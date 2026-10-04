@@ -198,7 +198,7 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
             content.Position = 0;
             await _mutationExecutor.ExecuteAsync(Intent(command, revision, content.Length, hash, binding), async token =>
                 await _uploads.UploadAsync(new MirrorPulseWorkerUploadRequest(command.InstanceId, command.RelativePath,
-                    revision, content, content.Length, command.OperationId), token).ConfigureAwait(false),
+                    revision, content, content.Length, command.OperationId, hash), token).ConfigureAwait(false),
                 async (accepted, token) =>
                 {
                     await content.DisposeAsync().ConfigureAwait(false);

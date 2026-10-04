@@ -48,6 +48,14 @@ public sealed class AdapterWorkerUploadClient
 
         Guid requestId = request.OperationId ?? Guid.NewGuid();
         if (requestId == Guid.Empty) throw new ArgumentException("The Worker operation ID must not be empty.", nameof(request));
+        string? expectedHash = request.ExpectedContentSha256 is { } expected
+            ? Sha256Digest.Parse(expected).Hexadecimal : null;
+        using IncrementalHash? contentHash = expectedHash is null ? null : IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        void VerifyTransmittedContent()
+        {
+            if (contentHash is not null && Convert.ToHexString(contentHash.GetHashAndReset()) != expectedHash)
+                throw new InvalidDataException("The transmitted content no longer matches the durable upload intent.");
+        }
         await _operation.WaitAsync(cancellationToken).ConfigureAwait(false);
         var ready = new TaskCompletionSource<Guid>(TaskCreationOptions.RunContinuationsAsynchronously);
         var completion = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -83,6 +91,11 @@ public sealed class AdapterWorkerUploadClient
                 int count = checked((int)Math.Min(MaximumChunkBytes, request.Length - offset));
                 byte[] buffer = new byte[count];
                 await request.Content.ReadExactlyAsync(buffer, cancellationToken).ConfigureAwait(false);
+                contentHash?.AppendData(buffer);
+                // A surviving writable mapping can alter a normal shared read handle.
+                // Bind the durable proof to the bytes actually sent, before the final
+                // frame authorizes the Worker to commit its temporary upload.
+                if (offset + count == request.Length) VerifyTransmittedContent();
                 await _channel.WriteChunkAsync(new BinaryChunkFrame(requestId, _instanceId, _sessionId,
                     streamId, offset, buffer, offset + count == request.Length,
                     Sha256Digest.Parse(Convert.ToHexString(SHA256.HashData(buffer)))), cancellationToken)
@@ -92,6 +105,7 @@ public sealed class AdapterWorkerUploadClient
 
             if (request.Length == 0)
             {
+                VerifyTransmittedContent();
                 await _channel.WriteChunkAsync(new BinaryChunkFrame(requestId, _instanceId, _sessionId,
                     streamId, 0, ReadOnlyMemory<byte>.Empty, true,
                     Sha256Digest.Parse(Convert.ToHexString(SHA256.HashData(ReadOnlySpan<byte>.Empty)))), cancellationToken)

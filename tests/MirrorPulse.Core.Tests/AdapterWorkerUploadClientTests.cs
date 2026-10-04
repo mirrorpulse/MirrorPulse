@@ -1,4 +1,5 @@
 using System.IO.Pipes;
+using System.Security.Cryptography;
 using System.Text;
 using MirrorPulse.Adapter.Sdk;
 using MirrorPulse.Core.CloudFiles;
@@ -12,15 +13,18 @@ namespace MirrorPulse.Core.Tests;
 public sealed class AdapterWorkerUploadClientTests
 {
     [TestMethod]
-    public async Task UploadStreamsChunksAndReturnsWorkerRevision()
+    [DataRow(0)]
+    [DataRow(14)]
+    [DataRow(1048601)]
+    public async Task UploadStreamsChunksAndReturnsWorkerRevision(int length)
     {
         Guid operationId = Guid.NewGuid();
         InstanceId instanceId = InstanceId.New();
-        await UploadInNewSessionAsync(operationId, instanceId);
-        await UploadInNewSessionAsync(operationId, instanceId);
+        await UploadInNewSessionAsync(operationId, instanceId, length);
+        await UploadInNewSessionAsync(operationId, instanceId, length);
     }
 
-    private static async Task UploadInNewSessionAsync(Guid operationId, InstanceId instanceId)
+    private static async Task UploadInNewSessionAsync(Guid operationId, InstanceId instanceId, int length)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         string pipeName = $"mirrorpulse-upload-test-{Guid.NewGuid():N}";
@@ -34,10 +38,11 @@ public sealed class AdapterWorkerUploadClientTests
         var worker = new AdapterControlChannel(workerPipe, instanceId.Value, sessionId.Value);
         var channel = new AdapterWorkerReadRangeClient(server, instanceId, sessionId);
         var upload = new AdapterWorkerUploadClient(channel, instanceId, sessionId);
-        byte[] content = Encoding.UTF8.GetBytes("upload-content");
+        byte[] content = Enumerable.Range(0, length).Select(index => (byte)(index % 251)).ToArray();
         await using var source = new MemoryStream(content, writable: false);
         Task<string> pending = upload.UploadAsync(new MirrorPulseWorkerUploadRequest(
-            instanceId, "notes.txt", "old-revision", source, content.Length, operationId), timeout.Token).AsTask();
+            instanceId, "notes.txt", "old-revision", source, content.Length, operationId,
+            Convert.ToHexString(SHA256.HashData(content))), timeout.Token).AsTask();
 
         AdapterControlFrame command = await worker.ReadAsync(timeout.Token);
         Assert.AreEqual("Upload", command.MessageType);
@@ -50,9 +55,15 @@ public sealed class AdapterWorkerUploadClientTests
         await worker.SendAsync("UploadReady", command.RequestId, true, new { streamId }, timeout.Token);
         ControlFrameEnvelope response = ControlFrameJsonCodec.Decode(await responseBytes);
         await upload.HandleResponseAsync(response);
-        AdapterBinaryChunk received = await worker.ReadChunkAsync(timeout.Token);
-        CollectionAssert.AreEqual(content, received.Data.ToArray());
-        Assert.IsTrue(received.EndOfStream);
+        using var receivedContent = new MemoryStream();
+        AdapterBinaryChunk received;
+        do
+        {
+            received = await worker.ReadChunkAsync(timeout.Token);
+            Assert.AreEqual(receivedContent.Length, received.Offset);
+            await receivedContent.WriteAsync(received.Data, timeout.Token);
+        } while (!received.EndOfStream);
+        CollectionAssert.AreEqual(content, receivedContent.ToArray());
 
         Task<byte[]> completeBytes = LengthPrefixedFrameReader.ReadAsync(server, timeout.Token).AsTask();
         await worker.SendAsync("UploadComplete", command.RequestId, true,
@@ -60,6 +71,49 @@ public sealed class AdapterWorkerUploadClientTests
         ControlFrameEnvelope complete = ControlFrameJsonCodec.Decode(await completeBytes);
         await upload.HandleResponseAsync(complete);
         Assert.AreEqual("new-revision", await pending);
+        upload.Close();
+        channel.Close();
+    }
+
+    [TestMethod]
+    [DataRow(0)]
+    [DataRow(14)]
+    [DataRow(1048601)]
+    public async Task ChangedTransmittedContentCannotSendACommitFrame(int length)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        string pipeName = $"mirrorpulse-upload-proof-{Guid.NewGuid():N}";
+        using var server = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1,
+            PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+        Task connection = server.WaitForConnectionAsync(timeout.Token);
+        await using AdapterNamedPipeClient workerPipe = await AdapterNamedPipeClient.ConnectAsync(
+            pipeName, TimeSpan.FromSeconds(10), timeout.Token);
+        await connection;
+        InstanceId instance = InstanceId.New();
+        WorkerSessionId session = WorkerSessionId.New();
+        var worker = new AdapterControlChannel(workerPipe, instance.Value, session.Value);
+        var channel = new AdapterWorkerReadRangeClient(server, instance, session);
+        var upload = new AdapterWorkerUploadClient(channel, instance, session);
+        byte[] actual = new byte[length];
+        byte[] expected = length == 0 ? [1] : new byte[length];
+        expected[^1] = 1;
+        await using var source = new MemoryStream(actual, writable: false);
+        Task<string> pending = upload.UploadAsync(new(instance, "changed.bin", null, source, length,
+            Guid.NewGuid(), Convert.ToHexString(SHA256.HashData(expected))), timeout.Token).AsTask();
+        AdapterControlFrame command = await worker.ReadAsync(timeout.Token);
+        Guid streamId = command.Payload.GetProperty("streamId").GetGuid();
+        Task<byte[]> response = LengthPrefixedFrameReader.ReadAsync(server, timeout.Token).AsTask();
+        await worker.SendAsync("UploadReady", command.RequestId, true, new { streamId }, timeout.Token);
+        await upload.HandleResponseAsync(ControlFrameJsonCodec.Decode(await response));
+        if (length > 1024 * 1024)
+        {
+            AdapterBinaryChunk partial = await worker.ReadChunkAsync(timeout.Token);
+            Assert.IsFalse(partial.EndOfStream);
+            Assert.AreEqual(1024 * 1024, partial.Data.Length);
+        }
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(async () => await pending);
+        using var noCommit = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+        await Assert.ThrowsAsync<OperationCanceledException>(async () => await worker.ReadChunkAsync(noCommit.Token));
         upload.Close();
         channel.Close();
     }

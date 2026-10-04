@@ -23,7 +23,8 @@ public sealed record MirrorPulseWorkerUploadRequest(
     string? ExpectedRevision,
     Stream Content,
     long Length,
-    Guid? OperationId = null);
+    Guid? OperationId = null,
+    string? ExpectedContentSha256 = null);
 
 public interface IMirrorPulseWorkerUploadTransport
 {

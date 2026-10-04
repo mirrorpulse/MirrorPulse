@@ -145,7 +145,7 @@ public sealed class MirrorPulseFullRescanPolicy(CloudFileSystem fileSystem, Clou
                     string? actual = await stats.StatAsync(new(route.InstanceId, route.RelativePath), cancellationToken).ConfigureAwait(false);
                     if (actual != expected) throw new MirrorPulseWorkerMutationConflictException(expected, actual);
                     await _executor.ExecuteAsync(intent, async token => await uploads.UploadAsync(new(route.InstanceId,
-                        route.RelativePath, expected, content, content.Length, intent.OperationId), token).ConfigureAwait(false), Acknowledge, cancellationToken).ConfigureAwait(false);
+                        route.RelativePath, expected, content, content.Length, intent.OperationId, intent.ContentSha256), token).ConfigureAwait(false), Acknowledge, cancellationToken).ConfigureAwait(false);
                 }
                 count++;
             }
