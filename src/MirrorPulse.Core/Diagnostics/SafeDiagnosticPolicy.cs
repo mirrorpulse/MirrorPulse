@@ -16,6 +16,10 @@ public static class SafeDiagnosticPolicy
 {
     private static readonly Dictionary<string, string> Messages = new(StringComparer.Ordinal)
     {
+        ["HostStartupFailed"] = "The Host could not start.",
+        ["ShellRootPolicyMismatch"] = "The actual Shell root policy does not match content synchronization.",
+        ["CloudRootMetadataMismatch"] = "The actual Cloud Files registration does not match the product root.",
+        ["CloudRootIdentityMismatch"] = "The existing Cloud Files registration belongs to another root identity.",
         ["JournalReadFailed"] = "The local journal could not be read.",
         ["JournalCommandFailed"] = "A local journal command failed.",
         ["JournalAcknowledgementFailed"] = "An accepted Worker result could not be acknowledged.",

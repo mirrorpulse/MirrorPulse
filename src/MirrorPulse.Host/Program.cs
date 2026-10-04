@@ -1,5 +1,7 @@
 using MirrorPulse.Core;
 using MirrorPulse.Core.Configuration;
+using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.Diagnostics;
 using MirrorPulse.Host;
 
 if (!MirrorPulsePlatform.IsCurrentSupported())
@@ -54,6 +56,24 @@ try
 }
 catch (Exception exception)
 {
+    try
+    {
+        using var log = new LocalRollingLogWriter(Path.Combine(paths.DataRootPath, "logs"));
+        string code = exception.Message switch
+        {
+            "The actual Shell root policy does not match content synchronization." => "ShellRootPolicyMismatch",
+            "CfSharp registration metadata does not match the MirrorPulse root." => "CloudRootMetadataMismatch",
+            "The existing Cloud Files registration belongs to another root identity." => "CloudRootIdentityMismatch",
+            _ => "HostStartupFailed",
+        };
+        await log.WriteAsync(new LogEntry(LogLevel.Error, "host", code, DateTimeOffset.UtcNow,
+            [new("failureCategory", SafeDiagnosticPolicy.ClassifyFailure(exception)),
+                new("hresult", exception.HResult.ToString("X8", System.Globalization.CultureInfo.InvariantCulture))]));
+    }
+    catch (Exception logFailure) when (logFailure is not OutOfMemoryException)
+    {
+        // Preserve the original startup failure when local diagnostics are unavailable.
+    }
     Console.Error.WriteLine($"{ProductInfo.Name} Host failed: {exception.Message}");
     return 1;
 }
