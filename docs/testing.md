@@ -43,13 +43,15 @@ against a user's configured application or storage sources.
 
 The disposable GitHub-hosted native fixture enables a bounded NTFS USN journal
 when the image has none. The preparation script rejects other environments.
-The preview.2 product path requires a positive native USN for conditional
-in-sync verification. Missing or rejected tokens keep reconciliation pending.
+The product registers the actual content-only `None` policy and uses CfSharp
+preview.3's public managed confirmation API; it does not rely on a usable
+conditional USN. The native journal fixture still needs NTFS change tracking.
 The native rescan test includes real feed overflow, offline root deferral,
 directory ACL denial without remote deletion, and a full runtime/store restart
-after acknowledgement but before product projection. Its current confirmation
-failure occurs before the final ACL/restart checks, so those checks do not yet
-have complete native execution evidence.
+after acknowledgement but before product projection. All of those assertions
+remain required; an earlier confirmation success cannot replace the rest of the
+test. Root migration from `TrackAll` must also preserve file content and identity
+and report the actual registered `None` policy.
 
 ## CI evidence
 
@@ -60,12 +62,13 @@ traversal paths, duplicate suites, mismatched counts, or missing required gates.
 It exports only named checks and relative artifact paths, without TRX output,
 stack traces, host user paths, credentials, or temporary certificate material.
 
-A manual workflow run additionally requires nine actual native Cloud Files
-integrations, one official SQLite crash test, and installed ARM64 MSIX checks
+A manual workflow run additionally requires all 23 named native/official-store
+integration methods in `eng/test-suites.json`, and installed ARM64 MSIX checks
 on the Windows 11 desktop runner. The x64 Server runner verifies that published
 CLI and Host processes reject the unsupported SKU without creating state.
-The legacy native filter also selects five
-managed helper tests; they remain a separate category. MSIX installation,
+The broad native filter also selects managed helper tests; they remain a separate
+category and cannot satisfy a required native method. Each required method must
+execute exactly once, pass, and never skip. MSIX installation,
 CLI alias, Host auto-start, associations, and uninstall checks are separate from
 Shell registration. `shellRegistration=false` explicitly means it was not run.
 Installed evidence includes the OS build and product type; a Server installation
@@ -88,20 +91,27 @@ The completed conditional experiment rejected current and refreshed tokens on
 both architectures; its strict expected-success assertions failed. Do not treat
 that workflow's failure as evidence that a USN reader alone repairs confirmation.
 
-The separate manual `Protected content confirmation probe` workflow selects all
-15 cases in `MirrorPulseProtectedConfirmationTests`. They exercise exclusive
+The separate manual `Protected content confirmation probe` workflow offers two
+contracts. `prototype` selects all 15 cases in
+`MirrorPulseProtectedConfirmationTests`. They exercise exclusive
 references, same-handle content verification and commit, competing processes,
 existing writable mappings, mismatches, pre-commit cancellation/failure, and an
 oplock break between segments. Both architectures executed and passed all cases
 in [run 37132837677](https://github.com/mirrorpulse/MirrorPulse/actions/runs/37132837677).
 The report counts selected, executed and passed results separately and rejects
 any skip or missing case. Ordinary managed runs declare these cases skipped;
-the existing ten required native tests are unchanged.
+the production suite requires its own named integrations.
 
-This probe is a test-only mechanism experiment. It does not prove pending-I/O
-cancellation, large-file fairness, official SQLite projection recovery or full
-rescan acceptance. See [protected content confirmation](protected-content-confirmation.md)
-for the planned managed boundary and remaining production gates.
+The prototype is a mechanism experiment and does not prove production recovery.
+`managed` selects 12 public API cases: actual `None`/`TrackAll` policy checks plus
+the ten `MirrorPulseContentConfirmationRecoveryTests` methods. They cover binding
+and identity refusals, partial data and reparse refusal, a 64 MiB segmented
+cancel/dispose/writer race, writable handles/mappings, post-mark cancellation or
+write, and native-applied official SQLite failure with full runtime/catalog
+restart. The managed report requires all 12 cases to execute and pass on each
+architecture. These tests are also mandatory in the full native suite, but a
+successful probe alone cannot satisfy signed Local, full rescan or installed
+acceptance. See [protected content confirmation](protected-content-confirmation.md).
 
 Download the three `evidence-*` artifacts from one workflow run, then verify:
 

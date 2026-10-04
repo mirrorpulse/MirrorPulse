@@ -22,9 +22,12 @@ The Host updates only a registration with its own provider name, stable root
 identity and matching path. Startup performs registration changes before starting
 the CfSharp owner and Workers. It uses the existing-registration update contract,
 preserves files and configuration, and queries the actual Cloud Files policy
-after registration. Shell registration is also read back when that integration
-is available. A mismatched or unverified policy prevents startup; another
-provider's registration is never adopted.
+after registration. A packaged Host also requires Shell readback of its path and
+zero metadata-tracking policy. An unpackaged development Host may proceed only
+when Shell registration succeeded and readback reports `0x80070490` (not found);
+actual CFAPI policy verification is still mandatory. Other registration or
+readback failures prevent startup. Another provider's registration is never
+adopted.
 
 Registration changes must be quiescent with respect to content confirmation.
 MirrorPulse does not hot-change the root policy while a session runs. Item
@@ -42,7 +45,10 @@ This restriction does not repair the Windows conditional-USN issue.
 MirrorPulse retains the upload-time native volume/root/file binding, complete
 length and SHA-256, and the accepted identity before local confirmation. A
 replacement's current binding cannot be substituted for a missing historical
-binding. Native success, official projection and the product ledger remain
+binding. The Worker transport also hashes the bytes actually sent and compares
+them with the durable intent before sending the final commit frame. A mismatch
+aborts that upload rather than treating an earlier local hash as remote proof.
+Native success, official projection and the product ledger remain
 separate commits. Replaying the retained proof repairs projection without
 blindly uploading again. The product alone advances its ledger, the official
 journal acknowledgement and the rescan generation.

@@ -2,10 +2,12 @@
 
 ## Status
 
-MirrorPulse is pinned to CfSharp `0.1.0-preview.3`. Its existing full-rescan path
-does not acknowledge local content when a usable confirmation precondition is
-unavailable. The alternative below has passed a disposable native experiment;
-production recovery is being integrated with the newly published managed API.
+MirrorPulse is pinned to CfSharp `0.1.0-preview.3`. Both full-rescan and journal
+uploads use its public managed confirmation API through the anti-corruption
+layer. The Host retains the accepted proof before confirmation and does not
+acknowledge local content when native verification or official projection is
+incomplete. The original native experiment below is historical mechanism
+evidence, separate from the required product integration suite.
 The API requires the actual registered policy to be exactly `None`; MirrorPulse
 adopts the [content-only policy](content-sync-policy.md). The library's default
 `TrackAll` remains unchanged. Package publication does not replace full product
@@ -100,6 +102,36 @@ failure after native success must expose that fact and retain a repair path.
 The product ledger stays `RemoteAccepted` until safe local confirmation and
 projection complete; recovery must not blindly repeat the remote upload.
 
+## Product persistence order
+
+1. Capture the upload-time volume/root/file binding and exact previous opaque
+   identity, then persist the mutation intent with complete length and SHA-256.
+2. Hash the bytes actually transmitted through the bounded Worker transport.
+   Compare them with the intent before the final upload commit frame.
+3. Persist remote acceptance as an immutable proof containing that original
+   binding, accepted identity and remote revision. Missing historical bindings
+   remain blocked; never populate them from the current path.
+4. Call the public confirmation API with the retained proof. Persist its typed
+   receipt, including native verification and official projection results.
+5. Require both native verification and committed official projection before
+   acknowledging the official journal or completing rescan/product projection.
+   These remain separate durable boundaries.
+
+Recovery of a retained `RemoteAccepted` proof retries local confirmation without
+uploading again or replacing the accepted revision. A native-applied projection
+failure can be replayed after closing and reopening both the CfSharp runtime and
+product catalog. A receipt proves the completed operation; a later data write
+can already have made the file dirty again. That new write must not be erased by
+treating a past receipt as proof of current content.
+
+An ordinary-file conversion may prepare identity and lose its protected
+reference before verification. A typed `Busy` or `ProtectionLost` result retains
+the same proof for bounded retry; preparation alone never authorizes
+acknowledgement. Historical records without proof use bounded remote readback,
+with changed content preserved for conflict handling. Windows callback paths
+are normalized only at metadata lookup boundaries so retained intent IDs and
+fingerprints remain unchanged.
+
 ## Evidence and remaining work
 
 | Experiment group | Cases | Observed result on both architectures |
@@ -114,17 +146,30 @@ projection complete; recovery must not blindly repeat the remote upload.
 The rename fixture explicitly approves the owned placeholder through the public
 Provider callback. Its earlier default rejection was a fixture policy issue.
 
-Production gates still include ordinary-file identity across conversion,
-replacement before acquisition, root/volume binding, partial-data refusal,
-pending-I/O cancellation, large-file segmented fairness, internal operation
-lease/shutdown races, native-applied SQLite failure recovery, and complete
-full-rescan ACL/disabled-root/runtime-restart integration. Small fixture timings
-are not throughput or latency guarantees. The experiment does not satisfy those
-gates or complete full-rescan acceptance.
+The public managed integration matrix adds ten independently required tests:
 
-Run the manual `Protected content confirmation probe` workflow for the 15 native
-cases. It exports only counts, outcomes and numeric observations in
+| Boundary | Required observation |
+| --- | --- |
+| Changed volume, root, file, hash, length or previous identity | Refusal without preparation or content modification |
+| Native success followed by official SQLite commit failure | Retained proof survives full runtime/catalog restart; replay projects without another upload |
+| Cancellation or a new write after native marking | Completed receipt remains truthful; later content remains dirty |
+| Cancellation/disposal during a 64 MiB segmented read | Some bytes read, no native commit, bounded drain, exclusive reopen succeeds |
+| Existing writable handle or surviving writable mapping | No confirmation until the writer releases ownership |
+| Writer queued during segmented verification | Writer progresses and stale proof cannot confirm its changed content |
+| Online-only data or a link outside the owned root | No hydration or adoption; both fresh path resolution and retained-reference confirmation refuse the link |
+
+Two separate required tests verify actual `None` acceptance and `TrackAll`
+rejection before reading. Root migration and the original full-rescan overflow,
+ACL denial, disabled-root and runtime-restart test remain independently required.
+The signed ARM64 Local CLI integration must also drain its offline queue and
+retain conflicts and cursors across restart. No probe substitutes for the three
+same-commit CI reports with native and installed evidence.
+
+Run the manual `Protected content confirmation probe` workflow with
+`contract=prototype` for the historical 15 native cases, or `contract=managed`
+for the 12 public API cases. It exports only counts, typed outcomes and numeric observations in
 `evidence-protected-win-x64` and `evidence-protected-win-arm64`; it does not export
 user content, fixture paths or credentials. Test-only native code remains
-outside the product boundary. Required native acceptance also covers migration
-of an owned root from `TrackAll` to the actual content-only policy.
+outside the product boundary. Small fixture timings are not throughput or
+latency guarantees. See [test boundaries](testing.md) for required evidence
+collection and the remaining desktop release matrix.
