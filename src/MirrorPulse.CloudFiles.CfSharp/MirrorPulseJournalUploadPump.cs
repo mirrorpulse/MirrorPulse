@@ -38,6 +38,7 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
     private readonly MirrorPulseMutationReadback _readback;
     private readonly MirrorPulseFullRescanRecovery? _rescan;
     private readonly Func<InstanceId, bool> _mayDispatch;
+    private readonly CloudFileSystem? _fileSystem;
 
     public MirrorPulseJournalPumpHealth Health => _runner.Health;
 
@@ -69,6 +70,7 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
         _catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
         _mutationExecutor = new MirrorPulseMutationExecutor(catalog);
         _readback = new MirrorPulseMutationReadback(stats, ranges, directories);
+        _fileSystem = fileSystem;
         if (fileSystem is not null)
             _rescan = new(catalog, new MirrorPulseFullRescanPolicy(fileSystem, feed, state, router, catalog,
                 uploads, stats, mayDispatch, mutations, ranges, directories, conflicts, notifications, scheduler).ReconcileAsync,
@@ -189,12 +191,19 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
                 .ConfigureAwait(false);
             await using var content = new FileStream(localPath, FileMode.Open, FileAccess.Read,
                 FileShare.Read, 64 * 1024, FileOptions.Asynchronous);
+            if (_fileSystem is null) throw new NotSupportedException("Journal content uploads require the Cloud Files confirmation owner.");
+            MirrorPulseUploadBinding binding = MirrorPulseContentConfirmation.CaptureUploadBinding(
+                await _fileSystem.GetFile(syncRootRelativePath).InspectAsync(cancellationToken).ConfigureAwait(false));
             string hash = Convert.ToHexString(await SHA256.HashDataAsync(content, cancellationToken).ConfigureAwait(false));
             content.Position = 0;
-            await _mutationExecutor.ExecuteAsync(Intent(command, revision, content.Length, hash), async token =>
+            await _mutationExecutor.ExecuteAsync(Intent(command, revision, content.Length, hash, binding), async token =>
                 await _uploads.UploadAsync(new MirrorPulseWorkerUploadRequest(command.InstanceId, command.RelativePath,
                     revision, content, content.Length, command.OperationId), token).ConfigureAwait(false),
-                (accepted, token) => AcknowledgeAsync(command.OperationId, accepted, token), cancellationToken).ConfigureAwait(false);
+                async (accepted, token) =>
+                {
+                    await content.DisposeAsync().ConfigureAwait(false);
+                    await AcknowledgeAsync(command.OperationId, accepted, token).ConfigureAwait(false);
+                }, cancellationToken).ConfigureAwait(false);
             return true;
         }
         catch (MirrorPulseUploadConflictException conflict)
@@ -313,9 +322,40 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
     {
         try
         {
-            await _completion.AcknowledgeSuccessfulUploadAsync(operationId, revision, cancellationToken).ConfigureAwait(false);
             MirrorPulseMutationRecord record = await _catalog.ReadMutationAsync(operationId, cancellationToken).ConfigureAwait(false)
                 ?? throw new InvalidDataException("The accepted mutation intent disappeared.");
+            if (!record.Intent.IsDirectory && record.Intent.Kind is MirrorPulseWorkerChangeKind.Create or MirrorPulseWorkerChangeKind.ContentUpdate)
+            {
+                if (record.Intent.UploadBinding is null)
+                {
+                    await _catalog.SaveBlockedLocalOperationAsync(new(operationId, record.Intent.InstanceId, record.Intent.RelativePath,
+                        MirrorPulseLocalOperationBlockReason.MissingUploadBinding, DateTimeOffset.UtcNow), cancellationToken).ConfigureAwait(false);
+                    throw new MirrorPulseMutationAmbiguousException("The historical journal upload has no upload-time binding.");
+                }
+                if (_fileSystem is null) throw new NotSupportedException("Content confirmation requires the Cloud Files owner.");
+                MirrorPulseContentAcceptanceProof? proof = await _catalog.ReadContentAcceptanceProofAsync(operationId, cancellationToken).ConfigureAwait(false);
+                if (proof is null)
+                {
+                    MirrorPulseWorkerDirectoryEntry remote = await _readback.ReadMetadataAsync(record.Intent, cancellationToken).ConfigureAwait(false)
+                        ?? throw new FileNotFoundException("The accepted remote file has no metadata.");
+                    if (remote.IsDeleted || remote.ItemKind != "file" || remote.RemoteRevision != revision)
+                        throw new MirrorPulseMutationAmbiguousException("Remote metadata does not match the accepted upload.");
+                    CloudPlaceholderIdentity identity = MirrorPulsePlaceholderIdentity.Create(record.Intent.InstanceId, remote.RemoteId, revision).ToCfSharp();
+                    proof = new(operationId, record.Intent.UploadBinding, identity.ItemId, identity.RemoteId, revision,
+                        record.Intent.ContentLength!.Value, record.Intent.ContentSha256!);
+                    await _catalog.SaveContentAcceptanceProofAsync(proof, cancellationToken).ConfigureAwait(false);
+                }
+                string localPath = _router.ResolveUploadPath(record.Intent.InstanceId, record.Intent.RootKey, record.Intent.RelativePath);
+                string relative = Path.GetRelativePath(_syncRootPath, localPath).Replace(Path.DirectorySeparatorChar, '/');
+                await _feed.SuppressProviderEchoAsync(CloudStateOperationKind.MetadataUpdate, relative,
+                    DateTimeOffset.UtcNow.AddSeconds(10), cancellationToken: cancellationToken).ConfigureAwait(false);
+                MirrorPulseContentConfirmationReceipt receipt = await MirrorPulseContentConfirmation.ConfirmAsync(
+                    _fileSystem.GetFile(relative), proof, cancellationToken).ConfigureAwait(false);
+                await _catalog.SaveContentConfirmationReceiptAsync(operationId, receipt, CancellationToken.None).ConfigureAwait(false);
+                if (!receipt.MayAcknowledge)
+                    throw new MirrorPulseMutationAmbiguousException($"Local journal content confirmation requires recovery ({receipt.Outcome}).");
+            }
+            await _completion.AcknowledgeSuccessfulUploadAsync(operationId, revision, cancellationToken).ConfigureAwait(false);
             await ProjectAcceptedAsync(record, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
@@ -335,9 +375,9 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
     }
 
     private static MirrorPulseMutationIntent Intent(MirrorPulseWorkerChangeCommand command, string? revision,
-        long? length = null, string? hash = null) => new(command.OperationId, command.InstanceId, command.RootKey,
+        long? length = null, string? hash = null, MirrorPulseUploadBinding? binding = null) => new(command.OperationId, command.InstanceId, command.RootKey,
             command.Kind, command.RelativePath, command.PreviousRelativePath, command.IsDirectory, revision,
-            length, hash, MirrorPulseMutationOrigin.Journal);
+            length, hash, MirrorPulseMutationOrigin.Journal, binding);
 
     private async ValueTask ReportFailureAsync(MirrorPulseWorkerChangeCommand? command, string code,
         Exception exception, CancellationToken cancellationToken)

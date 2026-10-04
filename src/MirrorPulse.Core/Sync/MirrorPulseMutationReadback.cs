@@ -29,7 +29,7 @@ public sealed class MirrorPulseMutationReadback(IMirrorPulseWorkerStatTransport 
         }
         if (ranges is null || directories is null || revision is null || intent.ContentSha256 is null || intent.ContentLength is null)
             return new(MirrorPulseMutationProofKind.Unknown, revision);
-        MirrorPulseWorkerDirectoryEntry? metadata = await FindAsync(intent, cancellationToken).ConfigureAwait(false);
+        MirrorPulseWorkerDirectoryEntry? metadata = await ReadMetadataAsync(intent, cancellationToken).ConfigureAwait(false);
         if (metadata is null || metadata.IsDeleted || metadata.ItemKind != "file" || metadata.RemoteRevision != revision)
             return new(MirrorPulseMutationProofKind.Unknown, revision);
         bool matches = metadata.Length == intent.ContentLength;
@@ -57,8 +57,10 @@ public sealed class MirrorPulseMutationReadback(IMirrorPulseWorkerStatTransport 
                 ? MirrorPulseMutationProofKind.Conflict : MirrorPulseMutationProofKind.Unknown, revision);
     }
 
-    private async ValueTask<MirrorPulseWorkerDirectoryEntry?> FindAsync(MirrorPulseMutationIntent intent, CancellationToken cancellationToken)
+    public async ValueTask<MirrorPulseWorkerDirectoryEntry?> ReadMetadataAsync(MirrorPulseMutationIntent intent, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(intent);
+        if (directories is null) throw new NotSupportedException("The Worker must provide remote metadata for content confirmation.");
         int separator = intent.RelativePath.LastIndexOf('/');
         string parent = separator < 0 ? string.Empty : intent.RelativePath[..separator];
         ReadOnlyMemory<byte> cursor = ReadOnlyMemory<byte>.Empty;
