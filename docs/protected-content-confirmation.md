@@ -2,10 +2,14 @@
 
 ## Status
 
-MirrorPulse remains pinned to CfSharp `0.1.0-preview.2`. Its full-rescan path
+MirrorPulse is pinned to CfSharp `0.1.0-preview.3`. Its existing full-rescan path
 does not acknowledge local content when a usable confirmation precondition is
 unavailable. The alternative below has passed a disposable native experiment;
-production integration awaits a managed CfSharp API and its recovery contract.
+production recovery is being integrated with the newly published managed API.
+The API requires the actual registered policy to be exactly `None`; MirrorPulse
+adopts the [content-only policy](content-sync-policy.md). The library's default
+`TrackAll` remains unchanged. Package publication does not replace full product
+native and installed acceptance.
 
 The [successful experiment](https://github.com/mirrorpulse/MirrorPulse/actions/runs/37132837677)
 ran all 15 cases on each architecture at commit
@@ -69,7 +73,7 @@ and [CancelIoEx](https://learn.microsoft.com/en-us/windows/win32/api/ioapiset/nf
 The test prototype's synchronous completion wait does not establish production
 asynchronous cancellation or bounded reference latency.
 
-## Ownership of the planned managed operation
+## Ownership of the managed operation
 
 | Owner | Responsibility |
 | --- | --- |
@@ -78,16 +82,16 @@ asynchronous cancellation or bounded reference latency.
 | Host and Worker | Remote upload/readback, accepted revision, mutation ledger, retry scheduling and root policy |
 | Clients | Query and request operations through `MirrorPulse.Control.Client` |
 
-Reuse the existing public `CloudItemSnapshot.LocalFileId`, `SyncRootFileId`,
-placeholder identity and availability fields. In preview.2, the inspector leaves
-IDs absent for ordinary non-placeholder files. The managed contract must also
-support binding ordinary files before upload and comparing that binding after
-conversion, with root/volume scope. Missing historical bindings cannot be
+Reuse public `CloudItemSnapshot.LocalBinding`, placeholder identity and
+availability fields. Preview.3 inspects ordinary files as well as placeholders;
+the binding includes the native volume and full root/file IDs. Capture it before
+upload and compare that binding after conversion. Missing historical bindings cannot be
 replaced with the current pathname's ID and treated as proof of the old object.
 
-A proposed managed confirmation request contains the expected local binding,
-accepted placeholder identity, complete length and SHA-256, with a cancellation
-token and bounded reading policy. API names are not yet published. The operation
+`CloudContentConfirmationRequest` contains the expected local binding,
+accepted placeholder identity, complete length and SHA-256, explicit guarded
+preparation and bounded reading policy. Pass it with a cancellation token to
+`CloudFile.ConfirmUploadedContentAsync`. The operation
 must reject changed objects, mismatched content, incomplete local data and lost
 protection. It must not hydrate missing bytes or execute remote requests.
 
@@ -122,4 +126,5 @@ Run the manual `Protected content confirmation probe` workflow for the 15 native
 cases. It exports only counts, outcomes and numeric observations in
 `evidence-protected-win-x64` and `evidence-protected-win-arm64`; it does not export
 user content, fixture paths or credentials. Test-only native code remains
-outside the product boundary. The existing required native suite is unchanged.
+outside the product boundary. Required native acceptance also covers migration
+of an owned root from `TrackAll` to the actual content-only policy.

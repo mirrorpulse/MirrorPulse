@@ -1,6 +1,6 @@
 # CfSharp Preview Compatibility Report
 
-MirrorPulse pins `CfSharp` and `CfSharp.Storage.Sqlite` to `0.1.0-preview.2` from
+MirrorPulse pins `CfSharp` and `CfSharp.Storage.Sqlite` to `0.1.0-preview.3` from
 NuGet.org. The integration project owns CfSharp types and lifecycle; Core exposes
 MirrorPulse contracts to Adapters and the product UI.
 
@@ -46,13 +46,20 @@ transaction rolled back and `PRAGMA integrity_check` returned `ok`.
 The earlier `CF-001`, `API-001`, and `API-002` gaps were retested after pinning
 preview.2. MirrorPulse uses the public CfSharp batch and conflict contracts and
 does not read or mutate CfSharp's private SQLite tables or conflict payload
-format. Preview.2 remains a prerelease dependency until its final package is
+format. Preview.3 remains a prerelease dependency until its final package is
 published and validated.
 
 Preview.2 also exposes a confirmation limitation: coordination USNs can be zero,
 and independently queried current/refreshed USNs were rejected in the isolated
 conditional experiment. A protected same-handle alternative passed 15/15 native
-cases per architecture. It remains test-only while a managed CfSharp operation,
-ordinary-file binding, cancellation and official-store recovery are specified
-for preview.3. See [protected content confirmation](protected-content-confirmation.md).
-MirrorPulse has not upgraded its packages or adopted a production native fallback.
+cases per architecture. Preview.3 now publishes `CloudItemSnapshot.LocalBinding`
+for ordinary files and placeholders, and `CloudFile.ConfirmUploadedContentAsync`
+with guarded preparation, segmented protected reading and explicit native and
+official-store projection receipts. Its content proof requires the actual root
+policy to be exactly `None`; the library default remains `TrackAll`.
+
+MirrorPulse registers the [content-only policy](content-sync-policy.md) and is
+integrating the public managed confirmation contract. The package upgrade does
+not establish complete product recovery or close the conditional-USN limitation.
+See [protected content confirmation](protected-content-confirmation.md). Product
+code keeps the anti-corruption layer and does not own a native confirmation reader.
