@@ -208,14 +208,15 @@ public sealed class MirrorPulseFullRescanPolicy(CloudFileSystem fileSystem, Clou
     private async ValueTask<MirrorPulseWorkerDirectoryEntry> FindRemoteAsync(MirrorPulseRoutedItem route, CancellationToken token)
     {
         if (directories is null) throw new NotSupportedException("The Worker must provide remote metadata for reconciliation.");
-        int separator = route.RelativePath.LastIndexOf('/');
-        string parent = separator < 0 ? string.Empty : route.RelativePath[..separator];
+        string relative = NormalizePath(route.RelativePath);
+        int separator = relative.LastIndexOf('/');
+        string parent = separator < 0 ? string.Empty : relative[..separator];
         ReadOnlyMemory<byte> cursor = ReadOnlyMemory<byte>.Empty;
         var seen = new HashSet<string>(StringComparer.Ordinal);
         for (int pageIndex = 0; pageIndex < 10000; pageIndex++)
         {
             MirrorPulseWorkerDirectoryPage page = await directories.ReadDirectoryPageAsync(new(route.InstanceId, parent, cursor, 256), token).ConfigureAwait(false);
-            MirrorPulseWorkerDirectoryEntry? entry = page.Entries.SingleOrDefault(candidate => candidate.RelativePath == route.RelativePath && !candidate.IsDeleted);
+            MirrorPulseWorkerDirectoryEntry? entry = page.Entries.SingleOrDefault(candidate => NormalizePath(candidate.RelativePath) == relative && !candidate.IsDeleted);
             if (entry is not null) return entry;
             if (page.IsComplete) throw new FileNotFoundException("The confirmed remote item has no metadata.");
             cursor = page.ContinuationCursor;

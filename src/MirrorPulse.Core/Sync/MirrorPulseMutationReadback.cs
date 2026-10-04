@@ -61,8 +61,12 @@ public sealed class MirrorPulseMutationReadback(IMirrorPulseWorkerStatTransport 
     {
         ArgumentNullException.ThrowIfNull(intent);
         if (directories is null) throw new NotSupportedException("The Worker must provide remote metadata for content confirmation.");
-        int separator = intent.RelativePath.LastIndexOf('/');
-        string parent = separator < 0 ? string.Empty : intent.RelativePath[..separator];
+        // Retained intents may use Windows separators from native callbacks;
+        // directory metadata uses the portable Worker spelling. Keep the original
+        // durable intent and normalize only this lookup boundary.
+        string relative = intent.RelativePath.Replace('\\', '/');
+        int separator = relative.LastIndexOf('/');
+        string parent = separator < 0 ? string.Empty : relative[..separator];
         ReadOnlyMemory<byte> cursor = ReadOnlyMemory<byte>.Empty;
         var seen = new HashSet<string>(StringComparer.Ordinal);
         for (int pageIndex = 0; pageIndex < 10000; pageIndex++)
@@ -70,7 +74,7 @@ public sealed class MirrorPulseMutationReadback(IMirrorPulseWorkerStatTransport 
             MirrorPulseWorkerDirectoryPage page = await directories!.ReadDirectoryPageAsync(new(intent.InstanceId, parent, cursor, 256),
                 cancellationToken).ConfigureAwait(false);
             MirrorPulseWorkerDirectoryEntry? found = page.Entries.SingleOrDefault(entry =>
-                string.Equals(entry.RelativePath, intent.RelativePath, StringComparison.Ordinal));
+                string.Equals(entry.RelativePath.Replace('\\', '/'), relative, StringComparison.Ordinal));
             if (found is not null) return found;
             if (page.IsComplete) return null;
             cursor = page.ContinuationCursor;
