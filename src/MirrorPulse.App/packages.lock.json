@@ -35,7 +35,7 @@
       "CfSharp.Native": {
         "type": "Transitive",
         "resolved": "0.1.0-preview.3",
-        "contentHash": "lJF828bHefR5i5GkvEBt5YcmD5kNUkeyuWksvQZk2Aidxyipc1yOYhsLdQtMIvIhbgVuHBvy6FrBnYKmqzsLFQ=="
+        "contentHash": "TFSKHLuvjcuMXjpu1boZSYCeeeOGAEdIYnSODIWLwtXyVQgO69HJcawJie5gOJTwmvdhCOQjvDy4wfBwtVJtDQ=="
       },
       "Microsoft.Data.Sqlite.Core": {
         "type": "Transitive",
@@ -207,7 +207,7 @@
         "type": "CentralTransitive",
         "requested": "[0.1.0-preview.3, )",
         "resolved": "0.1.0-preview.3",
-        "contentHash": "WUEpLe+BWa1W7cyu/oA17IGiiVkkKSH+tM3A6xt06RIxuMmqCsAL3aUWtXCt2HBYrVxbbE9KeV9ILEKb9IkuYA==",
+        "contentHash": "ijo8GwpNR9Y+yFx+uTlpqyDECgpbieYo209oLXzq/9KIKo2VSH1QDqnjRV6CWV3MpTnJ/9aZcEgwzmlFC7/erg==",
         "dependencies": {
           "CfSharp.Native": "0.1.0-preview.3"
         }
@@ -216,7 +216,7 @@
         "type": "CentralTransitive",
         "requested": "[0.1.0-preview.3, )",
         "resolved": "0.1.0-preview.3",
-        "contentHash": "Kl1YLrqbn1LPrNtiWqF1YD/XDDW38rzWvjSiiaIVjeF66XJOnYsp8izBoKQa3cf980Vp/5j7WkuyBWWNT9UeqQ==",
+        "contentHash": "BTD5ItAETZfqNXHLrpI7EI0HtzMMyeXWx0yKNvuQho1PRJSUHqi012DpnhHo6uQjf1bZX4Jg6+uKi+3yc702BA==",
         "dependencies": {
           "CfSharp": "0.1.0-preview.3",
           "Microsoft.Data.Sqlite": "8.0.31"
