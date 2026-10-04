@@ -82,6 +82,12 @@ public sealed class MirrorPulseFullRescanPolicy(CloudFileSystem fileSystem, Clou
             if (blockedDirectories.Any(parent => path.StartsWith(parent, StringComparison.OrdinalIgnoreCase))) continue;
             MirrorPulseMutationRecord? pending = incomplete.SingleOrDefault(record => record.Intent.Origin == MirrorPulseMutationOrigin.Rescan &&
                 record.Intent.InstanceId == route.InstanceId && record.Intent.RootKey == route.RootKey && record.Intent.RelativePath == route.RelativePath);
+            if (pending is not null && pending.Intent.UploadBinding is null)
+            {
+                await catalog.SaveBlockedLocalOperationAsync(new(pending.Intent.OperationId, route.InstanceId, path,
+                    MirrorPulseLocalOperationBlockReason.MissingUploadBinding, DateTimeOffset.UtcNow), cancellationToken).ConfigureAwait(false);
+                throw new MirrorPulseMutationAmbiguousException("The historical rescan upload has no upload-time object binding.");
+            }
             if (pending is null && observation.Snapshot.SynchronizationState == CloudSynchronizationState.InSync) continue;
             if (observation.Snapshot.IsPlaceholder && observation.Snapshot.ContentAvailability != CloudContentAvailability.FullyAvailable)
             {
@@ -90,42 +96,47 @@ public sealed class MirrorPulseFullRescanPolicy(CloudFileSystem fileSystem, Clou
             }
             await using var content = new FileStream(observation.Item.FullPath, FileMode.Open, FileAccess.Read,
                 FileShare.Read, 64 * 1024, FileOptions.Asynchronous);
+            // The upload read handle prevents writes and replacement while the public snapshot
+            // captures the object and previous identity. Never substitute this observation for
+            // a historical intent's binding.
+            CloudItemSnapshot lockedSnapshot = await observation.Item.InspectAsync(cancellationToken).ConfigureAwait(false);
+            MirrorPulseUploadBinding binding = MirrorPulseContentConfirmation.CaptureUploadBinding(lockedSnapshot);
+            if (observation.Snapshot.LocalBinding != lockedSnapshot.LocalBinding ||
+                pending is not null && pending.Intent.UploadBinding!.LocalObject != binding.LocalObject)
+                throw new MirrorPulseMutationAmbiguousException("The upload object changed after discovery or historical acceptance.");
             string hash = Convert.ToHexString(await SHA256.HashDataAsync(content, cancellationToken).ConfigureAwait(false));
             content.Position = 0;
             previous.TryGetValue(path, out CloudItemState? prior);
             string? expected = string.IsNullOrEmpty(prior?.RemoteRevision) ? null : prior.RemoteRevision;
-            var intent = pending?.Intent ?? new MirrorPulseMutationIntent(StableId($"upload/{route.InstanceId}/{route.RootKey}/{route.RelativePath}/{expected}/{hash}"),
+            var intent = pending?.Intent ?? new MirrorPulseMutationIntent(StableId($"upload/{route.InstanceId}/{route.RootKey}/{route.RelativePath}/{expected}/{hash}/{binding.LocalObject.VolumeSerialNumber:X16}/{binding.LocalObject.SyncRootFileId:N}/{binding.LocalObject.LocalFileId:N}"),
                 route.InstanceId, route.RootKey, MirrorPulseWorkerChangeKind.ContentUpdate, route.RelativePath, null, false,
-                expected, content.Length, hash, MirrorPulseMutationOrigin.Rescan);
+                expected, content.Length, hash, MirrorPulseMutationOrigin.Rescan, binding);
             if (intent.ContentLength != content.Length || intent.ContentSha256 != hash) throw new MirrorPulseMutationAmbiguousException();
             try
             {
                 async ValueTask Acknowledge(string? revision, CancellationToken token)
                 {
-                    // Native placeholder operations need their own handle. Release the upload
-                    // read handle, then verify bytes and use CfSharp's public USN guard.
+                    // Release the upload handle before CfSharp acquires its protected owner.
+                    // Durable acceptance retains the original binding and bytes across this gap.
                     await content.DisposeAsync().ConfigureAwait(false);
-                    MirrorPulseWorkerDirectoryEntry remote = await FindRemoteAsync(route, token).ConfigureAwait(false);
-                    if (remote.RemoteRevision != revision) throw new MirrorPulseMutationAmbiguousException();
-                    var identity = MirrorPulsePlaceholderIdentity.Create(route.InstanceId, remote.RemoteId, revision).ToCfSharp();
+                    MirrorPulseContentAcceptanceProof? proof = await catalog.ReadContentAcceptanceProofAsync(intent.OperationId, token).ConfigureAwait(false);
+                    if (proof is null)
+                    {
+                        MirrorPulseWorkerDirectoryEntry remote = await FindRemoteAsync(route, token).ConfigureAwait(false);
+                        if (remote.RemoteRevision != revision) throw new MirrorPulseMutationAmbiguousException();
+                        CloudPlaceholderIdentity identity = MirrorPulsePlaceholderIdentity.Create(route.InstanceId, remote.RemoteId, revision).ToCfSharp();
+                        proof = new(intent.OperationId, intent.UploadBinding!, identity.ItemId, identity.RemoteId, revision,
+                            intent.ContentLength!.Value, intent.ContentSha256!);
+                        await catalog.SaveContentAcceptanceProofAsync(proof, token).ConfigureAwait(false);
+                    }
                     await feed.SuppressProviderEchoAsync(CloudStateOperationKind.MetadataUpdate, path,
                         DateTimeOffset.UtcNow.AddSeconds(10), cancellationToken: token).ConfigureAwait(false);
-                    CloudPlaceholderMutationResult coordinated = observation.Snapshot.IsPlaceholder
-                        ? await observation.Item.UpdatePlaceholderAsync(CloudPlaceholderPatch.CreateBuilder().WithIdentity(identity).WithInSyncState(false).Build(), token).ConfigureAwait(false)
-                        : await observation.Item.ConvertToPlaceholderAsync(identity, cancellationToken: token).ConfigureAwait(false);
-                    long? observedUsn = coordinated.OperationUsn;
-                    if (observedUsn is null or <= 0)
-                        observedUsn = (await observation.Item.SetInSyncAsync(false, cancellationToken: token).ConfigureAwait(false)).OperationUsn;
-                    if (observedUsn is not > 0) throw new MirrorPulseMutationAmbiguousException(
-                        $"The filesystem did not provide a usable in-sync precondition (coordination USN: {coordinated.OperationUsn}, observed USN: {observedUsn}).");
-                    await using (var verification = new FileStream(observation.Item.FullPath, FileMode.Open, FileAccess.Read,
-                        FileShare.Read, 64 * 1024, FileOptions.Asynchronous))
-                    {
-                        if (verification.Length != intent.ContentLength ||
-                            Convert.ToHexString(await SHA256.HashDataAsync(verification, token).ConfigureAwait(false)) != intent.ContentSha256)
-                            throw new MirrorPulseMutationAmbiguousException();
-                    }
-                    await observation.Item.SetInSyncAsync(true, new CloudInSyncChangeOptions(observedUsn), token).ConfigureAwait(false);
+                    MirrorPulseContentConfirmationReceipt receipt = await MirrorPulseContentConfirmation.ConfirmAsync(
+                        fileSystem.GetFile(path), proof, token).ConfigureAwait(false);
+                    // After a native commit, retain the receipt even if caller cancellation arrived.
+                    await catalog.SaveContentConfirmationReceiptAsync(intent.OperationId, receipt, CancellationToken.None).ConfigureAwait(false);
+                    if (!receipt.MayAcknowledge)
+                        throw new MirrorPulseMutationAmbiguousException($"Local content confirmation requires recovery ({receipt.Outcome}).");
                 }
                 if (pending is not null && pending.State != MirrorPulseMutationState.Prepared)
                     await _executor.ReconcileAsync(pending, _readback.VerifyAsync, Acknowledge, cancellationToken).ConfigureAwait(false);
