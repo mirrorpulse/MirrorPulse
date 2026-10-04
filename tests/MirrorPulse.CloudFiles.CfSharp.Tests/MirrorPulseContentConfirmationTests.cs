@@ -109,8 +109,14 @@ public sealed class MirrorPulseContentConfirmationTests
             CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(file.FullPath));
             if (!tracked)
             {
-                await File.WriteAllBytesAsync(file.FullPath, [5, 4, 3, 2, 1]);
+                await using (var edit = new FileStream(file.FullPath, FileMode.Open, FileAccess.Write, FileShare.Read))
+                {
+                    await edit.WriteAsync(new byte[] { 5, 4, 3, 2, 1 });
+                    await edit.FlushAsync();
+                }
                 CloudItemSnapshot dirty = await file.InspectAsync();
+                Assert.IsTrue(dirty.IsPlaceholder);
+                Assert.AreEqual(snapshot.LocalBinding, dirty.LocalBinding);
                 Assert.AreEqual(CloudSynchronizationState.NotInSync, dirty.SynchronizationState);
                 Assert.IsFalse(MirrorPulseJournalContentPolicy.IsAcceptedObservation(dirty, instance, "accepted"));
             }
