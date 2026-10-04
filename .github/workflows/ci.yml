@@ -51,7 +51,7 @@ jobs:
         run: pwsh ./eng/verify-cli-host-publish.ps1 -Runtime win-x64 -OutputDirectory "$env:RUNNER_TEMP/mirrorpulse-cli-host-win-x64"
 
       - name: Upload x64 CLI and Host publish
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: cli-host-win-x64
           path: ${{ runner.temp }}/mirrorpulse-cli-host-win-x64
@@ -101,7 +101,7 @@ jobs:
           ./eng/collect-ci-evidence.ps1 @parameters
 
       - name: Upload x64 verification evidence
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: evidence-build-and-test
           path: artifacts/evidence/build-and-test.json
@@ -132,7 +132,7 @@ jobs:
         run: pwsh ./eng/verify-cli-host-publish.ps1 -Runtime win-arm64 -OutputDirectory "$env:RUNNER_TEMP/mirrorpulse-cli-host-win-arm64"
 
       - name: Upload ARM64 CLI and Host publish
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: cli-host-win-arm64
           path: ${{ runner.temp }}/mirrorpulse-cli-host-win-arm64
@@ -191,7 +191,7 @@ jobs:
           ./eng/collect-ci-evidence.ps1 @parameters
 
       - name: Upload ARM64 verification evidence
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: evidence-official-package-arm64
           path: artifacts/evidence/official-package-arm64.json
@@ -259,7 +259,7 @@ jobs:
           }
 
       - name: Upload official Adapter aggregate
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: official-adapters
           path: artifacts/official-adapters
@@ -272,7 +272,7 @@ jobs:
           ./eng/collect-ci-evidence.ps1 -Job official-adapters -Runtime win-x64 -OutputPath artifacts/evidence/official-adapters.json -TestManifests artifacts/test-results/official/test-evidence.json -AdapterDirectory artifacts/official-adapters
 
       - name: Upload official Adapter verification evidence
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: evidence-official-adapters
           path: artifacts/evidence/official-adapters.json
