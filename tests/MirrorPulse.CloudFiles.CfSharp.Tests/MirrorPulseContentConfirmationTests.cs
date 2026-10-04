@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using CfSharp;
 using MirrorPulse.CloudFiles.CfSharp;
 using MirrorPulse.Core.Configuration;
+using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.State;
 
 namespace MirrorPulse.CloudFiles.CfSharp.Tests;
@@ -60,7 +61,9 @@ public sealed class MirrorPulseContentConfirmationTests
             CloudFile file = fileSystem.GetFile("content.bin");
             CloudItemSnapshot snapshot = await file.InspectAsync();
             MirrorPulseUploadBinding binding = MirrorPulseContentConfirmation.CaptureUploadBinding(snapshot);
-            var proof = new MirrorPulseContentAcceptanceProof(Guid.NewGuid(), binding, Guid.NewGuid(), "remote", "accepted",
+            InstanceId instance = InstanceId.New();
+            CloudPlaceholderIdentity accepted = MirrorPulsePlaceholderIdentity.Create(instance, "remote", "accepted").ToCfSharp();
+            var proof = new MirrorPulseContentAcceptanceProof(Guid.NewGuid(), binding, accepted.ItemId, "remote", "accepted",
                 bytes.Length, Convert.ToHexString(SHA256.HashData(bytes)));
             MirrorPulseContentConfirmationReceipt receipt = await MirrorPulseContentConfirmation.ConfirmAsync(file, proof, default);
             bool prepared = receipt.NativeIdentityPrepared;
@@ -92,6 +95,9 @@ public sealed class MirrorPulseContentConfirmationTests
                 CloudItemSnapshot confirmed = await file.InspectAsync();
                 Assert.AreEqual(snapshot.LocalBinding, confirmed.LocalBinding);
                 Assert.AreEqual(proof.RemoteId, confirmed.RemoteId);
+                Assert.IsTrue(MirrorPulseJournalContentPolicy.IsAcceptedObservation(confirmed, instance, "accepted"));
+                Assert.IsFalse(MirrorPulseJournalContentPolicy.IsAcceptedObservation(confirmed, InstanceId.New(), "accepted"));
+                Assert.IsFalse(MirrorPulseJournalContentPolicy.IsAcceptedObservation(confirmed, instance, "changed"));
                 MirrorPulseContentConfirmationReceipt replay = await MirrorPulseContentConfirmation.ConfirmAsync(file, proof, default);
                 Assert.AreEqual(MirrorPulseContentConfirmationOutcome.AlreadyConfirmed, replay.Outcome);
                 Assert.IsTrue(replay.MayAcknowledge);
@@ -101,6 +107,13 @@ public sealed class MirrorPulseContentConfirmationTests
                     (await MirrorPulseContentConfirmation.ConfirmAsync(file, replacementProof, default)).Outcome);
             }
             CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(file.FullPath));
+            if (!tracked)
+            {
+                await File.WriteAllBytesAsync(file.FullPath, [5, 4, 3, 2, 1]);
+                CloudItemSnapshot dirty = await file.InspectAsync();
+                Assert.AreEqual(CloudSynchronizationState.NotInSync, dirty.SynchronizationState);
+                Assert.IsFalse(MirrorPulseJournalContentPolicy.IsAcceptedObservation(dirty, instance, "accepted"));
+            }
         }
         finally
         {

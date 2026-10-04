@@ -204,10 +204,22 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
                 _state.OpenStore, _stats, command, syncRootRelativePath,
                 cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
+            if (_fileSystem is null) throw new NotSupportedException("Journal content uploads require the Cloud Files confirmation owner.");
+            dispatchPhase = "InspectBinding";
+            CloudItemSnapshot observed = await _fileSystem.GetFile(syncRootRelativePath).InspectAsync(cancellationToken).ConfigureAwait(false);
+            if (MirrorPulseJournalContentPolicy.IsAcceptedObservation(observed, command.InstanceId, revision))
+            {
+                // None tracks data writes. This current native state, owned identity
+                // and mutually acknowledged remote baseline identify an observation
+                // with no pending content change. Do not mark or suppress a window:
+                // a later real write clears InSync and has its own journal operation.
+                dispatchPhase = "AcknowledgeObservedContent";
+                await _completion.AcknowledgeSuccessfulUploadAsync(command.OperationId, revision, cancellationToken).ConfigureAwait(false);
+                return true;
+            }
             dispatchPhase = "OpenContent";
             await using var content = new FileStream(localPath, FileMode.Open, FileAccess.Read,
                 FileShare.Read, 64 * 1024, FileOptions.Asynchronous);
-            if (_fileSystem is null) throw new NotSupportedException("Journal content uploads require the Cloud Files confirmation owner.");
             dispatchPhase = "InspectBinding";
             MirrorPulseUploadBinding binding = MirrorPulseContentConfirmation.CaptureUploadBinding(
                 await _fileSystem.GetFile(syncRootRelativePath).InspectAsync(cancellationToken).ConfigureAwait(false));
