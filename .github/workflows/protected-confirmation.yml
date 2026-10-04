@@ -2,6 +2,14 @@ name: Protected content confirmation probe
 
 on:
   workflow_dispatch:
+    inputs:
+      contract:
+        description: Verify the historical prototype or the public managed API
+        type: choice
+        options:
+          - prototype
+          - managed
+        default: prototype
 
 permissions:
   contents: read
@@ -40,25 +48,33 @@ jobs:
         shell: pwsh
         env:
           MIRRORPULSE_NATIVE_TEST: '1'
+          CONFIRMATION_CONTRACT: ${{ inputs.contract || 'prototype' }}
         run: |
-          dotnet test tests/MirrorPulse.CloudFiles.CfSharp.Tests --configuration Release --no-build --filter FullyQualifiedName~MirrorPulseProtectedConfirmationTests --logger trx --results-directory artifacts/protected-confirmation
+          $filter = if ($env:CONFIRMATION_CONTRACT -eq 'managed') {
+            'FullyQualifiedName~NativeManagedConfirmationHonorsActualPolicyAndReplaysExactProof'
+          } else { 'FullyQualifiedName~MirrorPulseProtectedConfirmationTests' }
+          dotnet test tests/MirrorPulse.CloudFiles.CfSharp.Tests --configuration Release --no-build --filter $filter --logger trx --results-directory artifacts/protected-confirmation
           if ($LASTEXITCODE -ne 0) { throw 'Protected content confirmation failed.' }
 
       - name: Collect safe probe evidence
         if: always()
         shell: pwsh
+        env:
+          CONFIRMATION_CONTRACT: ${{ inputs.contract || 'prototype' }}
         run: |
           $ErrorActionPreference = 'Stop'
           $files = @(Get-ChildItem -LiteralPath artifacts/protected-confirmation -Filter '*.trx' -File)
           if ($files.Count -ne 1) { throw 'Expected exactly one protected confirmation result file.' }
           [xml]$trx = Get-Content -LiteralPath $files[0].FullName -Raw
           $results = @($trx.SelectNodes("//*[local-name()='UnitTestResult']"))
-          $observations = @($results | ForEach-Object { $_.SelectNodes(".//*[local-name()='StdOut']") } | ForEach-Object { $_.InnerText -split "`r?`n" } | Where-Object { $_ -match '^Protected confirmation ' })
+          $expected = if ($env:CONFIRMATION_CONTRACT -eq 'managed') { 2 } else { 15 }
+          $observations = @($results | ForEach-Object { $_.SelectNodes(".//*[local-name()='StdOut']") } | ForEach-Object { $_.InnerText -split "`r?`n" } | Where-Object { $_ -match '^Protected confirmation |^Confirmation:' })
           $report = [ordered]@{
             schemaVersion = 1
             sourceSha = '${{ github.sha }}'
             runtime = '${{ matrix.runtime }}'
-            expected = 15
+            contract = $env:CONFIRMATION_CONTRACT
+            expected = $expected
             selected = $results.Count
             executed = @($results | Where-Object outcome -notin @('NotExecuted', 'Inconclusive')).Count
             passed = @($results | Where-Object outcome -eq 'Passed').Count
@@ -67,7 +83,7 @@ jobs:
           }
           $report | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath artifacts/protected-confirmation/report.json -Encoding utf8
           $observations | ForEach-Object { Write-Output $_ }
-          if ($report.selected -ne 15 -or $report.executed -ne 15 -or $report.passed -ne 15) { throw 'Every protected confirmation case must execute and pass.' }
+          if ($report.selected -ne $expected -or $report.executed -ne $expected -or $report.passed -ne $expected) { throw 'Every protected confirmation case must execute and pass.' }
 
       - name: Upload safe probe report
         if: always()

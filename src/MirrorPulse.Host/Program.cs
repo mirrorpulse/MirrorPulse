@@ -64,11 +64,14 @@ catch (Exception exception)
             "The actual Shell root policy does not match content synchronization." => "ShellRootPolicyMismatch",
             "CfSharp registration metadata does not match the MirrorPulse root." => "CloudRootMetadataMismatch",
             "The existing Cloud Files registration belongs to another root identity." => "CloudRootIdentityMismatch",
+            "The existing Shell registration belongs to another provider." => "ShellRootOwnershipMismatch",
+            "The MirrorPulse Shell registration belongs to another sync root." => "ShellRootPathMismatch",
+            _ when exception.Message.StartsWith("Shell sync-root registration failed with HRESULT", StringComparison.Ordinal) => "ShellRootRegistrationFailed",
             _ => "HostStartupFailed",
         };
         await log.WriteAsync(new LogEntry(LogLevel.Error, "host", code, DateTimeOffset.UtcNow,
             [new("failureCategory", SafeDiagnosticPolicy.ClassifyFailure(exception)),
-                new("hresult", exception.HResult.ToString("X8", System.Globalization.CultureInfo.InvariantCulture))]));
+                new("hresult", exception.GetBaseException().HResult.ToString("X8", System.Globalization.CultureInfo.InvariantCulture))]));
     }
     catch (Exception logFailure) when (logFailure is not OutOfMemoryException)
     {

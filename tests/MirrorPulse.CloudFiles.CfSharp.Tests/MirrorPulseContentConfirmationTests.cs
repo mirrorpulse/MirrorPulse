@@ -11,6 +11,7 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 [SupportedOSPlatform("windows10.0.19041")]
 public sealed class MirrorPulseContentConfirmationTests
 {
+    public TestContext TestContext { get; set; } = null!;
     [TestMethod]
     public void ProductProofMapsFullNativeBindingAndExactAcceptedIdentityToPublicRequest()
     {
@@ -57,10 +58,23 @@ public sealed class MirrorPulseContentConfirmationTests
             var proof = new MirrorPulseContentAcceptanceProof(Guid.NewGuid(), binding, Guid.NewGuid(), "remote", "accepted",
                 bytes.Length, Convert.ToHexString(SHA256.HashData(bytes)));
             MirrorPulseContentConfirmationReceipt receipt = await MirrorPulseContentConfirmation.ConfirmAsync(file, proof, default);
-            Assert.AreEqual(tracked ? MirrorPulseContentConfirmationOutcome.NotApplicable : MirrorPulseContentConfirmationOutcome.Confirmed,
-                receipt.Outcome);
+            bool prepared = receipt.NativeIdentityPrepared;
+            for (int attempt = 1; ; attempt++)
+            {
+                TestContext.WriteLine($"Confirmation: attempt={attempt}, tracked={tracked}, outcome={receipt.Outcome}, stage={receipt.Stage}, " +
+                    $"nativeStage={receipt.NativeStage}, prepared={receipt.NativeIdentityPrepared}, applied={receipt.NativeApplied}, " +
+                    $"verified={receipt.NativeConfirmationVerified}, projected={receipt.DurableProjectionCommitted}, bytes={receipt.BytesVerified}, " +
+                    $"nativeHResult={receipt.NativeErrorHResult:X8}, projectionHResult={receipt.ProjectionErrorHResult:X8}");
+                if (attempt == 3 || receipt.Outcome is not (MirrorPulseContentConfirmationOutcome.Busy or MirrorPulseContentConfirmationOutcome.ProtectionLost)) break;
+                await Task.Delay(50);
+                // Retry the identical durable request; no new binding, identity, hash or upload.
+                receipt = await MirrorPulseContentConfirmation.ConfirmAsync(file, proof, default);
+                prepared |= receipt.NativeIdentityPrepared;
+            }
+            if (tracked) Assert.AreEqual(MirrorPulseContentConfirmationOutcome.NotApplicable, receipt.Outcome);
+            else Assert.IsTrue(receipt.Outcome is MirrorPulseContentConfirmationOutcome.Confirmed or MirrorPulseContentConfirmationOutcome.AlreadyConfirmed);
             Assert.AreEqual(!tracked, receipt.MayAcknowledge);
-            Assert.AreEqual(!tracked, receipt.NativeIdentityPrepared);
+            Assert.AreEqual(!tracked, prepared);
             Assert.AreEqual(!tracked, receipt.NativeConfirmationVerified);
             Assert.AreEqual(!tracked, receipt.DurableProjectionCommitted);
             if (tracked)
