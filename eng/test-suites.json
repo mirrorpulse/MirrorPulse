@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "allowSkipped": [
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseContentConfirmationTests.NativeManagedConfirmationHonorsActualPolicyAndReplaysExactProof",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseSyncRootRegistrationTests.NativeOwnedRootPolicyMigrationPreservesFilesAndIdentity",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseProtectedConfirmationTests.ExclusiveReferenceConfirmsCompleteContentOnTheSameHandle",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseProtectedConfirmationTests.ExclusiveReferenceSerializesACompetingProcessUntilConfirmationFinishes",
@@ -30,6 +31,7 @@
   ],
   "required": {
     "native": [
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseContentConfirmationTests.NativeManagedConfirmationHonorsActualPolicyAndReplaysExactProof",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseSyncRootRegistrationTests.NativeOwnedRootPolicyMigrationPreservesFilesAndIdentity",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseFullRescanPolicyTests.NativeOverflowReconcilesFilesAndKeepsDisabledRootsOffline",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseExternalConsumerTests.NativeExternalConsumerEnumeratesAndHydratesAcrossRestart",
