@@ -24,6 +24,8 @@ public sealed record MirrorPulseShellRegistrationProfile(
 public static class MirrorPulseShellSyncRootRegistrar
 {
     public const string DefaultIconResource = "%SystemRoot%\\System32\\imageres.dll,-102";
+    // WinRT has no named None member; zero disables metadata tracking.
+    public const StorageProviderInSyncPolicy ContentInSyncPolicy = StorageProviderInSyncPolicy.Default;
 
     public static MirrorPulseShellRegistrationProfile CreateProfile(
         MirrorPulseSyncRootDefinition definition,
@@ -80,6 +82,8 @@ public static class MirrorPulseShellSyncRootRegistrar
         {
             throw new InvalidOperationException("The MirrorPulse Shell registration belongs to another sync root.");
         }
+        if (alreadyRegistered && StorageProviderSyncRootManager.GetSyncRootInformationForId(profile.RegistrationId).ProviderId != profile.ProviderId)
+            throw new InvalidOperationException("The existing Shell registration belongs to another provider.");
 
         StorageFolder folder = await StorageFolder.GetFolderFromPathAsync(path);
         cancellationToken.ThrowIfCancellationRequested();
@@ -93,8 +97,7 @@ public static class MirrorPulseShellSyncRootRegistrar
             HydrationPolicy = StorageProviderHydrationPolicy.Full,
             HydrationPolicyModifier = StorageProviderHydrationPolicyModifier.None,
             PopulationPolicy = StorageProviderPopulationPolicy.Full,
-            InSyncPolicy = StorageProviderInSyncPolicy.FileCreationTime |
-                StorageProviderInSyncPolicy.DirectoryCreationTime,
+            InSyncPolicy = ContentInSyncPolicy,
             HardlinkPolicy = StorageProviderHardlinkPolicy.None,
             Version = profile.ProviderVersion,
             AllowPinning = true,
@@ -104,6 +107,10 @@ public static class MirrorPulseShellSyncRootRegistrar
         try
         {
             StorageProviderSyncRootManager.Register(registration);
+            StorageProviderSyncRootInfo actual = StorageProviderSyncRootManager.GetSyncRootInformationForId(profile.RegistrationId);
+            if (actual.InSyncPolicy != ContentInSyncPolicy ||
+                !string.Equals(actual.Path.Path, path, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("The actual Shell root policy does not match content synchronization.");
         }
         catch (COMException exception)
         {

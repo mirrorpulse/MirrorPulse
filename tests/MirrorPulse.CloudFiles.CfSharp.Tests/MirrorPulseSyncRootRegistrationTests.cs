@@ -1,3 +1,4 @@
+using System.Runtime.Versioning;
 using CfSharp;
 using MirrorPulse.CloudFiles.CfSharp;
 using MirrorPulse.Core.CloudFiles;
@@ -24,6 +25,8 @@ public sealed class MirrorPulseSyncRootRegistrationTests
         Assert.IsTrue(registrar.Options.MarkRootInSync);
         Assert.AreEqual(CloudHydrationPolicy.Full, registrar.Options.HydrationPolicy);
         Assert.AreEqual(CloudHydrationPolicyModifiers.None, registrar.Options.HydrationModifiers);
+        Assert.AreEqual(CloudInSyncPolicy.None, registrar.Options.InSyncPolicy);
+        Assert.AreEqual(CloudInSyncPolicy.TrackAll, SyncRootRegistrationOptions.CreateBuilder("Other", "1.0").Build().InSyncPolicy);
         CollectionAssert.AreEqual(new byte[] { 1, 2, 3 }, registrar.Options.SyncRootIdentity.ToArray());
         Assert.IsTrue(Directory.Exists(path));
         Directory.Delete(path, recursive: true);
@@ -37,6 +40,42 @@ public sealed class MirrorPulseSyncRootRegistrationTests
         {
             Options = options;
             return new(path, options.ProviderId, options.ProviderName, options.ProviderVersion);
+        }
+    }
+
+    [TestMethod]
+    [DoNotParallelize]
+    [TestCategory("NativeCloudFiles")]
+    [SupportedOSPlatform("windows10.0.19041")]
+    public async Task NativeOwnedRootPolicyMigrationPreservesFilesAndIdentity()
+    {
+        if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
+            Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
+        string path = Path.Combine(Path.GetTempPath(), "MirrorPulse-native-tests", Guid.NewGuid().ToString("N"));
+        var registry = new CfSharpMirrorPulseCloudRootRegistry();
+        var definition = new MirrorPulseSyncRootDefinition(path, "0.1.0", Guid.NewGuid(), [1, 2, 3]);
+        try
+        {
+            Directory.CreateDirectory(path);
+            await File.WriteAllTextAsync(Path.Combine(path, "preserved.txt"), "preserved content");
+            CloudSyncRoot.Register(path, SyncRootRegistrationOptions.CreateBuilder("MirrorPulse", "0.1.0")
+                .WithProviderId(definition.ProviderId).WithSyncRootIdentity(definition.Identity).Build());
+            CloudSyncRootInfo previous = CloudSyncRoot.Open(path).GetInfo();
+            Assert.AreEqual(CloudInSyncPolicy.TrackAll, previous.InSyncPolicy);
+            registry.EnsureCompatible(definition);
+            registry.Register(definition);
+            CloudSyncRootInfo migrated = CloudSyncRoot.Open(path).GetInfo();
+            Assert.AreEqual(CloudInSyncPolicy.None, migrated.InSyncPolicy);
+            Assert.AreEqual(previous.FileId, migrated.FileId);
+            CollectionAssert.AreEqual(previous.SyncRootIdentity.ToArray(), migrated.SyncRootIdentity.ToArray());
+            Assert.AreEqual("preserved content", await File.ReadAllTextAsync(Path.Combine(path, "preserved.txt")));
+            Assert.ThrowsExactly<InvalidDataException>(() => registry.EnsureCompatible(
+                new(path, "0.1.0", definition.ProviderId, [4, 5, 6])));
+        }
+        finally
+        {
+            registry.Unregister(path);
+            if (Directory.Exists(path)) Directory.Delete(path, true);
         }
     }
 }

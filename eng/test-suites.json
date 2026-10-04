@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "allowSkipped": [
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseSyncRootRegistrationTests.NativeOwnedRootPolicyMigrationPreservesFilesAndIdentity",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseProtectedConfirmationTests.ExclusiveReferenceConfirmsCompleteContentOnTheSameHandle",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseProtectedConfirmationTests.ExclusiveReferenceSerializesACompetingProcessUntilConfirmationFinishes",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseProtectedConfirmationTests.RejectedVerificationAndInterruptedConfirmationLeaveContentPendingAndReleaseTheHandle",
@@ -29,6 +30,7 @@
   ],
   "required": {
     "native": [
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseSyncRootRegistrationTests.NativeOwnedRootPolicyMigrationPreservesFilesAndIdentity",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseFullRescanPolicyTests.NativeOverflowReconcilesFilesAndKeepsDisabledRootsOffline",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseExternalConsumerTests.NativeExternalConsumerEnumeratesAndHydratesAcrossRestart",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseExternalConsumerTests.NativeOneSyncRootRetainsMultipleInstancesAndDirectoriesAcrossRestart",
