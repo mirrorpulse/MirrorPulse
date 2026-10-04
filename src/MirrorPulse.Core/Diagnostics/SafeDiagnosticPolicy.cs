@@ -109,7 +109,9 @@ public static class SafeDiagnosticPolicy
                 "kind" => Enum.TryParse(value, out MirrorPulseWorkerChangeKind kind) && Enum.IsDefined(kind) ? kind.ToString() : null,
                 "confirmationOutcome" => Enum.TryParse(value, out MirrorPulseContentConfirmationOutcome outcome) && Enum.IsDefined(outcome) ? outcome.ToString() : null,
                 "confirmationStage" => Enum.TryParse(value, out MirrorPulseContentConfirmationStage stage) && Enum.IsDefined(stage) ? stage.ToString() : null,
-                "nativeApplied" or "nativeVerified" or "projectionCommitted" => bool.TryParse(value, out bool flag) ? flag.ToString() : null,
+                "mutationState" => Enum.TryParse(value, out MirrorPulseMutationState state) && Enum.IsDefined(state) ? state.ToString() : null,
+                "acknowledgementPhase" => value is "ReadIntent" or "ReadMetadata" or "ValidateMetadata" or "SaveProof" or "ConfirmContent" or "SaveReceipt" or "AcknowledgeFeed" or "ProjectProduct" ? value : null,
+                "nativeApplied" or "nativeVerified" or "projectionCommitted" or "proofPresent" => bool.TryParse(value, out bool flag) ? flag.ToString() : null,
                 "redacted" => value == LogFieldPolicy.RedactedValue ? value : null,
                 "omittedFieldCount" => int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out int count) && count >= 0
                     ? count.ToString(CultureInfo.InvariantCulture) : null,

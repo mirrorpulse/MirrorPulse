@@ -75,11 +75,14 @@ public sealed class SafeDiagnosticPolicyTests
         var safe = SafeDiagnosticPolicy.Sanitize(new LogEntry(LogLevel.Warning, "CloudFiles.Upload", "MutationOutcomeAmbiguous", DateTimeOffset.UtcNow,
             [new("confirmationOutcome", "ProtectionLost"), new("confirmationStage", "Reference"),
              new("nativeApplied", "false"), new("nativeVerified", "false"), new("projectionCommitted", "true"),
+             new("acknowledgementPhase", "ReadMetadata"), new("mutationState", "RemoteAccepted"), new("proofPresent", "false"),
+             new("acknowledgementPhase", "path-secret-needle"),
              new("confirmationOutcome", "token-secret-needle"), new("confirmationStage", "path-secret-needle"), new("nativeApplied", "password-secret-needle")]));
         Assert.AreEqual("ProtectionLost", safe.Fields["confirmationOutcome"]);
         Assert.AreEqual("Reference", safe.Fields["confirmationStage"]);
         Assert.AreEqual("False", safe.Fields["nativeApplied"]);
         Assert.AreEqual("True", safe.Fields["projectionCommitted"]);
+        Assert.AreEqual("ReadMetadata", safe.Fields["acknowledgementPhase"]);
         Assert.IsFalse(JsonSerializer.Serialize(safe).Contains("needle", StringComparison.Ordinal));
     }
 }

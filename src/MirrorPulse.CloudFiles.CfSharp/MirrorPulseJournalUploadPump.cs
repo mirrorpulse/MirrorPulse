@@ -320,6 +320,7 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
 
     private async ValueTask AcknowledgeAsync(Guid operationId, string? revision, CancellationToken cancellationToken)
     {
+        string phase = "ReadIntent";
         try
         {
             MirrorPulseMutationRecord record = await _catalog.ReadMutationAsync(operationId, cancellationToken).ConfigureAwait(false)
@@ -336,30 +337,45 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
                 MirrorPulseContentAcceptanceProof? proof = await _catalog.ReadContentAcceptanceProofAsync(operationId, cancellationToken).ConfigureAwait(false);
                 if (proof is null)
                 {
+                    phase = "ReadMetadata";
                     MirrorPulseWorkerDirectoryEntry remote = await _readback.ReadMetadataAsync(record.Intent, cancellationToken).ConfigureAwait(false)
                         ?? throw new FileNotFoundException("The accepted remote file has no metadata.");
+                    phase = "ValidateMetadata";
                     if (remote.IsDeleted || !string.Equals(remote.ItemKind, "File", StringComparison.OrdinalIgnoreCase) || remote.RemoteRevision != revision)
                         throw new MirrorPulseMutationAmbiguousException("Remote metadata does not match the accepted upload.");
                     CloudPlaceholderIdentity identity = MirrorPulsePlaceholderIdentity.Create(record.Intent.InstanceId, remote.RemoteId, revision).ToCfSharp();
                     proof = new(operationId, record.Intent.UploadBinding, identity.ItemId, identity.RemoteId, revision,
                         record.Intent.ContentLength!.Value, record.Intent.ContentSha256!);
+                    phase = "SaveProof";
                     await _catalog.SaveContentAcceptanceProofAsync(proof, cancellationToken).ConfigureAwait(false);
                 }
                 string localPath = _router.ResolveUploadPath(record.Intent.InstanceId, record.Intent.RootKey, record.Intent.RelativePath);
                 string relative = Path.GetRelativePath(_syncRootPath, localPath).Replace(Path.DirectorySeparatorChar, '/');
                 await _feed.SuppressProviderEchoAsync(CloudStateOperationKind.MetadataUpdate, relative,
                     DateTimeOffset.UtcNow.AddSeconds(10), cancellationToken: cancellationToken).ConfigureAwait(false);
+                phase = "ConfirmContent";
                 MirrorPulseContentConfirmationReceipt receipt = await MirrorPulseContentConfirmation.ConfirmAsync(
                     _fileSystem.GetFile(relative), proof, cancellationToken).ConfigureAwait(false);
+                phase = "SaveReceipt";
                 await _catalog.SaveContentConfirmationReceiptAsync(operationId, receipt, CancellationToken.None).ConfigureAwait(false);
                 if (!receipt.MayAcknowledge)
                     throw new MirrorPulseMutationAmbiguousException($"Local journal content confirmation requires recovery ({receipt.Outcome}).");
             }
+            phase = "AcknowledgeFeed";
             await _completion.AcknowledgeSuccessfulUploadAsync(operationId, revision, cancellationToken).ConfigureAwait(false);
+            phase = "ProjectProduct";
             await ProjectAcceptedAsync(record, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
+            try
+            {
+                await _log.WriteAsync(new(LogLevel.Warning, "CloudFiles.Upload", "JournalAcknowledgementFailed", DateTimeOffset.UtcNow,
+                    [new("operationId", operationId.ToString("D")), new("acknowledgementPhase", phase),
+                     new("failureCategory", SafeDiagnosticPolicy.ClassifyFailure(exception.GetBaseException())),
+                     new("hresult", exception.GetBaseException().HResult.ToString("X8", System.Globalization.CultureInfo.InvariantCulture))]), cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception logException) when (logException is not OperationCanceledException) { }
             throw new MirrorPulseJournalAcknowledgementException("The accepted Worker result could not be acknowledged.", exception);
         }
     }
@@ -415,6 +431,11 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
             {
                 fields.Add(new("operationId", command.OperationId.ToString("D")));
                 fields.Add(new("kind", command.Kind.ToString()));
+                if (await _catalog.ReadMutationAsync(command.OperationId, cancellationToken).ConfigureAwait(false) is { } record)
+                {
+                    fields.Add(new("mutationState", record.State.ToString()));
+                    fields.Add(new("proofPresent", (await _catalog.ReadContentAcceptanceProofAsync(command.OperationId, cancellationToken).ConfigureAwait(false) is not null).ToString()));
+                }
                 MirrorPulseContentConfirmationReceipt? receipt = await _catalog.ReadContentConfirmationReceiptAsync(
                     command.OperationId, cancellationToken).ConfigureAwait(false);
                 if (receipt is not null)
