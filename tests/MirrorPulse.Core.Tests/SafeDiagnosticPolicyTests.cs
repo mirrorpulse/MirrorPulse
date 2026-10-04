@@ -68,4 +68,18 @@ public sealed class SafeDiagnosticPolicyTests
         Assert.AreEqual(operation.ToString("D"), safe.Fields["operationId"]);
         Assert.IsFalse(JsonSerializer.Serialize(safe).Contains("needle", StringComparison.Ordinal));
     }
+
+    [TestMethod]
+    public void ContentConfirmationDiagnosticsAcceptOnlyTypedReceiptFacts()
+    {
+        var safe = SafeDiagnosticPolicy.Sanitize(new LogEntry(LogLevel.Warning, "CloudFiles.Upload", "MutationOutcomeAmbiguous", DateTimeOffset.UtcNow,
+            [new("confirmationOutcome", "ProtectionLost"), new("confirmationStage", "Reference"),
+             new("nativeApplied", "false"), new("nativeVerified", "false"), new("projectionCommitted", "true"),
+             new("confirmationOutcome", "token-secret-needle"), new("confirmationStage", "path-secret-needle"), new("nativeApplied", "password-secret-needle")]));
+        Assert.AreEqual("ProtectionLost", safe.Fields["confirmationOutcome"]);
+        Assert.AreEqual("Reference", safe.Fields["confirmationStage"]);
+        Assert.AreEqual("False", safe.Fields["nativeApplied"]);
+        Assert.AreEqual("True", safe.Fields["projectionCommitted"]);
+        Assert.IsFalse(JsonSerializer.Serialize(safe).Contains("needle", StringComparison.Ordinal));
+    }
 }

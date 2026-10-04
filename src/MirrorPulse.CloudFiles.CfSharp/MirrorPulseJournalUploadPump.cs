@@ -415,6 +415,16 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
             {
                 fields.Add(new("operationId", command.OperationId.ToString("D")));
                 fields.Add(new("kind", command.Kind.ToString()));
+                MirrorPulseContentConfirmationReceipt? receipt = await _catalog.ReadContentConfirmationReceiptAsync(
+                    command.OperationId, cancellationToken).ConfigureAwait(false);
+                if (receipt is not null)
+                {
+                    fields.Add(new("confirmationOutcome", receipt.Outcome.ToString()));
+                    fields.Add(new("confirmationStage", receipt.Stage.ToString()));
+                    fields.Add(new("nativeApplied", receipt.NativeApplied.ToString()));
+                    fields.Add(new("nativeVerified", receipt.NativeConfirmationVerified.ToString()));
+                    fields.Add(new("projectionCommitted", receipt.DurableProjectionCommitted.ToString()));
+                }
             }
 
             await _log.WriteAsync(new LogEntry(LogLevel.Warning, "CloudFiles.Upload",

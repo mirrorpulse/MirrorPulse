@@ -94,6 +94,12 @@ public sealed class MirrorPulseFullRescanPolicyTests
                         }
                         await Task.Delay(50, timeout.Token);
                     }
+                    catch (Exception exception)
+                    {
+                        // Only disposable fixture paths and data exist in this native test.
+                        TestContext.WriteLine($"Rescan acceptance failure: {exception}");
+                        throw;
+                    }
                 }
             }
             var router = new MirrorPulseRootRouter(paths.SyncRootPath, [first, second]);

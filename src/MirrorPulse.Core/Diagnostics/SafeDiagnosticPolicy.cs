@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.State;
 using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.Core.Diagnostics;
@@ -106,6 +107,9 @@ public static class SafeDiagnosticPolicy
                         ? count.ToString(CultureInfo.InvariantCulture) : null,
                 "failureCategory" => value is "IO" or "InvalidData" or "Authorization" or "Cancelled" or "Internal" ? value : null,
                 "kind" => Enum.TryParse(value, out MirrorPulseWorkerChangeKind kind) && Enum.IsDefined(kind) ? kind.ToString() : null,
+                "confirmationOutcome" => Enum.TryParse(value, out MirrorPulseContentConfirmationOutcome outcome) && Enum.IsDefined(outcome) ? outcome.ToString() : null,
+                "confirmationStage" => Enum.TryParse(value, out MirrorPulseContentConfirmationStage stage) && Enum.IsDefined(stage) ? stage.ToString() : null,
+                "nativeApplied" or "nativeVerified" or "projectionCommitted" => bool.TryParse(value, out bool flag) ? flag.ToString() : null,
                 "redacted" => value == LogFieldPolicy.RedactedValue ? value : null,
                 "omittedFieldCount" => int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out int count) && count >= 0
                     ? count.ToString(CultureInfo.InvariantCulture) : null,
