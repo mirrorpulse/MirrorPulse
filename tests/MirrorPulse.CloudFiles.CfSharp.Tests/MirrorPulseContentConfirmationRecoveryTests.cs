@@ -294,8 +294,12 @@ public sealed class MirrorPulseContentConfirmationRecoveryTests
         Assert.IsFalse(receipt.NativeApplied);
         string outside = Path.Combine(fixture.Root, "outside.bin");
         await File.WriteAllBytesAsync(outside, [9, 8, 7]);
+        // Keep an item reference acquired before the link appears, then verify
+        // both fresh path resolution and confirmation refuse the outside target.
+        CloudFile linkedFile = fixture.System.GetFile("link.bin");
         File.CreateSymbolicLink(Path.Combine(fixture.Paths.SyncRootPath, "link.bin"), outside);
-        MirrorPulseContentConfirmationReceipt linked = await MirrorPulseContentConfirmation.ConfirmAsync(fixture.System.GetFile("link.bin"), proof, default);
+        Assert.ThrowsExactly<ArgumentException>(() => fixture.System.GetFile("link.bin"));
+        MirrorPulseContentConfirmationReceipt linked = await MirrorPulseContentConfirmation.ConfirmAsync(linkedFile, proof, default);
         Assert.AreEqual(MirrorPulseContentConfirmationOutcome.NotApplicable, linked.Outcome);
         Assert.AreEqual(0, linked.BytesVerified);
         Assert.IsFalse(linked.MayAcknowledge);
