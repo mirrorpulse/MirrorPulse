@@ -107,10 +107,6 @@ public static class MirrorPulseShellSyncRootRegistrar
         try
         {
             StorageProviderSyncRootManager.Register(registration);
-            StorageProviderSyncRootInfo actual = StorageProviderSyncRootManager.GetSyncRootInformationForId(profile.RegistrationId);
-            if (actual.InSyncPolicy != ContentInSyncPolicy ||
-                !string.Equals(actual.Path.Path, path, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidDataException("The actual Shell root policy does not match content synchronization.");
         }
         catch (COMException exception)
         {
@@ -118,7 +114,33 @@ public static class MirrorPulseShellSyncRootRegistrar
                 $"Shell sync-root registration failed with HRESULT 0x{exception.HResult:X8}.",
                 exception);
         }
+        try
+        {
+            StorageProviderSyncRootInfo actual = StorageProviderSyncRootManager.GetSyncRootInformationForId(profile.RegistrationId);
+            if (actual.InSyncPolicy != ContentInSyncPolicy ||
+                !string.Equals(actual.Path.Path, path, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("The actual Shell root policy does not match content synchronization.");
+        }
+        catch (COMException exception) when (exception.HResult == unchecked((int)0x80070490) && !HasPackageIdentity())
+        {
+            // Unpackaged development Hosts can register successfully while Shell cannot
+            // resolve the registration ID. The coordinator still requires CFAPI's actual
+            // None policy; packaged Hosts must also pass the Shell readback.
+        }
+        catch (COMException exception)
+        {
+            throw new InvalidOperationException(
+                $"Shell sync-root readback failed with HRESULT 0x{exception.HResult:X8}.",
+                exception);
+        }
         return alreadyRegistered;
+    }
+
+    private static bool HasPackageIdentity()
+    {
+        try { _ = Windows.ApplicationModel.Package.Current.Id.Name; return true; }
+        catch (InvalidOperationException) { return false; }
+        catch (COMException exception) when (exception.HResult == unchecked((int)0x80073D54)) { return false; }
     }
 
     public static bool TryGetRegisteredPath(string registrationId, out string? path)
