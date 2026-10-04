@@ -30,7 +30,7 @@ public sealed class MirrorPulseMutationReadback(IMirrorPulseWorkerStatTransport 
         if (ranges is null || directories is null || revision is null || intent.ContentSha256 is null || intent.ContentLength is null)
             return new(MirrorPulseMutationProofKind.Unknown, revision);
         MirrorPulseWorkerDirectoryEntry? metadata = await ReadMetadataAsync(intent, cancellationToken).ConfigureAwait(false);
-        if (metadata is null || metadata.IsDeleted || metadata.ItemKind != "file" || metadata.RemoteRevision != revision)
+        if (metadata is null || metadata.IsDeleted || !string.Equals(metadata.ItemKind, "File", StringComparison.OrdinalIgnoreCase) || metadata.RemoteRevision != revision)
             return new(MirrorPulseMutationProofKind.Unknown, revision);
         bool matches = metadata.Length == intent.ContentLength;
         if (matches)

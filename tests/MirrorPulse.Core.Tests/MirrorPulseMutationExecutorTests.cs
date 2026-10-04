@@ -63,9 +63,11 @@ public sealed class MirrorPulseMutationExecutorTests
     }
 
     [TestMethod]
-    [DataRow(false)]
-    [DataRow(true)]
-    public async Task ReadbackAfterRestartConvergesMatchingBytesOrRetainsConflict(bool changed)
+    [DataRow(false, "file")]
+    [DataRow(false, "File")]
+    [DataRow(true, "file")]
+    [DataRow(true, "File")]
+    public async Task ReadbackAfterRestartConvergesMatchingBytesOrRetainsConflict(bool changed, string itemKind)
     {
         string root = Path.Combine(Path.GetTempPath(), "MirrorPulse-tests", Guid.NewGuid().ToString("N"));
         var paths = new MirrorPulseStoragePaths(Path.Combine(root, "sync"), Path.Combine(root, "data"));
@@ -81,7 +83,7 @@ public sealed class MirrorPulseMutationExecutorTests
                     (_, _) => throw new AssertFailedException(), default).AsTask());
             if (changed) File.WriteAllBytes(Path.Combine(root, "remote"), [4, 3, 2, 1]);
             await using var reopened = await MirrorPulseProductCatalog.OpenAsync(paths);
-            var transport = new ReadbackFixture(Path.Combine(root, "remote"));
+            var transport = new ReadbackFixture(Path.Combine(root, "remote")) { ItemKind = itemKind };
             var readback = new MirrorPulseMutationReadback(transport, transport, transport);
             var executor = new MirrorPulseMutationExecutor(reopened);
             MirrorPulseMutationRecord record = (await reopened.ReadMutationAsync(intent.OperationId))!;
@@ -251,6 +253,7 @@ public sealed class MirrorPulseMutationExecutorTests
     {
         private int _stats;
         public bool RevisionChanges { get; set; }
+        public string ItemKind { get; set; } = "file";
         public ValueTask<string?> StatAsync(MirrorPulseWorkerStatRequest request, CancellationToken cancellationToken) =>
             ValueTask.FromResult<string?>(RevisionChanges && ++_stats > 1 ? "concurrent-change" : "different-revision");
         public ValueTask<Stream> ReadRangeAsync(MirrorPulseWorkerReadRangeRequest request, CancellationToken cancellationToken)
@@ -260,7 +263,7 @@ public sealed class MirrorPulseMutationExecutorTests
         }
         public ValueTask<MirrorPulseWorkerDirectoryPage> ReadDirectoryPageAsync(MirrorPulseWorkerDirectoryPageRequest request,
             CancellationToken cancellationToken) => ValueTask.FromResult(new MirrorPulseWorkerDirectoryPage(
-                [new("remote-id", "different-revision", "file", "file.txt", path is null ? 0 : new FileInfo(path).Length, null, null, false)],
+                [new("remote-id", "different-revision", ItemKind, "file.txt", path is null ? 0 : new FileInfo(path).Length, null, null, false)],
                 ReadOnlyMemory<byte>.Empty, true));
     }
 }

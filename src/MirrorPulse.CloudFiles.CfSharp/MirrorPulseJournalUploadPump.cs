@@ -338,7 +338,7 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
                 {
                     MirrorPulseWorkerDirectoryEntry remote = await _readback.ReadMetadataAsync(record.Intent, cancellationToken).ConfigureAwait(false)
                         ?? throw new FileNotFoundException("The accepted remote file has no metadata.");
-                    if (remote.IsDeleted || remote.ItemKind != "file" || remote.RemoteRevision != revision)
+                    if (remote.IsDeleted || !string.Equals(remote.ItemKind, "File", StringComparison.OrdinalIgnoreCase) || remote.RemoteRevision != revision)
                         throw new MirrorPulseMutationAmbiguousException("Remote metadata does not match the accepted upload.");
                     CloudPlaceholderIdentity identity = MirrorPulsePlaceholderIdentity.Create(record.Intent.InstanceId, remote.RemoteId, revision).ToCfSharp();
                     proof = new(operationId, record.Intent.UploadBinding, identity.ItemId, identity.RemoteId, revision,
