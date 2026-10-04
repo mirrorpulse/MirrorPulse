@@ -26,6 +26,7 @@ public static class SafeDiagnosticPolicy
         ["ShellRootRegistrationFailed"] = "Windows rejected the Shell root registration.",
         ["JournalReadFailed"] = "The local journal could not be read.",
         ["JournalCommandFailed"] = "A local journal command failed.",
+        ["JournalDispatchBoundary"] = "A local content command reached a deferred dispatch boundary.",
         ["JournalAcknowledgementFailed"] = "An accepted Worker result could not be acknowledged.",
         ["MutationOutcomeAmbiguous"] = "A remote outcome requires reconciliation before retry.",
         ["RemoteBatchRetry"] = "The remote batch requires another attempt.",
@@ -111,7 +112,8 @@ public static class SafeDiagnosticPolicy
                 "confirmationStage" => Enum.TryParse(value, out MirrorPulseContentConfirmationStage stage) && Enum.IsDefined(stage) ? stage.ToString() : null,
                 "mutationState" => Enum.TryParse(value, out MirrorPulseMutationState state) && Enum.IsDefined(state) ? state.ToString() : null,
                 "acknowledgementPhase" => value is "ReadIntent" or "ReadMetadata" or "ValidateMetadata" or "SaveProof" or "ConfirmContent" or "SaveReceipt" or "AcknowledgeFeed" or "ProjectProduct" ? value : null,
-                "nativeApplied" or "nativeVerified" or "projectionCommitted" or "proofPresent" => bool.TryParse(value, out bool flag) ? flag.ToString() : null,
+                "dispatchPhase" => value is "ResolvePath" or "RecoverIntent" or "ResolveRevision" or "OpenContent" or "InspectBinding" or "HashContent" or "ExecuteRemote" or "MissingLocalContent" ? value : null,
+                "nativeApplied" or "nativeVerified" or "projectionCommitted" or "proofPresent" or "hasItemReference" => bool.TryParse(value, out bool flag) ? flag.ToString() : null,
                 "redacted" => value == LogFieldPolicy.RedactedValue ? value : null,
                 "omittedFieldCount" => int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out int count) && count >= 0
                     ? count.ToString(CultureInfo.InvariantCulture) : null,

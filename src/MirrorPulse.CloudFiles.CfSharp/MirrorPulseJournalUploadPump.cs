@@ -177,25 +177,36 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
         }
 
         string? syncRootRelativePath = null;
+        string dispatchPhase = "ResolvePath";
         try
         {
             string localPath = _router.ResolveUploadPath(command.InstanceId,
                 command.RootKey, command.RelativePath);
             syncRootRelativePath = Path.GetRelativePath(_syncRootPath, localPath)
                 .Replace(Path.DirectorySeparatorChar, '/');
+            dispatchPhase = "RecoverIntent";
             if (await CheckPreviousMutationAsync(command, cancellationToken).ConfigureAwait(false)) return true;
-            if (!File.Exists(localPath)) return false;
+            if (!File.Exists(localPath))
+            {
+                await LogDispatchBoundaryAsync(command, "MissingLocalContent", null, cancellationToken).ConfigureAwait(false);
+                return false;
+            }
+            dispatchPhase = "ResolveRevision";
             string? revision = await MirrorPulseJournalUploadRevisionGuard.ResolveAsync(
                 _state.OpenStore, _stats, command, syncRootRelativePath,
                 cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
+            dispatchPhase = "OpenContent";
             await using var content = new FileStream(localPath, FileMode.Open, FileAccess.Read,
                 FileShare.Read, 64 * 1024, FileOptions.Asynchronous);
             if (_fileSystem is null) throw new NotSupportedException("Journal content uploads require the Cloud Files confirmation owner.");
+            dispatchPhase = "InspectBinding";
             MirrorPulseUploadBinding binding = MirrorPulseContentConfirmation.CaptureUploadBinding(
                 await _fileSystem.GetFile(syncRootRelativePath).InspectAsync(cancellationToken).ConfigureAwait(false));
+            dispatchPhase = "HashContent";
             string hash = Convert.ToHexString(await SHA256.HashDataAsync(content, cancellationToken).ConfigureAwait(false));
             content.Position = 0;
+            dispatchPhase = "ExecuteRemote";
             await _mutationExecutor.ExecuteAsync(Intent(command, revision, content.Length, hash, binding), async token =>
                 await _uploads.UploadAsync(new MirrorPulseWorkerUploadRequest(command.InstanceId, command.RelativePath,
                     revision, content, content.Length, command.OperationId, hash), token).ConfigureAwait(false),
@@ -208,6 +219,7 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
         }
         catch (MirrorPulseUploadConflictException conflict)
         {
+            await LogDispatchBoundaryAsync(command, dispatchPhase, conflict, cancellationToken).ConfigureAwait(false);
             return await DeferConflictAsync(command, syncRootRelativePath!,
                 conflict.ExpectedRevision, conflict.ActualRevision, cancellationToken)
                 .ConfigureAwait(false);
@@ -220,11 +232,26 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
+            await LogDispatchBoundaryAsync(command, dispatchPhase, exception, cancellationToken).ConfigureAwait(false);
             if (exception is MirrorPulseJournalAcknowledgementException) throw;
             await _completion.DeferFailedUploadAsync(command.OperationId, DateTimeOffset.UtcNow,
                 cancellationToken).ConfigureAwait(false);
             throw;
         }
+    }
+
+    private async Task LogDispatchBoundaryAsync(MirrorPulseWorkerChangeCommand command, string phase,
+        Exception? exception, CancellationToken token)
+    {
+        try
+        {
+            await _log.WriteAsync(new(LogLevel.Warning, "CloudFiles.Upload", "JournalDispatchBoundary", DateTimeOffset.UtcNow,
+                [new("operationId", command.OperationId.ToString("D")), new("kind", command.Kind.ToString()),
+                 new("dispatchPhase", phase), new("hasItemReference", (command.ItemId is not null).ToString()),
+                 new("failureCategory", exception is null ? "IO" : SafeDiagnosticPolicy.ClassifyFailure(exception.GetBaseException())),
+                 new("hresult", (exception?.GetBaseException().HResult ?? 0).ToString("X8", System.Globalization.CultureInfo.InvariantCulture))]), token).ConfigureAwait(false);
+        }
+        catch (Exception loggingFailure) when (loggingFailure is not OperationCanceledException) { }
     }
 
     private async ValueTask<bool> DispatchMutationAsync(

@@ -271,6 +271,14 @@ try {
             Write-Host 'Conflict reasons:'
             @($conflictStatus.data.items) | Group-Object reason |
                 ForEach-Object { Write-Host "$($_.Name): $($_.Count)" }
+            foreach ($conflictItem in @($conflictStatus.data.items)) {
+                $relative = $conflictItem.relativePath.Replace('\', '/')
+                $role = if ($relative.EndsWith('/nested/fixture.txt')) { 'HydratedRangeFixture' }
+                    elseif ($relative.EndsWith('/cli-roundtrip.txt')) { 'HydratedRoundTripFixture' }
+                    elseif ($relative.EndsWith('/queued-upload.txt')) { 'OfflineUploadFixture' }
+                    else { 'OtherFixture' }
+                Write-Host "Fixture conflict: role=$role; reason=$($conflictItem.reason); source=$($conflictItem.source); localRevisionPresent=$(-not [string]::IsNullOrEmpty($conflictItem.localRevision)); remoteRevisionPresent=$(-not [string]::IsNullOrEmpty($conflictItem.remoteRevision))."
+            }
             throw "The upload journal did not drain. Pending=$($drainedStatus.data.pendingUploads); " +
                 "UploadConflicts=$($drainedStatus.data.pendingUploadConflicts); " +
                 "Phase=$($instanceStatus.phase); Error=$($instanceStatus.lastErrorCode)."
