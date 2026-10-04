@@ -80,9 +80,10 @@ public sealed class SignedLocalVersionSwitchProcessTests
                 {
                     await supervisor.StartAsync(offline);
                     Assert.AreEqual("Offline", (await catalog.ReadInstanceRuntimeStateAsync(instanceId))?.Phase);
-                    await Assert.ThrowsExactlyAsync<IOException>(async () =>
+                    AdapterWorkerOperationException unavailable = await Assert.ThrowsExactlyAsync<AdapterWorkerOperationException>(async () =>
                         await supervisor.StatAsync(new MirrorPulseWorkerStatRequest(instanceId, "note.txt"),
                             CancellationToken.None));
+                    Assert.AreEqual("Offline", unavailable.FailureCode);
                 }
 
                 await catalog.SetInstanceEnabledAsync(instanceId, true);
