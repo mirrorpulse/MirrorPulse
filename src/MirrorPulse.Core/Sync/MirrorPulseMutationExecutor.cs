@@ -19,6 +19,20 @@ public sealed class MirrorPulseMutationExecutor(MirrorPulseProductCatalog catalo
         if (record.State == MirrorPulseMutationState.Conflict)
             throw new MirrorPulseWorkerMutationConflictException(record.Intent.ExpectedRevision, record.AcceptedRevision);
         if (record.State == MirrorPulseMutationState.Prepared) throw new MirrorPulseMutationAmbiguousException();
+        if (record.State == MirrorPulseMutationState.RemoteAccepted &&
+            await _catalog.ReadContentAcceptanceProofAsync(record.Intent.OperationId, cancellationToken).ConfigureAwait(false) is { } retained)
+        {
+            if (retained.UploadBinding != record.Intent.UploadBinding || retained.Length != record.Intent.ContentLength ||
+                !string.Equals(retained.Sha256, record.Intent.ContentSha256, StringComparison.OrdinalIgnoreCase) ||
+                retained.AcceptedRevision != record.AcceptedRevision)
+                throw new InvalidDataException("The retained proof does not match its accepted mutation.");
+            // Remote acceptance is already durable. Reverify the same local proof rather than
+            // replace its revision/identity with a later remote observation or upload again.
+            await acknowledge(retained.AcceptedRevision, cancellationToken).ConfigureAwait(false);
+            await _catalog.TransitionMutationAsync(record.Intent.OperationId, MirrorPulseMutationState.RemoteAccepted,
+                MirrorPulseMutationState.Acknowledged, retained.AcceptedRevision, cancellationToken).ConfigureAwait(false);
+            return;
+        }
         MirrorPulseMutationProof proof = await verify(record, cancellationToken).ConfigureAwait(false);
         if (proof.Kind == MirrorPulseMutationProofKind.Unknown) throw new MirrorPulseMutationAmbiguousException();
         if (proof.Kind == MirrorPulseMutationProofKind.Conflict)

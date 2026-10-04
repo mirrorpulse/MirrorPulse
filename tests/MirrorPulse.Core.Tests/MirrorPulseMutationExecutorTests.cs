@@ -122,7 +122,10 @@ public sealed class MirrorPulseMutationExecutorTests
     {
         string root = Path.Combine(Path.GetTempPath(), "MirrorPulse-tests", Guid.NewGuid().ToString("N"));
         var paths = new MirrorPulseStoragePaths(Path.Combine(root, "sync"), Path.Combine(root, "data"));
-        MirrorPulseMutationIntent intent = Intent();
+        MirrorPulseMutationIntent intent = Intent() with
+        {
+            UploadBinding = new(new(42, Guid.NewGuid(), Guid.NewGuid()), MirrorPulseContentPreparation.ConvertRegularFile),
+        };
         int mutations = 0;
         try
         {
@@ -141,6 +144,11 @@ public sealed class MirrorPulseMutationExecutorTests
                 await Assert.ThrowsExactlyAsync<IOException>(() => new MirrorPulseMutationExecutor(catalog).ExecuteAsync(intent,
                     _ => { mutations++; return ValueTask.FromResult<string?>("accepted"); }, async (_, token) =>
                     {
+                        await catalog.SaveContentAcceptanceProofAsync(new(intent.OperationId, intent.UploadBinding!, Guid.NewGuid(), "remote",
+                            "accepted", intent.ContentLength!.Value, intent.ContentSha256!), token);
+                        await catalog.SaveContentConfirmationReceiptAsync(intent.OperationId, new(MirrorPulseContentConfirmationOutcome.Confirmed,
+                            MirrorPulseContentConfirmationStage.Complete, MirrorPulseContentConfirmationStage.Complete,
+                            true, true, true, true, 4, 1, 0, 0, null, null, true, null, DateTimeOffset.UtcNow), token);
                         await using ICloudStateTransaction transaction = await official.BeginTransactionAsync(token);
                         await transaction.Operations.RemoveAsync(intent.OperationId, token);
                         await transaction.CommitAsync(token);
@@ -166,6 +174,74 @@ public sealed class MirrorPulseMutationExecutorTests
             Assert.AreEqual(1, mutations);
             Assert.AreEqual(MirrorPulseMutationState.Acknowledged, (await reopened.ReadMutationAsync(intent.OperationId))!.State);
             Assert.AreEqual("Connected", (await reopened.ReadInstanceRuntimeStateAsync(intent.InstanceId))!.Phase);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [TestMethod]
+    public async Task RetainedAcceptanceReplaysLocalConfirmationWithoutChangingRemoteProofOrRepeatingUpload()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "MirrorPulse-tests", Guid.NewGuid().ToString("N"));
+        var paths = new MirrorPulseStoragePaths(Path.Combine(root, "sync"), Path.Combine(root, "data"));
+        MirrorPulseMutationIntent intent = Intent() with
+        {
+            UploadBinding = new(new(42, Guid.NewGuid(), Guid.NewGuid()), MirrorPulseContentPreparation.ConvertRegularFile),
+        };
+        var proof = new MirrorPulseContentAcceptanceProof(intent.OperationId, intent.UploadBinding!, Guid.NewGuid(), "remote",
+            "accepted", intent.ContentLength!.Value, intent.ContentSha256!);
+        int mutations = 0;
+        int confirmations = 0;
+        try
+        {
+            await using (var catalog = await MirrorPulseProductCatalog.OpenAsync(paths))
+            {
+                await Assert.ThrowsExactlyAsync<IOException>(() => new MirrorPulseMutationExecutor(catalog).ExecuteAsync(intent,
+                    _ => { mutations++; return ValueTask.FromResult<string?>("accepted"); }, async (_, token) =>
+                    {
+                        await catalog.SaveContentAcceptanceProofAsync(proof, token);
+                        confirmations++;
+                        throw new IOException("Native confirmation committed but projection failed.");
+                    }, default).AsTask());
+            }
+            await using var reopened = await MirrorPulseProductCatalog.OpenAsync(paths);
+            MirrorPulseMutationRecord record = (await reopened.ReadMutationAsync(intent.OperationId))!;
+            await new MirrorPulseMutationExecutor(reopened).ReconcileAsync(record,
+                (_, _) => throw new AssertFailedException("Later remote observations must not replace the accepted proof."),
+                async (revision, token) =>
+                {
+                    Assert.AreEqual(proof.AcceptedRevision, revision);
+                    Assert.AreEqual(proof, await reopened.ReadContentAcceptanceProofAsync(intent.OperationId, token));
+                    confirmations++;
+                }, default);
+            Assert.AreEqual(1, mutations);
+            Assert.AreEqual(2, confirmations);
+            Assert.AreEqual(proof, await reopened.ReadContentAcceptanceProofAsync(intent.OperationId));
+            Assert.AreEqual(MirrorPulseMutationState.Acknowledged, (await reopened.ReadMutationAsync(intent.OperationId))!.State);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task MissingJournalRecordCannotInventHistoricalBindingOrNativeConfirmation(bool hasBinding)
+    {
+        string root = Path.Combine(Path.GetTempPath(), "MirrorPulse-tests", Guid.NewGuid().ToString("N"));
+        var paths = new MirrorPulseStoragePaths(Path.Combine(root, "sync"), Path.Combine(root, "data"));
+        MirrorPulseMutationIntent intent = Intent() with
+        {
+            UploadBinding = hasBinding ? new(new(42, Guid.NewGuid(), Guid.NewGuid()), MirrorPulseContentPreparation.ConvertRegularFile) : null,
+        };
+        try
+        {
+            await using var catalog = await MirrorPulseProductCatalog.OpenAsync(paths);
+            await Assert.ThrowsExactlyAsync<IOException>(() => new MirrorPulseMutationExecutor(catalog).ExecuteAsync(intent,
+                _ => ValueTask.FromResult<string?>("accepted"), (_, _) => throw new IOException("Unconfirmed local outcome."), default).AsTask());
+            Assert.IsEmpty(await new MirrorPulseMutationProjectionRecovery(catalog).RepairAsync((_, _) => ValueTask.FromResult(false),
+                (_, _) => throw new AssertFailedException("Missing official journal state is not a native content proof."), default));
+            Assert.AreEqual(MirrorPulseMutationState.RemoteAccepted, (await catalog.ReadMutationAsync(intent.OperationId))!.State);
+            if (!hasBinding)
+                Assert.AreEqual(MirrorPulseLocalOperationBlockReason.MissingUploadBinding, (await catalog.ReadBlockedLocalOperationsAsync()).Single().Reason);
         }
         finally { Directory.Delete(root, true); }
     }
