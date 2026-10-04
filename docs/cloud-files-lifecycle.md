@@ -110,8 +110,11 @@ consistency policy and remain a documented limitation.
   After CfSharp reports the final safe cursor, the Host commits the candidate
   snapshot and clears the intent. A crash between these writes replays the batch;
   CfSharp remains the authority for already-applied entries and checkpoints.
-- Background polling, manual refresh, and streamed remote applies share an
-  instance scheduler. Different instances progress independently. A streamed
+- Background polling, manual refresh, streamed remote applies, and complete
+  journal mutations share an instance scheduler. The journal gate includes
+  remote acceptance, local confirmation, and acknowledgement, preventing a poll
+  from applying the accepted upload in the middle of those boundaries.
+  Different instances progress independently. A streamed
   batch cannot overtake a pending poll. Worker ingress uses a bounded ordered
   inbox so waiting for the scheduler never blocks the Pipe response reader.
 - A failed journal command does not stop dispatch of later valid commands.

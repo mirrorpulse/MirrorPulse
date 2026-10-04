@@ -145,6 +145,20 @@ older portable path records. Conflicting identities at those two spellings stay
 ambiguous. An unavailable explicit item ID does not authorize adoption of the
 current path's identity or revision.
 
+A command captured earlier in a feed batch may retain a temporary item reference
+after a preceding command finishes official identity projection. Before resolving
+its baseline, MirrorPulse reads the same operation from CfSharp's official
+journal and verifies its sequence and explicitly mapped kind. Only that
+authoritative changed reference may replace the captured reference. A fresh
+Worker Stat remains a conflict check and never supplies a new baseline. This
+does not change any historical upload binding or acceptance proof.
+
+The complete journal mutation, including local confirmation and acknowledgement,
+uses the same per-instance scheduler as remote polling and rescan. A poll cannot
+apply the just-uploaded remote version between acceptance and local confirmation.
+Instances remain independent, and the Worker response reader does not wait on
+that scheduler.
+
 ## Evidence and remaining work
 
 | Experiment group | Cases | Observed result on both architectures |
