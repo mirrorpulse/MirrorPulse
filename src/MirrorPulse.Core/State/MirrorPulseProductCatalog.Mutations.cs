@@ -9,7 +9,8 @@ public enum MirrorPulseMutationState { Prepared, Executing, RemoteAccepted, Ambi
 public enum MirrorPulseMutationOrigin { Journal, Rescan }
 public sealed record MirrorPulseMutationIntent(Guid OperationId, InstanceId InstanceId, string RootKey,
     MirrorPulseWorkerChangeKind Kind, string RelativePath, string? PreviousRelativePath, bool IsDirectory,
-    string? ExpectedRevision, long? ContentLength, string? ContentSha256, MirrorPulseMutationOrigin Origin);
+    string? ExpectedRevision, long? ContentLength, string? ContentSha256, MirrorPulseMutationOrigin Origin,
+    MirrorPulseUploadBinding? UploadBinding = null);
 public sealed record MirrorPulseMutationRecord(MirrorPulseMutationIntent Intent, MirrorPulseMutationState State,
     string? AcceptedRevision, DateTimeOffset UpdatedAt);
 
@@ -23,6 +24,13 @@ public sealed partial class MirrorPulseProductCatalog
             !Enum.IsDefined(intent.Kind) || !Enum.IsDefined(intent.Origin) || intent.ContentLength < 0 ||
             (intent.ContentSha256 is not null && (intent.ContentSha256.Length != 64 || !intent.ContentSha256.All(Uri.IsHexDigit))))
             throw new ArgumentException("The mutation intent is invalid.", nameof(intent));
+        if (intent.UploadBinding is not null)
+        {
+            intent.UploadBinding.Validate();
+            if (intent.IsDirectory || intent.Kind is not (MirrorPulseWorkerChangeKind.Create or MirrorPulseWorkerChangeKind.ContentUpdate) ||
+                intent.ContentLength is null || intent.ContentSha256 is null)
+                throw new ArgumentException("An upload binding requires a complete file-content intent.", nameof(intent));
+        }
         byte[] payload = JsonSerializer.SerializeToUtf8Bytes(intent, TopologyJsonOptions);
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try

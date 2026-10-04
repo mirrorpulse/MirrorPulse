@@ -100,7 +100,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                 version.CommandText = "PRAGMA user_version;";
                 long currentVersion = (long)(await version.ExecuteScalarAsync(cancellationToken)
                     .ConfigureAwait(false) ?? 0L);
-                if (currentVersion > 12)
+                if (currentVersion > 13)
                 {
                     throw new InvalidDataException("The MP product catalog schema is newer than this Host supports.");
                 }
@@ -142,6 +142,11 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                         state INTEGER NOT NULL,
                         accepted_revision TEXT NULL,
                         updated_utc TEXT NOT NULL
+                    );
+                    CREATE TABLE IF NOT EXISTS content_acceptance_proofs (
+                        operation_id TEXT PRIMARY KEY REFERENCES mutation_intents(operation_id),
+                        payload BLOB NOT NULL,
+                        receipt BLOB NULL
                     );
                     CREATE TABLE IF NOT EXISTS user_commands (
                         command_id TEXT PRIMARY KEY,
@@ -226,7 +231,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
 
             await using (SqliteCommand version = connection.CreateCommand())
             {
-                version.CommandText = "PRAGMA user_version=12;";
+                version.CommandText = "PRAGMA user_version=13;";
                 await version.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
 
