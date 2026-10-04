@@ -114,7 +114,7 @@ public sealed class AdapterInstanceProcessSupervisor :
         if (!_connected.TryGetValue(request.InstanceId, out AdapterWorkerReadRangeClient? client) ||
             !_instanceOperations.TryGetValue(request.InstanceId, out SemaphoreSlim? operation))
         {
-            throw new IOException("The Adapter instance is offline.");
+            throw new AdapterWorkerOperationException("Offline");
         }
 
         await operation.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -135,7 +135,7 @@ public sealed class AdapterInstanceProcessSupervisor :
         if (!_uploads.TryGetValue(request.InstanceId, out AdapterWorkerUploadClient? client) ||
             !_instanceOperations.TryGetValue(request.InstanceId, out SemaphoreSlim? operation))
         {
-            throw new IOException("The Adapter instance is offline.");
+            throw new AdapterWorkerOperationException("Offline");
         }
 
         await operation.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -156,7 +156,7 @@ public sealed class AdapterInstanceProcessSupervisor :
         if (!_stats.TryGetValue(request.InstanceId, out AdapterWorkerStatClient? client) ||
             !_instanceOperations.TryGetValue(request.InstanceId, out SemaphoreSlim? operation))
         {
-            throw new IOException("The Adapter instance is offline.");
+            throw new AdapterWorkerOperationException("Offline");
         }
 
         await operation.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -177,7 +177,7 @@ public sealed class AdapterInstanceProcessSupervisor :
         if (!_directories.TryGetValue(request.InstanceId, out AdapterWorkerDirectoryPageClient? client) ||
             !_instanceOperations.TryGetValue(request.InstanceId, out SemaphoreSlim? operation))
         {
-            throw new IOException("The Adapter instance is offline.");
+            throw new AdapterWorkerOperationException("Offline");
         }
 
         await operation.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -198,7 +198,7 @@ public sealed class AdapterInstanceProcessSupervisor :
         if (!_mutations.TryGetValue(request.InstanceId, out AdapterWorkerMutationClient? client) ||
             !_instanceOperations.TryGetValue(request.InstanceId, out SemaphoreSlim? operation))
         {
-            throw new IOException("The Adapter instance is offline.");
+            throw new AdapterWorkerOperationException("Offline");
         }
 
         await operation.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -219,7 +219,7 @@ public sealed class AdapterInstanceProcessSupervisor :
         if (!_mutations.TryGetValue(request.InstanceId, out AdapterWorkerMutationClient? client) ||
             !_instanceOperations.TryGetValue(request.InstanceId, out SemaphoreSlim? operation))
         {
-            throw new IOException("The Adapter instance is offline.");
+            throw new AdapterWorkerOperationException("Offline");
         }
 
         await operation.WaitAsync(cancellationToken).ConfigureAwait(false);

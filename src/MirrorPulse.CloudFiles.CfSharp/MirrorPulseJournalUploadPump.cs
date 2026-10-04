@@ -5,6 +5,7 @@ using MirrorPulse.Core.CloudFiles;
 using MirrorPulse.Core.Conflicts;
 using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.Diagnostics;
+using MirrorPulse.Core.Host;
 using MirrorPulse.Core.State;
 using MirrorPulse.Core.Sync;
 
@@ -252,11 +253,17 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
     {
         try
         {
+            var fields = new List<LogField>
+            {
+                new("operationId", command.OperationId.ToString("D")), new("kind", command.Kind.ToString()),
+                new("dispatchPhase", phase), new("hasItemReference", (command.ItemId is not null).ToString()),
+                new("failureCategory", exception is null ? "IO" : SafeDiagnosticPolicy.ClassifyFailure(exception.GetBaseException())),
+                new("hresult", (exception?.GetBaseException().HResult ?? 0).ToString("X8", System.Globalization.CultureInfo.InvariantCulture)),
+            };
+            if (exception?.GetBaseException() is AdapterWorkerOperationException worker)
+                fields.Add(new("workerFailureCode", worker.FailureCode));
             await _log.WriteAsync(new(LogLevel.Warning, "CloudFiles.Upload", "JournalDispatchBoundary", DateTimeOffset.UtcNow,
-                [new("operationId", command.OperationId.ToString("D")), new("kind", command.Kind.ToString()),
-                 new("dispatchPhase", phase), new("hasItemReference", (command.ItemId is not null).ToString()),
-                 new("failureCategory", exception is null ? "IO" : SafeDiagnosticPolicy.ClassifyFailure(exception.GetBaseException())),
-                 new("hresult", (exception?.GetBaseException().HResult ?? 0).ToString("X8", System.Globalization.CultureInfo.InvariantCulture))]), token).ConfigureAwait(false);
+                fields), token).ConfigureAwait(false);
         }
         catch (Exception loggingFailure) when (loggingFailure is not OperationCanceledException) { }
     }

@@ -57,7 +57,7 @@ function Write-MirrorPulseUploadDiagnostics {
     foreach ($line in Get-Content -LiteralPath $logPath) {
         $entry = $line | ConvertFrom-Json
         if ($entry.Category -ne 'CloudFiles.Upload') { continue }
-        $key = "$($entry.Code):$($entry.Fields.operationId):$($entry.Fields.acknowledgementPhase)"
+        $key = "$($entry.Code):$($entry.Fields.operationId):$($entry.Fields.acknowledgementPhase):$($entry.Fields.dispatchPhase):$($entry.Fields.failureCategory):$($entry.Fields.workerFailureCode)"
         if ($seen.Add($key)) {
             Write-Host $line
             if (++$printed -ge 32) { break }

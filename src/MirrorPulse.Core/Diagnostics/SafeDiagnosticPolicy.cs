@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.Host;
 using MirrorPulse.Core.State;
 using MirrorPulse.Core.Sync;
 
@@ -55,6 +56,9 @@ public static class SafeDiagnosticPolicy
 
     public static string ClassifyFailure(Exception exception) => exception switch
     {
+        AdapterWorkerOperationException worker => worker.FailureCode == "Offline" ? "WorkerOffline" :
+            worker.FailureCode == "Disconnected" ? "WorkerDisconnected" : "WorkerRejected",
+        MirrorPulseMutationAmbiguousException => "MutationAmbiguous",
         InvalidDataException => "InvalidData",
         UnauthorizedAccessException => "Authorization",
         OperationCanceledException => "Cancelled",
@@ -106,7 +110,8 @@ public static class SafeDiagnosticPolicy
                 "attempt" or "bytesTransferred" or "totalBytes" or "pendingCount" =>
                     long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out long count) && count >= 0
                         ? count.ToString(CultureInfo.InvariantCulture) : null,
-                "failureCategory" => value is "IO" or "InvalidData" or "Authorization" or "Cancelled" or "Internal" ? value : null,
+                "failureCategory" => value is "IO" or "InvalidData" or "Authorization" or "Cancelled" or "Internal" or "MutationAmbiguous" or "WorkerOffline" or "WorkerDisconnected" or "WorkerRejected" ? value : null,
+                "workerFailureCode" => value is "Offline" or "Disconnected" or "InvalidRequest" or "AccessDenied" or "SourceUnavailable" or "CapabilityUnavailable" or "LocalIoFailure" or "RetryableTransferFailure" or "RemoteConflict" or "Unknown" ? value : null,
                 "kind" => Enum.TryParse(value, out MirrorPulseWorkerChangeKind kind) && Enum.IsDefined(kind) ? kind.ToString() : null,
                 "confirmationOutcome" => Enum.TryParse(value, out MirrorPulseContentConfirmationOutcome outcome) && Enum.IsDefined(outcome) ? outcome.ToString() : null,
                 "confirmationStage" => Enum.TryParse(value, out MirrorPulseContentConfirmationStage stage) && Enum.IsDefined(stage) ? stage.ToString() : null,

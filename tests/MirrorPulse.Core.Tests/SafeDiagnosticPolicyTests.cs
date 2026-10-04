@@ -2,6 +2,7 @@ using System.IO.Compression;
 using System.Text.Json;
 using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.Diagnostics;
+using MirrorPulse.Core.Host;
 
 namespace MirrorPulse.Core.Tests;
 
@@ -66,6 +67,22 @@ public sealed class SafeDiagnosticPolicyTests
         Assert.AreEqual("JournalAcknowledgementFailed", safe.Code);
         Assert.AreEqual("80070005", safe.Fields["hresult"]);
         Assert.AreEqual(operation.ToString("D"), safe.Fields["operationId"]);
+        Assert.IsFalse(JsonSerializer.Serialize(safe).Contains("needle", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public void WorkerFailuresRetainOnlyRegisteredCodes()
+    {
+        var rejected = new AdapterWorkerOperationException("InvalidRequest");
+        Assert.AreEqual("WorkerRejected", SafeDiagnosticPolicy.ClassifyFailure(rejected));
+        var unknown = new AdapterWorkerOperationException("token-secret-needle");
+        Assert.AreEqual("Unknown", unknown.FailureCode);
+        Assert.IsFalse(unknown.Message.Contains("needle", StringComparison.Ordinal));
+        var safe = SafeDiagnosticPolicy.Sanitize(new LogEntry(LogLevel.Warning, "CloudFiles.Upload", "JournalDispatchBoundary", DateTimeOffset.UtcNow,
+            [new("failureCategory", "WorkerRejected"), new("workerFailureCode", rejected.FailureCode),
+             new("workerFailureCode", "token-secret-needle")]));
+        Assert.AreEqual("WorkerRejected", safe.Fields["failureCategory"]);
+        Assert.AreEqual("InvalidRequest", safe.Fields["workerFailureCode"]);
         Assert.IsFalse(JsonSerializer.Serialize(safe).Contains("needle", StringComparison.Ordinal));
     }
 

@@ -108,7 +108,7 @@ public sealed class AdapterWorkerStatClient
         if (frame.MessageType == "OperationError")
         {
             string code = frame.Payload.GetProperty("code").GetString() ?? "Unknown";
-            completion.TrySetException(new IOException($"The Adapter Worker stat failed: {code}."));
+            completion.TrySetException(new AdapterWorkerOperationException(code));
             return ValueTask.CompletedTask;
         }
 
@@ -120,7 +120,7 @@ public sealed class AdapterWorkerStatClient
         lock (_pendingLock)
         {
             _closed = true;
-            _completion?.TrySetException(new IOException("The Adapter Worker disconnected."));
+            _completion?.TrySetException(new AdapterWorkerOperationException("Disconnected"));
         }
     }
 }

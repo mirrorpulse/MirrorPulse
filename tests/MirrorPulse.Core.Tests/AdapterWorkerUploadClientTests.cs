@@ -143,6 +143,17 @@ public sealed class AdapterWorkerUploadClientTests
         ControlFrameEnvelope response = ControlFrameJsonCodec.Decode(await responseBytes);
         await stat.HandleResponseAsync(response);
         Assert.IsNull(await pending);
+        foreach (string code in new[] { "InvalidRequest", "secret-token-needle" })
+        {
+            pending = stat.StatAsync(new(instanceId, "missing.txt"), timeout.Token).AsTask();
+            command = await worker.ReadAsync(timeout.Token);
+            responseBytes = LengthPrefixedFrameReader.ReadAsync(server, timeout.Token).AsTask();
+            await worker.SendAsync("OperationError", command.RequestId, true, new { code }, timeout.Token);
+            await stat.HandleResponseAsync(ControlFrameJsonCodec.Decode(await responseBytes));
+            AdapterWorkerOperationException failure = await Assert.ThrowsExactlyAsync<AdapterWorkerOperationException>(async () => await pending);
+            Assert.AreEqual(code == "InvalidRequest" ? code : "Unknown", failure.FailureCode);
+            Assert.IsFalse(failure.Message.Contains("needle", StringComparison.Ordinal));
+        }
         stat.Close();
         channel.Close();
     }
