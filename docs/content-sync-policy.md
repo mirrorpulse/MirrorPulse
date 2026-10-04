@@ -42,6 +42,15 @@ tracked metadata under `TrackAll`. The operation rechecks actual registration
 and rejects other policies before reading, preparation, marking or projection.
 This restriction does not repair the Windows conditional-USN issue.
 
+The local watcher can report hydration or confirmation metadata as a file
+content observation. Under the actual `None` policy, MirrorPulse acknowledges
+such an observation without uploading when the current native snapshot is
+`InSync`, its encoded identity belongs to the Adapter instance, and its revision
+matches both the official acknowledged baseline and a fresh remote Stat. This
+does not mark native state or suppress a time window. A real data write clears
+`InSync` and retains its separate journal operation. An incomplete historical
+mutation still requires proof recovery before this observation policy runs.
+
 MirrorPulse retains the upload-time native volume/root/file binding, complete
 length and SHA-256, and the accepted identity before local confirmation. A
 replacement's current binding cannot be substituted for a missing historical

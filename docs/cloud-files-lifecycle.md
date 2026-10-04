@@ -117,6 +117,13 @@ consistency policy and remain a documented limitation.
   Different instances progress independently. A streamed
   batch cannot overtake a pending poll. Worker ingress uses a bounded ordered
   inbox so waiting for the scheduler never blocks the Pipe response reader.
+- A canceled hydration consumer leaves an already-dispatched bounded range
+  correlated with its Worker session. The single response reader validates and
+  drains that frame before the next range can use the channel. Abandoned bytes
+  are disposed, and session shutdown faults the waiting drain. Cancellation
+  during an incomplete control write still closes that range channel.
+  Worker session failures have separate local sanitized diagnostics, so sync
+  progress updates cannot erase their original recognized failure code.
 - A failed journal command does not stop dispatch of later valid commands.
   Unacknowledged operations remain in the official feed. Acknowledgement failures
   have a distinct error code; source or catalog failures remain visible in the
