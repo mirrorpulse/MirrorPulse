@@ -71,13 +71,17 @@ public sealed class MirrorPulseJournalUploadSource
         foreach (MirrorPulseWorkerChangeCommand command in plan.Commands)
         {
             byte[] fingerprint = SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(command));
+            // Official identity projection may clear a journal's old ItemId reference.
+            // The operation, routing, paths, kind, sequence and observation remain fixed;
+            // upload-time native object binding is retained separately in the intent.
+            byte[] stableFingerprint = SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(command with { ItemId = null }));
             try
             {
                 await _catalog.TryRecordWorkerRequestAsync(
                 command.OperationId,
                 command.InstanceId,
                 fingerprint,
-                    cancellationToken).ConfigureAwait(false);
+                    stableFingerprint, cancellationToken).ConfigureAwait(false);
             }
             catch (InvalidDataException)
             {

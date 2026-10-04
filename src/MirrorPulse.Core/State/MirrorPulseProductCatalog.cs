@@ -11,7 +11,8 @@ public sealed record MirrorPulseWorkerRequestRecord(
     InstanceId InstanceId,
     byte[] Fingerprint,
     int Attempt,
-    DateTimeOffset? NextAttemptAt);
+    DateTimeOffset? NextAttemptAt,
+    byte[]? StableFingerprint = null);
 
 public sealed record MirrorPulseUserCommandRecord(
     Guid CommandId,
@@ -100,7 +101,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                 version.CommandText = "PRAGMA user_version;";
                 long currentVersion = (long)(await version.ExecuteScalarAsync(cancellationToken)
                     .ConfigureAwait(false) ?? 0L);
-                if (currentVersion > 13)
+                if (currentVersion > 14)
                 {
                     throw new InvalidDataException("The MP product catalog schema is newer than this Host supports.");
                 }
@@ -120,6 +121,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                         operation_id TEXT PRIMARY KEY,
                         instance_id TEXT NOT NULL,
                         fingerprint BLOB NOT NULL,
+                        stable_fingerprint BLOB NULL,
                         attempt INTEGER NOT NULL DEFAULT 0,
                         next_attempt_utc TEXT NULL
                     );
@@ -231,7 +233,15 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
 
             await using (SqliteCommand version = connection.CreateCommand())
             {
-                version.CommandText = "PRAGMA user_version=13;";
+                await using SqliteCommand column = connection.CreateCommand();
+                column.CommandText = "SELECT 1 FROM pragma_table_info('worker_requests') WHERE name = 'stable_fingerprint';";
+                if (await column.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is null)
+                {
+                    await using SqliteCommand alter = connection.CreateCommand();
+                    alter.CommandText = "ALTER TABLE worker_requests ADD COLUMN stable_fingerprint BLOB NULL;";
+                    await alter.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                }
+                version.CommandText = "PRAGMA user_version=14;";
                 await version.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
 
@@ -250,10 +260,16 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
     }
 
     /// <summary>Returns false for an identical replay and rejects reuse with a different payload.</summary>
+    public Task<bool> TryRecordWorkerRequestAsync(Guid operationId, InstanceId instanceId,
+        ReadOnlyMemory<byte> fingerprint, CancellationToken cancellationToken = default) =>
+        TryRecordWorkerRequestAsync(operationId, instanceId, fingerprint, ReadOnlyMemory<byte>.Empty, cancellationToken);
+
+    /// <summary>Also permits a verified stable payload whose official item reference changed.</summary>
     public async Task<bool> TryRecordWorkerRequestAsync(
         Guid operationId,
         InstanceId instanceId,
         ReadOnlyMemory<byte> fingerprint,
+        ReadOnlyMemory<byte> stableFingerprint,
         CancellationToken cancellationToken = default)
     {
         if (operationId == Guid.Empty)
@@ -261,7 +277,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
             throw new ArgumentException("The Worker operation ID cannot be empty.", nameof(operationId));
         }
 
-        if (fingerprint.Length != 32)
+        if (fingerprint.Length != 32 || !stableFingerprint.IsEmpty && stableFingerprint.Length != 32)
         {
             throw new ArgumentException("A Worker request fingerprint must be a SHA-256 digest.", nameof(fingerprint));
         }
@@ -272,13 +288,14 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
             ThrowIfDisposed();
             await using SqliteCommand insert = _connection.CreateCommand();
             insert.CommandText = """
-                INSERT INTO worker_requests (operation_id, instance_id, fingerprint)
-                VALUES ($operation, $instance, $fingerprint)
+                INSERT INTO worker_requests (operation_id, instance_id, fingerprint, stable_fingerprint)
+                VALUES ($operation, $instance, $fingerprint, $stable)
                 ON CONFLICT(operation_id) DO NOTHING;
                 """;
             insert.Parameters.AddWithValue("$operation", operationId.ToString("D"));
             insert.Parameters.AddWithValue("$instance", instanceId.ToString());
             insert.Parameters.AddWithValue("$fingerprint", fingerprint.ToArray());
+            insert.Parameters.AddWithValue("$stable", stableFingerprint.IsEmpty ? DBNull.Value : stableFingerprint.ToArray());
             if (await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) == 1)
             {
                 return true;
@@ -286,9 +303,25 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
 
             MirrorPulseWorkerRequestRecord existing = await ReadWorkerRequestCoreAsync(operationId, cancellationToken)
                 .ConfigureAwait(false) ?? throw new InvalidDataException("The existing Worker request disappeared.");
-            if (existing.InstanceId != instanceId || !existing.Fingerprint.AsSpan().SequenceEqual(fingerprint.Span))
+            bool exactReplay = existing.Fingerprint.AsSpan().SequenceEqual(fingerprint.Span);
+            bool stableReplay = !stableFingerprint.IsEmpty && existing.StableFingerprint is not null &&
+                existing.StableFingerprint.AsSpan().SequenceEqual(stableFingerprint.Span);
+            if (existing.InstanceId != instanceId ||
+                (!exactReplay && !stableReplay) ||
+                (!stableFingerprint.IsEmpty && existing.StableFingerprint is not null && !stableReplay))
             {
                 throw new InvalidDataException("A Worker operation ID was reused with a different request.");
+            }
+
+            // A legacy fingerprint can be supplemented only after an exact replay.
+            // Never manufacture a stable fingerprint for an already changed payload.
+            if (exactReplay && !stableFingerprint.IsEmpty && existing.StableFingerprint is null)
+            {
+                await using SqliteCommand update = _connection.CreateCommand();
+                update.CommandText = "UPDATE worker_requests SET stable_fingerprint=$stable WHERE operation_id=$operation;";
+                update.Parameters.AddWithValue("$stable", stableFingerprint.ToArray());
+                update.Parameters.AddWithValue("$operation", operationId.ToString("D"));
+                await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
 
             return false;
@@ -586,7 +619,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
     {
         await using SqliteCommand query = _connection.CreateCommand();
         query.CommandText = """
-            SELECT instance_id, fingerprint, attempt, next_attempt_utc
+            SELECT instance_id, fingerprint, attempt, next_attempt_utc, stable_fingerprint
             FROM worker_requests WHERE operation_id = $operation;
             """;
         query.Parameters.AddWithValue("$operation", operationId.ToString("D"));
@@ -601,7 +634,8 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
             InstanceId.Parse(reader.GetString(0)),
             (byte[])reader.GetValue(1),
             reader.GetInt32(2),
-            reader.IsDBNull(3) ? null : DateTimeOffset.Parse(reader.GetString(3), System.Globalization.CultureInfo.InvariantCulture));
+            reader.IsDBNull(3) ? null : DateTimeOffset.Parse(reader.GetString(3), System.Globalization.CultureInfo.InvariantCulture),
+            reader.IsDBNull(4) ? null : (byte[])reader.GetValue(4));
     }
 
     private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_disposed, this);

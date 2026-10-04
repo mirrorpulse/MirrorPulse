@@ -80,7 +80,9 @@ public sealed class MirrorPulseLocalBatchMapperTests
         try
         {
             cloud.Register(definition);
+            var state = new MirrorPulseCfSharpStateSession(paths);
             await using var fileSystem = new MirrorPulseCloudFileSystemBuilder(paths)
+                .WithStateStore(state)
                 .WithContentProvider(MirrorPulseDemandProvider.CreateWithoutAdapters(paths.SyncRootPath))
                 .Build();
             await fileSystem.StartAsync();
@@ -110,6 +112,17 @@ public sealed class MirrorPulseLocalBatchMapperTests
             CollectionAssert.IsSubsetOf(
                 plan.Commands.Select(command => command.OperationId).ToArray(),
                 repeatedPlan.Commands.Select(command => command.OperationId).ToArray());
+            await using var catalog = await MirrorPulseProductCatalog.OpenAsync(paths);
+            var source = new MirrorPulseJournalUploadSource(feed, router, catalog, _ => true);
+            MirrorPulseJournalUploadBatch beforeProjection = await source.ReadPendingAsync();
+            MirrorPulseWorkerChangeCommand original = beforeProjection.ReadyCommands.First(command => command.RelativePath == "report.txt");
+            await feed.SuppressProviderEchoAsync(CloudStateOperationKind.MetadataUpdate, "Documents/report.txt", DateTimeOffset.UtcNow.AddSeconds(10));
+            await fileSystem.GetFile("Documents/report.txt").ConvertToPlaceholderAsync(new CloudPlaceholderIdentity(Guid.NewGuid(), "accepted-remote", "accepted-revision"));
+            MirrorPulseJournalUploadBatch afterProjection = await source.ReadPendingAsync();
+            MirrorPulseWorkerChangeCommand replay = afterProjection.ReadyCommands.Single(command => command.OperationId == original.OperationId);
+            Assert.AreNotEqual(original.ItemId, replay.ItemId);
+            Assert.IsFalse((await catalog.ReadBlockedLocalOperationsAsync()).Any(operation =>
+                operation.OperationId == original.OperationId && operation.Reason == MirrorPulseLocalOperationBlockReason.RequestIdentityMismatch));
             Assert.IsFalse(typeof(MirrorPulseWorkerChangeCommand).GetProperties()
                 .Any(property => property.PropertyType == typeof(byte[])
                     || property.Name.Contains("Payload", StringComparison.Ordinal)));
