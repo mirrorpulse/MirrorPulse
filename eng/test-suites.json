@@ -1,6 +1,16 @@
 {
   "schemaVersion": 1,
   "allowSkipped": [
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseContentConfirmationRecoveryTests.NativeRejectedProductProofDoesNotPrepareOrModifyContent",
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseContentConfirmationRecoveryTests.NativeProductProofProjectionFailureReplaysAfterRuntimeRestart",
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseContentConfirmationRecoveryTests.NativePostMarkCancellationRetainsVerifiedReceipt",
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseContentConfirmationRecoveryTests.NativePostMarkWriteKeepsNewContentDirty",
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseContentConfirmationRecoveryTests.NativeSegmentedCancellationDrainsBeforeReturning",
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseContentConfirmationRecoveryTests.NativeSegmentedDisposalDrainsBeforeReturning",
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseContentConfirmationRecoveryTests.NativeWritableHandlePreventsProductConfirmation",
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseContentConfirmationRecoveryTests.NativeWritableMappingPreventsProductConfirmation",
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseContentConfirmationRecoveryTests.NativeQueuedWriterInvalidatesSegmentedProductProof",
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseContentConfirmationRecoveryTests.NativeOnlineContentAndReparseAreNotAdoptedOrHydrated",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseContentConfirmationTests.NativeManagedConfirmationHonorsActualPolicyAndReplaysExactProof",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseContentConfirmationTests.NativeManagedConfirmationRejectsActualTrackedPolicyBeforeReading",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseSyncRootRegistrationTests.NativeOwnedRootPolicyMigrationPreservesFilesAndIdentity",
@@ -32,6 +42,16 @@
   ],
   "required": {
     "native": [
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseContentConfirmationRecoveryTests.NativeRejectedProductProofDoesNotPrepareOrModifyContent",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseContentConfirmationRecoveryTests.NativeProductProofProjectionFailureReplaysAfterRuntimeRestart",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseContentConfirmationRecoveryTests.NativePostMarkCancellationRetainsVerifiedReceipt",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseContentConfirmationRecoveryTests.NativePostMarkWriteKeepsNewContentDirty",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseContentConfirmationRecoveryTests.NativeSegmentedCancellationDrainsBeforeReturning",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseContentConfirmationRecoveryTests.NativeSegmentedDisposalDrainsBeforeReturning",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseContentConfirmationRecoveryTests.NativeWritableHandlePreventsProductConfirmation",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseContentConfirmationRecoveryTests.NativeWritableMappingPreventsProductConfirmation",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseContentConfirmationRecoveryTests.NativeQueuedWriterInvalidatesSegmentedProductProof",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseContentConfirmationRecoveryTests.NativeOnlineContentAndReparseAreNotAdoptedOrHydrated",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseContentConfirmationTests.NativeManagedConfirmationHonorsActualPolicyAndReplaysExactProof",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseContentConfirmationTests.NativeManagedConfirmationRejectsActualTrackedPolicyBeforeReading",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseSyncRootRegistrationTests.NativeOwnedRootPolicyMigrationPreservesFilesAndIdentity",

@@ -51,7 +51,7 @@ jobs:
           CONFIRMATION_CONTRACT: ${{ inputs.contract || 'prototype' }}
         run: |
           $filter = if ($env:CONFIRMATION_CONTRACT -eq 'managed') {
-            'FullyQualifiedName~MirrorPulseContentConfirmationTests.NativeManagedConfirmation'
+            'FullyQualifiedName~MirrorPulseContentConfirmationTests.NativeManagedConfirmation|FullyQualifiedName~MirrorPulseContentConfirmationRecoveryTests'
           } else { 'FullyQualifiedName~MirrorPulseProtectedConfirmationTests' }
           dotnet test tests/MirrorPulse.CloudFiles.CfSharp.Tests --configuration Release --no-build --filter $filter --logger trx --results-directory artifacts/protected-confirmation
           if ($LASTEXITCODE -ne 0) { throw 'Protected content confirmation failed.' }
@@ -67,8 +67,8 @@ jobs:
           if ($files.Count -ne 1) { throw 'Expected exactly one protected confirmation result file.' }
           [xml]$trx = Get-Content -LiteralPath $files[0].FullName -Raw
           $results = @($trx.SelectNodes("//*[local-name()='UnitTestResult']"))
-          $expected = if ($env:CONFIRMATION_CONTRACT -eq 'managed') { 2 } else { 15 }
-          $observations = @($results | ForEach-Object { $_.SelectNodes(".//*[local-name()='StdOut']") } | ForEach-Object { $_.InnerText -split "`r?`n" } | Where-Object { $_ -match '^Protected confirmation |^Confirmation:' })
+          $expected = if ($env:CONFIRMATION_CONTRACT -eq 'managed') { 12 } else { 15 }
+          $observations = @($results | ForEach-Object { $_.SelectNodes(".//*[local-name()='StdOut']") } | ForEach-Object { $_.InnerText -split "`r?`n" } | Where-Object { $_ -match '^Protected confirmation |^Confirmation:|^Confirmation matrix:' })
           $report = [ordered]@{
             schemaVersion = 1
             sourceSha = '${{ github.sha }}'
