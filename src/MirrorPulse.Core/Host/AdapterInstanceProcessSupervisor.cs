@@ -298,21 +298,25 @@ public sealed class AdapterInstanceProcessSupervisor :
         }
         catch (Exception exception)
         {
-            if (_log is not null)
-            {
-                try
-                {
-                    await _log.WriteAsync(new(LogLevel.Warning, "worker", "WorkerSessionFailed", DateTimeOffset.UtcNow,
-                        [new("instanceId", instance.InstanceId.ToString()),
-                         new("failureCategory", SafeDiagnosticPolicy.ClassifyFailure(exception.GetBaseException())),
-                         new("workerFailureCode", exception.GetBaseException() is AdapterWorkerOperationException failure ? failure.FailureCode : "Unknown"),
-                         new("hresult", exception.GetBaseException().HResult.ToString("X8", System.Globalization.CultureInfo.InvariantCulture))]), CancellationToken.None).ConfigureAwait(false);
-                }
-                catch (Exception loggingFailure) when (loggingFailure is not OperationCanceledException) { }
-            }
+            await LogSessionFailureAsync(instance.InstanceId, exception).ConfigureAwait(false);
             await SetPhaseAsync(instance.InstanceId, "Worker failed", CancellationToken.None,
                 exception.GetType().Name).ConfigureAwait(false);
         }
+    }
+
+    private async Task LogSessionFailureAsync(InstanceId instanceId, Exception exception)
+    {
+        if (_log is null) return;
+        try
+        {
+            Exception cause = exception.GetBaseException();
+            await _log.WriteAsync(new(LogLevel.Warning, "worker", "WorkerSessionFailed", DateTimeOffset.UtcNow,
+                [new("instanceId", instanceId.ToString()),
+                 new("failureCategory", SafeDiagnosticPolicy.ClassifyFailure(cause)),
+                 new("workerFailureCode", cause is AdapterWorkerOperationException failure ? failure.FailureCode : "Unknown"),
+                 new("hresult", cause.HResult.ToString("X8", System.Globalization.CultureInfo.InvariantCulture))]), CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception loggingFailure) when (loggingFailure is not OperationCanceledException) { }
     }
 
     private async Task ServeWorkerAsync(
@@ -416,6 +420,7 @@ public sealed class AdapterInstanceProcessSupervisor :
                     case "Error":
                         string code = frame.Payload.TryGetProperty("code", out JsonElement value)
                             ? value.GetString() ?? "Unknown" : "Unknown";
+                        await LogSessionFailureAsync(instance.InstanceId, new AdapterWorkerOperationException(code)).ConfigureAwait(false);
                         await SetPhaseAsync(instance.InstanceId, "Worker error", cancellationToken, code)
                             .ConfigureAwait(false);
                         return;

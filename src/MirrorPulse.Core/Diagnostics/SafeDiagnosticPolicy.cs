@@ -112,7 +112,7 @@ public static class SafeDiagnosticPolicy
                     long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out long count) && count >= 0
                         ? count.ToString(CultureInfo.InvariantCulture) : null,
                 "failureCategory" => value is "IO" or "InvalidData" or "Authorization" or "Cancelled" or "Internal" or "MutationAmbiguous" or "WorkerOffline" or "WorkerDisconnected" or "WorkerRejected" ? value : null,
-                "workerFailureCode" => value is "Offline" or "Disconnected" or "InvalidRequest" or "AccessDenied" or "SourceUnavailable" or "CapabilityUnavailable" or "LocalIoFailure" or "RetryableTransferFailure" or "RemoteConflict" or "UncorrelatedResponse" or "Unknown" ? value : null,
+                "workerFailureCode" => value is "Offline" or "Disconnected" or "InvalidRequest" or "AccessDenied" or "SourceUnavailable" or "CapabilityUnavailable" or "LocalIoFailure" or "RetryableTransferFailure" or "RemoteConflict" or "UncorrelatedResponse" or "InvalidConfiguration" or "WorkerFailure" or "Unknown" ? value : null,
                 "kind" => Enum.TryParse(value, out MirrorPulseWorkerChangeKind kind) && Enum.IsDefined(kind) ? kind.ToString() : null,
                 "confirmationOutcome" => Enum.TryParse(value, out MirrorPulseContentConfirmationOutcome outcome) && Enum.IsDefined(outcome) ? outcome.ToString() : null,
                 "confirmationStage" => Enum.TryParse(value, out MirrorPulseContentConfirmationStage stage) && Enum.IsDefined(stage) ? stage.ToString() : null,
