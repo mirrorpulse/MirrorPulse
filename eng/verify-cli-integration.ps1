@@ -264,6 +264,13 @@ try {
         if ($drainedStatus.data.pendingUploads -ne 0) {
             $instanceStatus = @($drainedStatus.data.instances) | Where-Object instanceId -eq $instanceId | Select-Object -First 1
             Write-MirrorPulseUploadDiagnostics
+            Write-Host 'Blocked local operation reasons:'
+            @($drainedStatus.data.blockedLocalOperations) | Group-Object reason |
+                ForEach-Object { Write-Host "$($_.Name): $($_.Count)" }
+            $conflictStatus = Invoke-MirrorPulseCli @('--json', '--developer-mode', 'conflict', 'list')
+            Write-Host 'Conflict reasons:'
+            @($conflictStatus.data.items) | Group-Object reason |
+                ForEach-Object { Write-Host "$($_.Name): $($_.Count)" }
             throw "The upload journal did not drain. Pending=$($drainedStatus.data.pendingUploads); " +
                 "UploadConflicts=$($drainedStatus.data.pendingUploadConflicts); " +
                 "Phase=$($instanceStatus.phase); Error=$($instanceStatus.lastErrorCode)."
