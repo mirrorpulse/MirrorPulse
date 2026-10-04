@@ -48,6 +48,8 @@ public sealed class AdapterWorkerReadRangeClient
         await _operation.WaitAsync(cancellationToken).ConfigureAwait(false);
         TaskCompletionSource<Stream> completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
         Guid requestId = Guid.NewGuid();
+        bool dispatched = false;
+        bool delivered = false;
         try
         {
             lock (_pendingLock)
@@ -67,24 +69,49 @@ public sealed class AdapterWorkerReadRangeClient
                     offset = request.Offset,
                     length = request.Length,
                 })), cancellationToken).ConfigureAwait(false);
-            return await completion.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            dispatched = true;
+            Stream result = await completion.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            delivered = true;
+            return result;
         }
         finally
         {
+            bool drain = false;
             lock (_pendingLock)
             {
                 if (ReferenceEquals(_pending, completion))
                 {
-                    _pending = null;
-                    if (!completion.Task.IsCompleted)
+                    if (!completion.Task.IsCompleted && dispatched && !_closed)
                     {
-                        // A cancelled read cannot safely share this pipe with a later request:
-                        // the Worker may still send its binary frame.
-                        _closed = true;
+                        // The consumer can leave, but the response reader must still
+                        // correlate and validate its bounded frame. Hold this range
+                        // gate until that frame is drained or the session closes.
+                        drain = true;
+                    }
+                    else
+                    {
+                        _pending = null;
+                        if (!completion.Task.IsCompleted) _closed = true;
                     }
                 }
             }
+            if (drain) _ = DrainAbandonedReadAsync(completion);
+            else
+            {
+                if (!delivered && completion.Task.IsCompletedSuccessfully) completion.Task.Result.Dispose();
+                _operation.Release();
+            }
+        }
+    }
 
+    private async Task DrainAbandonedReadAsync(TaskCompletionSource<Stream> completion)
+    {
+        try { (await completion.Task.ConfigureAwait(false)).Dispose(); }
+        catch (Exception) { /* The session reader reports failures; this observes the abandoned result. */ }
+        finally
+        {
+            lock (_pendingLock)
+                if (ReferenceEquals(_pending, completion)) _pending = null;
             _operation.Release();
         }
     }

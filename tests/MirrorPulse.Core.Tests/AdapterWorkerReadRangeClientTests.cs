@@ -53,6 +53,48 @@ public sealed class AdapterWorkerReadRangeClientTests
     }
 
     [TestMethod]
+    public async Task CanceledConsumerDrainsItsDispatchedFrameBeforeTheNextRange()
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var consumer = new CancellationTokenSource();
+        string pipeName = $"mirrorpulse-range-cancel-{Guid.NewGuid():N}";
+        using var server = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1,
+            PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+        Task connection = server.WaitForConnectionAsync(timeout.Token);
+        await using AdapterNamedPipeClient workerPipe = await AdapterNamedPipeClient.ConnectAsync(pipeName, TimeSpan.FromSeconds(10), timeout.Token);
+        await connection;
+        InstanceId instance = InstanceId.New();
+        WorkerSessionId session = WorkerSessionId.New();
+        var worker = new AdapterControlChannel(workerPipe, instance.Value, session.Value);
+        var host = new AdapterWorkerReadRangeClient(server, instance, session);
+        Task<Stream> canceled = host.ReadRangeAsync(new(instance, "note.txt", ReadOnlyMemory<byte>.Empty, 0, 1), consumer.Token).AsTask();
+        AdapterControlFrame oldRequest = await worker.ReadAsync(timeout.Token);
+        consumer.Cancel();
+        await Assert.ThrowsAsync<OperationCanceledException>(() => canceled);
+        Task<Stream> next = host.ReadRangeAsync(new(instance, "note.txt", ReadOnlyMemory<byte>.Empty, 1, 1), timeout.Token).AsTask();
+        Guid oldStream = Guid.NewGuid();
+        Task<byte[]> response = LengthPrefixedFrameReader.ReadAsync(server, timeout.Token).AsTask();
+        await worker.SendAsync("ReadRangeReady", oldRequest.RequestId, true, new { streamId = oldStream, length = 1 }, timeout.Token);
+        ControlFrameEnvelope oldReady = ControlFrameJsonCodec.Decode(await response);
+        Assert.IsTrue(host.CanHandle(oldReady), "A canceled consumer must not turn its late response into an uncorrelated session failure.");
+        Assert.IsFalse(next.IsCompleted);
+        Task handling = host.HandleResponseAsync(oldReady, timeout.Token).AsTask();
+        await worker.SendChunkAsync(new(oldRequest.RequestId, instance.Value, session.Value, oldStream, 0, new byte[] { 10 }, true), timeout.Token);
+        await handling;
+        AdapterControlFrame newRequest = await worker.ReadAsync(timeout.Token);
+        Guid newStream = Guid.NewGuid();
+        response = LengthPrefixedFrameReader.ReadAsync(server, timeout.Token).AsTask();
+        await worker.SendAsync("ReadRangeReady", newRequest.RequestId, true, new { streamId = newStream, length = 1 }, timeout.Token);
+        handling = host.HandleResponseAsync(ControlFrameJsonCodec.Decode(await response), timeout.Token).AsTask();
+        await worker.SendChunkAsync(new(newRequest.RequestId, instance.Value, session.Value, newStream, 1, new byte[] { 20 }, true), timeout.Token);
+        await handling;
+        await using Stream result = await next;
+        Assert.AreEqual(20, result.ReadByte());
+        Assert.AreEqual(-1, result.ReadByte());
+        host.Close();
+    }
+
+    [TestMethod]
     public async Task MismatchedBinaryOffsetFailsThePendingRange()
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
