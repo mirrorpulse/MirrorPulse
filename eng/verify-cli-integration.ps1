@@ -48,6 +48,23 @@ function Wait-MirrorPulseHostStopped {
     throw "The Host did not stop after the CLI lifecycle command."
 }
 
+function Write-MirrorPulseUploadDiagnostics {
+    $logPath = Join-Path $dataRoot 'logs\mirrorpulse.log'
+    if (-not (Test-Path -LiteralPath $logPath)) { return }
+    Write-Host 'First safe diagnostic for each upload failure boundary:'
+    $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $printed = 0
+    foreach ($line in Get-Content -LiteralPath $logPath) {
+        $entry = $line | ConvertFrom-Json
+        if ($entry.Category -ne 'CloudFiles.Upload') { continue }
+        $key = "$($entry.Code):$($entry.Fields.operationId):$($entry.Fields.acknowledgementPhase)"
+        if ($seen.Add($key)) {
+            Write-Host $line
+            if (++$printed -ge 32) { break }
+        }
+    }
+}
+
 try {
     if (-not (Test-Path -LiteralPath $PackagePath -PathType Leaf)) {
         throw "The Adapter package was not found: $PackagePath"
@@ -232,11 +249,7 @@ try {
             $failedInstance = @($failedStatus.data.instances) |
                 Where-Object { $_.instanceId -eq $instanceId } | Select-Object -First 1
             $sourceNames = (Get-ChildItem -LiteralPath $sourceRoot -File | Select-Object -ExpandProperty Name) -join ","
-            $logPath = Join-Path $dataRoot "logs\mirrorpulse.log"
-            if (Test-Path -LiteralPath $logPath) {
-                Write-Host "Recent local upload diagnostics:"
-                Get-Content -LiteralPath $logPath -Tail 12 | ForEach-Object { Write-Host $_ }
-            }
+            Write-MirrorPulseUploadDiagnostics
             throw "The persisted upload was not delivered. Pending=$($failedStatus.data.pendingUploads); " +
                 "UploadConflicts=$($failedStatus.data.pendingUploadConflicts); " +
                 "Phase=$($failedInstance.phase); Error=$($failedInstance.lastErrorCode); " +
@@ -250,11 +263,7 @@ try {
         } while ([DateTime]::UtcNow -lt $deadline)
         if ($drainedStatus.data.pendingUploads -ne 0) {
             $instanceStatus = @($drainedStatus.data.instances) | Where-Object instanceId -eq $instanceId | Select-Object -First 1
-            $logPath = Join-Path $dataRoot 'logs\mirrorpulse.log'
-            if (Test-Path -LiteralPath $logPath) {
-                Write-Host 'Recent safe upload diagnostics:'
-                Get-Content -LiteralPath $logPath -Tail 8 | ForEach-Object { Write-Host $_ }
-            }
+            Write-MirrorPulseUploadDiagnostics
             throw "The upload journal did not drain. Pending=$($drainedStatus.data.pendingUploads); " +
                 "UploadConflicts=$($drainedStatus.data.pendingUploadConflicts); " +
                 "Phase=$($instanceStatus.phase); Error=$($instanceStatus.lastErrorCode)."
