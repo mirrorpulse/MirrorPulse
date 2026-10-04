@@ -11,6 +11,7 @@ using MirrorPulse.Core.CloudFiles;
 using MirrorPulse.Core.Configuration;
 using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.State;
+using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 
@@ -72,13 +73,36 @@ public sealed class MirrorPulseFullRescanPolicyTests
                 if (!signal.RequiresFullRescan) await feed.AcknowledgeAsync(signal.Changes.Select(change => change.OperationId), timeout.Token);
             } while (!signal.RequiresFullRescan);
             await using var catalog = await MirrorPulseProductCatalog.OpenAsync(paths, timeout.Token);
+            async Task RetryRetainedConfirmationAsync(Func<Task> operation)
+            {
+                for (int attempt = 1; ; attempt++)
+                {
+                    try { await operation(); return; }
+                    catch (MirrorPulseMutationAmbiguousException) when (attempt < 4)
+                    {
+                        MirrorPulseMutationRecord[] retained = (await catalog.ReadIncompleteMutationsAsync(timeout.Token))
+                            .Where(record => record.State == MirrorPulseMutationState.RemoteAccepted).ToArray();
+                        if (retained.Length == 0) throw;
+                        foreach (MirrorPulseMutationRecord record in retained)
+                        {
+                            Assert.IsNotNull(await catalog.ReadContentAcceptanceProofAsync(record.Intent.OperationId, timeout.Token));
+                            MirrorPulseContentConfirmationReceipt? receipt = await catalog.ReadContentConfirmationReceiptAsync(record.Intent.OperationId, timeout.Token);
+                            if (receipt is null || receipt.Outcome is not (MirrorPulseContentConfirmationOutcome.Busy or
+                                MirrorPulseContentConfirmationOutcome.ProtectionLost or MirrorPulseContentConfirmationOutcome.NativeAppliedProjectionPending)) throw;
+                            Assert.IsFalse(receipt.MayAcknowledge);
+                            TestContext.WriteLine($"Rescan confirmation recovery: attempt={attempt}, outcome={receipt.Outcome}, nativeApplied={receipt.NativeApplied}, projected={receipt.DurableProjectionCommitted}.");
+                        }
+                        await Task.Delay(50, timeout.Token);
+                    }
+                }
+            }
             var router = new MirrorPulseRootRouter(paths.SyncRootPath, [first, second]);
             var policy = new MirrorPulseFullRescanPolicy(fileSystem, feed, state, router, catalog, transport, transport,
                 instance => instance == active, transport, transport, transport);
-            try { await new MirrorPulseCfSharpFullRescanAdapter(feed, policy.ReconcileAsync).HandleAsync(signal, timeout.Token); }
+            try { await RetryRetainedConfirmationAsync(() => new MirrorPulseCfSharpFullRescanAdapter(feed, policy.ReconcileAsync).HandleAsync(signal, timeout.Token).AsTask()); }
             catch (CloudFilesException exception)
             {
-                Assert.Fail($"CfSharp 0.1.0-preview.2: {exception.Operation}, HRESULT 0x{exception.HResult:X8}, Win32 {exception.Win32ErrorCode}; {exception}");
+                Assert.Fail($"CfSharp 0.1.0-preview.3: {exception.Operation}, HRESULT 0x{exception.HResult:X8}, Win32 {exception.Win32ErrorCode}; {exception}");
             }
             CollectionAssert.AreEqual(new[] { second.RootId }, (await catalog.ReadDeferredRescanRootsAsync(timeout.Token)).ToArray());
             Assert.AreEqual(1, transport.Uploads.GetValueOrDefault(active));
@@ -114,7 +138,7 @@ public sealed class MirrorPulseFullRescanPolicyTests
                 _ => true, transport, transport, transport);
             var ackGap = new MirrorPulseFullRescanRecovery(catalog, policy.ReconcileAsync, feed.AcknowledgeFullRescanAsync,
                 _ => throw new IOException("Projection failed after native rescan acknowledgement."));
-            await Assert.ThrowsExactlyAsync<IOException>(() => ackGap.RunAsync(new(false), timeout.Token).AsTask());
+            await Assert.ThrowsExactlyAsync<IOException>(() => RetryRetainedConfirmationAsync(() => ackGap.RunAsync(new(false), timeout.Token).AsTask()));
             Assert.AreEqual(MirrorPulseFullRescanPhase.Acknowledging, (await catalog.ReadFullRescanAsync(timeout.Token))!.Phase);
             Assert.AreEqual(1, transport.Uploads[active]);
             Assert.AreEqual(1, transport.Uploads[offline]);
@@ -165,7 +189,7 @@ public sealed class MirrorPulseFullRescanPolicyTests
         CloudPlaceholderMutationResult patched = await file.UpdatePlaceholderAsync(CloudPlaceholderPatch.CreateBuilder()
             .WithMetadata(CloudPlaceholderMetadata.CreateFileBuilder().WithLastWriteTime(DateTimeOffset.UtcNow.AddMinutes(-1)).Build())
             .WithInSyncState(false).Build(), token);
-        TestContext.WriteLine($"CfSharp 0.1.0-preview.2 coordination USNs: convert={converted.OperationUsn}, clear={cleared.OperationUsn}, mark={marked.OperationUsn}, changed={changed.OperationUsn}, metadata={patched.OperationUsn}; OS={Environment.OSVersion.Version}.");
+        TestContext.WriteLine($"CfSharp 0.1.0-preview.3 coordination USNs: convert={converted.OperationUsn}, clear={cleared.OperationUsn}, mark={marked.OperationUsn}, changed={changed.OperationUsn}, metadata={patched.OperationUsn}; OS={Environment.OSVersion.Version}.");
         string path = Path.Combine(syncRoot, name);
         var native = SetNativeOutOfSync(path);
         TestContext.WriteLine($"CfSharp.Native direct coordination: HRESULT=0x{native.HResult:X8}, USN={native.Usn}.");
