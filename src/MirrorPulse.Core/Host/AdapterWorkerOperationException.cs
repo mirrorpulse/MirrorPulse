@@ -6,7 +6,7 @@ public sealed class AdapterWorkerOperationException : IOException
     public AdapterWorkerOperationException(string? code) : base("The Adapter Worker operation failed.")
     {
         FailureCode = code is "Offline" or "Disconnected" or "InvalidRequest" or "AccessDenied" or
-            "SourceUnavailable" or "CapabilityUnavailable" or "LocalIoFailure" or "RetryableTransferFailure" or "RemoteConflict"
+            "SourceUnavailable" or "CapabilityUnavailable" or "LocalIoFailure" or "RetryableTransferFailure" or "RemoteConflict" or "UncorrelatedResponse"
             ? code : "Unknown";
     }
 

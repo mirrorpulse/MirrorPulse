@@ -165,7 +165,8 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
                 }, batchCancellationToken).ConfigureAwait(false);
             }
 
-            workers = new AdapterInstanceProcessSupervisor(catalog, credentialStore, ApplyRemoteBatchAsync);
+            workers = new AdapterInstanceProcessSupervisor(catalog, credentialStore, ApplyRemoteBatchAsync,
+                Path.Combine(paths.DataRootPath, "logs", "workers"));
             var rootRouter = new MirrorPulseRootRouter(paths.SyncRootPath, topology.Roots);
             var directorySource = new MirrorPulseAdapterDirectoryPageSource(workers);
             var provider = new MirrorPulseDemandProvider(rootRouter, workers, directorySource);

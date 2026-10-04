@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using MirrorPulse.Core.CloudFiles;
 using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.Diagnostics;
 using MirrorPulse.Core.Security;
 using MirrorPulse.Core.State;
 using MirrorPulse.Core.Transport;
@@ -21,6 +22,7 @@ public sealed class AdapterInstanceProcessSupervisor :
     private readonly MirrorPulseProductCatalog _catalog;
     private readonly ISecureCredentialStore _credentials;
     private readonly Func<InstanceId, JsonElement, CancellationToken, ValueTask>? _remoteBatch;
+    private readonly LocalRollingLogWriter? _log;
     private readonly CancellationTokenSource _shutdown = new();
     private readonly ConcurrentDictionary<InstanceId, AdapterWorkerReadRangeClient> _connected = new();
     private readonly ConcurrentDictionary<InstanceId, AdapterWorkerUploadClient> _uploads = new();
@@ -34,11 +36,13 @@ public sealed class AdapterInstanceProcessSupervisor :
     public AdapterInstanceProcessSupervisor(
         MirrorPulseProductCatalog catalog,
         ISecureCredentialStore credentials,
-        Func<InstanceId, JsonElement, CancellationToken, ValueTask>? remoteBatch = null)
+        Func<InstanceId, JsonElement, CancellationToken, ValueTask>? remoteBatch = null,
+        string? diagnosticsDirectory = null)
     {
         _catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
         _credentials = credentials ?? throw new ArgumentNullException(nameof(credentials));
         _remoteBatch = remoteBatch;
+        _log = diagnosticsDirectory is null ? null : new(diagnosticsDirectory);
     }
 
     public async Task StartAsync(MirrorPulseAdapterTopology topology)
@@ -294,6 +298,18 @@ public sealed class AdapterInstanceProcessSupervisor :
         }
         catch (Exception exception)
         {
+            if (_log is not null)
+            {
+                try
+                {
+                    await _log.WriteAsync(new(LogLevel.Warning, "worker", "WorkerSessionFailed", DateTimeOffset.UtcNow,
+                        [new("instanceId", instance.InstanceId.ToString()),
+                         new("failureCategory", SafeDiagnosticPolicy.ClassifyFailure(exception.GetBaseException())),
+                         new("workerFailureCode", exception.GetBaseException() is AdapterWorkerOperationException failure ? failure.FailureCode : "Unknown"),
+                         new("hresult", exception.GetBaseException().HResult.ToString("X8", System.Globalization.CultureInfo.InvariantCulture))]), CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception loggingFailure) when (loggingFailure is not OperationCanceledException) { }
+            }
             await SetPhaseAsync(instance.InstanceId, "Worker failed", CancellationToken.None,
                 exception.GetType().Name).ConfigureAwait(false);
         }
@@ -361,7 +377,7 @@ public sealed class AdapterInstanceProcessSupervisor :
                     }
                     else
                     {
-                        throw new InvalidDataException("The Adapter sent an uncorrelated response.");
+                        throw new AdapterWorkerOperationException("UncorrelatedResponse");
                     }
                     continue;
                 }
@@ -525,5 +541,6 @@ public sealed class AdapterInstanceProcessSupervisor :
         _shutdown.Cancel();
         await Task.WhenAll(_workers).ConfigureAwait(false);
         _shutdown.Dispose();
+        _log?.Dispose();
     }
 }

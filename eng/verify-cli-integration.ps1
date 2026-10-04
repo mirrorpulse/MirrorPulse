@@ -49,6 +49,11 @@ function Wait-MirrorPulseHostStopped {
 }
 
 function Write-MirrorPulseUploadDiagnostics {
+    $workerLog = Join-Path $dataRoot 'logs\workers\mirrorpulse.log'
+    if (Test-Path -LiteralPath $workerLog) {
+        Write-Host 'Safe Worker session failure diagnostics:'
+        Get-Content -LiteralPath $workerLog -Tail 8 | ForEach-Object { Write-Host $_ }
+    }
     $logPath = Join-Path $dataRoot 'logs\mirrorpulse.log'
     if (-not (Test-Path -LiteralPath $logPath)) { return }
     Write-Host 'First safe diagnostic for each upload failure boundary:'
