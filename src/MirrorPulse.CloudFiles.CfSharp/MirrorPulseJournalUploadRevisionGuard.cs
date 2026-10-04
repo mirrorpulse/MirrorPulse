@@ -27,8 +27,29 @@ public static class MirrorPulseJournalUploadRevisionGuard
 
         await using ICloudStateTransaction transaction = await state.BeginTransactionAsync(
             cancellationToken).ConfigureAwait(false);
+        Guid? referencedItem = command.ItemId;
+        CloudOperationJournalEntry? currentOperation = await transaction.Operations.GetAsync(command.OperationId, cancellationToken).ConfigureAwait(false);
+        if (currentOperation is not null && currentOperation.ItemId != referencedItem)
+        {
+            // An earlier command in this same batch can finish official identity
+            // projection. Re-read only the journal's current reference, preserving
+            // the operation and its immutable routing/proof rather than adopting
+            // an arbitrary unknown ID from the current path.
+            CloudStateOperationKind? expectedKind = command.Kind switch
+            {
+                MirrorPulseWorkerChangeKind.Create => CloudStateOperationKind.Create,
+                MirrorPulseWorkerChangeKind.ContentUpdate => CloudStateOperationKind.ContentUpdate,
+                MirrorPulseWorkerChangeKind.MetadataUpdate => CloudStateOperationKind.MetadataUpdate,
+                MirrorPulseWorkerChangeKind.Move => CloudStateOperationKind.Move,
+                MirrorPulseWorkerChangeKind.Delete => CloudStateOperationKind.Delete,
+                _ => null,
+            };
+            if (currentOperation.Sequence != command.Sequence || currentOperation.Kind != expectedKind)
+                throw new MirrorPulseMutationAmbiguousException("The authoritative journal operation changed during dispatch.");
+            referencedItem = currentOperation.ItemId;
+        }
         CloudItemState? item;
-        if (command.ItemId is { } itemId)
+        if (referencedItem is { } itemId)
             item = await transaction.Items.GetByItemIdAsync(itemId, cancellationToken).ConfigureAwait(false);
         else
         {

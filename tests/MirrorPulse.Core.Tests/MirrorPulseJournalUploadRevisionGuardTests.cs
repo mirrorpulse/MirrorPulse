@@ -98,6 +98,53 @@ public sealed class MirrorPulseJournalUploadRevisionGuardTests
     }
 
     [TestMethod]
+    public async Task EarlierProjectionInSameBatchUsesCurrentOfficialJournalReferenceWithoutLearningRemoteRevision()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "MirrorPulse-revision-guard", Guid.NewGuid().ToString("N"));
+        var paths = new MirrorPulseStoragePaths(Path.Combine(root, "sync"), Path.Combine(root, "data"));
+        Directory.CreateDirectory(paths.SyncRootPath);
+        Guid originalItem = Guid.NewGuid();
+        Guid operation = Guid.NewGuid();
+        try
+        {
+            await using ICloudStateStore store = await new SqliteCloudStateStoreFactory(paths.CfSharpStateDatabasePath)
+                .OpenAsync(new CloudStateStoreContext(paths.SyncRootPath));
+            long sequence;
+            await using (ICloudStateTransaction transaction = await store.BeginTransactionAsync())
+            {
+                await transaction.Items.UpsertAsync(new CloudItemState(originalItem, "temporary", "Local\\note.txt",
+                    CloudItemKind.File, null, null, false, DateTimeOffset.UtcNow));
+                await transaction.Operations.EnqueueAsync(new CloudOperationJournalEntry(operation, CloudStateOperationKind.ContentUpdate,
+                    originalItem, new byte[] { 1 }, DateTimeOffset.UtcNow));
+                sequence = (await transaction.Operations.GetAsync(operation))!.Sequence;
+                await transaction.CommitAsync();
+            }
+            var command = new MirrorPulseWorkerChangeCommand(operation, sequence, InstanceId.New(), "local",
+                MirrorPulseWorkerChangeKind.ContentUpdate, "note.txt", null, null, false, originalItem, DateTimeOffset.UtcNow);
+            await using (ICloudStateTransaction transaction = await store.BeginTransactionAsync())
+            {
+                await transaction.Items.RemoveAsync(originalItem);
+                await transaction.Items.UpsertAsync(new CloudItemState(Guid.NewGuid(), "accepted-remote", "Local\\note.txt",
+                    CloudItemKind.File, "accepted", null, false, DateTimeOffset.UtcNow));
+                Assert.IsNull((await transaction.Operations.GetAsync(operation))!.ItemId);
+                await transaction.CommitAsync();
+            }
+            var stats = new FakeStats("accepted");
+            await Assert.ThrowsExactlyAsync<MirrorPulseMutationAmbiguousException>(async () =>
+                await MirrorPulseJournalUploadRevisionGuard.ResolveAsync(store, stats, command with { Sequence = sequence + 1 }, "Local/note.txt"));
+            await Assert.ThrowsExactlyAsync<MirrorPulseMutationAmbiguousException>(async () =>
+                await MirrorPulseJournalUploadRevisionGuard.ResolveAsync(store, stats, command with { Kind = MirrorPulseWorkerChangeKind.Delete }, "Local/note.txt"));
+            Assert.AreEqual("accepted", await MirrorPulseJournalUploadRevisionGuard.ResolveAsync(store, stats, command, "Local/note.txt"));
+            stats.Revision = "concurrent-change";
+            MirrorPulseUploadConflictException conflict = await Assert.ThrowsExactlyAsync<MirrorPulseUploadConflictException>(async () =>
+                await MirrorPulseJournalUploadRevisionGuard.ResolveAsync(store, stats, command, "Local/note.txt"));
+            Assert.AreEqual("accepted", conflict.ExpectedRevision);
+            Assert.AreEqual("concurrent-change", conflict.ActualRevision);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [TestMethod]
     public async Task UntrackedCreateRequiresTheRemotePathToBeAbsent()
     {
         string root = Path.Combine(Path.GetTempPath(), "MirrorPulse-revision-guard", Guid.NewGuid().ToString("N"));
