@@ -39,6 +39,8 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
     private readonly MirrorPulseFullRescanRecovery? _rescan;
     private readonly Func<InstanceId, bool> _mayDispatch;
     private readonly CloudFileSystem? _fileSystem;
+    private readonly MirrorPulseInstanceScheduler _scheduler;
+    private readonly bool _ownsScheduler;
 
     public MirrorPulseJournalPumpHealth Health => _runner.Health;
 
@@ -71,9 +73,11 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
         _mutationExecutor = new MirrorPulseMutationExecutor(catalog);
         _readback = new MirrorPulseMutationReadback(stats, ranges, directories);
         _fileSystem = fileSystem;
+        _ownsScheduler = scheduler is null;
+        _scheduler = scheduler ?? new MirrorPulseInstanceScheduler();
         if (fileSystem is not null)
             _rescan = new(catalog, new MirrorPulseFullRescanPolicy(fileSystem, feed, state, router, catalog,
-                uploads, stats, mayDispatch, mutations, ranges, directories, conflicts, notifications, scheduler).ReconcileAsync,
+                uploads, stats, mayDispatch, mutations, ranges, directories, conflicts, notifications, _scheduler).ReconcileAsync,
                 feed.AcknowledgeFullRescanAsync, ProjectRescanAsync);
         _conflicts = conflicts;
         _notifications = notifications;
@@ -156,7 +160,10 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
         await _catalog.SaveInstanceRuntimeStateAsync(new(record.Intent.InstanceId, "Connected", false, DateTimeOffset.UtcNow),
             cancellationToken).ConfigureAwait(false);
 
-    private async ValueTask<bool> DispatchAsync(
+    private ValueTask<bool> DispatchAsync(MirrorPulseWorkerChangeCommand command, CancellationToken cancellationToken) =>
+        _scheduler.RunAsync(command.InstanceId, token => DispatchCoreAsync(command, token), cancellationToken);
+
+    private async ValueTask<bool> DispatchCoreAsync(
         MirrorPulseWorkerChangeCommand command,
         CancellationToken cancellationToken)
     {
@@ -440,6 +447,7 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
         }
 
         await _feed.DisposeAsync().ConfigureAwait(false);
+        if (_ownsScheduler) await _scheduler.DisposeAsync().ConfigureAwait(false);
         _log.Dispose();
         _shutdown.Dispose();
     }
