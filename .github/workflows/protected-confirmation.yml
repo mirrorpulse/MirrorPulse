@@ -51,7 +51,7 @@ jobs:
           CONFIRMATION_CONTRACT: ${{ inputs.contract || 'prototype' }}
         run: |
           $filter = if ($env:CONFIRMATION_CONTRACT -eq 'managed') {
-            'FullyQualifiedName~NativeManagedConfirmationHonorsActualPolicyAndReplaysExactProof'
+            'FullyQualifiedName~MirrorPulseContentConfirmationTests.NativeManagedConfirmation'
           } else { 'FullyQualifiedName~MirrorPulseProtectedConfirmationTests' }
           dotnet test tests/MirrorPulse.CloudFiles.CfSharp.Tests --configuration Release --no-build --filter $filter --logger trx --results-directory artifacts/protected-confirmation
           if ($LASTEXITCODE -ne 0) { throw 'Protected content confirmation failed.' }

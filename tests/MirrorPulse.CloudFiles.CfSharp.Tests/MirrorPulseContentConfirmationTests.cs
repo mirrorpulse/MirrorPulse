@@ -33,9 +33,14 @@ public sealed class MirrorPulseContentConfirmationTests
     [TestMethod]
     [DoNotParallelize]
     [TestCategory("NativeCloudFiles")]
-    [DataRow(false)]
-    [DataRow(true)]
-    public async Task NativeManagedConfirmationHonorsActualPolicyAndReplaysExactProof(bool tracked)
+    public Task NativeManagedConfirmationHonorsActualPolicyAndReplaysExactProof() => VerifyPolicyAsync(false);
+
+    [TestMethod]
+    [DoNotParallelize]
+    [TestCategory("NativeCloudFiles")]
+    public Task NativeManagedConfirmationRejectsActualTrackedPolicyBeforeReading() => VerifyPolicyAsync(true);
+
+    private async Task VerifyPolicyAsync(bool tracked)
     {
         if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
             Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
