@@ -27,10 +27,23 @@ public static class MirrorPulseJournalUploadRevisionGuard
 
         await using ICloudStateTransaction transaction = await state.BeginTransactionAsync(
             cancellationToken).ConfigureAwait(false);
-        CloudItemState? item = command.ItemId is { } itemId
-            ? await transaction.Items.GetByItemIdAsync(itemId, cancellationToken).ConfigureAwait(false)
-            : await transaction.Items.GetByRelativePathAsync(syncRootRelativePath, cancellationToken)
-                .ConfigureAwait(false);
+        CloudItemState? item;
+        if (command.ItemId is { } itemId)
+            item = await transaction.Items.GetByItemIdAsync(itemId, cancellationToken).ConfigureAwait(false);
+        else
+        {
+            // CfSharp stores canonical native paths; older product projections may
+            // use portable separators. Resolve both without adopting an unknown ID.
+            string nativePath = syncRootRelativePath.Replace('/', Path.DirectorySeparatorChar);
+            item = await transaction.Items.GetByRelativePathAsync(nativePath, cancellationToken).ConfigureAwait(false);
+            if (nativePath != syncRootRelativePath)
+            {
+                CloudItemState? portable = await transaction.Items.GetByRelativePathAsync(syncRootRelativePath, cancellationToken).ConfigureAwait(false);
+                if (item is not null && portable is not null && item.ItemId != portable.ItemId)
+                    throw new MirrorPulseMutationAmbiguousException("The native and portable state paths identify different objects.");
+                item ??= portable;
+            }
+        }
         await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
 
         if (item?.IsTombstone == true && !allowTombstone)

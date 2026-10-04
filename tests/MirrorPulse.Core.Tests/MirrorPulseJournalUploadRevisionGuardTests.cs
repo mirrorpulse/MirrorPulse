@@ -58,6 +58,46 @@ public sealed class MirrorPulseJournalUploadRevisionGuardTests
     }
 
     [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task NativePathLookupRetainsAcknowledgedRevisionWhenJournalIdentityIsUnavailable(bool staleItemId)
+    {
+        string root = Path.Combine(Path.GetTempPath(), "MirrorPulse-revision-guard", Guid.NewGuid().ToString("N"));
+        var paths = new MirrorPulseStoragePaths(Path.Combine(root, "sync"), Path.Combine(root, "data"));
+        Directory.CreateDirectory(paths.SyncRootPath);
+        try
+        {
+            await using ICloudStateStore store = await new SqliteCloudStateStoreFactory(paths.CfSharpStateDatabasePath)
+                .OpenAsync(new CloudStateStoreContext(paths.SyncRootPath));
+            await using (ICloudStateTransaction transaction = await store.BeginTransactionAsync())
+            {
+                await transaction.Items.UpsertAsync(new CloudItemState(Guid.NewGuid(), "remote-note",
+                    "Local\\nested\\note.txt", CloudItemKind.File, "base", null, false, DateTimeOffset.UtcNow));
+                await transaction.CommitAsync();
+            }
+            var command = new MirrorPulseWorkerChangeCommand(Guid.NewGuid(), 1, InstanceId.New(), "local",
+                MirrorPulseWorkerChangeKind.ContentUpdate, "nested\\note.txt", null, null, false,
+                staleItemId ? Guid.NewGuid() : null, DateTimeOffset.UtcNow);
+            var stats = new FakeStats("base");
+            if (staleItemId)
+            {
+                MirrorPulseUploadConflictException unavailable = await Assert.ThrowsExactlyAsync<MirrorPulseUploadConflictException>(async () =>
+                    await MirrorPulseJournalUploadRevisionGuard.ResolveAsync(store, stats, command, "Local/nested/note.txt"));
+                Assert.IsNull(unavailable.ExpectedRevision);
+                Assert.AreEqual("base", unavailable.ActualRevision);
+                return;
+            }
+            Assert.AreEqual("base", await MirrorPulseJournalUploadRevisionGuard.ResolveAsync(store, stats, command, "Local/nested/note.txt"));
+            stats.Revision = "changed";
+            MirrorPulseUploadConflictException conflict = await Assert.ThrowsExactlyAsync<MirrorPulseUploadConflictException>(async () =>
+                await MirrorPulseJournalUploadRevisionGuard.ResolveAsync(store, stats, command, "Local/nested/note.txt"));
+            Assert.AreEqual("base", conflict.ExpectedRevision);
+            Assert.AreEqual("changed", conflict.ActualRevision);
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [TestMethod]
     public async Task UntrackedCreateRequiresTheRemotePathToBeAbsent()
     {
         string root = Path.Combine(Path.GetTempPath(), "MirrorPulse-revision-guard", Guid.NewGuid().ToString("N"));
