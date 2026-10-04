@@ -132,6 +132,19 @@ with changed content preserved for conflict handling. Windows callback paths
 are normalized only at metadata lookup boundaries so retained intent IDs and
 fingerprints remain unchanged.
 
+Official identity projection can change or clear a journal entry's temporary
+`ItemId` reference. The product catalog retains the original exact fingerprint
+and a separate stable routing fingerprint, which excludes only that reference.
+Operation ID, instance, root, paths, kind, sequence and observation time remain
+checked. Schema 14 preserves old records; an old fingerprint can gain a stable
+proof only after an exact replay, never after an already changed payload. This
+routing proof does not replace the immutable upload-time native binding.
+
+Revision checks use CfSharp's canonical native state path and also recognize
+older portable path records. Conflicting identities at those two spellings stay
+ambiguous. An unavailable explicit item ID does not authorize adoption of the
+current path's identity or revision.
+
 ## Evidence and remaining work
 
 | Experiment group | Cases | Observed result on both architectures |
