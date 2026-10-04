@@ -49,7 +49,7 @@ public sealed class MirrorPulseFullRescanPolicy(CloudFileSystem fileSystem, Clou
                 {
                     CloudItemSnapshot snapshot = await item.InspectAsync(cancellationToken).ConfigureAwait(false);
                     if (!snapshot.Exists) throw new IOException("The materialized tree changed during discovery.");
-                    observations.Add(item.RelativePath, (item, snapshot));
+                    observations.Add(NormalizePath(item.RelativePath), (item, snapshot));
                     if (item.Kind == CloudItemKind.Directory && (snapshot.IsPlaceholder ||
                         snapshot.Attributes is { } attributes && !attributes.HasFlag(FileAttributes.ReparsePoint)))
                         pending.Enqueue(fileSystem.GetDirectory(item.RelativePath));
@@ -62,7 +62,7 @@ public sealed class MirrorPulseFullRescanPolicy(CloudFileSystem fileSystem, Clou
             known = await transaction.Items.ListSubtreeAsync(string.Empty, cancellationToken).ConfigureAwait(false);
             await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
         }
-        var previous = known.ToDictionary(item => item.RelativePath, StringComparer.OrdinalIgnoreCase);
+        var previous = known.ToDictionary(item => NormalizePath(item.RelativePath), StringComparer.OrdinalIgnoreCase);
         IReadOnlyList<MirrorPulseMutationRecord> incomplete = await catalog.ReadIncompleteMutationsAsync(cancellationToken).ConfigureAwait(false);
         int count = 0;
         var blockedDirectories = new List<string>();
@@ -156,21 +156,22 @@ public sealed class MirrorPulseFullRescanPolicy(CloudFileSystem fileSystem, Clou
         }
         // Absence is actionable only after complete discovery and a fresh inspection. Never infer
         // directory deletion: an unmaterialized remote subtree requires a separate policy decision.
-        foreach (CloudItemState item in known.Where(item => !observations.ContainsKey(item.RelativePath) && !string.IsNullOrEmpty(item.RemoteRevision)))
+        foreach (CloudItemState item in known.Where(item => !observations.ContainsKey(NormalizePath(item.RelativePath)) && !string.IsNullOrEmpty(item.RemoteRevision)))
         {
+            string path = NormalizePath(item.RelativePath);
             MirrorPulseRoutedItem route;
-            try { route = router.ResolvePath(item.RelativePath); }
+            try { route = router.ResolvePath(path); }
             catch (IOException) { continue; }
             if (route.RelativePath.Length == 0 || !enabled.Any(root => root.InstanceId == route.InstanceId && root.UniquenessKey == route.RootKey)) continue;
-            string parent = item.RelativePath[..item.RelativePath.LastIndexOf('/')];
-            if (blockedDirectories.Any(prefix => item.RelativePath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) ||
+            string parent = path[..path.LastIndexOf('/')];
+            if (blockedDirectories.Any(prefix => path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) ||
                 (!observations.ContainsKey(parent) && !enabled.Any(root => root.DirectoryName == parent))) continue;
-            CloudItem reference = item.Kind == CloudItemKind.File ? fileSystem.GetFile(item.RelativePath) : fileSystem.GetDirectory(item.RelativePath);
+            CloudItem reference = item.Kind == CloudItemKind.File ? fileSystem.GetFile(path) : fileSystem.GetDirectory(path);
             if ((await reference.InspectAsync(cancellationToken).ConfigureAwait(false)).Exists)
                 throw new IOException("A missing-path candidate changed during discovery.");
             if (item.Kind == CloudItemKind.Directory || mutations is null)
             {
-                await BlockAsync(route, item.RelativePath, MirrorPulseLocalOperationBlockReason.UnsupportedRescanDirectoryDeletion, cancellationToken).ConfigureAwait(false);
+                await BlockAsync(route, path, MirrorPulseLocalOperationBlockReason.UnsupportedRescanDirectoryDeletion, cancellationToken).ConfigureAwait(false);
                 continue;
             }
             var intent = new MirrorPulseMutationIntent(StableId($"delete/{route.InstanceId}/{route.RootKey}/{route.RelativePath}/{item.RemoteRevision}"),
@@ -197,7 +198,7 @@ public sealed class MirrorPulseFullRescanPolicy(CloudFileSystem fileSystem, Clou
                 }
                 count++;
             }
-            catch (MirrorPulseWorkerMutationConflictException conflict) { await SaveConflictAsync(intent, item.RelativePath, conflict, cancellationToken).ConfigureAwait(false); }
+            catch (MirrorPulseWorkerMutationConflictException conflict) { await SaveConflictAsync(intent, path, conflict, cancellationToken).ConfigureAwait(false); }
         }
         foreach (RootRegistration root in router.Registrations.Where(root => !enabled.Contains(root)))
             await catalog.RequireRootRescanAsync(root.RootId, cancellationToken).ConfigureAwait(false);
@@ -240,5 +241,8 @@ public sealed class MirrorPulseFullRescanPolicy(CloudFileSystem fileSystem, Clou
         }
     }
 
+    // CfSharp's local objects and official store use Windows separators. Product
+    // routing, subtree membership and mutation keys use one portable spelling.
+    private static string NormalizePath(string path) => path.Replace('\\', '/');
     private static Guid StableId(string value) => new(SHA256.HashData(Encoding.UTF8.GetBytes(value)).AsSpan(0, 16));
 }
