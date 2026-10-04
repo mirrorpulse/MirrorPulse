@@ -79,7 +79,16 @@ try {
     $version = Invoke-MirrorPulseCli @("--json", "--version")
     if ($version.kind -ne "version") { throw "The CLI version envelope is invalid." }
 
-    $hostStatus = Invoke-MirrorPulseCli @("--json", "--developer-mode", "host", "start")
+    try {
+        $hostStatus = Invoke-MirrorPulseCli @("--json", "--developer-mode", "host", "start")
+    }
+    catch {
+        # The isolated fixture has no Adapter or credentials yet. Surface the original
+        # one-shot Host startup error before cleanup removes this test's data root.
+        Write-Host 'Isolated Host startup diagnostic:'
+        & $hostExecutable --run-once 2>&1 | ForEach-Object { Write-Host $_ }
+        throw
+    }
     if ($hostStatus.kind -ne "result" -or $hostStatus.data.state -notin @("Running", "Degraded")) {
         throw "The Host did not reach a running state through the CLI."
     }
