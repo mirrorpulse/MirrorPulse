@@ -15,13 +15,13 @@ public sealed class MirrorPulseMutationReadback(IMirrorPulseWorkerStatTransport 
     {
         ArgumentNullException.ThrowIfNull(record);
         MirrorPulseMutationIntent intent = record.Intent;
-        string? revision = await stats.StatAsync(new(intent.InstanceId, intent.RelativePath), cancellationToken).ConfigureAwait(false);
+        string? revision = await stats.StatAsync(new(intent.InstanceId, intent.RelativePath, intent.RootKey), cancellationToken).ConfigureAwait(false);
         if (intent.Kind == MirrorPulseWorkerChangeKind.Delete)
             return revision is null ? new(MirrorPulseMutationProofKind.Verified, null) :
                 new(revision == intent.ExpectedRevision ? MirrorPulseMutationProofKind.Unknown : MirrorPulseMutationProofKind.Conflict, revision);
         if (intent.Kind == MirrorPulseWorkerChangeKind.Move)
         {
-            string? source = await stats.StatAsync(new(intent.InstanceId, intent.PreviousRelativePath!), cancellationToken).ConfigureAwait(false);
+            string? source = await stats.StatAsync(new(intent.InstanceId, intent.PreviousRelativePath!, intent.PreviousRootKey ?? intent.RootKey), cancellationToken).ConfigureAwait(false);
             if (record.AcceptedRevision is not null && revision == record.AcceptedRevision && source is null)
                 return new(MirrorPulseMutationProofKind.Verified, revision);
             return new(revision is not null && revision != record.AcceptedRevision
@@ -41,7 +41,7 @@ public sealed class MirrorPulseMutationReadback(IMirrorPulseWorkerStatTransport 
             {
                 int length = (int)Math.Min(1024 * 1024, intent.ContentLength.Value - offset);
                 await using Stream content = await ranges.ReadRangeAsync(new(intent.InstanceId, intent.RelativePath,
-                    ReadOnlyMemory<byte>.Empty, offset, length), cancellationToken).ConfigureAwait(false);
+                    ReadOnlyMemory<byte>.Empty, offset, length, intent.RootKey), cancellationToken).ConfigureAwait(false);
                 byte[] buffer = new byte[length];
                 await content.ReadExactlyAsync(buffer, cancellationToken).ConfigureAwait(false);
                 if (content.ReadByte() != -1) throw new InvalidDataException("The readback range exceeded its bound.");
@@ -50,7 +50,7 @@ public sealed class MirrorPulseMutationReadback(IMirrorPulseWorkerStatTransport 
             }
             matches = string.Equals(Convert.ToHexString(hash.GetHashAndReset()), intent.ContentSha256, StringComparison.OrdinalIgnoreCase);
         }
-        string? after = await stats.StatAsync(new(intent.InstanceId, intent.RelativePath), cancellationToken).ConfigureAwait(false);
+        string? after = await stats.StatAsync(new(intent.InstanceId, intent.RelativePath, intent.RootKey), cancellationToken).ConfigureAwait(false);
         if (after != revision) return new(MirrorPulseMutationProofKind.Unknown, after);
         return new(matches ? MirrorPulseMutationProofKind.Verified :
             revision != intent.ExpectedRevision || record.State == MirrorPulseMutationState.RemoteAccepted
@@ -71,7 +71,7 @@ public sealed class MirrorPulseMutationReadback(IMirrorPulseWorkerStatTransport 
         var seen = new HashSet<string>(StringComparer.Ordinal);
         for (int pageIndex = 0; pageIndex < 10000; pageIndex++)
         {
-            MirrorPulseWorkerDirectoryPage page = await directories!.ReadDirectoryPageAsync(new(intent.InstanceId, parent, cursor, 256),
+            MirrorPulseWorkerDirectoryPage page = await directories!.ReadDirectoryPageAsync(new(intent.InstanceId, parent, cursor, 256, intent.RootKey),
                 cancellationToken).ConfigureAwait(false);
             MirrorPulseWorkerDirectoryEntry? found = page.Entries.SingleOrDefault(entry =>
                 string.Equals(entry.RelativePath.Replace('\\', '/'), relative, StringComparison.Ordinal));

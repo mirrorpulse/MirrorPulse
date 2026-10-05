@@ -142,10 +142,10 @@ public sealed class MirrorPulseFullRescanPolicy(CloudFileSystem fileSystem, Clou
                     await _executor.ReconcileAsync(pending, _readback.VerifyAsync, Acknowledge, cancellationToken).ConfigureAwait(false);
                 else
                 {
-                    string? actual = await stats.StatAsync(new(route.InstanceId, route.RelativePath), cancellationToken).ConfigureAwait(false);
+                    string? actual = await stats.StatAsync(new(route.InstanceId, route.RelativePath, route.RootKey), cancellationToken).ConfigureAwait(false);
                     if (actual != expected) throw new MirrorPulseWorkerMutationConflictException(expected, actual);
                     await _executor.ExecuteAsync(intent, async token => await uploads.UploadAsync(new(route.InstanceId,
-                        route.RelativePath, expected, content, content.Length, intent.OperationId, intent.ContentSha256), token).ConfigureAwait(false), Acknowledge, cancellationToken).ConfigureAwait(false);
+                        route.RelativePath, expected, content, content.Length, intent.OperationId, intent.ContentSha256, route.RootKey), token).ConfigureAwait(false), Acknowledge, cancellationToken).ConfigureAwait(false);
                 }
                 count++;
             }
@@ -191,10 +191,10 @@ public sealed class MirrorPulseFullRescanPolicy(CloudFileSystem fileSystem, Clou
                     await _executor.ReconcileAsync(record, _readback.VerifyAsync, Acknowledge, cancellationToken).ConfigureAwait(false);
                 else
                 {
-                    string? actual = await stats.StatAsync(new(route.InstanceId, route.RelativePath), cancellationToken).ConfigureAwait(false);
+                    string? actual = await stats.StatAsync(new(route.InstanceId, route.RelativePath, route.RootKey), cancellationToken).ConfigureAwait(false);
                     if (actual is not null && actual != item.RemoteRevision) throw new MirrorPulseWorkerMutationConflictException(item.RemoteRevision, actual);
                     await _executor.ExecuteAsync(intent, token => mutations.DeleteAsync(new(route.InstanceId, route.RelativePath,
-                        item.RemoteRevision, false, intent.OperationId), token), Acknowledge, cancellationToken).ConfigureAwait(false);
+                        item.RemoteRevision, false, intent.OperationId, route.RootKey), token), Acknowledge, cancellationToken).ConfigureAwait(false);
                 }
                 count++;
             }
@@ -215,7 +215,7 @@ public sealed class MirrorPulseFullRescanPolicy(CloudFileSystem fileSystem, Clou
         var seen = new HashSet<string>(StringComparer.Ordinal);
         for (int pageIndex = 0; pageIndex < 10000; pageIndex++)
         {
-            MirrorPulseWorkerDirectoryPage page = await directories.ReadDirectoryPageAsync(new(route.InstanceId, parent, cursor, 256), token).ConfigureAwait(false);
+            MirrorPulseWorkerDirectoryPage page = await directories.ReadDirectoryPageAsync(new(route.InstanceId, parent, cursor, 256, route.RootKey), token).ConfigureAwait(false);
             MirrorPulseWorkerDirectoryEntry? entry = page.Entries.SingleOrDefault(candidate => NormalizePath(candidate.RelativePath) == relative && !candidate.IsDeleted);
             if (entry is not null) return entry;
             if (page.IsComplete) throw new FileNotFoundException("The confirmed remote item has no metadata.");

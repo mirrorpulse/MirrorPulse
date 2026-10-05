@@ -447,7 +447,8 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
     private static MirrorPulseMutationIntent Intent(MirrorPulseWorkerChangeCommand command, string? revision,
         long? length = null, string? hash = null, MirrorPulseUploadBinding? binding = null) => new(command.OperationId, command.InstanceId, command.RootKey,
             command.Kind, command.RelativePath, command.PreviousRelativePath, command.IsDirectory, revision,
-            length, hash, MirrorPulseMutationOrigin.Journal, binding);
+            length, hash, MirrorPulseMutationOrigin.Journal, binding,
+            command.PreviousRootKey == command.RootKey ? null : command.PreviousRootKey);
 
     private async ValueTask ReportFailureAsync(MirrorPulseWorkerChangeCommand? command, string code,
         Exception exception, CancellationToken cancellationToken)

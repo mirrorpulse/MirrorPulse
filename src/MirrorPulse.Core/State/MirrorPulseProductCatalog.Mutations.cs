@@ -10,7 +10,8 @@ public enum MirrorPulseMutationOrigin { Journal, Rescan }
 public sealed record MirrorPulseMutationIntent(Guid OperationId, InstanceId InstanceId, string RootKey,
     MirrorPulseWorkerChangeKind Kind, string RelativePath, string? PreviousRelativePath, bool IsDirectory,
     string? ExpectedRevision, long? ContentLength, string? ContentSha256, MirrorPulseMutationOrigin Origin,
-    MirrorPulseUploadBinding? UploadBinding = null);
+    MirrorPulseUploadBinding? UploadBinding = null,
+    string? PreviousRootKey = null);
 public sealed record MirrorPulseMutationRecord(MirrorPulseMutationIntent Intent, MirrorPulseMutationState State,
     string? AcceptedRevision, DateTimeOffset UpdatedAt);
 
