@@ -4,6 +4,44 @@ This matrix distinguishes implemented Worker operations from complete product
 acceptance. Source support alone does not prove journal recovery or Explorer
 behavior. The Host must not infer capabilities from a protocol's feature set.
 
+## Package and input boundaries
+
+Host applies the same manifest configuration schema when creating or patching an
+instance. Ordinary settings cannot inject secret fields or managed credential
+references. Credential rotation publishes a new opaque reference only after save;
+unused credentials are retired through a durable cleanup record. Workers receive
+system and declared cache environment variables rather than inherited tokens or
+runtime injection variables. Package admission validates canonical Windows paths,
+minimum product/protocol versions, and both x64/ARM64 executable payloads.
+
+The independently maintained WebDAV Worker confines raw relative segments and
+returned hrefs to its configured origin and directory. Redirects are not followed.
+Its bounded range reader requires HTTP 206, correct Content-Range offsets/length,
+identity encoding and consistent HEAD/GET revision metadata before exposing bytes.
+PROPFIND is capped at 4 MiB and 8,192 responses and disallows DTDs. Directory
+pagination beyond that budget and a revision pinned across separate Host requests
+remain contract work. These changes are in the Adapter source and signed candidate
+artifacts; consumers of older published packages retain that package's behavior.
+
+## Independent release verification
+
+The [Adapter template](https://github.com/mirrorpulse/adapter-template) supplies
+release scripts with data-only environment inputs, full Action commit SHAs and
+separate build, sign and publish jobs. Numeric versions are validated before path
+creation. Build receives no signing secrets. Manual release dispatch defaults to
+verified signed artifacts and does not create a public Release.
+
+Official repositories additionally test each newly signed candidate using a pinned
+MirrorPulse verifier and real Host/Worker protocol fixtures on a disposable Windows
+runner. Evidence records Adapter and MirrorPulse source commits and package hash.
+This gate is separate from testing whichever older package is currently latest.
+Environment reviewers, branch/tag protection and signing-secret scope must be
+configured by the repository owner; environment names in YAML do not establish
+those policies. Candidate integrity checks do not replace the product's publisher
+trust check.
+
+## Current protocol coverage
+
 | Adapter | Read | Write | Move | Delete | Offline upload | Conflict detection |
 | --- | --- | --- | --- | --- | --- | --- |
 | Local directory | Signed Worker + CfSharp demand | Signed Worker + Host upload | Worker file/directory implementation | Worker file/directory implementation | ARM64 Local CLI replay verified; complete journal coverage partial | Revision check |
