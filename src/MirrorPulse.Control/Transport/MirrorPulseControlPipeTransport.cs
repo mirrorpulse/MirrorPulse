@@ -16,7 +16,7 @@ public static class MirrorPulseControlPipeTransport
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(stream);
-        var frame = await LengthPrefixedFrameReader.ReadAsync(stream, cancellationToken)
+        var frame = await LengthPrefixedFrameReader.ReadAsync(stream, MirrorPulseControlSchema.MaximumFrameBytes, cancellationToken)
             .ConfigureAwait(false);
         if (frame.Length > MirrorPulseControlSchema.MaximumFrameBytes)
         {
@@ -54,6 +54,24 @@ public static class MirrorPulseControlPipeTransport
     }
 }
 
+/// <summary>Deadlines for untrusted control connections and cancellation-aware Host handlers.</summary>
+public sealed record MirrorPulseControlPipeOptions
+{
+    public TimeSpan FrameReadTimeout { get; init; } = TimeSpan.FromSeconds(5);
+    public TimeSpan FrameWriteTimeout { get; init; } = TimeSpan.FromSeconds(5);
+    public TimeSpan ConnectionTimeout { get; init; } = TimeSpan.FromMinutes(2);
+
+    internal void Validate()
+    {
+        if (FrameReadTimeout <= TimeSpan.Zero || FrameWriteTimeout <= TimeSpan.Zero ||
+            ConnectionTimeout <= TimeSpan.Zero || FrameReadTimeout > TimeSpan.FromHours(1) ||
+            FrameWriteTimeout > TimeSpan.FromHours(1) || ConnectionTimeout > TimeSpan.FromHours(1))
+        {
+            throw new ArgumentOutOfRangeException(nameof(ConnectionTimeout), "Control deadlines must be positive and bounded.");
+        }
+    }
+}
+
 /// <summary>
 /// Serves one request at a time on the current-user versioned control pipe.
 /// </summary>
@@ -61,15 +79,19 @@ public sealed class MirrorPulseControlPipeServer
 {
     private readonly Func<ControlRequestEnvelope, CancellationToken, ValueTask<ControlResponseEnvelope>> _handler;
     private readonly string _pipeName;
+    private readonly MirrorPulseControlPipeOptions _options;
 
     public MirrorPulseControlPipeServer(
         Func<ControlRequestEnvelope, CancellationToken, ValueTask<ControlResponseEnvelope>> handler,
-        string? pipeName = null)
+        string? pipeName = null,
+        MirrorPulseControlPipeOptions? options = null)
     {
         _handler = handler ?? throw new ArgumentNullException(nameof(handler));
         _pipeName = string.IsNullOrWhiteSpace(pipeName)
             ? MirrorPulseControlPipeNames.CurrentUserV1()
             : pipeName.Trim();
+        _options = options ?? new();
+        _options.Validate();
     }
 
     public string PipeName => _pipeName;
@@ -80,35 +102,52 @@ public sealed class MirrorPulseControlPipeServer
         {
             await using var pipe = SecureNamedPipeServerFactory.Create(
                 new NamedPipeServerOptions(_pipeName));
+            Guid requestId = Guid.Empty;
             try
             {
                 await pipe.WaitForConnectionAsync(cancellationToken).ConfigureAwait(false);
+                using var connection = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                connection.CancelAfter(_options.ConnectionTimeout);
+                using var read = CancellationTokenSource.CreateLinkedTokenSource(connection.Token);
+                read.CancelAfter(_options.FrameReadTimeout);
                 var request = MirrorPulseControlJsonCodec.Deserialize<ControlRequestEnvelope>(
-                    await MirrorPulseControlPipeTransport.ReadFrameAsync(pipe, cancellationToken)
+                    await MirrorPulseControlPipeTransport.ReadFrameAsync(pipe, read.Token)
                         .ConfigureAwait(false));
-                var response = await _handler(request, cancellationToken).ConfigureAwait(false);
+                requestId = request.RequestId;
+                var response = await _handler(request, connection.Token).ConfigureAwait(false);
+                connection.Token.ThrowIfCancellationRequested();
+                using var write = CancellationTokenSource.CreateLinkedTokenSource(connection.Token);
+                write.CancelAfter(_options.FrameWriteTimeout);
                 await MirrorPulseControlPipeTransport.WriteFrameAsync(
                     pipe,
                     MirrorPulseControlJsonCodec.Serialize(response),
-                    cancellationToken).ConfigureAwait(false);
+                    write.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 return;
             }
-            catch (InvalidDataException exception)
+            catch (OperationCanceledException)
             {
-                await TryWriteFailureAsync(pipe, Guid.Empty,
+                await TryWriteFailureAsync(pipe, requestId,
+                    MirrorPulseControlErrorCodes.RequestTimeout,
+                    "The control connection timed out.",
+                    ErrorCategory.Network,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (InvalidDataException)
+            {
+                await TryWriteFailureAsync(pipe, requestId,
                     MirrorPulseControlErrorCodes.InvalidRequest,
-                    exception.Message,
+                    "The control request is invalid.",
                     ErrorCategory.Protocol,
                     cancellationToken).ConfigureAwait(false);
             }
-            catch (ArgumentException exception)
+            catch (ArgumentException)
             {
-                await TryWriteFailureAsync(pipe, Guid.Empty,
+                await TryWriteFailureAsync(pipe, requestId,
                     MirrorPulseControlErrorCodes.InvalidRequest,
-                    exception.Message,
+                    "The control request is invalid.",
                     ErrorCategory.Validation,
                     cancellationToken).ConfigureAwait(false);
             }
@@ -119,7 +158,7 @@ public sealed class MirrorPulseControlPipeServer
         }
     }
 
-    private static async Task TryWriteFailureAsync(
+    private async Task TryWriteFailureAsync(
         NamedPipeServerStream pipe,
         Guid requestId,
         string code,
@@ -137,14 +176,20 @@ public sealed class MirrorPulseControlPipeServer
             new ControlError(code, message, category));
         try
         {
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            deadline.CancelAfter(_options.FrameWriteTimeout);
             await MirrorPulseControlPipeTransport.WriteFrameAsync(
                 pipe,
                 MirrorPulseControlJsonCodec.Serialize(response),
-                cancellationToken).ConfigureAwait(false);
+                deadline.Token).ConfigureAwait(false);
         }
         catch (IOException)
         {
             // The peer may have disconnected while the error was being sent.
+        }
+        catch (OperationCanceledException)
+        {
+            // An unresponsive peer cannot prolong an error response or Host shutdown.
         }
     }
 }

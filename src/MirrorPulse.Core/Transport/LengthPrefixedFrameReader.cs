@@ -7,7 +7,11 @@ namespace MirrorPulse.Core.Transport;
 /// </summary>
 public static class LengthPrefixedFrameReader
 {
-    public static async ValueTask<byte[]> ReadAsync(Stream stream, CancellationToken cancellationToken = default)
+    public static ValueTask<byte[]> ReadAsync(Stream stream, CancellationToken cancellationToken = default)
+        => ReadAsync(stream, (int)ControlFrameLimits.MaxPayloadBytes, cancellationToken);
+
+    public static async ValueTask<byte[]> ReadAsync(Stream stream, int maximumPayloadBytes,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(stream);
         if (!stream.CanRead)
@@ -18,6 +22,10 @@ public static class LengthPrefixedFrameReader
         var lengthPrefix = new byte[ControlFrameLimits.LengthPrefixBytes];
         await ReadExactlyAsync(stream, lengthPrefix, cancellationToken).ConfigureAwait(false);
         var payloadLength = ControlFrameLimits.ReadPayloadLength(lengthPrefix);
+        if (maximumPayloadBytes < 0 || payloadLength > maximumPayloadBytes)
+        {
+            throw new InvalidDataException("The frame exceeds the selected protocol limit.");
+        }
         var payload = new byte[payloadLength];
         if (payloadLength > 0)
         {
