@@ -224,6 +224,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
+          pwsh ./eng/verify-official-adapter-release-policy.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Official stable release selection failed.' }
           pwsh ./eng/verify-official-adapter-signatures.ps1
           if ($LASTEXITCODE -ne 0) { throw 'Official signature contract failed.' }
           pwsh ./eng/aggregate-official-adapters.ps1 -OutputDirectory "$env:GITHUB_WORKSPACE/artifacts/official-adapters"

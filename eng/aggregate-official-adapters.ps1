@@ -5,6 +5,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'adapter-signature-policy.ps1')
+. (Join-Path $PSScriptRoot 'official-adapter-release-policy.ps1')
 
 function Get-RequiredString {
     param(
@@ -92,12 +93,9 @@ foreach ($entry in @($lock.adapters)) {
     if ($LASTEXITCODE -ne 0 -or $null -eq $release) {
         throw "Unable to read the latest release for '$repository'."
     }
-    $tag = Get-RequiredString $release 'tag_name' "Latest release for '$adapterId'"
-    $version = $tag.TrimStart('v', 'V')
-    $parsedVersion = $null
-    if (-not [Version]::TryParse($version, [ref]$parsedVersion)) {
-        throw "Latest release for '$adapterId' has a non-semantic tag '$tag'."
-    }
+    $identity = Get-OfficialStableAdapterReleaseIdentity -Release $release -AdapterId $adapterId
+    $tag = $identity.tag
+    $version = $identity.version
 
     $assets = @($release.assets)
     $packages = @($assets | Where-Object { $_.name -match '\.mpadapter$' })
