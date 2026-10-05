@@ -14,6 +14,7 @@ using MirrorPulse.Core.Workers;
 namespace MirrorPulse.Core.Tests;
 
 [TestClass]
+[DoNotParallelize] // Both tests publish the same Worker project into its shared intermediate directory.
 public sealed class FtpSignedPackageProcessTests
 {
     [TestMethod]
