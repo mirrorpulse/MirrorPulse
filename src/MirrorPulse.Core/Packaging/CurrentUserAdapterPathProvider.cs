@@ -32,10 +32,9 @@ public sealed class CurrentUserAdapterPathProvider
 
     private static void ValidateVersion(string? version)
     {
-        if (string.IsNullOrWhiteSpace(version) || version != version.Trim() ||
-            version.Contains('/') || version.Contains('\\') || !Version.TryParse(version, out _))
+        if (!AdapterPackageVersion.TryParse(version, out _))
         {
-            throw new ArgumentException("Adapter versions must be numeric path-safe values.", nameof(version));
+            throw new ArgumentException("Adapter versions must be canonical path-safe values.", nameof(version));
         }
     }
 }

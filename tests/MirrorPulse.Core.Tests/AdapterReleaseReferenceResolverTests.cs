@@ -7,6 +7,27 @@ namespace MirrorPulse.Core.Tests;
 public sealed class AdapterReleaseReferenceResolverTests
 {
     [TestMethod]
+    [DataRow("v1.2.3-preview.10", "1.2.3-preview.10")]
+    [DataRow("v1.2.3.0", "1.2.3.0")]
+    public void ResolverPreservesCanonicalPreviewAndLegacyIdentity(string tag, string version)
+    {
+        var release = new LatestAdapterRelease(tag, "Adapter", new Uri("https://github.com/MirrorPulse/example/releases"),
+            [new OfficialReleaseAsset("example.mpadapter", new Uri("https://github.com/MirrorPulse/example/releases/download/" + tag + "/example.mpadapter"), 42)], null);
+        Assert.AreEqual(version, AdapterReleaseReferenceResolver.Resolve(AdapterId.Parse("example.webdav"), release).Version);
+    }
+
+    [TestMethod]
+    [DataRow("vv1.2.3")]
+    [DataRow("v1.2.3-preview.0")]
+    [DataRow("v01.2.3")]
+    public void ResolverRejectsAmbiguousVersionTags(string tag)
+    {
+        var release = new LatestAdapterRelease(tag, "Adapter", new Uri("https://github.com/MirrorPulse/example/releases"),
+            [new OfficialReleaseAsset("example.mpadapter", new Uri("https://github.com/MirrorPulse/example/releases/download/package.mpadapter"), 42)], null);
+        Assert.ThrowsExactly<InvalidDataException>(() => AdapterReleaseReferenceResolver.Resolve(AdapterId.Parse("example.webdav"), release));
+    }
+
+    [TestMethod]
     public void ResolverStoresNormalizedVersionAndPackageUrl()
     {
         var release = LatestAdapterReleaseParser.Parse("""

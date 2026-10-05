@@ -14,12 +14,17 @@ namespace MirrorPulse.Core.Tests;
 public sealed class SignedThirdPartyPackageTests
 {
     [TestMethod]
-    [DataRow("1.0.0", 1, true)]
-    [DataRow("999.0.0", 1, false)]
-    [DataRow("1.0.0", 2, true)]
-    [DataRow("1.0.0", 3, false)]
+    [DataRow("1.0.0", 1, true, "1.0.0")]
+    [DataRow("999.0.0", 1, false, "1.0.0")]
+    [DataRow("1.0.0", 2, true, "1.0.0")]
+    [DataRow("1.0.0", 3, false, "1.0.0")]
+    [DataRow("1.0.0", 2, true, "1.0.0-preview.1")]
+    [DataRow("1.0.0", 2, true, "1.0.0.0")]
+    [DataRow("1.0.0", 2, false, "1.0.0-preview.0")]
+    [DataRow("1.0.0", 2, false, "1.0.0-rc.1")]
+    [DataRow("1.0.0", 2, false, "01.0.0")]
     public async Task ExplicitlyTrustedPublisherCanInstallOnlyCompatibleStandalonePackage(
-        string minimumProductVersion, int workerProtocol, bool compatible)
+        string minimumProductVersion, int workerProtocol, bool compatible, string packageVersion)
     {
         string root = Path.Combine(Path.GetTempPath(), "MirrorPulse-third-party", Guid.NewGuid().ToString("N"));
         string source = Path.Combine(root, "source");
@@ -51,7 +56,7 @@ public sealed class SignedThirdPartyPackageTests
                 schemaVersion = 1,
                 adapterId,
                 publisher = "Example Publisher",
-                version = "1.0.0",
+                version = packageVersion,
                 protocol = new { minimum = workerProtocol, maximum = workerProtocol },
                 entrypoints = new Dictionary<string, string>
                 {
@@ -135,6 +140,7 @@ public sealed class SignedThirdPartyPackageTests
                 Path.Combine(root, "missing.signature.json"), Path.Combine(root, "installed"),
                 "win-x64", publisherKey, "Example Publisher");
             Assert.AreEqual(adapterId, installed.AdapterId.ToString());
+            Assert.AreEqual(packageVersion, installed.Version);
             Assert.IsTrue(installed.IsSigned);
             Assert.AreEqual("cloud", installed.Manifest.RootDefinitions.Single().Key);
             Assert.AreEqual("endpoint", installed.Manifest.ConfigurationFields[0].Key);

@@ -26,10 +26,10 @@ public static class AdapterReleaseReferenceResolver
             throw new InvalidDataException("A latest Adapter release must contain exactly one .mpadapter asset.");
         }
 
-        var version = release.TagName.TrimStart('v', 'V');
-        if (!Version.TryParse(version, out _))
+        var version = release.TagName.StartsWith('v') ? release.TagName[1..] : release.TagName;
+        if (!AdapterPackageVersion.TryParse(version, out _))
         {
-            throw new InvalidDataException("The latest Adapter release tag must contain a numeric version.");
+            throw new InvalidDataException("The Adapter release tag must contain a canonical package version.");
         }
 
         var asset = packageAssets[0];
