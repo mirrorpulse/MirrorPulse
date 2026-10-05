@@ -17,7 +17,7 @@ public sealed class WorkerLauncherTests
             Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe",
             AppContext.BaseDirectory,
             ExitArguments,
-            new Dictionary<string, string> { ["MIRRORPULSE_TEST"] = "enabled" });
+            new Dictionary<string, string>());
         using var worker = WorkerProcessLauncher.Start(request);
 
         await worker.WaitForExitAsync();
@@ -26,6 +26,33 @@ public sealed class WorkerLauncherTests
         Assert.AreEqual(request.WorkerSessionId, worker.WorkerSessionId);
         Assert.IsTrue(worker.Process.HasExited);
         Assert.AreEqual(0, worker.Process.ExitCode);
+    }
+
+    [TestMethod]
+    [DoNotParallelize]
+    public async Task WorkerCannotSeeInheritedSecretsOrInjectedRuntimeEnvironment()
+    {
+        const string marker = "MIRRORPULSE_TEST_PARENT_SECRET";
+        Environment.SetEnvironmentVariable(marker, "fixture-marker");
+        try
+        {
+            string executable = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "System32", "cmd.exe");
+            var request = new WorkerLaunchRequest(InstanceId.New(), WorkerSessionId.New(), executable,
+                AppContext.BaseDirectory, ["/d", "/c",
+                    "if defined MIRRORPULSE_TEST_PARENT_SECRET (exit 17) else if defined GITHUB_TOKEN (exit 18) else if defined DOTNET_STARTUP_HOOKS (exit 19) else if not defined SystemRoot (exit 20) else (exit 0)"]);
+            using WorkerProcessHandle worker = WorkerProcessLauncher.Start(request);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await worker.WaitForExitAsync(timeout.Token);
+            Assert.AreEqual(0, worker.Process.ExitCode);
+
+            foreach (string key in new[] { "PATH", "GITHUB_TOKEN", "DOTNET_STARTUP_HOOKS", "COMPlus_ReadyToRun", "MP_UNKNOWN" })
+            {
+                Assert.ThrowsExactly<InvalidDataException>(() => WorkerProcessLauncher.Start(new WorkerLaunchRequest(
+                    request.InstanceId, request.WorkerSessionId, executable, AppContext.BaseDirectory, ExitArguments,
+                    new Dictionary<string, string> { [key] = "fixture" })));
+            }
+        }
+        finally { Environment.SetEnvironmentVariable(marker, null); }
     }
 
     [TestMethod]

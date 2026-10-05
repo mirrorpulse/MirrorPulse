@@ -94,7 +94,8 @@ public static class WorkerProcessLauncher
             startInfo.ArgumentList.Add(argument);
         }
 
-        foreach (var pair in request.Environment)
+        startInfo.Environment.Clear();
+        foreach (var pair in WorkerEnvironmentPolicy.Create(request))
         {
             startInfo.Environment[pair.Key] = pair.Value;
         }

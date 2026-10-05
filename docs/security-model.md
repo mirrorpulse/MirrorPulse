@@ -39,7 +39,11 @@ other current-user files and environment/registry state. A signature does not
 grant trustworthy behavior, and current-user ACLs do not distinguish every
 process under the same account.
 
-Worker environment inheritance and peer verification still need hardening.
+Workers receive a rebuilt environment containing Windows system paths, temporary
+directories, and declared file/transfer cache paths. Host tokens, inherited PATH
+entries, runtime hooks and undeclared launch variables are excluded. This does
+not prevent current-user code from querying other system state. Worker peer
+verification still needs hardening.
 
 ## Credential configuration transactions
 
