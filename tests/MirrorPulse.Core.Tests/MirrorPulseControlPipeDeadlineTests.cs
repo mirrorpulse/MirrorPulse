@@ -50,6 +50,7 @@ public sealed class MirrorPulseControlPipeDeadlineTests
                 RequestTimeout = TimeSpan.FromSeconds(3),
             });
             Assert.AreEqual(7, (await client.GetStatusAsync(cancellationToken: shutdown.Token)).PendingUploads);
+            Assert.AreEqual(0, await stalled.ReadAsync(new byte[1], shutdown.Token));
         }
         finally
         {

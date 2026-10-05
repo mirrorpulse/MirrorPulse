@@ -60,6 +60,9 @@ public sealed record MirrorPulseControlPipeOptions
     public TimeSpan FrameReadTimeout { get; init; } = TimeSpan.FromSeconds(5);
     public TimeSpan FrameWriteTimeout { get; init; } = TimeSpan.FromSeconds(5);
     public TimeSpan ConnectionTimeout { get; init; } = TimeSpan.FromMinutes(2);
+    public int MaximumConnections { get; init; } = 16;
+    public int MaximumConcurrentRequests { get; init; } = 8;
+    public int ReservedControlRequests { get; init; } = 2;
 
     internal void Validate()
     {
@@ -69,11 +72,16 @@ public sealed record MirrorPulseControlPipeOptions
         {
             throw new ArgumentOutOfRangeException(nameof(ConnectionTimeout), "Control deadlines must be positive and bounded.");
         }
+        if (MaximumConnections is < 3 or > 64 || MaximumConcurrentRequests < 1 || ReservedControlRequests < 1 ||
+            MaximumConcurrentRequests + ReservedControlRequests >= MaximumConnections)
+        {
+            throw new ArgumentOutOfRangeException(nameof(MaximumConnections), "Control concurrency must leave a bounded admission slot.");
+        }
     }
 }
 
 /// <summary>
-/// Serves one request at a time on the current-user versioned control pipe.
+/// Serves bounded concurrent requests while reserving status, cancel and shutdown capacity.
 /// </summary>
 public sealed class MirrorPulseControlPipeServer
 {
@@ -98,14 +106,55 @@ public sealed class MirrorPulseControlPipeServer
 
     public async Task ServeAsync(CancellationToken cancellationToken)
     {
-        while (!cancellationToken.IsCancellationRequested)
+        using var ordinary = new SemaphoreSlim(_options.MaximumConcurrentRequests);
+        using var control = new SemaphoreSlim(_options.ReservedControlRequests);
+        using var mutation = new SemaphoreSlim(1);
+        var connections = new List<Task>();
+        try
         {
-            await using var pipe = SecureNamedPipeServerFactory.Create(
-                new NamedPipeServerOptions(_pipeName));
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                Task[] completed = connections.Where(task => task.IsCompleted).ToArray();
+                if (completed.Length > 0)
+                {
+                    await Task.WhenAll(completed).ConfigureAwait(false);
+                    foreach (Task task in completed) connections.Remove(task);
+                }
+
+                var pipe = SecureNamedPipeServerFactory.Create(new NamedPipeServerOptions(_pipeName)
+                {
+                    MaxInstances = _options.MaximumConnections + 1,
+                });
+                try { await pipe.WaitForConnectionAsync(cancellationToken).ConfigureAwait(false); }
+                catch { await pipe.DisposeAsync().ConfigureAwait(false); throw; }
+                if (connections.Count >= _options.MaximumConnections)
+                {
+                    // One bounded admission slot rejects overload without creating additional tasks.
+                    await HandleConnectionAsync(pipe, ordinary, control, mutation, true, cancellationToken).ConfigureAwait(false);
+                }
+                else
+                {
+                    connections.Add(Task.Run(() => HandleConnectionAsync(pipe, ordinary, control, mutation,
+                        false, cancellationToken), CancellationToken.None));
+                }
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+        finally
+        {
+            // Host handlers must honor cancellation. Keep their ownership until they actually finish.
+            await Task.WhenAll(connections).ConfigureAwait(false);
+        }
+    }
+
+    private async Task HandleConnectionAsync(NamedPipeServerStream pipe, SemaphoreSlim ordinary,
+        SemaphoreSlim control, SemaphoreSlim mutation, bool overloaded, CancellationToken cancellationToken)
+    {
+        await using (pipe.ConfigureAwait(false))
+        {
             Guid requestId = Guid.Empty;
             try
             {
-                await pipe.WaitForConnectionAsync(cancellationToken).ConfigureAwait(false);
                 using var connection = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 connection.CancelAfter(_options.ConnectionTimeout);
                 using var read = CancellationTokenSource.CreateLinkedTokenSource(connection.Token);
@@ -114,7 +163,9 @@ public sealed class MirrorPulseControlPipeServer
                     await MirrorPulseControlPipeTransport.ReadFrameAsync(pipe, read.Token)
                         .ConfigureAwait(false));
                 requestId = request.RequestId;
-                var response = await _handler(request, connection.Token).ConfigureAwait(false);
+                ControlResponseEnvelope response = overloaded
+                    ? Busy(requestId)
+                    : await DispatchBoundedAsync(request, ordinary, control, mutation, connection.Token).ConfigureAwait(false);
                 connection.Token.ThrowIfCancellationRequested();
                 using var write = CancellationTokenSource.CreateLinkedTokenSource(connection.Token);
                 write.CancelAfter(_options.FrameWriteTimeout);
@@ -157,6 +208,30 @@ public sealed class MirrorPulseControlPipeServer
             }
         }
     }
+
+    private async ValueTask<ControlResponseEnvelope> DispatchBoundedAsync(ControlRequestEnvelope request,
+        SemaphoreSlim ordinary, SemaphoreSlim control, SemaphoreSlim mutation, CancellationToken cancellationToken)
+    {
+        bool priority = request.Command is MirrorPulseControlCommands.HostStatus or MirrorPulseControlCommands.HostStop or
+            MirrorPulseControlCommands.HostRestart or MirrorPulseControlCommands.SyncStatus or
+            MirrorPulseControlCommands.OperationGet or MirrorPulseControlCommands.OperationCancel;
+        SemaphoreSlim capacity = priority ? control : ordinary;
+        if (!capacity.Wait(0, cancellationToken)) return Busy(request.RequestId);
+        try
+        {
+            bool mutating = !priority && MirrorPulseControlCommands.Catalog.Any(command =>
+                command.Name == request.Command && command.Mutating);
+            if (!mutating) return await _handler(request, cancellationToken).ConfigureAwait(false);
+            await mutation.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try { return await _handler(request, cancellationToken).ConfigureAwait(false); }
+            finally { mutation.Release(); }
+        }
+        finally { capacity.Release(); }
+    }
+
+    private static ControlResponseEnvelope Busy(Guid requestId) => ControlResponseEnvelope.Failure(requestId,
+        new ControlError(MirrorPulseControlErrorCodes.HostBusy, "The Host control channel is busy.",
+            ErrorCategory.Network, retryable: true));
 
     private async Task TryWriteFailureAsync(
         NamedPipeServerStream pipe,
