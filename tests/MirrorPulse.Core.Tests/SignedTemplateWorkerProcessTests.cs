@@ -18,18 +18,20 @@ public sealed class SignedTemplateWorkerProcessTests
     {
         string? package = Environment.GetEnvironmentVariable("MP_TEMPLATE_PACKAGE");
         string? publicKey = Environment.GetEnvironmentVariable("MP_TEMPLATE_PUBLIC_KEY");
-        if (string.IsNullOrEmpty(package) || string.IsNullOrEmpty(publicKey))
+        bool official = Environment.GetEnvironmentVariable("MP_TEMPLATE_OFFICIAL_SIGNED") == "true";
+        if (string.IsNullOrEmpty(package) || (!official && string.IsNullOrEmpty(publicKey)))
             Assert.Inconclusive("Requires the independent template package gate.");
         string directory = Path.Combine(Path.GetTempPath(), "MirrorPulse-template-tests", Guid.NewGuid().ToString("N"));
         var paths = new MirrorPulseStoragePaths(Path.Combine(directory, "sync"), Path.Combine(directory, "data"));
         string runtime = RuntimeInformation.ProcessArchitecture == Architecture.Arm64 ? "win-arm64" : "win-x64";
         try
         {
-            using RSA publisher = RSA.Create();
-            publisher.ImportFromPem(await File.ReadAllTextAsync(publicKey!));
+            using RSA publisher = official ? MirrorPulseOfficialAdapterTrust.CreatePublicKey() : RSA.Create();
+            if (!official) publisher.ImportFromPem(await File.ReadAllTextAsync(publicKey!));
             await using var catalog = await MirrorPulseProductCatalog.OpenAsync(paths);
             InstalledAdapter installed = await catalog.InstallSignedAdapterAsync(package!, package! + ".signature.json",
-                Path.Combine(directory, "installed"), runtime, publisher, "MirrorPulse Dry Run");
+                Path.Combine(directory, "installed"), runtime, publisher,
+                official ? MirrorPulseOfficialAdapterTrust.Signer : "MirrorPulse Dry Run");
             Assert.IsTrue(installed.IsSigned);
             Assert.AreEqual(2, installed.Manifest.Protocol.Minimum);
             Assert.AreEqual(2, installed.Manifest.Protocol.Maximum);
