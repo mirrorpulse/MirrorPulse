@@ -1,16 +1,47 @@
 # MirrorPulse Worker Protocol
 
-Host journal mutations use the durable operation ID as the request ID, including
+For legacy v1 sessions, Host journal mutations use the durable operation ID as the request ID, including
 after Worker restarts. Upload streams also use that ID. This is correlation,
 not an idempotency guarantee: protocol v1 does not promise duplicate suppression.
 The Host records execution intent before dispatch and retains unknown outcomes
 for reconciliation instead of blindly sending the mutation again.
 
-This document describes the version-one control contract between MirrorPulse and
+This document retains the version-one control contract between MirrorPulse and
 one Adapter Worker process. Core owns the Host envelope codec, and the Adapter
 SDK implements the corresponding version-one frame format for out-of-process
 Workers. Protocol messages listed below include target contract elements that
 are not yet wired into the product Host.
+
+## Implemented v2 boundary
+
+The Host also negotiates v2 using the signed package's version range and the
+Worker's Hello capabilities. It rejects a v1 session with multiple configured
+roots, including disabled roots. V2 read, list, stat and mutation requests carry
+an explicit rootKey; move carries source and destination roots. Durable
+operationId remains stable across retries while request and stream IDs are fresh.
+Responses and binary chunks must match the selected version, root and all IDs.
+
+The canonical language-neutral specification and golden vectors are owned by
+[adapter-template](https://github.com/MirrorPulse/adapter-template/blob/0c6398635a7680691d4bcff418cbbd6b951ab0a4/spec/worker-v2.md).
+The independently built memory Worker is tested through production signed
+installation and the actual Supervisor on x64 and ARM64. A separate SDK-free
+wire process checks interoperability and negative root/capability/cancel cases.
+The five currently published official providers retain their v1 storage behavior;
+the memory profile does not establish their v2 or crash-recovery support.
+
+New v2 roots use root-scoped placeholder identities. Existing single-root v1
+bindings retain their exact CfSharp identity bytes and ItemId; adding a scoped
+root does not rewrite them. Multiple preexisting legacy roots require an explicit
+migration rather than assigning their ambiguous identities to whichever root
+currently occupies a path. Cross-root raw remote IDs therefore do not collide.
+
+Interrupted v2 uploads send Cancel and retain response correlation until the
+target terminates and CancelAck confirms lease cleanup. Failed acknowledgment or
+partial-frame writes terminate the session. Bounded range reads continue to drain
+and validate an abandoned result before the next range. Acceptance may race a
+cancel; recovery uses the durable operation binding rather than assuming rollback.
+Directory transport support does not mean the local journal's directory execution
+and multi-root background remote polling are complete.
 
 ## Process and identity boundary
 

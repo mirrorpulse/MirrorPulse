@@ -94,7 +94,7 @@ and applying changes to running Workers are separate implementation steps.
 Package inventories, entrypoints and locale resources use one canonical Windows
 path policy: no ADS, device names, trailing dots/spaces, short-name aliases,
 decomposed Unicode, case aliases or file/parent collisions. Before publishing an
-installation, Host checks the minimum product version, v1 protocol intersection,
+installation, Host checks the minimum product version, supported v1/v2 protocol intersection,
 supported RIDs and both executable PE machine types. Canonical Unicode names and
 ordinary spaces within a filename remain supported. Embedded and detached signed
 inventory formats remain compatible.

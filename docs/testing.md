@@ -6,6 +6,19 @@ inconclusive results when prerequisites are absent. `eng/verify-test-results.ps1
 checks executed counts and requires every named test in a dedicated suite.
 Ordinary CfSharp tests are not all native Cloud Files tests.
 
+## Independent Adapter template gate
+
+`SignedTemplateWorkerProcessTests` requires `MP_TEMPLATE_PACKAGE` and
+`MP_TEMPLATE_PUBLIC_KEY` pointing to a disposable signed package and its public
+key. It is declared environment-dependent in the general managed suite. The
+independent adapter-template CI supplies those inputs on native x64 and ARM64,
+then requires that exact method to execute and pass without skips. It generates
+a fresh repository, builds its dual-RID package, verifies production publisher
+trust/installation and runs the installed v2 Worker through the real Supervisor.
+The test covers both roots, file operations, stable retry, mid-upload cancellation,
+actual transfer-lease deletion and subsequent session reuse. It uses an isolated
+product catalog and does not register Cloud Files or install an MSIX.
+
 ## Durability faults
 
 `DurabilityFaultFixtureTests` invokes a child process with a unique temporary
