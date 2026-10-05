@@ -113,7 +113,7 @@ public sealed class MirrorPulseActiveRemotePoller : IAsyncDisposable
         }
 
         IReadOnlyDictionary<string, SnapshotEntry> current = await ReadSnapshotAsync(
-            instanceId, cancellationToken).ConfigureAwait(false);
+            instanceId, root.UniquenessKey, cancellationToken).ConfigureAwait(false);
         if (!_snapshots.TryGetValue(instanceId, out IReadOnlyDictionary<string, SnapshotEntry>? previous))
         {
             IReadOnlyDictionary<string, MirrorPulseRemoteSnapshotEntry>? persisted =
@@ -219,6 +219,7 @@ public sealed class MirrorPulseActiveRemotePoller : IAsyncDisposable
 
     private async Task<IReadOnlyDictionary<string, SnapshotEntry>> ReadSnapshotAsync(
         InstanceId instanceId,
+        string rootKey,
         CancellationToken cancellationToken)
     {
         var entries = new Dictionary<string, SnapshotEntry>(StringComparer.Ordinal);
@@ -236,7 +237,7 @@ public sealed class MirrorPulseActiveRemotePoller : IAsyncDisposable
                 if (++pages > _maximumPages)
                     throw new InvalidDataException("The active remote poll exceeded its page limit.");
                 CloudRemoteDirectoryPage page = await _source.ReadPageAsync(
-                    instanceId, directory, cursor, _pageSize, cancellationToken).ConfigureAwait(false);
+                    instanceId, rootKey, directory, cursor, _pageSize, cancellationToken).ConfigureAwait(false);
                 foreach (CloudRemoteDirectoryEntry entry in page.Entries)
                 {
                     string relativePath = NormalizeRemotePath(entry.RelativePath);

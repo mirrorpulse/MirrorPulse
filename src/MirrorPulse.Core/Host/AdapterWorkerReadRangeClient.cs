@@ -25,6 +25,7 @@ public sealed class AdapterWorkerReadRangeClient
     private Guid _requestId;
     private long _offset;
     private long _length;
+    private string? _rootKey;
     private bool _closed;
 
     public AdapterWorkerReadRangeClient(Stream pipe, InstanceId instanceId, WorkerSessionId sessionId,
@@ -38,6 +39,12 @@ public sealed class AdapterWorkerReadRangeClient
 
     public AdapterWorkerProtocolSession? Protocol { get; }
     public int ProtocolVersion => Protocol?.ProtocolVersion ?? 1;
+    public JsonElement RoutePayload(string? rootKey, JsonElement payload) => Protocol?.RoutePayload(rootKey, payload) ?? payload;
+    public void ValidateResponse(ControlFrameEnvelope frame, string? rootKey)
+    {
+        if (Protocol is not null) Protocol.ValidateResponse(frame, rootKey);
+        else if (!frame.IsResponse || frame.ProtocolVersion != 1) throw new InvalidDataException("ResponseProtocolMismatch");
+    }
 
     public async ValueTask<Stream> ReadRangeAsync(
         MirrorPulseWorkerReadRangeRequest request,
@@ -64,16 +71,17 @@ public sealed class AdapterWorkerReadRangeClient
                 _requestId = requestId;
                 _offset = request.Offset;
                 _length = request.Length;
+                _rootKey = request.RootKey;
             }
 
             await WriteControlAsync(new ControlFrameEnvelope(1, "ReadRange", requestId,
                 _instanceId, _sessionId, false,
-                JsonSerializer.SerializeToElement(new
+                RoutePayload(request.RootKey, JsonSerializer.SerializeToElement(new
                 {
                     path = request.NormalizedPath,
                     offset = request.Offset,
                     length = request.Length,
-                })), cancellationToken).ConfigureAwait(false);
+                }))), cancellationToken).ConfigureAwait(false);
             dispatched = true;
             Stream result = await completion.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
             delivered = true;
@@ -154,7 +162,7 @@ public sealed class AdapterWorkerReadRangeClient
             throw new InvalidDataException("The binary chunk belongs to another Worker session.");
         }
 
-        byte[] payload = BinaryChunkCodec.Encode(chunk);
+        byte[] payload = ProtocolVersion == 2 ? WorkerBinaryChunkV2Codec.Encode(chunk) : BinaryChunkCodec.Encode(chunk);
         byte[] prefix = new byte[4];
         BinaryPrimitives.WriteUInt32LittleEndian(prefix, checked((uint)payload.Length));
         await _writes.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -204,6 +212,7 @@ public sealed class AdapterWorkerReadRangeClient
 
         try
         {
+            ValidateResponse(frame, _rootKey);
             if (frame.MessageType == "OperationError")
             {
                 string code = frame.Payload.GetProperty("code").GetString() ?? "Unknown";
@@ -223,10 +232,11 @@ public sealed class AdapterWorkerReadRangeClient
                 throw new InvalidDataException("The Worker declared a different range length.");
             }
 
-            BinaryChunkFrame chunk = BinaryChunkCodec.Decode(
-                await LengthPrefixedFrameReader.ReadAsync(_pipe, cancellationToken).ConfigureAwait(false));
+            byte[] bytes = await LengthPrefixedFrameReader.ReadAsync(_pipe, cancellationToken).ConfigureAwait(false);
+            BinaryChunkFrame chunk = ProtocolVersion == 2 ? WorkerBinaryChunkV2Codec.Decode(bytes) : BinaryChunkCodec.Decode(bytes);
             if (chunk.RequestId != frame.RequestId || chunk.InstanceId != _instanceId ||
                 chunk.WorkerSessionId != _sessionId || chunk.StreamId != streamId ||
+                (ProtocolVersion == 2 && chunk.RootKey != _rootKey) ||
                 chunk.Offset != offset || chunk.Data.Length != length || !chunk.EndOfStream ||
                 chunk.Sha256 is not { } digest ||
                 !CryptographicOperations.FixedTimeEquals(

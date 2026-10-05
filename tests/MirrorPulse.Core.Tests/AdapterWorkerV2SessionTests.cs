@@ -1,4 +1,5 @@
 using System.Text.Json;
+using MirrorPulse.Core.CloudFiles;
 using MirrorPulse.Core.Configuration;
 using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.Host;
@@ -41,6 +42,16 @@ public sealed class AdapterWorkerV2SessionTests
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
             while ((await catalog.ReadInstanceRuntimeStateAsync(instanceId, timeout.Token))?.Phase != "Connected")
                 await Task.Delay(25, timeout.Token);
+            foreach (string key in new[] { "left", "right" })
+            {
+                Assert.AreEqual(key + "/revision", await supervisor.StatAsync(new(instanceId, "same.txt", key), timeout.Token));
+                MirrorPulseWorkerDirectoryPage page = await supervisor.ReadDirectoryPageAsync(new(instanceId, "", ReadOnlyMemory<byte>.Empty, 4, key), timeout.Token);
+                Assert.IsTrue(page.IsComplete);
+                await using Stream content = await supervisor.ReadRangeAsync(new(instanceId, "same.txt", ReadOnlyMemory<byte>.Empty, 0, 4, key), timeout.Token);
+                using var reader = new StreamReader(content);
+                Assert.AreEqual(key == "left" ? "left" : "rght", await reader.ReadToEndAsync(timeout.Token));
+            }
+            await Assert.ThrowsExactlyAsync<InvalidDataException>(() => supervisor.StatAsync(new(instanceId, "same.txt", "unconfigured"), timeout.Token).AsTask());
         }
         finally { Directory.Delete(directory, true); }
     }

@@ -19,6 +19,33 @@ public sealed class AdapterWorkerProtocolSession
 
     public int ProtocolVersion { get; }
 
+    public JsonElement RoutePayload(string? rootKey, JsonElement payload)
+    {
+        if (rootKey is not null)
+        {
+            RootRegistration? root = _roots.SingleOrDefault(r => r.UniquenessKey == rootKey);
+            if (root is null) throw new InvalidDataException("UnknownRoot");
+            if (root.State != RootRegistrationState.Active) throw new IOException("RootOffline");
+        }
+        if (ProtocolVersion == 1) return payload;
+        if (string.IsNullOrWhiteSpace(rootKey)) throw new InvalidDataException("RootRequired");
+        Dictionary<string, JsonElement> fields = payload.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.Clone(), StringComparer.Ordinal);
+        fields["rootKey"] = JsonSerializer.SerializeToElement(rootKey);
+        foreach (string name in new[] { "path", "sourcePath", "destinationPath" })
+            if (fields.TryGetValue(name, out JsonElement path) && path.ValueKind == JsonValueKind.String)
+                fields[name] = JsonSerializer.SerializeToElement(path.GetString()!.Replace('\\', '/'));
+        return JsonSerializer.SerializeToElement(fields);
+    }
+
+    public void ValidateResponse(ControlFrameEnvelope frame, string? rootKey)
+    {
+        if (!frame.IsResponse || frame.ProtocolVersion != ProtocolVersion)
+            throw new InvalidDataException("ResponseProtocolMismatch");
+        if (ProtocolVersion == 2 && (!frame.Payload.TryGetProperty("rootKey", out JsonElement actual) ||
+            actual.ValueKind != JsonValueKind.String || actual.GetString() != rootKey))
+            throw new InvalidDataException("ResponseRootMismatch");
+    }
+
     public static AdapterWorkerProtocolSession Negotiate(JsonElement hello, IEnumerable<RootRegistration> roots,
         ProtocolVersionRange packageVersions)
     {

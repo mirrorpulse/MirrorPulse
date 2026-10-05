@@ -19,6 +19,7 @@ public sealed class AdapterWorkerDirectoryPageClient
     private readonly object _pendingLock = new();
     private TaskCompletionSource<MirrorPulseWorkerDirectoryPage>? _pending;
     private Guid _requestId;
+    private string? _rootKey;
     private bool _closed;
 
     public AdapterWorkerDirectoryPageClient(
@@ -55,18 +56,19 @@ public sealed class AdapterWorkerDirectoryPageClient
                 ObjectDisposedException.ThrowIf(_closed, this);
                 _pending = completion;
                 _requestId = requestId;
+                _rootKey = request.RootKey;
             }
 
             await _channel.WriteControlAsync(new ControlFrameEnvelope(1, "List", requestId,
                 _instanceId, _sessionId, false,
-                JsonSerializer.SerializeToElement(new
+                _channel.RoutePayload(request.RootKey, JsonSerializer.SerializeToElement(new
                 {
                     path = request.NormalizedPath,
                     cursor = request.ContinuationCursor.IsEmpty
                         ? null
                         : Convert.ToBase64String(request.ContinuationCursor.Span),
                     pageSize = request.PageSize,
-                })), cancellationToken).ConfigureAwait(false);
+                }))), cancellationToken).ConfigureAwait(false);
             return await completion.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
@@ -115,6 +117,7 @@ public sealed class AdapterWorkerDirectoryPageClient
 
         try
         {
+            _channel.ValidateResponse(frame, _rootKey);
             if (frame.MessageType == "OperationError")
             {
                 string code = frame.Payload.GetProperty("code").GetString() ?? "Unknown";

@@ -59,6 +59,7 @@ public sealed class BinaryChunkFrame
     public bool EndOfStream { get; }
 
     public Sha256Digest? Sha256 { get; }
+    public string? RootKey { get; init; }
 }
 
 /// <summary>

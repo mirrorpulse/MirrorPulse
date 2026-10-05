@@ -8,7 +8,8 @@ public sealed record MirrorPulseWorkerReadRangeRequest(
     string NormalizedPath,
     ReadOnlyMemory<byte> FileIdentity,
     long Offset,
-    long Length);
+    long Length,
+    string? RootKey = null);
 
 public interface IMirrorPulseWorkerRangeTransport
 {
@@ -33,7 +34,7 @@ public interface IMirrorPulseWorkerUploadTransport
         CancellationToken cancellationToken);
 }
 
-public sealed record MirrorPulseWorkerStatRequest(InstanceId InstanceId, string NormalizedPath);
+public sealed record MirrorPulseWorkerStatRequest(InstanceId InstanceId, string NormalizedPath, string? RootKey = null);
 
 public interface IMirrorPulseWorkerStatTransport
 {
@@ -47,7 +48,8 @@ public sealed record MirrorPulseWorkerDirectoryPageRequest(
     InstanceId InstanceId,
     string NormalizedPath,
     ReadOnlyMemory<byte> ContinuationCursor,
-    int PageSize);
+    int PageSize,
+    string? RootKey = null);
 
 /// <summary>Represents one remote entry returned by an Adapter Worker directory page.</summary>
 public sealed record MirrorPulseWorkerDirectoryEntry(

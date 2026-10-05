@@ -17,6 +17,7 @@ public sealed class AdapterWorkerStatClient
     private readonly object _pendingLock = new();
     private TaskCompletionSource<string?>? _completion;
     private Guid _requestId;
+    private string? _rootKey;
     private bool _closed;
 
     public AdapterWorkerStatClient(AdapterWorkerReadRangeClient channel,
@@ -46,12 +47,13 @@ public sealed class AdapterWorkerStatClient
             {
                 ObjectDisposedException.ThrowIf(_closed, this);
                 _requestId = requestId;
+                _rootKey = request.RootKey;
                 _completion = completion;
             }
 
             await _channel.WriteControlAsync(new ControlFrameEnvelope(1, "Stat", requestId,
                 _instanceId, _sessionId, false,
-                JsonSerializer.SerializeToElement(new { path = request.NormalizedPath })), cancellationToken)
+                _channel.RoutePayload(request.RootKey, JsonSerializer.SerializeToElement(new { path = request.NormalizedPath }))), cancellationToken)
                 .ConfigureAwait(false);
             return await completion.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
         }
@@ -95,6 +97,7 @@ public sealed class AdapterWorkerStatClient
             completion = _completion!;
         }
 
+        _channel.ValidateResponse(frame, _rootKey);
         if (frame.MessageType == "StatResult")
         {
             string? revision = frame.Payload.TryGetProperty("revision", out JsonElement value) &&

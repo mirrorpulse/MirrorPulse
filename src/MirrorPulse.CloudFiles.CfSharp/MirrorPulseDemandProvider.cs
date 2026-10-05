@@ -8,6 +8,11 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 public interface IMirrorPulseDirectoryPageSource
 {
     ValueTask<CloudRemoteDirectoryPage> ReadPageAsync(
+        InstanceId instanceId, string rootKey, string normalizedPath, ReadOnlyMemory<byte> continuationCursor,
+        int pageSize, CancellationToken cancellationToken) =>
+        ReadPageAsync(instanceId, normalizedPath, continuationCursor, pageSize, cancellationToken);
+
+    ValueTask<CloudRemoteDirectoryPage> ReadPageAsync(
         InstanceId instanceId,
         string normalizedPath,
         ReadOnlyMemory<byte> continuationCursor,
@@ -101,6 +106,7 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
 
         InstanceId instanceId;
         string adapterPath = normalizedPath;
+        string? rootKey = null;
         if (_rootRouter is null)
         {
             CloudPlaceholderIdentity identity = CloudPlaceholderIdentity.Decode(directoryIdentity.Span);
@@ -111,12 +117,14 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
             MirrorPulseRoutedItem routed = _rootRouter.Resolve(normalizedPath, directoryIdentity.Span);
             instanceId = routed.InstanceId;
             adapterPath = routed.RelativePath;
+            rootKey = routed.RootKey;
         }
 
         ReadOnlyMemory<byte> cursor = DecodeContinuation(continuationToken);
-        CloudRemoteDirectoryPage page = await _directoryPages
-            .ReadPageAsync(instanceId, adapterPath, cursor, DirectoryPageSize, cancellationToken)
-            .ConfigureAwait(false) ?? throw new InvalidDataException("The Adapter returned no directory page.");
+        CloudRemoteDirectoryPage page = rootKey is null
+            ? await _directoryPages.ReadPageAsync(instanceId, adapterPath, cursor, DirectoryPageSize, cancellationToken).ConfigureAwait(false)
+            : await _directoryPages.ReadPageAsync(instanceId, rootKey, adapterPath, cursor, DirectoryPageSize, cancellationToken).ConfigureAwait(false);
+        if (page is null) throw new InvalidDataException("The Adapter returned no directory page.");
         if (page.Entries.Count > DirectoryPageSize)
         {
             throw new InvalidDataException("The Adapter directory page exceeds the requested size.");
@@ -198,6 +206,7 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
         cancellationToken.ThrowIfCancellationRequested();
         InstanceId instanceId;
         string adapterPath = normalizedPath;
+        string? rootKey = null;
         if (_rootRouter is null)
         {
             CloudPlaceholderIdentity identity = CloudPlaceholderIdentity.Decode(encodedIdentity.Span);
@@ -208,6 +217,7 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
             MirrorPulseRoutedItem routed = _rootRouter.Resolve(normalizedPath, encodedIdentity.Span);
             instanceId = routed.InstanceId;
             adapterPath = routed.RelativePath;
+            rootKey = routed.RootKey;
         }
 
         Stream stream = new WorkerRangeStream(
@@ -215,7 +225,8 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
             instanceId,
             adapterPath,
             encodedIdentity.ToArray(),
-            fileSize);
+            fileSize,
+            rootKey);
         return ValueTask.FromResult(stream);
     }
 
@@ -249,7 +260,8 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
         InstanceId instanceId,
         string normalizedPath,
         byte[] encodedIdentity,
-        long fileSize) : Stream
+        long fileSize,
+        string? rootKey) : Stream
     {
         private long _position;
 
@@ -292,7 +304,8 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
                 normalizedPath,
                 encodedIdentity,
                 _position,
-                length);
+                length,
+                rootKey);
             await using Stream source = await transport.ReadRangeAsync(request, cancellationToken)
                 .ConfigureAwait(false);
             if (!source.CanRead)

@@ -1,5 +1,7 @@
 using System.Buffers.Binary;
 using System.IO.Pipes;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.Transport;
@@ -35,7 +37,27 @@ while (true)
     if (request.MessageType == "Stop") return;
     if (request.MessageType == "Stat")
         await SendAsync(new(ready.ProtocolVersion, "StatResult", request.RequestId, instance, session, true,
-            JsonSerializer.SerializeToElement(new { rootKey = request.Payload.GetProperty("rootKey").GetString(), revision = "fixture-revision" })));
+            JsonSerializer.SerializeToElement(new { rootKey = request.Payload.GetProperty("rootKey").GetString(), revision = request.Payload.GetProperty("rootKey").GetString() + "/revision" })));
+    if (request.MessageType == "List")
+        await SendAsync(new(ready.ProtocolVersion, "DirectoryPage", request.RequestId, instance, session, true,
+            JsonSerializer.SerializeToElement(new { rootKey = request.Payload.GetProperty("rootKey").GetString(), entries = Array.Empty<object>(), isComplete = true, cursor = (string?)null })));
+    if (request.MessageType == "ReadRange")
+    {
+        string rootKey = request.Payload.GetProperty("rootKey").GetString()!;
+        byte[] data = Encoding.UTF8.GetBytes(rootKey == "left" ? "left" : "rght");
+        Guid streamId = Guid.NewGuid();
+        await SendAsync(new(ready.ProtocolVersion, "ReadRangeReady", request.RequestId, instance, session, true,
+            JsonSerializer.SerializeToElement(new { rootKey, streamId, length = data.Length })));
+        byte[] chunk = WorkerBinaryChunkV2Codec.Encode(new(request.RequestId, instance, session, streamId,
+            request.Payload.GetProperty("offset").GetInt64(), data, true,
+            Sha256Digest.Parse(Convert.ToHexString(SHA256.HashData(data))))
+        { RootKey = rootKey });
+        byte[] prefix = new byte[4];
+        BinaryPrimitives.WriteUInt32LittleEndian(prefix, checked((uint)chunk.Length));
+        await pipe.WriteAsync(prefix);
+        await pipe.WriteAsync(chunk);
+        await pipe.FlushAsync();
+    }
 }
 
 async Task<ControlFrameEnvelope> ReadAsync() => ControlFrameJsonCodec.Decode(await LengthPrefixedFrameReader.ReadAsync(pipe));

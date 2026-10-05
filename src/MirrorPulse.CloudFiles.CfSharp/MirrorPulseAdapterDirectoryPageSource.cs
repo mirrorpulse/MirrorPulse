@@ -21,11 +21,19 @@ public sealed class MirrorPulseAdapterDirectoryPageSource : IMirrorPulseDirector
         string normalizedPath,
         ReadOnlyMemory<byte> continuationCursor,
         int pageSize,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken) => await ReadPageCoreAsync(instanceId, null, normalizedPath,
+            continuationCursor, pageSize, cancellationToken).ConfigureAwait(false);
+
+    public ValueTask<CloudRemoteDirectoryPage> ReadPageAsync(InstanceId instanceId, string rootKey,
+        string normalizedPath, ReadOnlyMemory<byte> continuationCursor, int pageSize, CancellationToken cancellationToken) =>
+        ReadPageCoreAsync(instanceId, rootKey, normalizedPath, continuationCursor, pageSize, cancellationToken);
+
+    private async ValueTask<CloudRemoteDirectoryPage> ReadPageCoreAsync(InstanceId instanceId, string? rootKey,
+        string normalizedPath, ReadOnlyMemory<byte> continuationCursor, int pageSize, CancellationToken cancellationToken)
     {
         MirrorPulseWorkerDirectoryPage page = await _source.ReadDirectoryPageAsync(
             new MirrorPulseWorkerDirectoryPageRequest(instanceId, normalizedPath,
-                continuationCursor, pageSize), cancellationToken).ConfigureAwait(false);
+                continuationCursor, pageSize, rootKey), cancellationToken).ConfigureAwait(false);
 
         var entries = new List<CloudRemoteDirectoryEntry>(page.Entries.Count);
         foreach (MirrorPulseWorkerDirectoryEntry entry in page.Entries)

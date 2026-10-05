@@ -74,7 +74,7 @@ public static class MirrorPulseJournalUploadRevisionGuard
 
         string? expected = string.IsNullOrEmpty(item?.RemoteRevision) ? null : item.RemoteRevision;
         string? actual = await stats.StatAsync(new MirrorPulseWorkerStatRequest(
-            command.InstanceId, remoteStatPath ?? command.RelativePath), cancellationToken).ConfigureAwait(false);
+            command.InstanceId, remoteStatPath ?? command.RelativePath, command.RootKey), cancellationToken).ConfigureAwait(false);
         actual = string.IsNullOrEmpty(actual) ? null : actual;
         if (allowMissingRemote && actual is null)
         {
