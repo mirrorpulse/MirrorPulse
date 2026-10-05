@@ -17,10 +17,16 @@ $headers = @{ Authorization="Bearer $token"; Accept='application/vnd.github+json
 function Invoke-GovernanceApi([string]$Path, [string]$Method='GET', $Body=$null, [switch]$AllowNotFound) {
     $arguments = @{ Uri="https://api.github.com/$Path"; Headers=$headers; Method=$Method }
     if ($null -ne $Body) { $arguments.Body=$Body | ConvertTo-Json -Depth 15 -Compress; $arguments.ContentType='application/json' }
-    try { Invoke-RestMethod @arguments } catch {
-        $status = [int]$_.Exception.Response.StatusCode
-        if ($AllowNotFound -and $status -eq 404) { return $null }
-        throw "GitHub governance request failed: $Method $Path (HTTP $status)."
+    for ($attempt=1; $attempt -le 3; $attempt++) {
+        try { return Invoke-RestMethod @arguments } catch {
+            $status = [int]$_.Exception.Response.StatusCode
+            if ($AllowNotFound -and $status -eq 404) { return $null }
+            if ($Method -ceq 'GET' -and $attempt -lt 3 -and ($status -eq 0 -or $status -in @(408,429,500,502,503,504))) {
+                Start-Sleep -Seconds $attempt
+                continue
+            }
+            throw "GitHub governance request failed: $Method $Path (HTTP $status). Reapply to reconcile an interrupted mutation."
+        }
     }
 }
 $evidence = @()
@@ -59,7 +65,8 @@ try {
         $rules = @{name='Protect release tags';target='tag';enforcement='active';bypass_actors=@();
             conditions=@{ref_name=@{include=@($repositorySettings.tagPatterns);exclude=@()}};
             rules=@(@{type='deletion'},@{type='update'})}
-        $existingRules = @(Invoke-GovernanceApi "$prefix/rulesets" | Where-Object name -CEQ $rules.name)
+        $allRules = Invoke-GovernanceApi "$prefix/rulesets"
+        $existingRules = @($allRules | Where-Object name -CEQ $rules.name)
         if ($existingRules.Count -gt 1) { throw 'Duplicate release tag rulesets require review.' }
         $tagRule = if ($existingRules.Count -eq 1) { Invoke-GovernanceApi "$prefix/rulesets/$($existingRules[0].id)" 'PUT' $rules } else { Invoke-GovernanceApi "$prefix/rulesets" 'POST' $rules }
         $actual = Invoke-GovernanceApi "$prefix/branches/main/protection"
@@ -80,10 +87,10 @@ try {
             @((Compare-Object @($tags.conditions.ref_name.include) @($repositorySettings.tagPatterns))).Count -ne 0 -or
             @((Compare-Object @($tags.rules.type) @('deletion','update'))).Count -ne 0) { throw "Governance readback differs for $name." }
         $evidence += [ordered]@{repository="$($settings.owner)/$name";mainSourceSha=$main.commit.sha;protection=$actual;stableEnvironment=$stable;previewEnvironment=$preview;releaseTags=$tags;verified=$true}
+        $fullPath = [IO.Path]::GetFullPath($EvidencePath)
+        New-Item -ItemType Directory -Path (Split-Path -Parent $fullPath) -Force | Out-Null
+        [ordered]@{schemaVersion=1;complete=($evidence.Count -eq $repositories.Count);appliedAt=[DateTimeOffset]::UtcNow.ToString('O');referenceSourceSha=$settings.referenceSourceSha;repositories=$evidence} |
+            ConvertTo-Json -Depth 25 | Set-Content -LiteralPath $fullPath -Encoding utf8
         Write-Host "Verified branch, environment and immutable tag settings for $name."
     }
-    $fullPath = [IO.Path]::GetFullPath($EvidencePath)
-    New-Item -ItemType Directory -Path (Split-Path -Parent $fullPath) -Force | Out-Null
-    [ordered]@{schemaVersion=1;appliedAt=[DateTimeOffset]::UtcNow.ToString('O');referenceSourceSha=$settings.referenceSourceSha;repositories=$evidence} |
-        ConvertTo-Json -Depth 25 | Set-Content -LiteralPath $fullPath -Encoding utf8
 } finally { $headers.Clear(); $token=$null }
