@@ -126,11 +126,27 @@ architecture. These tests are also mandatory in the full native suite, but a
 successful probe alone cannot satisfy signed Local, full rescan or installed
 acceptance. See [protected content confirmation](protected-content-confirmation.md).
 
+CI first resolves one `official-adapter-release-lock` artifact for the checked-out
+product commit. Default selection accepts published stable releases with canonical
+tags, including existing four-component stable identities. It refuses previews
+even if a release was incorrectly marked stable. Each candidate fixes its provider
+tag commit, release ID, asset IDs, sizes and GitHub SHA256 digests. Download checks
+reject moved tags, changed assets, or bytes that differ from this inventory.
+
+The official aggregation and ARM64 Local regression consume this same candidate.
+All three verification reports hash the original candidate file; the evidence gate
+refuses missing, different, or unbound candidate digests. To resolve a candidate
+locally, run `eng/resolve-official-adapter-releases.ps1`, then pass its output with
+`-ReleaseLockPath` to `eng/aggregate-official-adapters.ps1`. A scoped Local download
+uses `-AdapterIds com.mirrorpulse.adapter.local` with that same frozen file.
+
 Download the three `evidence-*` artifacts from one workflow run, then verify:
 
 ```powershell
-pwsh ./eng/verify-ci-evidence.ps1 -EvidenceDirectory artifacts/downloaded-evidence -ExpectedSourceSha <commit-sha> -RequireNative -RequireInstalled
+pwsh ./eng/verify-ci-evidence.ps1 -EvidenceDirectory artifacts/downloaded-evidence -ExpectedSourceSha <commit-sha> -RequireNative -RequireInstalled -RequireOfficialCandidate
 ```
 
-Omit the last two switches for a push/PR run, which does not select those gates.
+Omit `-RequireNative` and `-RequireInstalled` for a push/PR run, which does not select
+those gates. Omit `-RequireOfficialCandidate` only for historical reports produced
+before the shared-candidate contract.
 The three reports must name the same expected commit and their job-specific RID.

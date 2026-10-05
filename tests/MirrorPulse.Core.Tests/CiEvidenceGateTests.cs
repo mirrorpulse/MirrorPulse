@@ -7,6 +7,8 @@ namespace MirrorPulse.Core.Tests;
 [TestClass]
 public sealed class CiEvidenceGateTests
 {
+    private static readonly string[] OfficialProviders = ["local", "webdav", "smb", "ftp", "sftp"];
+
     [TestMethod]
     [DataRow("valid", true)]
     [DataRow("changed", false)]
@@ -16,6 +18,9 @@ public sealed class CiEvidenceGateTests
     [DataRow("installed-old-build", false)]
     [DataRow("native-valid", true)]
     [DataRow("native-missing", false)]
+    [DataRow("candidate-valid", true)]
+    [DataRow("candidate-source-mismatch", false)]
+    [DataRow("candidate-invalid-inventory", false)]
     public async Task EvidenceVerifiesArtifactBytesAndRejectsUnsafePaths(string scenario, bool succeeds)
     {
         string repository = SftpProtocolFixture.FindRepositoryRoot();
@@ -79,6 +84,47 @@ public sealed class CiEvidenceGateTests
                 start.ArgumentList.Add("-InstalledPath");
                 start.ArgumentList.Add(installed);
             }
+            if (scenario.StartsWith("candidate-", StringComparison.Ordinal))
+            {
+                var gitStart = new ProcessStartInfo("git") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true };
+                foreach (string argument in new[] { "-C", repository, "rev-parse", "HEAD" }) gitStart.ArgumentList.Add(argument);
+                using Process git = Process.Start(gitStart)!;
+                string source = (await git.StandardOutput.ReadToEndAsync()).Trim();
+                await git.WaitForExitAsync();
+                Assert.AreEqual(0, git.ExitCode);
+                string candidatePath = Path.Combine(root, "official-adapter-releases.json");
+                var candidate = new
+                {
+                    schemaVersion = 1,
+                    mirrorPulseSourceSha = scenario == "candidate-source-mismatch" ? new string('a', 40) : source,
+                    adapters = OfficialProviders.Select((name, index) => new
+                    {
+                        adapterId = "com.mirrorpulse.adapter." + name,
+                        repository = "MirrorPulse/adapter-" + name,
+                        sourceSha = new string('b', 40),
+                        release = new
+                        {
+                            id = index + 1,
+                            tag_name = "v1.0.0",
+                            draft = false,
+                            prerelease = false,
+                            published_at = "2026-01-01T00:00:00Z",
+                            html_url = "https://github.com/MirrorPulse/adapter-" + name + "/releases/tag/v1.0.0",
+                            assets = new[]
+                            {
+                                new { id = 1, name = "com.mirrorpulse.adapter." + name + "-1.0.0.mpadapter", size = 7,
+                                    digest = "sha256:" + new string('c', 64) },
+                                new { id = scenario == "candidate-invalid-inventory" ? 1 : 2,
+                                    name = "com.mirrorpulse.adapter." + name + "-1.0.0.mpadapter.signature.json", size = 7,
+                                    digest = "sha256:" + new string('d', 64) },
+                            },
+                        },
+                    }),
+                };
+                await File.WriteAllTextAsync(candidatePath, JsonSerializer.Serialize(candidate));
+                start.ArgumentList.Add("-AdapterReleaseLockPath");
+                start.ArgumentList.Add(candidatePath);
+            }
             if (scenario.StartsWith("native-", StringComparison.Ordinal))
             {
                 using JsonDocument catalog = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(repository, "eng", "test-suites.json")));
@@ -113,7 +159,9 @@ public sealed class CiEvidenceGateTests
                 string report = await File.ReadAllTextAsync(evidence);
                 Assert.DoesNotContain(root, report);
                 using JsonDocument json = JsonDocument.Parse(report);
-                Assert.AreEqual(2, json.RootElement.GetProperty("artifacts").GetArrayLength());
+                Assert.AreEqual(scenario == "candidate-valid" ? 3 : 2, json.RootElement.GetProperty("artifacts").GetArrayLength());
+                if (scenario == "candidate-valid")
+                    Assert.AreEqual(64, json.RootElement.GetProperty("officialAdapterCandidateSha256").GetString()!.Length);
                 Assert.AreEqual(40, json.RootElement.GetProperty("sourceSha").GetString()!.Length);
             }
         }

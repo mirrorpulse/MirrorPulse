@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$OutputDirectory = (Join-Path $PSScriptRoot '..' 'artifacts' 'official-adapters'),
-    [string]$ReleaseLockPath
+    [string]$ReleaseLockPath,
+    [string[]]$AdapterIds
 )
 
 $ErrorActionPreference = 'Stop'
@@ -66,10 +67,15 @@ if (-not $OutputDirectory.StartsWith($artifactRoot + [IO.Path]::DirectorySeparat
 }
 $releaseLock = $null
 if ($ReleaseLockPath) {
-    $releaseLock = Get-Content -LiteralPath $ReleaseLockPath -Raw | ConvertFrom-Json
     $source = (& git -C (Join-Path $PSScriptRoot '..') rev-parse HEAD | Out-String).Trim()
-    if ($LASTEXITCODE -ne 0 -or $releaseLock.schemaVersion -ne 1 -or $releaseLock.mirrorPulseSourceSha -cne $source -or
-        @($releaseLock.adapters).Count -ne @($lock.adapters).Count) { throw 'The shared candidate differs from the product source or official catalog.' }
+    if ($LASTEXITCODE -ne 0) { throw 'The product source identity is unavailable.' }
+    $releaseLock = Read-OfficialAdapterReleaseCandidate -Path $ReleaseLockPath -SourceSha $source
+}
+if ($AdapterIds) {
+    if (-not $releaseLock -or @($AdapterIds | Select-Object -Unique).Count -ne $AdapterIds.Count -or
+        @($AdapterIds | Where-Object { $_ -cnotin @($lock.adapters.adapterId) }).Count -ne 0) {
+        throw 'A scoped aggregate requires a frozen candidate and unique official Adapter IDs.'
+    }
 }
 if (Test-Path -LiteralPath $OutputDirectory) {
     Remove-Item -LiteralPath $OutputDirectory -Recurse -Force
@@ -96,6 +102,7 @@ $trustedKey = [Security.Cryptography.RSA]::Create()
 $trustedKey.ImportFromPem($publicKeyMatch.Value)
 $records = [System.Collections.Generic.List[object]]::new()
 foreach ($entry in @($lock.adapters)) {
+    if ($AdapterIds -and $entry.adapterId -cnotin $AdapterIds) { continue }
     $adapterId = Get-RequiredString $entry 'adapterId' 'Aggregation entry'
     $repository = Get-RequiredString $entry 'repository' "Aggregation entry '$adapterId'"
     if ($adapterId -notlike 'com.mirrorpulse.adapter.*' -or $repository -notmatch '^[^/]+/[^/]+$') {
@@ -228,5 +235,5 @@ foreach ($entry in @($lock.adapters)) {
     } | ForEach-Object { $records.Add($_) }
 }
 
-$records | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $OutputDirectory 'official-adapters.manifest.json') -Encoding utf8
+ConvertTo-Json -InputObject @($records.ToArray()) -Depth 5 | Set-Content -LiteralPath (Join-Path $OutputDirectory 'official-adapters.manifest.json') -Encoding utf8
 Write-Host "Aggregated $($records.Count) official Adapter releases into $OutputDirectory."

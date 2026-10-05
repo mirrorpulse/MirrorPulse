@@ -85,3 +85,22 @@ function Get-OfficialAdapterTagSource {
     }
     throw 'The release tag exceeds its bounded annotation depth.'
 }
+
+function Read-OfficialAdapterReleaseCandidate {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$SourceSha)
+    $candidate = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    $catalog = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'official-adapters.json') -Raw | ConvertFrom-Json
+    if ($catalog.schemaVersion -ne 1 -or @($catalog.adapters).Count -ne 5 -or
+        $candidate.schemaVersion -ne 1 -or $candidate.mirrorPulseSourceSha -cne $SourceSha -or
+        @($candidate.adapters).Count -ne @($catalog.adapters).Count) {
+        throw 'The shared official candidate differs from the product source or official catalog.'
+    }
+    foreach ($entry in $catalog.adapters) {
+        $matches = @($candidate.adapters | Where-Object { $_.adapterId -ceq $entry.adapterId -and $_.repository -ceq $entry.repository })
+        if ($matches.Count -ne 1) { throw 'The shared candidate must identify each official provider exactly once.' }
+        $null = Get-OfficialAdapterReleaseSnapshot -Release $matches[0].release -AdapterId $entry.adapterId `
+            -Repository $entry.repository -SourceSha $matches[0].sourceSha
+    }
+    $candidate
+}
