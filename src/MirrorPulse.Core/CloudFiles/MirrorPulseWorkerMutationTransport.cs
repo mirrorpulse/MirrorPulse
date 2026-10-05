@@ -8,7 +8,8 @@ public sealed record MirrorPulseWorkerDeleteRequest(
     string NormalizedPath,
     string? ExpectedRevision,
     bool IsDirectory,
-    Guid? OperationId = null);
+    Guid? OperationId = null,
+    string? RootKey = null);
 
 /// <summary>Carries one local move from the CfSharp journal to an Adapter Worker.</summary>
 public sealed record MirrorPulseWorkerMoveRequest(
@@ -17,10 +18,19 @@ public sealed record MirrorPulseWorkerMoveRequest(
     string DestinationPath,
     string? ExpectedRevision,
     bool IsDirectory,
-    Guid? OperationId = null);
+    Guid? OperationId = null,
+    string? RootKey = null,
+    string? DestinationRootKey = null,
+    bool DestinationMustBeAbsent = true);
+
+public sealed record MirrorPulseWorkerCreateDirectoryRequest(InstanceId InstanceId, string RootKey,
+    string NormalizedPath, Guid OperationId, bool MustBeAbsent = true);
 
 public interface IMirrorPulseWorkerMutationTransport
 {
+    ValueTask<string> CreateDirectoryAsync(MirrorPulseWorkerCreateDirectoryRequest request,
+        CancellationToken cancellationToken) => ValueTask.FromException<string>(new NotSupportedException("CreateDirectoryUnsupported"));
+
     ValueTask<string?> DeleteAsync(
         MirrorPulseWorkerDeleteRequest request,
         CancellationToken cancellationToken);

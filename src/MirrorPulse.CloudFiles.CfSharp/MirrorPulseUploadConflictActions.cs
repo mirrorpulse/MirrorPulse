@@ -156,7 +156,7 @@ public sealed class MirrorPulseUploadConflictActions
         }
 
         await _mutations.DeleteAsync(new MirrorPulseWorkerDeleteRequest(
-            conflict.InstanceId, routed.RelativePath, conflict.RemoteRevision, isDirectory),
+            conflict.InstanceId, routed.RelativePath, conflict.RemoteRevision, isDirectory, Guid.Parse(conflict.ChangeId), routed.RootKey),
             cancellationToken).ConfigureAwait(false);
         await AlignRemoteDeletedAsync(conflict, cancellationToken).ConfigureAwait(false);
         await _completion.PrepareRetryAsync(Guid.Parse(conflict.ChangeId), cancellationToken)

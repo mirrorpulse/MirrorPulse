@@ -22,6 +22,8 @@ public sealed class AdapterWorkerUploadClient
     private TaskCompletionSource<Guid>? _ready;
     private Guid _requestId;
     private Guid _streamId;
+    private Guid _operationId;
+    private string? _rootKey;
     private bool _closed;
 
     public AdapterWorkerUploadClient(
@@ -46,7 +48,9 @@ public sealed class AdapterWorkerUploadClient
             throw new ArgumentOutOfRangeException(nameof(request), "The Worker upload is invalid.");
         }
 
-        Guid requestId = request.OperationId ?? Guid.NewGuid();
+        Guid operationId = request.OperationId ?? Guid.NewGuid();
+        if (operationId == Guid.Empty) throw new ArgumentException("The Worker operation ID must not be empty.", nameof(request));
+        Guid requestId = _channel.ProtocolVersion == 2 ? Guid.NewGuid() : operationId;
         if (requestId == Guid.Empty) throw new ArgumentException("The Worker operation ID must not be empty.", nameof(request));
         string? expectedHash = request.ExpectedContentSha256 is { } expected
             ? Sha256Digest.Parse(expected).Hexadecimal : null;
@@ -56,6 +60,16 @@ public sealed class AdapterWorkerUploadClient
             if (contentHash is not null && Convert.ToHexString(contentHash.GetHashAndReset()) != expectedHash)
                 throw new InvalidDataException("The transmitted content no longer matches the durable upload intent.");
         }
+        Guid streamId = _channel.ProtocolVersion == 2 ? Guid.NewGuid() : request.OperationId ?? Guid.NewGuid();
+        JsonElement payload = _channel.MutationPayload(request.RootKey, new
+        {
+            path = request.NormalizedPath,
+            expectedRevision = request.ExpectedRevision,
+            length = request.Length,
+            streamId,
+            operationId = request.OperationId,
+        }, operationId, expectedRevision: request.ExpectedRevision,
+            destinationMustBeAbsent: request.ExpectedRevision is null && request.DestinationMustBeAbsent);
         await _operation.WaitAsync(cancellationToken).ConfigureAwait(false);
         var ready = new TaskCompletionSource<Guid>(TaskCreationOptions.RunContinuationsAsynchronously);
         var completion = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -65,20 +79,14 @@ public sealed class AdapterWorkerUploadClient
             {
                 ObjectDisposedException.ThrowIf(_closed, this);
                 _requestId = requestId;
+                _operationId = operationId;
+                _rootKey = request.RootKey;
                 _ready = ready;
                 _completion = completion;
             }
 
-            Guid streamId = request.OperationId ?? Guid.NewGuid();
             await _channel.WriteControlAsync(new ControlFrameEnvelope(1, "Upload", requestId,
-                _instanceId, _sessionId, false, JsonSerializer.SerializeToElement(new
-                {
-                    path = request.NormalizedPath,
-                    expectedRevision = request.ExpectedRevision,
-                    length = request.Length,
-                    streamId,
-                    operationId = request.OperationId,
-                })), cancellationToken).ConfigureAwait(false);
+                _instanceId, _sessionId, false, payload), cancellationToken).ConfigureAwait(false);
             Guid acceptedStream = await ready.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
             if (acceptedStream != streamId)
             {
@@ -98,7 +106,8 @@ public sealed class AdapterWorkerUploadClient
                 if (offset + count == request.Length) VerifyTransmittedContent();
                 await _channel.WriteChunkAsync(new BinaryChunkFrame(requestId, _instanceId, _sessionId,
                     streamId, offset, buffer, offset + count == request.Length,
-                    Sha256Digest.Parse(Convert.ToHexString(SHA256.HashData(buffer)))), cancellationToken)
+                    Sha256Digest.Parse(Convert.ToHexString(SHA256.HashData(buffer))))
+                { RootKey = request.RootKey }, cancellationToken)
                     .ConfigureAwait(false);
                 offset += count;
             }
@@ -108,7 +117,8 @@ public sealed class AdapterWorkerUploadClient
                 VerifyTransmittedContent();
                 await _channel.WriteChunkAsync(new BinaryChunkFrame(requestId, _instanceId, _sessionId,
                     streamId, 0, ReadOnlyMemory<byte>.Empty, true,
-                    Sha256Digest.Parse(Convert.ToHexString(SHA256.HashData(ReadOnlySpan<byte>.Empty)))), cancellationToken)
+                    Sha256Digest.Parse(Convert.ToHexString(SHA256.HashData(ReadOnlySpan<byte>.Empty))))
+                { RootKey = request.RootKey }, cancellationToken)
                     .ConfigureAwait(false);
             }
 
@@ -157,6 +167,7 @@ public sealed class AdapterWorkerUploadClient
             completion = _completion;
         }
 
+        _channel.ValidateOperationResponse(frame, _rootKey, _operationId);
         if (frame.MessageType == "UploadReady")
         {
             Guid streamId = frame.Payload.GetProperty("streamId").GetGuid();

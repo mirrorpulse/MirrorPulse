@@ -17,6 +17,8 @@ public sealed class AdapterWorkerMutationClient
     private readonly object _pendingLock = new();
     private TaskCompletionSource<string?>? _completion;
     private Guid _requestId;
+    private Guid _operationId;
+    private string? _rootKey;
     private bool _closed;
 
     public AdapterWorkerMutationClient(
@@ -37,7 +39,7 @@ public sealed class AdapterWorkerMutationClient
             path = request.NormalizedPath,
             expectedRevision = request.ExpectedRevision,
             isDirectory = request.IsDirectory,
-        }, request.OperationId, cancellationToken);
+        }, request.OperationId, request.RootKey, null, request.ExpectedRevision, true, cancellationToken);
 
     public async ValueTask<string> MoveAsync(
         MirrorPulseWorkerMoveRequest request,
@@ -49,18 +51,38 @@ public sealed class AdapterWorkerMutationClient
             destinationPath = request.DestinationPath,
             expectedRevision = request.ExpectedRevision,
             isDirectory = request.IsDirectory,
-        }, request.OperationId, cancellationToken).ConfigureAwait(false) ??
+        }, request.OperationId, request.RootKey, request.DestinationRootKey ?? request.RootKey,
+            request.ExpectedRevision, request.DestinationMustBeAbsent, cancellationToken).ConfigureAwait(false) ??
             throw new IOException("The Adapter Worker did not return a moved revision.");
+    }
+
+    public async ValueTask<string> CreateDirectoryAsync(MirrorPulseWorkerCreateDirectoryRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.InstanceId != _instanceId) throw new InvalidDataException("InstanceMismatch");
+        if (_channel.ProtocolVersion != 2) throw new NotSupportedException("CreateDirectoryRequiresProtocolV2");
+        return await SendAsync("CreateDirectory", new { path = request.NormalizedPath, mustBeAbsent = request.MustBeAbsent },
+            request.OperationId, request.RootKey, null, null, request.MustBeAbsent, cancellationToken).ConfigureAwait(false)
+            ?? throw new InvalidDataException("DirectoryRevisionRequired");
     }
 
     private async ValueTask<string?> SendAsync(
         string messageType,
         object payload,
         Guid? operationId,
+        string? rootKey,
+        string? destinationRootKey,
+        string? expectedRevision,
+        bool destinationMustBeAbsent,
         CancellationToken cancellationToken)
     {
-        Guid requestId = operationId ?? Guid.NewGuid();
+        Guid stableOperationId = operationId ?? Guid.NewGuid();
+        if (stableOperationId == Guid.Empty) throw new ArgumentException("The Worker operation ID must not be empty.", nameof(operationId));
+        Guid requestId = _channel.ProtocolVersion == 2 ? Guid.NewGuid() : stableOperationId;
         if (requestId == Guid.Empty) throw new ArgumentException("The Worker operation ID must not be empty.", nameof(operationId));
+        JsonElement routedPayload = _channel.MutationPayload(rootKey, payload, stableOperationId,
+            destinationRootKey, expectedRevision, destinationMustBeAbsent);
         await _operation.WaitAsync(cancellationToken).ConfigureAwait(false);
         var completion = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
         try
@@ -69,11 +91,13 @@ public sealed class AdapterWorkerMutationClient
             {
                 ObjectDisposedException.ThrowIf(_closed, this);
                 _requestId = requestId;
+                _operationId = stableOperationId;
+                _rootKey = rootKey;
                 _completion = completion;
             }
 
             await _channel.WriteControlAsync(new ControlFrameEnvelope(1, messageType, requestId,
-                _instanceId, _sessionId, false, JsonSerializer.SerializeToElement(payload)),
+                _instanceId, _sessionId, false, routedPayload),
                 cancellationToken).ConfigureAwait(false);
             return await completion.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
         }
@@ -117,6 +141,7 @@ public sealed class AdapterWorkerMutationClient
             completion = _completion!;
         }
 
+        _channel.ValidateOperationResponse(frame, _rootKey, _operationId);
         if (frame.MessageType == "MutationComplete")
         {
             string? revision = frame.Payload.TryGetProperty("revision", out JsonElement value) &&

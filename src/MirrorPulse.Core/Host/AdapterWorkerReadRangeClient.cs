@@ -46,6 +46,37 @@ public sealed class AdapterWorkerReadRangeClient
         else if (!frame.IsResponse || frame.ProtocolVersion != 1) throw new InvalidDataException("ResponseProtocolMismatch");
     }
 
+    public JsonElement MutationPayload(string? rootKey, object payload, Guid operationId,
+        string? destinationRootKey = null, string? expectedRevision = null, bool destinationMustBeAbsent = true)
+    {
+        JsonElement routed = RoutePayload(rootKey, JsonSerializer.SerializeToElement(payload));
+        if (ProtocolVersion == 1)
+        {
+            if (destinationRootKey is not null && destinationRootKey != rootKey)
+                throw new NotSupportedException("CrossRootMoveRequiresProtocolV2");
+            return routed;
+        }
+        if (operationId == Guid.Empty) throw new InvalidDataException("OperationIdRequired");
+        Dictionary<string, JsonElement> fields = routed.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.Clone(), StringComparer.Ordinal);
+        fields["operationId"] = JsonSerializer.SerializeToElement(operationId);
+        fields["preconditions"] = JsonSerializer.SerializeToElement(new { expectedRevision, destinationMustBeAbsent });
+        if (fields.TryGetValue("sourcePath", out JsonElement source)) fields["path"] = source;
+        if (destinationRootKey is not null)
+        {
+            _ = RoutePayload(destinationRootKey, JsonSerializer.SerializeToElement(new { }));
+            fields["destinationRootKey"] = JsonSerializer.SerializeToElement(destinationRootKey);
+        }
+        return JsonSerializer.SerializeToElement(fields);
+    }
+
+    public void ValidateOperationResponse(ControlFrameEnvelope frame, string? rootKey, Guid operationId)
+    {
+        ValidateResponse(frame, rootKey);
+        if (ProtocolVersion == 2 && (!frame.Payload.TryGetProperty("operationId", out JsonElement id) ||
+            !id.TryGetGuid(out Guid actual) || actual != operationId))
+            throw new InvalidDataException("ResponseOperationMismatch");
+    }
+
     public async ValueTask<Stream> ReadRangeAsync(
         MirrorPulseWorkerReadRangeRequest request,
         CancellationToken cancellationToken = default)
@@ -57,6 +88,12 @@ public sealed class AdapterWorkerReadRangeClient
             throw new ArgumentOutOfRangeException(nameof(request), "The Worker range or instance is invalid.");
         }
 
+        JsonElement payload = RoutePayload(request.RootKey, JsonSerializer.SerializeToElement(new
+        {
+            path = request.NormalizedPath,
+            offset = request.Offset,
+            length = request.Length,
+        }));
         await _operation.WaitAsync(cancellationToken).ConfigureAwait(false);
         TaskCompletionSource<Stream> completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
         Guid requestId = Guid.NewGuid();
@@ -76,12 +113,7 @@ public sealed class AdapterWorkerReadRangeClient
 
             await WriteControlAsync(new ControlFrameEnvelope(1, "ReadRange", requestId,
                 _instanceId, _sessionId, false,
-                RoutePayload(request.RootKey, JsonSerializer.SerializeToElement(new
-                {
-                    path = request.NormalizedPath,
-                    offset = request.Offset,
-                    length = request.Length,
-                }))), cancellationToken).ConfigureAwait(false);
+                payload), cancellationToken).ConfigureAwait(false);
             dispatched = true;
             Stream result = await completion.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
             delivered = true;

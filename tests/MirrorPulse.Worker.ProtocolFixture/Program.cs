@@ -31,20 +31,29 @@ if (ready.ProtocolVersion == 2)
 }
 await SendAsync(new(ready.ProtocolVersion, "Connected", Guid.NewGuid(), instance, session, false,
     JsonSerializer.SerializeToElement(new { })));
+var files = new Dictionary<(string Root, string Path), (byte[] Content, string Revision)>
+{
+    [("left", "same.txt")] = (Encoding.UTF8.GetBytes("left"), "left/revision"),
+    [("right", "same.txt")] = (Encoding.UTF8.GetBytes("rght"), "right/revision"),
+};
+var directories = new HashSet<(string Root, string Path)>();
+var acceptedOperations = new Dictionary<Guid, (string Signature, string? Revision)>();
 while (true)
 {
     ControlFrameEnvelope request = await ReadAsync();
     if (request.MessageType == "Stop") return;
+    string requestRoot = request.Payload.GetProperty("rootKey").GetString()!;
+    string requestPath = request.Payload.TryGetProperty("path", out JsonElement pathElement) ? pathElement.GetString()! : "";
     if (request.MessageType == "Stat")
         await SendAsync(new(ready.ProtocolVersion, "StatResult", request.RequestId, instance, session, true,
-            JsonSerializer.SerializeToElement(new { rootKey = request.Payload.GetProperty("rootKey").GetString(), revision = request.Payload.GetProperty("rootKey").GetString() + "/revision" })));
+            JsonSerializer.SerializeToElement(new { rootKey = requestRoot, revision = files.TryGetValue((requestRoot, requestPath), out var file) ? file.Revision : directories.Contains((requestRoot, requestPath)) ? "directory" : null })));
     if (request.MessageType == "List")
         await SendAsync(new(ready.ProtocolVersion, "DirectoryPage", request.RequestId, instance, session, true,
             JsonSerializer.SerializeToElement(new { rootKey = request.Payload.GetProperty("rootKey").GetString(), entries = Array.Empty<object>(), isComplete = true, cursor = (string?)null })));
     if (request.MessageType == "ReadRange")
     {
         string rootKey = request.Payload.GetProperty("rootKey").GetString()!;
-        byte[] data = Encoding.UTF8.GetBytes(rootKey == "left" ? "left" : "rght");
+        byte[] data = files[(rootKey, requestPath)].Content;
         Guid streamId = Guid.NewGuid();
         await SendAsync(new(ready.ProtocolVersion, "ReadRangeReady", request.RequestId, instance, session, true,
             JsonSerializer.SerializeToElement(new { rootKey, streamId, length = data.Length })));
@@ -57,6 +66,66 @@ while (true)
         await pipe.WriteAsync(prefix);
         await pipe.WriteAsync(chunk);
         await pipe.FlushAsync();
+    }
+    if (request.MessageType is "CreateDirectory" or "Move" or "Delete" or "Upload")
+    {
+        Guid operationId = request.Payload.GetProperty("operationId").GetGuid();
+        string destinationRoot = request.Payload.TryGetProperty("destinationRootKey", out JsonElement destination) ? destination.GetString()! : requestRoot;
+        string destinationPath = request.Payload.TryGetProperty("destinationPath", out JsonElement target) ? target.GetString()! : requestPath;
+        string signature = request.MessageType + "/" + requestRoot + "/" + requestPath + "/" + destinationRoot + "/" + destinationPath;
+        string? revision;
+        if (acceptedOperations.TryGetValue(operationId, out var accepted))
+        {
+            if (accepted.Signature != signature) throw new InvalidDataException("Operation ID changed binding.");
+            revision = accepted.Revision;
+        }
+        else
+        {
+            if (request.MessageType == "Upload")
+            {
+                Guid streamId = request.Payload.GetProperty("streamId").GetGuid();
+                long length = request.Payload.GetProperty("length").GetInt64();
+                await SendAsync(new(2, "UploadReady", request.RequestId, instance, session, true,
+                    JsonSerializer.SerializeToElement(new { rootKey = requestRoot, operationId, streamId })));
+                using var data = new MemoryStream();
+                while (true)
+                {
+                    BinaryChunkFrame chunk = WorkerBinaryChunkV2Codec.Decode(await LengthPrefixedFrameReader.ReadAsync(pipe));
+                    if (chunk.RootKey != requestRoot || chunk.RequestId != request.RequestId || chunk.WorkerSessionId != session ||
+                        chunk.InstanceId != instance || chunk.StreamId != streamId || chunk.Offset != data.Length || chunk.Data.Length > length - data.Length)
+                        throw new InvalidDataException("Upload binding mismatch.");
+                    data.Write(chunk.Data.Span);
+                    if (!chunk.EndOfStream) continue;
+                    if (data.Length != length) throw new InvalidDataException("Upload length mismatch.");
+                    break;
+                }
+                byte[] content = data.ToArray();
+                revision = Convert.ToHexString(SHA256.HashData(content));
+                files[(requestRoot, requestPath)] = (content, revision);
+            }
+            else if (request.MessageType == "Move")
+            {
+                var source = files[(requestRoot, requestPath)];
+                if (files.ContainsKey((destinationRoot, destinationPath))) throw new InvalidDataException("Destination exists.");
+                files.Add((destinationRoot, destinationPath), source);
+                files.Remove((requestRoot, requestPath));
+                revision = source.Revision;
+            }
+            else if (request.MessageType == "Delete")
+            {
+                files.Remove((requestRoot, requestPath));
+                directories.Remove((requestRoot, requestPath));
+                revision = null;
+            }
+            else
+            {
+                if (!directories.Add((requestRoot, requestPath))) throw new InvalidDataException("Directory exists.");
+                revision = "directory";
+            }
+            acceptedOperations.Add(operationId, (signature, revision));
+        }
+        await SendAsync(new(2, request.MessageType == "Upload" ? "UploadComplete" : "MutationComplete", request.RequestId, instance, session, true,
+            JsonSerializer.SerializeToElement(new { rootKey = requestRoot, operationId, revision })));
     }
 }
 

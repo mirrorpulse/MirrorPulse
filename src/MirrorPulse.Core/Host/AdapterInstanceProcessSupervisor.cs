@@ -111,6 +111,18 @@ public sealed class AdapterInstanceProcessSupervisor :
         return MutateMoveCoreAsync(request, cancellationToken);
     }
 
+    public async ValueTask<string> CreateDirectoryAsync(MirrorPulseWorkerCreateDirectoryRequest request,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (!_mutations.TryGetValue(request.InstanceId, out AdapterWorkerMutationClient? client) ||
+            !_instanceOperations.TryGetValue(request.InstanceId, out SemaphoreSlim? operation))
+            throw new AdapterWorkerOperationException("Disconnected");
+        await operation.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try { return await client.CreateDirectoryAsync(request, cancellationToken).ConfigureAwait(false); }
+        finally { operation.Release(); }
+    }
+
     private async ValueTask<Stream> ReadRangeCoreAsync(
         MirrorPulseWorkerReadRangeRequest request,
         CancellationToken cancellationToken)

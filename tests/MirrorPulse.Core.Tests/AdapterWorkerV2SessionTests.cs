@@ -52,6 +52,21 @@ public sealed class AdapterWorkerV2SessionTests
                 Assert.AreEqual(key == "left" ? "left" : "rght", await reader.ReadToEndAsync(timeout.Token));
             }
             await Assert.ThrowsExactlyAsync<InvalidDataException>(() => supervisor.StatAsync(new(instanceId, "same.txt", "unconfigured"), timeout.Token).AsTask());
+            Assert.AreEqual("directory", await supervisor.CreateDirectoryAsync(new(instanceId, "left", "new", Guid.NewGuid()), timeout.Token));
+            Assert.IsNull(await supervisor.StatAsync(new(instanceId, "new", "right"), timeout.Token));
+            using var upload = new MemoryStream(new byte[] { 4, 5, 6 });
+            string uploaded = await supervisor.UploadAsync(new(instanceId, "upload.txt", null, upload, upload.Length, Guid.NewGuid(), RootKey: "left"), timeout.Token);
+            Assert.AreEqual(uploaded, await supervisor.StatAsync(new(instanceId, "upload.txt", "left"), timeout.Token));
+            Assert.IsNull(await supervisor.StatAsync(new(instanceId, "upload.txt", "right"), timeout.Token));
+            Guid stableMoveId = Guid.NewGuid();
+            var move = new MirrorPulseWorkerMoveRequest(instanceId, "upload.txt", "moved.txt", uploaded, false, stableMoveId, "left", "right");
+            Assert.AreEqual(uploaded, await supervisor.MoveAsync(move, timeout.Token));
+            Assert.AreEqual(uploaded, await supervisor.MoveAsync(move, timeout.Token), "A retried intent keeps its stable operation ID.");
+            Assert.IsNull(await supervisor.StatAsync(new(instanceId, "upload.txt", "left"), timeout.Token));
+            Assert.AreEqual(uploaded, await supervisor.StatAsync(new(instanceId, "moved.txt", "right"), timeout.Token));
+            await supervisor.DeleteAsync(new(instanceId, "moved.txt", uploaded, false, Guid.NewGuid(), "right"), timeout.Token);
+            Assert.IsNull(await supervisor.StatAsync(new(instanceId, "moved.txt", "right"), timeout.Token));
+            Assert.AreEqual("left/revision", await supervisor.StatAsync(new(instanceId, "same.txt", "left"), timeout.Token));
         }
         finally { Directory.Delete(directory, true); }
     }

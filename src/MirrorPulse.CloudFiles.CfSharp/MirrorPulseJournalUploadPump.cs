@@ -229,7 +229,7 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
             dispatchPhase = "ExecuteRemote";
             await _mutationExecutor.ExecuteAsync(Intent(command, revision, content.Length, hash, binding), async token =>
                 await _uploads.UploadAsync(new MirrorPulseWorkerUploadRequest(command.InstanceId, command.RelativePath,
-                    revision, content, content.Length, command.OperationId, hash), token).ConfigureAwait(false),
+                    revision, content, content.Length, command.OperationId, hash, command.RootKey), token).ConfigureAwait(false),
                 async (accepted, token) =>
                 {
                     await content.DisposeAsync().ConfigureAwait(false);
@@ -300,7 +300,7 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
                     cancellationToken: cancellationToken).ConfigureAwait(false);
                 await _mutationExecutor.ExecuteAsync(Intent(command, revision), token =>
                     _mutations!.DeleteAsync(new MirrorPulseWorkerDeleteRequest(command.InstanceId,
-                        command.RelativePath, revision, command.IsDirectory, command.OperationId), token),
+                        command.RelativePath, revision, command.IsDirectory, command.OperationId, command.RootKey), token),
                     (_, token) => AcknowledgeAsync(command.OperationId, null, token), cancellationToken).ConfigureAwait(false);
                 return true;
             }
@@ -313,10 +313,11 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
             revision = await MirrorPulseJournalUploadRevisionGuard.ResolveAsync(
                 _state.OpenStore, _stats, command, syncRootRelativePath,
                 remoteStatPath: command.PreviousRelativePath,
-                cancellationToken: cancellationToken).ConfigureAwait(false);
+                cancellationToken: cancellationToken, remoteStatRootKey: command.PreviousRootKey).ConfigureAwait(false);
             await _mutationExecutor.ExecuteAsync(Intent(command, revision), async token =>
                 await _mutations!.MoveAsync(new MirrorPulseWorkerMoveRequest(command.InstanceId,
-                    command.PreviousRelativePath, command.RelativePath, revision, command.IsDirectory, command.OperationId), token).ConfigureAwait(false),
+                    command.PreviousRelativePath, command.RelativePath, revision, command.IsDirectory, command.OperationId,
+                    command.PreviousRootKey ?? command.RootKey, command.RootKey), token).ConfigureAwait(false),
                 (accepted, token) => AcknowledgeAsync(command.OperationId, accepted, token), cancellationToken).ConfigureAwait(false);
             return true;
         }

@@ -38,6 +38,7 @@ public sealed class AdapterWorkerStatClient
             throw new ArgumentException("The stat request belongs to another instance.", nameof(request));
         }
 
+        JsonElement payload = _channel.RoutePayload(request.RootKey, JsonSerializer.SerializeToElement(new { path = request.NormalizedPath }));
         await _operation.WaitAsync(cancellationToken).ConfigureAwait(false);
         Guid requestId = Guid.NewGuid();
         var completion = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -53,7 +54,7 @@ public sealed class AdapterWorkerStatClient
 
             await _channel.WriteControlAsync(new ControlFrameEnvelope(1, "Stat", requestId,
                 _instanceId, _sessionId, false,
-                _channel.RoutePayload(request.RootKey, JsonSerializer.SerializeToElement(new { path = request.NormalizedPath }))), cancellationToken)
+                payload), cancellationToken)
                 .ConfigureAwait(false);
             return await completion.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
         }

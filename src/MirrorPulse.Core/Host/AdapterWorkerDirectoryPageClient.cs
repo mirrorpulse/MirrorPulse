@@ -45,6 +45,12 @@ public sealed class AdapterWorkerDirectoryPageClient
                 "The Worker directory request is invalid.");
         }
 
+        JsonElement payload = _channel.RoutePayload(request.RootKey, JsonSerializer.SerializeToElement(new
+        {
+            path = request.NormalizedPath,
+            cursor = request.ContinuationCursor.IsEmpty ? null : Convert.ToBase64String(request.ContinuationCursor.Span),
+            pageSize = request.PageSize,
+        }));
         await _operation.WaitAsync(cancellationToken).ConfigureAwait(false);
         TaskCompletionSource<MirrorPulseWorkerDirectoryPage> completion =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -61,14 +67,7 @@ public sealed class AdapterWorkerDirectoryPageClient
 
             await _channel.WriteControlAsync(new ControlFrameEnvelope(1, "List", requestId,
                 _instanceId, _sessionId, false,
-                _channel.RoutePayload(request.RootKey, JsonSerializer.SerializeToElement(new
-                {
-                    path = request.NormalizedPath,
-                    cursor = request.ContinuationCursor.IsEmpty
-                        ? null
-                        : Convert.ToBase64String(request.ContinuationCursor.Span),
-                    pageSize = request.PageSize,
-                }))), cancellationToken).ConfigureAwait(false);
+                payload), cancellationToken).ConfigureAwait(false);
             return await completion.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
