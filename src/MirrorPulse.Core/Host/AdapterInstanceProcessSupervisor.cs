@@ -252,7 +252,7 @@ public sealed class AdapterInstanceProcessSupervisor :
                 System.Runtime.InteropServices.Architecture.Arm64 => "win-arm64",
                 _ => throw new PlatformNotSupportedException("The Adapter process architecture is unsupported."),
             };
-            string pipeName = $"mirrorpulse-adapter-{Guid.NewGuid():N}";
+            string pipeName = WorkerLaunchNonce.CreatePipeName();
             string[] arguments = ["--instance-id", instance.InstanceId.ToString(),
                 "--worker-session-id", sessionId.ToString(), "--pipe-name", pipeName];
             AdapterInstanceWorkerPayload payload = AdapterInstanceWorkerLaunchResolver.Resolve(
@@ -262,7 +262,10 @@ public sealed class AdapterInstanceProcessSupervisor :
                 request.ExecutablePath, request.WorkingDirectory, request.Arguments,
                 new Dictionary<string, string> { ["MP_TRANSFER_CACHE_DIR"] = instance.TransferCacheDirectory });
             Directory.CreateDirectory(instance.TransferCacheDirectory);
-            await using var pipe = SecureNamedPipeServerFactory.Create(new NamedPipeServerOptions(pipeName));
+            await using var pipe = SecureNamedPipeServerFactory.Create(new NamedPipeServerOptions(pipeName)
+            {
+                PipeOptions = PipeOptions.Asynchronous | PipeOptions.FirstPipeInstance,
+            });
             using var job = WorkerJobObject.Create();
             using WorkerProcessHandle worker = WorkerProcessLauncher.Start(request);
             try
@@ -271,6 +274,11 @@ public sealed class AdapterInstanceProcessSupervisor :
                 using var connectionTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 connectionTimeout.CancelAfter(TimeSpan.FromSeconds(15));
                 await pipe.WaitForConnectionAsync(connectionTimeout.Token).ConfigureAwait(false);
+                if (worker.Process.HasExited)
+                {
+                    throw new UnauthorizedAccessException("The launched Worker exited before its pipe handshake.");
+                }
+                NamedPipePeerIdentity.ValidateClient(pipe, worker.ProcessId, worker.Process.SessionId);
                 await ServeWorkerAsync(pipe, instance, sessionId, cancellationToken).ConfigureAwait(false);
             }
             finally
@@ -325,7 +333,9 @@ public sealed class AdapterInstanceProcessSupervisor :
         WorkerSessionId sessionId,
         CancellationToken cancellationToken)
     {
-        ControlFrameEnvelope hello = await ReadAsync(pipe, cancellationToken).ConfigureAwait(false);
+        using var helloDeadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        helloDeadline.CancelAfter(TimeSpan.FromSeconds(5));
+        ControlFrameEnvelope hello = await ReadAsync(pipe, helloDeadline.Token).ConfigureAwait(false);
         ValidateFrame(hello, "Hello", instance.InstanceId, sessionId);
         var channel = new AdapterWorkerReadRangeClient(pipe, instance.InstanceId, sessionId);
         var upload = new AdapterWorkerUploadClient(channel, instance.InstanceId, sessionId);
@@ -514,7 +524,7 @@ public sealed class AdapterInstanceProcessSupervisor :
             cancellationToken).ConfigureAwait(false);
     }
 
-    private static void ValidateFrame(
+    internal static void ValidateFrame(
         ControlFrameEnvelope frame,
         string? expectedMessage,
         InstanceId instanceId,

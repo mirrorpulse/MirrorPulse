@@ -60,7 +60,10 @@ public sealed class MirrorPulseCliHostOperations : IMirrorPulseCliHostOperations
     public MirrorPulseCliHostOperations(MirrorPulseHostStartupOptions options, MirrorPulseControlClient? client = null)
     {
         _startup = new MirrorPulseHostStartupCoordinator(options: options);
-        _client = client ?? new MirrorPulseControlClient();
+        _client = client ?? new MirrorPulseControlClient(new()
+        {
+            GetExpectedHostExecutablePath = _startup.ResolveExecutablePath,
+        });
     }
 
     public Task EnsureStartedAsync(CancellationToken cancellationToken) =>

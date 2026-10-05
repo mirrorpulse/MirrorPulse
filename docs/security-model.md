@@ -42,8 +42,32 @@ process under the same account.
 Workers receive a rebuilt environment containing Windows system paths, temporary
 directories, and declared file/transfer cache paths. Host tokens, inherited PATH
 entries, runtime hooks and undeclared launch variables are excluded. This does
-not prevent current-user code from querying other system state. Worker peer
-verification still needs hardening.
+not prevent current-user code from querying other system state.
+
+## Pipe admission and peer identity
+
+Each Worker launch receives a fresh 256-bit pipe-name nonce and a distinct
+protocol session ID using the existing v1 arguments. Before sending configuration
+or credentials, Host checks the connected client PID and Windows session against
+the launched process using the kernel's
+[client identity APIs](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-getnamedpipeclientprocessid).
+The Hello frame must match the instance and protocol session within five seconds.
+Old sessions and different processes are rejected.
+
+The control server claims the first pipe instance and retains a listening handle
+during handover. A preclaimed name fails with a fixed diagnostic. The CLI checks
+the connected server's PID/session and executable path against its selected Host
+before sending any arguments. Control clients can supply an expected PID or
+executable resolver; product clients must bind that identity. Current-user client
+connections use identification rather than granting server impersonation.
+
+Control admits at most 16 concurrent connections plus one admission slot, with
+eight ordinary request slots and two reserved status/cancel/stop slots. Ordinary
+mutations are serialized. Overload returns a retryable `mp.control.hostBusy`.
+Frame read/write deadlines are five seconds and the connection deadline is two
+minutes. Trusted Host handlers must honor cancellation; shutdown drains their
+ownership before disposing stores. These checks prevent accidental peers and
+stale sessions; they do not form a sandbox against fully privileged same-user code.
 
 ## Credential configuration transactions
 

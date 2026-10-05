@@ -80,6 +80,12 @@ public sealed record MirrorPulseControlPipeOptions
     }
 }
 
+/// <summary>A safe diagnostic for a control pipe name already claimed by another server.</summary>
+public sealed class MirrorPulseControlPipeClaimException : IOException
+{
+    public MirrorPulseControlPipeClaimException() : base("The current-user control pipe name is already occupied.") { }
+}
+
 /// <summary>
 /// Serves bounded concurrent requests while reserving status, cancel and shutdown capacity.
 /// </summary>
@@ -110,8 +116,10 @@ public sealed class MirrorPulseControlPipeServer
         using var control = new SemaphoreSlim(_options.ReservedControlRequests);
         using var mutation = new SemaphoreSlim(1);
         var connections = new List<Task>();
+        NamedPipeServerStream? listener = null;
         try
         {
+            listener = CreateListener(firstInstance: true);
             while (!cancellationToken.IsCancellationRequested)
             {
                 Task[] completed = connections.Where(task => task.IsCompleted).ToArray();
@@ -121,11 +129,11 @@ public sealed class MirrorPulseControlPipeServer
                     foreach (Task task in completed) connections.Remove(task);
                 }
 
-                var pipe = SecureNamedPipeServerFactory.Create(new NamedPipeServerOptions(_pipeName)
-                {
-                    MaxInstances = _options.MaximumConnections + 1,
-                });
-                try { await pipe.WaitForConnectionAsync(cancellationToken).ConfigureAwait(false); }
+                await listener.WaitForConnectionAsync(cancellationToken).ConfigureAwait(false);
+                NamedPipeServerStream pipe = listener;
+                listener = null;
+                // Keep the pipe name owned throughout handover, even if a request completes immediately.
+                try { listener = CreateListener(firstInstance: false); }
                 catch { await pipe.DisposeAsync().ConfigureAwait(false); throw; }
                 if (connections.Count >= _options.MaximumConnections)
                 {
@@ -142,8 +150,25 @@ public sealed class MirrorPulseControlPipeServer
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
         finally
         {
+            if (listener is not null) await listener.DisposeAsync().ConfigureAwait(false);
             // Host handlers must honor cancellation. Keep their ownership until they actually finish.
             await Task.WhenAll(connections).ConfigureAwait(false);
+        }
+    }
+
+    private NamedPipeServerStream CreateListener(bool firstInstance)
+    {
+        try
+        {
+            return SecureNamedPipeServerFactory.Create(new NamedPipeServerOptions(_pipeName)
+            {
+                MaxInstances = _options.MaximumConnections + 2,
+                PipeOptions = PipeOptions.Asynchronous | (firstInstance ? PipeOptions.FirstPipeInstance : PipeOptions.None),
+            });
+        }
+        catch (Exception exception) when (firstInstance && exception is IOException or UnauthorizedAccessException)
+        {
+            throw new MirrorPulseControlPipeClaimException();
         }
     }
 

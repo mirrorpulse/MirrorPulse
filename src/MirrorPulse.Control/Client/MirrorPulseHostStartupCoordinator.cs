@@ -170,7 +170,7 @@ public sealed class MirrorPulseHostStartupCoordinator : IAsyncDisposable
         await ValueTask.CompletedTask;
     }
 
-    private string ResolveExecutablePath()
+    public string ResolveExecutablePath()
     {
         if (!string.IsNullOrWhiteSpace(_options.InstalledHostPath))
         {

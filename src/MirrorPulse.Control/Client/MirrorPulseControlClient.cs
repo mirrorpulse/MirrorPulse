@@ -17,6 +17,8 @@ public sealed record MirrorPulseControlClientOptions
     public TimeSpan ConnectTimeout { get; init; } = TimeSpan.FromSeconds(2);
 
     public TimeSpan RequestTimeout { get; init; } = TimeSpan.FromSeconds(30);
+    public int? ExpectedHostProcessId { get; init; }
+    public Func<string>? GetExpectedHostExecutablePath { get; init; }
 
     /// <summary>
     /// Starts the current-user Host after an initial connection failure.
@@ -96,6 +98,11 @@ public sealed class MirrorPulseControlClient
                 typeof(MirrorPulseControlClient).Assembly.GetName().Version?.ToString());
 
             await using var pipe = await ConnectAsync(linked.Token).ConfigureAwait(false);
+            NamedPipePeerIdentity.ValidateServer(pipe, _options.ExpectedHostProcessId);
+            if (_options.GetExpectedHostExecutablePath is not null)
+            {
+                NamedPipePeerIdentity.ValidateServerImage(pipe, _options.GetExpectedHostExecutablePath());
+            }
             await MirrorPulseControlPipeTransport.WriteFrameAsync(
                 pipe,
                 MirrorPulseControlJsonCodec.Serialize(request),
@@ -136,6 +143,11 @@ public sealed class MirrorPulseControlClient
                     MirrorPulseControlErrorCodes.InvalidRequest,
                     "The Host returned an invalid control response.",
                     MirrorPulse.Core.Contracts.ErrorCategory.Protocol));
+        }
+        catch (UnauthorizedAccessException)
+        {
+            throw new MirrorPulseControlException(new ControlError(MirrorPulseControlErrorCodes.Unauthorized,
+                "The control pipe peer identity could not be verified.", MirrorPulse.Core.Contracts.ErrorCategory.Authorization));
         }
         catch (Exception exception) when (exception is EndOfStreamException or IOException)
         {
