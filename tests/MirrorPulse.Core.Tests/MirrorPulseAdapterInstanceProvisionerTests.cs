@@ -76,6 +76,33 @@ public sealed class MirrorPulseAdapterInstanceProvisionerTests
                     },
                 }));
 
+            foreach (string managedKey in new[] { "credentialReference", "CredentialReference" })
+            {
+                var injected = new Dictionary<string, string>(firstRequest.Configuration)
+                {
+                    [managedKey] = "injected-secret",
+                };
+                await Assert.ThrowsExactlyAsync<InvalidDataException>(() => provisioner.CreateAsync(
+                    firstRequest with { Configuration = injected }));
+                await Assert.ThrowsExactlyAsync<InvalidDataException>(() => catalog.ConfigureInstanceAsync(
+                    first.InstanceId, "Injected", injected, new Dictionary<string, string>()));
+            }
+
+            await Assert.ThrowsExactlyAsync<InvalidDataException>(() => catalog.ConfigureInstanceAsync(
+                first.InstanceId, "Invalid patch", new Dictionary<string, string> { ["mode"] = "unknown" },
+                new Dictionary<string, string>()));
+            AdapterInstance unchanged = (await catalog.ReadAdapterTopologyAsync()).Instances.Single();
+            Assert.AreEqual(first.DisplayName, unchanged.DisplayName);
+            Assert.AreEqual("safe", unchanged.Configuration["mode"]);
+
+            AdapterInstance patched = await catalog.ConfigureInstanceAsync(first.InstanceId, "Patched",
+                new Dictionary<string, string> { ["mode"] = "fast" }, new Dictionary<string, string>());
+            Assert.AreEqual("https://example.test/", patched.Configuration["endpoint"]);
+            Assert.AreEqual("fast", patched.Configuration["mode"]);
+            Assert.AreEqual(first.CredentialReferences.Single(), patched.Configuration["credentialReference"]);
+            Assert.IsFalse(patched.Configuration.Values.Contains("password-one"));
+            Assert.AreEqual("password-one", credentials.Read(patched.CredentialReferences.Single()));
+
             AdapterInstance second = await provisioner.CreateAsync(firstRequest with
             {
                 DisplayName = "Second source",

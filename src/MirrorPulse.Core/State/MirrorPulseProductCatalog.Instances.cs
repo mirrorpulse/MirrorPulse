@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using MirrorPulse.Core.CloudFiles;
 using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.Host;
 
 namespace MirrorPulse.Core.State;
 
@@ -28,6 +29,8 @@ public sealed partial class MirrorPulseProductCatalog
             AdapterInstance instance = current.Instances.SingleOrDefault(item => item.InstanceId == instanceId)
                 ?? throw new FileNotFoundException("The Adapter instance is not installed.");
             InstalledAdapter installation = current.Installations.Single(item => item.InstallId == instance.InstallId);
+            IReadOnlyDictionary<string, string> validated = AdapterConfigurationFieldValidator.ApplyPatch(
+                installation.Manifest, instance, configuration);
             if (rootLabels.Keys.Any(key => !installation.Manifest.RootDefinitions.Any(definition =>
                     string.Equals(definition.Key, key, StringComparison.Ordinal))))
             {
@@ -36,7 +39,7 @@ public sealed partial class MirrorPulseProductCatalog
 
             AdapterInstance updated = new(
                 instance.AdapterId, instance.InstallId, instance.InstanceId, displayName.Trim(),
-                configuration, instance.CredentialReferences, instance.FileCacheDirectory,
+                validated, instance.CredentialReferences, instance.FileCacheDirectory,
                 instance.TransferCacheDirectory, instance.Enabled, instance.LifecycleState,
                 null, instance.CreatedAt);
             AdapterInstance[] instances = current.Instances.Select(item =>
