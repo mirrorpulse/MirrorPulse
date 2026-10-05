@@ -2,7 +2,8 @@
 param(
     [string]$OutputDirectory = (Join-Path $PSScriptRoot '..' 'artifacts' 'official-adapters'),
     [string]$ReleaseLockPath,
-    [string[]]$AdapterIds
+    [string[]]$AdapterIds,
+    [switch]$AllowPreview
 )
 
 $ErrorActionPreference = 'Stop'
@@ -66,10 +67,11 @@ if (-not $OutputDirectory.StartsWith($artifactRoot + [IO.Path]::DirectorySeparat
     throw 'The aggregate output must be a dedicated directory inside the product artifacts directory.'
 }
 $releaseLock = $null
+if ($AllowPreview -and -not $ReleaseLockPath) { throw 'Preview verification requires an explicitly resolved candidate.' }
 if ($ReleaseLockPath) {
     $source = (& git -C (Join-Path $PSScriptRoot '..') rev-parse HEAD | Out-String).Trim()
     if ($LASTEXITCODE -ne 0) { throw 'The product source identity is unavailable.' }
-    $releaseLock = Read-OfficialAdapterReleaseCandidate -Path $ReleaseLockPath -SourceSha $source
+    $releaseLock = Read-OfficialAdapterReleaseCandidate -Path $ReleaseLockPath -SourceSha $source -AllowPreview:$AllowPreview
 }
 if ($AdapterIds) {
     if (-not $releaseLock -or @($AdapterIds | Select-Object -Unique).Count -ne $AdapterIds.Count -or
@@ -113,7 +115,7 @@ foreach ($entry in @($lock.adapters)) {
     if ($releaseLock) {
         $matches = @($releaseLock.adapters | Where-Object { $_.adapterId -ceq $adapterId -and $_.repository -ceq $repository })
         if ($matches.Count -ne 1) { throw 'The shared candidate must identify each official provider exactly once.' }
-        $snapshot = Get-OfficialAdapterReleaseSnapshot -Release $matches[0].release -AdapterId $adapterId -Repository $repository -SourceSha $matches[0].sourceSha
+        $snapshot = Get-OfficialAdapterReleaseSnapshot -Release $matches[0].release -AdapterId $adapterId -Repository $repository -SourceSha $matches[0].sourceSha -AllowPreview:$AllowPreview
         $release = $snapshot.release
         if ((Get-OfficialAdapterTagSource -Repository $repository -Tag $release.tag_name) -cne $snapshot.sourceSha) {
             throw 'An official release tag changed after the shared candidate was resolved.'
@@ -126,7 +128,7 @@ foreach ($entry in @($lock.adapters)) {
             -SourceSha (Get-OfficialAdapterTagSource -Repository $repository -Tag $resolvedIdentity.tag)
         $release = $snapshot.release
     }
-    $identity = Get-OfficialStableAdapterReleaseIdentity -Release $release -AdapterId $adapterId
+    $identity = Get-OfficialAdapterReleaseIdentity -Release $release -AdapterId $adapterId -AllowPreview:$AllowPreview
     $tag = $identity.tag
     $version = $identity.version
 

@@ -77,3 +77,23 @@ if ((Get-OfficialAdapterReleaseSnapshot @arguments -Release $fixture).release.as
     throw 'The frozen release refused the current four-asset publication inventory.'
 }
 Write-Output 'Frozen official release selection passed: legacy and current inventories plus ten rejected source and asset boundaries.'
+
+$preview = $fixture | ConvertTo-Json -Depth 5 | ConvertFrom-Json
+$preview.tag_name = 'v1.0.0-preview.1'
+$preview.prerelease = $true
+foreach ($asset in $preview.assets) { $asset.name = $asset.name.Replace('-1.0.0.', '-1.0.0-preview.1.') }
+$identity = Get-OfficialAdapterReleaseIdentity -Release $preview -AdapterId $arguments.AdapterId -AllowPreview
+$snapshot = Get-OfficialAdapterReleaseSnapshot @arguments -Release $preview -AllowPreview
+if ($identity.version -cne '1.0.0-preview.1' -or $identity.channel -cne 'preview' -or -not $snapshot.release.prerelease) {
+    throw 'Explicit preview verification changed the selected version or release classification.'
+}
+$rejected = $false
+try { $null = Get-OfficialAdapterReleaseSnapshot @arguments -Release $preview } catch { $rejected = $true }
+if (-not $rejected) { throw 'A preview entered the default frozen candidate.' }
+foreach ($tag in @('v1.0.0-preview.0', 'v1.0.0-preview.01', 'v1.0.0-preview.2147483648', 'v1.0.0.0-preview.1', 'v1.0.0-Preview.1')) {
+    $preview.tag_name = $tag
+    $rejected = $false
+    try { $null = Get-OfficialAdapterReleaseIdentity -Release $preview -AdapterId $arguments.AdapterId -AllowPreview } catch { $rejected = $true }
+    if (-not $rejected) { throw 'Explicit preview verification accepted a malformed or unbounded preview version.' }
+}
+Write-Output 'Explicit preview selection passed: one fixed preview and six rejected default/version boundaries.'

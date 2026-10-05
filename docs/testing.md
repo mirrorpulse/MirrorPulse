@@ -140,6 +140,13 @@ locally, run `eng/resolve-official-adapter-releases.ps1`, then pass its output w
 `-ReleaseLockPath` to `eng/aggregate-official-adapters.ps1`. A scoped Local download
 uses `-AdapterIds com.mirrorpulse.adapter.local` with that same frozen file.
 
+Preview verification is explicit and separate from default distribution. Supply a
+JSON map such as `{"schemaVersion":1,"adapters":[{"adapterId":"com.mirrorpulse.adapter.webdav","tag":"v0.2.0-preview.1"}]}`
+with `-PreviewReleaseMapPath` to the resolver and choose a separate output file.
+Consume it with `-ReleaseLockPath`, `-AllowPreview`, and a separate aggregation
+directory. The map accepts exact official preview tags; unspecified providers use
+stable releases. Default aggregation and CI evidence refuse this preview candidate.
+
 Download the three `evidence-*` artifacts from one workflow run, then verify:
 
 ```powershell

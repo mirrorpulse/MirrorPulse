@@ -23,15 +23,35 @@ function Get-OfficialStableAdapterReleaseIdentity {
     [pscustomobject]@{ tag = $tag; version = $version; channel = 'stable' }
 }
 
+function Get-OfficialAdapterReleaseIdentity {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][object]$Release, [Parameter(Mandatory)][string]$AdapterId, [switch]$AllowPreview)
+    if (-not $AllowPreview -or $Release.prerelease -ne $true) {
+        return Get-OfficialStableAdapterReleaseIdentity -Release $Release -AdapterId $AdapterId
+    }
+    if ($Release.draft -isnot [bool] -or $Release.draft -or $Release.prerelease -isnot [bool] -or
+        [string]::IsNullOrWhiteSpace([string]$Release.published_at) -or
+        [string]$Release.tag_name -cnotmatch '\Av(?<base>(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))-preview\.(?<counter>[1-9][0-9]*)\z') {
+        throw 'Explicit preview verification requires a published canonical preview release.'
+    }
+    $baseVersion = $null
+    $counter = 0
+    if (-not [Version]::TryParse($Matches.base, [ref]$baseVersion) -or -not [int]::TryParse($Matches.counter, [ref]$counter)) {
+        throw 'The preview version exceeds its supported numeric bounds.'
+    }
+    [pscustomobject]@{ tag = [string]$Release.tag_name; version = ([string]$Release.tag_name).Substring(1); channel = 'preview' }
+}
+
 function Get-OfficialAdapterReleaseSnapshot {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][object]$Release,
         [Parameter(Mandatory)][string]$AdapterId,
         [Parameter(Mandatory)][string]$Repository,
-        [Parameter(Mandatory)][string]$SourceSha
+        [Parameter(Mandatory)][string]$SourceSha,
+        [switch]$AllowPreview
     )
-    $identity = Get-OfficialStableAdapterReleaseIdentity -Release $Release -AdapterId $AdapterId
+    $identity = Get-OfficialAdapterReleaseIdentity -Release $Release -AdapterId $AdapterId -AllowPreview:$AllowPreview
     if ($AdapterId -cnotmatch '\Acom\.mirrorpulse\.adapter\.[a-z]+\z' -or
         $Repository -cne ('MirrorPulse/adapter-' + $AdapterId.Substring('com.mirrorpulse.adapter.'.Length)) -or
         $SourceSha -cnotmatch '\A[0-9a-f]{40}\z' -or [long]$Release.id -le 0) {
@@ -59,7 +79,7 @@ function Get-OfficialAdapterReleaseSnapshot {
     [pscustomobject][ordered]@{
         adapterId = $AdapterId; repository = $Repository; sourceSha = $SourceSha
         release = [pscustomobject][ordered]@{
-            id = [long]$Release.id; tag_name = $identity.tag; draft = $false; prerelease = $false
+            id = [long]$Release.id; tag_name = $identity.tag; draft = $false; prerelease = ($identity.channel -ceq 'preview')
             published_at = [string]$Release.published_at; html_url = [string]$Release.html_url
             assets = @(foreach ($asset in $assets) {
                 [pscustomobject][ordered]@{ id = [long]$asset.id; name = [string]$asset.name
@@ -88,7 +108,7 @@ function Get-OfficialAdapterTagSource {
 
 function Read-OfficialAdapterReleaseCandidate {
     [CmdletBinding()]
-    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$SourceSha)
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$SourceSha, [switch]$AllowPreview)
     $candidate = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
     $catalog = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'official-adapters.json') -Raw | ConvertFrom-Json
     if ($catalog.schemaVersion -ne 1 -or @($catalog.adapters).Count -ne 5 -or
@@ -96,11 +116,15 @@ function Read-OfficialAdapterReleaseCandidate {
         @($candidate.adapters).Count -ne @($catalog.adapters).Count) {
         throw 'The shared official candidate differs from the product source or official catalog.'
     }
+    if ($candidate.selection -and ($candidate.selection -cnotin @('stable', 'explicit-preview') -or
+        ($candidate.selection -ceq 'explicit-preview' -and -not $AllowPreview))) {
+        throw 'The default official aggregate cannot consume an explicit preview candidate.'
+    }
     foreach ($entry in $catalog.adapters) {
         $matches = @($candidate.adapters | Where-Object { $_.adapterId -ceq $entry.adapterId -and $_.repository -ceq $entry.repository })
         if ($matches.Count -ne 1) { throw 'The shared candidate must identify each official provider exactly once.' }
         $null = Get-OfficialAdapterReleaseSnapshot -Release $matches[0].release -AdapterId $entry.adapterId `
-            -Repository $entry.repository -SourceSha $matches[0].sourceSha
+            -Repository $entry.repository -SourceSha $matches[0].sourceSha -AllowPreview:$AllowPreview
     }
     $candidate
 }
