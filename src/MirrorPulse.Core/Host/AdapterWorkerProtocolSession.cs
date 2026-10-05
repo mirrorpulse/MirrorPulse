@@ -57,13 +57,14 @@ public sealed class AdapterWorkerProtocolSession
         if (hello.ValueKind != JsonValueKind.Object) throw new InvalidDataException("InvalidHello");
         if (hello.TryGetProperty("supportedVersions", out JsonElement versions))
         {
-            minimum = versions.GetProperty("minimum").GetInt32();
-            maximum = versions.GetProperty("maximum").GetInt32();
+            if (versions.ValueKind != JsonValueKind.Object || !versions.TryGetProperty("minimum", out JsonElement offeredMinimum) ||
+                !versions.TryGetProperty("maximum", out JsonElement offeredMaximum) || !ReadVersion(offeredMinimum, out minimum) ||
+                !ReadVersion(offeredMaximum, out maximum)) throw new InvalidDataException("InvalidVersionOffer");
         }
         else if (hello.TryGetProperty("minimumProtocolVersion", out JsonElement legacyMinimum))
         {
-            minimum = legacyMinimum.GetInt32();
-            maximum = hello.GetProperty("maximumProtocolVersion").GetInt32();
+            if (!ReadVersion(legacyMinimum, out minimum) || !hello.TryGetProperty("maximumProtocolVersion", out JsonElement legacyMaximum) ||
+                !ReadVersion(legacyMaximum, out maximum)) throw new InvalidDataException("InvalidVersionOffer");
         }
         if (minimum < 1 || maximum < minimum) throw new InvalidDataException("InvalidVersionOffer");
         int selected = Math.Min(2, Math.Min(maximum, packageVersions.Maximum));
@@ -74,6 +75,8 @@ public sealed class AdapterWorkerProtocolSession
             if (!hello.TryGetProperty("capabilities", out JsonElement capabilities) ||
                 capabilities.ValueKind != JsonValueKind.Array)
                 throw new InvalidDataException("RequiredCapabilityMissing");
+            if (capabilities.EnumerateArray().Any(c => c.ValueKind != JsonValueKind.String))
+                throw new InvalidDataException("RequiredCapabilityMissing");
             string?[] offered = capabilities.EnumerateArray().Select(c => c.GetString()).ToArray();
             if (RequiredCapabilities.Any(c => !offered.Contains(c, StringComparer.Ordinal)))
                 throw new InvalidDataException("RequiredCapabilityMissing");
@@ -82,6 +85,12 @@ public sealed class AdapterWorkerProtocolSession
         }
         else if (configured.Length > 1) throw new InvalidDataException("MultipleRootsRequireProtocolV2");
         return new(selected, configured);
+    }
+
+    private static bool ReadVersion(JsonElement value, out int version)
+    {
+        version = 0;
+        return value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out version);
     }
 
     public JsonElement CreateReadyPayload(AdapterInstance instance)

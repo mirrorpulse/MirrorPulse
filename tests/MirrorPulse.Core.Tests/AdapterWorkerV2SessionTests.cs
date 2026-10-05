@@ -86,4 +86,16 @@ public sealed class AdapterWorkerV2SessionTests
         Assert.AreEqual("ProtocolVersionUnsupported", Assert.ThrowsExactly<InvalidDataException>(() =>
             AdapterWorkerProtocolSession.Negotiate(offer.RootElement, roots, new(1, 1))).Message);
     }
+
+    [TestMethod]
+    [DataRow("{\"supportedVersions\":null}", "InvalidVersionOffer")]
+    [DataRow("{\"supportedVersions\":{\"minimum\":\"2\",\"maximum\":2}}", "InvalidVersionOffer")]
+    [DataRow("{\"minimumProtocolVersion\":1}", "InvalidVersionOffer")]
+    [DataRow("{\"supportedVersions\":{\"minimum\":2,\"maximum\":2},\"capabilities\":[false]}", "RequiredCapabilityMissing")]
+    public void MalformedOffersReturnFixedErrorsWithoutLegacyDowngrade(string json, string code)
+    {
+        using JsonDocument offer = JsonDocument.Parse(json);
+        Assert.AreEqual(code, Assert.ThrowsExactly<InvalidDataException>(() =>
+            AdapterWorkerProtocolSession.Negotiate(offer.RootElement, [], new(1, 2))).Message);
+    }
 }
