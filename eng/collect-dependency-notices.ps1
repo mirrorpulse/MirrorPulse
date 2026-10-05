@@ -7,8 +7,9 @@ New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
 $licenseDirectory = Join-Path $OutputDirectory "licenses"
 New-Item -ItemType Directory -Path $licenseDirectory -Force | Out-Null
 $components = @{}
+$sdkPin = Get-Content -LiteralPath (Join-Path $PSScriptRoot "adapter-sdk.lock.json") -Raw | ConvertFrom-Json
 $licenseSources = Get-Content -LiteralPath (Join-Path $PSScriptRoot "dependency-license-sources.json") -Raw | ConvertFrom-Json
-$projects = @(Get-ChildItem "$repositoryRoot/src", "$repositoryRoot/Adapters/src", "$repositoryRoot/Adapters/official" -Filter "*.csproj" -File -Recurse |
+$projects = @(Get-ChildItem "$repositoryRoot/src", "$repositoryRoot/Adapters/official" -Filter "*.csproj" -File -Recurse |
     Where-Object { $_.FullName -notmatch '[\\/](bin|obj)[\\/]' })
 foreach ($project in $projects) {
     $assetsPath = (& dotnet msbuild $project.FullName -nologo -getProperty:ProjectAssetsFile | Out-String).Trim()
@@ -92,10 +93,15 @@ foreach ($project in $projects) {
             }
             $copied += $destination
         }
+        $packageSource = "https://www.nuget.org/packages/$id/$version"
+        if ($id -ceq $sdkPin.packageId) {
+            if ($version -cne $sdkPin.version) { throw "The restored SDK version differs from the fixed release." }
+            $packageSource = "https://github.com/MirrorPulse/adapter-template/releases/tag/$($sdkPin.tag)"
+        }
         $components[$package.Key] = [ordered]@{
             id=$id;version=$version;kind=$package.Value.kind;sha512=$hash;nugetContentHash=$metadata.contentHash
             licenseType=$licenseKind;license=$licenseValue;licenseTextSource=$licenseSource;noticeFiles=@($copied | Sort-Object -Unique)
-            source="https://www.nuget.org/packages/$id/$version"
+            source=$packageSource
         }
     }
 }

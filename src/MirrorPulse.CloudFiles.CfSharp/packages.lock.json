@@ -21,6 +21,12 @@
           "Microsoft.Data.Sqlite": "8.0.31"
         }
       },
+      "MirrorPulse.Adapter.Sdk": {
+        "type": "Direct",
+        "requested": "[0.2.0, 0.2.0]",
+        "resolved": "0.2.0",
+        "contentHash": "xzz57ZRJg8nQzkGQFIyJp+blVNSLzs+l6XGNnyXj/mfJuur6hEVPkTzNcj27K+0IGWyd9aDz4qdH31eDwakSJg=="
+      },
       "CfSharp.Native": {
         "type": "Transitive",
         "resolved": "0.1.0-preview.3",
@@ -60,9 +66,6 @@
         "dependencies": {
           "SQLitePCLRaw.core": "2.1.12"
         }
-      },
-      "mirrorpulse.adapter.sdk": {
-        "type": "Project"
       },
       "mirrorpulse.core": {
         "type": "Project",
