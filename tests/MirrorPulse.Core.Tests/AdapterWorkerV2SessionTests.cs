@@ -1,0 +1,63 @@
+using System.Text.Json;
+using MirrorPulse.Core.Configuration;
+using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.Host;
+using MirrorPulse.Core.Security;
+using MirrorPulse.Core.State;
+using MirrorPulse.Worker.ProtocolFixture;
+
+namespace MirrorPulse.Core.Tests;
+
+[TestClass]
+public sealed class AdapterWorkerV2SessionTests
+{
+    [TestMethod]
+    public async Task RealWorkerProcessNegotiatesTwoRootsWithTheProductionSupervisor()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "MirrorPulse-tests", Guid.NewGuid().ToString("N"));
+        string executable = Path.ChangeExtension(typeof(ProtocolFixtureMarker).Assembly.Location, ".exe");
+        AdapterId adapter = AdapterId.Parse("example.protocolfixture");
+        InstanceId instanceId = InstanceId.New();
+        InstallId installId = InstallId.New();
+        var manifest = new AdapterManifest(1, adapter, "Fixture", "1.0.0", new(1, 2),
+            new Dictionary<string, string> { ["win-x64"] = Path.GetFileName(executable), ["win-arm64"] = Path.GetFileName(executable) },
+            new(null), new(null, null), new(true, false, true, true), ["en-US"], "1.0.0");
+        var installed = new InstalledAdapter(manifest, installId, Path.GetDirectoryName(executable)!,
+            new(new string('A', 64)), AdapterInstallSource.LocalFile, null, true, DateTimeOffset.UtcNow, AdapterLifecycleState.Installed);
+        var instance = new AdapterInstance(adapter, installId, instanceId, "Fixture", new Dictionary<string, string>
+        {
+            ["root.left.sourcePath"] = "left-source",
+            ["root.right.sourcePath"] = "right-source",
+        }, [], Path.Combine(directory, "files"), Path.Combine(directory, "transfers"), true,
+            AdapterLifecycleState.Enabled, null, DateTimeOffset.UtcNow);
+        RootRegistration Root(string key) => new(adapter, instanceId, RootId.New(), key, key, key, false, RootRegistrationState.Active, DateTimeOffset.UtcNow);
+        var topology = new MirrorPulseAdapterTopology([installed], [instance], [Root("left"), Root("right")]);
+        try
+        {
+            await using var catalog = await MirrorPulseProductCatalog.OpenAsync(new(Path.Combine(directory, "sync"), Path.Combine(directory, "data")));
+            await catalog.SaveAdapterTopologyAsync(topology);
+            await using var supervisor = new AdapterInstanceProcessSupervisor(catalog, new WindowsCredentialManagerStore());
+            await supervisor.StartAsync(topology);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            while ((await catalog.ReadInstanceRuntimeStateAsync(instanceId, timeout.Token))?.Phase != "Connected")
+                await Task.Delay(25, timeout.Token);
+        }
+        finally { Directory.Delete(directory, true); }
+    }
+
+    [TestMethod]
+    public void LegacyWorkerCannotNegotiateMultipleRootsOrExceedItsSignedManifest()
+    {
+        AdapterId adapter = AdapterId.Parse("example.fixture");
+        InstanceId instance = InstanceId.New();
+        RootRegistration Root(string key) => new(adapter, instance, RootId.New(), key, key, key, false, RootRegistrationState.Disabled, DateTimeOffset.UtcNow);
+        RootRegistration[] roots = [Root("left"), Root("right")];
+        using JsonDocument legacy = JsonDocument.Parse("{}");
+        Assert.AreEqual(1, AdapterWorkerProtocolSession.Negotiate(legacy.RootElement, roots[..1], new(1, 1)).ProtocolVersion);
+        InvalidDataException error = Assert.ThrowsExactly<InvalidDataException>(() => AdapterWorkerProtocolSession.Negotiate(legacy.RootElement, roots, new(1, 1)));
+        Assert.AreEqual("MultipleRootsRequireProtocolV2", error.Message);
+        using JsonDocument offer = JsonDocument.Parse("{\"supportedVersions\":{\"minimum\":2,\"maximum\":2},\"capabilities\":[]}");
+        Assert.AreEqual("ProtocolVersionUnsupported", Assert.ThrowsExactly<InvalidDataException>(() =>
+            AdapterWorkerProtocolSession.Negotiate(offer.RootElement, roots, new(1, 1))).Message);
+    }
+}

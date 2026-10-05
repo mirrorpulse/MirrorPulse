@@ -1,0 +1,86 @@
+using System.Collections.ObjectModel;
+using System.Text.Json;
+using MirrorPulse.Core.Contracts;
+
+namespace MirrorPulse.Core.Host;
+
+/// <summary>Owns the negotiated wire version and configured root bindings for one session.</summary>
+public sealed class AdapterWorkerProtocolSession
+{
+    private static readonly string[] RequiredCapabilities =
+        ["root-addresses", "stable-operations", "conditional-targets", "bounded-streams", "cancel-ack"];
+    private readonly RootRegistration[] _roots;
+
+    private AdapterWorkerProtocolSession(int version, RootRegistration[] roots)
+    {
+        ProtocolVersion = version;
+        _roots = roots;
+    }
+
+    public int ProtocolVersion { get; }
+
+    public static AdapterWorkerProtocolSession Negotiate(JsonElement hello, IEnumerable<RootRegistration> roots,
+        ProtocolVersionRange packageVersions)
+    {
+        ArgumentNullException.ThrowIfNull(roots);
+        ArgumentNullException.ThrowIfNull(packageVersions);
+        RootRegistration[] configured = roots.Where(r => r.State != RootRegistrationState.Removed).ToArray();
+        int minimum = 1;
+        int maximum = 1;
+        if (hello.ValueKind != JsonValueKind.Object) throw new InvalidDataException("InvalidHello");
+        if (hello.TryGetProperty("supportedVersions", out JsonElement versions))
+        {
+            minimum = versions.GetProperty("minimum").GetInt32();
+            maximum = versions.GetProperty("maximum").GetInt32();
+        }
+        else if (hello.TryGetProperty("minimumProtocolVersion", out JsonElement legacyMinimum))
+        {
+            minimum = legacyMinimum.GetInt32();
+            maximum = hello.GetProperty("maximumProtocolVersion").GetInt32();
+        }
+        if (minimum < 1 || maximum < minimum) throw new InvalidDataException("InvalidVersionOffer");
+        int selected = Math.Min(2, Math.Min(maximum, packageVersions.Maximum));
+        if (selected < Math.Max(minimum, packageVersions.Minimum))
+            throw new InvalidDataException("ProtocolVersionUnsupported");
+        if (selected == 2)
+        {
+            if (!hello.TryGetProperty("capabilities", out JsonElement capabilities) ||
+                capabilities.ValueKind != JsonValueKind.Array)
+                throw new InvalidDataException("RequiredCapabilityMissing");
+            string?[] offered = capabilities.EnumerateArray().Select(c => c.GetString()).ToArray();
+            if (RequiredCapabilities.Any(c => !offered.Contains(c, StringComparer.Ordinal)))
+                throw new InvalidDataException("RequiredCapabilityMissing");
+            if (configured.Length == 0 || configured.Select(r => r.UniquenessKey).Distinct(StringComparer.Ordinal).Count() != configured.Length)
+                throw new InvalidDataException("InvalidRoots");
+        }
+        else if (configured.Length > 1) throw new InvalidDataException("MultipleRootsRequireProtocolV2");
+        return new(selected, configured);
+    }
+
+    public JsonElement CreateReadyPayload(AdapterInstance instance)
+    {
+        ArgumentNullException.ThrowIfNull(instance);
+        if (ProtocolVersion == 1) return JsonSerializer.SerializeToElement(instance.Configuration);
+        return JsonSerializer.SerializeToElement(new
+        {
+            selectedVersion = ProtocolVersion,
+            capabilities = RequiredCapabilities,
+            roots = _roots.Select(root => new
+            {
+                rootKey = root.UniquenessKey,
+                enabled = root.State == RootRegistrationState.Active,
+                configuration = RootConfiguration(instance.Configuration, root.UniquenessKey),
+            }).ToArray(),
+            configuration = instance.Configuration,
+        });
+    }
+
+    private static ReadOnlyDictionary<string, string> RootConfiguration(IReadOnlyDictionary<string, string> configuration, string rootKey)
+    {
+        var result = new Dictionary<string, string>(configuration.Where(pair => !pair.Key.StartsWith("root.", StringComparison.Ordinal)), StringComparer.Ordinal);
+        string prefix = "root." + rootKey + ".";
+        foreach ((string key, string value) in configuration)
+            if (key.StartsWith(prefix, StringComparison.Ordinal)) result[key[prefix.Length..]] = value;
+        return new ReadOnlyDictionary<string, string>(result);
+    }
+}

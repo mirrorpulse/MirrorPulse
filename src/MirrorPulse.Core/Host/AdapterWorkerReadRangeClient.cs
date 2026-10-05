@@ -27,12 +27,17 @@ public sealed class AdapterWorkerReadRangeClient
     private long _length;
     private bool _closed;
 
-    public AdapterWorkerReadRangeClient(Stream pipe, InstanceId instanceId, WorkerSessionId sessionId)
+    public AdapterWorkerReadRangeClient(Stream pipe, InstanceId instanceId, WorkerSessionId sessionId,
+        AdapterWorkerProtocolSession? protocol = null)
     {
         _pipe = pipe ?? throw new ArgumentNullException(nameof(pipe));
         _instanceId = instanceId;
         _sessionId = sessionId;
+        Protocol = protocol;
     }
+
+    public AdapterWorkerProtocolSession? Protocol { get; }
+    public int ProtocolVersion => Protocol?.ProtocolVersion ?? 1;
 
     public async ValueTask<Stream> ReadRangeAsync(
         MirrorPulseWorkerReadRangeRequest request,
@@ -121,6 +126,8 @@ public sealed class AdapterWorkerReadRangeClient
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(frame);
+        if (frame.ProtocolVersion != ProtocolVersion)
+            frame = new(ProtocolVersion, frame.MessageType, frame.RequestId, frame.InstanceId, frame.WorkerSessionId, frame.IsResponse, frame.Payload);
         byte[] payload = ControlFrameJsonCodec.Encode(frame);
         byte[] prefix = new byte[4];
         BinaryPrimitives.WriteUInt32LittleEndian(prefix, checked((uint)payload.Length));
@@ -185,7 +192,7 @@ public sealed class AdapterWorkerReadRangeClient
         {
             if (_closed || _pending is null || frame.RequestId != _requestId ||
                 frame.InstanceId != _instanceId || frame.WorkerSessionId != _sessionId ||
-                !frame.IsResponse || frame.ProtocolVersion != 1)
+                !frame.IsResponse || frame.ProtocolVersion != ProtocolVersion)
             {
                 throw new InvalidDataException("The Worker response has no matching range request.");
             }

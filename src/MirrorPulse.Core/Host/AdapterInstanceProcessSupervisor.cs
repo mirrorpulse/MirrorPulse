@@ -262,6 +262,7 @@ public sealed class AdapterInstanceProcessSupervisor :
                 request.ExecutablePath, request.WorkingDirectory, request.Arguments,
                 new Dictionary<string, string> { ["MP_TRANSFER_CACHE_DIR"] = instance.TransferCacheDirectory });
             Directory.CreateDirectory(instance.TransferCacheDirectory);
+            int selectedVersion = 1;
             await using var pipe = SecureNamedPipeServerFactory.Create(new NamedPipeServerOptions(pipeName)
             {
                 PipeOptions = PipeOptions.Asynchronous | PipeOptions.FirstPipeInstance,
@@ -279,7 +280,8 @@ public sealed class AdapterInstanceProcessSupervisor :
                     throw new UnauthorizedAccessException("The launched Worker exited before its pipe handshake.");
                 }
                 NamedPipePeerIdentity.ValidateClient(pipe, worker.ProcessId, worker.Process.SessionId);
-                await ServeWorkerAsync(pipe, instance, sessionId, cancellationToken).ConfigureAwait(false);
+                await ServeWorkerAsync(pipe, topology, instance, sessionId, version => selectedVersion = version,
+                    cancellationToken).ConfigureAwait(false);
             }
             finally
             {
@@ -288,7 +290,7 @@ public sealed class AdapterInstanceProcessSupervisor :
                     try
                     {
                         using var stopTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-                        await WriteAsync(pipe, new ControlFrameEnvelope(1, "Stop", Guid.NewGuid(),
+                        await WriteAsync(pipe, new ControlFrameEnvelope(selectedVersion, "Stop", Guid.NewGuid(),
                             instance.InstanceId, sessionId, false, JsonSerializer.SerializeToElement(new { })),
                             stopTimeout.Token).ConfigureAwait(false);
                         await worker.WaitForExitAsync(stopTimeout.Token).ConfigureAwait(false);
@@ -329,22 +331,40 @@ public sealed class AdapterInstanceProcessSupervisor :
 
     private async Task ServeWorkerAsync(
         NamedPipeServerStream pipe,
+        MirrorPulseAdapterTopology topology,
         AdapterInstance instance,
         WorkerSessionId sessionId,
+        Action<int> selectProtocol,
         CancellationToken cancellationToken)
     {
         using var helloDeadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         helloDeadline.CancelAfter(TimeSpan.FromSeconds(5));
         ControlFrameEnvelope hello = await ReadAsync(pipe, helloDeadline.Token).ConfigureAwait(false);
         ValidateFrame(hello, "Hello", instance.InstanceId, sessionId);
-        var channel = new AdapterWorkerReadRangeClient(pipe, instance.InstanceId, sessionId);
+        AdapterWorkerProtocolSession protocol;
+        try
+        {
+            protocol = AdapterWorkerProtocolSession.Negotiate(hello.Payload,
+                topology.Roots.Where(root => root.InstanceId == instance.InstanceId),
+                topology.Installations.Single(i => i.InstallId == instance.InstallId).Manifest.Protocol);
+        }
+        catch (InvalidDataException exception)
+        {
+            await WriteAsync(pipe, new ControlFrameEnvelope(1, "HandshakeRejected", hello.RequestId,
+                instance.InstanceId, sessionId, true, JsonSerializer.SerializeToElement(new { code = exception.Message })),
+                cancellationToken).ConfigureAwait(false);
+            await SetPhaseAsync(instance.InstanceId, "Worker error", cancellationToken, exception.Message).ConfigureAwait(false);
+            return;
+        }
+        var channel = new AdapterWorkerReadRangeClient(pipe, instance.InstanceId, sessionId, protocol);
+        selectProtocol(protocol.ProtocolVersion);
         var upload = new AdapterWorkerUploadClient(channel, instance.InstanceId, sessionId);
         var stat = new AdapterWorkerStatClient(channel, instance.InstanceId, sessionId);
         var directory = new AdapterWorkerDirectoryPageClient(channel, instance.InstanceId, sessionId);
         var mutations = new AdapterWorkerMutationClient(channel, instance.InstanceId, sessionId);
         var instanceOperations = new SemaphoreSlim(1, 1);
         await channel.WriteControlAsync(new ControlFrameEnvelope(1, "Ready", hello.RequestId,
-            instance.InstanceId, sessionId, true, JsonSerializer.SerializeToElement(instance.Configuration)),
+            instance.InstanceId, sessionId, true, protocol.CreateReadyPayload(instance)),
             cancellationToken).ConfigureAwait(false);
         if (!_connected.TryAdd(instance.InstanceId, channel))
         {
@@ -367,6 +387,8 @@ public sealed class AdapterInstanceProcessSupervisor :
             while (true)
             {
                 ControlFrameEnvelope frame = await ReadAsync(pipe, cancellationToken).ConfigureAwait(false);
+                if (frame.ProtocolVersion != protocol.ProtocolVersion)
+                    throw new InvalidDataException("The Worker changed its selected protocol version.");
                 if (frame.IsResponse)
                 {
                     if (channel.CanHandle(frame))
@@ -396,7 +418,7 @@ public sealed class AdapterInstanceProcessSupervisor :
                     continue;
                 }
 
-                ValidateFrame(frame, null, instance.InstanceId, sessionId);
+                ValidateFrame(frame, null, instance.InstanceId, sessionId, protocol.ProtocolVersion);
                 switch (frame.MessageType)
                 {
                     case "CredentialRequest":
@@ -528,9 +550,10 @@ public sealed class AdapterInstanceProcessSupervisor :
         ControlFrameEnvelope frame,
         string? expectedMessage,
         InstanceId instanceId,
-        WorkerSessionId sessionId)
+        WorkerSessionId sessionId,
+        int protocolVersion = 1)
     {
-        if (frame.ProtocolVersion != 1 || frame.InstanceId != instanceId || frame.WorkerSessionId != sessionId ||
+        if (frame.ProtocolVersion != protocolVersion || frame.InstanceId != instanceId || frame.WorkerSessionId != sessionId ||
             frame.IsResponse || (expectedMessage is not null && frame.MessageType != expectedMessage))
         {
             throw new InvalidDataException("The Adapter control frame does not belong to this session.");

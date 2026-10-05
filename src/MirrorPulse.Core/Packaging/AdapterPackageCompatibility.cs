@@ -7,7 +7,7 @@ namespace MirrorPulse.Core.Packaging;
 public static class AdapterPackageCompatibility
 {
     public static Version CurrentProductVersion => typeof(ProductInfo).Assembly.GetName().Version ?? new Version(0, 0, 0);
-    public const int CurrentWorkerProtocol = 1;
+    public const int CurrentWorkerProtocol = 2;
 
     public static void Validate(AdapterManifest manifest, string runtimeIdentifier, Version? productVersion = null)
     {
@@ -15,7 +15,7 @@ public static class AdapterPackageCompatibility
         Diagnostic[] invalid = AdapterManifestValidator.Validate(manifest).Where(item => item.Severity == DiagnosticSeverity.Error).ToArray();
         if (invalid.Length > 0 || !Version.TryParse(manifest.MinimumMirrorPulseVersion, out Version? minimum) ||
             Normalize(minimum) > Normalize(productVersion ?? CurrentProductVersion) ||
-            manifest.Protocol.Minimum > CurrentWorkerProtocol || manifest.Protocol.Maximum < CurrentWorkerProtocol ||
+            manifest.Protocol.Minimum > CurrentWorkerProtocol || manifest.Protocol.Maximum < 1 ||
             runtimeIdentifier is not ("win-x64" or "win-arm64") || !manifest.Entrypoints.ContainsKey(runtimeIdentifier))
         {
             throw new InvalidDataException("The Adapter requires an incompatible product version, Worker protocol or runtime.");

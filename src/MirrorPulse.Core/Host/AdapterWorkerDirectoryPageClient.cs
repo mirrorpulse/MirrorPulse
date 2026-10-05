@@ -105,7 +105,7 @@ public sealed class AdapterWorkerDirectoryPageClient
         {
             if (_closed || _pending is null || frame.RequestId != _requestId ||
                 frame.InstanceId != _instanceId || frame.WorkerSessionId != _sessionId ||
-                !frame.IsResponse || frame.ProtocolVersion != 1)
+                !frame.IsResponse || frame.ProtocolVersion != _channel.ProtocolVersion)
             {
                 throw new InvalidDataException("The Worker response has no matching directory request.");
             }

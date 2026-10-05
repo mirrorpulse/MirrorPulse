@@ -248,6 +248,12 @@
           "Microsoft.Data.Sqlite": "[8.0.31, )"
         }
       },
+      "mirrorpulse.worker.protocolfixture": {
+        "type": "Project",
+        "dependencies": {
+          "MirrorPulse.Core": "[1.0.0, )"
+        }
+      },
       "CfSharp": {
         "type": "CentralTransitive",
         "requested": "[0.1.0-preview.3, )",
