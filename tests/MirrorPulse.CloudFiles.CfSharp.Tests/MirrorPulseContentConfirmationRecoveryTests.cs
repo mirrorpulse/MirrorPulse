@@ -79,7 +79,7 @@ public sealed class MirrorPulseContentConfirmationRecoveryTests
                 {
                     fixture.Faults.FailNextCommit = true;
                     pending = await MirrorPulseContentConfirmation.ConfirmAsync(fixture.File, proof, token);
-                    TestContext.WriteLine($"Confirmation matrix: projectionFaultAttempt={attempt + 1}; outcome={pending.Outcome}; stage={pending.Stage}; nativeApplied={pending.NativeApplied}; nativeVerified={pending.NativeConfirmationVerified}; projectionCommitted={pending.DurableProjectionCommitted}; nativeHResult={pending.NativeErrorHResult:X8}; projectionHResult={pending.ProjectionErrorHResult:X8}.");
+                    TestContext.WriteLine($"Confirmation matrix: projectionFaultAttempt={attempt + 1}; outcome={pending.Outcome}; stage={pending.Stage}; nativeStage={pending.NativeStage}; identityPrepared={pending.NativeIdentityPrepared}; nativeApplied={pending.NativeApplied}; nativeVerified={pending.NativeConfirmationVerified}; projectionCommitted={pending.DurableProjectionCommitted}; preparationHResult={pending.PreparationHResult:X8}; markHResult={pending.NativeMarkHResult:X8}; nativeHResult={pending.NativeErrorHResult:X8}; projectionHResult={pending.ProjectionErrorHResult:X8}.");
                     await fixture.Catalog.SaveContentConfirmationReceiptAsync(intent.OperationId, pending, CancellationToken.None);
                     if (pending.NativeConfirmationVerified) break;
                     Assert.IsTrue(pending.Outcome is MirrorPulseContentConfirmationOutcome.ProtectionLost or MirrorPulseContentConfirmationOutcome.Busy,
