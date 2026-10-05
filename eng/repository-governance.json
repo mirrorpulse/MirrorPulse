@@ -8,7 +8,7 @@
     { "name": "adapter-template", "checks": ["build-and-test (windows-latest)", "build-and-test (windows-11-arm)", "validate-main-pr"], "tagPatterns": ["refs/tags/v*", "refs/tags/sdk-v*"] },
     { "name": "adapter-local", "checks": ["build-and-test (windows-latest)", "build-and-test (windows-11-arm)", "validate-main-pr"], "tagPatterns": ["refs/tags/v*"] },
     { "name": "adapter-webdav", "checks": ["build-and-test (windows-latest)", "build-and-test (windows-11-arm)", "validate-main-pr"], "tagPatterns": ["refs/tags/v*"] },
-    { "name": "adapter-smb", "checks": ["build-and-test", "validate-main-pr"], "tagPatterns": ["refs/tags/v*"] },
+    { "name": "adapter-smb", "checks": ["build-and-test (windows-latest)", "build-and-test (windows-11-arm)", "validate-main-pr"], "tagPatterns": ["refs/tags/v*"] },
     { "name": "adapter-ftp", "checks": ["build-and-test", "validate-main-pr"], "tagPatterns": ["refs/tags/v*"] },
     { "name": "adapter-sftp", "checks": ["build-and-test", "validate-main-pr"], "tagPatterns": ["refs/tags/v*"] }
   ]
