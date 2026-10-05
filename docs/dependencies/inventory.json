@@ -462,6 +462,20 @@
       "source": "https://www.nuget.org/packages/Microsoft.WindowsDesktop.App.Runtime.win-x64/10.0.12"
     },
     {
+      "id": "MirrorPulse.Adapter.Sdk",
+      "version": "0.2.0",
+      "kind": "restored",
+      "sha512": "xzz57ZRJg8nQzkGQFIyJp+blVNSLzs+l6XGNnyXj/mfJuur6hEVPkTzNcj27K+0IGWyd9aDz4qdH31eDwakSJg==",
+      "nugetContentHash": "xzz57ZRJg8nQzkGQFIyJp+blVNSLzs+l6XGNnyXj/mfJuur6hEVPkTzNcj27K+0IGWyd9aDz4qdH31eDwakSJg==",
+      "licenseType": "expression",
+      "license": "Apache-2.0",
+      "licenseTextSource": null,
+      "noticeFiles": [
+        "MirrorPulse.Adapter.Sdk.0.2.0.LICENSE"
+      ],
+      "source": "https://github.com/MirrorPulse/adapter-template/releases/tag/sdk-v0.2.0"
+    },
+    {
       "id": "SQLitePCLRaw.bundle_e_sqlite3",
       "version": "2.1.12",
       "kind": "restored",

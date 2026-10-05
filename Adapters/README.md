@@ -1,14 +1,9 @@
-# MirrorPulse Adapters
+# Adapter code in the product repository
 
-This repository template is the starting point for an independently packaged MirrorPulse Adapter Worker.
+The canonical Worker SDK, runnable example, package template and conformance tools live in [MirrorPulse/adapter-template](https://github.com/MirrorPulse/adapter-template). The product references its fixed SDK package through `Directory.Packages.props`; SDK source is not copied here.
 
-## Layout
+`official/` contains development integration projects for protocol providers. The installed product uses independently signed `.mpadapter` releases from the official Adapter repositories. These projects are compatibility implementations and do not establish that every official Worker supports v2 multi-root routing.
 
-- `src/` contains reusable Worker SDK code.
-- `samples/` contains a minimal executable Worker.
-- `template/` contains the manifest and `.mpadapter` package skeleton.
-- `eng/` contains repository validation and packaging scripts.
+`samples/`, `template/` and `eng/` retain older development scaffolding. New providers should use the canonical repository, its language-neutral [v2 specification](https://github.com/MirrorPulse/adapter-template/blob/main/spec/worker-v2.md) and downloadable conformance runners.
 
-Adapters communicate with MirrorPulse over the current-user Named Pipe contract and receive configuration, credentials references, source-directory grants, and cache paths from MirrorPulse at runtime.
-
-The template does not implement a storage protocol. Provider repositories should add their own protocol code and publish a signed `.mpadapter` release.
+See [SDK dependency verification](../docs/adapter-sdk.md) for the pinned package, local feed and update procedure.

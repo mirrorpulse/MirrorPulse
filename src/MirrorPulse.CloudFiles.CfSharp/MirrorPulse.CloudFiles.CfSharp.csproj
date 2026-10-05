@@ -10,7 +10,7 @@
     <PackageReference Include="CfSharp" />
     <PackageReference Include="CfSharp.Storage.Sqlite" />
     <ProjectReference Include="..\MirrorPulse.Core\MirrorPulse.Core.csproj" />
-    <ProjectReference Include="..\..\Adapters\src\MirrorPulse.Adapter.Sdk\MirrorPulse.Adapter.Sdk.csproj" />
+    <PackageReference Include="MirrorPulse.Adapter.Sdk" />
   </ItemGroup>
 
 </Project>

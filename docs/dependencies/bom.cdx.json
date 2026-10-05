@@ -597,6 +597,23 @@
     },
     {
       "type": "library",
+      "name": "MirrorPulse.Adapter.Sdk",
+      "version": "0.2.0",
+      "purl": "pkg:nuget/MirrorPulse.Adapter.Sdk@0.2.0",
+      "licenses": [
+        {
+          "expression": "Apache-2.0"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "c73cf9ed944983c9d0ce4190148c89a7e6e554d48bcecfa5e9718d9f25e3fe67c9baeafa84454f913ccd723dbb2bed08196c9df5a0f3e2a747df5783c1a91226"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "name": "SQLitePCLRaw.bundle_e_sqlite3",
       "version": "2.1.12",
       "purl": "pkg:nuget/SQLitePCLRaw.bundle_e_sqlite3@2.1.12",

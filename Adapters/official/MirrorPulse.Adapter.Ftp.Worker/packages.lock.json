@@ -8,8 +8,11 @@
         "resolved": "54.2.1",
         "contentHash": "Rv7MWPUR8orjoSHoDgH2Yp8JC7on6T4dh6+l76lvplu8p4nGmI+tl97hsiERy06HqigxCdhAccuZAv978d7aeQ=="
       },
-      "mirrorpulse.adapter.sdk": {
-        "type": "Project"
+      "MirrorPulse.Adapter.Sdk": {
+        "type": "Direct",
+        "requested": "[0.2.0, 0.2.0]",
+        "resolved": "0.2.0",
+        "contentHash": "xzz57ZRJg8nQzkGQFIyJp+blVNSLzs+l6XGNnyXj/mfJuur6hEVPkTzNcj27K+0IGWyd9aDz4qdH31eDwakSJg=="
       }
     },
     "net10.0-windows7.0/win-arm64": {},

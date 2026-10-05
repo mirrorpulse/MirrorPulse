@@ -20,7 +20,7 @@
     <ProjectReference Include="..\..\src\MirrorPulse.Core\MirrorPulse.Core.csproj" />
     <ProjectReference Include="..\..\src\MirrorPulse.Control\MirrorPulse.Control.csproj" />
     <ProjectReference Include="..\..\src\MirrorPulse.CloudFiles.CfSharp\MirrorPulse.CloudFiles.CfSharp.csproj" />
-    <ProjectReference Include="..\..\Adapters\src\MirrorPulse.Adapter.Sdk\MirrorPulse.Adapter.Sdk.csproj" />
+    <PackageReference Include="MirrorPulse.Adapter.Sdk" />
     <ProjectReference Include="..\..\Adapters\official\MirrorPulse.Adapter.Ftp.Worker\MirrorPulse.Adapter.Ftp.Worker.csproj" />
     <ProjectReference Include="..\..\Adapters\official\MirrorPulse.Adapter.Sftp.Worker\MirrorPulse.Adapter.Sftp.Worker.csproj" />
   </ItemGroup>

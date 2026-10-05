@@ -19,7 +19,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\MirrorPulse.Core\MirrorPulse.Core.csproj" />
     <ProjectReference Include="..\..\src\MirrorPulse.CloudFiles.CfSharp\MirrorPulse.CloudFiles.CfSharp.csproj" />
-    <ProjectReference Include="..\..\Adapters\src\MirrorPulse.Adapter.Sdk\MirrorPulse.Adapter.Sdk.csproj" />
+    <PackageReference Include="MirrorPulse.Adapter.Sdk" />
     <ProjectReference Include="..\MirrorPulse.CfSharp.CrashProbe\MirrorPulse.CfSharp.CrashProbe.csproj" />
   </ItemGroup>
 

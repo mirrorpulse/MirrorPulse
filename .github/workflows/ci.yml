@@ -29,7 +29,9 @@ jobs:
           global-json-file: global.json
 
       - name: Restore
-        run: dotnet restore MirrorPulse.sln --locked-mode
+        run: |
+          pwsh ./eng/restore-adapter-sdk.ps1
+          dotnet restore MirrorPulse.sln --locked-mode
 
       - name: Verify formatting
         run: pwsh ./eng/verify-format.ps1
@@ -119,7 +121,9 @@ jobs:
           global-json-file: global.json
 
       - name: Restore
-        run: dotnet restore MirrorPulse.sln --locked-mode
+        run: |
+          pwsh ./eng/restore-adapter-sdk.ps1
+          dotnet restore MirrorPulse.sln --locked-mode
 
       - name: Install SFTP fixture dependencies
         run: pwsh ./eng/setup-test-environment.ps1
@@ -211,7 +215,9 @@ jobs:
           global-json-file: global.json
 
       - name: Restore package verifier
-        run: dotnet restore tests/MirrorPulse.Core.Tests/MirrorPulse.Core.Tests.csproj --locked-mode
+        run: |
+          pwsh ./eng/restore-adapter-sdk.ps1
+          dotnet restore tests/MirrorPulse.Core.Tests/MirrorPulse.Core.Tests.csproj --locked-mode
 
       - name: Aggregate latest official Adapter releases
         shell: pwsh

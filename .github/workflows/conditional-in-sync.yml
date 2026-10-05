@@ -28,7 +28,9 @@ jobs:
           global-json-file: global.json
 
       - name: Restore locked test dependencies
-        run: dotnet restore tests/MirrorPulse.CloudFiles.CfSharp.Tests --locked-mode
+        run: |
+          pwsh ./eng/restore-adapter-sdk.ps1
+          dotnet restore tests/MirrorPulse.CloudFiles.CfSharp.Tests --locked-mode
 
       - name: Build native test boundary
         run: dotnet build tests/MirrorPulse.CloudFiles.CfSharp.Tests --configuration Release --no-restore
