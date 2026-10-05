@@ -40,9 +40,28 @@ grant trustworthy behavior, and current-user ACLs do not distinguish every
 process under the same account.
 
 Worker environment inheritance and peer verification still need hardening.
+
+## Credential configuration transactions
+
+Host creates and rotates credentials under new opaque references, then atomically
+publishes the instance configuration in the product catalog. Failed writes and
+failed catalog commits leave the previous credential unchanged. Ordinary
+configuration patches cannot inject secret fields or managed references. Required
+credentials cannot be removed.
+
+The catalog stores an outbox of references awaiting cleanup, never credential
+bytes. After commit, unreferenced credentials are retired. A failed retirement
+remains pending and is retried when Host opens the catalog; the committed instance
+keeps its valid new credential. Recovery preserves every currently referenced
+credential. Credential removal detaches the pointer before retirement. Rotation
+and removal are available through the typed control contract; CLI input wiring
+and applying changes to running Workers are separate implementation steps.
+
+## Remaining work
+
 Third-party publisher trust, unsigned developer-mode installation, Windows
 path canonicalization and installed-package revalidation are incomplete.
-Configuration validation, bounded diagnostic exports and end-to-end safe error
+Credential CLI input wiring and end-to-end safe error
 presentation still require further work. Do not describe those pending controls
 as implemented.
 

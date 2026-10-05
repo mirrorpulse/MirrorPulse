@@ -109,7 +109,9 @@ public sealed record InstanceConfigureArguments(
     string InstanceId,
     string DisplayName,
     IReadOnlyDictionary<string, string> Configuration,
-    IReadOnlyDictionary<string, string> RootLabels) : IMirrorPulseControlArguments;
+    IReadOnlyDictionary<string, string> RootLabels,
+    [property: MirrorPulseSensitiveData] string? Secret = null,
+    bool RemoveCredential = false) : IMirrorPulseControlArguments;
 
 public sealed record InstanceIdArguments(string InstanceId) : IMirrorPulseControlArguments;
 

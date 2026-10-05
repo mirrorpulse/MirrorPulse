@@ -127,6 +127,8 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
             var conflictNotifications = new MirrorPulseConflictNotificationBridge(
                 systemNotifications.PublishAsync);
             var credentialStore = new WindowsCredentialManagerStore();
+            await new MirrorPulseAdapterInstanceProvisioner(catalog, credentialStore, paths.DataRootPath)
+                .RecoverPendingCredentialsAsync(cancellationToken).ConfigureAwait(false);
             MirrorPulseCloudHostSession? currentSession = null;
             async ValueTask<MirrorPulseRemotePollApplyOutcome> ApplyCloudRemoteBatchAsync(
                 InstanceId instanceId,
@@ -409,7 +411,8 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
             UpdateSettingsAsync,
             CollectDiagnosticsAsync,
             RefreshAsync,
-            ConfigureInstanceAsync,
+            (instanceId, arguments, cancellationToken) => ConfigureInstanceAsync(provisioner, instanceId,
+                arguments, cancellationToken),
             ReadConflictsAsync,
             GetOperationAsync,
             GetOperationAsync,
@@ -640,12 +643,14 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
     }
 
     private async Task<MirrorPulseAppStatusResponse> ConfigureInstanceAsync(
+        MirrorPulseAdapterInstanceProvisioner provisioner,
         InstanceId instanceId,
         InstanceConfigureArguments arguments,
         CancellationToken cancellationToken)
     {
-        await _catalog.ConfigureInstanceAsync(instanceId, arguments.DisplayName,
-            arguments.Configuration, arguments.RootLabels, cancellationToken).ConfigureAwait(false);
+        await provisioner.ConfigureAsync(instanceId, arguments.DisplayName,
+            arguments.Configuration, arguments.RootLabels, arguments.Secret, arguments.RemoveCredential,
+            cancellationToken).ConfigureAwait(false);
         return await ReadStatusAsync(cancellationToken).ConfigureAwait(false);
     }
 

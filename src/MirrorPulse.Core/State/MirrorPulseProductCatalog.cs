@@ -44,6 +44,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
     private readonly FileStream _owner;
     private readonly SqliteConnection _connection;
     private readonly SemaphoreSlim _gate = new(1, 1);
+    internal SemaphoreSlim CredentialGate { get; } = new(1, 1);
     private bool _disposed;
 
     private MirrorPulseProductCatalog(FileStream owner, SqliteConnection connection)
@@ -101,7 +102,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                 version.CommandText = "PRAGMA user_version;";
                 long currentVersion = (long)(await version.ExecuteScalarAsync(cancellationToken)
                     .ConfigureAwait(false) ?? 0L);
-                if (currentVersion > 14)
+                if (currentVersion > 15)
                 {
                     throw new InvalidDataException("The MP product catalog schema is newer than this Host supports.");
                 }
@@ -198,6 +199,11 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                         conflict_id TEXT PRIMARY KEY,
                         snoozed_utc TEXT NOT NULL
                     );
+                    CREATE TABLE IF NOT EXISTS credential_cleanup (
+                        reference_id TEXT PRIMARY KEY,
+                        provider TEXT NOT NULL,
+                        created_utc TEXT NOT NULL
+                    );
                     """;
                 await schema.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
@@ -241,7 +247,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                     alter.CommandText = "ALTER TABLE worker_requests ADD COLUMN stable_fingerprint BLOB NULL;";
                     await alter.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
                 }
-                version.CommandText = "PRAGMA user_version=14;";
+                version.CommandText = "PRAGMA user_version=15;";
                 await version.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
 

@@ -14,6 +14,20 @@ public sealed partial class MirrorPulseProductCatalog
         IReadOnlyDictionary<string, string> configuration,
         IReadOnlyDictionary<string, string> rootLabels,
         CancellationToken cancellationToken = default)
+        => await ConfigureInstanceCoreAsync(instanceId, displayName, configuration, rootLabels,
+            false, null, null, cancellationToken).ConfigureAwait(false);
+
+    internal Task<AdapterInstance> ConfigureInstanceCredentialAsync(
+        InstanceId instanceId, string displayName, IReadOnlyDictionary<string, string> configuration,
+        IReadOnlyDictionary<string, string> rootLabels, string? expectedReference, string? newReference,
+        CancellationToken cancellationToken)
+        => ConfigureInstanceCoreAsync(instanceId, displayName, configuration, rootLabels,
+            true, expectedReference, newReference, cancellationToken);
+
+    private async Task<AdapterInstance> ConfigureInstanceCoreAsync(
+        InstanceId instanceId, string displayName, IReadOnlyDictionary<string, string> configuration,
+        IReadOnlyDictionary<string, string> rootLabels, bool replaceCredential,
+        string? expectedReference, string? newReference, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(displayName);
         ArgumentNullException.ThrowIfNull(configuration);
@@ -29,6 +43,26 @@ public sealed partial class MirrorPulseProductCatalog
             AdapterInstance instance = current.Instances.SingleOrDefault(item => item.InstanceId == instanceId)
                 ?? throw new FileNotFoundException("The Adapter instance is not installed.");
             InstalledAdapter installation = current.Installations.Single(item => item.InstallId == instance.InstallId);
+            if (replaceCredential)
+            {
+                instance.Configuration.TryGetValue("credentialReference", out string? currentReference);
+                if (!string.Equals(currentReference, expectedReference, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException("The instance credential changed during this operation.");
+                }
+
+                var nextConfiguration = new Dictionary<string, string>(instance.Configuration, StringComparer.Ordinal);
+                nextConfiguration.Remove("credentialReference");
+                if (newReference is not null)
+                {
+                    nextConfiguration["credentialReference"] = newReference;
+                }
+
+                instance = new AdapterInstance(instance.AdapterId, instance.InstallId, instance.InstanceId,
+                    instance.DisplayName, nextConfiguration, newReference is null ? [] : [newReference],
+                    instance.FileCacheDirectory, instance.TransferCacheDirectory, instance.Enabled,
+                    instance.LifecycleState, instance.WorkerSessionId, instance.CreatedAt);
+            }
             IReadOnlyDictionary<string, string> validated = AdapterConfigurationFieldValidator.ApplyPatch(
                 installation.Manifest, instance, configuration);
             if (rootLabels.Keys.Any(key => !installation.Manifest.RootDefinitions.Any(definition =>

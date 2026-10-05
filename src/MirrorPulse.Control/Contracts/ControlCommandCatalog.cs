@@ -45,7 +45,7 @@ public static class MirrorPulseControlCommands
         new(AdapterRemove, "adapter", true, false),
         new(InstanceList, "instance", false, false),
         new(InstanceCreate, "instance", true, true),
-        new(InstanceConfigure, "instance", true, false),
+        new(InstanceConfigure, "instance", true, true),
         new(InstanceEnable, "instance", true, false),
         new(InstanceSelectVersion, "instance", true, false),
         new(SyncStatus, "sync", false, false),
