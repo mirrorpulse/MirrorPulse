@@ -19,12 +19,14 @@ permission can provide the approving review; no named PR reviewer is enforced.
 
 ## Publication
 
-Stable publication uses the `stable` environment, restricted to protected
+The shared publication model uses the `stable` environment, restricted to protected
 branches and approved by a reviewer other than the initiating actor. Preview
 publication is explicitly requested from `develop` through the `preview`
 environment. Provider signing remains a separate credential boundary; never
 expose signing secrets in pull request builds. SDK and provider package versions
 are independent of the negotiated Worker protocol version.
+
+The SDK publication workflow implements these channels. Application publication is not yet implemented. Official provider workflows currently retain numeric package versions and their existing signing/release environments; migrating their package version validation and publication workflows is required before provider preview releases. Configuring environments does not itself migrate a workflow.
 
 Release tags cannot be updated or deleted, including by administrators. SDK tags
 use `sdk-vVERSION`; provider and application tags use `vVERSION`. Published
