@@ -333,14 +333,15 @@ public sealed class MirrorPulseActiveRemotePoller : IAsyncDisposable
         CloudItemKind itemKind = entry.ItemKind;
         CloudPlaceholderMetadata metadata = entry.Metadata;
         string path = root.DirectoryName + "\\" + entry.RelativePath.Replace('/', '\\');
+        CloudPlaceholderIdentity identity = MirrorPulsePlaceholderIdentity.CreateForRoot(root, entry.RemoteId, entry.RemoteRevision).ToCfSharp();
         return new CloudRemoteChange(
             $"{instanceId}/{entry.RemoteId}/{Convert.ToHexString(cursor.Span)}",
             kind,
-            entry.RemoteId,
+            identity.RemoteId,
             entry.RemoteRevision,
             itemKind,
             path,
-            MirrorPulsePlaceholderIdentity.Create(instanceId, entry.RemoteId).ToCfSharp().ItemId,
+            identity.ItemId,
             previousRevision,
             previousPath is null ? null : root.DirectoryName + "\\" + previousPath.Replace('/', '\\'),
             entry.Length,

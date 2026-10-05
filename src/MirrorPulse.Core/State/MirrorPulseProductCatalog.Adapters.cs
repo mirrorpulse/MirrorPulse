@@ -215,7 +215,7 @@ public sealed partial class MirrorPulseProductCatalog : IInstalledAdapterCatalog
                 return new RootRegistration(root.AdapterId, root.InstanceId, root.RootId,
                     root.UniquenessKey, root.Label, root.DirectoryName, root.CustomEntry,
                     enabled ? RootRegistrationState.Active : RootRegistrationState.Disabled,
-                    root.RegisteredAt);
+                    root.RegisteredAt, root.IdentityScope);
             }).ToArray();
             var next = new MirrorPulseAdapterTopology(current.Installations, instances, roots);
             ValidateTopology(next);

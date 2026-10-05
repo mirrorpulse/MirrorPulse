@@ -87,7 +87,7 @@ public sealed partial class MirrorPulseProductCatalog
                 if (value.Length == 0)
                     throw new InvalidDataException("An Adapter root Label cannot be empty.");
                 return new RootRegistration(root.AdapterId, root.InstanceId, root.RootId,
-                    root.UniquenessKey, value, value, root.CustomEntry, root.State, root.RegisteredAt);
+                    root.UniquenessKey, value, value, root.CustomEntry, root.State, root.RegisteredAt, root.IdentityScope);
             }).ToArray();
             var next = new MirrorPulseAdapterTopology(current.Installations, instances, roots);
             ValidateTopology(next);
@@ -166,7 +166,8 @@ public sealed partial class MirrorPulseProductCatalog
                 installation.AdapterId,
                 instanceId,
                 installation.Manifest.RootDefinitions,
-                enabled ? RootRegistrationState.Active : RootRegistrationState.Disabled)
+                enabled ? RootRegistrationState.Active : RootRegistrationState.Disabled,
+                identityScope: installation.Manifest.Protocol.Maximum >= 2 ? RootIdentityScope.InstanceRoot : RootIdentityScope.LegacyInstance)
                 .Select(root =>
                 {
                     if (rootLabels is null || !rootLabels.TryGetValue(root.UniquenessKey, out string? label))
@@ -175,7 +176,7 @@ public sealed partial class MirrorPulseProductCatalog
                     }
 
                     return new RootRegistration(root.AdapterId, root.InstanceId, root.RootId,
-                        root.UniquenessKey, label, label, root.CustomEntry, root.State, root.RegisteredAt);
+                        root.UniquenessKey, label, label, root.CustomEntry, root.State, root.RegisteredAt, root.IdentityScope);
                 }).ToArray();
             if (rootLabels is not null && rootLabels.Keys.Any(key =>
                 !installation.Manifest.RootDefinitions.Any(definition =>

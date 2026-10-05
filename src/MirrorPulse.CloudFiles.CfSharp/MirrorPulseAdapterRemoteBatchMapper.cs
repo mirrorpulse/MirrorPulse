@@ -20,11 +20,12 @@ public static class MirrorPulseAdapterRemoteBatchMapper
         ArgumentNullException.ThrowIfNull(batch.Changes);
         var roots = registrations
             .Where(root => root.InstanceId == instanceId && root.State == RootRegistrationState.Active)
-            .ToDictionary(root => root.UniquenessKey, StringComparer.OrdinalIgnoreCase);
+            .ToDictionary(root => root.UniquenessKey, StringComparer.Ordinal);
         CloudRemoteChange[] changes = batch.Changes.Select(change =>
         {
             ArgumentNullException.ThrowIfNull(change);
             RootRegistration root = GetRoot(roots, change.RootKey);
+            CloudPlaceholderIdentity identity = MirrorPulsePlaceholderIdentity.CreateForRoot(root, change.RemoteId, change.RemoteRevision).ToCfSharp();
             string path = MapPath(root, change.RelativePath);
             string? previousPath = change.PreviousRelativePath is null
                 ? null
@@ -36,13 +37,13 @@ public static class MirrorPulseAdapterRemoteBatchMapper
                 _ => throw new ArgumentOutOfRangeException(nameof(change), "The Adapter item kind is invalid."),
             };
             return new CloudRemoteChange(
-                $"{instanceId}/{change.ChangeId}",
+                root.IdentityScope == RootIdentityScope.InstanceRoot ? $"{instanceId}/{root.RootId}/{change.ChangeId}" : $"{instanceId}/{change.ChangeId}",
                 ToCfSharpKind(change.Kind),
-                change.RemoteId,
+                identity.RemoteId,
                 change.RemoteRevision,
                 itemKind,
                 path,
-                MirrorPulsePlaceholderIdentity.Create(instanceId, change.RemoteId).ToCfSharp().ItemId,
+                identity.ItemId,
                 change.PreviousRemoteRevision,
                 previousPath,
                 change.Length,

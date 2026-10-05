@@ -40,7 +40,8 @@ public sealed class MirrorPulsePlaceholderBatchCoordinator
 
     public static MirrorPulsePlaceholderBatchPlan Plan(
         InstanceId instanceId,
-        IReadOnlyList<CloudRemoteDirectoryEntry> entries)
+        IReadOnlyList<CloudRemoteDirectoryEntry> entries,
+        RootRegistration? root = null)
     {
         ArgumentNullException.ThrowIfNull(entries);
 
@@ -55,7 +56,9 @@ public sealed class MirrorPulsePlaceholderBatchCoordinator
                 continue;
             }
 
-            var identity = MirrorPulsePlaceholderIdentity.Create(instanceId, entry.RemoteId, entry.RemoteRevision);
+            if (root is not null && root.InstanceId != instanceId) throw new InvalidDataException("RootInstanceMismatch");
+            var identity = root is null ? MirrorPulsePlaceholderIdentity.Create(instanceId, entry.RemoteId, entry.RemoteRevision) :
+                MirrorPulsePlaceholderIdentity.CreateForRoot(root, entry.RemoteId, entry.RemoteRevision);
             placeholders.Add(entry.ItemKind == CloudItemKind.Directory
                 ? BuildDirectory(entry, identity.ToCfSharp())
                 : BuildFile(entry, identity.ToCfSharp()));

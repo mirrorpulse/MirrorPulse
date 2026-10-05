@@ -22,7 +22,7 @@ public sealed class MirrorPulseRootRouterTests
             AdapterId.Parse("example.drive"), first,
             [new AdapterRootDefinition("docs", "Documents", "Documents", false),
              new AdapterRootDefinition("photos", "Photos", "Photos", false)],
-            RootRegistrationState.Active).Concat(AdapterRootRegistrationMapper.MapAll(
+            RootRegistrationState.Active, identityScope: RootIdentityScope.InstanceRoot).Concat(AdapterRootRegistrationMapper.MapAll(
                 AdapterId.Parse("example.drive"), second,
                 [new AdapterRootDefinition("backup", "Backup", "Backup", false)],
                 RootRegistrationState.Active));

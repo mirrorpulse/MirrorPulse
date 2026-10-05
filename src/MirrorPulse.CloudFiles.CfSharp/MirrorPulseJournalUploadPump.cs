@@ -207,7 +207,7 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
             if (_fileSystem is null) throw new NotSupportedException("Journal content uploads require the Cloud Files confirmation owner.");
             dispatchPhase = "InspectBinding";
             CloudItemSnapshot observed = await _fileSystem.GetFile(syncRootRelativePath).InspectAsync(cancellationToken).ConfigureAwait(false);
-            if (MirrorPulseJournalContentPolicy.IsAcceptedObservation(observed, command.InstanceId, revision))
+            if (MirrorPulseJournalContentPolicy.IsAcceptedObservation(observed, _router.GetRegistration(command.InstanceId, command.RootKey), revision))
             {
                 // None tracks data writes. This current native state, owned identity
                 // and mutually acknowledged remote baseline identify an observation
@@ -397,7 +397,7 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
                     phase = "ValidateMetadata";
                     if (remote.IsDeleted || !string.Equals(remote.ItemKind, "File", StringComparison.OrdinalIgnoreCase) || remote.RemoteRevision != revision)
                         throw new MirrorPulseMutationAmbiguousException("Remote metadata does not match the accepted upload.");
-                    CloudPlaceholderIdentity identity = MirrorPulsePlaceholderIdentity.Create(record.Intent.InstanceId, remote.RemoteId, revision).ToCfSharp();
+                    CloudPlaceholderIdentity identity = _router.CreateFileIdentity(record.Intent.InstanceId, record.Intent.RootKey, remote.RemoteId, revision);
                     proof = new(operationId, record.Intent.UploadBinding, identity.ItemId, identity.RemoteId, revision,
                         record.Intent.ContentLength!.Value, record.Intent.ContentSha256!);
                     phase = "SaveProof";

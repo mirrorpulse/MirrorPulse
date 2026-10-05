@@ -35,7 +35,17 @@ public sealed class MirrorPulseRootRouter
                 throw new InvalidDataException($"Duplicate first-level Adapter Label: '{root.Label}'.");
             }
         }
+        if (_roots.Values.GroupBy(root => root.InstanceId).Any(group =>
+            group.Count(root => root.IdentityScope == RootIdentityScope.LegacyInstance) > 1))
+            throw new InvalidDataException("Multiple legacy roots require explicit identity migration.");
     }
+
+    public RootRegistration GetRegistration(InstanceId instanceId, string rootKey) =>
+        _roots.Values.SingleOrDefault(root => root.InstanceId == instanceId && root.UniquenessKey == rootKey)
+        ?? throw new FileNotFoundException("The Adapter root is not registered.");
+
+    public CloudPlaceholderIdentity CreateFileIdentity(InstanceId instanceId, string rootKey, string remoteId, string? revision = null) =>
+        MirrorPulsePlaceholderIdentity.CreateForRoot(GetRegistration(instanceId, rootKey), remoteId, revision).ToCfSharp();
 
     public CloudProviderDirectoryPage CreateRootPage()
     {
@@ -62,18 +72,10 @@ public sealed class MirrorPulseRootRouter
 
 
         CloudPlaceholderIdentity identity = CloudPlaceholderIdentity.Decode(encodedIdentity);
-        Guid expected = MirrorPulsePlaceholderIdentity
-            .Create(root.InstanceId, identity.RemoteId, identity.RemoteRevision)
-            .ToCfSharp()
-            .ItemId;
-        if (identity.ItemId != expected)
+        if (innerPath.Length == 0 ? identity.ItemId != CreateRootIdentity(root).ItemId :
+            !MirrorPulsePlaceholderIdentity.BelongsToRoot(root, identity))
         {
-            throw new InvalidDataException("The placeholder identity belongs to another Adapter instance.");
-        }
-
-        if (innerPath.Length == 0 && identity.ItemId != CreateRootIdentity(root).ItemId)
-        {
-            throw new InvalidDataException("The Adapter root has an unexpected placeholder identity.");
+            throw new InvalidDataException("The placeholder identity belongs to another Adapter root.");
         }
 
         return new(root.InstanceId, root.UniquenessKey, innerPath);

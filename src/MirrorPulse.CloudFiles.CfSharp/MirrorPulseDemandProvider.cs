@@ -140,7 +140,8 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
             throw new InvalidDataException("The Adapter repeated a directory continuation cursor.");
         }
 
-        MirrorPulsePlaceholderBatchPlan plan = MirrorPulsePlaceholderBatchCoordinator.Plan(instanceId, page.Entries);
+        MirrorPulsePlaceholderBatchPlan plan = MirrorPulsePlaceholderBatchCoordinator.Plan(instanceId, page.Entries,
+            rootKey is null ? null : _rootRouter!.GetRegistration(instanceId, rootKey));
         return new CloudProviderDirectoryPage(plan.Placeholders, next);
     }
 
@@ -234,11 +235,7 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
     {
         foreach (InstanceId candidate in _activeInstances)
         {
-            Guid expectedItemId = MirrorPulsePlaceholderIdentity
-                .Create(candidate, identity.RemoteId, identity.RemoteRevision)
-                .ToCfSharp()
-                .ItemId;
-            if (expectedItemId == identity.ItemId)
+            if (MirrorPulsePlaceholderIdentity.BelongsToInstance(candidate, identity))
             {
                 return candidate;
             }

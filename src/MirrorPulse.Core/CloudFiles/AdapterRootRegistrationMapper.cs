@@ -14,7 +14,8 @@ public static class AdapterRootRegistrationMapper
         InstanceId instanceId,
         AdapterRootDefinition definition,
         RootRegistrationState state = RootRegistrationState.Pending,
-        DateTimeOffset? registeredAt = null)
+        DateTimeOffset? registeredAt = null,
+        RootIdentityScope identityScope = RootIdentityScope.LegacyInstance)
     {
         ArgumentNullException.ThrowIfNull(definition);
         var rootId = new RootId(CreateRootId(instanceId, definition.Key));
@@ -27,7 +28,7 @@ public static class AdapterRootRegistrationMapper
             definition.DirectoryName,
             definition.CustomEntry,
             state,
-            registeredAt ?? DateTimeOffset.UtcNow);
+            registeredAt ?? DateTimeOffset.UtcNow, identityScope);
     }
 
     public static IReadOnlyList<RootRegistration> MapAll(
@@ -35,11 +36,12 @@ public static class AdapterRootRegistrationMapper
         InstanceId instanceId,
         IEnumerable<AdapterRootDefinition> definitions,
         RootRegistrationState state = RootRegistrationState.Pending,
-        DateTimeOffset? registeredAt = null)
+        DateTimeOffset? registeredAt = null,
+        RootIdentityScope identityScope = RootIdentityScope.LegacyInstance)
     {
         ArgumentNullException.ThrowIfNull(definitions);
         var registrations = definitions
-            .Select(definition => Map(adapterId, instanceId, definition, state, registeredAt))
+            .Select(definition => Map(adapterId, instanceId, definition, state, registeredAt, identityScope))
             .ToArray();
         var duplicate = registrations
             .GroupBy(registration => registration.UniquenessKey, StringComparer.OrdinalIgnoreCase)

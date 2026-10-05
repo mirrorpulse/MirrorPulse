@@ -12,6 +12,8 @@ public enum RootRegistrationState
     Removed
 }
 
+public enum RootIdentityScope { LegacyInstance, InstanceRoot }
+
 /// <summary>
 /// One first-level directory contributed by an Adapter Instance.
 /// </summary>
@@ -26,10 +28,12 @@ public sealed record RootRegistration
         string directoryName,
         bool customEntry,
         RootRegistrationState state,
-        DateTimeOffset registeredAt)
+        DateTimeOffset registeredAt,
+        RootIdentityScope identityScope = RootIdentityScope.LegacyInstance)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(uniquenessKey);
         ArgumentException.ThrowIfNullOrWhiteSpace(label);
+        if (!Enum.IsDefined(identityScope)) throw new ArgumentOutOfRangeException(nameof(identityScope));
         if (!IsSafeDirectoryName(directoryName))
         {
             throw new ArgumentException("A root directory name must be one safe first-level segment.", nameof(directoryName));
@@ -44,6 +48,7 @@ public sealed record RootRegistration
         CustomEntry = customEntry;
         State = state;
         RegisteredAt = registeredAt;
+        IdentityScope = identityScope;
     }
 
     public AdapterId AdapterId { get; }
@@ -66,6 +71,7 @@ public sealed record RootRegistration
     public RootRegistrationState State { get; }
 
     public DateTimeOffset RegisteredAt { get; }
+    public RootIdentityScope IdentityScope { get; }
 
     private static bool IsSafeDirectoryName(string? directoryName)
     {
