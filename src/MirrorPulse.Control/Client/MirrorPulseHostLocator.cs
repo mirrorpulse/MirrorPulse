@@ -40,5 +40,11 @@ public sealed class MirrorPulseHostLocator
         {
             return false;
         }
+        catch (UnauthorizedAccessException)
+        {
+            throw new MirrorPulseControlException(new MirrorPulse.Control.Contracts.ControlError(
+                MirrorPulse.Control.Contracts.MirrorPulseControlErrorCodes.Unauthorized,
+                "The control pipe peer identity could not be verified.", MirrorPulse.Core.Contracts.ErrorCategory.Authorization));
+        }
     }
 }

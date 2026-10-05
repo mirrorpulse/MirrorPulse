@@ -23,12 +23,13 @@ public static class NamedPipeWorkerClient
             ".",
             pipeName.Trim(),
             PipeDirection.InOut,
-            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly,
+            PipeOptions.Asynchronous,
             TokenImpersonationLevel.Identification);
 
         try
         {
             await client.ConnectAsync(timeoutMilliseconds, cancellationToken).ConfigureAwait(false);
+            CurrentUserPipeSecurity.ValidateOwner(client);
             NamedPipePeerIdentity.ValidateServer(client);
             return client;
         }

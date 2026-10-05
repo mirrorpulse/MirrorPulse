@@ -60,6 +60,10 @@ the connected server's PID/session and executable path against its selected Host
 before sending any arguments. Control clients can supply an expected PID or
 executable resolver; product clients must bind that identity. Current-user client
 connections use identification rather than granting server impersonation.
+The server ACL and client owner check use the actual Windows user SID. An elevated
+token's default owner can be the Administrators group; it is not accepted as a
+replacement for the user SID. An ownership rejection is a structured authorization
+error, including during Host discovery.
 
 Control admits at most 16 concurrent connections plus one admission slot, with
 eight ordinary request slots and two reserved status/cancel/stop slots. Ordinary

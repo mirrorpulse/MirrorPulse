@@ -20,7 +20,20 @@ public static class CurrentUserPipeSecurity
             PipeAccessRights.ReadWrite | PipeAccessRights.CreateNewInstance | PipeAccessRights.Synchronize,
             AccessControlType.Allow));
         security.SetOwner(user);
+        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
         return security;
+    }
+
+    /// <summary>Checks the actual user SID, including when the token's default owner is a group.</summary>
+    public static void ValidateOwner(NamedPipeClientStream pipe)
+    {
+        ArgumentNullException.ThrowIfNull(pipe);
+        using var identity = WindowsIdentity.GetCurrent();
+        var user = identity.User ?? throw new UnauthorizedAccessException("The current Windows user could not be verified.");
+        if (pipe.GetAccessControl().GetOwner(typeof(SecurityIdentifier)) != user)
+        {
+            throw new UnauthorizedAccessException("The pipe is not owned by the current Windows user.");
+        }
     }
 }
 
