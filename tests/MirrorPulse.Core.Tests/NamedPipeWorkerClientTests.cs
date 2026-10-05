@@ -9,7 +9,7 @@ public sealed class NamedPipeWorkerClientTests
     public async Task ClientConnectsToServerAndBothStreamsAreDuplex()
     {
         var options = new NamedPipeServerOptions($"mirrorpulse-client-{Guid.NewGuid():N}");
-        await using var server = NamedPipeServerFactory.Create(options);
+        await using var server = SecureNamedPipeServerFactory.Create(options);
 
         var serverConnection = server.WaitForConnectionAsync();
         await using var client = await NamedPipeWorkerClient.ConnectAsync(options.PipeName, TimeSpan.FromSeconds(2));

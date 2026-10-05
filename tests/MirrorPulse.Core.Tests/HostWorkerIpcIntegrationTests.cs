@@ -12,7 +12,7 @@ public sealed class HostWorkerIpcIntegrationTests
     public async Task HostAndWorkerExchangeControlAndBinaryFramesOverNamedPipe()
     {
         var options = new NamedPipeServerOptions($"mirrorpulse-integration-{Guid.NewGuid():N}");
-        await using var server = NamedPipeServerFactory.Create(options);
+        await using var server = SecureNamedPipeServerFactory.Create(options);
         var serverConnection = server.WaitForConnectionAsync();
         await using var client = await NamedPipeWorkerClient.ConnectAsync(options.PipeName, TimeSpan.FromSeconds(2));
         await serverConnection;
