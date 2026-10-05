@@ -87,8 +87,16 @@ and applying changes to running Workers are separate implementation steps.
 
 ## Remaining work
 
-Third-party publisher trust, unsigned developer-mode installation, Windows
-path canonicalization and installed-package revalidation are incomplete.
+Package inventories, entrypoints and locale resources use one canonical Windows
+path policy: no ADS, device names, trailing dots/spaces, short-name aliases,
+decomposed Unicode, case aliases or file/parent collisions. Before publishing an
+installation, Host checks the minimum product version, v1 protocol intersection,
+supported RIDs and both executable PE machine types. Canonical Unicode names and
+ordinary spaces within a filename remain supported. Embedded and detached signed
+inventory formats remain compatible.
+
+Third-party publisher trust, unsigned developer-mode installation and
+installed-package revalidation are incomplete.
 Credential CLI input wiring and end-to-end safe error
 presentation still require further work. Do not describe those pending controls
 as implemented.

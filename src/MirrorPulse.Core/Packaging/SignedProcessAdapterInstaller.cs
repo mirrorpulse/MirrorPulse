@@ -66,7 +66,8 @@ public static class SignedProcessAdapterInstaller
         var declaredManifest = new PackageFileManifest(declaredFiles);
 
         if (archive.Entries.Count == 0 || archive.Entries.Count > 4096 ||
-            archive.Entries.Any(entry => string.IsNullOrEmpty(entry.Name) ||
+            archive.Entries.GroupBy(entry => entry.FullName, StringComparer.OrdinalIgnoreCase).Any(group => group.Count() > 1) ||
+            archive.Entries.Any(entry => !WindowsPackagePath.IsCanonical(entry.FullName) || string.IsNullOrEmpty(entry.Name) ||
                 ((entry.ExternalAttributes >> 16) & 0xF000) == 0xA000))
         {
             throw new InvalidDataException("The Adapter package contains unsupported entries.");
@@ -126,12 +127,13 @@ public static class SignedProcessAdapterInstaller
 
         ZipArchiveEntry manifestEntry = archive.GetEntry("manifest.json")
             ?? throw new InvalidDataException("The Adapter manifest is missing.");
-        using JsonDocument manifest = await JsonDocument.ParseAsync(manifestEntry.Open(), cancellationToken: cancellationToken)
-            .ConfigureAwait(false);
-        JsonElement manifestRoot = manifest.RootElement;
-        string adapterId = manifestRoot.GetProperty("adapterId").GetString() ?? string.Empty;
-        string version = manifestRoot.GetProperty("version").GetString() ?? string.Empty;
-        string entrypoint = manifestRoot.GetProperty("entrypoints").GetProperty(runtimeIdentifier).GetString() ?? string.Empty;
+        if (manifestEntry.Length > 1024 * 1024) throw new InvalidDataException("The Adapter manifest is too large.");
+        await using Stream manifestStream = manifestEntry.Open();
+        AdapterManifest manifest = await AdapterPackageManifestReader.ReadAsync(manifestStream, cancellationToken).ConfigureAwait(false);
+        AdapterPackageCompatibility.Validate(manifest, runtimeIdentifier);
+        string adapterId = manifest.AdapterId.ToString();
+        string version = manifest.Version;
+        string entrypoint = manifest.Entrypoints[runtimeIdentifier];
         if (!AdapterId.TryParse(adapterId, out _) ||
             !Version.TryParse(version, out _) ||
             !actualFiles.Any(file => string.Equals(file.Path, entrypoint, StringComparison.Ordinal)))
@@ -166,6 +168,11 @@ public static class SignedProcessAdapterInstaller
                 await input.CopyToAsync(output, cancellationToken).ConfigureAwait(false);
             }
 
+            foreach (var payload in manifest.Entrypoints)
+            {
+                AdapterPackageCompatibility.ValidateExecutable(Path.Combine(stagedDirectory,
+                    payload.Value.Replace('/', Path.DirectorySeparatorChar)), payload.Key);
+            }
             Directory.Move(stagedDirectory, installedDirectory);
             return new SignedProcessAdapterInstallation(installedDirectory,
                 Path.Combine(installedDirectory, entrypoint.Replace('/', Path.DirectorySeparatorChar)),

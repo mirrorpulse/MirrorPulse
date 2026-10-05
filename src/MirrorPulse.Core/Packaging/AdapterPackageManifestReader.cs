@@ -12,6 +12,12 @@ public static class AdapterPackageManifestReader
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         await using var stream = File.OpenRead(path);
+        return await ReadAsync(stream, cancellationToken).ConfigureAwait(false);
+    }
+
+    public static async Task<AdapterManifest> ReadAsync(Stream stream, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
         using JsonDocument document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken)
             .ConfigureAwait(false);
         JsonElement root = document.RootElement;

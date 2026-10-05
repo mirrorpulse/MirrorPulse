@@ -19,6 +19,7 @@ public static class AdapterPayloadSelector
         {
             throw new PlatformNotSupportedException($"The Adapter runtime '{runtimeIdentifier}' is not supported.");
         }
+        AdapterPackageCompatibility.Validate(manifest, runtimeIdentifier);
 
         if (!manifest.Entrypoints.TryGetValue(runtimeIdentifier, out var entrypoint) || string.IsNullOrWhiteSpace(entrypoint))
         {

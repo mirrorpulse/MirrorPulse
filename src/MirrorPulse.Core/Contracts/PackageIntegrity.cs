@@ -67,7 +67,7 @@ public sealed record PackageFileEntry
 {
     public PackageFileEntry(string path, long length, Sha256Digest sha256)
     {
-        if (!IsSafeRelativePath(path))
+        if (!WindowsPackagePath.IsCanonical(path))
         {
             throw new ArgumentException("Package file paths must be safe relative paths.", nameof(path));
         }
@@ -85,16 +85,6 @@ public sealed record PackageFileEntry
 
     public Sha256Digest Sha256 { get; }
 
-    private static bool IsSafeRelativePath(string? path)
-    {
-        if (string.IsNullOrWhiteSpace(path) || path.Contains('\\') || path.StartsWith('/') || System.IO.Path.IsPathRooted(path))
-        {
-            return false;
-        }
-
-        var segments = path.Split('/');
-        return segments.All(segment => segment is not ("." or ".."));
-    }
 }
 
 /// <summary>
@@ -111,6 +101,16 @@ public sealed record PackageFileManifest
         if (entries.GroupBy(file => file.Path, StringComparer.OrdinalIgnoreCase).Any(group => group.Count() > 1))
         {
             throw new ArgumentException("A package file manifest cannot contain duplicate paths.", nameof(files));
+        }
+
+        var paths = entries.Select(file => file.Path).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (string path in paths)
+        {
+            for (int index = path.IndexOf('/'); index >= 0; index = path.IndexOf('/', index + 1))
+            {
+                if (paths.Contains(path[..index]))
+                    throw new ArgumentException("Package files cannot alias a parent directory.", nameof(files));
+            }
         }
 
         Files = new ReadOnlyCollection<PackageFileEntry>(entries);

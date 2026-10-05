@@ -83,6 +83,10 @@ public static class AdapterManifestValidator
                     $"The manifest must provide a safe executable entrypoint for {runtime}."));
             }
         }
+        if (entrypoints.Any(pair => pair.Key is not ("win-x64" or "win-arm64") || !IsSafeExecutablePath(pair.Value)))
+        {
+            diagnostics.Add(Error("manifest.entrypoint.invalid", "Worker entrypoints must declare supported Windows runtimes and canonical paths."));
+        }
     }
 
     private static void ValidateInstallPolicy(AdapterInstallPolicy? policy, List<Diagnostic> diagnostics)
@@ -186,6 +190,8 @@ public static class AdapterManifestValidator
                 string.IsNullOrWhiteSpace(field.Label) || field.Label.Length > 128 ||
                 (field.Key == "credentialReference") !=
                     (field.Kind == AdapterConfigurationFieldKind.Secret) ||
+                (string.Equals(field.Key, "credentialReference", StringComparison.OrdinalIgnoreCase) &&
+                    field.Key != "credentialReference") ||
                 (field.Kind == AdapterConfigurationFieldKind.Secret && field.DefaultValue is not null) ||
                 (field.Kind == AdapterConfigurationFieldKind.Choice &&
                     (field.Options.Count == 0 || field.Options.Any(string.IsNullOrWhiteSpace) ||
@@ -203,16 +209,7 @@ public static class AdapterManifestValidator
     }
 
     private static bool IsSafeExecutablePath(string? path)
-    {
-        if (string.IsNullOrWhiteSpace(path) || path.Contains('\\') || path.StartsWith('/') || Path.IsPathRooted(path))
-        {
-            return false;
-        }
-
-        var segments = path.Split('/');
-        return segments.All(segment => segment is not ("." or "..")) &&
-            path.EndsWith(".exe", StringComparison.OrdinalIgnoreCase);
-    }
+        => WindowsPackagePath.IsCanonical(path) && path!.EndsWith(".exe", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsVersion(string? value) =>
         !string.IsNullOrWhiteSpace(value) && Version.TryParse(value, out var version) && version.Major >= 0;

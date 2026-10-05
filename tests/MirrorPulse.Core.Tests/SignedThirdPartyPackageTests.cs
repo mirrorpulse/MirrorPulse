@@ -1,4 +1,6 @@
+using System.Buffers.Binary;
 using System.IO.Compression;
+using System.Reflection.PortableExecutable;
 using System.Security.Cryptography;
 using System.Text.Json;
 using MirrorPulse.Core.Configuration;
@@ -12,7 +14,11 @@ namespace MirrorPulse.Core.Tests;
 public sealed class SignedThirdPartyPackageTests
 {
     [TestMethod]
-    public async Task ExplicitlyTrustedPublisherCanInstallStandaloneThirdPartyPackage()
+    [DataRow("1.0.0", 1, true)]
+    [DataRow("999.0.0", 1, false)]
+    [DataRow("1.0.0", 2, false)]
+    public async Task ExplicitlyTrustedPublisherCanInstallOnlyCompatibleStandalonePackage(
+        string minimumProductVersion, int workerProtocol, bool compatible)
     {
         string root = Path.Combine(Path.GetTempPath(), "MirrorPulse-third-party", Guid.NewGuid().ToString("N"));
         string source = Path.Combine(root, "source");
@@ -26,7 +32,14 @@ public sealed class SignedThirdPartyPackageTests
             {
                 string path = Path.Combine(source, "worker", runtime, "Example.Worker.exe");
                 Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-                await File.WriteAllBytesAsync(path, "test worker payload"u8.ToArray());
+                byte[] image = await File.ReadAllBytesAsync(Path.ChangeExtension(
+                    typeof(MirrorPulse.Adapter.Ftp.Worker.FtpWorkerEntryMarker).Assembly.Location, ".exe"));
+                using (var reader = new PEReader(new MemoryStream(image)))
+                {
+                    BinaryPrimitives.WriteUInt16LittleEndian(image.AsSpan(reader.PEHeaders.CoffHeaderStartOffset),
+                        (ushort)(runtime == "win-x64" ? Machine.Amd64 : Machine.Arm64));
+                }
+                await File.WriteAllBytesAsync(path, image);
             }
 
             string localePath = Path.Combine(source, "locales", "en-US.json");
@@ -38,7 +51,7 @@ public sealed class SignedThirdPartyPackageTests
                 adapterId,
                 publisher = "Example Publisher",
                 version = "1.0.0",
-                protocol = new { minimum = 1, maximum = 1 },
+                protocol = new { minimum = workerProtocol, maximum = workerProtocol },
                 entrypoints = new Dictionary<string, string>
                 {
                     ["win-x64"] = worker,
@@ -78,7 +91,7 @@ public sealed class SignedThirdPartyPackageTests
                     new { key = "credentialReference", label = "Password", kind = "Secret",
                         required = false },
                 },
-                minimumMirrorPulseVersion = "1.0.0",
+                minimumMirrorPulseVersion = minimumProductVersion,
             }));
 
             AdapterPackageBuildResult package = await AdapterPackageBuilder.BuildAsync(source, packagePath);
@@ -108,6 +121,15 @@ public sealed class SignedThirdPartyPackageTests
             var paths = new MirrorPulseStoragePaths(Path.Combine(root, "sync"),
                 Path.Combine(root, "data"));
             await using var catalog = await MirrorPulseProductCatalog.OpenAsync(paths);
+            if (!compatible)
+            {
+                await Assert.ThrowsExactlyAsync<InvalidDataException>(() => catalog.InstallSignedAdapterAsync(packagePath,
+                    Path.Combine(root, "missing.signature.json"), Path.Combine(root, "installed"),
+                    "win-x64", publisherKey, "Example Publisher"));
+                Assert.IsEmpty((await catalog.ReadAdapterTopologyAsync()).Installations);
+                Assert.IsFalse(Directory.Exists(Path.Combine(root, "installed")));
+                return;
+            }
             InstalledAdapter installed = await catalog.InstallSignedAdapterAsync(packagePath,
                 Path.Combine(root, "missing.signature.json"), Path.Combine(root, "installed"),
                 "win-x64", publisherKey, "Example Publisher");

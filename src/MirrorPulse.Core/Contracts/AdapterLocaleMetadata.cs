@@ -28,9 +28,7 @@ public sealed record AdapterLocaleMetadata
     public string ResourcePath { get; }
 
     private static bool IsSafeResourcePath(string? path) =>
-        !string.IsNullOrWhiteSpace(path) && !Path.IsPathRooted(path) && !path.Contains('\\') &&
-        path.EndsWith(".json", StringComparison.OrdinalIgnoreCase) &&
-        path.Split('/').All(segment => segment is not ("." or ".."));
+        WindowsPackagePath.IsCanonical(path) && path!.EndsWith(".json", StringComparison.OrdinalIgnoreCase);
 }
 
 /// <summary>
