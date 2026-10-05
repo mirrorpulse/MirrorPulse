@@ -74,11 +74,12 @@ public sealed class WindowsPackagePolicyTests
             new Dictionary<string, string> { ["win-x64"] = "worker/x64.exe", ["win-arm64"] = "worker/arm64.exe" },
             new AdapterInstallPolicy(null), new AdapterInstancePolicy(null, null), new(true, false, true, true), ["en-US"], minimum);
         AdapterPackageCompatibility.Validate(Manifest("1.0", new(1, 2)), "win-arm64", new Version(1, 0, 0));
+        AdapterPackageCompatibility.Validate(Manifest("1.0.0", new(2, 3)), "win-arm64", new Version(1, 0, 0));
         Assert.ThrowsExactly<InvalidDataException>(() => AdapterPackageCompatibility.Validate(
             Manifest("2.0.0", new(1, 1)), "win-arm64", new Version(1, 0, 0)));
         Assert.ThrowsExactly<InvalidDataException>(() => AdapterPayloadSelector.Select(Manifest("999.0.0", new(1, 1)), "win-arm64"));
         Assert.ThrowsExactly<InvalidDataException>(() => AdapterPackageCompatibility.Validate(
-            Manifest("1.0.0", new(2, 3)), "win-arm64", new Version(1, 0, 0)));
+            Manifest("1.0.0", new(3, 4)), "win-arm64", new Version(1, 0, 0)));
         Assert.ThrowsExactly<InvalidDataException>(() => AdapterPackageCompatibility.Validate(
             Manifest("1.0.0", new(1, 1)), "linux-x64", new Version(1, 0, 0)));
     }

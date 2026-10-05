@@ -22,7 +22,7 @@ public sealed class MirrorPulseLocalBatchMapperTests
         InstanceId instance = InstanceId.New();
         AdapterId adapter = AdapterId.Parse("example.routing");
         RootRegistration Root(string key, string label) => AdapterRootRegistrationMapper.Map(adapter, instance,
-            new AdapterRootDefinition(key, label, label, false), RootRegistrationState.Active);
+            new AdapterRootDefinition(key, label, label, false), RootRegistrationState.Active, identityScope: RootIdentityScope.InstanceRoot);
         var router = new MirrorPulseRootRouter(paths.SyncRootPath, [Root("docs", "Documents"), Root("other", "Other")]);
         MirrorPulseLocalChangeObservation Change(string path, CloudLocalChangeKind kind, bool directory = false, string? previous = null) =>
             new(Guid.NewGuid(), 1, kind, null, path, previous, directory, DateTimeOffset.UtcNow);

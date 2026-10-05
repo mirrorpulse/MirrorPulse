@@ -16,7 +16,8 @@ public sealed class SignedThirdPartyPackageTests
     [TestMethod]
     [DataRow("1.0.0", 1, true)]
     [DataRow("999.0.0", 1, false)]
-    [DataRow("1.0.0", 2, false)]
+    [DataRow("1.0.0", 2, true)]
+    [DataRow("1.0.0", 3, false)]
     public async Task ExplicitlyTrustedPublisherCanInstallOnlyCompatibleStandalonePackage(
         string minimumProductVersion, int workerProtocol, bool compatible)
     {
