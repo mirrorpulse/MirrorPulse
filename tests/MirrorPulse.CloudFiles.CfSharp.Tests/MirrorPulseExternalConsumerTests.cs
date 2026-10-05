@@ -35,9 +35,9 @@ public sealed class MirrorPulseExternalConsumerTests
         RootRegistration[] registrations = [
             .. AdapterRootRegistrationMapper.MapAll(adapterId, first, [
                 new AdapterRootDefinition("docs", "Documents", "Documents", false),
-                new AdapterRootDefinition("photos", "Photos", "Photos", false)], RootRegistrationState.Active),
+                new AdapterRootDefinition("photos", "Photos", "Photos", false)], RootRegistrationState.Active, identityScope: RootIdentityScope.InstanceRoot),
             .. AdapterRootRegistrationMapper.MapAll(adapterId, second, [
-                new AdapterRootDefinition("backup", "Backup", "Backup", false)], RootRegistrationState.Active),
+                new AdapterRootDefinition("backup", "Backup", "Backup", false)], RootRegistrationState.Active, identityScope: RootIdentityScope.InstanceRoot),
         ];
         var router = new MirrorPulseRootRouter(paths.SyncRootPath, registrations);
         var cloud = new CfSharpMirrorPulseCloudRootRegistry();
