@@ -132,7 +132,7 @@ public sealed class SignedSmbV2WorkerProcessTests
     private static string Fixture(string name) => Environment.GetEnvironmentVariable("MP_SMB_FIXTURE_" + name) ??
         throw new InvalidOperationException("The disposable SMB fixture is incomplete.");
 
-    private static void VerifyPrivateRuntime(string executable)
+    internal static void VerifyPrivateRuntime(string executable)
     {
         string expected = Path.Combine(Path.GetDirectoryName(executable)!, "coreclr.dll");
         bool found = false;

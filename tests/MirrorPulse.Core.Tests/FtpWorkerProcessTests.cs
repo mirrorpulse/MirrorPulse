@@ -453,12 +453,14 @@ public sealed class FtpWorkerProcessTests
         await stream.FlushAsync(cancellationToken);
     }
 
-    private sealed class LoopbackFtpFixture : IAsyncDisposable
+    internal sealed class LoopbackFtpFixture : IAsyncDisposable
     {
         private readonly TcpListener _listener;
         private readonly X509Certificate2 _certificate;
         private readonly Task _server;
         private readonly FtpSecurityMode _mode;
+        private readonly string _username;
+        private readonly string _password;
         private readonly Dictionary<string, (byte[] Content, DateTime Modified)> _files =
             new(StringComparer.Ordinal);
         private TcpListener? _dataListener;
@@ -467,9 +469,12 @@ public sealed class FtpWorkerProcessTests
         private bool _protectData;
         private int _uploadCount;
 
-        public LoopbackFtpFixture(FtpSecurityMode mode)
+        public LoopbackFtpFixture(FtpSecurityMode mode, string username = "user",
+            string password = "correct-secret", byte[]? initialContent = null)
         {
             _mode = mode;
+            _username = username;
+            _password = password;
             using RSA key = RSA.Create(2048);
             var certificateRequest = new CertificateRequest(
                 "CN=localhost", key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
@@ -482,7 +487,7 @@ public sealed class FtpWorkerProcessTests
             _listener = new TcpListener(IPAddress.Loopback, 0);
             _listener.Start();
             Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
-            _files["/report.bin"] = ([2, 3, 5, 7, 11, 13, 17, 19],
+            _files["/report.bin"] = (initialContent ?? [2, 3, 5, 7, 11, 13, 17, 19],
                 new DateTime(2026, 9, 29, 12, 0, 0, DateTimeKind.Utc));
             _server = ServeAsync();
         }
@@ -543,14 +548,26 @@ public sealed class FtpWorkerProcessTests
                         stream = await SecureAsync(stream);
                         break;
                     case "USER":
-                        await SendAsync(stream, argument == "user" ? "331 Password required\r\n" : "530 Invalid user\r\n");
+                        await SendAsync(stream, argument == _username ? "331 Password required\r\n" : "530 Invalid user\r\n");
                         break;
                     case "PASS":
-                        Authenticated = argument == "correct-secret";
+                        Authenticated = argument == _password;
                         await SendAsync(stream, Authenticated ? "230 Logged in\r\n" : "530 Login incorrect\r\n");
                         break;
                     case "FEAT":
-                        await SendAsync(stream, "211-Features\r\n UTF8\r\n SIZE\r\n MDTM\r\n REST STREAM\r\n211 End\r\n");
+                        await SendAsync(stream, "211-Features\r\n UTF8\r\n SIZE\r\n MDTM\r\n MLST type*;size*;modify*;\r\n REST STREAM\r\n211 End\r\n");
+                        break;
+                    case "MLSD":
+                        await SendAsync(stream, "150 Opening directory connection\r\n");
+                        using (TcpClient data = await (_dataListener ?? throw new InvalidDataException()).AcceptTcpClientAsync())
+                        {
+                            Stream dataStream = _protectData ? await SecureAsync(data.GetStream()) : data.GetStream();
+                            foreach (var file in _files.OrderBy(item => item.Key, StringComparer.Ordinal))
+                                await SendAsync(dataStream, FormattableString.Invariant(
+                                    $"type=file;size={file.Value.Content.Length};modify={file.Value.Modified:yyyyMMddHHmmss}; {file.Key.TrimStart('/')}\r\n"));
+                        }
+                        _dataListener?.Stop();
+                        await SendAsync(stream, "226 Directory complete\r\n");
                         break;
                     case "PROT":
                         _protectData = argument == "P";
