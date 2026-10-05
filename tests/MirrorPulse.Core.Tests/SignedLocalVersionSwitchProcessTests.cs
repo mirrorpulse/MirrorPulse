@@ -110,6 +110,7 @@ public sealed class SignedLocalVersionSwitchProcessTests
         byte[] content)
     {
         MirrorPulseAdapterTopology topology = await catalog.ReadAdapterTopologyAsync();
+        string rootKey = topology.Roots.Single(root => root.InstanceId == instanceId).UniquenessKey;
         AdapterInstanceWorkerPayload payload = AdapterInstanceWorkerLaunchResolver.Resolve(topology,
             instanceId, WorkerSessionId.New(), RuntimeIdentifier);
         Assert.AreEqual(expected.InstallId, payload.InstallId);
@@ -137,9 +138,9 @@ public sealed class SignedLocalVersionSwitchProcessTests
 
         await WaitForProcessPathAsync(payload.LaunchRequest.ExecutablePath, timeout.Token);
         Assert.IsFalse(string.IsNullOrWhiteSpace(await supervisor.StatAsync(
-            new MirrorPulseWorkerStatRequest(instanceId, "note.txt"), timeout.Token)));
+            new MirrorPulseWorkerStatRequest(instanceId, "note.txt", rootKey), timeout.Token)));
         await using Stream read = await supervisor.ReadRangeAsync(new MirrorPulseWorkerReadRangeRequest(
-            instanceId, "note.txt", ReadOnlyMemory<byte>.Empty, 0, content.Length), timeout.Token);
+            instanceId, "note.txt", ReadOnlyMemory<byte>.Empty, 0, content.Length, RootKey: rootKey), timeout.Token);
         byte[] actual = new byte[content.Length];
         await read.ReadExactlyAsync(actual, timeout.Token);
         CollectionAssert.AreEqual(content, actual);

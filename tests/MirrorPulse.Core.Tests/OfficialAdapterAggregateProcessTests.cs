@@ -180,12 +180,13 @@ public sealed class OfficialAdapterAggregateProcessTests
             byte[] upload = Encoding.UTF8.GetBytes("uploaded-through-signed-worker");
             await using var content = new MemoryStream(upload, writable: false);
             string revision = await supervisor.UploadAsync(new MirrorPulseWorkerUploadRequest(
-                instance.InstanceId, "uploaded.txt", null, content, upload.Length), timeout.Token);
+                instance.InstanceId, "uploaded.txt", null, content, upload.Length,
+                RootKey: registration.UniquenessKey), timeout.Token);
             Assert.IsFalse(string.IsNullOrWhiteSpace(revision));
             CollectionAssert.AreEqual(upload, await File.ReadAllBytesAsync(
                 Path.Combine(sourceDirectory, "uploaded.txt"), timeout.Token));
             Assert.AreEqual(revision, await supervisor.StatAsync(new MirrorPulseWorkerStatRequest(
-                instance.InstanceId, "uploaded.txt"), timeout.Token));
+                instance.InstanceId, "uploaded.txt", registration.UniquenessKey), timeout.Token));
         }
         finally
         {
