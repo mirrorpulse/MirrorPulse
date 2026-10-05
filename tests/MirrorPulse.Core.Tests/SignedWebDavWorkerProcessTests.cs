@@ -194,7 +194,16 @@ public sealed class SignedWebDavWorkerProcessTests
                     response.ContentLength64 = _content.Length;
                     if (request.HttpMethod == "GET")
                     {
-                        await response.OutputStream.WriteAsync(_content);
+                        string? range = request.Headers["Range"];
+                        if (range is null || !range.StartsWith("bytes=", StringComparison.Ordinal))
+                            throw new InvalidDataException("The fixture expects a bounded range request.");
+                        string[] bounds = range[6..].Split('-');
+                        int start = int.Parse(bounds[0], System.Globalization.CultureInfo.InvariantCulture);
+                        int end = int.Parse(bounds[1], System.Globalization.CultureInfo.InvariantCulture);
+                        response.StatusCode = 206;
+                        response.Headers["Content-Range"] = $"bytes {start}-{end}/{_content.Length}";
+                        response.ContentLength64 = end - start + 1;
+                        await response.OutputStream.WriteAsync(_content.AsMemory(start, end - start + 1));
                     }
                 }
                 else if (request.Url?.AbsolutePath == "/dav/note.txt" && request.HttpMethod == "PUT")
