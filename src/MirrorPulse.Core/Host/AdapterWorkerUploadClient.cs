@@ -25,6 +25,8 @@ public sealed class AdapterWorkerUploadClient
     private Guid _operationId;
     private string? _rootKey;
     private bool _closed;
+    private Guid _cancelId;
+    private TaskCompletionSource<bool>? _cancelAck;
 
     public AdapterWorkerUploadClient(
         AdapterWorkerReadRangeClient channel,
@@ -73,6 +75,7 @@ public sealed class AdapterWorkerUploadClient
         await _operation.WaitAsync(cancellationToken).ConfigureAwait(false);
         var ready = new TaskCompletionSource<Guid>(TaskCreationOptions.RunContinuationsAsynchronously);
         var completion = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        bool dispatched = false;
         try
         {
             lock (_pendingLock)
@@ -87,6 +90,7 @@ public sealed class AdapterWorkerUploadClient
 
             await _channel.WriteControlAsync(new ControlFrameEnvelope(1, "Upload", requestId,
                 _instanceId, _sessionId, false, payload), cancellationToken).ConfigureAwait(false);
+            dispatched = true;
             Guid acceptedStream = await ready.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
             if (acceptedStream != streamId)
             {
@@ -124,6 +128,27 @@ public sealed class AdapterWorkerUploadClient
 
             return await completion.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
         }
+        catch
+        {
+            if (_channel.ProtocolVersion == 2 && dispatched && !completion.Task.IsCompleted)
+            {
+                using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                var acknowledgment = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                Guid cancelId = Guid.NewGuid();
+                lock (_pendingLock) { _cancelId = cancelId; _cancelAck = acknowledgment; }
+                try
+                {
+                    await _channel.WriteControlAsync(new ControlFrameEnvelope(2, "Cancel", cancelId,
+                        _instanceId, _sessionId, false, JsonSerializer.SerializeToElement(new
+                        { rootKey = request.RootKey, targetRequestId = requestId, operationId })), deadline.Token).ConfigureAwait(false);
+                    await acknowledgment.Task.WaitAsync(deadline.Token).ConfigureAwait(false);
+                    try { await completion.Task.WaitAsync(deadline.Token).ConfigureAwait(false); }
+                    catch (IOException) when (completion.Task.IsCompleted) { /* Observe the canceled target's terminal response. */ }
+                }
+                catch { _channel.AbortSession(); }
+            }
+            throw;
+        }
         finally
         {
             lock (_pendingLock)
@@ -132,6 +157,7 @@ public sealed class AdapterWorkerUploadClient
                 {
                     _completion = null;
                     _ready = null;
+                    _cancelAck = null;
                     if (!completion.Task.IsCompleted)
                     {
                         _closed = true;
@@ -147,7 +173,7 @@ public sealed class AdapterWorkerUploadClient
     {
         lock (_pendingLock)
         {
-            return !_closed && _completion is not null && frame.RequestId == _requestId &&
+            return !_closed && _completion is not null && (frame.RequestId == _requestId || (_cancelAck is not null && frame.RequestId == _cancelId)) &&
                 frame.InstanceId == _instanceId && frame.WorkerSessionId == _sessionId;
         }
     }
@@ -165,6 +191,16 @@ public sealed class AdapterWorkerUploadClient
 
             ready = _ready;
             completion = _completion;
+        }
+
+        if (frame.RequestId == _cancelId && _cancelAck is { } acknowledgment)
+        {
+            _channel.ValidateResponse(frame, _rootKey);
+            if (frame.MessageType != "CancelAck" || frame.Payload.GetProperty("targetRequestId").GetGuid() != _requestId ||
+                frame.Payload.GetProperty("status").GetString() is not ("canceled" or "alreadyCompleted"))
+                throw new InvalidDataException("CancelResponseMismatch");
+            acknowledgment.TrySetResult(true);
+            return ValueTask.CompletedTask;
         }
 
         _channel.ValidateOperationResponse(frame, _rootKey, _operationId);
@@ -207,6 +243,7 @@ public sealed class AdapterWorkerUploadClient
             _closed = true;
             _ready?.TrySetException(new IOException("The Adapter Worker disconnected."));
             _completion?.TrySetException(new IOException("The Adapter Worker disconnected."));
+            _cancelAck?.TrySetException(new IOException("The Adapter Worker disconnected."));
         }
     }
 }

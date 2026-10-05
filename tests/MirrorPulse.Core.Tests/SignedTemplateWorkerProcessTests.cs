@@ -67,7 +67,25 @@ public sealed class SignedTemplateWorkerProcessTests
             await supervisor.DeleteAsync(new(instanceId, "moved.bin", revision, false, Guid.NewGuid(), "right"), timeout.Token);
             Assert.IsNull(await supervisor.StatAsync(new(instanceId, "moved.bin", "right"), timeout.Token));
             Assert.IsEmpty(Directory.EnumerateFiles(instance.TransferCacheDirectory));
+            using var canceled = CancellationTokenSource.CreateLinkedTokenSource(timeout.Token);
+            using var interrupted = new InterruptAfterFirstChunk(canceled);
+            await Assert.ThrowsAsync<OperationCanceledException>(() => supervisor.UploadAsync(new(instanceId,
+                "canceled.bin", null, interrupted, interrupted.Length, Guid.NewGuid(), RootKey: "left"), canceled.Token).AsTask());
+            Assert.IsNull(await supervisor.StatAsync(new(instanceId, "canceled.bin", "left"), timeout.Token));
+            Assert.IsEmpty(Directory.EnumerateFiles(instance.TransferCacheDirectory), "CancelAck follows lease removal.");
+            using var nextUpload = new MemoryStream(new byte[] { 7 });
+            await supervisor.UploadAsync(new(instanceId, "after-cancel.bin", null, nextUpload, 1, Guid.NewGuid(), RootKey: "right"), timeout.Token);
         }
         finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+    }
+
+    private sealed class InterruptAfterFirstChunk(CancellationTokenSource cancellation) : MemoryStream(new byte[1024 * 1024 + 1], false)
+    {
+        private int _reads;
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (++_reads == 2) cancellation.Cancel();
+            return base.ReadAsync(buffer, cancellationToken);
+        }
     }
 }

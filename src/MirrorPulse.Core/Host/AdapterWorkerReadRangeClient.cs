@@ -174,9 +174,7 @@ public sealed class AdapterWorkerReadRangeClient
         await _writes.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            await _pipe.WriteAsync(prefix, cancellationToken).ConfigureAwait(false);
-            await _pipe.WriteAsync(payload, cancellationToken).ConfigureAwait(false);
-            await _pipe.FlushAsync(cancellationToken).ConfigureAwait(false);
+            await WriteFrameAsync(prefix, payload, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -200,14 +198,33 @@ public sealed class AdapterWorkerReadRangeClient
         await _writes.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            await _pipe.WriteAsync(prefix, cancellationToken).ConfigureAwait(false);
-            await _pipe.WriteAsync(payload, cancellationToken).ConfigureAwait(false);
-            await _pipe.FlushAsync(cancellationToken).ConfigureAwait(false);
+            await WriteFrameAsync(prefix, payload, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
             _writes.Release();
         }
+    }
+
+    private async Task WriteFrameAsync(byte[] prefix, byte[] payload, CancellationToken cancellationToken)
+    {
+        // Once a v2 frame starts, consumer cancellation must not leave a partial
+        // frame before Cancel. A bounded write failure terminates the session.
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        CancellationToken writeToken = ProtocolVersion == 2 ? deadline.Token : cancellationToken;
+        try
+        {
+            await _pipe.WriteAsync(prefix, writeToken).ConfigureAwait(false);
+            await _pipe.WriteAsync(payload, writeToken).ConfigureAwait(false);
+            await _pipe.FlushAsync(writeToken).ConfigureAwait(false);
+        }
+        catch when (ProtocolVersion == 2) { AbortSession(); throw; }
+    }
+
+    public void AbortSession()
+    {
+        Close();
+        _pipe.Dispose();
     }
 
     public bool CanHandle(ControlFrameEnvelope frame)
