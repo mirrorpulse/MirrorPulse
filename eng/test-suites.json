@@ -40,7 +40,8 @@
     "MirrorPulse.Core.Tests.SignedSmbHostProcessTests.SignedSmbReleaseListsReadsAndConditionallyUploadsThroughHostAndCfSharp",
     "MirrorPulse.Core.Tests.SignedWebDavWorkerProcessTests.SignedWorkerPreservesEtagAndRejectsStaleUploadWithoutOverwritingRemote",
     "MirrorPulse.Core.Tests.SignedTemplateWorkerProcessTests.SignedV2TemplateInstallsAndRunsThroughProductionSupervisor",
-    "MirrorPulse.Core.Tests.SignedLocalV2WorkerProcessTests.SignedLocalV2UsesPrivateRuntimeAndIsolatedSourcesThroughProductionHost"
+    "MirrorPulse.Core.Tests.SignedLocalV2WorkerProcessTests.SignedLocalV2UsesPrivateRuntimeAndIsolatedSourcesThroughProductionHost",
+    "MirrorPulse.Core.Tests.SignedWebDavV2WorkerProcessTests.SignedWebDavV2KeepsCredentialsAndAcceptedContentBoundThroughProductionHost"
   ],
   "required": {
     "native": [
