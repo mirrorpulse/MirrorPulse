@@ -223,7 +223,10 @@ jobs:
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: pwsh ./eng/aggregate-official-adapters.ps1 -OutputDirectory "$env:GITHUB_WORKSPACE/artifacts/official-adapters"
+        run: |
+          pwsh ./eng/verify-official-adapter-signatures.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Official signature contract failed.' }
+          pwsh ./eng/aggregate-official-adapters.ps1 -OutputDirectory "$env:GITHUB_WORKSPACE/artifacts/official-adapters"
 
       - name: Download previous signed Local Adapter release
         shell: pwsh
