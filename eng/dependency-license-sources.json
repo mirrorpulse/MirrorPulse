@@ -1,7 +1,7 @@
 [
-  { "package": "CfSharp*", "version": "0.1.0-preview.2", "repositoryFile": "LICENSE", "url": "https://github.com/MirrorPulse/CfSharp/blob/32e292f921b0ac33bb0b07dc671616ef3ae990fe/LICENSE" },
+  { "package": "CfSharp*", "version": "0.1.0-preview.3", "repositoryFile": "eng/license-texts/CfSharp.0.1.0-preview.3.LICENSE.txt", "url": "https://raw.githubusercontent.com/MirrorPulse/CfSharp/b65b6b7a81c411e8af84f421e4259825e91536d6/LICENSE" },
   { "package": "Microsoft.Data.Sqlite*", "version": "8.0.31", "url": "https://raw.githubusercontent.com/dotnet/efcore/4caf9eeca38ab8bbc8857b975a8f0ad29ad2ea7f/LICENSE.txt" },
-  { "package": "Microsoft.Windows.SDK.BuildTools.WinApp", "version": "0.7.0", "url": "https://raw.githubusercontent.com/microsoft/WinAppCli/2fdd020c5b7db093e8b3e317b22bdd8135a47e89/LICENSE" },
+  { "package": "Microsoft.Windows.SDK.BuildTools.WinApp", "version": "0.7.1", "repositoryFile": "eng/license-texts/Microsoft.Windows.SDK.BuildTools.WinApp.0.7.1.LICENSE.txt", "url": "https://raw.githubusercontent.com/microsoft/WinAppCli/e3cd0b94f3e7b776ac51ba0564f4908094e979b5/LICENSE" },
   { "package": "SQLitePCLRaw.*", "version": "2.1.12", "url": "https://raw.githubusercontent.com/ericsink/SQLitePCL.raw/v2.1.12/LICENSE.TXT" },
   { "package": "SSH.NET", "version": "2026.0.0", "url": "https://raw.githubusercontent.com/sshnet/SSH.NET/7b2fd3dbf2c86a80a7b06cea020aa5f821c9902e/LICENSE" }
 ]

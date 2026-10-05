@@ -18,48 +18,48 @@
     },
     {
       "id": "CfSharp.Native",
-      "version": "0.1.0-preview.2",
+      "version": "0.1.0-preview.3",
       "kind": "restored",
-      "sha512": "RgLInSWW6rqc7xMMyG09UL2rEl5RZIPc03eDGW+G0ZpID37MxEplMoRFbVOcHWxeF/DLcXBNuK0eEH54DsMzEw==",
-      "nugetContentHash": "PKBpu8/I4l/efhdjqGHPCtte4zVmyzty5EApV9em+bOjQ1MJNOCdhmzMU44QJgLCDjDJwNph2rJzaCX0lPO5tw==",
+      "sha512": "euT3t03kWB5vwXv6CWKT4PJrzB8MjFj8VEQn3YqmLayo96enj+NbDvuHU9VuAmLOFx8ArV7ykPtOgO9QtVmeBg==",
+      "nugetContentHash": "TFSKHLuvjcuMXjpu1boZSYCeeeOGAEdIYnSODIWLwtXyVQgO69HJcawJie5gOJTwmvdhCOQjvDy4wfBwtVJtDQ==",
       "licenseType": "expression",
       "license": "Apache-2.0",
-      "licenseTextSource": "https://github.com/MirrorPulse/CfSharp/blob/32e292f921b0ac33bb0b07dc671616ef3ae990fe/LICENSE",
+      "licenseTextSource": "https://raw.githubusercontent.com/MirrorPulse/CfSharp/b65b6b7a81c411e8af84f421e4259825e91536d6/LICENSE",
       "noticeFiles": [
-        "CfSharp.Native.0.1.0-preview.2.LICENSE.txt",
-        "CfSharp.Native.0.1.0-preview.2.NOTICE"
+        "CfSharp.Native.0.1.0-preview.3.LICENSE.txt",
+        "CfSharp.Native.0.1.0-preview.3.NOTICE"
       ],
-      "source": "https://www.nuget.org/packages/CfSharp.Native/0.1.0-preview.2"
+      "source": "https://www.nuget.org/packages/CfSharp.Native/0.1.0-preview.3"
     },
     {
       "id": "CfSharp.Storage.Sqlite",
-      "version": "0.1.0-preview.2",
+      "version": "0.1.0-preview.3",
       "kind": "restored",
-      "sha512": "xw6AARq8x8GeKSZO9H8ocWPJY27UbTtmVU1OxA9b6nXpfmX8Rc2cZNzMogz7DK2cY5llLsoEofR4bcASk5Izqw==",
-      "nugetContentHash": "+Vb2m1fNoPKc4/DrN0zyFij3ERwMwPOswLWGugidkoamvTsTywPC5bdhBFkEs/+gH65XfjsnedY9DNiQwUNnUQ==",
+      "sha512": "vEXfwLQq90fM1LL/X3fkQjXGm0JHNPRSRCh8GKGbQDEXm55lkBhcjJoPTYrlUKO6VrZ123dcp+Uksn0u7gtA2Q==",
+      "nugetContentHash": "BTD5ItAETZfqNXHLrpI7EI0HtzMMyeXWx0yKNvuQho1PRJSUHqi012DpnhHo6uQjf1bZX4Jg6+uKi+3yc702BA==",
       "licenseType": "expression",
       "license": "Apache-2.0",
-      "licenseTextSource": "https://github.com/MirrorPulse/CfSharp/blob/32e292f921b0ac33bb0b07dc671616ef3ae990fe/LICENSE",
+      "licenseTextSource": "https://raw.githubusercontent.com/MirrorPulse/CfSharp/b65b6b7a81c411e8af84f421e4259825e91536d6/LICENSE",
       "noticeFiles": [
-        "CfSharp.Storage.Sqlite.0.1.0-preview.2.LICENSE.txt",
-        "CfSharp.Storage.Sqlite.0.1.0-preview.2.NOTICE"
+        "CfSharp.Storage.Sqlite.0.1.0-preview.3.LICENSE.txt",
+        "CfSharp.Storage.Sqlite.0.1.0-preview.3.NOTICE"
       ],
-      "source": "https://www.nuget.org/packages/CfSharp.Storage.Sqlite/0.1.0-preview.2"
+      "source": "https://www.nuget.org/packages/CfSharp.Storage.Sqlite/0.1.0-preview.3"
     },
     {
       "id": "CfSharp",
-      "version": "0.1.0-preview.2",
+      "version": "0.1.0-preview.3",
       "kind": "restored",
-      "sha512": "EQMJ3MzuPWEpbQhfSEBPB+jv6qV4G4O/95V4ttiSX+AKz5HKISZ5RJLuxh+ELZNMSX9vtFOaDFlDefg7ea3NCg==",
-      "nugetContentHash": "j6dMoG/kJy4FTKjz1W7X/mt6rsMzikKTVuBBYqU+Sf0g+cTEpSSlYzhJwvwK1JakrvG+UOeO+EmIKDIFE1V64g==",
+      "sha512": "GIeHxEKYdRRXjj0/0Ra8i8ex+hawIywVBrXVdC4yR2yepjouQGxEi9BySp/sEy3J4UXKIGwSS/JIjBMTqJm/uw==",
+      "nugetContentHash": "ijo8GwpNR9Y+yFx+uTlpqyDECgpbieYo209oLXzq/9KIKo2VSH1QDqnjRV6CWV3MpTnJ/9aZcEgwzmlFC7/erg==",
       "licenseType": "expression",
       "license": "Apache-2.0",
-      "licenseTextSource": "https://github.com/MirrorPulse/CfSharp/blob/32e292f921b0ac33bb0b07dc671616ef3ae990fe/LICENSE",
+      "licenseTextSource": "https://raw.githubusercontent.com/MirrorPulse/CfSharp/b65b6b7a81c411e8af84f421e4259825e91536d6/LICENSE",
       "noticeFiles": [
-        "CfSharp.0.1.0-preview.2.LICENSE.txt",
-        "CfSharp.0.1.0-preview.2.NOTICE"
+        "CfSharp.0.1.0-preview.3.LICENSE.txt",
+        "CfSharp.0.1.0-preview.3.NOTICE"
       ],
-      "source": "https://www.nuget.org/packages/CfSharp/0.1.0-preview.2"
+      "source": "https://www.nuget.org/packages/CfSharp/0.1.0-preview.3"
     },
     {
       "id": "FluentFTP",
@@ -239,17 +239,17 @@
     },
     {
       "id": "Microsoft.Windows.SDK.BuildTools.WinApp",
-      "version": "0.7.0",
+      "version": "0.7.1",
       "kind": "restored",
-      "sha512": "dFNVAyND8G1YSizGSAvg5CxKWU0KeGtAGlSqhXRkhhlhR2juM01uz/4Vf5W/5CteYSEM/jBYddZ+8ZDuB+ZDEg==",
-      "nugetContentHash": "ZV4VfpCo+XMY4FvAZLD2aq7ZAyAuU8nqTBKjkT1oNiDRwuA82JU/6sM3wX1045frxfAun0cXU5F+nIyADvdHXQ==",
+      "sha512": "CIpQ5uWMZrRg8u4C1XuoF6f+lk1swPQpcsM58W843RZd8uvo8fiz/JQ7OVjrSMz9UkhmS7BqNV/fd3LVdQLq7A==",
+      "nugetContentHash": "oCUTw4+psOgBzT1C52VxIDdtZWX/MqynGWIOAI2U5LsSVo+AUQpggGkvddFBlN+aCUjS/iiBanJLvjm7Vt45xg==",
       "licenseType": "expression",
       "license": "MIT",
-      "licenseTextSource": "https://raw.githubusercontent.com/microsoft/WinAppCli/2fdd020c5b7db093e8b3e317b22bdd8135a47e89/LICENSE",
+      "licenseTextSource": "https://raw.githubusercontent.com/microsoft/WinAppCli/e3cd0b94f3e7b776ac51ba0564f4908094e979b5/LICENSE",
       "noticeFiles": [
-        "Microsoft.Windows.SDK.BuildTools.WinApp.0.7.0.LICENSE.txt"
+        "Microsoft.Windows.SDK.BuildTools.WinApp.0.7.1.LICENSE.txt"
       ],
-      "source": "https://www.nuget.org/packages/Microsoft.Windows.SDK.BuildTools.WinApp/0.7.0"
+      "source": "https://www.nuget.org/packages/Microsoft.Windows.SDK.BuildTools.WinApp/0.7.1"
     },
     {
       "id": "Microsoft.Windows.SDK.BuildTools",

@@ -15,16 +15,16 @@
       ],
       "hashes": [
         {
-          "content": "2f2b3e749b61a43f2ab8e35a024455f647bc0e0113d02c015bdd4d7898cc547646bd144d3bc0e475179815f08138272f329cc9782dc3b8bae946e9ed627abd23",
-          "alg": "SHA-512"
+          "alg": "SHA-512",
+          "content": "2f2b3e749b61a43f2ab8e35a024455f647bc0e0113d02c015bdd4d7898cc547646bd144d3bc0e475179815f08138272f329cc9782dc3b8bae946e9ed627abd23"
         }
       ]
     },
     {
       "type": "library",
       "name": "CfSharp.Native",
-      "version": "0.1.0-preview.2",
-      "purl": "pkg:nuget/CfSharp.Native@0.1.0-preview.2",
+      "version": "0.1.0-preview.3",
+      "purl": "pkg:nuget/CfSharp.Native@0.1.0-preview.3",
       "licenses": [
         {
           "expression": "Apache-2.0"
@@ -32,16 +32,16 @@
       ],
       "hashes": [
         {
-          "content": "4602c89d2596eaba9cef130cc86d3d50bdab125e516483dcd37783196f86d19a480f7eccc44a653284456d539c1d6c5e17f0cb71704db8ad1e107e780ec33313",
-          "alg": "SHA-512"
+          "alg": "SHA-512",
+          "content": "7ae4f7b74de4581e6fc17bfa096293e0f26bcc1f0c8c58fc544427dd8aa62daca8f7a7a78fe35b0efb8753d56e0262ce171f00ad5ef290fb4e80ef50b5599e06"
         }
       ]
     },
     {
       "type": "library",
       "name": "CfSharp.Storage.Sqlite",
-      "version": "0.1.0-preview.2",
-      "purl": "pkg:nuget/CfSharp.Storage.Sqlite@0.1.0-preview.2",
+      "version": "0.1.0-preview.3",
+      "purl": "pkg:nuget/CfSharp.Storage.Sqlite@0.1.0-preview.3",
       "licenses": [
         {
           "expression": "Apache-2.0"
@@ -49,16 +49,16 @@
       ],
       "hashes": [
         {
-          "content": "c70e80011abcc7c19e29264ef47f287163c9636ed46d3b66554d4ec40f5bea75e97e65fc45cd9c64dccca20cfb0cad9c6399652eca04a1f4786dc012939233ab",
-          "alg": "SHA-512"
+          "alg": "SHA-512",
+          "content": "bc45dfc0b42af747ccd4b2ff5f77e44235c69b424734f45244287c18a19b4031179b9e6590185c8c9a0f4d8ae550a3ba56b675db775ca7e524b27d2eee0b40d9"
         }
       ]
     },
     {
       "type": "library",
       "name": "CfSharp",
-      "version": "0.1.0-preview.2",
-      "purl": "pkg:nuget/CfSharp@0.1.0-preview.2",
+      "version": "0.1.0-preview.3",
+      "purl": "pkg:nuget/CfSharp@0.1.0-preview.3",
       "licenses": [
         {
           "expression": "Apache-2.0"
@@ -66,8 +66,8 @@
       ],
       "hashes": [
         {
-          "content": "110309dcccee3d61296d085f48404f07e8efeaa5781b83bff79578b6d8925fe00acf91ca2126794492eec61f842d934c497f6fb4539a0c594379f83b79adcd0a",
-          "alg": "SHA-512"
+          "alg": "SHA-512",
+          "content": "188787c442987514578e3d3fd116bc8bc7b1fa16b0232c1506b5d5742e32476c9ea63a2e406c448bd0724a9fec132dc9e145ca206c124bf2488c1313a899bfbb"
         }
       ]
     },
@@ -83,8 +83,8 @@
       ],
       "hashes": [
         {
-          "content": "4a6e853762095f21f73ab2935a8ea4bb5b9e587d90aa2162e04c67cd46583fcd779342c3c9b13b859e1230f07dd370d875768862c9186389c2296c850939640c",
-          "alg": "SHA-512"
+          "alg": "SHA-512",
+          "content": "4a6e853762095f21f73ab2935a8ea4bb5b9e587d90aa2162e04c67cd46583fcd779342c3c9b13b859e1230f07dd370d875768862c9186389c2296c850939640c"
         }
       ]
     },
@@ -100,8 +100,8 @@
       ],
       "hashes": [
         {
-          "content": "3e0bd382313a89ce4940a98179399277c87444742f9cbf3d732b01a99eb6b5fd3966ac03d197d59f02b642a43c992f91c76395439602b95646753502e3a6a0b5",
-          "alg": "SHA-512"
+          "alg": "SHA-512",
+          "content": "3e0bd382313a89ce4940a98179399277c87444742f9cbf3d732b01a99eb6b5fd3966ac03d197d59f02b642a43c992f91c76395439602b95646753502e3a6a0b5"
         }
       ]
     },
@@ -117,8 +117,8 @@
       ],
       "hashes": [
         {
-          "content": "9fca92913dca9245d2a6ef5453be3cc3311bac3c0b3890a4386c58d03fedbd63b051751b4b6a9193989c606d92ba447bfa2d5e3bc605e2c3a5fa2bdba218513c",
-          "alg": "SHA-512"
+          "alg": "SHA-512",
+          "content": "9fca92913dca9245d2a6ef5453be3cc3311bac3c0b3890a4386c58d03fedbd63b051751b4b6a9193989c606d92ba447bfa2d5e3bc605e2c3a5fa2bdba218513c"
         }
       ]
     },
@@ -134,8 +134,8 @@
       ],
       "hashes": [
         {
-          "content": "9eaaed2122f0777143e48a1c24163724b6842b4933ac0d8fb0155816d374f8993be458f2a0596178245759cfb9cf7ed4edeae8937aab6a7c0f144823ee95a43a",
-          "alg": "SHA-512"
+          "alg": "SHA-512",
+          "content": "9eaaed2122f0777143e48a1c24163724b6842b4933ac0d8fb0155816d374f8993be458f2a0596178245759cfb9cf7ed4edeae8937aab6a7c0f144823ee95a43a"
         }
       ]
     },
@@ -151,8 +151,8 @@
       ],
       "hashes": [
         {
-          "content": "7b52d376341eb4f1478a45f465747c3b6228b2edd7c948b2e531a4e678fe6a71fa35d7ccb46d9811de152d352f3fefb22e8e49892101bfcd50272ad8ace6b05d",
-          "alg": "SHA-512"
+          "alg": "SHA-512",
+          "content": "7b52d376341eb4f1478a45f465747c3b6228b2edd7c948b2e531a4e678fe6a71fa35d7ccb46d9811de152d352f3fefb22e8e49892101bfcd50272ad8ace6b05d"
         }
       ]
     },
@@ -168,8 +168,8 @@
       ],
       "hashes": [
         {
-          "content": "ba1960ef110ac7387a2a06eefc02c59ce57b0fe58b3e0cccb79b1c8f2150105c5d1f4b65e0ed95ff50d70f28142917c6a735b83f4e5406bb1d8f9dd1f9635d7d",
-          "alg": "SHA-512"
+          "alg": "SHA-512",
+          "content": "ba1960ef110ac7387a2a06eefc02c59ce57b0fe58b3e0cccb79b1c8f2150105c5d1f4b65e0ed95ff50d70f28142917c6a735b83f4e5406bb1d8f9dd1f9635d7d"
         }
       ]
     },
@@ -185,8 +185,8 @@
       ],
       "hashes": [
         {
-          "content": "e689ec1e2cb9d2fafa9fd9f6ab861a0895aa9a1cbc9fb37e9dd856c8d1709004eb1455e64570b51013be88b60e9ae0c44f8f853932d9cdeab33ddb42fcec199b",
-          "alg": "SHA-512"
+          "alg": "SHA-512",
+          "content": "e689ec1e2cb9d2fafa9fd9f6ab861a0895aa9a1cbc9fb37e9dd856c8d1709004eb1455e64570b51013be88b60e9ae0c44f8f853932d9cdeab33ddb42fcec199b"
         }
       ]
     },
@@ -202,8 +202,8 @@
       ],
       "hashes": [
         {
-          "content": "b9c3af665938fe5f0dd8d8424405ab5f40d7e3f741142f541606552c039be345b3a2496d2c16cd61b948a67f2d7f3eea916b10853ab4f0a61ae6fc07da40223e",
-          "alg": "SHA-512"
+          "alg": "SHA-512",
+          "content": "b9c3af665938fe5f0dd8d8424405ab5f40d7e3f741142f541606552c039be345b3a2496d2c16cd61b948a67f2d7f3eea916b10853ab4f0a61ae6fc07da40223e"
         }
       ]
     },
@@ -219,8 +219,8 @@
       ],
       "hashes": [
         {
-          "content": "39afcb222032eabebe2c7fa51a37c491c6b0f456796ad7888431971b8eef4f689caee5454260398ce0ffafe491c565891b35e73afc67585a3e4c4bde995710ee",
-          "alg": "SHA-512"
+          "alg": "SHA-512",
+          "content": "39afcb222032eabebe2c7fa51a37c491c6b0f456796ad7888431971b8eef4f689caee5454260398ce0ffafe491c565891b35e73afc67585a3e4c4bde995710ee"
         }
       ]
     },
@@ -239,8 +239,8 @@
       ],
       "hashes": [
         {
-          "content": "0a9abb1068228e208dd258354654d9b99711933ca8fd4494f5c1093123e1e851b83cb8e64c4a49e4d2ae26a434e8e36755501109c4cb7f7d488e3845254ac0a7",
-          "alg": "SHA-512"
+          "alg": "SHA-512",
+          "content": "0a9abb1068228e208dd258354654d9b99711933ca8fd4494f5c1093123e1e851b83cb8e64c4a49e4d2ae26a434e8e36755501109c4cb7f7d488e3845254ac0a7"
         }
       ]
     },
@@ -259,8 +259,8 @@
       ],
       "hashes": [
         {
-          "content": "ca0f8553f04eac7b1861796c54ba4774c9a41d13af94898547793be496b706b9ff18756e9bb9dc9aca7700ad7db2d3198a1ec5756c9cb9c0022f6d9f3b10fb61",
-          "alg": "SHA-512"
+          "alg": "SHA-512",
+          "content": "ca0f8553f04eac7b1861796c54ba4774c9a41d13af94898547793be496b706b9ff18756e9bb9dc9aca7700ad7db2d3198a1ec5756c9cb9c0022f6d9f3b10fb61"
         }
       ]
     },
@@ -279,16 +279,16 @@
       ],
       "hashes": [
         {
-          "content": "dce1098e60ef3d01fae3da7bded693b769f801e63d74c83f81a0dd647419878c4e39302375fbb3baec3617149e76942e3fd3db922ec5346a04d663389237f433",
-          "alg": "SHA-512"
+          "alg": "SHA-512",
+          "content": "dce1098e60ef3d01fae3da7bded693b769f801e63d74c83f81a0dd647419878c4e39302375fbb3baec3617149e76942e3fd3db922ec5346a04d663389237f433"
         }
       ]
     },
     {
       "type": "library",
       "name": "Microsoft.Windows.SDK.BuildTools.WinApp",
-      "version": "0.7.0",
-      "purl": "pkg:nuget/Microsoft.Windows.SDK.BuildTools.WinApp@0.7.0",
+      "version": "0.7.1",
+      "purl": "pkg:nuget/Microsoft.Windows.SDK.BuildTools.WinApp@0.7.1",
       "licenses": [
         {
           "expression": "MIT"
@@ -296,8 +296,8 @@
       ],
       "hashes": [
         {
-          "content": "745355032343f06d584a2cc6480be0e42c4a594d0a786b401a54aa8574648619614768ee334d6ecffe157f95bfe42b5e61210cfe305875d67ef190ee07e64312",
-          "alg": "SHA-512"
+          "alg": "SHA-512",
+          "content": "088a50e6e58c66b460f2ee02d57ba817a7fe964d6cc0f42972c339f16f38dd165df2ebe8f1f8b3fc943b3958eb48ccfd5248664bb06a355fdf7772d57502eaec"
         }
       ]
     },
@@ -316,8 +316,8 @@
       ],
       "hashes": [
         {
-          "content": "9177406c9f55bb580585e56982a77116a6da9a5a689c855e5449e7908ceebcb91c686ad03a827069949172b87020281cd54642a0f504e055992b11d64d6e2cdd",
-          "alg": "SHA-512"
+          "alg": "SHA-512",
+          "content": "9177406c9f55bb580585e56982a77116a6da9a5a689c855e5449e7908ceebcb91c686ad03a827069949172b87020281cd54642a0f504e055992b11d64d6e2cdd"
         }
       ]
     },
@@ -336,8 +336,8 @@
       ],
       "hashes": [
         {
-          "content": "e3b929e3678c6fcac5ddb8c3b991d59331916fd16bef0c85643213dac5abdd2b709d30a80c7222b037b448f586c1eaf0554c3f79040efcec436f46181db7cdbc",
-          "alg": "SHA-512"
+          "alg": "SHA-512",
+          "content": "e3b929e3678c6fcac5ddb8c3b991d59331916fd16bef0c85643213dac5abdd2b709d30a80c7222b037b448f586c1eaf0554c3f79040efcec436f46181db7cdbc"
         }
       ]
     },
@@ -356,8 +356,8 @@
       ],
       "hashes": [
         {
-          "content": "45f9648e87861b92d9d120ee8e8d820196f42643a95270dffe07cb368e3190012bde537e82117a2ef3ef32be901caf8ad5ce3bcf7b88d8716371ddb5ebf8302f",
-          "alg": "SHA-512"
+          "alg": "SHA-512",
+          "content": "45f9648e87861b92d9d120ee8e8d820196f42643a95270dffe07cb368e3190012bde537e82117a2ef3ef32be901caf8ad5ce3bcf7b88d8716371ddb5ebf8302f"
         }
       ]
     },
@@ -376,8 +376,8 @@
       ],
       "hashes": [
         {
-          "content": "323cba2bb97d923d7ee5434f83ccbf7e41f1d9b7b44dd2d8688589b1fed296464711c15de9b9792fcb928cf3582b45f3e6f7da6042cee722accc71c86da3bbe4",
-          "alg": "SHA-512"
+          "alg": "SHA-512",
+          "content": "323cba2bb97d923d7ee5434f83ccbf7e41f1d9b7b44dd2d8688589b1fed296464711c15de9b9792fcb928cf3582b45f3e6f7da6042cee722accc71c86da3bbe4"
         }
       ]
     },
@@ -396,8 +396,8 @@
       ],
       "hashes": [
         {
-          "content": "966d6624c85003a1d5ef4d8ea26dd88e6edee40d1951f53a262d0914386061250fef502505ede140c30d61cd680aea8e77f6fb51d1e5e9a2705c6ce43fedb41f",
-          "alg": "SHA-512"
+          "alg": "SHA-512",
+          "content": "966d6624c85003a1d5ef4d8ea26dd88e6edee40d1951f53a262d0914386061250fef502505ede140c30d61cd680aea8e77f6fb51d1e5e9a2705c6ce43fedb41f"
         }
       ]
     },
@@ -416,8 +416,8 @@
       ],
       "hashes": [
         {
-          "content": "057c7d56ee994e7d85e8f740c7589a3dad9f7421723de80f219fe6e3ef03329d94af7a2bbd454003f7f64aff6607291fc953c3f5d8763502a3d091584bfe30d6",
-          "alg": "SHA-512"
+          "alg": "SHA-512",
+          "content": "057c7d56ee994e7d85e8f740c7589a3dad9f7421723de80f219fe6e3ef03329d94af7a2bbd454003f7f64aff6607291fc953c3f5d8763502a3d091584bfe30d6"
         }
       ]
     },
@@ -436,8 +436,8 @@
       ],
       "hashes": [
         {
-          "content": "dd6429dedd2dc6183e447c358f850436d52f881ab99fe6c39c2aa0634c0386846096fa112b53ba62cbd638c5e72f97b6231c0856ec1917409786f0f9a4a51e07",
-          "alg": "SHA-512"
+          "alg": "SHA-512",
+          "content": "dd6429dedd2dc6183e447c358f850436d52f881ab99fe6c39c2aa0634c0386846096fa112b53ba62cbd638c5e72f97b6231c0856ec1917409786f0f9a4a51e07"
         }
       ]
     },
@@ -456,8 +456,8 @@
       ],
       "hashes": [
         {
-          "content": "944c321d1529bf46a29aca3bde66fb55f9468f7fa15fc02492827b3be31557596b15c2dd82a612eefac50f1fd2b3fc1da3976028883518b92c4f7097619b2ef9",
-          "alg": "SHA-512"
+          "alg": "SHA-512",
+          "content": "944c321d1529bf46a29aca3bde66fb55f9468f7fa15fc02492827b3be31557596b15c2dd82a612eefac50f1fd2b3fc1da3976028883518b92c4f7097619b2ef9"
         }
       ]
     },
@@ -476,8 +476,8 @@
       ],
       "hashes": [
         {
-          "content": "58eb92711dd2f7d5de61393b037b9869989d02f3968e0cc508bbe819b7187feb539ec6d91eab6c65a491b02175e362acb678c322bc6392d1f73693d9caed0c20",
-          "alg": "SHA-512"
+          "alg": "SHA-512",
+          "content": "58eb92711dd2f7d5de61393b037b9869989d02f3968e0cc508bbe819b7187feb539ec6d91eab6c65a491b02175e362acb678c322bc6392d1f73693d9caed0c20"
         }
       ]
     },
@@ -496,8 +496,8 @@
       ],
       "hashes": [
         {
-          "content": "bafe381b050c249cb8d6a34fcd3c25353b92685a9fb59699d559a6573ebbae0882c0955f8755be3e6fc41af6c90f34260fbb39ae4c3367703e3988c751f27537",
-          "alg": "SHA-512"
+          "alg": "SHA-512",
+          "content": "bafe381b050c249cb8d6a34fcd3c25353b92685a9fb59699d559a6573ebbae0882c0955f8755be3e6fc41af6c90f34260fbb39ae4c3367703e3988c751f27537"
         }
       ]
     },
@@ -516,8 +516,8 @@
       ],
       "hashes": [
         {
-          "content": "baa3085a5a0b067b1d48ab023f62b9db78cef85846788707e78041b0983f4d2287bdd43fc3c4500e2e594465418e1ee8bebc3c6e348975f101034bb5fa70ba77",
-          "alg": "SHA-512"
+          "alg": "SHA-512",
+          "content": "baa3085a5a0b067b1d48ab023f62b9db78cef85846788707e78041b0983f4d2287bdd43fc3c4500e2e594465418e1ee8bebc3c6e348975f101034bb5fa70ba77"
         }
       ]
     },
@@ -536,8 +536,8 @@
       ],
       "hashes": [
         {
-          "content": "b4e75550f15f9197b9f812711859c9a6563ed5ed42168834c6acfc94442f9227359cc12f874055cd4ff3f3a18166d0ef2f18c2360e544d7983b4e06ad270a055",
-          "alg": "SHA-512"
+          "alg": "SHA-512",
+          "content": "b4e75550f15f9197b9f812711859c9a6563ed5ed42168834c6acfc94442f9227359cc12f874055cd4ff3f3a18166d0ef2f18c2360e544d7983b4e06ad270a055"
         }
       ]
     },
@@ -556,8 +556,8 @@
       ],
       "hashes": [
         {
-          "content": "a577ffc5e5821cea511b86d04e6b8c4bdc345654df6d353c1d28c90558e7071eb7567f5aa0d5224454cca771425a8566b321800dbc3b1ea57266d25620d3f734",
-          "alg": "SHA-512"
+          "alg": "SHA-512",
+          "content": "a577ffc5e5821cea511b86d04e6b8c4bdc345654df6d353c1d28c90558e7071eb7567f5aa0d5224454cca771425a8566b321800dbc3b1ea57266d25620d3f734"
         }
       ]
     },
@@ -573,8 +573,8 @@
       ],
       "hashes": [
         {
-          "content": "0ea951310180df265bc7afa094b53e9875c5be913e4d04908c82b3b9be2f21f9aea891ab8622851284358bae5f0cd348b0335b46126a4bd482ec8cae0e1a4c4f",
-          "alg": "SHA-512"
+          "alg": "SHA-512",
+          "content": "0ea951310180df265bc7afa094b53e9875c5be913e4d04908c82b3b9be2f21f9aea891ab8622851284358bae5f0cd348b0335b46126a4bd482ec8cae0e1a4c4f"
         }
       ]
     },
@@ -590,8 +590,8 @@
       ],
       "hashes": [
         {
-          "content": "05e188fca4c105c6b8a5dbaed677dfeb556f640c25cd5c2a366a3e795a93dba96db0026c42c17ffc308f26cb30f9f5e9011abe150ee954a89079de6282ff0a61",
-          "alg": "SHA-512"
+          "alg": "SHA-512",
+          "content": "05e188fca4c105c6b8a5dbaed677dfeb556f640c25cd5c2a366a3e795a93dba96db0026c42c17ffc308f26cb30f9f5e9011abe150ee954a89079de6282ff0a61"
         }
       ]
     },
@@ -607,8 +607,8 @@
       ],
       "hashes": [
         {
-          "content": "29b78a5ed88cae9c5dedd160b27a2b03519c8bfc554430819a47d935d8a213595ae8e75410cb724d32774c17829fd9c8bd9817a39b8277d7550a38b7032e8bb8",
-          "alg": "SHA-512"
+          "alg": "SHA-512",
+          "content": "29b78a5ed88cae9c5dedd160b27a2b03519c8bfc554430819a47d935d8a213595ae8e75410cb724d32774c17829fd9c8bd9817a39b8277d7550a38b7032e8bb8"
         }
       ]
     },
@@ -624,8 +624,8 @@
       ],
       "hashes": [
         {
-          "content": "5a09a0c8ac062d347a65f21fd7ed5d14dc6c3b2a7d1a6b14f588e37948e0cfe3599f0da1ca3541d14f2d693d59d6fbf6d6ce7e82f847437beda596a3b0c28962",
-          "alg": "SHA-512"
+          "alg": "SHA-512",
+          "content": "5a09a0c8ac062d347a65f21fd7ed5d14dc6c3b2a7d1a6b14f588e37948e0cfe3599f0da1ca3541d14f2d693d59d6fbf6d6ce7e82f847437beda596a3b0c28962"
         }
       ]
     },
@@ -641,8 +641,8 @@
       ],
       "hashes": [
         {
-          "content": "0e58be10b28db915f483bd94ab62363996b9ce08b87f049757825edf0c85ee31fda33e8029103dc17233330b95796ed17c065d49580870479964e379f4b76d88",
-          "alg": "SHA-512"
+          "alg": "SHA-512",
+          "content": "0e58be10b28db915f483bd94ab62363996b9ce08b87f049757825edf0c85ee31fda33e8029103dc17233330b95796ed17c065d49580870479964e379f4b76d88"
         }
       ]
     },
@@ -658,8 +658,8 @@
       ],
       "hashes": [
         {
-          "content": "9384426e53fe1dcd4901cefb72b57e7c564b8997893da63c563300f24be48b4d19d1da211bac715f0e2a92e5720940b6f870a16e1c16fb27619a39a551901751",
-          "alg": "SHA-512"
+          "alg": "SHA-512",
+          "content": "9384426e53fe1dcd4901cefb72b57e7c564b8997893da63c563300f24be48b4d19d1da211bac715f0e2a92e5720940b6f870a16e1c16fb27619a39a551901751"
         }
       ]
     },
@@ -675,8 +675,8 @@
       ],
       "hashes": [
         {
-          "content": "c577e02b142674ddee068f263fcf5c5443af4661648f9a2f04c131ad9143473e5969c94072b812c741f1d54e0ebf59893d0473e57da51a4d21c1789c93287002",
-          "alg": "SHA-512"
+          "alg": "SHA-512",
+          "content": "c577e02b142674ddee068f263fcf5c5443af4661648f9a2f04c131ad9143473e5969c94072b812c741f1d54e0ebf59893d0473e57da51a4d21c1789c93287002"
         }
       ]
     },
@@ -692,8 +692,8 @@
       ],
       "hashes": [
         {
-          "content": "adace58eeed48082d0fd56fb0685b5451ff120404373c627ab4b1193be0aa4b0476b2dd031925f80af25cb8204ce52656c562508ec6974f6bb0cd05461a62d23",
-          "alg": "SHA-512"
+          "alg": "SHA-512",
+          "content": "adace58eeed48082d0fd56fb0685b5451ff120404373c627ab4b1193be0aa4b0476b2dd031925f80af25cb8204ce52656c562508ec6974f6bb0cd05461a62d23"
         }
       ]
     }
