@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [string]$OutputDirectory = (Join-Path $PSScriptRoot '..' 'artifacts' 'official-adapters')
+    [string]$OutputDirectory = (Join-Path $PSScriptRoot '..' 'artifacts' 'official-adapters'),
+    [string]$ReleaseLockPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -58,6 +59,18 @@ if ($lock.schemaVersion -ne 1 -or @($lock.adapters).Count -eq 0) {
     throw 'The official Adapter aggregation lock is invalid.'
 }
 
+$OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
+$artifactRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../artifacts'))
+if (-not $OutputDirectory.StartsWith($artifactRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'The aggregate output must be a dedicated directory inside the product artifacts directory.'
+}
+$releaseLock = $null
+if ($ReleaseLockPath) {
+    $releaseLock = Get-Content -LiteralPath $ReleaseLockPath -Raw | ConvertFrom-Json
+    $source = (& git -C (Join-Path $PSScriptRoot '..') rev-parse HEAD | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or $releaseLock.schemaVersion -ne 1 -or $releaseLock.mirrorPulseSourceSha -cne $source -or
+        @($releaseLock.adapters).Count -ne @($lock.adapters).Count) { throw 'The shared candidate differs from the product source or official catalog.' }
+}
 if (Test-Path -LiteralPath $OutputDirectory) {
     Remove-Item -LiteralPath $OutputDirectory -Recurse -Force
 }
@@ -89,9 +102,22 @@ foreach ($entry in @($lock.adapters)) {
         throw "Aggregation entry '$adapterId' has an invalid identity."
     }
 
-    $release = (& gh api "repos/$repository/releases/latest" | ConvertFrom-Json)
-    if ($LASTEXITCODE -ne 0 -or $null -eq $release) {
-        throw "Unable to read the latest release for '$repository'."
+    $snapshot = $null
+    if ($releaseLock) {
+        $matches = @($releaseLock.adapters | Where-Object { $_.adapterId -ceq $adapterId -and $_.repository -ceq $repository })
+        if ($matches.Count -ne 1) { throw 'The shared candidate must identify each official provider exactly once.' }
+        $snapshot = Get-OfficialAdapterReleaseSnapshot -Release $matches[0].release -AdapterId $adapterId -Repository $repository -SourceSha $matches[0].sourceSha
+        $release = $snapshot.release
+        if ((Get-OfficialAdapterTagSource -Repository $repository -Tag $release.tag_name) -cne $snapshot.sourceSha) {
+            throw 'An official release tag changed after the shared candidate was resolved.'
+        }
+    } else {
+        $release = (& gh api "repos/$repository/releases/latest" | ConvertFrom-Json)
+        if ($LASTEXITCODE -ne 0 -or $null -eq $release) { throw "Unable to read the latest release for '$repository'." }
+        $resolvedIdentity = Get-OfficialStableAdapterReleaseIdentity -Release $release -AdapterId $adapterId
+        $snapshot = Get-OfficialAdapterReleaseSnapshot -Release $release -AdapterId $adapterId -Repository $repository `
+            -SourceSha (Get-OfficialAdapterTagSource -Repository $repository -Tag $resolvedIdentity.tag)
+        $release = $snapshot.release
     }
     $identity = Get-OfficialStableAdapterReleaseIdentity -Release $release -AdapterId $adapterId
     $tag = $identity.tag
@@ -113,8 +139,29 @@ foreach ($entry in @($lock.adapters)) {
     New-Item -ItemType Directory -Path $adapterDirectory -Force | Out-Null
     $packagePath = Join-Path $adapterDirectory $packageAsset.name
     $signaturePath = Join-Path $adapterDirectory $signatureAsset[0].name
+    if ($snapshot) {
+        foreach ($asset in $release.assets) {
+            $current = & gh api "repos/$repository/releases/assets/$($asset.id)" | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0 -or $current.name -cne $asset.name -or $current.size -ne $asset.size -or $current.digest -cne $asset.digest) {
+                throw 'A release asset changed after the shared candidate was resolved.'
+            }
+        }
+    }
     Download-ReleaseAsset -Tag $tag -Repository $repository -Pattern $packageAsset.name -Directory $adapterDirectory
     Download-ReleaseAsset -Tag $tag -Repository $repository -Pattern $signatureAsset[0].name -Directory $adapterDirectory
+
+    if ($snapshot) {
+        foreach ($asset in @($packageAsset, $signatureAsset[0])) {
+            $download = Join-Path $adapterDirectory $asset.name
+            if ((Get-Item -LiteralPath $download).Length -ne $asset.size -or
+                ('sha256:' + (Get-FileHash -LiteralPath $download -Algorithm SHA256).Hash.ToLowerInvariant()) -cne $asset.digest) {
+                throw 'A downloaded release asset differs from the shared candidate.'
+            }
+        }
+        if ((Get-OfficialAdapterTagSource -Repository $repository -Tag $tag) -cne $snapshot.sourceSha) {
+            throw 'The official release tag changed during candidate download.'
+        }
+    }
 
     $packageHash = (Get-FileHash -LiteralPath $packagePath -Algorithm SHA256).Hash.ToLowerInvariant()
     $packageLength = (Get-Item -LiteralPath $packagePath).Length
@@ -170,6 +217,10 @@ foreach ($entry in @($lock.adapters)) {
         version = $version
         tag = $tag
         releaseUrl = $release.html_url
+        releaseId = $release.id
+        sourceSha = if ($snapshot) { $snapshot.sourceSha } else { $null }
+        packageAssetId = $packageAsset.id
+        signatureAssetId = $signatureAsset[0].id
         package = $packageAsset.name
         packageLength = $packageLength
         packageSha256 = $packageHash
