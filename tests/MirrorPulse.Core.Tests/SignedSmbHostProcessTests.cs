@@ -57,6 +57,7 @@ public sealed class SignedSmbHostProcessTests
                 "SMB fixture", new Dictionary<string, string> { ["networkPath"] = networkPath },
                 [], Path.Combine(root, "cache", "files"), Path.Combine(root, "cache", "transfers"));
             MirrorPulseAdapterTopology topology = await catalog.ReadAdapterTopologyAsync();
+            string rootKey = topology.Roots.Single(binding => binding.InstanceId == instance.InstanceId).UniquenessKey;
             await using var supervisor = new AdapterInstanceProcessSupervisor(catalog,
                 new FixedCredentialStore("unused", string.Empty));
             await supervisor.StartAsync(topology);
@@ -99,13 +100,13 @@ public sealed class SignedSmbHostProcessTests
             CollectionAssert.AreEqual(original.AsSpan(1, 3).ToArray(), range);
 
             string revision = (await supervisor.StatAsync(new MirrorPulseWorkerStatRequest(
-                instance.InstanceId, "note.txt"), timeout.Token))!;
+                instance.InstanceId, "note.txt", rootKey), timeout.Token))!;
             Assert.AreEqual(note.Identity.RemoteRevision, revision);
             byte[] replacement = Encoding.UTF8.GetBytes("updated SMB content");
             await using (var content = new MemoryStream(replacement, writable: false))
             {
                 string updated = await supervisor.UploadAsync(new MirrorPulseWorkerUploadRequest(
-                    instance.InstanceId, "note.txt", revision, content, replacement.Length), timeout.Token);
+                    instance.InstanceId, "note.txt", revision, content, replacement.Length, RootKey: rootKey), timeout.Token);
                 Assert.IsFalse(string.IsNullOrWhiteSpace(updated));
             }
 
@@ -115,7 +116,7 @@ public sealed class SignedSmbHostProcessTests
             {
                 await Assert.ThrowsExactlyAsync<MirrorPulseWorkerMutationConflictException>(async () => await supervisor.UploadAsync(
                     new MirrorPulseWorkerUploadRequest(instance.InstanceId, "note.txt", revision,
-                        stale, 3), timeout.Token));
+                        stale, 3, RootKey: rootKey), timeout.Token));
             }
 
             CollectionAssert.AreEqual(replacement, await File.ReadAllBytesAsync(

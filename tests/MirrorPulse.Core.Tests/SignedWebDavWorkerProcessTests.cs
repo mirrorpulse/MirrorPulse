@@ -45,6 +45,7 @@ public sealed class SignedWebDavWorkerProcessTests
                 "WebDAV test", new Dictionary<string, string> { ["endpoint"] = server.Endpoint.AbsoluteUri },
                 [], Path.Combine(root, "cache", "files"), Path.Combine(root, "cache", "transfers"));
             MirrorPulseAdapterTopology topology = await catalog.ReadAdapterTopologyAsync();
+            string rootKey = topology.Roots.Single(binding => binding.InstanceId == instance.InstanceId).UniquenessKey;
             await using var supervisor = new AdapterInstanceProcessSupervisor(catalog,
                 new WindowsCredentialManagerStore());
             await supervisor.StartAsync(topology);
@@ -91,7 +92,7 @@ public sealed class SignedWebDavWorkerProcessTests
             {
                 await Assert.ThrowsExactlyAsync<MirrorPulseWorkerMutationConflictException>(async () => await supervisor.UploadAsync(
                     new MirrorPulseWorkerUploadRequest(instance.InstanceId, "note.txt", "\"stale\"",
-                        stale, replacement.Length), timeout.Token));
+                        stale, replacement.Length, RootKey: rootKey), timeout.Token));
             }
 
             CollectionAssert.AreEqual(original, server.Content);
@@ -101,7 +102,7 @@ public sealed class SignedWebDavWorkerProcessTests
             {
                 string revision = await supervisor.UploadAsync(new MirrorPulseWorkerUploadRequest(
                     instance.InstanceId, "note.txt", note.Identity.RemoteRevision,
-                    current, replacement.Length), timeout.Token);
+                    current, replacement.Length, RootKey: rootKey), timeout.Token);
                 Assert.AreEqual("\"v2\"", revision);
             }
 
@@ -173,11 +174,11 @@ public sealed class SignedWebDavWorkerProcessTests
                         <d:multistatus xmlns:d="DAV:">
                           <d:response><d:href>/dav/</d:href><d:propstat><d:prop>
                             <d:resourcetype><d:collection/></d:resourcetype>
-                          </d:prop></d:propstat></d:response>
+                          </d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>
                           <d:response><d:href>/dav/note.txt</d:href><d:propstat><d:prop>
                             <d:resourcetype/><d:getcontentlength>{_content.Length}</d:getcontentlength>
                             <d:getetag>"v{_revision}"</d:getetag>
-                          </d:prop></d:propstat></d:response>
+                          </d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>
                         </d:multistatus>
                         """;
                     byte[] body = Encoding.UTF8.GetBytes(xml);
@@ -194,8 +195,23 @@ public sealed class SignedWebDavWorkerProcessTests
                     response.ContentLength64 = _content.Length;
                     if (request.HttpMethod == "GET")
                     {
+                        if (request.Headers["If-Match"] is { } expected && expected != $"\"v{_revision}\"")
+                        {
+                            response.StatusCode = 412;
+                            response.ContentLength64 = 0;
+                            return;
+                        }
+
                         string? range = request.Headers["Range"];
-                        if (range is null || !range.StartsWith("bytes=", StringComparison.Ordinal))
+                        if (range is null)
+                        {
+                            if (request.Headers["If-Match"] != $"\"v{_revision}\"")
+                                throw new InvalidDataException("The fixture expects a conditional content proof.");
+                            await response.OutputStream.WriteAsync(_content);
+                            return;
+                        }
+
+                        if (!range.StartsWith("bytes=", StringComparison.Ordinal))
                             throw new InvalidDataException("The fixture expects a bounded range request.");
                         string[] bounds = range[6..].Split('-');
                         int start = int.Parse(bounds[0], System.Globalization.CultureInfo.InvariantCulture);
