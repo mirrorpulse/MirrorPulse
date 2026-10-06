@@ -50,14 +50,37 @@ Preview and dry-run candidates remain separate from default stable distribution.
 | Local | Stable 1.0.0 | [12 Worker cases and one production Host case](https://github.com/mirrorpulse/adapter-local/actions/runs/37328416807) per architecture | Protected native file operations; explicit recovery copies after ambiguous replacement |
 | WebDAV | Stable 1.0.0 | [14 Worker cases and one production Host case](https://github.com/mirrorpulse/adapter-webdav/actions/runs/37398809874) per architecture | Conditional HTTP requests and supported directory locks; lost acknowledgements are not blindly replayed |
 | SMB | Stable 1.0.0 | [18 actual shared-file cases and one production Host case](https://github.com/mirrorpulse/adapter-smb/actions/runs/37398735064) per architecture | Windows identities and protected native handles; unsupported cross-root or directory-tree moves are refused |
-| FTP / FTPS | Unpublished v2 dry run | [Eight Worker cases and one production Host case](https://github.com/mirrorpulse/adapter-ftp/actions/runs/37371924154) per architecture | Reads only; mutations return `ConditionalMutationUnavailable` |
-| SFTP | Unpublished v2 dry run | [Nine Worker cases and one production Host case](https://github.com/mirrorpulse/adapter-sftp/actions/runs/37373243470) per architecture | Reads only; mutations return `ConditionalMutationUnavailable` |
+| FTP / FTPS | Historical v2 read-only dry run | [Eight Worker cases and one production Host case](https://github.com/mirrorpulse/adapter-ftp/actions/runs/37371924154) per architecture | Reads only in this candidate; mutations return `ConditionalMutationUnavailable` |
+| SFTP | Historical v2 read-only dry run | [Nine Worker cases and one production Host case](https://github.com/mirrorpulse/adapter-sftp/actions/runs/37373243470) per architecture | Reads only in this candidate; mutations return `ConditionalMutationUnavailable` |
 
 These gates verify the exact signed package, its private runtime, independent root
 credentials, disabled roots, and the production Host boundary. Official Local,
 WebDAV and SMB publication also verifies the built-in product trust anchor. FTP
 and SFTP dry runs use disposable signing keys. This evidence does not complete
 offline journal recovery or Explorer acceptance for every Adapter.
+
+### Network v2 optimistic development boundary
+
+The current FTP/FTPS and SFTP development Workers add verified staged uploads,
+same-root file moves, retained file deletion, directory creation and empty-only
+directory deletion. Each root selects `mutationPolicy=Optimistic` (the default)
+or `ReadOnly`. Existing move destinations, cross-root moves and directory-tree
+moves are refused. These changes are separate from the historical dry-run
+candidates and published stable versions listed here.
+
+Remote receipts bind the stable operation ID, root, paths, preconditions and
+content digest. Staging, previous content and receipts use reserved sibling names
+that are omitted from normal directory pages. They consume remote space and must
+remain available while a result is unknown. Retries read back the result;
+they do not blindly repeat an uncertain rename. A cancellation acknowledgement
+does not establish that a remote publication was rolled back.
+
+Metadata and full-content checks improve conflict detection, but external writers
+can race the final check and rename. Previous copies may miss the last concurrent
+edit. This policy supplies neither atomic version CAS nor exactly-once semantics.
+The signed network v2 Host profile verifies actual writes and replay, retained
+bytes, moves/deletes, directories, hidden evidence and a separate read-only root.
+Formal organization signing and native x64/ARM64 publication remain distinct gates.
 
 ## Published stable protocol coverage
 

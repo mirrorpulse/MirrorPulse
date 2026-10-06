@@ -53,10 +53,13 @@ public sealed class FtpWorkerProcessTests
                     ["endpoint"] = $"ftp://127.0.0.1:{fixture.Port}/",
                     ["username"] = "user",
                     ["securityMode"] = "Plain",
+                    ["allowPlaintext"] = "true",
                     ["credentialReference"] = "ftp-password",
                 }, ["ftp-password"], Path.Combine(root, "cache", "files"),
                 Path.Combine(root, "cache", "transfers"));
             MirrorPulseAdapterTopology topology = await catalog.ReadAdapterTopologyAsync();
+            RootRegistration registration = topology.Roots.Single(binding => binding.InstanceId == instance.InstanceId);
+            string rootKey = registration.UniquenessKey;
             await using var supervisor = new AdapterInstanceProcessSupervisor(catalog,
                 new FixedCredentialStore("ftp-password", "correct-secret"));
             await supervisor.StartAsync(topology);
@@ -79,14 +82,14 @@ public sealed class FtpWorkerProcessTests
             }
 
             string revision = (await supervisor.StatAsync(new MirrorPulseWorkerStatRequest(
-                instance.InstanceId, "report.bin"), timeout.Token))!;
+                instance.InstanceId, "report.bin", rootKey), timeout.Token))!;
             Assert.IsFalse(string.IsNullOrWhiteSpace(revision));
             var router = new MirrorPulseRootRouter(paths.SyncRootPath, topology.Roots);
             var provider = new MirrorPulseDemandProvider(router, supervisor,
                 new MirrorPulseAdapterDirectoryPageSource(supervisor));
             string filePath = Path.Combine(paths.SyncRootPath, topology.Roots.Single().DirectoryName,
                 "report.bin");
-            byte[] identity = MirrorPulsePlaceholderIdentity.Create(instance.InstanceId,
+            byte[] identity = MirrorPulsePlaceholderIdentity.CreateForRoot(registration,
                 "report.bin", revision).Encode();
             await using Stream read = await provider.OpenReadAsync(filePath, identity,
                 8, 2, 3, timeout.Token);
@@ -100,7 +103,7 @@ public sealed class FtpWorkerProcessTests
             await using (var content = new MemoryStream(replacement, writable: false))
             {
                 updated = await supervisor.UploadAsync(new MirrorPulseWorkerUploadRequest(
-                    instance.InstanceId, "report.bin", revision, content, replacement.Length), timeout.Token);
+                    instance.InstanceId, "report.bin", revision, content, replacement.Length, RootKey: rootKey), timeout.Token);
                 Assert.IsFalse(string.IsNullOrWhiteSpace(updated));
             }
 
@@ -109,19 +112,19 @@ public sealed class FtpWorkerProcessTests
             {
                 await Assert.ThrowsExactlyAsync<MirrorPulseWorkerMutationConflictException>(async () => await supervisor.UploadAsync(
                     new MirrorPulseWorkerUploadRequest(instance.InstanceId, "report.bin", revision,
-                        stale, 3), timeout.Token));
+                        stale, 3, RootKey: rootKey), timeout.Token));
             }
 
             CollectionAssert.AreEqual(replacement, fixture.ReadStoredFile("/report.bin"));
 
             string movedRevision = await supervisor.MoveAsync(new MirrorPulseWorkerMoveRequest(
-                instance.InstanceId, "report.bin", "renamed.bin", updated, false), timeout.Token);
+                instance.InstanceId, "report.bin", "renamed.bin", updated, false, RootKey: rootKey), timeout.Token);
             Assert.IsFalse(string.IsNullOrWhiteSpace(movedRevision));
             CollectionAssert.AreEqual(replacement, fixture.ReadStoredFile("/renamed.bin"));
             await supervisor.DeleteAsync(new MirrorPulseWorkerDeleteRequest(
-                instance.InstanceId, "renamed.bin", movedRevision, false), timeout.Token);
+                instance.InstanceId, "renamed.bin", movedRevision, false, RootKey: rootKey), timeout.Token);
             Assert.IsNull(await supervisor.StatAsync(new MirrorPulseWorkerStatRequest(
-                instance.InstanceId, "renamed.bin"), timeout.Token));
+                instance.InstanceId, "renamed.bin", rootKey), timeout.Token));
         }
         finally
         {
@@ -468,6 +471,8 @@ public sealed class FtpWorkerProcessTests
         private string? _renameFrom;
         private bool _protectData;
         private int _uploadCount;
+        private readonly HashSet<string> _directories = new(StringComparer.Ordinal) { "/" };
+        private string _currentDirectory = "/";
 
         public LoopbackFtpFixture(FtpSecurityMode mode, string username = "user",
             string password = "correct-secret", byte[]? initialContent = null)
@@ -558,13 +563,18 @@ public sealed class FtpWorkerProcessTests
                         await SendAsync(stream, "211-Features\r\n UTF8\r\n SIZE\r\n MDTM\r\n MLST type*;size*;modify*;\r\n REST STREAM\r\n211 End\r\n");
                         break;
                     case "MLSD":
+                        if (!_directories.Contains(argument)) { await SendAsync(stream, "550 Not found\r\n"); break; }
                         await SendAsync(stream, "150 Opening directory connection\r\n");
                         using (TcpClient data = await (_dataListener ?? throw new InvalidDataException()).AcceptTcpClientAsync())
                         {
                             Stream dataStream = _protectData ? await SecureAsync(data.GetStream()) : data.GetStream();
-                            foreach (var file in _files.OrderBy(item => item.Key, StringComparer.Ordinal))
+                            string prefix = argument.TrimEnd('/') + "/";
+                            foreach (var file in _files.Where(item => item.Key.StartsWith(prefix, StringComparison.Ordinal) && !item.Key[prefix.Length..].Contains('/'))
+                                .OrderBy(item => item.Key, StringComparer.Ordinal))
                                 await SendAsync(dataStream, FormattableString.Invariant(
-                                    $"type=file;size={file.Value.Content.Length};modify={file.Value.Modified:yyyyMMddHHmmss}; {file.Key.TrimStart('/')}\r\n"));
+                                    $"type=file;size={file.Value.Content.Length};modify={file.Value.Modified:yyyyMMddHHmmss}; {file.Key[prefix.Length..]}\r\n"));
+                            foreach (string directory in _directories.Where(path => path != "/" && path.StartsWith(prefix, StringComparison.Ordinal) && !path[prefix.Length..].Contains('/')))
+                                await SendAsync(dataStream, $"type=dir;size=0;modify=20260929120000; {directory[prefix.Length..]}\r\n");
                         }
                         _dataListener?.Stop();
                         await SendAsync(stream, "226 Directory complete\r\n");
@@ -615,6 +625,8 @@ public sealed class FtpWorkerProcessTests
                         await SendAsync(stream, "226 Transfer complete\r\n");
                         break;
                     case "STOR":
+                        string parent = argument[..argument.LastIndexOf('/')];
+                        if (!_directories.Contains(parent.Length == 0 ? "/" : parent)) { await SendAsync(stream, "550 Parent missing\r\n"); break; }
                         await SendAsync(stream, "150 Opening data connection\r\n");
                         using (TcpClient data = await (_dataListener ?? throw new InvalidDataException()).AcceptTcpClientAsync())
                         {
@@ -664,7 +676,21 @@ public sealed class FtpWorkerProcessTests
                         await SendAsync(stream, "215 UNIX Type: L8\r\n");
                         break;
                     case "PWD":
-                        await SendAsync(stream, "257 \"/\" is current directory\r\n");
+                        await SendAsync(stream, $"257 \"{_currentDirectory}\" is current directory\r\n");
+                        break;
+                    case "CWD":
+                        if (_directories.Contains(argument)) { _currentDirectory = argument; await SendAsync(stream, "250 Directory changed\r\n"); }
+                        else await SendAsync(stream, "550 Not found\r\n");
+                        break;
+                    case "MKD":
+                        string directoryParent = argument[..argument.LastIndexOf('/')];
+                        bool created = !_files.ContainsKey(argument) && _directories.Contains(directoryParent.Length == 0 ? "/" : directoryParent) && _directories.Add(argument);
+                        await SendAsync(stream, created ? "257 Directory created\r\n" : "550 Cannot create directory\r\n");
+                        break;
+                    case "RMD":
+                        bool removed = argument != "/" && !_files.Keys.Any(path => path.StartsWith(argument + "/", StringComparison.Ordinal)) &&
+                            !_directories.Any(path => path.StartsWith(argument + "/", StringComparison.Ordinal)) && _directories.Remove(argument);
+                        await SendAsync(stream, removed ? "250 Directory removed\r\n" : "550 Directory not empty or absent\r\n");
                         break;
                     case "QUIT":
                         await SendAsync(stream, "221 Goodbye\r\n");
