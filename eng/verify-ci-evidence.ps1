@@ -3,7 +3,8 @@ param(
     [Parameter(Mandatory)][string]$EvidenceDirectory,
     [Parameter(Mandatory)][ValidatePattern('^[0-9a-f]{40}$')][string]$ExpectedSourceSha,
     [switch]$RequireNative,
-    [switch]$RequireInstalled
+    [switch]$RequireInstalled,
+    [switch]$RequireOfficialCandidate
 )
 
 $ErrorActionPreference = "Stop"
@@ -58,6 +59,19 @@ foreach ($job in $expected.Keys) {
                 @($native[0].categories | Where-Object { $_.category -eq "native" -and $_.executed -eq $requiredNativeCount }).Count -ne 1) {
                 throw "Native Cloud Files execution is missing."
             }
+        }
+    }
+}
+$candidates = @($manifests | Where-Object { $null -ne $_.officialAdapterCandidateSha256 })
+if ($RequireOfficialCandidate -or $candidates.Count -gt 0) {
+    if ($candidates.Count -ne 3 -or @($candidates.officialAdapterCandidateSha256 | Select-Object -Unique).Count -ne 1 -or
+        [string]$candidates[0].officialAdapterCandidateSha256 -cnotmatch '\A[0-9a-f]{64}\z') {
+        throw 'All three CI jobs must verify the same frozen official Adapter candidate.'
+    }
+    foreach ($candidate in $candidates) {
+        $records = @($candidate.artifacts | Where-Object { $_.path -ceq 'official-candidate/official-adapter-releases.json' })
+        if ($records.Count -ne 1 -or $records[0].sha256 -cne $candidate.officialAdapterCandidateSha256 -or $records[0].length -le 0) {
+            throw 'The shared candidate digest is not bound to a verified artifact.'
         }
     }
 }

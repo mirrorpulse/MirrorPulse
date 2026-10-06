@@ -17,11 +17,39 @@ permissions:
   contents: read
 
 jobs:
+  official-adapter-candidate:
+    runs-on: windows-latest
+    steps:
+      - name: Check out the candidate product source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Verify stable selection and freeze official release identities once
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          pwsh ./eng/verify-official-adapter-release-policy.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Official candidate selection failed.' }
+          pwsh ./eng/resolve-official-adapter-releases.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'The official release candidate could not be frozen.' }
+      - name: Share the exact official release candidate
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: official-adapter-release-lock
+          path: artifacts/official-adapter-releases.json
+          if-no-files-found: error
+
   build-and-test:
+    needs: official-adapter-candidate
     runs-on: windows-latest
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Download the shared official candidate
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: official-adapter-release-lock
+          path: artifacts
 
       - name: Set up .NET
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
@@ -95,6 +123,7 @@ jobs:
             TestManifests = @('artifacts/test-results/managed/test-evidence.json')
             PublishDirectory = "$env:RUNNER_TEMP/mirrorpulse-cli-host-win-x64"
             RejectedPath = 'artifacts/evidence/rejected.json'
+            AdapterReleaseLockPath = 'artifacts/official-adapter-releases.json'
           }
           if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
             $parameters.TestManifests += 'artifacts/test-results/native/test-evidence.json'
@@ -110,10 +139,17 @@ jobs:
           if-no-files-found: error
 
   official-package-arm64:
+    needs: official-adapter-candidate
     runs-on: windows-11-arm
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Download the shared official candidate
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: official-adapter-release-lock
+          path: artifacts
 
       - name: Set up .NET
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
@@ -149,11 +185,10 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           pwsh ./eng/prepare-native-ci-volume.ps1
-          $directory = Join-Path $env:RUNNER_TEMP 'mirrorpulse-cli-local'
-          New-Item -ItemType Directory -Path $directory -Force | Out-Null
-          gh release download --repo MirrorPulse/adapter-local --dir $directory --pattern '*.mpadapter*'
-          if ($LASTEXITCODE -ne 0) { throw 'The signed Local Adapter release could not be downloaded.' }
-          $package = Get-ChildItem -LiteralPath $directory -Filter '*.mpadapter' -File | Select-Object -First 1
+          $directory = Join-Path $env:GITHUB_WORKSPACE 'artifacts/official-local'
+          pwsh ./eng/aggregate-official-adapters.ps1 -ReleaseLockPath artifacts/official-adapter-releases.json -AdapterIds com.mirrorpulse.adapter.local -OutputDirectory $directory
+          if ($LASTEXITCODE -ne 0) { throw 'The frozen signed Local Adapter could not be verified.' }
+          $package = Get-ChildItem -LiteralPath $directory -Recurse -Filter '*.mpadapter' -File | Select-Object -First 1
           if ($null -eq $package -or -not (Test-Path -LiteralPath "$($package.FullName).signature.json")) {
             throw 'The Local Adapter package or signature is missing.'
           }
@@ -187,6 +222,7 @@ jobs:
             TestManifests = @('artifacts/test-results/signed/test-evidence.json')
             PublishDirectory = "$env:RUNNER_TEMP/mirrorpulse-cli-host-win-arm64"
             IntegrationPath = 'artifacts/evidence/cli-regression.json'
+            AdapterReleaseLockPath = 'artifacts/official-adapter-releases.json'
           }
           if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
             $parameters.RequireInstalled = $true
@@ -202,12 +238,19 @@ jobs:
           if-no-files-found: error
 
   official-adapters:
+    needs: official-adapter-candidate
     runs-on: windows-latest
     permissions:
       contents: read
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Download the shared official candidate
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: official-adapter-release-lock
+          path: artifacts
 
       - name: Set up .NET
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
@@ -219,11 +262,16 @@ jobs:
           pwsh ./eng/restore-adapter-sdk.ps1
           dotnet restore tests/MirrorPulse.Core.Tests/MirrorPulse.Core.Tests.csproj --locked-mode
 
-      - name: Aggregate latest official Adapter releases
+      - name: Aggregate the frozen official Adapter releases
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: pwsh ./eng/aggregate-official-adapters.ps1 -OutputDirectory "$env:GITHUB_WORKSPACE/artifacts/official-adapters"
+        run: |
+          pwsh ./eng/verify-official-adapter-release-policy.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Official stable release selection failed.' }
+          pwsh ./eng/verify-official-adapter-signatures.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Official signature contract failed.' }
+          pwsh ./eng/aggregate-official-adapters.ps1 -ReleaseLockPath artifacts/official-adapter-releases.json -OutputDirectory "$env:GITHUB_WORKSPACE/artifacts/official-adapters"
 
       - name: Download previous signed Local Adapter release
         shell: pwsh
@@ -275,7 +323,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path artifacts/evidence -Force | Out-Null
-          ./eng/collect-ci-evidence.ps1 -Job official-adapters -Runtime win-x64 -OutputPath artifacts/evidence/official-adapters.json -TestManifests artifacts/test-results/official/test-evidence.json -AdapterDirectory artifacts/official-adapters
+          ./eng/collect-ci-evidence.ps1 -Job official-adapters -Runtime win-x64 -OutputPath artifacts/evidence/official-adapters.json -TestManifests artifacts/test-results/official/test-evidence.json -AdapterDirectory artifacts/official-adapters -AdapterReleaseLockPath artifacts/official-adapter-releases.json
 
       - name: Upload official Adapter verification evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

@@ -14,8 +14,92 @@ using MirrorPulse.Core.Workers;
 namespace MirrorPulse.Core.Tests;
 
 [TestClass]
+[DoNotParallelize] // Both tests publish the same Worker project into its shared intermediate directory.
 public sealed class FtpSignedPackageProcessTests
 {
+    [TestMethod]
+    public async Task SignedPreviewAndLegacyVersionsCoexistAcrossSelectionRestartAndUninstall()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"mirrorpulse-package-versions-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            string project = Path.Combine(FindRepositoryRoot(), "Adapters", "official",
+                "MirrorPulse.Adapter.Ftp.Worker", "MirrorPulse.Adapter.Ftp.Worker.csproj");
+            string x64 = Path.Combine(root, "publish-x64");
+            string arm64 = Path.Combine(root, "publish-arm64");
+            await PublishAsync(project, "win-x64", x64);
+            await PublishAsync(project, "win-arm64", arm64);
+            string runtime = RuntimeInformation.ProcessArchitecture == Architecture.Arm64 ? "win-arm64" : "win-x64";
+            var storage = new MirrorPulseStoragePaths(Path.Combine(root, "sync"), Path.Combine(root, "data"));
+            var paths = new CurrentUserAdapterPathProvider(Path.Combine(root, "installed"));
+            var activation = new AdapterActivationPointerStore(paths);
+            string[] versions = ["1.2.3.0", "1.2.3-preview.2", "1.2.3-preview.10", "1.2.3"];
+            var installations = new List<InstalledAdapter>();
+            InstanceId instanceId;
+            using RSA publisher = RSA.Create(2048);
+            await using (var catalog = await MirrorPulseProductCatalog.OpenAsync(storage))
+            {
+                foreach (string version in versions)
+                {
+                    string packagePath = Path.Combine(root, version + ".mpadapter");
+                    SignedAdapterPackageBuildResult package = await OfficialProcessAdapterPackageBuilder.BuildAsync(
+                        new OfficialProcessAdapterPackageInput("com.mirrorpulse.adapter.ftp", "FTP", version, x64, arm64),
+                        packagePath, publisher, "Version Test Publisher");
+                    InstalledAdapter installed = await catalog.InstallSignedAdapterAsync(packagePath,
+                        package.SignaturePath, paths.RootDirectory, runtime, publisher, "Version Test Publisher");
+                    Assert.AreEqual(version, installed.Version);
+                    string managedPath = paths.GetInstallationDirectory(installed.AdapterId, version, installed.InstallId);
+                    Directory.CreateDirectory(Path.GetDirectoryName(managedPath)!);
+                    Directory.Move(installed.InstallationDirectory, managedPath);
+                    installed = new InstalledAdapter(installed.Manifest, installed.InstallId, managedPath,
+                        installed.PackageSha256, installed.Source, installed.SourceReference, installed.IsSigned,
+                        installed.InstalledAt, installed.LifecycleState);
+                    installations.Add(installed);
+                }
+
+                await catalog.SaveAdapterTopologyAsync(new(installations, [], []));
+                AdapterInstance instance = await catalog.CreateInstanceAsync(installations[0].InstallId,
+                    "Version test", new Dictionary<string, string>(), [], Path.Combine(root, "files"),
+                    Path.Combine(root, "transfers"), enabled: false);
+                instanceId = instance.InstanceId;
+                await catalog.SelectInstanceInstallationAsync(instanceId, installations[2].InstallId);
+                await activation.ActivateAsync(installations[2].AdapterId, installations[2].Version, installations[2].InstallId);
+            }
+
+            await using (var reopened = await MirrorPulseProductCatalog.OpenAsync(storage))
+            {
+                MirrorPulseAdapterTopology restored = await reopened.ReadAdapterTopologyAsync();
+                CollectionAssert.AreEqual(versions, restored.Installations.Select(item => item.Version).ToArray());
+                Assert.AreEqual(installations[2].InstallId, restored.Instances.Single().InstallId);
+                Assert.AreEqual("1.2.3-preview.10", (await activation.ReadAsync(installations[2].AdapterId))?.Version);
+                InstalledAdapter legacy = installations[0];
+                AdapterUninstallResult removed = await new AdapterUninstallService(paths, activation).UninstallAsync(legacy);
+                Assert.IsTrue(removed.InstallationRemoved);
+                Assert.IsFalse(removed.ActivePointerCleared);
+                await reopened.RemoveInstallationAsync(legacy.InstallId);
+                Assert.IsTrue(Directory.Exists(installations[2].InstallationDirectory));
+                await reopened.SelectInstanceInstallationAsync(instanceId, installations[3].InstallId);
+            }
+
+            await using (var reopened = await MirrorPulseProductCatalog.OpenAsync(storage))
+            {
+                MirrorPulseAdapterTopology restored = await reopened.ReadAdapterTopologyAsync();
+                Assert.HasCount(3, restored.Installations);
+                Assert.AreEqual(installations[3].InstallId, restored.Instances.Single().InstallId);
+            }
+
+            InstalledAdapter preview = installations[2];
+            await VerifyInstalledWorkerStartsAsync(new SignedProcessAdapterInstallation(preview.InstallationDirectory,
+                Path.Combine(preview.InstallationDirectory, preview.Manifest.Entrypoints[runtime].Replace('/', Path.DirectorySeparatorChar)),
+                preview.AdapterId.ToString(), preview.Version));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [TestMethod]
     public async Task PublishedArchitecturesInstallWithVerifiedSignatureAndNativeWorkerStarts()
     {

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using MirrorPulse.Core.Contracts;
 
 namespace MirrorPulse.Core.Packaging;
 
@@ -100,9 +101,9 @@ public static class MirrorPulseLocalDirectoryAdapterPackageBuilder
     private static void ValidateVersion(string version)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(version);
-        if (!Version.TryParse(version, out _))
+        if (!AdapterPackageVersion.TryParse(version, out _))
         {
-            throw new ArgumentException("The Adapter version must be numeric.", nameof(version));
+            throw new ArgumentException("The Adapter version must be canonical.", nameof(version));
         }
     }
 }

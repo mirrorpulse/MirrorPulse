@@ -28,6 +28,20 @@ are independent of the negotiated Worker protocol version.
 
 The SDK publication workflow implements these channels. Application publication is not yet implemented. Official provider workflows currently retain numeric package versions and their existing signing/release environments; migrating their package version validation and publication workflows is required before provider preview releases. Configuring environments does not itself migrate a workflow.
 
+## Adapter package identities
+
+The Host accepts canonical three-part stable versions and `X.Y.Z-preview.N`,
+where the positive preview counter is compared numerically. Each numeric component
+must fit a nonnegative 32-bit integer, with no leading zeroes. A stable version
+sorts after its previews. Build metadata and other prerelease names are unsupported.
+
+Existing canonical four-part numeric versions remain separate identities:
+`1.2.3` and `1.2.3.0` are never renamed, merged, or silently normalized. Manifests,
+managed installation paths, activation pointers, catalog records, and CLI inventory
+preserve the exact version string. Instances select an installation ID, so stable,
+preview, and legacy packages can coexist without an implicit version switch.
+The minimum product version and Worker protocol range are separate contracts.
+
 Release tags cannot be updated or deleted, including by administrators. SDK tags
 use `sdk-vVERSION`; provider and application tags use `vVERSION`. Published
 versions and their original artifacts are never rebuilt or overwritten.

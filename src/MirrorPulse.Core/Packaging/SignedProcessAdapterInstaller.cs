@@ -135,7 +135,7 @@ public static class SignedProcessAdapterInstaller
         string version = manifest.Version;
         string entrypoint = manifest.Entrypoints[runtimeIdentifier];
         if (!AdapterId.TryParse(adapterId, out _) ||
-            !Version.TryParse(version, out _) ||
+            !AdapterPackageVersion.TryParse(version, out _) ||
             !actualFiles.Any(file => string.Equals(file.Path, entrypoint, StringComparison.Ordinal)))
         {
             throw new InvalidDataException("The Adapter manifest identity or Worker entrypoint is invalid.");

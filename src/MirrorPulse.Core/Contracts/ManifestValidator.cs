@@ -33,9 +33,9 @@ public static class AdapterManifestValidator
             diagnostics.Add(Error("manifest.publisher.missing", "The Adapter manifest must define a publisher."));
         }
 
-        if (!IsVersion(manifest.Version))
+        if (!AdapterPackageVersion.TryParse(manifest.Version, out _))
         {
-            diagnostics.Add(Error("manifest.version.invalid", "The Adapter version must be a numeric version."));
+            diagnostics.Add(Error("manifest.version.invalid", "The Adapter version must be a canonical stable, preview, or legacy four-part version."));
         }
 
         if (manifest.Protocol.Minimum < 1 || manifest.Protocol.Maximum < manifest.Protocol.Minimum)

@@ -40,7 +40,26 @@ configured by the repository owner; environment names in YAML do not establish
 those policies. Candidate integrity checks do not replace the product's publisher
 trust check.
 
-## Current protocol coverage
+## Independent protocol v2 verification
+
+The independently maintained Workers have the following exact-package evidence.
+Preview and dry-run candidates remain separate from default stable distribution.
+
+| Adapter | Candidate | Native x64 and ARM64 evidence | Mutation boundary |
+| --- | --- | --- | --- |
+| Local | Stable 1.0.0 | [12 Worker cases and one production Host case](https://github.com/mirrorpulse/adapter-local/actions/runs/37328416807) per architecture | Protected native file operations; explicit recovery copies after ambiguous replacement |
+| WebDAV | Preview 0.2.0-preview.1 | [14 Worker cases and one production Host case](https://github.com/mirrorpulse/adapter-webdav/actions/runs/37347394421) per architecture | Conditional HTTP requests and supported directory locks; lost acknowledgements are not blindly replayed |
+| SMB | Preview 0.2.0-preview.1 | [18 actual shared-file cases and one production Host case](https://github.com/mirrorpulse/adapter-smb/actions/runs/37373939638) per architecture | Windows identities and protected native handles; unsupported cross-root or directory-tree moves are refused |
+| FTP / FTPS | Unpublished v2 dry run | [Eight Worker cases and one production Host case](https://github.com/mirrorpulse/adapter-ftp/actions/runs/37371924154) per architecture | Reads only; mutations return `ConditionalMutationUnavailable` |
+| SFTP | Unpublished v2 dry run | [Nine Worker cases and one production Host case](https://github.com/mirrorpulse/adapter-sftp/actions/runs/37373243470) per architecture | Reads only; mutations return `ConditionalMutationUnavailable` |
+
+These gates verify the exact signed package, its private runtime, independent root
+credentials, disabled roots, and the production Host boundary. Official Local,
+WebDAV and SMB publication also verifies the built-in product trust anchor. FTP
+and SFTP dry runs use disposable signing keys. This evidence does not complete
+offline journal recovery or Explorer acceptance for every Adapter.
+
+## Published stable protocol coverage
 
 | Adapter | Read | Write | Move | Delete | Offline upload | Conflict detection |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -60,7 +79,7 @@ only” does not establish offline journal replay. The SMB CI fixture creates a 
 the signed Worker against its UNC path. This establishes the Host and CfSharp
 demand path, not Explorer's complete offline synchronization behavior.
 
-The current FTP and SFTP Workers expose `Stat`, `ReadRange`, `Upload`, `Move`, and `Delete`.
+The older published stable FTP and SFTP Workers expose `Stat`, `ReadRange`, `Upload`, `Move`, and `Delete`.
 Their tests launch separate EXEs, pass credentials through the current-user
 pipe, perform real protocol transfers, and check stale revisions. FTP tests
 cover plain FTP and both FTPS TLS modes. SFTP tests cover host-key approval and

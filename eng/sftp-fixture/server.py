@@ -19,7 +19,10 @@ class Authentication(paramiko.ServerInterface):
         self.transport = None
 
     def check_auth_password(self, username, password):
-        if username == "user" and password == "correct-secret":
+        label = sys.argv[2] if len(sys.argv) > 2 else None
+        expected_user = "user-" + label if label else "user"
+        expected_password = "secret-" + label if label else "correct-secret"
+        if username == expected_user and password == expected_password:
             return paramiko.AUTH_SUCCESSFUL
         return paramiko.AUTH_FAILED
 

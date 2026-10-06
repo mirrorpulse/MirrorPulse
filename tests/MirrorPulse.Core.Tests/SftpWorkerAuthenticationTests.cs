@@ -141,8 +141,10 @@ internal sealed class SftpProtocolFixture : IAsyncDisposable
 
     public string StorageDirectory { get; }
 
-    public static async Task<SftpProtocolFixture> StartAsync()
+    public static async Task<SftpProtocolFixture> StartAsync(string? identityLabel = null)
     {
+        if (identityLabel is not null and not ("left" or "right"))
+            throw new ArgumentException("Unknown disposable fixture identity.", nameof(identityLabel));
         string repository = FindRepositoryRoot();
         string python = Path.Combine(repository, "artifacts", "test-tools", "sftp", "venv", "Scripts", "python.exe");
         if (!File.Exists(python))
@@ -164,6 +166,7 @@ internal sealed class SftpProtocolFixture : IAsyncDisposable
         };
         start.ArgumentList.Add(script);
         start.ArgumentList.Add(storage);
+        if (identityLabel is not null) start.ArgumentList.Add(identityLabel);
         Process process = Process.Start(start) ?? throw new InvalidOperationException("The SFTP fixture did not start.");
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         try

@@ -6,6 +6,7 @@ param(
     [Parameter(Mandatory)][string[]]$TestManifests,
     [string]$PublishDirectory,
     [string]$AdapterDirectory,
+    [string]$AdapterReleaseLockPath,
     [string]$IntegrationPath,
     [string]$InstalledPath,
     [string]$RejectedPath,
@@ -78,6 +79,14 @@ if ($AdapterDirectory) {
         $artifacts += Add-Artifact $AdapterDirectory $relative "official-adapters" $adapter.packageSha256 $adapter.packageLength
     }
 }
+$candidateHash = $null
+if ($AdapterReleaseLockPath) {
+    . (Join-Path $PSScriptRoot 'official-adapter-release-policy.ps1')
+    $null = Read-OfficialAdapterReleaseCandidate -Path $AdapterReleaseLockPath -SourceSha $sourceSha
+    $candidateFile = Get-Item -LiteralPath $AdapterReleaseLockPath
+    $candidateHash = (Get-FileHash -LiteralPath $candidateFile.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+    $artifacts += Add-Artifact $candidateFile.Directory.FullName $candidateFile.Name 'official-candidate' $candidateHash $candidateFile.Length
+}
 if ($artifacts.Count -eq 0) { throw "No artifact hashes were verified." }
 $checks = @()
 if ($IntegrationPath) {
@@ -110,6 +119,7 @@ if ($RejectedPath) {
 } elseif ($Job -eq 'build-and-test' -and $env:GITHUB_SHA) { throw "Windows Server rejection evidence is required in CI." }
 [ordered]@{
     schemaVersion=1;sourceSha=$sourceSha;job=$Job;runtime=$Runtime
+    officialAdapterCandidateSha256=$candidateHash
     tests=$suites;checks=$checks;artifacts=$artifacts
 } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $OutputPath -Encoding utf8
 Write-Output "Saved verified $Job evidence for $sourceSha ($Runtime)."

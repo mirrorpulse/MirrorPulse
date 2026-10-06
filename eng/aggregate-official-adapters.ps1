@@ -1,9 +1,14 @@
 [CmdletBinding()]
 param(
-    [string]$OutputDirectory = (Join-Path $PSScriptRoot '..' 'artifacts' 'official-adapters')
+    [string]$OutputDirectory = (Join-Path $PSScriptRoot '..' 'artifacts' 'official-adapters'),
+    [string]$ReleaseLockPath,
+    [string[]]$AdapterIds,
+    [switch]$AllowPreview
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'adapter-signature-policy.ps1')
+. (Join-Path $PSScriptRoot 'official-adapter-release-policy.ps1')
 
 function Get-RequiredString {
     param(
@@ -56,6 +61,24 @@ if ($lock.schemaVersion -ne 1 -or @($lock.adapters).Count -eq 0) {
     throw 'The official Adapter aggregation lock is invalid.'
 }
 
+$OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
+$artifactRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../artifacts'))
+if (-not $OutputDirectory.StartsWith($artifactRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'The aggregate output must be a dedicated directory inside the product artifacts directory.'
+}
+$releaseLock = $null
+if ($AllowPreview -and -not $ReleaseLockPath) { throw 'Preview verification requires an explicitly resolved candidate.' }
+if ($ReleaseLockPath) {
+    $source = (& git -C (Join-Path $PSScriptRoot '..') rev-parse HEAD | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0) { throw 'The product source identity is unavailable.' }
+    $releaseLock = Read-OfficialAdapterReleaseCandidate -Path $ReleaseLockPath -SourceSha $source -AllowPreview:$AllowPreview
+}
+if ($AdapterIds) {
+    if (-not $releaseLock -or @($AdapterIds | Select-Object -Unique).Count -ne $AdapterIds.Count -or
+        @($AdapterIds | Where-Object { $_ -cnotin @($lock.adapters.adapterId) }).Count -ne 0) {
+        throw 'A scoped aggregate requires a frozen candidate and unique official Adapter IDs.'
+    }
+}
 if (Test-Path -LiteralPath $OutputDirectory) {
     Remove-Item -LiteralPath $OutputDirectory -Recurse -Force
 }
@@ -81,22 +104,33 @@ $trustedKey = [Security.Cryptography.RSA]::Create()
 $trustedKey.ImportFromPem($publicKeyMatch.Value)
 $records = [System.Collections.Generic.List[object]]::new()
 foreach ($entry in @($lock.adapters)) {
+    if ($AdapterIds -and $entry.adapterId -cnotin $AdapterIds) { continue }
     $adapterId = Get-RequiredString $entry 'adapterId' 'Aggregation entry'
     $repository = Get-RequiredString $entry 'repository' "Aggregation entry '$adapterId'"
     if ($adapterId -notlike 'com.mirrorpulse.adapter.*' -or $repository -notmatch '^[^/]+/[^/]+$') {
         throw "Aggregation entry '$adapterId' has an invalid identity."
     }
 
-    $release = (& gh api "repos/$repository/releases/latest" | ConvertFrom-Json)
-    if ($LASTEXITCODE -ne 0 -or $null -eq $release) {
-        throw "Unable to read the latest release for '$repository'."
+    $snapshot = $null
+    if ($releaseLock) {
+        $matches = @($releaseLock.adapters | Where-Object { $_.adapterId -ceq $adapterId -and $_.repository -ceq $repository })
+        if ($matches.Count -ne 1) { throw 'The shared candidate must identify each official provider exactly once.' }
+        $snapshot = Get-OfficialAdapterReleaseSnapshot -Release $matches[0].release -AdapterId $adapterId -Repository $repository -SourceSha $matches[0].sourceSha -AllowPreview:$AllowPreview
+        $release = $snapshot.release
+        if ((Get-OfficialAdapterTagSource -Repository $repository -Tag $release.tag_name) -cne $snapshot.sourceSha) {
+            throw 'An official release tag changed after the shared candidate was resolved.'
+        }
+    } else {
+        $release = (& gh api "repos/$repository/releases/latest" | ConvertFrom-Json)
+        if ($LASTEXITCODE -ne 0 -or $null -eq $release) { throw "Unable to read the latest release for '$repository'." }
+        $resolvedIdentity = Get-OfficialStableAdapterReleaseIdentity -Release $release -AdapterId $adapterId
+        $snapshot = Get-OfficialAdapterReleaseSnapshot -Release $release -AdapterId $adapterId -Repository $repository `
+            -SourceSha (Get-OfficialAdapterTagSource -Repository $repository -Tag $resolvedIdentity.tag)
+        $release = $snapshot.release
     }
-    $tag = Get-RequiredString $release 'tag_name' "Latest release for '$adapterId'"
-    $version = $tag.TrimStart('v', 'V')
-    $parsedVersion = $null
-    if (-not [Version]::TryParse($version, [ref]$parsedVersion)) {
-        throw "Latest release for '$adapterId' has a non-semantic tag '$tag'."
-    }
+    $identity = Get-OfficialAdapterReleaseIdentity -Release $release -AdapterId $adapterId -AllowPreview:$AllowPreview
+    $tag = $identity.tag
+    $version = $identity.version
 
     $assets = @($release.assets)
     $packages = @($assets | Where-Object { $_.name -match '\.mpadapter$' })
@@ -114,8 +148,29 @@ foreach ($entry in @($lock.adapters)) {
     New-Item -ItemType Directory -Path $adapterDirectory -Force | Out-Null
     $packagePath = Join-Path $adapterDirectory $packageAsset.name
     $signaturePath = Join-Path $adapterDirectory $signatureAsset[0].name
+    if ($snapshot) {
+        foreach ($asset in $release.assets) {
+            $current = & gh api "repos/$repository/releases/assets/$($asset.id)" | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0 -or $current.name -cne $asset.name -or $current.size -ne $asset.size -or $current.digest -cne $asset.digest) {
+                throw 'A release asset changed after the shared candidate was resolved.'
+            }
+        }
+    }
     Download-ReleaseAsset -Tag $tag -Repository $repository -Pattern $packageAsset.name -Directory $adapterDirectory
     Download-ReleaseAsset -Tag $tag -Repository $repository -Pattern $signatureAsset[0].name -Directory $adapterDirectory
+
+    if ($snapshot) {
+        foreach ($asset in @($packageAsset, $signatureAsset[0])) {
+            $download = Join-Path $adapterDirectory $asset.name
+            if ((Get-Item -LiteralPath $download).Length -ne $asset.size -or
+                ('sha256:' + (Get-FileHash -LiteralPath $download -Algorithm SHA256).Hash.ToLowerInvariant()) -cne $asset.digest) {
+                throw 'A downloaded release asset differs from the shared candidate.'
+            }
+        }
+        if ((Get-OfficialAdapterTagSource -Repository $repository -Tag $tag) -cne $snapshot.sourceSha) {
+            throw 'The official release tag changed during candidate download.'
+        }
+    }
 
     $packageHash = (Get-FileHash -LiteralPath $packagePath -Algorithm SHA256).Hash.ToLowerInvariant()
     $packageLength = (Get-Item -LiteralPath $packagePath).Length
@@ -124,9 +179,7 @@ foreach ($entry in @($lock.adapters)) {
         [string]::IsNullOrWhiteSpace([string]$signature.signature) -or @($signature.files).Count -eq 0) {
         throw "The detached signature envelope for '$adapterId' is invalid."
     }
-    $canonicalFiles = @($signature.files | Sort-Object path -CaseSensitive | ForEach-Object {
-        [ordered]@{ path = $_.path; length = $_.length; sha256 = $_.sha256 }
-    }) | ConvertTo-Json -Compress -Depth 5
+    $canonicalFiles = Get-AdapterSignatureCanonical -Inventory @($signature.files)
     $signatureBytes = [Convert]::FromBase64String($signature.signature)
     if (-not $trustedKey.VerifyData(
             [Text.Encoding]::UTF8.GetBytes($canonicalFiles),
@@ -173,6 +226,10 @@ foreach ($entry in @($lock.adapters)) {
         version = $version
         tag = $tag
         releaseUrl = $release.html_url
+        releaseId = $release.id
+        sourceSha = if ($snapshot) { $snapshot.sourceSha } else { $null }
+        packageAssetId = $packageAsset.id
+        signatureAssetId = $signatureAsset[0].id
         package = $packageAsset.name
         packageLength = $packageLength
         packageSha256 = $packageHash
@@ -180,5 +237,5 @@ foreach ($entry in @($lock.adapters)) {
     } | ForEach-Object { $records.Add($_) }
 }
 
-$records | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $OutputDirectory 'official-adapters.manifest.json') -Encoding utf8
+ConvertTo-Json -InputObject @($records.ToArray()) -Depth 5 | Set-Content -LiteralPath (Join-Path $OutputDirectory 'official-adapters.manifest.json') -Encoding utf8
 Write-Host "Aggregated $($records.Count) official Adapter releases into $OutputDirectory."

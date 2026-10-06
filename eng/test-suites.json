@@ -39,7 +39,12 @@
     "MirrorPulse.Core.Tests.SignedSftpHostProcessTests.SignedSftpReleaseReadsAndConditionallyUploadsThroughHostAndCfSharp",
     "MirrorPulse.Core.Tests.SignedSmbHostProcessTests.SignedSmbReleaseListsReadsAndConditionallyUploadsThroughHostAndCfSharp",
     "MirrorPulse.Core.Tests.SignedWebDavWorkerProcessTests.SignedWorkerPreservesEtagAndRejectsStaleUploadWithoutOverwritingRemote",
-    "MirrorPulse.Core.Tests.SignedTemplateWorkerProcessTests.SignedV2TemplateInstallsAndRunsThroughProductionSupervisor"
+    "MirrorPulse.Core.Tests.SignedTemplateWorkerProcessTests.SignedV2TemplateInstallsAndRunsThroughProductionSupervisor",
+    "MirrorPulse.Core.Tests.SignedLocalV2WorkerProcessTests.SignedLocalV2UsesPrivateRuntimeAndIsolatedSourcesThroughProductionHost",
+    "MirrorPulse.Core.Tests.SignedWebDavV2WorkerProcessTests.SignedWebDavV2KeepsCredentialsAndAcceptedContentBoundThroughProductionHost",
+    "MirrorPulse.Core.Tests.SignedSmbV2WorkerProcessTests.SignedSmbV2KeepsWindowsCredentialsAndAcceptedContentBoundThroughProductionHost",
+    "MirrorPulse.Core.Tests.SignedNetworkV2WorkerProcessTests.SignedFtpV2BindsTlsReadsAndRefusedMutationsThroughProductionHost",
+    "MirrorPulse.Core.Tests.SignedNetworkV2WorkerProcessTests.SignedSftpV2BindsPinnedKeysReadsAndRefusedMutationsThroughProductionHost"
   ],
   "required": {
     "native": [

@@ -37,7 +37,7 @@ public static class OfficialProcessAdapterPackageBuilder
         ArgumentException.ThrowIfNullOrWhiteSpace(signer);
         ArgumentException.ThrowIfNullOrWhiteSpace(outputPath);
         if (!input.AdapterId.StartsWith("com.mirrorpulse.adapter.", StringComparison.Ordinal) ||
-            !Version.TryParse(input.Version, out _) ||
+            !AdapterPackageVersion.TryParse(input.Version, out _) ||
             string.IsNullOrWhiteSpace(input.Label))
         {
             throw new ArgumentException("The official Adapter identity, label, or version is invalid.", nameof(input));
