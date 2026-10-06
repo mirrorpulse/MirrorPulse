@@ -19,6 +19,22 @@ The test covers both roots, file operations, stable retry, mid-upload cancellati
 actual transfer-lease deletion and subsequent session reuse. It uses an isolated
 product catalog and does not register Cloud Files or install an MSIX.
 
+## Signed network v2 Host gate
+
+`SignedNetworkV2WorkerProcessTests` requires `MP_FTP_V2_PACKAGE` or
+`MP_SFTP_V2_PACKAGE`, plus the corresponding `MP_*_V2_PUBLIC_KEY` for disposable
+signing. Official candidates instead set `MP_*_V2_OFFICIAL_SIGNED=true` and must
+pass the built-in publisher trust check. The production catalog installs the
+exact signed package; the Supervisor negotiates v2 and routes two independent
+sources plus a disabled root. Each installed Worker must load its own CLR.
+
+The left root uses optimistic writes and the right root is read-only. The profile
+checks CfSharp demand reads, upload/replay, stale-write refusal, retained bytes,
+file move/delete, directory creation and empty deletion. Reserved remote evidence
+must stay out of normal directory pages. A read-only root refuses both upload and
+directory mutation and keeps its source content. These tests use temporary
+catalogs and loopback sources, without registering Cloud Files or installing MSIX.
+
 ## Durability faults
 
 `DurabilityFaultFixtureTests` invokes a child process with a unique temporary
