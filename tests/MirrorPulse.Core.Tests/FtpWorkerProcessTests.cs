@@ -53,10 +53,13 @@ public sealed class FtpWorkerProcessTests
                     ["endpoint"] = $"ftp://127.0.0.1:{fixture.Port}/",
                     ["username"] = "user",
                     ["securityMode"] = "Plain",
+                    ["allowPlaintext"] = "true",
                     ["credentialReference"] = "ftp-password",
                 }, ["ftp-password"], Path.Combine(root, "cache", "files"),
                 Path.Combine(root, "cache", "transfers"));
             MirrorPulseAdapterTopology topology = await catalog.ReadAdapterTopologyAsync();
+            RootRegistration registration = topology.Roots.Single(binding => binding.InstanceId == instance.InstanceId);
+            string rootKey = registration.UniquenessKey;
             await using var supervisor = new AdapterInstanceProcessSupervisor(catalog,
                 new FixedCredentialStore("ftp-password", "correct-secret"));
             await supervisor.StartAsync(topology);
@@ -79,14 +82,14 @@ public sealed class FtpWorkerProcessTests
             }
 
             string revision = (await supervisor.StatAsync(new MirrorPulseWorkerStatRequest(
-                instance.InstanceId, "report.bin"), timeout.Token))!;
+                instance.InstanceId, "report.bin", rootKey), timeout.Token))!;
             Assert.IsFalse(string.IsNullOrWhiteSpace(revision));
             var router = new MirrorPulseRootRouter(paths.SyncRootPath, topology.Roots);
             var provider = new MirrorPulseDemandProvider(router, supervisor,
                 new MirrorPulseAdapterDirectoryPageSource(supervisor));
             string filePath = Path.Combine(paths.SyncRootPath, topology.Roots.Single().DirectoryName,
                 "report.bin");
-            byte[] identity = MirrorPulsePlaceholderIdentity.Create(instance.InstanceId,
+            byte[] identity = MirrorPulsePlaceholderIdentity.CreateForRoot(registration,
                 "report.bin", revision).Encode();
             await using Stream read = await provider.OpenReadAsync(filePath, identity,
                 8, 2, 3, timeout.Token);
@@ -100,7 +103,7 @@ public sealed class FtpWorkerProcessTests
             await using (var content = new MemoryStream(replacement, writable: false))
             {
                 updated = await supervisor.UploadAsync(new MirrorPulseWorkerUploadRequest(
-                    instance.InstanceId, "report.bin", revision, content, replacement.Length), timeout.Token);
+                    instance.InstanceId, "report.bin", revision, content, replacement.Length, RootKey: rootKey), timeout.Token);
                 Assert.IsFalse(string.IsNullOrWhiteSpace(updated));
             }
 
@@ -109,19 +112,19 @@ public sealed class FtpWorkerProcessTests
             {
                 await Assert.ThrowsExactlyAsync<MirrorPulseWorkerMutationConflictException>(async () => await supervisor.UploadAsync(
                     new MirrorPulseWorkerUploadRequest(instance.InstanceId, "report.bin", revision,
-                        stale, 3), timeout.Token));
+                        stale, 3, RootKey: rootKey), timeout.Token));
             }
 
             CollectionAssert.AreEqual(replacement, fixture.ReadStoredFile("/report.bin"));
 
             string movedRevision = await supervisor.MoveAsync(new MirrorPulseWorkerMoveRequest(
-                instance.InstanceId, "report.bin", "renamed.bin", updated, false), timeout.Token);
+                instance.InstanceId, "report.bin", "renamed.bin", updated, false, RootKey: rootKey), timeout.Token);
             Assert.IsFalse(string.IsNullOrWhiteSpace(movedRevision));
             CollectionAssert.AreEqual(replacement, fixture.ReadStoredFile("/renamed.bin"));
             await supervisor.DeleteAsync(new MirrorPulseWorkerDeleteRequest(
-                instance.InstanceId, "renamed.bin", movedRevision, false), timeout.Token);
+                instance.InstanceId, "renamed.bin", movedRevision, false, RootKey: rootKey), timeout.Token);
             Assert.IsNull(await supervisor.StatAsync(new MirrorPulseWorkerStatRequest(
-                instance.InstanceId, "renamed.bin"), timeout.Token));
+                instance.InstanceId, "renamed.bin", rootKey), timeout.Token));
         }
         finally
         {

@@ -49,6 +49,8 @@ public sealed class SignedSftpHostProcessTests
                 }, ["sftp-password"], Path.Combine(root, "cache", "files"),
                 Path.Combine(root, "cache", "transfers"));
             MirrorPulseAdapterTopology topology = await catalog.ReadAdapterTopologyAsync();
+            RootRegistration registration = topology.Roots.Single(binding => binding.InstanceId == instance.InstanceId);
+            string rootKey = registration.UniquenessKey;
             await using var supervisor = new AdapterInstanceProcessSupervisor(catalog,
                 new FixedCredentialStore("sftp-password", "correct-secret"));
             await supervisor.StartAsync(topology);
@@ -71,14 +73,14 @@ public sealed class SignedSftpHostProcessTests
             }
 
             string revision = (await supervisor.StatAsync(new MirrorPulseWorkerStatRequest(
-                instance.InstanceId, "report.bin"), timeout.Token))!;
+                instance.InstanceId, "report.bin", rootKey), timeout.Token))!;
             Assert.IsFalse(string.IsNullOrWhiteSpace(revision));
             var router = new MirrorPulseRootRouter(paths.SyncRootPath, topology.Roots);
             var provider = new MirrorPulseDemandProvider(router, supervisor,
                 new MirrorPulseAdapterDirectoryPageSource(supervisor));
             string filePath = Path.Combine(paths.SyncRootPath, topology.Roots.Single().DirectoryName,
                 "report.bin");
-            byte[] identity = MirrorPulsePlaceholderIdentity.Create(instance.InstanceId,
+            byte[] identity = MirrorPulsePlaceholderIdentity.CreateForRoot(registration,
                 "report.bin", revision).Encode();
             await using Stream read = await provider.OpenReadAsync(filePath, identity,
                 original.Length, 2, 3, timeout.Token);
@@ -91,7 +93,7 @@ public sealed class SignedSftpHostProcessTests
             await using (var content = new MemoryStream(replacement, writable: false))
             {
                 string updated = await supervisor.UploadAsync(new MirrorPulseWorkerUploadRequest(
-                    instance.InstanceId, "report.bin", revision, content, replacement.Length), timeout.Token);
+                    instance.InstanceId, "report.bin", revision, content, replacement.Length, RootKey: rootKey), timeout.Token);
                 Assert.IsFalse(string.IsNullOrWhiteSpace(updated));
             }
 
@@ -100,7 +102,7 @@ public sealed class SignedSftpHostProcessTests
             {
                 await Assert.ThrowsExactlyAsync<MirrorPulseWorkerMutationConflictException>(async () => await supervisor.UploadAsync(
                     new MirrorPulseWorkerUploadRequest(instance.InstanceId, "report.bin", revision,
-                        stale, 3), timeout.Token));
+                        stale, 3, RootKey: rootKey), timeout.Token));
             }
 
             CollectionAssert.AreEqual(replacement, await File.ReadAllBytesAsync(file, timeout.Token));
