@@ -48,8 +48,8 @@ Preview and dry-run candidates remain separate from default stable distribution.
 | Adapter | Candidate | Native x64 and ARM64 evidence | Mutation boundary |
 | --- | --- | --- | --- |
 | Local | Stable 1.0.0 | [12 Worker cases and one production Host case](https://github.com/mirrorpulse/adapter-local/actions/runs/37328416807) per architecture | Protected native file operations; explicit recovery copies after ambiguous replacement |
-| WebDAV | Preview 0.2.0-preview.1 | [14 Worker cases and one production Host case](https://github.com/mirrorpulse/adapter-webdav/actions/runs/37347394421) per architecture | Conditional HTTP requests and supported directory locks; lost acknowledgements are not blindly replayed |
-| SMB | Preview 0.2.0-preview.1 | [18 actual shared-file cases and one production Host case](https://github.com/mirrorpulse/adapter-smb/actions/runs/37373939638) per architecture | Windows identities and protected native handles; unsupported cross-root or directory-tree moves are refused |
+| WebDAV | Stable 1.0.0 | [14 Worker cases and one production Host case](https://github.com/mirrorpulse/adapter-webdav/actions/runs/37398809874) per architecture | Conditional HTTP requests and supported directory locks; lost acknowledgements are not blindly replayed |
+| SMB | Stable 1.0.0 | [18 actual shared-file cases and one production Host case](https://github.com/mirrorpulse/adapter-smb/actions/runs/37398735064) per architecture | Windows identities and protected native handles; unsupported cross-root or directory-tree moves are refused |
 | FTP / FTPS | Unpublished v2 dry run | [Eight Worker cases and one production Host case](https://github.com/mirrorpulse/adapter-ftp/actions/runs/37371924154) per architecture | Reads only; mutations return `ConditionalMutationUnavailable` |
 | SFTP | Unpublished v2 dry run | [Nine Worker cases and one production Host case](https://github.com/mirrorpulse/adapter-sftp/actions/runs/37373243470) per architecture | Reads only; mutations return `ConditionalMutationUnavailable` |
 
@@ -64,8 +64,8 @@ offline journal recovery or Explorer acceptance for every Adapter.
 | Adapter | Read | Write | Move | Delete | Offline upload | Conflict detection |
 | --- | --- | --- | --- | --- | --- | --- |
 | Local directory | Signed Worker + CfSharp demand | Signed Worker + Host upload | Worker file/directory implementation | Worker file/directory implementation | ARM64 Local CLI replay verified; complete journal coverage partial | Revision check |
-| WebDAV | Signed Worker + CfSharp demand | Signed Worker + Host upload | Worker implementation; product acceptance partial | Worker implementation; product acceptance partial | Not verified end to end | Conditional ETag check |
-| SMB | Signed Worker + CfSharp demand (live UNC share) | Signed Worker + Host upload (live UNC share) | Worker file/directory implementation | Worker file/directory implementation | Not verified end to end | Revision check |
+| WebDAV | Signed Worker + CfSharp demand | Signed Worker + Host upload | Conditional file moves and supported directory locks; product acceptance partial | Conditional files and empty directories; product acceptance partial | Not verified end to end | Conditional ETag and target checks |
+| SMB | Signed Worker + CfSharp demand (live UNC share) | Signed Worker + Host upload (live UNC share) | Protected file moves; moves of directory trees or between roots refused | Files and empty directories | Not verified end to end | Revision and protected native handle checks |
 | FTP / FTPS | Signed Worker + CfSharp demand (plain FTP fixture) | Signed Worker + Host upload (plain FTP fixture) | Worker file/directory implementation | Worker file/directory implementation | Transfer retry only | Optimistic revision check |
 | SFTP | Signed Worker + CfSharp demand | Signed Worker + Host upload | Worker file/directory implementation | Worker file/directory implementation | Transfer retry only | Optimistic revision check |
 
