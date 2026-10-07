@@ -63,6 +63,15 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
     public static MirrorPulseDemandProvider CreateWithoutAdapters(string syncRootPath) =>
         new(new MirrorPulseRootRouter(syncRootPath, []), new NoActiveAdapterRangeTransport());
 
+    public ValueTask<CloudProviderPolicyDecision> ApproveDeleteAsync(CloudProviderDeleteRequest request,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        cancellationToken.ThrowIfCancellationRequested();
+        return ValueTask.FromResult(_rootRouter is null ? CloudProviderPolicyDecision.Deny :
+            MirrorPulseRootNamespacePolicy.ApproveDelete(_rootRouter, request.NormalizedPath));
+    }
+
     public ValueTask<CloudProviderDirectoryPage> FetchChildrenAsync(
         CloudProviderFetchPlaceholdersRequest request,
         CancellationToken cancellationToken)
