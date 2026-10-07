@@ -64,7 +64,8 @@ public sealed class MirrorPulseMutationExecutor(MirrorPulseProductCatalog catalo
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             await _catalog.TransitionMutationAsync(intent.OperationId, MirrorPulseMutationState.Executing,
-                exception is MirrorPulseWorkerMutationConflictException ? MirrorPulseMutationState.Conflict : MirrorPulseMutationState.Ambiguous,
+                exception is MirrorPulseWorkerMutationConflictException ? MirrorPulseMutationState.Conflict :
+                    exception is NotSupportedException ? MirrorPulseMutationState.Prepared : MirrorPulseMutationState.Ambiguous,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
             throw;
         }

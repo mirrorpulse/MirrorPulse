@@ -81,7 +81,6 @@ public static class MirrorPulseLocalBatchMapper
             MirrorPulseLocalOperationBlockReason? reason = change.Kind switch
             {
                 CloudLocalChangeKind.Move when previous is null || previous.RelativePath.Length == 0 => MirrorPulseLocalOperationBlockReason.InvalidMove,
-                CloudLocalChangeKind.Create when change.IsDirectory => MirrorPulseLocalOperationBlockReason.UnsupportedDirectoryCreate,
                 CloudLocalChangeKind.MetadataUpdate => MirrorPulseLocalOperationBlockReason.UnsupportedMetadataChange,
                 _ when !Enum.IsDefined(change.Kind) => MirrorPulseLocalOperationBlockReason.UnsupportedChangeKind,
                 _ => null,

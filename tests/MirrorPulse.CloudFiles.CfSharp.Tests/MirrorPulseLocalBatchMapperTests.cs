@@ -32,13 +32,14 @@ public sealed class MirrorPulseLocalBatchMapperTests
             Change("Unknown/file.txt", CloudLocalChangeKind.Create),
             Change("Documents/moved.txt", CloudLocalChangeKind.Move, previous: "Other/file.txt"),
             Change("Documents/new-folder", CloudLocalChangeKind.Create, true), valid], router);
-        Assert.HasCount(1, plan.Commands);
-        Assert.AreEqual(valid.OperationId, plan.Commands[0].OperationId);
-        Assert.HasCount(4, plan.BlockedOperations!);
+        Assert.HasCount(2, plan.Commands);
+        Assert.AreEqual(valid.OperationId, plan.Commands[1].OperationId);
+        Assert.IsTrue(plan.Commands[0].IsDirectory);
+        Assert.AreEqual(MirrorPulseWorkerChangeKind.Create, plan.Commands[0].Kind);
+        Assert.HasCount(3, plan.BlockedOperations!);
         Assert.IsEmpty(plan.DirectoryMetadataOperationIds);
         CollectionAssert.AreEqual(new[] { MirrorPulseLocalOperationBlockReason.RootReconciliationRequired,
-            MirrorPulseLocalOperationBlockReason.UnregisteredPath, MirrorPulseLocalOperationBlockReason.CrossRootMove,
-            MirrorPulseLocalOperationBlockReason.UnsupportedDirectoryCreate }, plan.BlockedOperations!.Select(item => item.Reason).ToArray());
+            MirrorPulseLocalOperationBlockReason.UnregisteredPath, MirrorPulseLocalOperationBlockReason.CrossRootMove }, plan.BlockedOperations!.Select(item => item.Reason).ToArray());
         try
         {
             await using (MirrorPulseProductCatalog catalog = await MirrorPulseProductCatalog.OpenAsync(paths))
@@ -50,12 +51,12 @@ public sealed class MirrorPulseLocalBatchMapperTests
             await using (MirrorPulseProductCatalog catalog = await MirrorPulseProductCatalog.OpenAsync(paths))
             {
                 IReadOnlyList<MirrorPulseBlockedLocalOperation> blocked = await catalog.ReadBlockedLocalOperationsAsync();
-                Assert.HasCount(4, blocked);
+                Assert.HasCount(3, blocked);
                 CollectionAssert.AreEquivalent(plan.BlockedOperations!.Select(item => item.OperationId).ToArray(), blocked.Select(item => item.OperationId).ToArray());
                 var status = new MirrorPulseAppStatusResponse(5, 0, [], [], BlockedLocalOperations: blocked);
-                Assert.HasCount(4, status.BlockedLocalOperations!);
+                Assert.HasCount(3, status.BlockedLocalOperations!);
                 await catalog.ClearBlockedLocalOperationAsync(blocked[0].OperationId);
-                Assert.HasCount(3, await catalog.ReadBlockedLocalOperationsAsync());
+                Assert.HasCount(2, await catalog.ReadBlockedLocalOperationsAsync());
             }
         }
         finally { Directory.Delete(fixture, true); }

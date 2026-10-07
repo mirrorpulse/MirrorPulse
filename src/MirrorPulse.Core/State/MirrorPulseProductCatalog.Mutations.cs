@@ -86,7 +86,7 @@ public sealed partial class MirrorPulseProductCatalog
         string? acceptedRevision = null, CancellationToken cancellationToken = default)
     {
         if ((from, to) is not ((MirrorPulseMutationState.Prepared, MirrorPulseMutationState.Executing) or
-            (MirrorPulseMutationState.Executing, MirrorPulseMutationState.RemoteAccepted or MirrorPulseMutationState.Ambiguous or MirrorPulseMutationState.Conflict) or
+            (MirrorPulseMutationState.Executing, MirrorPulseMutationState.RemoteAccepted or MirrorPulseMutationState.Ambiguous or MirrorPulseMutationState.Conflict or MirrorPulseMutationState.Prepared) or
             (MirrorPulseMutationState.Ambiguous, MirrorPulseMutationState.RemoteAccepted or MirrorPulseMutationState.Conflict) or
             (MirrorPulseMutationState.RemoteAccepted, MirrorPulseMutationState.RemoteAccepted or MirrorPulseMutationState.Acknowledged or MirrorPulseMutationState.Conflict)))
             throw new ArgumentException("The mutation transition is invalid.");

@@ -44,7 +44,8 @@
     "MirrorPulse.Core.Tests.SignedWebDavV2WorkerProcessTests.SignedWebDavV2KeepsCredentialsAndAcceptedContentBoundThroughProductionHost",
     "MirrorPulse.Core.Tests.SignedSmbV2WorkerProcessTests.SignedSmbV2KeepsWindowsCredentialsAndAcceptedContentBoundThroughProductionHost",
     "MirrorPulse.Core.Tests.SignedNetworkV2WorkerProcessTests.SignedFtpV2BindsTlsReadsOptimisticWritesAndReadOnlyRootsThroughProductionHost",
-    "MirrorPulse.Core.Tests.SignedNetworkV2WorkerProcessTests.SignedSftpV2BindsPinnedKeysOptimisticWritesAndReadOnlyRootsThroughProductionHost"
+    "MirrorPulse.Core.Tests.SignedNetworkV2WorkerProcessTests.SignedSftpV2BindsPinnedKeysOptimisticWritesAndReadOnlyRootsThroughProductionHost",
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseDirectoryJournalTests.NativeOfflineEmptyAndNestedDirectoryJournalResumesAfterRuntimeRestart"
   ],
   "required": {
     "native": [
@@ -70,7 +71,8 @@
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseLocalBatchMapperTests.NativeJournalBatchRetainsOperationIdentityWithoutContentPayload",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseRemoteBatchCoordinatorTests.NativeBatchCursorSurvivesCrashGapAndRejectsFingerprintReuse",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseRemoteEchoIntegrationTests.NativeRemoteMetadataApplicationDoesNotEnterLocalUploadJournal",
-      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseSqliteCrashRecoveryTests.NativeOfficialStoreRecoversCommittedRepositoriesAndRollsBackInterruptedWrite"
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseSqliteCrashRecoveryTests.NativeOfficialStoreRecoversCommittedRepositoriesAndRollsBackInterruptedWrite",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseDirectoryJournalTests.NativeOfflineEmptyAndNestedDirectoryJournalResumesAfterRuntimeRestart"
     ],
     "official": [
       "MirrorPulse.Core.Tests.FtpWorkerProcessTests.SignedFtpReleaseReadsAndConditionallyUploadsThroughHostAndCfSharp",

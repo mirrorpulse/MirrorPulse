@@ -163,9 +163,11 @@ public sealed class AdapterWorkerMutationClient
                     ? actualValue.GetString() : null;
                 completion.TrySetException(new MirrorPulseWorkerMutationConflictException(expected, actual));
             }
+            else if (code is "OperationUnsupported" or "CreateDirectoryUnsupported" or "CapabilityUnavailable")
+                completion.TrySetException(new NotSupportedException("The Worker rejected an unsupported mutation before execution."));
             else
             {
-                completion.TrySetException(new IOException($"The Adapter Worker mutation failed: {code}."));
+                completion.TrySetException(new AdapterWorkerOperationException(code));
             }
 
             return ValueTask.CompletedTask;

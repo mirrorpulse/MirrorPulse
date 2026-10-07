@@ -27,6 +27,15 @@ public sealed class MirrorPulseMutationReadback(IMirrorPulseWorkerStatTransport 
             return new(revision is not null && revision != record.AcceptedRevision
                 ? MirrorPulseMutationProofKind.Conflict : MirrorPulseMutationProofKind.Unknown, revision);
         }
+        if (intent.IsDirectory && intent.Kind == MirrorPulseWorkerChangeKind.Create)
+        {
+            if (record.State != MirrorPulseMutationState.RemoteAccepted || revision is null || directories is null)
+                return new(MirrorPulseMutationProofKind.Unknown, revision);
+            MirrorPulseWorkerDirectoryEntry? directory = await ReadMetadataAsync(intent, cancellationToken).ConfigureAwait(false);
+            if (directory is null || directory.IsDeleted || !string.Equals(directory.ItemKind, "Directory", StringComparison.OrdinalIgnoreCase) || directory.RemoteRevision != revision)
+                return new(MirrorPulseMutationProofKind.Unknown, revision);
+            return new(revision == record.AcceptedRevision ? MirrorPulseMutationProofKind.Verified : MirrorPulseMutationProofKind.Conflict, revision);
+        }
         if (ranges is null || directories is null || revision is null || intent.ContentSha256 is null || intent.ContentLength is null)
             return new(MirrorPulseMutationProofKind.Unknown, revision);
         MirrorPulseWorkerDirectoryEntry? metadata = await ReadMetadataAsync(intent, cancellationToken).ConfigureAwait(false);
