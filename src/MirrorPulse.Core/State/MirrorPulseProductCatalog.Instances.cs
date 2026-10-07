@@ -91,6 +91,7 @@ public sealed partial class MirrorPulseProductCatalog
             }).ToArray();
             var next = new MirrorPulseAdapterTopology(current.Installations, instances, roots);
             ValidateTopology(next);
+            await ValidateManagedRootNamesAsync(next, cancellationToken).ConfigureAwait(false);
             await using SqliteCommand update = _connection.CreateCommand();
             update.CommandText = "UPDATE adapter_topology SET payload = $payload WHERE id = 1;";
             update.Parameters.AddWithValue("$payload", JsonSerializer.Serialize(next, TopologyJsonOptions));
@@ -189,6 +190,7 @@ public sealed partial class MirrorPulseProductCatalog
                 [.. current.Instances, instance],
                 [.. current.Roots, .. roots]);
             ValidateTopology(next);
+            await ValidateManagedRootNamesAsync(next, cancellationToken).ConfigureAwait(false);
 
             Directory.CreateDirectory(instance.FileCacheDirectory);
             Directory.CreateDirectory(instance.TransferCacheDirectory);

@@ -7,6 +7,7 @@ namespace MirrorPulse.Core.Tests;
 [TestClass]
 public sealed class MirrorPulseRootLabelCatalogTests
 {
+    private static readonly string[] ExpectedNames = ["Docs", "My Files"];
     [TestMethod]
     [DataRow(true)]
     [DataRow(false)]
@@ -41,6 +42,17 @@ public sealed class MirrorPulseRootLabelCatalogTests
                 await Assert.ThrowsExactlyAsync<InvalidDataException>(() => catalog.RenameManagedRootAsync(original.RootId, "archive"));
                 await Assert.ThrowsExactlyAsync<ArgumentException>(() => catalog.RenameManagedRootAsync(original.RootId, "../outside"));
                 await Assert.ThrowsExactlyAsync<FileNotFoundException>(() => catalog.RenameManagedRootAsync(RootId.New(), "Unknown"));
+                RootRegistration sibling = (await catalog.ReadAdapterTopologyAsync()).Roots.Single(item => item.UniquenessKey == "archive");
+                await Assert.ThrowsExactlyAsync<InvalidDataException>(() => catalog.RenameManagedRootAsync(sibling.RootId, "docs"));
+                MirrorPulseAdapterTopology before = await catalog.ReadAdapterTopologyAsync();
+                var reused = new RootRegistration(sibling.AdapterId, sibling.InstanceId, sibling.RootId, sibling.UniquenessKey,
+                    "Docs", "Docs", sibling.CustomEntry, sibling.State, sibling.RegisteredAt, sibling.IdentityScope);
+                await Assert.ThrowsExactlyAsync<InvalidDataException>(() => catalog.SaveAdapterTopologyAsync(
+                    new(before.Installations, before.Instances, before.Roots.Select(item => item.RootId == sibling.RootId ? reused : item).ToArray())));
+                // Returning to this same root's old name is safe. Its history is
+                // retained so old journal entries still have one stable owner.
+                await catalog.RenameManagedRootAsync(original.RootId, "Docs");
+                await catalog.RenameManagedRootAsync(original.RootId, "My Files");
             }
             await using (MirrorPulseProductCatalog catalog = await MirrorPulseProductCatalog.OpenAsync(paths))
             {
@@ -60,6 +72,10 @@ public sealed class MirrorPulseRootLabelCatalogTests
                 Assert.AreEqual(source, retained.Configuration["sourceDirectory"]);
                 Assert.AreEqual("source remains unchanged", await File.ReadAllTextAsync(Path.Combine(source, "keep.txt")));
                 Assert.IsFalse(Directory.Exists(Path.Combine(root, "My Files")));
+                IReadOnlyList<MirrorPulseManagedRootName> names = await catalog.ReadManagedRootNamesAsync();
+                Assert.HasCount(2, names);
+                Assert.IsTrue(names.All(name => name.RootId == original.RootId));
+                CollectionAssert.AreEquivalent(ExpectedNames, names.Select(name => name.DirectoryName).ToArray());
             }
         }
         finally { Directory.Delete(root, true); }

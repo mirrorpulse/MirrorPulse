@@ -39,6 +39,7 @@ public sealed partial class MirrorPulseProductCatalog : IInstalledAdapterCatalog
         try
         {
             ThrowIfDisposed();
+            await ValidateManagedRootNamesAsync(topology, cancellationToken).ConfigureAwait(false);
             await using SqliteCommand command = _connection.CreateCommand();
             command.CommandText = """
                 INSERT INTO adapter_topology (id, payload) VALUES (1, $payload)
@@ -219,6 +220,7 @@ public sealed partial class MirrorPulseProductCatalog : IInstalledAdapterCatalog
             }).ToArray();
             var next = new MirrorPulseAdapterTopology(current.Installations, instances, roots);
             ValidateTopology(next);
+            await ValidateManagedRootNamesAsync(next, cancellationToken).ConfigureAwait(false);
             await using SqliteCommand update = _connection.CreateCommand();
             update.CommandText = "UPDATE adapter_topology SET payload = $payload WHERE id = 1;";
             update.Parameters.AddWithValue("$payload", JsonSerializer.Serialize(next, TopologyJsonOptions));
@@ -267,6 +269,7 @@ public sealed partial class MirrorPulseProductCatalog : IInstalledAdapterCatalog
                     null, item.CreatedAt)).ToArray();
             var next = new MirrorPulseAdapterTopology(current.Installations, instances, current.Roots);
             ValidateTopology(next);
+            await ValidateManagedRootNamesAsync(next, cancellationToken).ConfigureAwait(false);
             await using SqliteCommand update = _connection.CreateCommand();
             update.CommandText = "UPDATE adapter_topology SET payload = $payload WHERE id = 1;";
             update.Parameters.AddWithValue("$payload", JsonSerializer.Serialize(next, TopologyJsonOptions));
