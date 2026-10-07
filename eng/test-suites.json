@@ -46,7 +46,8 @@
     "MirrorPulse.Core.Tests.SignedNetworkV2WorkerProcessTests.SignedFtpV2BindsTlsReadsOptimisticWritesAndReadOnlyRootsThroughProductionHost",
     "MirrorPulse.Core.Tests.SignedNetworkV2WorkerProcessTests.SignedSftpV2BindsPinnedKeysOptimisticWritesAndReadOnlyRootsThroughProductionHost",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseDirectoryJournalTests.NativeOfflineEmptyAndNestedDirectoryJournalResumesAfterRuntimeRestart",
-    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseDirectoryJournalTests.NativeFullRescanAcceptsNestedDirectoriesBeforeSettlingTheirOriginalJournal"
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseDirectoryJournalTests.NativeFullRescanAcceptsNestedDirectoriesBeforeSettlingTheirOriginalJournal",
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeDisabledSiblingRootKeepsResidentDataAndJournalWithoutRemoteAccess"
   ],
   "required": {
     "native": [
@@ -74,7 +75,8 @@
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseRemoteEchoIntegrationTests.NativeRemoteMetadataApplicationDoesNotEnterLocalUploadJournal",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseSqliteCrashRecoveryTests.NativeOfficialStoreRecoversCommittedRepositoriesAndRollsBackInterruptedWrite",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseDirectoryJournalTests.NativeOfflineEmptyAndNestedDirectoryJournalResumesAfterRuntimeRestart",
-      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseDirectoryJournalTests.NativeFullRescanAcceptsNestedDirectoriesBeforeSettlingTheirOriginalJournal"
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseDirectoryJournalTests.NativeFullRescanAcceptsNestedDirectoriesBeforeSettlingTheirOriginalJournal",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeDisabledSiblingRootKeepsResidentDataAndJournalWithoutRemoteAccess"
     ],
     "official": [
       "MirrorPulse.Core.Tests.FtpWorkerProcessTests.SignedFtpReleaseReadsAndConditionallyUploadsThroughHostAndCfSharp",

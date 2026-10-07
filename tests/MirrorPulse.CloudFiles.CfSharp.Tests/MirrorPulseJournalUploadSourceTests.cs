@@ -17,6 +17,81 @@ public sealed class MirrorPulseJournalUploadSourceTests
     [TestMethod]
     [DoNotParallelize]
     [TestCategory("NativeCloudFiles")]
+    public async Task NativeDisabledSiblingRootKeepsResidentDataAndJournalWithoutRemoteAccess()
+    {
+        if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
+            Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
+        string root = Path.Combine(Path.GetTempPath(), "MirrorPulse-native-tests", Guid.NewGuid().ToString("N"));
+        var paths = new MirrorPulseStoragePaths(Path.Combine(root, "sync"), Path.Combine(root, "data"));
+        var cloud = new CfSharpMirrorPulseCloudRootRegistry();
+        InstanceId instance = InstanceId.New();
+        RootRegistration Registration(string key, string name, RootRegistrationState state) =>
+            AdapterRootRegistrationMapper.Map(AdapterId.Parse("example.sibling"), instance,
+                new AdapterRootDefinition(key, name, name, false), state, identityScope: RootIdentityScope.InstanceRoot);
+        RootRegistration active = Registration("docs", "Docs", RootRegistrationState.Active);
+        RootRegistration disabled = Registration("offline", "Offline", RootRegistrationState.Disabled);
+        var router = new MirrorPulseRootRouter(paths.SyncRootPath, [active, disabled]);
+        var range = new RejectingRangeTransport();
+        Guid heldId = Guid.Empty;
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        try
+        {
+            cloud.Register(new(paths.SyncRootPath, "0.1.0", Guid.NewGuid(), [1, 2, 3]));
+            for (int run = 0; run < 2; run++)
+            {
+                var state = new MirrorPulseCfSharpStateSession(paths);
+                await using var fileSystem = new MirrorPulseCloudFileSystemBuilder(paths).WithStateStore(state)
+                    .WithContentProvider(new MirrorPulseDemandProvider(router, range)).Build();
+                await fileSystem.StartAsync(timeout.Token);
+                await using CloudLocalChangeFeed feed = fileSystem.CreateLocalChangeFeed();
+                await feed.StartAsync(timeout.Token);
+                await using var catalog = await MirrorPulseProductCatalog.OpenAsync(paths, timeout.Token);
+                if (run == 0)
+                {
+                    await new MirrorPulseRootPopulationCoordinator(fileSystem, feed).PopulateAsync(router, timeout.Token);
+                    await fileSystem.GetDirectory("Offline").CreatePlaceholdersAsync([
+                        CloudFilePlaceholderSpec.CreateBuilder("online.txt", router.CreateFileIdentity(instance, "offline", "online", "v1"), 4)
+                            .WithInSyncState(true).WithInitialAvailability(CloudAvailabilityTarget.OnlineOnly).Build()],
+                        cancellationToken: timeout.Token);
+                    await Assert.ThrowsAsync<IOException>(() => File.ReadAllBytesAsync(
+                        Path.Combine(paths.SyncRootPath, "Offline", "online.txt"), timeout.Token));
+                    Assert.AreEqual(0, range.Requests);
+                    await File.WriteAllTextAsync(Path.Combine(paths.SyncRootPath, "Offline", "resident.txt"), "offline edit", timeout.Token);
+                    await File.WriteAllTextAsync(Path.Combine(paths.SyncRootPath, "Docs", "active.txt"), "active edit", timeout.Token);
+                }
+                Assert.AreEqual("offline edit", await File.ReadAllTextAsync(
+                    Path.Combine(paths.SyncRootPath, "Offline", "resident.txt"), timeout.Token));
+                var source = new MirrorPulseJournalUploadSource(feed, router, catalog, _ => true);
+                MirrorPulseJournalUploadBatch batch;
+                CloudLocalChangeBatch raw;
+                do
+                {
+                    batch = await source.ReadPendingAsync(timeout.Token);
+                    raw = await feed.ReadBatchAsync(timeout.Token);
+                    if (!raw.Changes.Any(change => change.RelativePath.Replace('\\', '/') == "Offline/resident.txt") ||
+                        !batch.ReadyCommands.Any(command => command.RootKey == "docs")) await Task.Delay(20, timeout.Token);
+                } while (!raw.Changes.Any(change => change.RelativePath.Replace('\\', '/') == "Offline/resident.txt") ||
+                    !batch.ReadyCommands.Any(command => command.RootKey == "docs"));
+                Guid actualId = raw.Changes.First(change => change.RelativePath.Replace('\\', '/') == "Offline/resident.txt").OperationId;
+                if (run == 0) heldId = actualId;
+                else Assert.AreEqual(heldId, actualId);
+                Assert.IsFalse(batch.ReadyCommands.Any(command => command.RootKey == "offline"));
+                Assert.IsGreaterThan(0, batch.DeferredCount);
+                Assert.IsNotNull(await catalog.ReadWorkerRequestAsync(heldId, timeout.Token));
+                Assert.AreEqual(0, range.Requests);
+                Assert.AreEqual(disabled.RootId, router.GetRegistration(instance, "offline").RootId);
+            }
+        }
+        finally
+        {
+            cloud.Unregister(paths.SyncRootPath);
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
+
+    [TestMethod]
+    [DoNotParallelize]
+    [TestCategory("NativeCloudFiles")]
     public async Task NativePersistedUploadConflictStopsAutomaticJournalDispatchAcrossRestart()
     {
         if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
@@ -162,6 +237,15 @@ public sealed class MirrorPulseJournalUploadSourceTests
         {
             cloud.Unregister(paths.SyncRootPath);
             Directory.Delete(root, recursive: true);
+        }
+    }
+    private sealed class RejectingRangeTransport : IMirrorPulseWorkerRangeTransport
+    {
+        public int Requests { get; private set; }
+        public ValueTask<Stream> ReadRangeAsync(MirrorPulseWorkerReadRangeRequest request, CancellationToken cancellationToken)
+        {
+            Requests++;
+            throw new AssertFailedException("A disabled root must not request remote bytes.");
         }
     }
 }
