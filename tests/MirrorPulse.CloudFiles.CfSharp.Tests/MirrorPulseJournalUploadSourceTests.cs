@@ -50,7 +50,7 @@ public sealed class MirrorPulseJournalUploadSourceTests
                 while (true)
                 {
                     await using ICloudStateTransaction transaction = await state.OpenStore.BeginTransactionAsync(timeout.Token);
-                    CloudItemState? item = await transaction.Items.GetByRelativePathAsync(path, timeout.Token);
+                    CloudItemState? item = await transaction.Items.GetByRelativePathAsync(path.Replace('/', Path.DirectorySeparatorChar), timeout.Token);
                     IReadOnlyList<CloudOperationJournalEntry> entries = await transaction.Operations.ListAsync(256, timeout.Token);
                     await transaction.RollbackAsync(timeout.Token);
                     CloudOperationJournalEntry? entry = item is null ? null : entries.FirstOrDefault(entry => entry.ItemId == item.ItemId);
