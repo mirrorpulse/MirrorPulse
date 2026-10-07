@@ -393,7 +393,7 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
         }
         await _completion.DeferFailedUploadAsync(command.OperationId, DateTimeOffset.UtcNow,
             cancellationToken).ConfigureAwait(false);
-        return true;
+        return false;
     }
 
     private async ValueTask AcknowledgeAsync(Guid operationId, string? revision, CancellationToken cancellationToken)
