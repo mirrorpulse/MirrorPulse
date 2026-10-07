@@ -301,6 +301,19 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
             {
                 if (!Directory.Exists(localPath)) return false;
                 if (_fileSystem is null) throw new NotSupportedException("Directory projection requires the Cloud Files owner.");
+                MirrorPulseWorkerDirectoryEntry? observedRemote = await _readback.ReadMetadataAsync(Intent(command, null), cancellationToken).ConfigureAwait(false);
+                if (observedRemote is { IsDeleted: false } && string.Equals(observedRemote.ItemKind, "Directory", StringComparison.OrdinalIgnoreCase) &&
+                    MirrorPulseJournalContentPolicy.IsAcceptedDirectoryObservation(
+                        await _fileSystem.GetDirectory(syncRootRelativePath).InspectAsync(cancellationToken).ConfigureAwait(false),
+                        _router.GetRegistration(command.InstanceId, command.RootKey), observedRemote.RemoteId))
+                {
+                    // A complete rescan already accepted this owned namespace.
+                    // Persist the observed result without another remote create.
+                    await _mutationExecutor.ExecuteAsync(Intent(command, null),
+                        _ => ValueTask.FromResult<string?>(observedRemote.RemoteRevision),
+                        (accepted, token) => AcknowledgeAsync(command.OperationId, accepted, token), cancellationToken).ConfigureAwait(false);
+                    return true;
+                }
                 await _mutationExecutor.ExecuteAsync(Intent(command, null), async token =>
                     await _mutations!.CreateDirectoryAsync(new(command.InstanceId, command.RootKey,
                         command.RelativePath, command.OperationId), token).ConfigureAwait(false),
@@ -463,24 +476,8 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
         if (_fileSystem is null) throw new NotSupportedException("Directory projection requires the Cloud Files owner.");
         MirrorPulseWorkerDirectoryEntry remote = await _readback.ReadMetadataAsync(record.Intent, cancellationToken).ConfigureAwait(false)
             ?? throw new MirrorPulseMutationAmbiguousException("The accepted directory has no remote metadata.");
-        if (remote.IsDeleted || !string.Equals(remote.ItemKind, "Directory", StringComparison.OrdinalIgnoreCase) || revision is null || remote.RemoteRevision != revision)
-            throw new MirrorPulseMutationAmbiguousException("The accepted directory metadata changed before projection.");
-        string localPath = _router.ResolveUploadPath(record.Intent.InstanceId, record.Intent.RootKey, record.Intent.RelativePath);
-        string relative = Path.GetRelativePath(_syncRootPath, localPath).Replace(Path.DirectorySeparatorChar, '/');
-        CloudDirectory directory = _fileSystem.GetDirectory(relative);
-        CloudItemSnapshot snapshot = await directory.InspectAsync(cancellationToken).ConfigureAwait(false);
-        if (!snapshot.Exists) throw new MirrorPulseMutationAmbiguousException("The accepted local directory disappeared.");
-        CloudPlaceholderIdentity identity = _router.CreateFileIdentity(record.Intent.InstanceId, record.Intent.RootKey, remote.RemoteId, revision);
-        if (snapshot.IsPlaceholder)
-        {
-            if (CloudPlaceholderIdentity.Decode(snapshot.PlaceholderIdentity.Span).ItemId != identity.ItemId)
-                throw new MirrorPulseMutationAmbiguousException("The local directory belongs to another object.");
-            await directory.UpdatePlaceholderAsync(CloudPlaceholderPatch.CreateBuilder().WithIdentity(identity)
-                .WithInSyncState(true).Build(), cancellationToken).ConfigureAwait(false);
-        }
-        else
-            await directory.ConvertToPlaceholderAsync(identity, CloudPlaceholderConversionOptions.CreateBuilder()
-                .WithInSyncState().WithPopulationState(CloudDirectoryPopulationState.Partial).Build(), cancellationToken).ConfigureAwait(false);
+        await MirrorPulseDirectoryConfirmation.ConfirmAsync(_fileSystem, _router, record.Intent, remote, revision,
+            cancellationToken).ConfigureAwait(false);
     }
 
     private async ValueTask<bool> CheckPreviousMutationAsync(MirrorPulseWorkerChangeCommand command, CancellationToken cancellationToken)

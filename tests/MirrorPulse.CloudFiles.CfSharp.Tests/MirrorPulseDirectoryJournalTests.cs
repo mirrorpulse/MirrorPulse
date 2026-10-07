@@ -6,6 +6,7 @@ using MirrorPulse.Core.Configuration;
 using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.Host;
 using MirrorPulse.Core.State;
+using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 
@@ -13,6 +14,80 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 [SupportedOSPlatform("windows10.0.19041")]
 public sealed class MirrorPulseDirectoryJournalTests
 {
+    [TestMethod]
+    [DoNotParallelize]
+    [TestCategory("NativeCloudFiles")]
+    public async Task NativeFullRescanAcceptsNestedDirectoriesBeforeSettlingTheirOriginalJournal()
+    {
+        if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
+            Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
+        string root = Path.Combine(Path.GetTempPath(), "MirrorPulse-native-tests", Guid.NewGuid().ToString("N"));
+        var paths = new MirrorPulseStoragePaths(Path.Combine(root, "sync"), Path.Combine(root, "data"));
+        var registry = new CfSharpMirrorPulseCloudRootRegistry();
+        InstanceId instance = InstanceId.New();
+        RootRegistration registration = AdapterRootRegistrationMapper.Map(AdapterId.Parse("example.rescan.directories"), instance,
+            new AdapterRootDefinition("docs", "Docs", "Docs", false), RootRegistrationState.Active,
+            identityScope: RootIdentityScope.InstanceRoot);
+        var router = new MirrorPulseRootRouter(paths.SyncRootPath, [registration]);
+        var remote = new DirectoryTransport(Path.Combine(root, "remote"));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(paths.SyncRootPath, "Docs"));
+            registry.Register(new(paths.SyncRootPath, "0.1.0", Guid.NewGuid(), [1, 2, 3]));
+            var state = new MirrorPulseCfSharpStateSession(paths);
+            await using var fileSystem = new MirrorPulseCloudFileSystemBuilder(paths).WithStateStore(state)
+                .WithContentProvider(MirrorPulseDemandProvider.CreateWithoutAdapters(paths.SyncRootPath)).Build();
+            await fileSystem.StartAsync(timeout.Token);
+            await using CloudLocalChangeFeed feed = fileSystem.CreateLocalChangeFeed();
+            await feed.StartAsync(timeout.Token);
+            Directory.CreateDirectory(Path.Combine(paths.SyncRootPath, "Docs", "empty"));
+            Directory.CreateDirectory(Path.Combine(paths.SyncRootPath, "Docs", "parent", "nested"));
+            Guid[] operations = [];
+            while (operations.Length < 3)
+            {
+                operations = (await feed.ReadBatchAsync(timeout.Token)).Changes
+                    .Where(change => change.IsDirectory && change.Kind == CloudLocalChangeKind.Create).Select(change => change.OperationId).ToArray();
+                if (operations.Length < 3) await Task.Delay(20, timeout.Token);
+            }
+            await using var catalog = await MirrorPulseProductCatalog.OpenAsync(paths, timeout.Token);
+            var rescan = new MirrorPulseFullRescanPolicy(fileSystem, feed, state, router, catalog, remote, remote,
+                _ => true, remote, directories: remote);
+            Assert.AreEqual(3, await rescan.ReconcileAsync(timeout.Token));
+            Assert.AreEqual(3, remote.Creates);
+            Assert.AreEqual(0, await rescan.ReconcileAsync(timeout.Token));
+            Assert.AreEqual(3, remote.Creates);
+            foreach (string relative in new[] { "empty", "parent", "parent/nested" })
+            {
+                CloudItemSnapshot snapshot = await fileSystem.GetDirectory("Docs/" + relative).InspectAsync(timeout.Token);
+                Assert.IsTrue(snapshot.IsPlaceholder);
+                Assert.IsTrue(MirrorPulseJournalContentPolicy.IsAcceptedDirectoryObservation(snapshot, registration, "remote:" + relative));
+                Assert.IsFalse(MirrorPulseJournalContentPolicy.IsAcceptedDirectoryObservation(snapshot, registration, "another-object"));
+            }
+            // This feed is already started by the rescan. Drive the pump's runner
+            // through its normal source and dispatch lifecycle using a fresh feed.
+            await feed.DisposeAsync();
+            CloudLocalChangeFeed replayFeed = fileSystem.CreateLocalChangeFeed();
+            var completion = new MirrorPulseJournalUploadCompletion(replayFeed, state, new BackoffPolicy(TimeSpan.FromMilliseconds(50), TimeSpan.FromSeconds(1)));
+            await using var pump = new MirrorPulseJournalUploadPump(replayFeed, router, catalog, remote, remote, state,
+                paths.SyncRootPath, paths.DataRootPath, _ => true, completion, mutations: remote, directories: remote, fileSystem: fileSystem);
+            await pump.StartAsync(timeout.Token);
+            while (true)
+            {
+                MirrorPulseMutationRecord?[] records = await Task.WhenAll(operations.Select(id => catalog.ReadMutationAsync(id, timeout.Token)));
+                if (records.All(record => record?.State == MirrorPulseMutationState.Acknowledged)) break;
+                await Task.Delay(20, timeout.Token);
+            }
+            Assert.AreEqual(3, remote.Creates);
+            Assert.IsTrue(pump.Health.Healthy);
+        }
+        finally
+        {
+            registry.Unregister(paths.SyncRootPath);
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
+
     [TestMethod]
     [DoNotParallelize]
     [TestCategory("NativeCloudFiles")]
@@ -121,6 +196,9 @@ public sealed class MirrorPulseDirectoryJournalTests
             Assert.IsTrue(request.MustBeAbsent);
             string path = Path.Combine(Root, request.NormalizedPath.Replace('/', Path.DirectorySeparatorChar));
             if (Directory.Exists(path)) throw new MirrorPulseWorkerMutationConflictException(null, "exists");
+            string? parent = Path.GetDirectoryName(request.NormalizedPath.Replace('/', Path.DirectorySeparatorChar));
+            if (!string.IsNullOrEmpty(parent) && !Directory.Exists(Path.Combine(Root, parent)))
+                throw new IOException("The parent directory has not been accepted.");
             Directory.CreateDirectory(path);
             Creates++;
             return ValueTask.FromResult("directory:" + request.NormalizedPath.Replace('\\', '/'));

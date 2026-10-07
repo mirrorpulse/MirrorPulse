@@ -73,10 +73,45 @@ public sealed class MirrorPulseFullRescanPolicy(CloudFileSystem fileSystem, Clou
             MirrorPulseRoutedItem route = router.ResolvePath(path);
             if (observation.Item.Kind == CloudItemKind.Directory)
             {
-                if (!observation.Snapshot.IsPlaceholder)
+                MirrorPulseMutationRecord? pendingDirectory = incomplete.SingleOrDefault(record => record.Intent.Origin == MirrorPulseMutationOrigin.Rescan &&
+                    record.Intent.IsDirectory && record.Intent.InstanceId == route.InstanceId && record.Intent.RootKey == route.RootKey &&
+                    record.Intent.RelativePath == route.RelativePath);
+                if (!observation.Snapshot.IsPlaceholder || pendingDirectory is not null)
                 {
-                    await BlockAsync(route, path, MirrorPulseLocalOperationBlockReason.UnsupportedDirectoryCreate, cancellationToken).ConfigureAwait(false);
-                    blockedDirectories.Add(path + "/");
+                    if (mutations is null)
+                    {
+                        await BlockAsync(route, path, MirrorPulseLocalOperationBlockReason.UnsupportedDirectoryCreate, cancellationToken).ConfigureAwait(false);
+                        blockedDirectories.Add(path + "/");
+                        continue;
+                    }
+                    var directoryIntent = pendingDirectory?.Intent ?? new MirrorPulseMutationIntent(StableId($"directory/{route.InstanceId}/{route.RootKey}/{route.RelativePath}/{observation.Snapshot.LocalBinding?.LocalFileId}/{observation.Snapshot.LocalFileId}/{observation.Snapshot.CreationTime:O}"),
+                        route.InstanceId, route.RootKey, MirrorPulseWorkerChangeKind.Create, route.RelativePath, null, true,
+                        null, null, null, MirrorPulseMutationOrigin.Rescan);
+                    try
+                    {
+                        async ValueTask Confirm(string? revision, CancellationToken token)
+                        {
+                            MirrorPulseWorkerDirectoryEntry remote = await _readback.ReadMetadataAsync(directoryIntent, token).ConfigureAwait(false)
+                                ?? throw new MirrorPulseMutationAmbiguousException("The accepted rescan directory has no metadata.");
+                            await MirrorPulseDirectoryConfirmation.ConfirmAsync(fileSystem, router, directoryIntent, remote, revision, token).ConfigureAwait(false);
+                        }
+                        if (pendingDirectory is not null && pendingDirectory.State != MirrorPulseMutationState.Prepared)
+                            await _executor.ReconcileAsync(pendingDirectory, _readback.VerifyAsync, Confirm, cancellationToken).ConfigureAwait(false);
+                        else
+                            await _executor.ExecuteAsync(directoryIntent, async token => await mutations.CreateDirectoryAsync(new(route.InstanceId,
+                                route.RootKey, route.RelativePath, directoryIntent.OperationId), token).ConfigureAwait(false), Confirm, cancellationToken).ConfigureAwait(false);
+                        count++;
+                    }
+                    catch (NotSupportedException)
+                    {
+                        await BlockAsync(route, path, MirrorPulseLocalOperationBlockReason.UnsupportedDirectoryCreate, cancellationToken).ConfigureAwait(false);
+                        blockedDirectories.Add(path + "/");
+                    }
+                    catch (MirrorPulseWorkerMutationConflictException conflict)
+                    {
+                        await SaveConflictAsync(directoryIntent, path, conflict, cancellationToken).ConfigureAwait(false);
+                        blockedDirectories.Add(path + "/");
+                    }
                 }
                 continue;
             }
