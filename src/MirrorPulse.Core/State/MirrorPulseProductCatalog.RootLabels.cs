@@ -41,6 +41,17 @@ public sealed partial class MirrorPulseProductCatalog
                 string.Equals(root.DirectoryName, name, StringComparison.OrdinalIgnoreCase)))
                 throw new InvalidDataException("A managed root name is reserved by another stable root identity.");
         }
+        await reader.DisposeAsync().ConfigureAwait(false);
+        foreach (MirrorPulseRootRenameIntent intent in await ReadManagedRootRenamesCoreAsync(cancellationToken, transaction).ConfigureAwait(false))
+        {
+            if (!intent.IsPending) continue;
+            if (topology.Roots.Any(root => root.RootId != intent.RootId &&
+                string.Equals(root.DirectoryName, intent.TargetName, StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidDataException("A managed root name is reserved by a pending namespace transition.");
+            RootRegistration? owner = topology.Roots.SingleOrDefault(root => root.RootId == intent.RootId);
+            if (owner is not null && owner.DirectoryName != intent.SourceName && owner.DirectoryName != intent.TargetName)
+                throw new InvalidOperationException("A managed root label cannot replace a pending namespace transition.");
+        }
     }
 
     /// <summary>Changes only a managed root's display mapping, preserving source and instance identity.</summary>

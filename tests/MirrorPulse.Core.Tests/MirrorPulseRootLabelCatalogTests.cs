@@ -24,6 +24,7 @@ public sealed class MirrorPulseRootLabelCatalogTests
             new Sha256Digest(new string('A', 64)), AdapterInstallSource.LocalFile, null, true, DateTimeOffset.UtcNow, AdapterLifecycleState.Installed);
         RootRegistration original;
         AdapterInstance instance;
+        Guid pendingRename;
         string source = Path.Combine(root, "source");
         try
         {
@@ -53,6 +54,14 @@ public sealed class MirrorPulseRootLabelCatalogTests
                 // retained so old journal entries still have one stable owner.
                 await catalog.RenameManagedRootAsync(original.RootId, "Docs");
                 await catalog.RenameManagedRootAsync(original.RootId, "My Files");
+                MirrorPulseRootRenameIntent pending = await catalog.PrepareManagedRootRenameAsync(original.RootId, "Queued Name");
+                pendingRename = pending.OperationId;
+                Assert.AreEqual("My Files", pending.SourceName);
+                Assert.AreEqual(pendingRename, (await catalog.PrepareManagedRootRenameAsync(original.RootId, "Queued Name")).OperationId);
+                await Assert.ThrowsExactlyAsync<InvalidDataException>(() => catalog.RenameManagedRootAsync(sibling.RootId, "Queued Name"));
+                await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => catalog.RenameManagedRootAsync(original.RootId, "Unrelated"));
+                await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => catalog.TransitionManagedRootRenameAsync(pendingRename,
+                    MirrorPulseRootRenamePhase.Prepared, MirrorPulseRootRenamePhase.Completed));
             }
             await using (MirrorPulseProductCatalog catalog = await MirrorPulseProductCatalog.OpenAsync(paths))
             {
@@ -76,6 +85,17 @@ public sealed class MirrorPulseRootLabelCatalogTests
                 Assert.HasCount(2, names);
                 Assert.IsTrue(names.All(name => name.RootId == original.RootId));
                 CollectionAssert.AreEquivalent(ExpectedNames, names.Select(name => name.DirectoryName).ToArray());
+                MirrorPulseRootRenameIntent pending = (await catalog.ReadManagedRootRenamesAsync()).Single();
+                Assert.AreEqual(pendingRename, pending.OperationId);
+                Assert.AreEqual(MirrorPulseRootRenamePhase.Prepared, pending.Phase);
+                Assert.AreEqual("Queued Name", pending.TargetName);
+                Assert.AreEqual(original.RootId, pending.RootId);
+                await catalog.TransitionManagedRootRenameAsync(pendingRename, MirrorPulseRootRenamePhase.Prepared,
+                    MirrorPulseRootRenamePhase.Cancelled);
+                Assert.IsFalse((await catalog.ReadManagedRootRenamesAsync()).Single().IsPending);
+                RootId sibling = topology.Roots.Single(item => item.UniquenessKey == "archive").RootId;
+                Assert.AreEqual("Queued Name", (await catalog.RenameManagedRootAsync(sibling, "Queued Name")).Label);
+                Assert.AreEqual("My Files", (await catalog.ReadAdapterTopologyAsync()).Roots.Single(item => item.RootId == original.RootId).Label);
             }
         }
         finally { Directory.Delete(root, true); }
