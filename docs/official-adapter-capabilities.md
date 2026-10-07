@@ -50,23 +50,24 @@ Preview and dry-run candidates remain separate from default stable distribution.
 | Local | Stable 1.0.0 | [12 Worker cases and one production Host case](https://github.com/mirrorpulse/adapter-local/actions/runs/37328416807) per architecture | Protected native file operations; explicit recovery copies after ambiguous replacement |
 | WebDAV | Stable 1.0.0 | [14 Worker cases and one production Host case](https://github.com/mirrorpulse/adapter-webdav/actions/runs/37398809874) per architecture | Conditional HTTP requests and supported directory locks; lost acknowledgements are not blindly replayed |
 | SMB | Stable 1.0.0 | [18 actual shared-file cases and one production Host case](https://github.com/mirrorpulse/adapter-smb/actions/runs/37398735064) per architecture | Windows identities and protected native handles; unsupported cross-root or directory-tree moves are refused |
-| FTP / FTPS | Historical v2 read-only dry run | [Eight Worker cases and one production Host case](https://github.com/mirrorpulse/adapter-ftp/actions/runs/37371924154) per architecture | Reads only in this candidate; mutations return `ConditionalMutationUnavailable` |
-| SFTP | Historical v2 read-only dry run | [Nine Worker cases and one production Host case](https://github.com/mirrorpulse/adapter-sftp/actions/runs/37373243470) per architecture | Reads only in this candidate; mutations return `ConditionalMutationUnavailable` |
+| FTP / FTPS | Stable 1.0.0 | [23 Worker cases and one production Host case](https://github.com/mirrorpulse/adapter-ftp/actions/runs/37432810833) per architecture | Optimistic writes with staged bytes, retained originals and remote operation receipts; each root can instead refuse mutations |
+| SFTP | Stable 1.0.0 | [24 Worker cases and one production Host case](https://github.com/mirrorpulse/adapter-sftp/actions/runs/37432860025) per architecture | Optimistic writes with staged bytes, retained originals and remote operation receipts; host keys must be approved or pinned |
 
 These gates verify the exact signed package, its private runtime, independent root
-credentials, disabled roots, and the production Host boundary. Official Local,
-WebDAV and SMB publication also verifies the built-in product trust anchor. FTP
-and SFTP dry runs use disposable signing keys. This evidence does not complete
-offline journal recovery or Explorer acceptance for every Adapter.
+credentials, disabled roots, and the production Host boundary. All five formal
+1.0.0 releases verify the built-in product trust anchor. The published FTP and
+SFTP package bytes match the candidates tested on both architectures. This
+evidence does not complete offline journal recovery or Explorer acceptance for
+every Adapter.
 
-### Network v2 optimistic development boundary
+### Network v2 optimistic write boundary
 
-The current FTP/FTPS and SFTP development Workers add verified staged uploads,
+The stable FTP/FTPS and SFTP 1.0.0 Workers provide verified staged uploads,
 same-root file moves, retained file deletion, directory creation and empty-only
 directory deletion. Each root selects `mutationPolicy=Optimistic` (the default)
 or `ReadOnly`. Existing move destinations, cross-root moves and directory-tree
-moves are refused. These changes are separate from the historical dry-run
-candidates and published stable versions listed here.
+moves are refused. Historical read-only dry-run candidates do not represent
+these stable releases.
 
 Remote receipts bind the stable operation ID, root, paths, preconditions and
 content digest. Staging, previous content and receipts use reserved sibling names
@@ -80,7 +81,8 @@ can race the final check and rename. Previous copies may miss the last concurren
 edit. This policy supplies neither atomic version CAS nor exactly-once semantics.
 The signed network v2 Host profile verifies actual writes and replay, retained
 bytes, moves/deletes, directories, hidden evidence and a separate read-only root.
-Formal organization signing and native x64/ARM64 publication remain distinct gates.
+Both formal releases passed this profile on native x64 and ARM64 using the same
+organization-signed package. Product journal and Explorer gates remain separate.
 
 ## Published stable protocol coverage
 
@@ -89,28 +91,29 @@ Formal organization signing and native x64/ARM64 publication remain distinct gat
 | Local directory | Signed Worker + CfSharp demand | Signed Worker + Host upload | Worker file/directory implementation | Worker file/directory implementation | ARM64 Local CLI replay verified; complete journal coverage partial | Revision check |
 | WebDAV | Signed Worker + CfSharp demand | Signed Worker + Host upload | Conditional file moves and supported directory locks; product acceptance partial | Conditional files and empty directories; product acceptance partial | Not verified end to end | Conditional ETag and target checks |
 | SMB | Signed Worker + CfSharp demand (live UNC share) | Signed Worker + Host upload (live UNC share) | Protected file moves; moves of directory trees or between roots refused | Files and empty directories | Not verified end to end | Revision and protected native handle checks |
-| FTP / FTPS | Signed Worker + CfSharp demand (plain FTP fixture) | Signed Worker + Host upload (plain FTP fixture) | Worker file/directory implementation | Worker file/directory implementation | Transfer retry only | Optimistic revision check |
-| SFTP | Signed Worker + CfSharp demand | Signed Worker + Host upload | Worker file/directory implementation | Worker file/directory implementation | Transfer retry only | Optimistic revision check |
+| FTP / FTPS | Signed Worker + CfSharp demand; v2 Host profile uses FTPS | Signed Worker + Host upload, staged digest checks and retained bytes | Same-root files; existing targets and directory-tree moves refused | Retained files and empty directories | Operation receipt recovery verified; complete offline journal replay unverified | Optimistic metadata and content checks; external writers can race publication |
+| SFTP | Signed Worker + CfSharp demand with pinned host keys | Signed Worker + Host upload, staged digest checks and retained bytes | Same-root files; existing targets and directory-tree moves refused | Retained files and empty directories | Operation receipt recovery verified; complete offline journal replay unverified | Optimistic metadata and content checks; external writers can race publication |
 
 The WebDAV loopback fixture exercises the installed signed Worker, Host pipe,
 CfSharp-compatible demand reads, and stale ETag upload rejection without a
 remote overwrite. It does not establish compatibility with every WebDAV server.
 The signed Local ARM64 CLI regression verifies real offline file edits and replay
 through Host and CfSharp, including cursor/catalog persistence. It does not prove
-all directory, metadata, multi-root or Explorer recovery cases. “Transfer retry
-only” does not establish offline journal replay. The SMB CI fixture creates a Windows share and verifies
-the signed Worker against its UNC path. This establishes the Host and CfSharp
+all directory, metadata, multi-root or Explorer recovery cases. Remote operation
+receipt recovery does not establish complete offline journal replay. The SMB CI
+fixture creates a Windows share and verifies the signed Worker against its UNC
+path. This establishes the Host and CfSharp
 demand path, not Explorer's complete offline synchronization behavior.
 
-The older published stable FTP and SFTP Workers expose `Stat`, `ReadRange`, `Upload`, `Move`, and `Delete`.
-Their tests launch separate EXEs, pass credentials through the current-user
-pipe, perform real protocol transfers, and check stale revisions. FTP tests
-cover plain FTP and both FTPS TLS modes. SFTP tests cover host-key approval and
-pinning, server disconnect, Worker restart, and retry. Both revision checks
-combine length with remote modification time; neither protocol path has an
-atomic compare-and-swap, so a concurrent writer may still win between the
-last check and rename. These Workers must not advertise strong conditional
-write or conflict-free offline synchronization.
+The stable network v2 Workers expose root-bound `Stat`, `ReadRange`, `Upload`,
+`Move`, `Delete` and directory creation. Their tests launch separate EXEs, pass
+credentials through the current-user pipe, perform real protocol transfers, and
+check stale revisions. FTP tests cover plain FTP and both FTPS TLS modes. SFTP
+tests cover host-key approval and pinning, server disconnect, Worker restart,
+and retry. Lost acknowledgements and interrupted mutations are recovered using
+stable operation bindings, retained content and remote receipts. Neither protocol
+path has an atomic compare-and-swap. These Workers must not advertise strong
+conditional writes, exactly-once execution or conflict-free offline synchronization.
 
 Evidence:
 
@@ -129,6 +132,10 @@ Evidence:
   fixtures through independent Workers.
 - `FtpSignedPackageProcessTests` and `SftpSignedPackageProcessTests` verify
   signed packages and start their installed Workers.
+- `SignedNetworkV2WorkerProcessTests` installs the exact signed FTP or SFTP v2
+  package using the product trust policy and verifies root credentials, actual
+  writes and replay, retained bytes, namespace operations, hidden receipts,
+  stale revision rejection and a separate read-only root through the Host.
 - `FtpWorkerProcessTests.SignedFtpReleaseReadsAndConditionallyUploadsThroughHostAndCfSharp`
   and `SignedSftpHostProcessTests` install current signed releases, route range
   hydration through the Host and CfSharp demand provider, upload through the
