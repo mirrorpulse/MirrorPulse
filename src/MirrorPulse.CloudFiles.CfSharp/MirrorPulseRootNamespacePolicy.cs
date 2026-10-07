@@ -17,6 +17,13 @@ public static class MirrorPulseRootNamespacePolicy
             return router.ResolvePath(normalizedPath).RelativePath.Length == 0
                 ? CloudProviderPolicyDecision.Deny : CloudProviderPolicyDecision.Allow;
         }
+        catch (FileNotFoundException)
+        {
+            // Scope was verified above. Unregistered local paths are not
+            // managed entry directories, and their deletion is never a source
+            // mutation authorized by this callback.
+            return CloudProviderPolicyDecision.Allow;
+        }
         catch (Exception exception) when (exception is IOException or InvalidDataException or ArgumentException)
         {
             return CloudProviderPolicyDecision.Deny;

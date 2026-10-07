@@ -68,7 +68,7 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
     {
         ArgumentNullException.ThrowIfNull(request);
         cancellationToken.ThrowIfCancellationRequested();
-        return ValueTask.FromResult(_rootRouter is null ? CloudProviderPolicyDecision.Deny :
+        return ValueTask.FromResult(_rootRouter is null ? CloudProviderPolicyDecision.Allow :
             MirrorPulseRootNamespacePolicy.ApproveDelete(_rootRouter, request.NormalizedPath));
     }
 

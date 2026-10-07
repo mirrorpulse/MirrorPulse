@@ -20,9 +20,9 @@ public sealed class MirrorPulseRootNamespacePolicyTests
             identityScope: RootIdentityScope.InstanceRoot);
         var router = new MirrorPulseRootRouter(sync, [Root("docs", "Docs", RootRegistrationState.Active),
             Root("offline", "Offline", RootRegistrationState.Disabled)]);
-        foreach (string path in new[] { sync, "", "Docs", Path.Combine(sync, "Docs"), "Offline", "Unknown", "../outside" })
+        foreach (string path in new[] { sync, "", "Docs", Path.Combine(sync, "Docs"), "Offline", "../outside" })
             Assert.AreEqual(CloudProviderPolicyDecision.Deny, MirrorPulseRootNamespacePolicy.ApproveDelete(router, path), path);
-        foreach (string path in new[] { "Docs/file.txt", "Docs/folder", "Offline/resident.txt", Path.Combine(sync, "Docs", "file.txt") })
+        foreach (string path in new[] { "Unknown", "Unknown/file.txt", "Docs/file.txt", "Docs/folder", "Offline/resident.txt", Path.Combine(sync, "Docs", "file.txt") })
             Assert.AreEqual(CloudProviderPolicyDecision.Allow, MirrorPulseRootNamespacePolicy.ApproveDelete(router, path), path);
     }
 }
