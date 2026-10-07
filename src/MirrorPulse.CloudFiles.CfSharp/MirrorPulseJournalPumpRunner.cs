@@ -36,16 +36,24 @@ public sealed class MirrorPulseJournalPumpRunner
         }
         if (batch.RequiresFullRescan) return false;
         bool progressed = false;
-        foreach (MirrorPulseWorkerChangeCommand command in batch.ReadyCommands)
+        var held = new List<MirrorPulseWorkerChangeCommand>();
+        foreach (MirrorPulseWorkerChangeCommand command in batch.ReadyCommands.OrderBy(command => command.Sequence))
         {
+            if (held.Any(earlier => MirrorPulseJournalOrderPolicy.DependsOn(command, earlier)))
+            {
+                held.Add(command);
+                continue;
+            }
             try
             {
                 bool accepted = await dispatch(command, cancellationToken).ConfigureAwait(false);
                 progressed |= accepted;
                 if (accepted) _faults.TryRemove(command.OperationId, out _);
+                else held.Add(command);
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
+                held.Add(command);
                 await ReportAsync(command, exception is MirrorPulseJournalAcknowledgementException
                     ? "JournalAcknowledgementFailed" : exception is MirrorPulseMutationAmbiguousException ? "MutationOutcomeAmbiguous" :
                     "JournalCommandFailed", exception, report, cancellationToken).ConfigureAwait(false);

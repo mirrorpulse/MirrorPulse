@@ -58,10 +58,11 @@ public sealed class MirrorPulseJournalUploadSource
         }
 
         var ready = new List<MirrorPulseWorkerChangeCommand>(plan.Commands.Count);
+        var held = new List<MirrorPulseWorkerChangeCommand>();
         int deferred = plan.BlockedOperations?.Count ?? 0;
         foreach (MirrorPulseBlockedLocalOperation blocked in plan.BlockedOperations ?? [])
             await _catalog.SaveBlockedLocalOperationAsync(blocked, cancellationToken).ConfigureAwait(false);
-        foreach (MirrorPulseWorkerChangeCommand command in plan.Commands)
+        foreach (MirrorPulseWorkerChangeCommand command in plan.Commands.OrderBy(command => command.Sequence))
         {
             byte[] fingerprint = SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(command));
             // Official identity projection may clear a journal's old ItemId reference.
@@ -81,6 +82,7 @@ public sealed class MirrorPulseJournalUploadSource
                 await _catalog.SaveBlockedLocalOperationAsync(new(command.OperationId, command.InstanceId,
                     command.RelativePath, MirrorPulseLocalOperationBlockReason.RequestIdentityMismatch, command.ObservedAt), cancellationToken).ConfigureAwait(false);
                 deferred++;
+                held.Add(command);
                 continue;
             }
             await _catalog.ClearBlockedLocalOperationAsync(command.OperationId, cancellationToken).ConfigureAwait(false);
@@ -93,10 +95,16 @@ public sealed class MirrorPulseJournalUploadSource
                     .ConfigureAwait(false) &&
                 (retryAfter is null || retryAfter <= DateTimeOffset.UtcNow))
             {
-                ready.Add(command);
+                if (held.Any(earlier => MirrorPulseJournalOrderPolicy.DependsOn(command, earlier)))
+                {
+                    held.Add(command);
+                    deferred++;
+                }
+                else ready.Add(command);
             }
             else
             {
+                held.Add(command);
                 deferred++;
             }
         }
