@@ -214,6 +214,14 @@ public sealed class MirrorPulseCliHostOperations : IMirrorPulseCliHostOperations
                         .ConfigureAwait(false);
                     human = FormatTopology((MirrorPulseControlTopology)result);
                     break;
+                case ("root", "list"):
+                    if (command.Arguments.Count != 0) throw new ArgumentException("root list does not accept command arguments.");
+                    IReadOnlyList<MirrorPulseControlRootStatus> roots = await _client.GetRootsAsync(cancellationToken).ConfigureAwait(false);
+                    result = roots;
+                    human = roots.Count == 0 ? "No managed roots are configured." : string.Join(Environment.NewLine,
+                        roots.Select(root => $"{root.Root.Label} · {root.SyncState} · {root.Root.RootId}" +
+                            (root.PendingRename is { } pending ? $" · {pending.SourceName} -> {pending.TargetName} ({pending.Phase})" : string.Empty)));
+                    break;
                 case ("instance", "create"):
                     result = await _client.CreateInstanceAsync(new InstanceCreateArguments(
                         GetRequiredOption(command.Arguments, "install-id"),

@@ -77,6 +77,12 @@ public sealed record MirrorPulseControlRoot(
     string State,
     DateTimeOffset RegisteredAt);
 
+public sealed record MirrorPulseControlRootRename(string OperationId, string SourceName, string TargetName,
+    string Phase, DateTimeOffset UpdatedAt);
+
+public sealed record MirrorPulseControlRootStatus(MirrorPulseControlRoot Root, string SyncState,
+    bool RequiresFullRescan, MirrorPulseControlRootRename? PendingRename);
+
 public sealed record MirrorPulseControlRuntimeState(
     string InstanceId,
     string Phase,

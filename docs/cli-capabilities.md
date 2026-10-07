@@ -15,6 +15,7 @@ production-release completion claim.
 | Host auto-start / stop | Implemented | host start, stop; ordinary command auto-start | Installed MSIX alias and matching Host are exercised by the manual installation gate. |
 | Host restart | Partial | host restart / host.restart | Stops and waits for the old process. A later ordinary command starts the replacement. |
 | Adapter inventory | Implemented | adapter list / adapter.list | Reports installations, versions, instances and roots. |
+| Managed root status | Implemented | root list / root.list | Reads Host-owned stable root IDs, labels, availability, required rescans and pending rename phases through Control. Native root rename and recovery execution are still being integrated. |
 | Official signed file installation | Implemented | adapter install, update / adapter.install | Embedded and legacy detached signatures work; extracted-file hashes are verified. |
 | Latest product update / default bundled packages | Unsupported | update currently takes a local path | CI aggregation downloads releases; product downloading and offline bundled registration are not connected. |
 | External publisher / unsigned installation | Unsupported | developer-mode setting | Current Host uses the official trust anchor and signed-only installation. The setting does not enable unsigned packages. |

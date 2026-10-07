@@ -151,6 +151,14 @@ try {
         throw "The Adapter instance did not register a first-level root."
     }
     $mappedRoot = Join-Path $syncRoot $rootDirectory
+    $managedRoots = Invoke-MirrorPulseCli @("--json", "--developer-mode", "root", "list")
+    $managedRoot = @($managedRoots.data) | Where-Object { $_.root.instanceId -eq $instanceId } | Select-Object -First 1
+    $registeredRoot = @($topology.data.roots) | Where-Object { $_.instanceId -eq $instanceId } | Select-Object -First 1
+    if ($null -eq $managedRoot -or $managedRoot.root.rootId -ne $registeredRoot.rootId -or
+        $managedRoot.root.directoryName -ne $rootDirectory -or $managedRoot.syncState -ne "Active" -or
+        $null -ne $managedRoot.pendingRename) {
+        throw "The CLI root status did not preserve the configured stable root and availability."
+    }
 
     $refresh = Invoke-MirrorPulseCli @("--json", "--developer-mode", "sync", "refresh")
     if ($refresh.kind -ne "result") { throw "The CLI refresh response is invalid." }

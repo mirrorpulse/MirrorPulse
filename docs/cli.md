@@ -50,6 +50,7 @@ The default output is concise human-readable text. Automation should use `--json
 | `mp adapter update <package>` | Install a newer package while retaining eligible versions. | package path |
 | `mp adapter remove --adapter-id ID [--install-id ID] [--purge]` | Remove an installation after Host reference checks. `uninstall` is an alias. | `--purge` removes retained package data when safe |
 | `mp instance list` | List Adapter instances and mapped roots. | `--json` |
+| `mp root list` | Inspect managed root IDs, labels, availability, required rescans, and pending namespace recovery. | `mp --json root list` |
 | `mp instance create --install-id ID --name NAME [--config k=v] [--root k=v] [--secret VALUE] [--disabled]` | Create an independently identifiable instance. | repeat `--config`/`--root` for multiple values |
 | `mp instance configure --instance-id ID --name NAME [--config k=v] [--root k=v]` | Update instance configuration and roots. | adapter-defined keys |
 | `mp instance enable\|disable --instance-id ID` | Change whether an instance participates in synchronization. | `--json` |

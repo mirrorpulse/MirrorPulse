@@ -31,7 +31,7 @@ public static class MirrorPulseCliCommandLine
         StringComparer.OrdinalIgnoreCase)
     {
         "adapter", "config", "conflict", "developer-mode", "diagnostics", "help",
-        "instance", "operation", "startup", "status", "sync", "version", "host"
+        "instance", "operation", "startup", "status", "sync", "version", "host", "root"
     };
 
     private static readonly Dictionary<string, IReadOnlySet<string>> Subcommands =
@@ -42,6 +42,7 @@ public static class MirrorPulseCliCommandLine
             ["host"] = NewSet("status", "start", "stop", "restart"),
             ["instance"] = NewSet("list", "create", "configure", "enable", "disable", "select-version"),
             ["operation"] = NewSet("get", "watch", "cancel"),
+            ["root"] = NewSet("list"),
             ["sync"] = NewSet("status", "refresh")
         };
 
@@ -193,6 +194,7 @@ public static class MirrorPulseCliHelp
                                          Manage installed Adapters.
           instance list|create|configure|enable|disable|select-version
                                          Manage Adapter instances.
+          root list                      Inspect managed roots and namespace recovery.
           conflict list|show|snooze|resolve
                                          Inspect and resolve conflicts.
           operation get|watch|cancel      Inspect long-running operations.

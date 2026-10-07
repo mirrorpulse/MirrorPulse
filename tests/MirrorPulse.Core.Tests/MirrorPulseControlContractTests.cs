@@ -353,6 +353,39 @@ public sealed class MirrorPulseControlContractTests
     }
 
     [TestMethod]
+    public async Task TypedRootStatusPreservesNamespaceRecoveryOverTheCurrentUserPipe()
+    {
+        string name = $"MirrorPulse-root-status-{Guid.NewGuid():N}";
+        string rootId = Guid.NewGuid().ToString("D");
+        string renameId = Guid.NewGuid().ToString("D");
+        var root = new MirrorPulseControlRoot("example.local", Guid.NewGuid().ToString("D"), rootId,
+            "docs", "Documents", "Documents", false, "Active", DateTimeOffset.UtcNow);
+        IReadOnlyList<MirrorPulseControlRootStatus> snapshot = [new(root, "NamespaceRecovery", true,
+            new(renameId, "Documents", "My Files", "Prepared", DateTimeOffset.UtcNow))];
+        var dispatcher = new MirrorPulseControlDispatcher();
+        dispatcher.Register<ControlEmptyArguments, IReadOnlyList<MirrorPulseControlRootStatus>>(
+            MirrorPulseControlCommands.RootList, (_, _) => ValueTask.FromResult(snapshot));
+        using var shutdown = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var server = new MirrorPulseControlPipeServer(dispatcher.DispatchAsync, name);
+        Task serving = server.ServeAsync(shutdown.Token);
+        try
+        {
+            var client = new MirrorPulseControlClient(new() { PipeName = name, ExpectedHostProcessId = Environment.ProcessId });
+            MirrorPulseControlRootStatus actual = (await client.GetRootsAsync(shutdown.Token)).Single();
+            Assert.AreEqual(rootId, actual.Root.RootId);
+            Assert.AreEqual("NamespaceRecovery", actual.SyncState);
+            Assert.IsTrue(actual.RequiresFullRescan);
+            Assert.AreEqual(renameId, actual.PendingRename?.OperationId);
+            Assert.AreEqual("My Files", actual.PendingRename?.TargetName);
+        }
+        finally
+        {
+            await shutdown.CancelAsync();
+            await serving;
+        }
+    }
+
+    [TestMethod]
     public async Task TypedClientCanInvokeHostStarterAfterInitialConnectionFailure()
     {
         var started = false;

@@ -382,6 +382,22 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
         return Task.FromResult(ToControlSettings(_configuration));
     }
 
+    public async Task<IReadOnlyList<MirrorPulseControlRootStatus>> ReadRootsAsync(CancellationToken cancellationToken = default)
+    {
+        MirrorPulseControlTopology topology = await ReadTopologyAsync(cancellationToken).ConfigureAwait(false);
+        IReadOnlyList<MirrorPulseRootRenameIntent> renames = await _catalog.ReadManagedRootRenamesAsync(cancellationToken).ConfigureAwait(false);
+        IReadOnlyList<RootId> deferred = await _catalog.ReadDeferredRescanRootsAsync(cancellationToken).ConfigureAwait(false);
+        return topology.Roots.Select(root =>
+        {
+            RootId id = RootId.Parse(root.RootId);
+            MirrorPulseRootRenameIntent? pending = renames.SingleOrDefault(intent => intent.RootId == id && intent.IsPending);
+            var rename = pending is null ? null : new MirrorPulseControlRootRename(pending.OperationId.ToString("D"),
+                pending.SourceName, pending.TargetName, pending.Phase.ToString(), pending.UpdatedAt);
+            return new MirrorPulseControlRootStatus(root, pending is null ? root.State : "NamespaceRecovery",
+                deferred.Contains(id) || pending is not null, rename);
+        }).ToArray();
+    }
+
     private void InitializeControlPlane(ISecureCredentialStore credentialStore)
     {
         var provisioner = new MirrorPulseAdapterInstanceProvisioner(
@@ -420,6 +436,8 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
             CancelOperationAsync,
             RemoveAdapterAsync)
             .Register(dispatcher);
+        dispatcher.Register<ControlEmptyArguments, IReadOnlyList<MirrorPulseControlRootStatus>>(
+            MirrorPulseControlCommands.RootList, async (_, token) => await ReadRootsAsync(token).ConfigureAwait(false));
         _controlPipe = new MirrorPulseControlPipeServer(dispatcher.DispatchAsync);
     }
 

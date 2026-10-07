@@ -228,6 +228,10 @@ public sealed class MirrorPulseControlClient
             MirrorPulseControlCommands.InstanceList,
             new(limit, cursor), cancellationToken);
 
+    public Task<IReadOnlyList<MirrorPulseControlRootStatus>> GetRootsAsync(CancellationToken cancellationToken = default) =>
+        SendAsync<ControlEmptyArguments, IReadOnlyList<MirrorPulseControlRootStatus>>(
+            MirrorPulseControlCommands.RootList, new(), cancellationToken);
+
     public Task<MirrorPulseControlConflictList> GetConflictsAsync(
         int? limit = null,
         string? cursor = null,
