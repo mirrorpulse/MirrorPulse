@@ -62,6 +62,17 @@ public sealed class MirrorPulseJournalUploadSource
         int deferred = plan.BlockedOperations?.Count ?? 0;
         foreach (MirrorPulseBlockedLocalOperation blocked in plan.BlockedOperations ?? [])
             await _catalog.SaveBlockedLocalOperationAsync(blocked, cancellationToken).ConfigureAwait(false);
+        Guid[] excludedMetadata = (plan.BlockedOperations ?? [])
+            .Where(operation => operation.Reason == MirrorPulseLocalOperationBlockReason.UnsupportedMetadataChange)
+            .Select(operation => operation.OperationId).ToArray();
+        if (excludedMetadata.Length != 0)
+        {
+            // Durable product results accept the notification's unsupported meaning,
+            // not remote metadata. No revision is advanced. Settling these entries
+            // also prevents excluded metadata from starving a bounded official batch.
+            await _feed.AcknowledgeAsync(excludedMetadata.Select(operationId =>
+                new CloudLocalChangeAcknowledgement(operationId, null)), cancellationToken).ConfigureAwait(false);
+        }
         foreach (MirrorPulseWorkerChangeCommand command in plan.Commands.OrderBy(command => command.Sequence))
         {
             byte[] fingerprint = SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(command));

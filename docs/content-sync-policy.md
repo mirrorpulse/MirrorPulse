@@ -20,9 +20,11 @@ remote metadata or authorize deletion after an incomplete scan.
 
 The current Worker protocol has no timestamp, DOS attribute or ACL mutation.
 Unfiltered `MetadataUpdate` operations for files, directories and managed roots
-remain in the official journal and are reported as `UnsupportedMetadataChange`
-in `mp sync status --json`. They are retained across Host restarts and are not
-acknowledged as remote acceptance. Supported child operations continue independently.
+are reported as `UnsupportedMetadataChange` in `mp --json sync status`. The Host
+persists that result before settling the official notification with no remote
+revision. The unsupported result remains queryable across Host restarts; it does
+not claim remote metadata acceptance. Excluded notifications cannot occupy the
+bounded journal batch indefinitely and starve supported child operations.
 
 CfSharp owns the identity-verified echoes of remote creation and remote metadata
 application. MirrorPulse does not treat every directory notification as an echo.

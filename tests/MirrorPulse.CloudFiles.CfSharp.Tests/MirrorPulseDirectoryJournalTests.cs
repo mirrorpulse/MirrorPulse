@@ -80,6 +80,27 @@ public sealed class MirrorPulseDirectoryJournalTests
                     Assert.AreEqual(router.CreateFileIdentity(instance, "docs", "remote:empty", "directory:empty").ItemId,
                         CloudPlaceholderIdentity.Decode(snapshot.PlaceholderIdentity.Span).ItemId);
                     Assert.IsTrue(pump.Health.Healthy);
+                    Guid[] previousResults = (await catalog.ReadBlockedLocalOperationsAsync(timeout.Token)).Select(operation => operation.OperationId).ToArray();
+                    Directory.SetLastWriteTimeUtc(Path.Combine(paths.SyncRootPath, "Docs", "empty"), DateTime.UtcNow.AddDays(-3));
+                    File.SetAttributes(Path.Combine(paths.SyncRootPath, "Docs", "empty"), FileAttributes.Directory | FileAttributes.Hidden);
+                    MirrorPulseBlockedLocalOperation? metadata = null;
+                    while (metadata is null)
+                    {
+                        metadata = (await catalog.ReadBlockedLocalOperationsAsync(timeout.Token)).FirstOrDefault(operation =>
+                            operation.Reason == MirrorPulseLocalOperationBlockReason.UnsupportedMetadataChange &&
+                            operation.RelativePath.Replace('\\', '/') == "Docs/empty" && !previousResults.Contains(operation.OperationId));
+                        if (metadata is null) await Task.Delay(20, timeout.Token);
+                    }
+                    while (true)
+                    {
+                        await using ICloudStateTransaction transaction = await state.OpenStore.BeginTransactionAsync(timeout.Token);
+                        bool pending = await transaction.Operations.GetAsync(metadata.OperationId, timeout.Token) is not null;
+                        await transaction.RollbackAsync(timeout.Token);
+                        if (!pending) break;
+                        await Task.Delay(20, timeout.Token);
+                    }
+                    Assert.AreEqual(3, remote.Creates);
+                    Assert.IsTrue(File.GetAttributes(Path.Combine(paths.SyncRootPath, "Docs", "empty")).HasFlag(FileAttributes.Hidden));
                 }
             }
         }

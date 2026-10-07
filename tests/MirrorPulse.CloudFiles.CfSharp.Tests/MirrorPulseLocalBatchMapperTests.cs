@@ -48,7 +48,7 @@ public sealed class MirrorPulseLocalBatchMapperTests
                     await catalog.SaveBlockedLocalOperationAsync(operation);
             await using (MirrorPulseProductCatalog catalog = await MirrorPulseProductCatalog.OpenAsync(paths))
             {
-                var status = new MirrorPulseAppStatusResponse(4, 0, [], [], BlockedLocalOperations: await catalog.ReadBlockedLocalOperationsAsync());
+                var status = new MirrorPulseAppStatusResponse(1, 0, [], [], BlockedLocalOperations: await catalog.ReadBlockedLocalOperationsAsync());
                 CollectionAssert.AreEquivalent(metadata.Select(change => change.OperationId).ToArray(),
                     status.BlockedLocalOperations!.Select(operation => operation.OperationId).ToArray());
                 Assert.AreEqual("unchanged content", await File.ReadAllTextAsync(file));
