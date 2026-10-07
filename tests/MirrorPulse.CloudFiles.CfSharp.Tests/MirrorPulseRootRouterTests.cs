@@ -3,6 +3,7 @@ using CfSharp;
 using MirrorPulse.CloudFiles.CfSharp;
 using MirrorPulse.Core.CloudFiles;
 using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.State;
 
 namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 
@@ -11,6 +12,36 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 public sealed class MirrorPulseRootRouterTests
 {
     private static readonly string[] ExpectedTopLevelNames = ["Backup", "Documents", "Photos"];
+
+    [TestMethod]
+    public void HistoricalJournalNamesFollowTheStableRootButCannotAuthorizeNativeCallbacks()
+    {
+        string syncRoot = Path.Combine(Path.GetTempPath(), "MirrorPulse-tests", Guid.NewGuid().ToString("N"));
+        InstanceId instance = InstanceId.New();
+        RootRegistration original = AdapterRootRegistrationMapper.Map(AdapterId.Parse("example.labels"), instance,
+            new AdapterRootDefinition("docs", "Documents", "Documents", false), RootRegistrationState.Active,
+            identityScope: RootIdentityScope.InstanceRoot);
+        var renamed = new RootRegistration(original.AdapterId, original.InstanceId, original.RootId, original.UniquenessKey,
+            "My Files", "My Files", original.CustomEntry, original.State, original.RegisteredAt, original.IdentityScope);
+        var router = new MirrorPulseRootRouter(syncRoot, [original]);
+        byte[] identity = router.CreateFileIdentity(instance, "docs", "remote-file", "v1").Encode();
+        MirrorPulseManagedRootName[] history = [new(original.RootId, "Documents"), new(original.RootId, "My Files")];
+        router.ReplaceRegistrations([renamed], history);
+        Assert.AreEqual(original.RootId, router.GetRegistration(instance, "docs").RootId);
+        Assert.AreEqual("note.txt", router.ResolvePath("Documents/note.txt").RelativePath);
+        Assert.AreEqual("docs", router.ResolvePath("Documents/note.txt").RootKey);
+        Assert.AreEqual(Path.Combine(syncRoot, "My Files", "note.txt"), router.ResolveUploadPath(instance, "docs", "note.txt"));
+        Assert.AreEqual(instance, router.Resolve("My Files/note.txt", identity).InstanceId);
+        Assert.ThrowsExactly<FileNotFoundException>(() => router.Resolve("Documents/note.txt", identity));
+        Assert.AreEqual(CloudProviderPolicyDecision.Allow, MirrorPulseRootNamespacePolicy.ApproveDelete(router, "Documents"));
+        Assert.AreEqual(CloudProviderPolicyDecision.Deny, MirrorPulseRootNamespacePolicy.ApproveDelete(router, "My Files"));
+        RootRegistration collision = CreateRoot(InstanceId.New(), "Documents");
+        Assert.ThrowsExactly<InvalidDataException>(() => router.ReplaceRegistrations([renamed, collision], history));
+        Assert.AreEqual("My Files", router.CreateRootPage().Children.Single().Name);
+        var reopened = new MirrorPulseRootRouter(syncRoot, [renamed], history);
+        Assert.AreEqual(router.ResolvePath("Documents/note.txt"), reopened.ResolvePath("Documents/note.txt"));
+        CollectionAssert.AreEqual(identity, reopened.CreateFileIdentity(instance, "docs", "remote-file", "v1").Encode());
+    }
 
     [TestMethod]
     public async Task OneSyncRootListsMultipleCopiesAndMultipleRootsPerInstance()

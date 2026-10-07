@@ -14,7 +14,7 @@ public static class MirrorPulseRootNamespacePolicy
         try
         {
             if (router.IsSyncRoot(normalizedPath)) return CloudProviderPolicyDecision.Deny;
-            return router.ResolvePath(normalizedPath).RelativePath.Length == 0
+            return router.ResolveCurrentPath(normalizedPath).RelativePath.Length == 0
                 ? CloudProviderPolicyDecision.Deny : CloudProviderPolicyDecision.Allow;
         }
         catch (FileNotFoundException)
