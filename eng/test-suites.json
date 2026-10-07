@@ -47,7 +47,8 @@
     "MirrorPulse.Core.Tests.SignedNetworkV2WorkerProcessTests.SignedSftpV2BindsPinnedKeysOptimisticWritesAndReadOnlyRootsThroughProductionHost",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseDirectoryJournalTests.NativeOfflineEmptyAndNestedDirectoryJournalResumesAfterRuntimeRestart",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseDirectoryJournalTests.NativeFullRescanAcceptsNestedDirectoriesBeforeSettlingTheirOriginalJournal",
-    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeDisabledSiblingRootKeepsResidentDataAndJournalWithoutRemoteAccess"
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeDisabledSiblingRootKeepsResidentDataAndJournalWithoutRemoteAccess",
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeBoundedJournalKeepsDeferredHeadAndLaterActiveOperationsDurable"
   ],
   "required": {
     "native": [
@@ -76,7 +77,8 @@
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseSqliteCrashRecoveryTests.NativeOfficialStoreRecoversCommittedRepositoriesAndRollsBackInterruptedWrite",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseDirectoryJournalTests.NativeOfflineEmptyAndNestedDirectoryJournalResumesAfterRuntimeRestart",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseDirectoryJournalTests.NativeFullRescanAcceptsNestedDirectoriesBeforeSettlingTheirOriginalJournal",
-      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeDisabledSiblingRootKeepsResidentDataAndJournalWithoutRemoteAccess"
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeDisabledSiblingRootKeepsResidentDataAndJournalWithoutRemoteAccess",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeBoundedJournalKeepsDeferredHeadAndLaterActiveOperationsDurable"
     ],
     "official": [
       "MirrorPulse.Core.Tests.FtpWorkerProcessTests.SignedFtpReleaseReadsAndConditionallyUploadsThroughHostAndCfSharp",

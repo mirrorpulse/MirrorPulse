@@ -14,6 +14,74 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 [TestClass]
 public sealed class MirrorPulseJournalUploadSourceTests
 {
+    public TestContext TestContext { get; set; } = null!;
+
+    [TestMethod]
+    [DoNotParallelize]
+    [TestCategory("NativeCloudFiles")]
+    public async Task NativeBoundedJournalKeepsDeferredHeadAndLaterActiveOperationsDurable()
+    {
+        if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
+            Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
+        string root = Path.Combine(Path.GetTempPath(), "MirrorPulse-native-tests", Guid.NewGuid().ToString("N"));
+        var paths = new MirrorPulseStoragePaths(Path.Combine(root, "sync"), Path.Combine(root, "data"));
+        var cloud = new CfSharpMirrorPulseCloudRootRegistry();
+        InstanceId instance = InstanceId.New();
+        RootRegistration Registration(string key, string name, RootRegistrationState status) =>
+            AdapterRootRegistrationMapper.Map(AdapterId.Parse("example.fairness"), instance,
+                new AdapterRootDefinition(key, name, name, false), status, identityScope: RootIdentityScope.InstanceRoot);
+        var router = new MirrorPulseRootRouter(paths.SyncRootPath,
+            [Registration("docs", "Docs", RootRegistrationState.Active), Registration("offline", "Offline", RootRegistrationState.Disabled)]);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        try
+        {
+            cloud.Register(new(paths.SyncRootPath, "0.1.0", Guid.NewGuid(), [1, 2, 3]));
+            var state = new MirrorPulseCfSharpStateSession(paths);
+            await using var fileSystem = new MirrorPulseCloudFileSystemBuilder(paths).WithStateStore(state)
+                .WithContentProvider(MirrorPulseDemandProvider.CreateWithoutAdapters(paths.SyncRootPath)).Build();
+            await fileSystem.StartAsync(timeout.Token);
+            await using CloudLocalChangeFeed feed = fileSystem.CreateLocalChangeFeed(new() { BatchSize = 4 });
+            await feed.StartAsync(timeout.Token);
+            await new MirrorPulseRootPopulationCoordinator(fileSystem, feed).PopulateAsync(router, timeout.Token);
+            for (int index = 0; index < 16; index++)
+                await File.WriteAllTextAsync(Path.Combine(paths.SyncRootPath, "Offline", $"queued-{index:D2}.txt"), "offline", timeout.Token);
+            async Task<Guid> WaitForJournalAsync(string path)
+            {
+                while (true)
+                {
+                    await using ICloudStateTransaction transaction = await state.OpenStore.BeginTransactionAsync(timeout.Token);
+                    CloudItemState? item = await transaction.Items.GetByRelativePathAsync(path, timeout.Token);
+                    IReadOnlyList<CloudOperationJournalEntry> entries = await transaction.Operations.ListAsync(256, timeout.Token);
+                    await transaction.RollbackAsync(timeout.Token);
+                    CloudOperationJournalEntry? entry = item is null ? null : entries.FirstOrDefault(entry => entry.ItemId == item.ItemId);
+                    if (entry is not null) return entry.OperationId;
+                    await Task.Delay(20, timeout.Token);
+                }
+            }
+            await WaitForJournalAsync("Offline/queued-15.txt");
+            await File.WriteAllTextAsync(Path.Combine(paths.SyncRootPath, "Docs", "later.txt"), "active", timeout.Token);
+            Guid later = await WaitForJournalAsync("Docs/later.txt");
+            await using var catalog = await MirrorPulseProductCatalog.OpenAsync(paths, timeout.Token);
+            var source = new MirrorPulseJournalUploadSource(feed, router, catalog, _ => true);
+            for (int pass = 0; pass < 4; pass++)
+            {
+                MirrorPulseJournalUploadBatch batch = await source.ReadPendingAsync(timeout.Token);
+                Assert.IsEmpty(batch.ReadyCommands);
+                Assert.IsGreaterThan(0, batch.DeferredCount);
+                Assert.IsFalse((await feed.ReadBatchAsync(timeout.Token)).Changes.Any(change => change.OperationId == later));
+            }
+            await using ICloudStateTransaction retained = await state.OpenStore.BeginTransactionAsync(timeout.Token);
+            Assert.IsNotNull(await retained.Operations.GetAsync(later, timeout.Token));
+            await retained.RollbackAsync(timeout.Token);
+            TestContext.WriteLine($"CfSharp 0.1.0-preview.3: BatchSize=4 returns the retained earliest journal head; a later active-root operation remains durable but unreachable without settling earlier disabled-root operations. OS={Environment.OSVersion.Version}. No native call failed.");
+        }
+        finally
+        {
+            cloud.Unregister(paths.SyncRootPath);
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
+
     [TestMethod]
     [DoNotParallelize]
     [TestCategory("NativeCloudFiles")]
