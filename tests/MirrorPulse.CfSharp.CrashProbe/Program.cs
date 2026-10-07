@@ -8,6 +8,11 @@ if (args.Length == 3 && args[0] == "--protected-writer")
     return await ProtectedConfirmationWriter.RunAsync(args[1], args[2]);
 }
 
+if (args.Length == 3 && args[0] == "--namespace-operation")
+{
+    return await NamespaceMutationProbe.RunAsync(args[1], args[2]);
+}
+
 if (args.Length == 4)
 {
     return await DurabilityFaultProbe.RunAsync(args);
