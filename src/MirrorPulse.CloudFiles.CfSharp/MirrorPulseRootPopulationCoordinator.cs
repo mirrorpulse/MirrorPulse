@@ -3,7 +3,7 @@ using CfSharp;
 
 namespace MirrorPulse.CloudFiles.CfSharp;
 
-/// <summary>Creates Adapter entry directories while using CfSharp's own journal echo suppression.</summary>
+/// <summary>Creates Adapter entry directories with CfSharp's identity-verified creation coordination.</summary>
 [SupportedOSPlatform("windows10.0.16299")]
 public sealed class MirrorPulseRootPopulationCoordinator
 {
@@ -27,15 +27,6 @@ public sealed class MirrorPulseRootPopulationCoordinator
         }
 
         CloudProviderDirectoryPage page = router.CreateRootPage();
-        foreach (CloudPlaceholderSpec root in page.Children)
-        {
-            await _feed.SuppressProviderEchoAsync(
-                CloudStateOperationKind.MetadataUpdate,
-                root.Name,
-                DateTimeOffset.UtcNow.AddSeconds(10),
-                cancellationToken: cancellationToken).ConfigureAwait(false);
-        }
-
         return await _fileSystem.Root.CreatePlaceholdersAsync(page.Children, cancellationToken: cancellationToken)
             .ConfigureAwait(false);
     }

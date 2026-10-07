@@ -56,6 +56,8 @@ public sealed class MirrorPulseContentConfirmationTests
             await using CloudFileSystem fileSystem = new MirrorPulseCloudFileSystemBuilder(paths).WithStateStore(state)
                 .WithContentProvider(MirrorPulseDemandProvider.CreateWithoutAdapters(paths.SyncRootPath)).Build();
             await fileSystem.StartAsync();
+            await using CloudLocalChangeFeed feed = fileSystem.CreateLocalChangeFeed();
+            await feed.StartAsync();
             byte[] bytes = [1, 2, 3, 4, 5];
             await File.WriteAllBytesAsync(Path.Combine(paths.SyncRootPath, "content.bin"), bytes);
             CloudFile file = fileSystem.GetFile("content.bin");
@@ -109,6 +111,9 @@ public sealed class MirrorPulseContentConfirmationTests
             CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(file.FullPath));
             if (!tracked)
             {
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                CloudLocalChangeBatch beforeEdit = await feed.ReadBatchAsync(timeout.Token);
+                long sequence = beforeEdit.Changes.Count == 0 ? 0 : beforeEdit.Changes.Max(change => change.Sequence);
                 await using (var edit = new FileStream(file.FullPath, FileMode.Open, FileAccess.Write, FileShare.Read))
                 {
                     await edit.WriteAsync(new byte[] { 5, 4, 3, 2, 1 });
@@ -119,6 +124,15 @@ public sealed class MirrorPulseContentConfirmationTests
                 Assert.AreEqual(snapshot.LocalBinding, dirty.LocalBinding);
                 Assert.AreEqual(CloudSynchronizationState.NotInSync, dirty.SynchronizationState);
                 Assert.IsFalse(MirrorPulseJournalContentPolicy.IsAcceptedObservation(dirty, instance, "accepted"));
+                CloudLocalChangeBatch afterEdit;
+                do
+                {
+                    afterEdit = await feed.ReadBatchAsync(timeout.Token);
+                    if (!afterEdit.Changes.Any(change => change.Sequence > sequence && change.Kind == CloudLocalChangeKind.ContentUpdate))
+                        await Task.Delay(20, timeout.Token);
+                } while (!afterEdit.Changes.Any(change => change.Sequence > sequence && change.Kind == CloudLocalChangeKind.ContentUpdate));
+                Assert.IsTrue(afterEdit.Changes.Any(change => change.RelativePath == "content.bin" &&
+                    change.Sequence > sequence && change.Kind == CloudLocalChangeKind.ContentUpdate));
             }
         }
         finally

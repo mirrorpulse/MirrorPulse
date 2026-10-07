@@ -431,8 +431,6 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
                 }
                 string localPath = _router.ResolveUploadPath(record.Intent.InstanceId, record.Intent.RootKey, record.Intent.RelativePath);
                 string relative = Path.GetRelativePath(_syncRootPath, localPath).Replace(Path.DirectorySeparatorChar, '/');
-                await _feed.SuppressProviderEchoAsync(CloudStateOperationKind.MetadataUpdate, relative,
-                    DateTimeOffset.UtcNow.AddSeconds(10), cancellationToken: cancellationToken).ConfigureAwait(false);
                 phase = "ConfirmContent";
                 MirrorPulseContentConfirmationReceipt receipt = await MirrorPulseContentConfirmation.ConfirmAsync(
                     _fileSystem.GetFile(relative), proof, cancellationToken).ConfigureAwait(false);

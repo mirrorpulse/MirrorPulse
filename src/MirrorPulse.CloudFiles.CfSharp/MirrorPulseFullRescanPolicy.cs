@@ -35,6 +35,7 @@ public sealed class MirrorPulseFullRescanPolicy(CloudFileSystem fileSystem, Clou
 
     private async ValueTask<int> ReconcileCoreAsync(CancellationToken cancellationToken)
     {
+        if (!feed.IsStarted) throw new InvalidOperationException("Full rescan requires the authoritative local change feed.");
         var observations = new Dictionary<string, (CloudItem Item, CloudItemSnapshot Snapshot)>(StringComparer.OrdinalIgnoreCase);
         var enabled = router.Registrations.Where(root => root.State == RootRegistrationState.Active && mayDispatch(root.InstanceId)).ToArray();
         // Complete discovery before any missing-path decision. Nonrecursive public enumeration
@@ -129,8 +130,6 @@ public sealed class MirrorPulseFullRescanPolicy(CloudFileSystem fileSystem, Clou
                             intent.ContentLength!.Value, intent.ContentSha256!);
                         await catalog.SaveContentAcceptanceProofAsync(proof, token).ConfigureAwait(false);
                     }
-                    await feed.SuppressProviderEchoAsync(CloudStateOperationKind.MetadataUpdate, path,
-                        DateTimeOffset.UtcNow.AddSeconds(10), cancellationToken: token).ConfigureAwait(false);
                     MirrorPulseContentConfirmationReceipt receipt = await MirrorPulseContentConfirmation.ConfirmAsync(
                         fileSystem.GetFile(path), proof, token).ConfigureAwait(false);
                     // After a native commit, retain the receipt even if caller cancellation arrived.
