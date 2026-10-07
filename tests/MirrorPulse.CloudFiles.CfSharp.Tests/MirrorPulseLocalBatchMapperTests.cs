@@ -15,6 +15,49 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 public sealed class MirrorPulseLocalBatchMapperTests
 {
     [TestMethod]
+    public async Task UnfilteredMetadataRetainsItsUnsupportedResultWithoutAcknowledgingDirectoriesOrBlockingChildren()
+    {
+        string fixture = Path.Combine(Path.GetTempPath(), "MirrorPulse-metadata-tests", Guid.NewGuid().ToString("N"));
+        var paths = new MirrorPulseStoragePaths(Path.Combine(fixture, "sync"), Path.Combine(fixture, "data"));
+        InstanceId instance = InstanceId.New();
+        RootRegistration root = AdapterRootRegistrationMapper.Map(AdapterId.Parse("example.metadata"), instance,
+            new AdapterRootDefinition("docs", "Docs", "Docs", false), RootRegistrationState.Active);
+        var router = new MirrorPulseRootRouter(paths.SyncRootPath, [root]);
+        MirrorPulseLocalChangeObservation Change(string path, bool directory, CloudLocalChangeKind kind) =>
+            new(Guid.NewGuid(), 1, kind, null, path, null, directory, DateTimeOffset.UtcNow);
+        try
+        {
+            string directory = Path.Combine(paths.SyncRootPath, "Docs", "folder");
+            Directory.CreateDirectory(directory);
+            string file = Path.Combine(directory, "content.txt");
+            await File.WriteAllTextAsync(file, "unchanged content");
+            File.SetLastWriteTimeUtc(file, DateTime.UtcNow.AddDays(-1));
+            File.SetAttributes(file, File.GetAttributes(file) | FileAttributes.Archive);
+            Directory.SetLastWriteTimeUtc(directory, DateTime.UtcNow.AddDays(-2));
+            MirrorPulseLocalChangeObservation[] metadata = [Change("Docs", true, CloudLocalChangeKind.MetadataUpdate),
+                Change("Docs/folder", true, CloudLocalChangeKind.MetadataUpdate),
+                Change("Docs/folder/content.txt", false, CloudLocalChangeKind.MetadataUpdate)];
+            MirrorPulseLocalChangeObservation child = Change("Docs/folder/content.txt", false, CloudLocalChangeKind.ContentUpdate);
+            MirrorPulseLocalBatchPlan plan = MirrorPulseLocalBatchMapper.MapObservations([.. metadata, child], router);
+            Assert.AreEqual(child.OperationId, plan.Commands.Single().OperationId);
+            Assert.IsEmpty(plan.DirectoryMetadataOperationIds);
+            Assert.HasCount(3, plan.BlockedOperations!);
+            Assert.IsTrue(plan.BlockedOperations!.All(operation => operation.Reason == MirrorPulseLocalOperationBlockReason.UnsupportedMetadataChange));
+            await using (MirrorPulseProductCatalog catalog = await MirrorPulseProductCatalog.OpenAsync(paths))
+                foreach (MirrorPulseBlockedLocalOperation operation in plan.BlockedOperations!)
+                    await catalog.SaveBlockedLocalOperationAsync(operation);
+            await using (MirrorPulseProductCatalog catalog = await MirrorPulseProductCatalog.OpenAsync(paths))
+            {
+                var status = new MirrorPulseAppStatusResponse(4, 0, [], [], BlockedLocalOperations: await catalog.ReadBlockedLocalOperationsAsync());
+                CollectionAssert.AreEquivalent(metadata.Select(change => change.OperationId).ToArray(),
+                    status.BlockedLocalOperations!.Select(operation => operation.OperationId).ToArray());
+                Assert.AreEqual("unchanged content", await File.ReadAllTextAsync(file));
+            }
+        }
+        finally { Directory.Delete(fixture, true); }
+    }
+
+    [TestMethod]
     public async Task BlockedRootsAndUnknownPathsDoNotPoisonValidCommandsAndRemainQueryableAfterRestart()
     {
         string fixture = Path.Combine(Path.GetTempPath(), "MirrorPulse-mapper-tests", Guid.NewGuid().ToString("N"));

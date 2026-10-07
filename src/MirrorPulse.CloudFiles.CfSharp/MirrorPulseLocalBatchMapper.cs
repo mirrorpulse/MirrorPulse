@@ -57,12 +57,13 @@ public static class MirrorPulseLocalBatchMapper
                 Block(change, null, MirrorPulseLocalOperationBlockReason.UnregisteredPath);
                 continue;
             }
-            if (change.IsDirectory && change.Kind == CloudLocalChangeKind.MetadataUpdate)
+            // CfSharp filters its proved remote-creation/application echoes. An
+            // unfiltered metadata observation cannot prove that a source accepted
+            // timestamps or attributes. The product promises content synchronization,
+            // and the current Worker contract has no metadata mutation capability.
+            if (change.Kind == CloudLocalChangeKind.MetadataUpdate)
             {
-                // Directory timestamps and availability flags do not have a Worker mutation.
-                // Retain the real child operations in the batch and acknowledge this local
-                // bookkeeping event so it cannot remain a permanent pending upload.
-                directoryMetadata.Add(change.OperationId);
+                Block(change, current.InstanceId, MirrorPulseLocalOperationBlockReason.UnsupportedMetadataChange);
                 continue;
             }
 
@@ -81,7 +82,6 @@ public static class MirrorPulseLocalBatchMapper
             MirrorPulseLocalOperationBlockReason? reason = change.Kind switch
             {
                 CloudLocalChangeKind.Move when previous is null || previous.RelativePath.Length == 0 => MirrorPulseLocalOperationBlockReason.InvalidMove,
-                CloudLocalChangeKind.MetadataUpdate => MirrorPulseLocalOperationBlockReason.UnsupportedMetadataChange,
                 _ when !Enum.IsDefined(change.Kind) => MirrorPulseLocalOperationBlockReason.UnsupportedChangeKind,
                 _ => null,
             };

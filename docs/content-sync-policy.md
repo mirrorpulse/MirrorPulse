@@ -16,6 +16,22 @@ content acceptance proof. Local metadata notifications still pass through the
 official change feed and product routing; they do not establish acceptance of
 remote metadata or authorize deletion after an incomplete scan.
 
+## Local metadata results
+
+The current Worker protocol has no timestamp, DOS attribute or ACL mutation.
+Unfiltered `MetadataUpdate` operations for files, directories and managed roots
+remain in the official journal and are reported as `UnsupportedMetadataChange`
+in `mp sync status --json`. They are retained across Host restarts and are not
+acknowledged as remote acceptance. Supported child operations continue independently.
+
+CfSharp owns the identity-verified echoes of remote creation and remote metadata
+application. MirrorPulse does not treat every directory notification as an echo.
+On the Windows watcher, file timestamp or attribute changes may instead arrive
+as content observations. A current owned `InSync` snapshot and mutually accepted
+content revision can settle that content observation without sending file bytes;
+this is not a promise to replicate the timestamp or attribute. A data write that
+clears `InSync` still requires a conditional upload and content acceptance proof.
+
 ## Existing roots
 
 The Host updates only a registration with its own provider name, stable root
