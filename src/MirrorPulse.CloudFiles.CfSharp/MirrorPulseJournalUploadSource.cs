@@ -58,6 +58,8 @@ public sealed class MirrorPulseJournalUploadSource
         }
 
         var ready = new List<MirrorPulseWorkerChangeCommand>(plan.Commands.Count);
+        HashSet<RootId> pendingRoots = (await _catalog.ReadManagedRootRenamesAsync(cancellationToken).ConfigureAwait(false))
+            .Where(intent => intent.IsPending).Select(intent => intent.RootId).ToHashSet();
         var held = new List<MirrorPulseWorkerChangeCommand>();
         int deferred = plan.BlockedOperations?.Count ?? 0;
         foreach (MirrorPulseBlockedLocalOperation blocked in plan.BlockedOperations ?? [])
@@ -101,7 +103,8 @@ public sealed class MirrorPulseJournalUploadSource
                 ? null
                 : await _completion.GetRetryAfterAsync(command.OperationId, cancellationToken)
                     .ConfigureAwait(false);
-            if (_mayDispatch(command.InstanceId) && _router.GetRegistration(command.InstanceId, command.RootKey).State == RootRegistrationState.Active &&
+            RootRegistration root = _router.GetRegistration(command.InstanceId, command.RootKey);
+            if (_mayDispatch(command.InstanceId) && root.State == RootRegistrationState.Active && !pendingRoots.Contains(root.RootId) &&
                 !await _catalog.HasPendingUploadConflictAsync(command.OperationId, cancellationToken)
                     .ConfigureAwait(false) &&
                 (retryAfter is null || retryAfter <= DateTimeOffset.UtcNow))

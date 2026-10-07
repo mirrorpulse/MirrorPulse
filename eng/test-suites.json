@@ -48,7 +48,8 @@
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseDirectoryJournalTests.NativeOfflineEmptyAndNestedDirectoryJournalResumesAfterRuntimeRestart",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseDirectoryJournalTests.NativeFullRescanAcceptsNestedDirectoriesBeforeSettlingTheirOriginalJournal",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeDisabledSiblingRootKeepsResidentDataAndJournalWithoutRemoteAccess",
-    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeBoundedJournalKeepsDeferredHeadAndLaterActiveOperationsDurable"
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeBoundedJournalKeepsDeferredHeadAndLaterActiveOperationsDurable",
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativePendingRootRenameFencesJournalAndRescanAcrossRestart"
   ],
   "required": {
     "native": [
@@ -78,7 +79,8 @@
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseDirectoryJournalTests.NativeOfflineEmptyAndNestedDirectoryJournalResumesAfterRuntimeRestart",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseDirectoryJournalTests.NativeFullRescanAcceptsNestedDirectoriesBeforeSettlingTheirOriginalJournal",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeDisabledSiblingRootKeepsResidentDataAndJournalWithoutRemoteAccess",
-      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeBoundedJournalKeepsDeferredHeadAndLaterActiveOperationsDurable"
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeBoundedJournalKeepsDeferredHeadAndLaterActiveOperationsDurable",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativePendingRootRenameFencesJournalAndRescanAcrossRestart"
     ],
     "official": [
       "MirrorPulse.Core.Tests.FtpWorkerProcessTests.SignedFtpReleaseReadsAndConditionallyUploadsThroughHostAndCfSharp",
