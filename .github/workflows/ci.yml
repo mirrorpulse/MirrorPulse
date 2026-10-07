@@ -114,6 +114,14 @@ jobs:
           New-Item -ItemType Directory -Path artifacts/evidence -Force | Out-Null
           pwsh ./eng/verify-unsupported-platform.ps1 -PublishDirectory "$env:RUNNER_TEMP/mirrorpulse-cli-host-win-x64" -EvidencePath artifacts/evidence/rejected.json
 
+      - name: Upload native boundary test results
+        if: (success() || failure()) && github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: native-test-results
+          path: artifacts/test-results/native/**/*.trx
+          if-no-files-found: warn
+
       - name: Collect x64 verification evidence
         shell: pwsh
         run: |

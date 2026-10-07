@@ -18,6 +18,57 @@ public sealed class MirrorPulseManagedRootNamespaceTests
     [TestMethod]
     [DoNotParallelize]
     [TestCategory("NativeCloudFiles")]
+    public async Task NativeRootDeleteProtectionRetainsEntryAfterChildFirstRecursiveDelete()
+    {
+        if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
+            Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
+        string root = Path.Combine(Path.GetTempPath(), "MirrorPulse-native-tests", Guid.NewGuid().ToString("N"));
+        var paths = new MirrorPulseStoragePaths(Path.Combine(root, "sync"), Path.Combine(root, "data"));
+        var registry = new CfSharpMirrorPulseCloudRootRegistry();
+        RootRegistration registration = AdapterRootRegistrationMapper.Map(AdapterId.Parse("example.delete-probe"), InstanceId.New(),
+            new AdapterRootDefinition("docs", "Docs", "Docs", false), RootRegistrationState.Active,
+            identityScope: RootIdentityScope.InstanceRoot);
+        var router = new MirrorPulseRootRouter(paths.SyncRootPath, [registration]);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        try
+        {
+            registry.Register(new(paths.SyncRootPath, "0.1.0", Guid.NewGuid(), [1, 2, 3]));
+            var state = new MirrorPulseCfSharpStateSession(paths);
+            await using var fileSystem = new MirrorPulseCloudFileSystemBuilder(paths).WithStateStore(state)
+                .WithContentProvider(new NamespaceProbeProvider(router)).Build();
+            await fileSystem.StartAsync(timeout.Token);
+            await using CloudLocalChangeFeed feed = fileSystem.CreateLocalChangeFeed();
+            await feed.StartAsync(timeout.Token);
+            await new MirrorPulseRootPopulationCoordinator(fileSystem, feed).PopulateAsync(router, timeout.Token);
+            string managed = Path.Combine(paths.SyncRootPath, "Docs");
+            CloudItemSnapshot before = await fileSystem.GetDirectory("Docs").InspectAsync(timeout.Token);
+            Exception emptyFailure = await DeniedAsync(() => Directory.Delete(managed));
+            Assert.IsTrue(Directory.Exists(managed));
+            string child = Path.Combine(managed, "unsent.txt");
+            await File.WriteAllTextAsync(child, "unsent resident data", timeout.Token);
+            Exception recursiveFailure = await DeniedAsync(() => Directory.Delete(managed, true));
+            CloudItemSnapshot after = await fileSystem.GetDirectory("Docs").InspectAsync(timeout.Token);
+            Assert.IsTrue(after.Exists && after.IsPlaceholder);
+            CollectionAssert.AreEqual(before.PlaceholderIdentity.ToArray(), after.PlaceholderIdentity.ToArray());
+            TestContext.WriteLine($"RootDeleteProbe: emptyRootProtected=True; recursiveRootProtected=True; residentChildRetained={File.Exists(child)}; sourceOperations=0; emptyHResult=0x{emptyFailure.HResult:X8}; recursiveHResult=0x{recursiveFailure.HResult:X8}. A recursive caller can remove children before requesting approval for the protected entry directory.");
+        }
+        finally
+        {
+            registry.Unregister(paths.SyncRootPath);
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
+
+    private static async Task<Exception> DeniedAsync(Action delete)
+    {
+        try { await Task.Run(delete); }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException) { return exception; }
+        throw new AssertFailedException("Deletion of the managed entry directory was not protected.");
+    }
+
+    [TestMethod]
+    [DoNotParallelize]
+    [TestCategory("NativeCloudFiles")]
     public async Task NativeExternalRootRenameExposesPartialStateMoveRecoveryBoundary()
     {
         if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
@@ -178,8 +229,11 @@ public sealed class MirrorPulseManagedRootNamespaceTests
 
     // This permissive provider belongs only to the disposable library boundary
     // probe. Product root rename remains guarded by its durable namespace policy.
-    private sealed class NamespaceProbeProvider : ICloudDemandProvider
+    private sealed class NamespaceProbeProvider(MirrorPulseRootRouter? rootRouter = null) : ICloudDemandProvider
     {
+        public ValueTask<CloudProviderPolicyDecision> ApproveDeleteAsync(CloudProviderDeleteRequest request,
+            CancellationToken cancellationToken) => ValueTask.FromResult(rootRouter is null
+                ? CloudProviderPolicyDecision.Deny : MirrorPulseRootNamespacePolicy.ApproveDelete(rootRouter, request.NormalizedPath));
         public ValueTask<CloudProviderPolicyDecision> ApproveRenameAsync(CloudProviderRenameRequest request,
             CancellationToken cancellationToken) => ValueTask.FromResult(CloudProviderPolicyDecision.Allow);
         public ValueTask<CloudProviderDirectoryPage> FetchChildrenAsync(CloudProviderFetchPlaceholdersRequest request,
