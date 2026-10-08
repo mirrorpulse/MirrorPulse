@@ -3,6 +3,11 @@ using MirrorPulse.CfSharp.CrashProbe;
 using MirrorPulse.CloudFiles.CfSharp;
 using MirrorPulse.Core.Configuration;
 
+if (args.Length == 2 && args[0] is "--read-cli-fixture" or "--audit-cli-fixture")
+{
+    return await CliFixtureProbe.RunAsync(args[1], audit: args[0] == "--audit-cli-fixture");
+}
+
 if (args.Length == 3 && args[0] == "--protected-writer")
 {
     return await ProtectedConfirmationWriter.RunAsync(args[1], args[2]);
