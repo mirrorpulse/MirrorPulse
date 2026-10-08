@@ -277,6 +277,7 @@ public sealed class MirrorPulseActiveRemotePollerTests
         var snapshots = new MirrorPulseFileRemotePollSnapshotStore(paths.DataRootPath);
         var observed = new List<CloudRemoteChangeBatch>();
         var applied = new HashSet<string>(StringComparer.Ordinal);
+        Guid renameOperation = Guid.Empty;
         bool inject = true;
         ValueTask<MirrorPulseRemotePollApplyOutcome> Apply(InstanceId _, CloudRemoteChangeBatch batch, CancellationToken __)
         {
@@ -290,6 +291,13 @@ public sealed class MirrorPulseActiveRemotePollerTests
         {
             await using (MirrorPulseProductCatalog catalog = await MirrorPulseProductCatalog.OpenAsync(paths))
             {
+                var manifest = new AdapterManifest(1, root.AdapterId, "Replay", "1.0.0", new(1, 1),
+                    new Dictionary<string, string> { ["win-x64"] = "worker/adapter.exe", ["win-arm64"] = "worker/adapter.exe" },
+                    new(null), new(null, null), new(true, false, true, true), ["en-US"], "1.0.0",
+                    [new("files", "Files", "Files", false)]);
+                var installation = new InstalledAdapter(manifest, adapter.InstallId, Path.Combine(dataRoot, "installed"),
+                    new(new string('A', 64)), AdapterInstallSource.LocalFile, null, true, DateTimeOffset.UtcNow, AdapterLifecycleState.Installed);
+                await catalog.SaveAdapterTopologyAsync(new([installation], [adapter], [root]));
                 var pending = new MirrorPulseCatalogRemotePollPendingStore(catalog);
                 await using var first = new MirrorPulseActiveRemotePoller(source, [adapter], [root], Apply,
                     snapshotStore: new FaultingSnapshotStore(snapshots, fault == "snapshot-commit"),
@@ -299,6 +307,7 @@ public sealed class MirrorPulseActiveRemotePollerTests
                 source.Set(new FakeEntry("file", "v2", CloudItemKind.File, "file.bin", 4));
                 await Assert.ThrowsExactlyAsync<IOException>(() => first.PollOnceAsync(instance).AsTask());
                 Assert.IsNotNull(await pending.LoadAsync(instance, CancellationToken.None));
+                renameOperation = (await catalog.PrepareManagedRootRenameAsync(root.RootId, "Renamed")).OperationId;
             }
 
             inject = false;
@@ -307,8 +316,20 @@ public sealed class MirrorPulseActiveRemotePollerTests
             await using (MirrorPulseProductCatalog reopened = await MirrorPulseProductCatalog.OpenAsync(paths))
             {
                 var pending = new MirrorPulseCatalogRemotePollPendingStore(reopened);
+                var router = new MirrorPulseRootRouter(paths.SyncRootPath, [root]);
+                var fence = new MirrorPulseRemoteNamespaceFence(router, reopened);
                 await using var second = new MirrorPulseActiveRemotePoller(source, [adapter], [root], Apply,
-                    snapshotStore: snapshots, pendingStore: pending);
+                    snapshotStore: snapshots, pendingStore: pending, mayPoll: fence.CanPollAsync);
+                MirrorPulsePendingRemotePoll retained = (await pending.LoadAsync(instance, CancellationToken.None))!;
+                Assert.IsFalse(await second.PollOnceAsync(instance));
+                Assert.AreEqual(readsBeforeReplay, source.Reads);
+                Assert.HasCount(1, observed);
+                MirrorPulsePendingRemotePoll fenced = (await pending.LoadAsync(instance, CancellationToken.None))!;
+                Assert.AreEqual(retained.BatchId, fenced.BatchId);
+                CollectionAssert.AreEqual(retained.Fingerprint, fenced.Fingerprint);
+                Assert.AreEqual("Files", fenced.RootDirectoryName);
+                await reopened.TransitionManagedRootRenameAsync(renameOperation,
+                    MirrorPulseRootRenamePhase.Prepared, MirrorPulseRootRenamePhase.Cancelled);
                 Assert.IsTrue(await second.PollOnceAsync(instance));
                 Assert.AreEqual(readsBeforeReplay, source.Reads);
                 Assert.HasCount(2, observed);
