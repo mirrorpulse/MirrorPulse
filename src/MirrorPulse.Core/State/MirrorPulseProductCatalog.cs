@@ -102,7 +102,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                 version.CommandText = "PRAGMA user_version;";
                 long currentVersion = (long)(await version.ExecuteScalarAsync(cancellationToken)
                     .ConfigureAwait(false) ?? 0L);
-                if (currentVersion > 18)
+                if (currentVersion > 19)
                 {
                     throw new InvalidDataException("The MP product catalog schema is newer than this Host supports.");
                 }
@@ -210,6 +210,14 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                         proof TEXT NULL,
                         observation TEXT NULL
                     );
+                    CREATE TABLE IF NOT EXISTS journal_coalescing_plans (
+                        plan_id TEXT PRIMARY KEY,
+                        payload TEXT NOT NULL
+                    );
+                    CREATE TABLE IF NOT EXISTS journal_coalescing_members (
+                        operation_id TEXT PRIMARY KEY,
+                        plan_id TEXT NOT NULL REFERENCES journal_coalescing_plans(plan_id)
+                    );
                     INSERT OR IGNORE INTO managed_root_rename_history (operation_id, root_id, payload)
                         SELECT json_extract(payload, '$.OperationId'), root_id, payload FROM managed_root_renames;
                     CREATE TABLE IF NOT EXISTS notification_snoozes (
@@ -264,7 +272,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                     alter.CommandText = "ALTER TABLE worker_requests ADD COLUMN stable_fingerprint BLOB NULL;";
                     await alter.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
                 }
-                version.CommandText = "PRAGMA user_version=18;";
+                version.CommandText = "PRAGMA user_version=19;";
                 await version.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
 

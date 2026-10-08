@@ -37,6 +37,13 @@ public sealed partial class MirrorPulseProductCatalog
         try
         {
             ThrowIfDisposed();
+            await using (var ownership = _connection.CreateCommand())
+            {
+                ownership.CommandText = "SELECT plan_id FROM journal_coalescing_members WHERE operation_id=$operation;";
+                ownership.Parameters.AddWithValue("$operation", intent.OperationId.ToString());
+                if (await ownership.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null)
+                    throw new InvalidOperationException("The original journal operation belongs to an immutable coalescing plan.");
+            }
             await using var command = _connection.CreateCommand();
             command.CommandText = """
                 INSERT INTO mutation_intents (operation_id, payload, state, accepted_revision, updated_utc)

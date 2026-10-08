@@ -84,6 +84,13 @@ unconverted child files before the protected entry receives its delete callback.
 Rejecting every provider delete callback does not intercept these ordinary files.
 Whole-tree protection remains an open product requirement.
 
+Unsent file-chain coalescing decisions preserve the official journal operation IDs
+and are immutable across catalog restart. Operations already owned by a mutation
+or another decision cannot be merged or individually dispatched. Planning is not
+yet connected to the upload pump: complete public journal pagination, remote
+verification, local projection and acknowledgement of every original ID remain
+required before the product can claim coalescing execution.
+
 An inherited NTFS delete-denial probe preserves ordinary children and their latest
 in-place edits, but it also blocks individual deletion and replacement-based saves.
 That probe is a compatibility diagnostic; the product has not adopted its ACL.
