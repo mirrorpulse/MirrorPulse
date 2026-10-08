@@ -85,8 +85,8 @@ Rejecting every provider delete callback does not intercept these ordinary files
 Whole-tree protection remains an open product requirement.
 
 Unsent file-chain coalescing decisions preserve the official journal operation IDs
-and are immutable across catalog restart. Operations already owned by a mutation
-or another decision cannot be merged or individually dispatched. Planning is not
+and are immutable across catalog restart. Operations already started or owned by
+another decision cannot be merged or individually dispatched. Planning is not
 yet connected to the upload pump: complete public journal pagination, remote
 verification, local projection and acknowledgement of every original ID remain
 required before the product can claim coalescing execution.
@@ -94,8 +94,13 @@ required before the product can claim coalescing execution.
 The catalog records whether mutation execution has ever started before dispatch.
 That evidence survives a return to Prepared and catalog restart. Migrated records
 without historical evidence remain Unknown; their current state cannot establish
-that they were never sent. A coalescing decision does not supersede existing
-mutation intent yet.
+that they were never sent. An explicit coalescing decision can supersede only
+proven never-started Prepared journal intent with a matching complete observation
+window, immutable original intent, common baseline and historical content binding.
+The plan, original-operation ownership and Superseded state commit together.
+Original intent remains readable, with its plan ID, and generic mutation recovery
+excludes it. Superseding neither executes a Worker operation nor acknowledges the
+official journal; aggregate execution and recovery still need implementation.
 
 An inherited NTFS delete-denial probe preserves ordinary children and their latest
 in-place edits, but it also blocks individual deletion and replacement-based saves.

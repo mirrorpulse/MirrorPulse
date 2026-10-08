@@ -16,6 +16,8 @@ public sealed class MirrorPulseMutationExecutor(MirrorPulseProductCatalog catalo
         ArgumentNullException.ThrowIfNull(verify);
         ArgumentNullException.ThrowIfNull(acknowledge);
         if (record.State == MirrorPulseMutationState.Acknowledged) return;
+        if (record.State == MirrorPulseMutationState.Superseded)
+            throw new MirrorPulseMutationAmbiguousException("The original mutation is owned by its durable coalescing plan.");
         if (record.State == MirrorPulseMutationState.Conflict)
             throw new MirrorPulseWorkerMutationConflictException(record.Intent.ExpectedRevision, record.AcceptedRevision);
         if (record.State == MirrorPulseMutationState.Prepared) throw new MirrorPulseMutationAmbiguousException();

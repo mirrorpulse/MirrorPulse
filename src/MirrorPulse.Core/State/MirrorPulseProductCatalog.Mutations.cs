@@ -5,7 +5,7 @@ using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.Core.State;
 
-public enum MirrorPulseMutationState { Prepared, Executing, RemoteAccepted, Ambiguous, Acknowledged, Conflict }
+public enum MirrorPulseMutationState { Prepared, Executing, RemoteAccepted, Ambiguous, Acknowledged, Conflict, Superseded }
 public enum MirrorPulseMutationOrigin { Journal, Rescan }
 /// <summary>Historical execution evidence; Prepared alone does not prove that a mutation was never dispatched.</summary>
 public enum MirrorPulseMutationExecutionEvidence { Unknown, NeverStarted, Started }
@@ -16,7 +16,8 @@ public sealed record MirrorPulseMutationIntent(Guid OperationId, InstanceId Inst
     string? PreviousRootKey = null);
 public sealed record MirrorPulseMutationRecord(MirrorPulseMutationIntent Intent, MirrorPulseMutationState State,
     string? AcceptedRevision, DateTimeOffset UpdatedAt,
-    MirrorPulseMutationExecutionEvidence ExecutionEvidence = MirrorPulseMutationExecutionEvidence.Unknown);
+    MirrorPulseMutationExecutionEvidence ExecutionEvidence = MirrorPulseMutationExecutionEvidence.Unknown,
+    Guid? SupersededByPlanId = null);
 
 public sealed partial class MirrorPulseProductCatalog
 {
@@ -42,10 +43,13 @@ public sealed partial class MirrorPulseProductCatalog
             ThrowIfDisposed();
             await using (var ownership = _connection.CreateCommand())
             {
-                ownership.CommandText = "SELECT plan_id FROM journal_coalescing_members WHERE operation_id=$operation;";
+                ownership.CommandText = """
+                    SELECT 1 FROM journal_coalescing_members WHERE operation_id=$operation
+                    UNION ALL SELECT 1 FROM journal_coalescing_plans WHERE plan_id=$operation LIMIT 1;
+                    """;
                 ownership.Parameters.AddWithValue("$operation", intent.OperationId.ToString());
                 if (await ownership.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null)
-                    throw new InvalidOperationException("The original journal operation belongs to an immutable coalescing plan.");
+                    throw new InvalidOperationException("The operation ID belongs to an immutable coalescing plan.");
             }
             await using var command = _connection.CreateCommand();
             command.CommandText = """
@@ -80,13 +84,19 @@ public sealed partial class MirrorPulseProductCatalog
         {
             ThrowIfDisposed();
             await using var command = _connection.CreateCommand();
-            command.CommandText = "SELECT operation_id, payload, state, accepted_revision, updated_utc, execution_started FROM mutation_intents WHERE state<>$acknowledged ORDER BY operation_id;";
+            command.CommandText = """
+                SELECT operation_id, payload, state, accepted_revision, updated_utc, execution_started,
+                    (SELECT plan_id FROM journal_coalescing_members WHERE operation_id=mutation_intents.operation_id)
+                FROM mutation_intents WHERE state NOT IN ($acknowledged,$superseded) ORDER BY operation_id;
+                """;
             command.Parameters.AddWithValue("$acknowledged", (int)MirrorPulseMutationState.Acknowledged);
+            command.Parameters.AddWithValue("$superseded", (int)MirrorPulseMutationState.Superseded);
             await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
             var values = new List<MirrorPulseMutationRecord>();
             while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
                 values.Add(DecodeMutation(Guid.Parse(reader.GetString(0)), (byte[])reader[1], reader.GetInt32(2),
-                    reader.IsDBNull(3) ? null : reader.GetString(3), reader.GetString(4), reader.IsDBNull(5) ? null : reader.GetInt32(5)));
+                    reader.IsDBNull(3) ? null : reader.GetString(3), reader.GetString(4), reader.IsDBNull(5) ? null : reader.GetInt32(5),
+                    reader.IsDBNull(6) ? null : reader.GetString(6)));
             return values.AsReadOnly();
         }
         finally { _gate.Release(); }
@@ -125,20 +135,30 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task<MirrorPulseMutationRecord?> ReadMutationCoreAsync(Guid operationId, CancellationToken cancellationToken)
     {
         await using var command = _connection.CreateCommand();
-        command.CommandText = "SELECT payload,state,accepted_revision,updated_utc,execution_started FROM mutation_intents WHERE operation_id=$operation;";
+        command.CommandText = """
+            SELECT payload,state,accepted_revision,updated_utc,execution_started,
+                (SELECT plan_id FROM journal_coalescing_members WHERE operation_id=$operation)
+            FROM mutation_intents WHERE operation_id=$operation;
+            """;
         command.Parameters.AddWithValue("$operation", operationId.ToString("D"));
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
             ? DecodeMutation(operationId, (byte[])reader[0], reader.GetInt32(1), reader.IsDBNull(2) ? null : reader.GetString(2), reader.GetString(3),
-                reader.IsDBNull(4) ? null : reader.GetInt32(4)) : null;
+                reader.IsDBNull(4) ? null : reader.GetInt32(4), reader.IsDBNull(5) ? null : reader.GetString(5)) : null;
     }
 
-    private static MirrorPulseMutationRecord DecodeMutation(Guid operationId, byte[] payload, int state, string? revision, string updated, int? executionStarted)
+    private static MirrorPulseMutationRecord DecodeMutation(Guid operationId, byte[] payload, int state, string? revision, string updated,
+        int? executionStarted, string? supersededByPlanId)
     {
         MirrorPulseMutationIntent intent = JsonSerializer.Deserialize<MirrorPulseMutationIntent>(payload, TopologyJsonOptions)
             ?? throw new InvalidDataException("The mutation intent is empty.");
+        Guid? supersedingPlan = supersededByPlanId is null ? null :
+            Guid.TryParse(supersededByPlanId, out Guid parsed) && parsed != Guid.Empty ? parsed :
+                throw new InvalidDataException("The mutation has an invalid coalescing owner.");
         if (intent.OperationId != operationId || !Enum.IsDefined((MirrorPulseMutationState)state) || executionStarted is not (null or 0 or 1) ||
-            executionStarted == 0 && state != (int)MirrorPulseMutationState.Prepared)
+            executionStarted == 0 && state is not ((int)MirrorPulseMutationState.Prepared or (int)MirrorPulseMutationState.Superseded) ||
+            (state == (int)MirrorPulseMutationState.Superseded) != (supersedingPlan is not null) ||
+            state == (int)MirrorPulseMutationState.Superseded && executionStarted != 0)
             throw new InvalidDataException("The mutation intent has invalid identity or state.");
         return new(intent, (MirrorPulseMutationState)state, revision, DateTimeOffset.Parse(updated, CultureInfo.InvariantCulture),
             executionStarted switch
@@ -146,6 +166,6 @@ public sealed partial class MirrorPulseProductCatalog
                 0 => MirrorPulseMutationExecutionEvidence.NeverStarted,
                 1 => MirrorPulseMutationExecutionEvidence.Started,
                 _ => MirrorPulseMutationExecutionEvidence.Unknown,
-            });
+            }, supersedingPlan);
     }
 }
