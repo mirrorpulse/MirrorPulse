@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.Versioning;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text.Json;
 using CfSharp;
 using MirrorPulse.CfSharp.CrashProbe;
@@ -17,6 +19,59 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 public sealed class MirrorPulseManagedRootNamespaceTests
 {
     public TestContext TestContext { get; set; } = null!;
+
+    [TestMethod]
+    [DoNotParallelize]
+    public async Task DisposableTreeDeleteAclPreservesOrdinaryEditsButBlocksFileDeletionAndReplacement()
+    {
+        // No Cloud Files root is registered. Only this marked temporary ordinary-file fixture gets an ACL.
+        string root = Path.Combine(Path.GetTempPath(), "MirrorPulse-native-tests", Guid.NewGuid().ToString("N"));
+        string managed = Path.Combine(root, "sync", "Docs");
+        string nested = Path.Combine(managed, "Nested");
+        Directory.CreateDirectory(nested);
+        var directory = new DirectoryInfo(managed);
+        DirectorySecurity original = directory.GetAccessControl();
+        string? previous = Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST");
+        using WindowsIdentity identity = WindowsIdentity.GetCurrent();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        string child = Path.Combine(nested, "unsent.txt");
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(root, ".mp-namespace-fixture"), string.Empty);
+            await File.WriteAllTextAsync(child, "unsent original");
+            DirectorySecurity protectedAcl = directory.GetAccessControl();
+            protectedAcl.AddAccessRule(new FileSystemAccessRule(identity.User!,
+                FileSystemRights.Delete | FileSystemRights.DeleteSubdirectoriesAndFiles,
+                InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+                PropagationFlags.None, AccessControlType.Deny));
+            directory.SetAccessControl(protectedAcl);
+            await File.WriteAllTextAsync(child, "unsent latest edit");
+            Environment.SetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST", "1");
+            NamespaceMutationProbeResult result = await RunNamespaceProcessAsync(root, "delete-tree", timeout.Token);
+            Assert.IsFalse(result.Completed);
+            Assert.IsTrue(Directory.Exists(nested));
+            Assert.AreEqual("unsent latest edit", await File.ReadAllTextAsync(child));
+            await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() => File.Delete(child)));
+            string replacement = Path.Combine(nested, "replacement.tmp");
+            await File.WriteAllTextAsync(replacement, "replacement bytes");
+            await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() => File.Move(replacement, child, overwrite: true)));
+            Assert.AreEqual("unsent latest edit", await File.ReadAllTextAsync(child));
+            TestContext.WriteLine("TreeAclProbe: recursive ordinary-file deletion denied; latest in-place edit retained; individual child deletion and atomic-save replacement also denied. This is a compatibility boundary, not the selected product policy.");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST", previous);
+            directory.SetAccessControl(original);
+            // Inherited deny ACEs can remain on already-created descendants.
+            // Restore the known disposable parent explicitly before recursive cleanup.
+            var cleanup = new DirectorySecurity();
+            cleanup.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+            cleanup.AddAccessRule(new FileSystemAccessRule(identity.User!, FileSystemRights.FullControl,
+                InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
+            new DirectoryInfo(nested).SetAccessControl(cleanup);
+            Directory.Delete(root, true);
+        }
+    }
 
     [TestMethod]
     [DoNotParallelize]
@@ -57,7 +112,7 @@ public sealed class MirrorPulseManagedRootNamespaceTests
     [TestMethod]
     [DoNotParallelize]
     [TestCategory("NativeCloudFiles")]
-    public async Task NativeChildDeleteDenialProtectsUnsentResidentFileFromRecursiveCaller()
+    public async Task NativeChildDeleteDenialExposesUnconvertedFileProtectionBoundary()
         => await ProbeRootDeletionAsync(protectChildren: true);
 
     private async Task ProbeRootDeletionAsync(bool protectChildren)
@@ -103,9 +158,9 @@ public sealed class MirrorPulseManagedRootNamespaceTests
             CollectionAssert.AreEqual(before.PlaceholderIdentity.ToArray(), after.PlaceholderIdentity.ToArray());
             if (protectChildren)
             {
-                Assert.IsTrue(File.Exists(child), "Denying child deletion did not protect the unsent resident file.");
-                Assert.AreEqual("unsent resident data", await File.ReadAllTextAsync(child, timeout.Token));
-                Assert.IsGreaterThan(0, provider.ChildDeleteApprovals, "No child approval was received for the ordinary file.");
+                Assert.IsFalse(File.Exists(child), "The reproduced ordinary-file callback boundary changed; reassess the product protection mechanism.");
+                Assert.AreEqual(0, provider.ChildDeleteApprovals, "The ordinary-file delete unexpectedly reached provider approval; reassess this diagnostic.");
+                TestContext.WriteLine("ChildDeleteBoundary: rejecting every provider delete request still does not intercept an unconverted ordinary child's deletion. This diagnostic does not satisfy whole-tree product protection.");
             }
             TestContext.WriteLine($"RootDeleteProbe: emptyRootProtected=True; recursiveRootProtected=True; residentChildRetained={File.Exists(child)}; sourceOperations=0; deleteApprovals={provider.DeleteApprovals}; emptyHResult=0x{emptyFailure.HResult:X8}; recursiveHResult=0x{recursiveFailure.HResult:X8}. A recursive caller can remove children before requesting approval for the protected entry directory.");
         }

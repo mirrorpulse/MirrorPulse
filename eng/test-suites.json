@@ -52,7 +52,7 @@
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativePendingRootRenameFencesJournalAndRescanAcrossRestart",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeExternalRootRenameExposesPartialStateMoveRecoveryBoundary",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeRootDeleteProtectionRetainsEntryAfterChildFirstRecursiveDelete",
-    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeChildDeleteDenialProtectsUnsentResidentFileFromRecursiveCaller"
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeChildDeleteDenialExposesUnconvertedFileProtectionBoundary"
   ],
   "required": {
     "native": [
@@ -86,7 +86,7 @@
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativePendingRootRenameFencesJournalAndRescanAcrossRestart",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeExternalRootRenameExposesPartialStateMoveRecoveryBoundary",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeRootDeleteProtectionRetainsEntryAfterChildFirstRecursiveDelete",
-    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeChildDeleteDenialProtectsUnsentResidentFileFromRecursiveCaller"
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeChildDeleteDenialExposesUnconvertedFileProtectionBoundary"
     ],
     "official": [
       "MirrorPulse.Core.Tests.FtpWorkerProcessTests.SignedFtpReleaseReadsAndConditionallyUploadsThroughHostAndCfSharp",
