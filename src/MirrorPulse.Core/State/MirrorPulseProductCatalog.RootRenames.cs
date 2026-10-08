@@ -89,8 +89,7 @@ public sealed partial class MirrorPulseProductCatalog
     public async Task<MirrorPulseRootRenameIntent> TransitionManagedRootRenameAsync(Guid operationId,
         MirrorPulseRootRenamePhase expected, MirrorPulseRootRenamePhase next, CancellationToken cancellationToken = default)
     {
-        bool allowed = (expected, next) is (MirrorPulseRootRenamePhase.Prepared, MirrorPulseRootRenamePhase.NativeObserved)
-            or (MirrorPulseRootRenamePhase.Prepared, MirrorPulseRootRenamePhase.Cancelled)
+        bool allowed = (expected, next) is (MirrorPulseRootRenamePhase.Prepared, MirrorPulseRootRenamePhase.Cancelled)
             or (MirrorPulseRootRenamePhase.NativeObserved, MirrorPulseRootRenamePhase.LocalProjected)
             or (MirrorPulseRootRenamePhase.LocalProjected, MirrorPulseRootRenamePhase.Completed);
         if (!allowed) throw new InvalidOperationException("The managed root rename transition is invalid.");
@@ -103,6 +102,18 @@ public sealed partial class MirrorPulseProductCatalog
                 ?? throw new FileNotFoundException("The managed root rename intent is not registered.");
             if (current.Phase == next) return current;
             if (current.Phase != expected) throw new InvalidOperationException("The managed root rename phase has changed.");
+            if (next is MirrorPulseRootRenamePhase.LocalProjected or MirrorPulseRootRenamePhase.Completed)
+            {
+                MirrorPulseRootRenameHistory history = await ReadManagedRootRenameHistoryCoreAsync(operationId, cancellationToken).ConfigureAwait(false);
+                if (history.Proof is null || history.Observation is null)
+                    throw new InvalidOperationException("The rename requires its original native object proof and matching observation.");
+                await using SqliteCommand topology = _connection.CreateCommand();
+                topology.CommandText = "SELECT payload FROM adapter_topology WHERE id=1;";
+                string? payload = (string?)await topology.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+                RootRegistration? root = payload is null ? null : DeserializeTopology(payload).Roots.SingleOrDefault(root => root.RootId == current.RootId);
+                if (root?.DirectoryName != current.TargetName)
+                    throw new InvalidOperationException("The renamed root's display mapping has not been projected.");
+            }
             MirrorPulseRootRenameIntent updated = current with { Phase = next, UpdatedAt = DateTimeOffset.UtcNow };
             await SaveManagedRootRenameCoreAsync(updated, cancellationToken).ConfigureAwait(false);
             return updated;
@@ -110,15 +121,22 @@ public sealed partial class MirrorPulseProductCatalog
         finally { _gate.Release(); }
     }
 
-    private async Task SaveManagedRootRenameCoreAsync(MirrorPulseRootRenameIntent intent, CancellationToken cancellationToken)
+    private async Task SaveManagedRootRenameCoreAsync(MirrorPulseRootRenameIntent intent, CancellationToken cancellationToken,
+        SqliteTransaction? transaction = null)
     {
+        using SqliteTransaction? owned = transaction is null ? _connection.BeginTransaction() : null;
         await using SqliteCommand command = _connection.CreateCommand();
+        command.Transaction = transaction ?? owned;
         command.CommandText = """
             INSERT INTO managed_root_renames (root_id, payload) VALUES ($root, $payload)
             ON CONFLICT(root_id) DO UPDATE SET payload=excluded.payload;
+            INSERT INTO managed_root_rename_history (operation_id, root_id, payload) VALUES ($operation, $root, $payload)
+            ON CONFLICT(operation_id) DO UPDATE SET payload=excluded.payload;
             """;
+        command.Parameters.AddWithValue("$operation", intent.OperationId.ToString());
         command.Parameters.AddWithValue("$root", intent.RootId.ToString());
         command.Parameters.AddWithValue("$payload", JsonSerializer.Serialize(intent, TopologyJsonOptions));
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        owned?.Commit();
     }
 }
