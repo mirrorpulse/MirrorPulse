@@ -44,10 +44,10 @@ show which outcomes are queued rather than completed.
 | --- | --- | --- |
 | Directory pages and demand ranges | Implemented | Installed signed Workers and protocol fixtures exercise reads. Full Explorer image/thumbnail/retention acceptance remains open. |
 | Multiple instances | Implemented | Signed aggregate tests start independent Local Workers with separate instance IDs. |
-| Multiple roots per instance | Partial | Root models exist, but Worker requests omit RootKey and the active poller skips instances with more than one root. |
-| Offline edits and upload replay | Partial | ARM64 signed Local CLI regression verifies queue 0 to 2 to 0. Failed and blocked commands no longer abort later valid commands in the same batch; sync status exposes blocked reasons. Full rescan, directory creation, metadata and bounded paging still need completion. |
+| Multiple roots per instance | Partial | Worker requests carry RootKey, with explicit demand and upload routing. The background poller still admits only one active root per instance. |
+| Offline edits and upload replay | Partial | ARM64 signed Local CLI regression verifies queue 0 to 2 to 0. File and directory-create recovery retain accepted intent across restart; sync status exposes blocked reasons. File-chain aggregate execution, recursive move/delete and bounded fair paging still need completion. Local metadata-only changes are outside the content-sync policy. |
 | Move / delete | Partial | Current official Workers implement file/directory mutations. Complete journal, cross-root, recursive and conflict safety is not proven. |
-| Remote polling | Partial | Single-root polling retains retry snapshots and replays durable pending batches before observing newer changes. Metadata and multi-root behavior still need completion. |
+| Remote polling | Partial | Single-root polling retains retry snapshots and replays durable pending batches before observing newer changes. Pending root rename fences observation and replay; multi-root polling and native rename recovery still need completion. |
 | Pin / free space | Unsupported | The availability helper exists, but no complete Control/CLI command is connected. |
 | Explorer identity / icon | Partial | MSIX identity is tested separately from interactive Shell/custom-name acceptance; the registrar still uses a system icon. |
 
@@ -85,8 +85,8 @@ Rejecting every provider delete callback does not intercept these ordinary files
 Whole-tree protection remains an open product requirement.
 
 Unsent file-chain coalescing decisions preserve the official journal operation IDs
-and are immutable across catalog restart. Operations already started or owned by
-another decision cannot be merged or individually dispatched. Planning is not
+and are immutable across catalog restart. Operations already started cannot be
+merged; decision members cannot be individually dispatched. Planning is not
 yet connected to the upload pump: complete public journal pagination, remote
 verification, local projection and acknowledgement of every original ID remain
 required before the product can claim coalescing execution.
