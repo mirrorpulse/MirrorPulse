@@ -78,6 +78,22 @@ process per instance do not constitute a filesystem sandbox.
 
 ## Evidence boundaries
 
+Managed entry deletion is rejected by the provider, but this does not yet protect
+the complete directory tree. An external recursive caller can remove ordinary
+unconverted child files before the protected entry receives its delete callback.
+Rejecting every provider delete callback does not intercept these ordinary files.
+Whole-tree protection remains an open product requirement.
+
+An inherited NTFS delete-denial probe preserves ordinary children and their latest
+in-place edits, but it also blocks individual deletion and replacement-based saves.
+That probe is a compatibility diagnostic; the product has not adopted its ACL.
+
+Root rename intent fences local dispatch, rescans and remote application. The
+catalog retains immutable original object evidence and successive rename history.
+Native rename recovery still requires a public directory object binding and safe
+subtree reconciliation from CfSharp; these persistence tests do not prove the
+native operation is implemented.
+
 Ordinary managed, explicit native, signed-package and installed-MSIX tests are
 different gates. A successful ordinary run does not prove native or Explorer
 tests executed. Missing environment prerequisites must produce skipped results.
