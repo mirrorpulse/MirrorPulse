@@ -14,6 +14,42 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 public sealed class MirrorPulseActiveRemotePollerTests
 {
     [TestMethod]
+    public async Task NamespaceFencePreventsEnumerationUntilRecoveryReleasesTheRoot()
+    {
+        AdapterId adapter = AdapterId.Parse("example.poll-fence");
+        InstanceId instance = InstanceId.New();
+        RootRegistration root = AdapterRootRegistrationMapper.Map(adapter, instance,
+            new AdapterRootDefinition("files", "Files", "Files", false), RootRegistrationState.Active);
+        var configured = new AdapterInstance(adapter, InstallId.New(), instance, "Files",
+            new Dictionary<string, string>(), [], Path.GetTempPath(), Path.GetTempPath(), true,
+            AdapterLifecycleState.Enabled, null, DateTimeOffset.UtcNow);
+        var source = new FakeDirectorySource();
+        bool allowed = false;
+        int applies = 0;
+        await using var poller = new MirrorPulseActiveRemotePoller(source, [configured], [root],
+            (_, batch, _) =>
+            {
+                applies++;
+                return ValueTask.FromResult(new MirrorPulseRemotePollApplyOutcome(true, batch.FinalCursor));
+            }, mayPoll: (_, _) => ValueTask.FromResult(allowed));
+        source.Set(new FakeEntry("file", "v1", CloudItemKind.File, "file.bin", 1));
+        Assert.IsFalse(await poller.PollOnceAsync(instance));
+        Assert.AreEqual(0, source.Reads);
+        Assert.AreEqual(0, applies);
+        allowed = true;
+        Assert.IsFalse(await poller.PollOnceAsync(instance));
+        source.Set(new FakeEntry("file", "v2", CloudItemKind.File, "file.bin", 2));
+        allowed = false;
+        int reads = source.Reads;
+        Assert.IsFalse(await poller.PollOnceAsync(instance));
+        Assert.AreEqual(reads, source.Reads);
+        Assert.AreEqual(0, applies);
+        allowed = true;
+        Assert.IsTrue(await poller.PollOnceAsync(instance));
+        Assert.AreEqual(1, applies);
+    }
+
+    [TestMethod]
     public async Task ConcurrentRefreshSharesPollScheduleWithoutBlockingAnotherInstance()
     {
         InstanceId first = InstanceId.New();

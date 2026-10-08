@@ -122,6 +122,9 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
                 .ConfigureAwait(false);
             MirrorPulseAdapterTopology topology = await catalog.ReadAdapterTopologyAsync(cancellationToken)
                 .ConfigureAwait(false);
+            var rootRouter = new MirrorPulseRootRouter(paths.SyncRootPath, topology.Roots,
+                await catalog.ReadManagedRootNamesAsync(cancellationToken).ConfigureAwait(false));
+            var namespaceFence = new MirrorPulseRemoteNamespaceFence(rootRouter, catalog);
             var conflictCenter = new MirrorPulseConflictCenter();
             systemNotifications = new MirrorPulseSystemNotificationPublisher();
             var conflictNotifications = new MirrorPulseConflictNotificationBridge(
@@ -135,6 +138,7 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
                 CloudRemoteChangeBatch batch,
                 CancellationToken batchCancellationToken)
             {
+                await namespaceFence.EnsureApplyAllowedAsync(instanceId, batch, batchCancellationToken).ConfigureAwait(false);
                 CloudRemoteApplyResult result = await (currentSession ??
                     throw new InvalidOperationException("The Cloud Files session has not started."))
                     .ApplyRemoteBatchAsync(
@@ -169,8 +173,6 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
 
             workers = new AdapterInstanceProcessSupervisor(catalog, credentialStore, ApplyRemoteBatchAsync,
                 Path.Combine(paths.DataRootPath, "logs", "workers"));
-            var rootRouter = new MirrorPulseRootRouter(paths.SyncRootPath, topology.Roots,
-                await catalog.ReadManagedRootNamesAsync(cancellationToken).ConfigureAwait(false));
             var directorySource = new MirrorPulseAdapterDirectoryPageSource(workers);
             var provider = new MirrorPulseDemandProvider(rootRouter, workers, directorySource);
             session = MirrorPulseCloudHostSession.CreateDefault(
@@ -183,7 +185,8 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
             remotePoller = new MirrorPulseActiveRemotePoller(
                 directorySource, topology.Instances, topology.Roots, ApplyCloudRemoteBatchAsync,
                 snapshotStore: remoteSnapshotStore,
-                pendingStore: new MirrorPulseCatalogRemotePollPendingStore(catalog), scheduler: remoteScheduler);
+                pendingStore: new MirrorPulseCatalogRemotePollPendingStore(catalog), scheduler: remoteScheduler,
+                mayPoll: namespaceFence.CanPollAsync);
 
             var application = new MirrorPulseHostApplication(
                 paths, configurationStore, configuration, hostLease, catalog, conflictCenter, systemNotifications,

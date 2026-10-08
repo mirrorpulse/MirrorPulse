@@ -27,6 +27,7 @@ public sealed class MirrorPulseActiveRemotePoller : IAsyncDisposable
     private readonly int _maximumPages;
     private readonly IMirrorPulseRemotePollSnapshotStore? _snapshotStore;
     private readonly IMirrorPulseRemotePollPendingStore? _pendingStore;
+    private readonly Func<RootRegistration, CancellationToken, ValueTask<bool>>? _mayPoll;
     private readonly ConcurrentDictionary<InstanceId, IReadOnlyDictionary<string, SnapshotEntry>> _snapshots = new();
     private readonly MirrorPulseInstanceScheduler _scheduler;
     private readonly bool _ownsScheduler;
@@ -43,7 +44,8 @@ public sealed class MirrorPulseActiveRemotePoller : IAsyncDisposable
         int maximumPages = 2048,
         IMirrorPulseRemotePollSnapshotStore? snapshotStore = null,
         IMirrorPulseRemotePollPendingStore? pendingStore = null,
-        MirrorPulseInstanceScheduler? scheduler = null)
+        MirrorPulseInstanceScheduler? scheduler = null,
+        Func<RootRegistration, CancellationToken, ValueTask<bool>>? mayPoll = null)
     {
         _source = source ?? throw new ArgumentNullException(nameof(source));
         ArgumentNullException.ThrowIfNull(instances);
@@ -67,6 +69,7 @@ public sealed class MirrorPulseActiveRemotePoller : IAsyncDisposable
         _maximumPages = maximumPages;
         _snapshotStore = snapshotStore;
         _pendingStore = pendingStore;
+        _mayPoll = mayPoll;
         _ownsScheduler = scheduler is null;
         _scheduler = scheduler ?? new MirrorPulseInstanceScheduler();
         if (pendingStore is not null && snapshotStore is null)
@@ -96,6 +99,7 @@ public sealed class MirrorPulseActiveRemotePoller : IAsyncDisposable
         }
 
         RootRegistration root = roots[0];
+        if (_mayPoll is not null && !await _mayPoll(root, cancellationToken).ConfigureAwait(false)) return false;
 
         MirrorPulsePendingRemotePoll? pending = _pendingStore is null ? null :
             await _pendingStore.LoadAsync(instanceId, cancellationToken).ConfigureAwait(false);
