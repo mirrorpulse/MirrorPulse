@@ -7,13 +7,16 @@ namespace MirrorPulse.Core.State;
 
 public enum MirrorPulseMutationState { Prepared, Executing, RemoteAccepted, Ambiguous, Acknowledged, Conflict }
 public enum MirrorPulseMutationOrigin { Journal, Rescan }
+/// <summary>Historical execution evidence; Prepared alone does not prove that a mutation was never dispatched.</summary>
+public enum MirrorPulseMutationExecutionEvidence { Unknown, NeverStarted, Started }
 public sealed record MirrorPulseMutationIntent(Guid OperationId, InstanceId InstanceId, string RootKey,
     MirrorPulseWorkerChangeKind Kind, string RelativePath, string? PreviousRelativePath, bool IsDirectory,
     string? ExpectedRevision, long? ContentLength, string? ContentSha256, MirrorPulseMutationOrigin Origin,
     MirrorPulseUploadBinding? UploadBinding = null,
     string? PreviousRootKey = null);
 public sealed record MirrorPulseMutationRecord(MirrorPulseMutationIntent Intent, MirrorPulseMutationState State,
-    string? AcceptedRevision, DateTimeOffset UpdatedAt);
+    string? AcceptedRevision, DateTimeOffset UpdatedAt,
+    MirrorPulseMutationExecutionEvidence ExecutionEvidence = MirrorPulseMutationExecutionEvidence.Unknown);
 
 public sealed partial class MirrorPulseProductCatalog
 {
@@ -46,8 +49,8 @@ public sealed partial class MirrorPulseProductCatalog
             }
             await using var command = _connection.CreateCommand();
             command.CommandText = """
-                INSERT INTO mutation_intents (operation_id, payload, state, accepted_revision, updated_utc)
-                VALUES ($operation, $payload, $state, NULL, $updated) ON CONFLICT(operation_id) DO NOTHING;
+                INSERT INTO mutation_intents (operation_id, payload, state, accepted_revision, updated_utc, execution_started)
+                VALUES ($operation, $payload, $state, NULL, $updated, 0) ON CONFLICT(operation_id) DO NOTHING;
                 """;
             command.Parameters.AddWithValue("$operation", intent.OperationId.ToString("D"));
             command.Parameters.AddWithValue("$payload", payload);
@@ -77,13 +80,13 @@ public sealed partial class MirrorPulseProductCatalog
         {
             ThrowIfDisposed();
             await using var command = _connection.CreateCommand();
-            command.CommandText = "SELECT operation_id, payload, state, accepted_revision, updated_utc FROM mutation_intents WHERE state<>$acknowledged ORDER BY operation_id;";
+            command.CommandText = "SELECT operation_id, payload, state, accepted_revision, updated_utc, execution_started FROM mutation_intents WHERE state<>$acknowledged ORDER BY operation_id;";
             command.Parameters.AddWithValue("$acknowledged", (int)MirrorPulseMutationState.Acknowledged);
             await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
             var values = new List<MirrorPulseMutationRecord>();
             while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
                 values.Add(DecodeMutation(Guid.Parse(reader.GetString(0)), (byte[])reader[1], reader.GetInt32(2),
-                    reader.IsDBNull(3) ? null : reader.GetString(3), reader.GetString(4)));
+                    reader.IsDBNull(3) ? null : reader.GetString(3), reader.GetString(4), reader.IsDBNull(5) ? null : reader.GetInt32(5)));
             return values.AsReadOnly();
         }
         finally { _gate.Release(); }
@@ -102,10 +105,15 @@ public sealed partial class MirrorPulseProductCatalog
         {
             ThrowIfDisposed();
             await using var command = _connection.CreateCommand();
-            command.CommandText = "UPDATE mutation_intents SET state=$to, accepted_revision=COALESCE($revision,accepted_revision), updated_utc=$updated WHERE operation_id=$operation AND state=$from;";
+            command.CommandText = """
+                UPDATE mutation_intents SET state=$to, accepted_revision=COALESCE($revision,accepted_revision),
+                    updated_utc=$updated, execution_started=CASE WHEN $to=$executing THEN 1 ELSE execution_started END
+                WHERE operation_id=$operation AND state=$from;
+                """;
             command.Parameters.AddWithValue("$operation", operationId.ToString("D"));
             command.Parameters.AddWithValue("$from", (int)from);
             command.Parameters.AddWithValue("$to", (int)to);
+            command.Parameters.AddWithValue("$executing", (int)MirrorPulseMutationState.Executing);
             command.Parameters.AddWithValue("$revision", (object?)acceptedRevision ?? DBNull.Value);
             command.Parameters.AddWithValue("$updated", DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture));
             if (await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
@@ -117,19 +125,27 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task<MirrorPulseMutationRecord?> ReadMutationCoreAsync(Guid operationId, CancellationToken cancellationToken)
     {
         await using var command = _connection.CreateCommand();
-        command.CommandText = "SELECT payload,state,accepted_revision,updated_utc FROM mutation_intents WHERE operation_id=$operation;";
+        command.CommandText = "SELECT payload,state,accepted_revision,updated_utc,execution_started FROM mutation_intents WHERE operation_id=$operation;";
         command.Parameters.AddWithValue("$operation", operationId.ToString("D"));
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
-            ? DecodeMutation(operationId, (byte[])reader[0], reader.GetInt32(1), reader.IsDBNull(2) ? null : reader.GetString(2), reader.GetString(3)) : null;
+            ? DecodeMutation(operationId, (byte[])reader[0], reader.GetInt32(1), reader.IsDBNull(2) ? null : reader.GetString(2), reader.GetString(3),
+                reader.IsDBNull(4) ? null : reader.GetInt32(4)) : null;
     }
 
-    private static MirrorPulseMutationRecord DecodeMutation(Guid operationId, byte[] payload, int state, string? revision, string updated)
+    private static MirrorPulseMutationRecord DecodeMutation(Guid operationId, byte[] payload, int state, string? revision, string updated, int? executionStarted)
     {
         MirrorPulseMutationIntent intent = JsonSerializer.Deserialize<MirrorPulseMutationIntent>(payload, TopologyJsonOptions)
             ?? throw new InvalidDataException("The mutation intent is empty.");
-        if (intent.OperationId != operationId || !Enum.IsDefined((MirrorPulseMutationState)state))
+        if (intent.OperationId != operationId || !Enum.IsDefined((MirrorPulseMutationState)state) || executionStarted is not (null or 0 or 1) ||
+            executionStarted == 0 && state != (int)MirrorPulseMutationState.Prepared)
             throw new InvalidDataException("The mutation intent has invalid identity or state.");
-        return new(intent, (MirrorPulseMutationState)state, revision, DateTimeOffset.Parse(updated, CultureInfo.InvariantCulture));
+        return new(intent, (MirrorPulseMutationState)state, revision, DateTimeOffset.Parse(updated, CultureInfo.InvariantCulture),
+            executionStarted switch
+            {
+                0 => MirrorPulseMutationExecutionEvidence.NeverStarted,
+                1 => MirrorPulseMutationExecutionEvidence.Started,
+                _ => MirrorPulseMutationExecutionEvidence.Unknown,
+            });
     }
 }

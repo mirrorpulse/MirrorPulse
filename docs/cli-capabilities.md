@@ -91,6 +91,12 @@ yet connected to the upload pump: complete public journal pagination, remote
 verification, local projection and acknowledgement of every original ID remain
 required before the product can claim coalescing execution.
 
+The catalog records whether mutation execution has ever started before dispatch.
+That evidence survives a return to Prepared and catalog restart. Migrated records
+without historical evidence remain Unknown; their current state cannot establish
+that they were never sent. A coalescing decision does not supersede existing
+mutation intent yet.
+
 An inherited NTFS delete-denial probe preserves ordinary children and their latest
 in-place edits, but it also blocks individual deletion and replacement-based saves.
 That probe is a compatibility diagnostic; the product has not adopted its ACL.

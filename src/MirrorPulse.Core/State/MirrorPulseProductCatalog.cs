@@ -102,7 +102,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                 version.CommandText = "PRAGMA user_version;";
                 long currentVersion = (long)(await version.ExecuteScalarAsync(cancellationToken)
                     .ConfigureAwait(false) ?? 0L);
-                if (currentVersion > 19)
+                if (currentVersion > 20)
                 {
                     throw new InvalidDataException("The MP product catalog schema is newer than this Host supports.");
                 }
@@ -144,7 +144,8 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                         payload BLOB NOT NULL,
                         state INTEGER NOT NULL,
                         accepted_revision TEXT NULL,
-                        updated_utc TEXT NOT NULL
+                        updated_utc TEXT NOT NULL,
+                        execution_started INTEGER NULL CHECK (execution_started IN (0,1))
                     );
                     CREATE TABLE IF NOT EXISTS content_acceptance_proofs (
                         operation_id TEXT PRIMARY KEY REFERENCES mutation_intents(operation_id),
@@ -262,6 +263,19 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                 }
             }
 
+            // Legacy Prepared records may already have dispatched before returning to Prepared.
+            // NULL preserves the absence of historical evidence instead of inventing a never-sent witness.
+            await using (SqliteCommand column = connection.CreateCommand())
+            {
+                column.CommandText = "SELECT 1 FROM pragma_table_info('mutation_intents') WHERE name = 'execution_started';";
+                if (await column.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is null)
+                {
+                    await using SqliteCommand alter = connection.CreateCommand();
+                    alter.CommandText = "ALTER TABLE mutation_intents ADD COLUMN execution_started INTEGER NULL CHECK (execution_started IN (0,1));";
+                    await alter.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                }
+            }
+
             await using (SqliteCommand version = connection.CreateCommand())
             {
                 await using SqliteCommand column = connection.CreateCommand();
@@ -272,7 +286,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                     alter.CommandText = "ALTER TABLE worker_requests ADD COLUMN stable_fingerprint BLOB NULL;";
                     await alter.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
                 }
-                version.CommandText = "PRAGMA user_version=19;";
+                version.CommandText = "PRAGMA user_version=20;";
                 await version.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
 
