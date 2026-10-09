@@ -106,6 +106,15 @@ Descriptors and SIDs remain private catalog data, outside client status and
 ordinary diagnostic output. These records do not authorize namespace operations
 or prove that an entire subtree is protected.
 
+The permission coordinator reconciles a prepared intent through a caller-owned
+stable object lease. A pending intent may write only when the observed DACL is
+the expected value. If the original object already has the exact target DACL,
+recovery records application and performs a separate fresh read without another
+write. Changed object, owner, scope or unknown DACL requires recovery. Failed
+read-back retains the application fact; cancellation after a successful write
+does not discard verification. Shutdown rejects new admission and drains
+accepted reconciliation before releasing its gate.
+
 The execution-session component and catalog evidence do not yet enable strict
 protection in the Host. Applying and auditing object permissions, rotating the
 Host role, controlled file operations, and their client commands require
