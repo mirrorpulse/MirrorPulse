@@ -27,6 +27,7 @@ public static class SafeDiagnosticPolicy
         ["ShellRootPathMismatch"] = "The existing Shell registration belongs to another sync root.",
         ["ShellRootRegistrationFailed"] = "Windows rejected the Shell root registration.",
         ["JournalReadFailed"] = "The local journal could not be read.",
+        ["CloudProviderRequestFailed"] = "A Windows Cloud Files request failed.",
         ["JournalCommandFailed"] = "A local journal command failed.",
         ["JournalDispatchBoundary"] = "A local content command reached a deferred dispatch boundary.",
         ["JournalAcknowledgementFailed"] = "An accepted Worker result could not be acknowledged.",
@@ -91,7 +92,7 @@ public static class SafeDiagnosticPolicy
             Source(Read("Category")), code, Message(code), Fields(fields));
     }
 
-    private static string Source(string? value) => value is "host" or "worker" or "sync" or "CloudFiles.Upload" or "diagnostics" ? value : "unknown";
+    private static string Source(string? value) => value is "host" or "worker" or "sync" or "CloudFiles.Upload" or "CloudFiles.Provider" or "diagnostics" ? value : "unknown";
     private static string Code(string? value) => value == "Transfer complete" ? "TransferComplete" :
         value is not null && Messages.ContainsKey(value) ? value : "UnclassifiedDiagnostic";
     private static string Message(string code) => Messages.GetValueOrDefault(code, LogFieldPolicy.RedactedValue);
@@ -112,6 +113,7 @@ public static class SafeDiagnosticPolicy
                     long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out long count) && count >= 0
                         ? count.ToString(CultureInfo.InvariantCulture) : null,
                 "failureCategory" => value is "IO" or "InvalidData" or "Authorization" or "Cancelled" or "Internal" or "MutationAmbiguous" or "WorkerOffline" or "WorkerDisconnected" or "WorkerRejected" ? value : null,
+                "cloudRequestKind" => value is "FetchData" or "FetchPlaceholders" or "ValidateData" or "Dehydrate" or "Delete" or "Rename" or "CompletionNotification" or "Other" ? value : null,
                 "workerFailureCode" => value is "Offline" or "Disconnected" or "InvalidRequest" or "AccessDenied" or "SourceUnavailable" or "CapabilityUnavailable" or "LocalIoFailure" or "RetryableTransferFailure" or "RemoteConflict" or "UncorrelatedResponse" or "InvalidConfiguration" or "WorkerFailure" or "Unknown" ? value : null,
                 "kind" => Enum.TryParse(value, out MirrorPulseWorkerChangeKind kind) && Enum.IsDefined(kind) ? kind.ToString() : null,
                 "confirmationOutcome" => Enum.TryParse(value, out MirrorPulseContentConfirmationOutcome outcome) && Enum.IsDefined(outcome) ? outcome.ToString() : null,

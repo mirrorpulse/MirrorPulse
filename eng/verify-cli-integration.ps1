@@ -39,7 +39,14 @@ function Invoke-CliFixtureProbe {
         $output = $process.StandardOutput.ReadToEndAsync()
         $errorOutput = $process.StandardError.ReadToEndAsync()
         if (-not $process.WaitForExit(30000)) { throw "The external $Mode consumer timed out ($Phase)." }
-        if ($process.ExitCode -ne 0) { throw "The external $Mode consumer failed ($Phase): $($errorOutput.GetAwaiter().GetResult())" }
+        if ($process.ExitCode -ne 0) {
+            $providerLog = Join-Path $dataRoot 'logs/cloud-files/mirrorpulse.log'
+            if (Test-Path -LiteralPath $providerLog) {
+                Write-Host 'Original isolated Cloud Files provider diagnostics:'
+                Get-Content -LiteralPath $providerLog -Tail 16 | ForEach-Object { Write-Host $_ }
+            }
+            throw "The external $Mode consumer failed ($Phase): $($errorOutput.GetAwaiter().GetResult())"
+        }
         $result = $output.GetAwaiter().GetResult() | ConvertFrom-Json
         if ($result.schemaVersion -ne 1) { throw 'The fixture consumer returned an invalid evidence version.' }
         $result | Add-Member -NotePropertyName phase -NotePropertyValue $Phase

@@ -121,10 +121,12 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         private MirrorPulseJournalUploadPump? _uploadPump;
         private MirrorPulseUploadConflictActions? _conflictActions;
         private MirrorPulseRemoteConflictActions? _remoteConflictActions;
+        private MirrorPulseCloudProviderDiagnostics? _providerDiagnostics;
         public MirrorPulseJournalPumpHealth? JournalHealth => _uploadPump?.Health;
 
         public async ValueTask StartAsync(CancellationToken cancellationToken)
         {
+            _providerDiagnostics = new(Path.Combine(dataRootPath, "logs", "cloud-files"));
             await fileSystem.StartAsync(cancellationToken).ConfigureAwait(false);
             if (catalog is not null && conflicts is not null && notifications is not null)
                 await new MirrorPulseRemoteConflictProjector(fileSystem, catalog, conflicts, notifications)
@@ -201,12 +203,20 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
 
         public async ValueTask DisposeAsync()
         {
-            if (_uploadPump is not null)
+            try
             {
-                await _uploadPump.DisposeAsync().ConfigureAwait(false);
+                if (_uploadPump is not null)
+                    await _uploadPump.DisposeAsync().ConfigureAwait(false);
             }
-
-            await fileSystem.DisposeAsync().ConfigureAwait(false);
+            finally
+            {
+                try { await fileSystem.DisposeAsync().ConfigureAwait(false); }
+                finally
+                {
+                    if (_providerDiagnostics is not null)
+                        await _providerDiagnostics.DisposeAsync().ConfigureAwait(false);
+                }
+            }
         }
     }
 }
