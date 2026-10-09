@@ -159,13 +159,18 @@ public sealed class MirrorPulseWindowsNamespacePermissionLeaseTests
                     await catalog.PrepareNamespacePermissionChangeAsync(original, restore, timeout.Token);
                     Assert.AreEqual(MirrorPulseNamespacePermissionOutcome.Verified, (await coordinator.ApplyAsync(restore.OperationId, counted, timeout.Token)).Outcome);
                     Assert.AreEqual(2, counted.Writes);
-                    Assert.AreEqual(original.OriginalDacl, (await lease.InspectAsync(timeout.Token)).Dacl);
+                    var restoredFile = await lease.InspectAsync(timeout.Token);
+                    var fileRestoreFact = (await catalog.ReadNamespacePermissionChangeAsync(restore.OperationId, timeout.Token))!;
+                    Assert.AreEqual(original.LocalObject, restoredFile.LocalObject);
+                    Assert.IsTrue(MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(original.OriginalDacl, restoredFile.Dacl));
+                    Assert.AreEqual(restoredFile.Dacl, fileRestoreFact.Verification!.Dacl);
+                    Assert.AreEqual(original.OriginalDacl, fileRestoreFact.Intent.TargetDacl);
                     Assert.AreEqual(original, await catalog.ReadNamespacePermissionBaselineAsync(original.EvidenceId, timeout.Token));
                     Assert.HasCount(5, await catalog.ReadNamespacePermissionChangesAsync(timeout.Token));
                 }
                 Assert.AreEqual("latest unsent bytes", await File.ReadAllTextAsync(filePath, timeout.Token));
             }
-            TestContext.WriteLine($"OwnedPermissionLease: architecture={System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture}; twoStoreOwners=True; publicBinding=True; retainedHandle=True; coldLeaseNoHydration=True; unrecordedWriteRecovered=True; repeatedRecoveryWrites=0; rotationAndExactRestore=True; fileAndDirectory=True; cfapiCreationInheritsProtection=True; latestBytesRetained=True; disabledRoot=True; sourceAccess=False; productIntegrated=False.");
+            TestContext.WriteLine($"OwnedPermissionLease: architecture={System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture}; twoStoreOwners=True; publicBinding=True; retainedHandle=True; coldLeaseNoHydration=True; unrecordedWriteRecovered=True; repeatedRecoveryWrites=0; rotationAndOriginalPermissionsRestored=True; nativeReadbackRetained=True; fileAndDirectory=True; cfapiCreationInheritsProtection=True; latestBytesRetained=True; disabledRoot=True; sourceAccess=False; productIntegrated=False.");
         }
         finally
         {
