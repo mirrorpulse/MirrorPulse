@@ -96,7 +96,7 @@ and file binding, capture location, owner SID and canonical DACL. The baseline
 and the first change intent commit together before any permission write. A
 different object at the same path cannot replace that evidence. Role rotation
 and restoration retain the first baseline and follow the previous verified
-DACL; restoration targets the exact original access descriptor.
+DACL; restoration requests the exact original access descriptor.
 
 Application and independent read-back verification are separate durable facts.
 Verification must match the original object and owner and the intended DACL.
@@ -105,6 +105,14 @@ retains the original and application facts and blocks subsequent changes.
 Descriptors and SIDs remain private catalog data, outside client status and
 ordinary diagnostic output. These records do not authorize namespace operations
 or prove that an entire subtree is protected.
+
+Windows can add the auto-inheritance completion marker during an access write,
+including restoration of a descriptor captured at protected object creation.
+Read-back permits that added marker only; ACEs, protection and every other flag
+must still match. The catalog retains the original request and the actual
+observed descriptor separately. Subsequent changes and audits use the recorded
+observation, preserving the original evidence and preventing a later descriptor
+change from being mistaken for an already verified write.
 
 Original evidence and intents can be prepared in bounded batches of up to 4096
 objects in one SQLite transaction. A later conflict rolls back every new record

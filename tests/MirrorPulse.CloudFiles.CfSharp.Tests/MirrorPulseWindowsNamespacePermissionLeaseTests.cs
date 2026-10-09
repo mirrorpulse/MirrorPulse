@@ -140,7 +140,14 @@ public sealed class MirrorPulseWindowsNamespacePermissionLeaseTests
                         PreparedAt = DateTimeOffset.UtcNow,
                     };
                     await catalog.PrepareNamespacePermissionChangeAsync(directoryBaseline, directoryRestore, timeout.Token);
-                    Assert.AreEqual(MirrorPulseNamespacePermissionOutcome.Verified, (await coordinator.ApplyAsync(directoryRestore.OperationId, directoryLease, timeout.Token)).Outcome);
+                    var directoryRestored = await coordinator.ApplyAsync(directoryRestore.OperationId, directoryLease, timeout.Token);
+                    var restoredDirectory = await directoryLease.InspectAsync(timeout.Token);
+                    var restoreFact = (await catalog.ReadNamespacePermissionChangeAsync(directoryRestore.OperationId, timeout.Token))!;
+                    TestContext.WriteLine($"DirectoryPermissionRestore: outcome={directoryRestored.Outcome}; recoveryReason={directoryRestored.RecoveryReason}; phase={restoreFact.Phase}; requestedFlags={new RawSecurityDescriptor(directoryBaseline.OriginalDacl).ControlFlags}; observedFlags={new RawSecurityDescriptor(restoredDirectory.Dacl).ControlFlags}; requestedAceCount={new RawSecurityDescriptor(directoryBaseline.OriginalDacl).DiscretionaryAcl!.Count}; observedAceCount={new RawSecurityDescriptor(restoredDirectory.Dacl).DiscretionaryAcl!.Count}.");
+                    Assert.AreEqual(MirrorPulseNamespacePermissionOutcome.Verified, directoryRestored.Outcome);
+                    Assert.IsTrue(MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(directoryBaseline.OriginalDacl, restoredDirectory.Dacl));
+                    Assert.AreEqual(restoredDirectory.Dacl, restoreFact.Verification!.Dacl);
+                    Assert.AreEqual(directoryBaseline, await catalog.ReadNamespacePermissionBaselineAsync(directoryBaseline.EvidenceId, timeout.Token));
                     var restore = rotation with
                     {
                         OperationId = Guid.NewGuid(),

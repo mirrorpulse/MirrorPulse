@@ -68,7 +68,7 @@ public sealed class MirrorPulseNamespacePermissionCoordinator(MirrorPulseProduct
             MirrorPulseNamespacePermissionRecoveryReason? mismatch = MatchObject(baseline, change.Intent, observed);
             if (mismatch is not null) return await FenceAsync(change, mismatch.Value).ConfigureAwait(false);
             if (change.Phase == MirrorPulseNamespacePermissionPhase.Verified)
-                return observed.Dacl == change.Intent.TargetDacl
+                return observed.Dacl == change.Verification!.Dacl
                     ? new(operationId, MirrorPulseNamespacePermissionOutcome.AlreadyVerified)
                     : await FenceAsync(change, MirrorPulseNamespacePermissionRecoveryReason.DaclChanged).ConfigureAwait(false);
 
@@ -79,7 +79,7 @@ public sealed class MirrorPulseNamespacePermissionCoordinator(MirrorPulseProduct
                     cancellationToken.ThrowIfCancellationRequested();
                     await lease.ApplyDaclAsync(change.Intent.TargetDacl, cancellationToken).ConfigureAwait(false);
                 }
-                else if (observed.Dacl != change.Intent.TargetDacl)
+                else if (!MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(change.Intent.TargetDacl, observed.Dacl))
                     return await FenceAsync(change, MirrorPulseNamespacePermissionRecoveryReason.DaclChanged).ConfigureAwait(false);
                 // Either the write returned successfully, or recovery observed the exact target
                 // on the original object. Retain that fact before the separate read-back.
@@ -89,7 +89,7 @@ public sealed class MirrorPulseNamespacePermissionCoordinator(MirrorPulseProduct
                 mismatch = MatchObject(baseline, change.Intent, observed);
                 if (mismatch is not null) return await FenceAsync(change, mismatch.Value).ConfigureAwait(false);
             }
-            if (observed.Dacl != change.Intent.TargetDacl)
+            if (!MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(change.Intent.TargetDacl, observed.Dacl))
                 return await FenceAsync(change, MirrorPulseNamespacePermissionRecoveryReason.DaclChanged).ConfigureAwait(false);
             await _catalog.VerifyNamespacePermissionChangeAsync(operationId,
                 new(observed.LocalObject, observed.OwnerSid, observed.Dacl, observed.ObservedAt), CancellationToken.None).ConfigureAwait(false);

@@ -17,6 +17,86 @@ public sealed class MirrorPulseNamespacePermissionCatalogTests
     private static readonly string SecondTarget = Dacl($"D:P(A;OICI;FRFW;;;{Owner})(A;OICI;FA;;;{SecondRole})");
 
     [TestMethod]
+    public async Task NativeInheritanceMarkerRetainsActualVerificationAndOriginalRestorationAcrossRestart()
+    {
+        using var fixture = new CatalogFixture();
+        var baseline = Baseline() with { OriginalDacl = Dacl($"D:P(A;OICI;FA;;;{Owner})") };
+        var first = Intent(baseline) with { ExpectedDacl = baseline.OriginalDacl };
+        string firstObserved = WithAutoInherited(first.TargetDacl);
+        var restore = first with
+        {
+            OperationId = Guid.NewGuid(),
+            Kind = MirrorPulseNamespacePermissionChangeKind.Restore,
+            ExpectedDacl = firstObserved,
+            TargetDacl = baseline.OriginalDacl,
+            PreparedAt = first.PreparedAt.AddSeconds(3),
+        };
+        string restoredObserved = WithAutoInherited(baseline.OriginalDacl);
+        await using (var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths))
+        {
+            await catalog.PrepareNamespacePermissionChangeAsync(baseline, first);
+            await catalog.RecordNamespacePermissionApplicationAsync(first.OperationId, baseline.LocalObject, first.PreparedAt);
+            await catalog.VerifyNamespacePermissionChangeAsync(first.OperationId, new(baseline.LocalObject, Owner, firstObserved, first.PreparedAt.AddSeconds(1)));
+            await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => catalog.PrepareNamespacePermissionChangeAsync(baseline,
+                restore with { ExpectedDacl = first.TargetDacl }));
+            await catalog.PrepareNamespacePermissionChangeAsync(baseline, restore);
+            await catalog.RecordNamespacePermissionApplicationAsync(restore.OperationId, baseline.LocalObject, restore.PreparedAt);
+            await catalog.VerifyNamespacePermissionChangeAsync(restore.OperationId,
+                new(baseline.LocalObject, Owner, restoredObserved, restore.PreparedAt.AddSeconds(1)));
+        }
+        await using (var reopened = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths))
+        {
+            var retained = (await reopened.ReadNamespacePermissionChangeAsync(restore.OperationId))!;
+            Assert.AreEqual(baseline.OriginalDacl, retained.Intent.TargetDacl);
+            Assert.AreEqual(restoredObserved, retained.Verification!.Dacl);
+            Assert.AreNotEqual(retained.Intent.TargetDacl, retained.Verification.Dacl);
+            Assert.AreEqual(baseline, await reopened.ReadNamespacePermissionBaselineAsync(baseline.EvidenceId));
+            await reopened.PrepareNamespacePermissionChangeAsync(baseline, first with
+            {
+                OperationId = Guid.NewGuid(),
+                ExpectedDacl = restoredObserved,
+                PreparedAt = restore.PreparedAt.AddSeconds(3),
+            });
+            Assert.HasCount(3, await reopened.ReadNamespacePermissionChangesAsync());
+        }
+    }
+
+    [TestMethod]
+    [DataRow("remove-completion")]
+    [DataRow("remove-protection")]
+    [DataRow("add-inherit-request")]
+    [DataRow("change-rights")]
+    [DataRow("change-role")]
+    public async Task NativeReadbackNeverAcceptsDifferentRightsOrOtherDescriptorFlags(string scenario)
+    {
+        using var fixture = new CatalogFixture();
+        await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        var baseline = Baseline();
+        var intent = Intent(baseline) with { TargetDacl = WithAutoInherited(FirstTarget) };
+        await catalog.PrepareNamespacePermissionChangeAsync(baseline, intent);
+        await catalog.RecordNamespacePermissionApplicationAsync(intent.OperationId, baseline.LocalObject, intent.PreparedAt);
+        var descriptor = new RawSecurityDescriptor(intent.TargetDacl);
+        string changed;
+        if (scenario == "change-rights") changed = Dacl($"D:PAI(A;OICI;FA;;;{Owner})(A;OICI;FA;;;{FirstRole})");
+        else if (scenario == "change-role") changed = WithAutoInherited(SecondTarget);
+        else
+        {
+            ControlFlags flags = scenario switch
+            {
+                "remove-completion" => descriptor.ControlFlags & ~ControlFlags.DiscretionaryAclAutoInherited,
+                "remove-protection" => descriptor.ControlFlags & ~ControlFlags.DiscretionaryAclProtected,
+                _ => descriptor.ControlFlags | ControlFlags.DiscretionaryAclAutoInheritRequired,
+            };
+            descriptor.SetFlags(flags);
+            changed = descriptor.GetSddlForm(AccessControlSections.Access);
+        }
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => catalog.VerifyNamespacePermissionChangeAsync(intent.OperationId,
+            new(baseline.LocalObject, Owner, changed, intent.PreparedAt)));
+        Assert.AreEqual(MirrorPulseNamespacePermissionPhase.Applied, (await catalog.ReadNamespacePermissionChangeAsync(intent.OperationId))!.Phase);
+        Assert.AreEqual(baseline, await catalog.ReadNamespacePermissionBaselineAsync(baseline.EvidenceId));
+    }
+
+    [TestMethod]
     public async Task PreparationBatchSurvivesRestartWithoutResettingAnAppliedMember()
     {
         using var fixture = new CatalogFixture();
@@ -416,6 +496,13 @@ public sealed class MirrorPulseNamespacePermissionCatalogTests
     }
 
     private static string Dacl(string value) => new RawSecurityDescriptor(value).GetSddlForm(AccessControlSections.Access);
+
+    private static string WithAutoInherited(string value)
+    {
+        var descriptor = new RawSecurityDescriptor(value);
+        descriptor.SetFlags(descriptor.ControlFlags | ControlFlags.DiscretionaryAclAutoInherited);
+        return descriptor.GetSddlForm(AccessControlSections.Access);
+    }
 
     private static async Task ExecuteSqlAsync(MirrorPulseStoragePaths paths, string sql)
     {

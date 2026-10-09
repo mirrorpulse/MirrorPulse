@@ -121,7 +121,7 @@ public sealed partial class MirrorPulseProductCatalog
         MirrorPulseNamespacePermissionChange? previous = history.Count == 0 ? null : history[^1];
         if (previous is null && (intent.RootId != baseline.RootId || intent.RelativePath != baseline.RelativePath))
             throw new InvalidOperationException("Initial protection requires the original capture location.");
-        if (intent.ExpectedDacl != (previous?.Intent.TargetDacl ?? baseline.OriginalDacl) ||
+        if (intent.ExpectedDacl != (previous?.Verification!.Dacl ?? baseline.OriginalDacl) ||
             previous is not null && intent.PreparedAt < previous.Verification!.ObservedAt)
             throw new InvalidOperationException("The expected DACL does not follow the retained verified history.");
         switch (intent.Kind)
@@ -236,7 +236,7 @@ public sealed partial class MirrorPulseProductCatalog
                 cancellationToken).ConfigureAwait(false) ?? throw new InvalidDataException("The original permission evidence is missing.");
             if (change.AppliedAt is null || verification.ObservedAt < change.AppliedAt ||
                 verification.LocalObject != baseline.LocalObject || verification.OwnerSid != baseline.OwnerSid ||
-                verification.Dacl != change.Intent.TargetDacl)
+                !MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(change.Intent.TargetDacl, verification.Dacl))
                 throw new InvalidOperationException("The permission verification does not match the retained application and original object.");
             if (change.Phase == MirrorPulseNamespacePermissionPhase.Verified)
             {
@@ -345,7 +345,8 @@ public sealed partial class MirrorPulseProductCatalog
             change.RecoveryReason is not null && !Enum.IsDefined(change.RecoveryReason.Value))
             throw new InvalidDataException("The permission change's retained state is inconsistent.");
         if (change.Verification is not null && (change.Verification.LocalObject != change.Intent.LocalObject || change.Verification.OwnerSid != baseline.OwnerSid ||
-            change.Verification.Dacl != change.Intent.TargetDacl || change.Verification.ObservedAt < change.AppliedAt))
+            !MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(change.Intent.TargetDacl, change.Verification.Dacl) ||
+            change.Verification.ObservedAt < change.AppliedAt))
             throw new InvalidDataException("The permission verification does not match its original intent.");
         if (change.Verification is not null)
         {

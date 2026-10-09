@@ -15,6 +15,50 @@ public sealed class MirrorPulseNamespacePermissionCoordinatorTests
     private static readonly string Unowned = Canonical($"D:P(A;;FR;;;{Owner})");
 
     [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task NativeMarkerReadbackSurvivesCrashAndLaterAuditRequiresTheRecordedDescriptor(bool interruptedWrite)
+    {
+        using var fixture = new Fixture();
+        var descriptor = new RawSecurityDescriptor(Target);
+        descriptor.SetFlags(descriptor.ControlFlags | ControlFlags.DiscretionaryAclAutoInherited);
+        string nativeReadback = descriptor.GetSddlForm(AccessControlSections.Access);
+        var lease = new ObjectLease(fixture.Baseline, fixture.Intent)
+        {
+            AfterWrite = () => nativeReadback,
+            FailAfterWrite = interruptedWrite,
+        };
+        await using (var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths))
+        {
+            await catalog.PrepareNamespacePermissionChangeAsync(fixture.Baseline, fixture.Intent);
+            await using var coordinator = new MirrorPulseNamespacePermissionCoordinator(catalog);
+            if (interruptedWrite)
+                await Assert.ThrowsExactlyAsync<IOException>(() => coordinator.ApplyAsync(fixture.Intent.OperationId, lease));
+            else
+                Assert.AreEqual(MirrorPulseNamespacePermissionOutcome.Verified, (await coordinator.ApplyAsync(fixture.Intent.OperationId, lease)).Outcome);
+        }
+        lease.FailAfterWrite = false;
+        await using (var reopened = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths))
+        {
+            await using var coordinator = new MirrorPulseNamespacePermissionCoordinator(reopened);
+            var recovered = await coordinator.ApplyAsync(fixture.Intent.OperationId, lease);
+            Assert.AreEqual(interruptedWrite ? MirrorPulseNamespacePermissionOutcome.Verified : MirrorPulseNamespacePermissionOutcome.AlreadyVerified, recovered.Outcome);
+            Assert.AreEqual(1, lease.Writes);
+            var retained = (await reopened.ReadNamespacePermissionChangeAsync(fixture.Intent.OperationId))!;
+            Assert.AreEqual(Target, retained.Intent.TargetDacl);
+            Assert.AreEqual(nativeReadback, retained.Verification!.Dacl);
+            Assert.AreEqual(fixture.Baseline, await reopened.ReadNamespacePermissionBaselineAsync(fixture.Baseline.EvidenceId));
+            // The accepted write normalization is not permission to reinterpret a later
+            // descriptor change: historical verification remains an exact observed fact.
+            lease.Current = lease.Current with { Dacl = Target };
+            var later = await coordinator.ApplyAsync(fixture.Intent.OperationId, lease);
+            Assert.AreEqual(MirrorPulseNamespacePermissionOutcome.RecoveryRequired, later.Outcome);
+            Assert.AreEqual(MirrorPulseNamespacePermissionRecoveryReason.DaclChanged, later.RecoveryReason);
+            Assert.AreEqual(retained, await reopened.ReadNamespacePermissionChangeAsync(fixture.Intent.OperationId));
+        }
+    }
+
+    [TestMethod]
     public async Task ApplicationRequiresPreparedEvidenceAndPersistsBeforeFreshVerification()
     {
         using var fixture = new Fixture();
