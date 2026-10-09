@@ -173,3 +173,16 @@ Omit `-RequireNative` and `-RequireInstalled` for a push/PR run, which does not 
 those gates. Omit `-RequireOfficialCandidate` only for historical reports produced
 before the shared-candidate contract.
 The three reports must name the same expected commit and their job-specific RID.
+
+Each atomic commit remains independently reviewable and passes its relevant
+local restore, Release build, tests, formatting, and ownership checks. Related
+commits may be pushed together for one CI run, with one full manual native and
+installed verification for that batch when required. A later successful run does
+not erase a failed run; preserve the original failure and investigate it without
+relaxing checks or adding unconditional retries.
+
+Worker startup regression tests launch real isolated child processes and verify
+early exit, a missing pipe connection, a silent Hello, an invalid first frame,
+an invalid executable, a rejected version negotiation, and requested shutdown. Official package failures include
+the Host's sanitized stage and process facts in the original TRX failure output.
+These tests preserve the production connection and Hello deadlines.

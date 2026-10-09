@@ -115,8 +115,9 @@ public sealed class SignedLocalVersionSwitchProcessTests
             instanceId, WorkerSessionId.New(), RuntimeIdentifier);
         Assert.AreEqual(expected.InstallId, payload.InstallId);
         Assert.AreEqual(expected.Version, payload.Version);
+        string diagnostics = Path.Combine(topology.Instances.Single(item => item.InstanceId == instanceId).TransferCacheDirectory, "diagnostics");
         await using var supervisor = new AdapterInstanceProcessSupervisor(catalog,
-            new WindowsCredentialManagerStore());
+            new WindowsCredentialManagerStore(), diagnosticsDirectory: diagnostics);
         await supervisor.StartAsync(topology);
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         while (true)
@@ -130,7 +131,8 @@ public sealed class SignedLocalVersionSwitchProcessTests
 
             if (state?.Phase is "Worker failed" or "Worker error")
             {
-                Assert.Fail($"The signed Local Worker failed: {state.LastErrorCode}.");
+                Assert.Fail($"The signed Local Worker failed: {state.LastErrorCode}. " +
+                    await WorkerFailureTestDiagnostics.ReadAsync(diagnostics));
             }
 
             await Task.Delay(50, timeout.Token);

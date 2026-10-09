@@ -58,8 +58,9 @@ public sealed class SignedSmbHostProcessTests
                 [], Path.Combine(root, "cache", "files"), Path.Combine(root, "cache", "transfers"));
             MirrorPulseAdapterTopology topology = await catalog.ReadAdapterTopologyAsync();
             string rootKey = topology.Roots.Single(binding => binding.InstanceId == instance.InstanceId).UniquenessKey;
+            string diagnostics = Path.Combine(root, "diagnostics");
             await using var supervisor = new AdapterInstanceProcessSupervisor(catalog,
-                new FixedCredentialStore("unused", string.Empty));
+                new FixedCredentialStore("unused", string.Empty), diagnosticsDirectory: diagnostics);
             await supervisor.StartAsync(topology);
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
             while (true)
@@ -73,7 +74,8 @@ public sealed class SignedSmbHostProcessTests
 
                 if (state?.Phase is "Worker failed" or "Worker error")
                 {
-                    Assert.Fail($"The signed SMB Worker failed: {state.LastErrorCode}.");
+                    Assert.Fail($"The signed SMB Worker failed: {state.LastErrorCode}. " +
+                        await WorkerFailureTestDiagnostics.ReadAsync(diagnostics));
                 }
 
                 await Task.Delay(50, timeout.Token);

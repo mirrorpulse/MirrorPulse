@@ -1,6 +1,8 @@
+using System.Text.Json;
 using MirrorPulse.Adapter.Ftp.Worker;
 using MirrorPulse.Core.Configuration;
 using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.Diagnostics;
 using MirrorPulse.Core.Host;
 using MirrorPulse.Core.Security;
 using MirrorPulse.Core.State;
@@ -49,7 +51,7 @@ public sealed class AdapterInstanceProcessSupervisorTests
             await using var catalog = await MirrorPulseProductCatalog.OpenAsync(paths);
             await catalog.SaveAdapterTopologyAsync(topology);
             await using (var supervisor = new AdapterInstanceProcessSupervisor(catalog,
-                new WindowsCredentialManagerStore()))
+                new WindowsCredentialManagerStore(), diagnosticsDirectory: Path.Combine(root, "diagnostics")))
             {
                 await supervisor.StartAsync(topology);
                 using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
@@ -67,6 +69,14 @@ public sealed class AdapterInstanceProcessSupervisorTests
 
                 MirrorPulseInstanceRuntimeState? offline = await catalog.ReadInstanceRuntimeStateAsync(disabledId);
                 Assert.AreEqual("Offline", offline?.Phase);
+                string retained = await WorkerFailureTestDiagnostics.ReadAsync(Path.Combine(root, "diagnostics"));
+                SafeLogEntry entry = JsonSerializer.Deserialize<SafeLogEntry[]>(retained)!.Single();
+                Assert.AreEqual("ReceiveFrames", entry.Fields["workerStage"]);
+                Assert.AreEqual("True", entry.Fields["workerProcessStarted"]);
+                Assert.AreEqual("True", entry.Fields["workerPipeConnected"]);
+                Assert.AreEqual("False", entry.Fields["workerDeadlineExpired"]);
+                Assert.AreEqual("InvalidConfiguration", entry.Fields["workerFailureCode"]);
+                Assert.IsFalse(retained.Contains("secret", StringComparison.OrdinalIgnoreCase));
             }
         }
         finally

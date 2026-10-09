@@ -115,8 +115,9 @@ public sealed class OfficialAdapterAggregateProcessTests
             RootRegistration registration = topology.Roots.Single(item => item.InstanceId == instance.InstanceId);
             RootRegistration secondRegistration = topology.Roots.Single(item =>
                 item.InstanceId == secondInstance.InstanceId);
+            string diagnostics = Path.Combine(root, "diagnostics");
             await using var supervisor = new AdapterInstanceProcessSupervisor(catalog,
-                new WindowsCredentialManagerStore());
+                new WindowsCredentialManagerStore(), diagnosticsDirectory: diagnostics);
             await supervisor.StartAsync(topology);
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
             while (true)
@@ -134,7 +135,7 @@ public sealed class OfficialAdapterAggregateProcessTests
                     secondState?.Phase is "Worker failed" or "Worker error")
                 {
                     Assert.Fail($"A signed Local Worker failed: {state?.LastErrorCode}; " +
-                        $"{secondState?.LastErrorCode}.");
+                        $"{secondState?.LastErrorCode}. " + await WorkerFailureTestDiagnostics.ReadAsync(diagnostics));
                 }
 
                 await Task.Delay(50, timeout.Token);

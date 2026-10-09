@@ -22,7 +22,11 @@ public sealed class SafeDiagnosticPolicyTests
             using var writer = new LocalRollingLogWriter(fixture);
             await writer.WriteAsync(new LogEntry(LogLevel.Error, hostile, hostile, DateTimeOffset.UtcNow,
                 [new("description", hostile), new(hostile, hostile), new("Authorization", hostile), new("Cookie", hostile),
-                 new("hresult", "80070005"), new("operationId", operationId.ToString("D")), new("kind", hostile)]));
+                 new("hresult", "80070005"), new("operationId", operationId.ToString("D")), new("kind", hostile),
+                 new("workerSessionId", hostile), new("workerStage", hostile), new("workerElapsedMs", hostile),
+                 new("workerStageElapsedMs", hostile), new("workerProcessStarted", hostile), new("workerProcessStateObserved", hostile),
+                 new("workerProcessHasExited", hostile), new("workerProcessExitCode", hostile), new("workerNativeErrorCode", hostile),
+                 new("workerPipeConnected", hostile), new("workerDeadlineExpired", hostile)]));
             string log = await File.ReadAllTextAsync(writer.FilePath);
             Assert.IsFalse(log.Contains("needle", StringComparison.Ordinal));
             using JsonDocument stored = JsonDocument.Parse(log);
@@ -83,6 +87,29 @@ public sealed class SafeDiagnosticPolicyTests
              new("workerFailureCode", "token-secret-needle")]));
         Assert.AreEqual("WorkerRejected", safe.Fields["failureCategory"]);
         Assert.AreEqual("InvalidRequest", safe.Fields["workerFailureCode"]);
+        Assert.IsFalse(JsonSerializer.Serialize(safe).Contains("needle", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    [DataRow("-2147483648")]
+    [DataRow("2147483647")]
+    public void WorkerStartupFactsPreserveSignedExitCodesAndRejectUntypedOrUnboundedValues(string exitCode)
+    {
+        var safe = SafeDiagnosticPolicy.Sanitize(new LogEntry(LogLevel.Warning, "worker", "WorkerSessionFailed", DateTimeOffset.UtcNow,
+            [new("workerStage", "AwaitPipe"), new("workerElapsedMs", "15000"), new("workerStageElapsedMs", "14999"),
+             new("workerProcessStarted", "true"), new("workerProcessStateObserved", "true"), new("workerProcessHasExited", "true"),
+             new("workerProcessExitCode", exitCode), new("workerNativeErrorCode", "193"), new("workerDeadlineExpired", "true"), new("workerPipeConnected", "false"),
+             new("workerStage", "token-secret-needle"), new("workerElapsedMs", "-1"), new("workerStageElapsedMs", "2147483648"),
+             new("workerProcessExitCode", "2147483648"), new("workerNativeErrorCode", "error-secret-needle"),
+             new("workerProcessStarted", "yes"), new("arguments", "password-secret-needle")]));
+        Assert.AreEqual("AwaitPipe", safe.Fields["workerStage"]);
+        Assert.AreEqual("15000", safe.Fields["workerElapsedMs"]);
+        Assert.AreEqual("14999", safe.Fields["workerStageElapsedMs"]);
+        Assert.AreEqual(exitCode, safe.Fields["workerProcessExitCode"]);
+        Assert.AreEqual("193", safe.Fields["workerNativeErrorCode"]);
+        Assert.AreEqual("True", safe.Fields["workerProcessStarted"]);
+        Assert.AreEqual("False", safe.Fields["workerPipeConnected"]);
+        Assert.AreEqual("7", safe.Fields["omittedFieldCount"]);
         Assert.IsFalse(JsonSerializer.Serialize(safe).Contains("needle", StringComparison.Ordinal));
     }
 

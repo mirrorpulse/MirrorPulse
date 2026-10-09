@@ -66,6 +66,18 @@ The expected sequence is:
 `Hello` and `Ready` use the same instance and Worker session context. A failed
 selection never becomes a healthy Worker session.
 
+The Host retains a safe `WorkerSessionFailed` observation when startup or a
+session fails. It records the Worker session ID, a closed stage name, bounded
+elapsed milliseconds, pipe connection state, and whether the launched process
+was observed to have exited. An exit code is included only after an observed
+exit; a missing code does not imply success. A Win32 failure retains its numeric
+native error separately from the exception HRESULT. Process facts are captured before
+the stop request or Job Object teardown can change them. Connection and Hello
+deadline expiry are distinguished from requested Host shutdown, which does not
+emit a failure observation. These fields contain no executable paths, command
+arguments, environment values, credentials, or arbitrary exception messages.
+The connection and Hello limits remain 15 and 5 seconds respectively.
+
 ## Control frames
 
 Named Pipe control frames use a four-byte unsigned little-endian payload length

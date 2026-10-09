@@ -105,7 +105,7 @@ public static class SafeDiagnosticPolicy
         {
             string? accepted = name switch
             {
-                "operationId" or "instanceId" or "diagnosticId" or "correlationId" =>
+                "operationId" or "instanceId" or "diagnosticId" or "correlationId" or "workerSessionId" =>
                     Guid.TryParse(value, out Guid id) ? id.ToString("D") : null,
                 "hresult" => value.Length == 8 && uint.TryParse(value, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out uint number)
                     ? number.ToString("X8", CultureInfo.InvariantCulture) : null,
@@ -115,6 +115,14 @@ public static class SafeDiagnosticPolicy
                 "failureCategory" => value is "IO" or "InvalidData" or "Authorization" or "Cancelled" or "Internal" or "MutationAmbiguous" or "WorkerOffline" or "WorkerDisconnected" or "WorkerRejected" ? value : null,
                 "cloudRequestKind" => value is "FetchData" or "FetchPlaceholders" or "ValidateData" or "Dehydrate" or "Delete" or "Rename" or "CompletionNotification" or "Other" ? value : null,
                 "workerFailureCode" => value is "Offline" or "Disconnected" or "InvalidRequest" or "AccessDenied" or "SourceUnavailable" or "CapabilityUnavailable" or "LocalIoFailure" or "RetryableTransferFailure" or "RemoteConflict" or "UncorrelatedResponse" or "InvalidConfiguration" or "WorkerFailure" or "Unknown" ? value : null,
+                "workerStage" => value is "ResolvePayload" or "CreatePipe" or "CreateJob" or "StartProcess" or "AttachJob" or "AwaitPipe" or "ValidatePeer" or "AwaitHello" or "Negotiate" or "SendReady" or "ReceiveFrames" or "StopWorker" ? value : null,
+                "workerElapsedMs" or "workerStageElapsedMs" =>
+                    int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out int elapsed) && elapsed >= 0
+                        ? elapsed.ToString(CultureInfo.InvariantCulture) : null,
+                "workerProcessExitCode" or "workerNativeErrorCode" => int.TryParse(value, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out int exitCode)
+                    ? exitCode.ToString(CultureInfo.InvariantCulture) : null,
+                "workerProcessStarted" or "workerProcessStateObserved" or "workerProcessHasExited" or "workerPipeConnected" or "workerDeadlineExpired" =>
+                    bool.TryParse(value, out bool workerFlag) ? workerFlag.ToString() : null,
                 "kind" => Enum.TryParse(value, out MirrorPulseWorkerChangeKind kind) && Enum.IsDefined(kind) ? kind.ToString() : null,
                 "confirmationOutcome" => Enum.TryParse(value, out MirrorPulseContentConfirmationOutcome outcome) && Enum.IsDefined(outcome) ? outcome.ToString() : null,
                 "confirmationStage" => Enum.TryParse(value, out MirrorPulseContentConfirmationStage stage) && Enum.IsDefined(stage) ? stage.ToString() : null,

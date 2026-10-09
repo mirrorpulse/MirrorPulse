@@ -254,10 +254,12 @@ public sealed class AdapterInstanceProcessSupervisor :
         AdapterInstance instance,
         CancellationToken cancellationToken)
     {
+        var observation = new WorkerSessionFailureObservation();
+        WorkerSessionId sessionId = WorkerSessionId.New();
+        LogField[]? failureObservation = null;
         try
         {
             await SetPhaseAsync(instance.InstanceId, "Starting", cancellationToken).ConfigureAwait(false);
-            WorkerSessionId sessionId = WorkerSessionId.New();
             string runtimeIdentifier = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture switch
             {
                 System.Runtime.InteropServices.Architecture.X64 => "win-x64",
@@ -275,28 +277,53 @@ public sealed class AdapterInstanceProcessSupervisor :
                 new Dictionary<string, string> { ["MP_TRANSFER_CACHE_DIR"] = instance.TransferCacheDirectory });
             Directory.CreateDirectory(instance.TransferCacheDirectory);
             int selectedVersion = 1;
+            observation.Advance(WorkerSessionStage.CreatePipe);
             await using var pipe = SecureNamedPipeServerFactory.Create(new NamedPipeServerOptions(pipeName)
             {
                 PipeOptions = PipeOptions.Asynchronous | PipeOptions.FirstPipeInstance,
             });
+            observation.Advance(WorkerSessionStage.CreateJob);
             using var job = WorkerJobObject.Create();
+            observation.Advance(WorkerSessionStage.StartProcess);
             using WorkerProcessHandle worker = WorkerProcessLauncher.Start(request);
             try
             {
+                observation.Advance(WorkerSessionStage.AttachJob);
                 job.Attach(worker.Process);
                 using var connectionTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 connectionTimeout.CancelAfter(TimeSpan.FromSeconds(15));
-                await pipe.WaitForConnectionAsync(connectionTimeout.Token).ConfigureAwait(false);
+                observation.Advance(WorkerSessionStage.AwaitPipe);
+                try
+                {
+                    await pipe.WaitForConnectionAsync(connectionTimeout.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (connectionTimeout.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+                {
+                    observation.DeadlineExpired = true;
+                    throw;
+                }
+                observation.Advance(WorkerSessionStage.ValidatePeer);
                 if (worker.Process.HasExited)
                 {
                     throw new UnauthorizedAccessException("The launched Worker exited before its pipe handshake.");
                 }
                 NamedPipePeerIdentity.ValidateClient(pipe, worker.ProcessId, worker.Process.SessionId);
                 await ServeWorkerAsync(pipe, topology, instance, sessionId, version => selectedVersion = version,
+                    observation, () => observation.Capture(sessionId, worker.Process, pipe),
                     cancellationToken).ConfigureAwait(false);
+            }
+            catch
+            {
+                failureObservation = observation.Capture(sessionId, worker.Process, pipe);
+                throw;
             }
             finally
             {
+                if (failureObservation is null)
+                {
+                    observation.Advance(WorkerSessionStage.StopWorker);
+                    failureObservation = observation.Capture(sessionId, worker.Process, pipe);
+                }
                 if (pipe.IsConnected && !worker.Process.HasExited)
                 {
                     try
@@ -320,23 +347,28 @@ public sealed class AdapterInstanceProcessSupervisor :
         }
         catch (Exception exception)
         {
-            await LogSessionFailureAsync(instance.InstanceId, exception).ConfigureAwait(false);
+            await LogSessionFailureAsync(instance.InstanceId, exception,
+                failureObservation ?? observation.Capture(sessionId)).ConfigureAwait(false);
             await SetPhaseAsync(instance.InstanceId, "Worker failed", CancellationToken.None,
                 exception.GetType().Name).ConfigureAwait(false);
         }
     }
 
-    private async Task LogSessionFailureAsync(InstanceId instanceId, Exception exception)
+    private async Task LogSessionFailureAsync(InstanceId instanceId, Exception exception, LogField[] observation)
     {
         if (_log is null) return;
         try
         {
             Exception cause = exception.GetBaseException();
+            LogField[] nativeFailure = cause is System.ComponentModel.Win32Exception native
+                ? [new("workerNativeErrorCode", native.NativeErrorCode.ToString(System.Globalization.CultureInfo.InvariantCulture))] : [];
             await _log.WriteAsync(new(LogLevel.Warning, "worker", "WorkerSessionFailed", DateTimeOffset.UtcNow,
                 [new("instanceId", instanceId.ToString()),
                  new("failureCategory", SafeDiagnosticPolicy.ClassifyFailure(cause)),
                  new("workerFailureCode", cause is AdapterWorkerOperationException failure ? failure.FailureCode : "Unknown"),
-                 new("hresult", cause.HResult.ToString("X8", System.Globalization.CultureInfo.InvariantCulture))]), CancellationToken.None).ConfigureAwait(false);
+                 new("hresult", cause.HResult.ToString("X8", System.Globalization.CultureInfo.InvariantCulture)),
+                 .. nativeFailure,
+                 .. observation]), CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception loggingFailure) when (loggingFailure is not OperationCanceledException) { }
     }
@@ -347,11 +379,24 @@ public sealed class AdapterInstanceProcessSupervisor :
         AdapterInstance instance,
         WorkerSessionId sessionId,
         Action<int> selectProtocol,
+        WorkerSessionFailureObservation observation,
+        Func<LogField[]> captureObservation,
         CancellationToken cancellationToken)
     {
+        observation.Advance(WorkerSessionStage.AwaitHello);
         using var helloDeadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         helloDeadline.CancelAfter(TimeSpan.FromSeconds(5));
-        ControlFrameEnvelope hello = await ReadAsync(pipe, helloDeadline.Token).ConfigureAwait(false);
+        ControlFrameEnvelope hello;
+        try
+        {
+            hello = await ReadAsync(pipe, helloDeadline.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (helloDeadline.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            observation.DeadlineExpired = true;
+            throw;
+        }
+        observation.Advance(WorkerSessionStage.Negotiate);
         ValidateFrame(hello, "Hello", instance.InstanceId, sessionId);
         AdapterWorkerProtocolSession protocol;
         try
@@ -365,6 +410,7 @@ public sealed class AdapterInstanceProcessSupervisor :
             await WriteAsync(pipe, new ControlFrameEnvelope(1, "HandshakeRejected", hello.RequestId,
                 instance.InstanceId, sessionId, true, JsonSerializer.SerializeToElement(new { code = exception.Message })),
                 cancellationToken).ConfigureAwait(false);
+            await LogSessionFailureAsync(instance.InstanceId, exception, captureObservation()).ConfigureAwait(false);
             await SetPhaseAsync(instance.InstanceId, "Worker error", cancellationToken, exception.Message).ConfigureAwait(false);
             return;
         }
@@ -375,6 +421,7 @@ public sealed class AdapterInstanceProcessSupervisor :
         var directory = new AdapterWorkerDirectoryPageClient(channel, instance.InstanceId, sessionId);
         var mutations = new AdapterWorkerMutationClient(channel, instance.InstanceId, sessionId);
         var instanceOperations = new SemaphoreSlim(1, 1);
+        observation.Advance(WorkerSessionStage.SendReady);
         await channel.WriteControlAsync(new ControlFrameEnvelope(1, "Ready", hello.RequestId,
             instance.InstanceId, sessionId, true, protocol.CreateReadyPayload(instance)),
             cancellationToken).ConfigureAwait(false);
@@ -396,6 +443,7 @@ public sealed class AdapterInstanceProcessSupervisor :
 
         try
         {
+            observation.Advance(WorkerSessionStage.ReceiveFrames);
             while (true)
             {
                 ControlFrameEnvelope frame = await ReadAsync(pipe, cancellationToken).ConfigureAwait(false);
@@ -464,7 +512,7 @@ public sealed class AdapterInstanceProcessSupervisor :
                     case "Error":
                         string code = frame.Payload.TryGetProperty("code", out JsonElement value)
                             ? value.GetString() ?? "Unknown" : "Unknown";
-                        await LogSessionFailureAsync(instance.InstanceId, new AdapterWorkerOperationException(code)).ConfigureAwait(false);
+                        await LogSessionFailureAsync(instance.InstanceId, new AdapterWorkerOperationException(code), captureObservation()).ConfigureAwait(false);
                         await SetPhaseAsync(instance.InstanceId, "Worker error", cancellationToken, code)
                             .ConfigureAwait(false);
                         return;

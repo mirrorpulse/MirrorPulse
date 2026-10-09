@@ -8,16 +8,33 @@ using MirrorPulse.Core.Transport;
 
 InstanceId instance = InstanceId.Parse(args[1]);
 WorkerSessionId session = WorkerSessionId.Parse(args[3]);
+string? cache = Environment.GetEnvironmentVariable("MP_TRANSFER_CACHE_DIR");
+string? modePath = cache is null ? null : Path.Combine(cache, ".mp-startup-fixture-mode");
+string mode = modePath is not null && File.Exists(modePath) ? (await File.ReadAllTextAsync(modePath)).Trim() : "Normal";
+if (mode == "ExitBeforePipe")
+{
+    while (!File.Exists(Path.Combine(cache!, ".mp-startup-fixture-exit"))) await Task.Delay(10);
+    Environment.Exit(73);
+}
+if (mode == "IdleBeforePipe") await Task.Delay(Timeout.InfiniteTimeSpan);
 await using var pipe = new NamedPipeClientStream(".", args[5], PipeDirection.InOut, PipeOptions.Asynchronous);
 await pipe.ConnectAsync(10000);
+if (mode == "IdleBeforeHello") await Task.Delay(Timeout.InfiniteTimeSpan);
+if (mode == "UnexpectedHello")
+{
+    await SendAsync(new(1, "Connected", Guid.NewGuid(), instance, session, false,
+        JsonSerializer.SerializeToElement(new { secret = "startup-secret-needle" })));
+    await Task.Delay(Timeout.InfiniteTimeSpan);
+}
 Guid helloId = Guid.NewGuid();
 string[] capabilities = ["root-addresses", "stable-operations", "conditional-targets", "bounded-streams", "cancel-ack"];
 await SendAsync(new(1, "Hello", helloId, instance, session, false, JsonSerializer.SerializeToElement(new
 {
-    supportedVersions = new { minimum = 1, maximum = 2 },
+    supportedVersions = new { minimum = mode == "RejectedHello" ? 2 : 1, maximum = 2 },
     capabilities,
 })));
 ControlFrameEnvelope ready = await ReadAsync();
+if (mode == "RejectedHello") await Task.Delay(Timeout.InfiniteTimeSpan);
 if (ready.MessageType != "Ready" || !ready.IsResponse || ready.RequestId != helloId) return;
 if (ready.ProtocolVersion == 2)
 {
