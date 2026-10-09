@@ -123,7 +123,8 @@ public static class CliFixtureProbe
                 throw new InvalidDataException("A mutation escaped the isolated fixture route.");
             if (record.Intent.IsDirectory || record.Intent.Kind is not (MirrorPulseWorkerChangeKind.Create or MirrorPulseWorkerChangeKind.ContentUpdate)) continue;
             string relative = record.Intent.RelativePath.Replace('\\', '/');
-            if (ReadOnlyPaths.Contains(relative, StringComparer.OrdinalIgnoreCase)) readOnly++;
+            if (ReadOnlyPaths.Contains(relative, StringComparer.OrdinalIgnoreCase) ||
+                string.Equals(relative, "cli-roundtrip.txt", StringComparison.OrdinalIgnoreCase)) readOnly++;
             if (string.Equals(relative, "queued-upload.txt", StringComparison.OrdinalIgnoreCase))
             {
                 queued++;

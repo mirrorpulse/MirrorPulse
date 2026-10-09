@@ -15,6 +15,15 @@ public sealed class CiEvidenceCandidateTests
     [DataRow("artifact-mismatch", false)]
     [DataRow("duplicate-artifact", false)]
     [DataRow("legacy", true)]
+    [DataRow("hydration-missing-hydration", false)]
+    [DataRow("hydration-missing-count", false)]
+    [DataRow("hydration-string-count", false)]
+    [DataRow("hydration-partial", false)]
+    [DataRow("hydration-duplicate-phase", false)]
+    [DataRow("hydration-content-changed", false)]
+    [DataRow("hydration-redundant-upload", false)]
+    [DataRow("hydration-no-positive-control", false)]
+    [DataRow("hydration-incomplete-local-write", false)]
     public async Task ThreeJobsMustBindTheSameOfficialCandidate(string scenario, bool succeeds)
     {
         string repository = SftpProtocolFixture.FindRepositoryRoot();
@@ -47,7 +56,7 @@ public sealed class CiEvidenceCandidateTests
                     if (arm && scenario == "duplicate-artifact") artifacts.Add(candidate);
                 }
                 object[] checks = arm
-                    ? [new { name = "signed-local-cli-regression", executed = true }]
+                    ? [CiHydrationEvidenceFixture.Create(scenario.StartsWith("hydration-", StringComparison.Ordinal) ? scenario["hydration-".Length..] : "valid")]
                     : job == "build-and-test"
                         ? [new { name = "unsupported-server", executed = true, cliRejected = true, hostRejected = true, stateUntouched = true, osProductType = 3 }]
                         : [];

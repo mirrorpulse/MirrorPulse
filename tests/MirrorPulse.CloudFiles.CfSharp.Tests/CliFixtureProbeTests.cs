@@ -41,6 +41,19 @@ public sealed class CliFixtureProbeTests
     }
 
     [TestMethod]
+    public async Task AuditAlsoCountsCompletedUploadsForTheRemoteAppliedReadOnlyFile()
+    {
+        await using Fixture fixture = await Fixture.CreateAsync();
+        await using (var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths))
+            await SeedAsync(catalog, fixture.Marker, "cli-roundtrip.txt", MirrorPulseMutationState.Acknowledged);
+        var result = await RunAsync(fixture.Root, audit: true);
+        Assert.AreEqual(0, result.ExitCode, result.Error);
+        CliFixtureAuditResult audit = JsonSerializer.Deserialize<CliFixtureAuditResult>(result.Output, JsonOptions)!;
+        Assert.AreEqual(1, audit.ReadOnlyFileMutations);
+        Assert.AreEqual(0, audit.QueuedFileMutations);
+    }
+
+    [TestMethod]
     public async Task EmptyCatalogIsNotMistakenForMissingRouteEvidence()
     {
         await using Fixture fixture = await Fixture.CreateAsync();

@@ -91,12 +91,12 @@ if ($artifacts.Count -eq 0) { throw "No artifact hashes were verified." }
 $checks = @()
 if ($IntegrationPath) {
     $integration = Get-Content -LiteralPath $IntegrationPath -Raw | ConvertFrom-Json
-    if ($integration.schemaVersion -ne 1 -or $integration.runtime -ne $Runtime -or $integration.regression -ne $true -or
-        $integration.rangeRead -ne $true -or $integration.offlineQueueRetained -ne $true -or
-        $integration.uploadJournalDrained -ne $true -or $integration.conflictPersisted -ne $true -or $integration.cursorPersisted -ne $true) {
+    if ($integration.schemaVersion -ne 2 -or $integration.runtime -ne $Runtime -or $integration.regression -ne $true) {
         throw "The CLI regression verification is incomplete."
     }
-    $checks += [ordered]@{name="signed-local-cli-regression";executed=$true;rangeRead=$true;offlineQueueRetained=$true;uploadJournalDrained=$true;conflictPersisted=$true;cursorPersisted=$true}
+    . (Join-Path $PSScriptRoot 'cli-regression-evidence-policy.ps1')
+    Assert-CliRegressionObservations $integration
+    $checks += [ordered]@{name="signed-local-cli-regression";executed=$true;rangeRead=$true;offlineQueueRetained=$true;uploadJournalDrained=$true;conflictPersisted=$true;cursorPersisted=$true;hydration=$integration.hydration}
 } elseif ($Job -eq "official-package-arm64") { throw "The signed Local CLI regression evidence is missing." }
 if ($InstalledPath) {
     $installed = Get-Content -LiteralPath $InstalledPath -Raw | ConvertFrom-Json

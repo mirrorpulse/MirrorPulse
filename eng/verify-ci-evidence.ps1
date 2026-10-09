@@ -35,9 +35,11 @@ foreach ($job in $expected.Keys) {
             throw "Invalid artifact evidence: $job"
         }
     }
-    if ($job -eq "official-package-arm64" -and
-        @($manifest.checks | Where-Object { $_.name -eq "signed-local-cli-regression" -and $_.executed -eq $true }).Count -ne 1) {
-        throw "The ARM64 CLI regression did not execute."
+    if ($job -eq "official-package-arm64") {
+        $integration = @($manifest.checks | Where-Object name -ceq 'signed-local-cli-regression')
+        if ($integration.Count -ne 1 -or $integration[0].executed -ne $true) { throw 'The ARM64 CLI regression did not execute exactly once.' }
+        . (Join-Path $PSScriptRoot 'cli-regression-evidence-policy.ps1')
+        Assert-CliRegressionObservations $integration[0]
     }
     if ($job -eq "official-package-arm64" -and $RequireInstalled) {
         $installed = @($manifest.checks | Where-Object name -eq 'installed-msix')

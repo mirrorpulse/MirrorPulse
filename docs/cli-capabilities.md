@@ -42,10 +42,10 @@ show which outcomes are queued rather than completed.
 
 | Capability | Status | Current behavior / evidence |
 | --- | --- | --- |
-| Directory pages and demand ranges | Implemented | Installed signed Workers and protocol fixtures exercise reads. Full Explorer image/thumbnail/retention acceptance remains open. |
+| Directory pages and demand ranges | Implemented | Installed signed Workers and protocol fixtures exercise reads. The ARM64 CLI gate requires repeated full and boundary reads of a large binary file across Host stop/restart and instance disable. Interactive Explorer image/thumbnail and availability policy acceptance remains open. |
 | Multiple instances | Implemented | Signed aggregate tests start independent Local Workers with separate instance IDs. |
 | Multiple roots per instance | Partial | Worker requests carry RootKey, with explicit demand and upload routing. The background poller still admits only one active root per instance. |
-| Offline edits and upload replay | Partial | ARM64 signed Local CLI regression verifies queue 0 to 2 to 0. File and directory-create recovery retain accepted intent across restart; sync status exposes blocked reasons. File-chain aggregate execution, recursive move/delete and bounded fair paging still need completion. Local metadata-only changes are outside the content-sync policy. |
+| Offline edits and upload replay | Partial | ARM64 signed Local CLI regression requires offline queue growth and drain, plus a stopped-Host audit of all retained content intents, including completed uploads, to distinguish read-only hydration from the real queued write. File and directory-create recovery retain accepted intent across restart; sync status exposes blocked reasons. File-chain aggregate execution, recursive move/delete and bounded fair paging still need completion. Local metadata-only changes are outside the content-sync policy. |
 | Move / delete | Partial | Current official Workers implement file/directory mutations. Complete journal, cross-root, recursive and conflict safety is not proven. |
 | Remote polling | Partial | Single-root polling retains retry snapshots and replays durable pending batches before observing newer changes. Pending root rename fences observation and replay; multi-root polling and native rename recovery still need completion. |
 | Pin / free space | Unsupported | The availability helper exists, but no complete Control/CLI command is connected. |

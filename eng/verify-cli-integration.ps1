@@ -18,8 +18,44 @@ $hostRoot = Join-Path $runRoot "host"
 $syncRoot = Join-Path $runRoot "sync"
 $dataRoot = Join-Path $runRoot "data"
 $sourceRoot = Join-Path $runRoot "source"
+$probeRoot = Join-Path $runRoot "probe"
 $hostProcess = $null
 $fixtureBytes = [Text.Encoding]::ASCII.GetBytes("0123456789ABCDEF-local-fixture")
+$hydrationReads = [Collections.Generic.List[object]]::new()
+$hydrationAudits = [Collections.Generic.List[object]]::new()
+
+function Invoke-CliFixtureProbe {
+    param([Parameter(Mandatory)][ValidateSet('read', 'audit')][string]$Mode, [Parameter(Mandatory)][string]$Phase)
+    $start = [Diagnostics.ProcessStartInfo]::new('dotnet')
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $start.ArgumentList.Add($script:probeAssembly)
+    $start.ArgumentList.Add("--$Mode-cli-fixture")
+    $start.ArgumentList.Add($runRoot)
+    $process = [Diagnostics.Process]::Start($start)
+    try {
+        $output = $process.StandardOutput.ReadToEndAsync()
+        $errorOutput = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit(30000)) { throw "The external $Mode consumer timed out ($Phase)." }
+        if ($process.ExitCode -ne 0) { throw "The external $Mode consumer failed ($Phase): $($errorOutput.GetAwaiter().GetResult())" }
+        $result = $output.GetAwaiter().GetResult() | ConvertFrom-Json
+        if ($result.schemaVersion -ne 1) { throw 'The fixture consumer returned an invalid evidence version.' }
+        $result | Add-Member -NotePropertyName phase -NotePropertyValue $Phase
+        if ($Mode -eq 'read') {
+            $hydrationReads.Add($result)
+            Write-Host "External consumer $Phase`: fullReads=$($result.wholeFileReads); rangeReads=$($result.rangeReads); binaryLength=$($result.binaryLength); sha256=$($result.binarySha256)."
+        } else {
+            $hydrationAudits.Add($result)
+            Write-Host "Retained intent audit $Phase`: readOnly=$($result.readOnlyFileMutations); queued=$($result.queuedFileMutations); acknowledged=$($result.acknowledgedQueuedFileMutations)."
+        }
+        return $result
+    } finally {
+        if (-not $process.HasExited) { $process.Kill($true); $process.WaitForExit() }
+        $process.Dispose()
+    }
+}
 
 function Invoke-MirrorPulseCli {
     param([Parameter(Mandatory = $true)][string[]]$Arguments)
@@ -78,6 +114,11 @@ try {
     New-Item -ItemType Directory -Path $cliRoot, $hostRoot, $syncRoot, $dataRoot, $sourceRoot -Force | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $sourceRoot "nested") -Force | Out-Null
     [IO.File]::WriteAllBytes((Join-Path $sourceRoot "nested\fixture.txt"), $fixtureBytes)
+    if ($Regression) {
+        $binaryFixture = [byte[]]::new(2 * 1024 * 1024 + 257)
+        [Random]::new(4096).NextBytes($binaryFixture)
+        [IO.File]::WriteAllBytes((Join-Path $sourceRoot 'nested\fixture.bin'), $binaryFixture)
+    }
 
     $cliProject = Join-Path $repositoryRoot "src\MirrorPulse.Cli\MirrorPulse.Cli.csproj"
     $hostProject = Join-Path $repositoryRoot "src\MirrorPulse.Host\MirrorPulse.Host.csproj"
@@ -85,6 +126,12 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "CLI publish failed." }
     & dotnet publish $hostProject --configuration $Configuration --runtime $Runtime --self-contained true --no-restore --output $hostRoot
     if ($LASTEXITCODE -ne 0) { throw "Host publish failed." }
+    if ($Regression) {
+        $probeProject = Join-Path $repositoryRoot 'tests\MirrorPulse.CfSharp.CrashProbe\MirrorPulse.CfSharp.CrashProbe.csproj'
+        & dotnet publish $probeProject --configuration $Configuration --self-contained false --no-restore --output $probeRoot
+        if ($LASTEXITCODE -ne 0) { throw 'The test-only external consumer publish failed.' }
+        $script:probeAssembly = Join-Path $probeRoot 'MirrorPulse.CfSharp.CrashProbe.dll'
+    }
 
     $script:cliExecutable = Join-Path $cliRoot "mp.exe"
     $hostExecutable = Join-Path $hostRoot "MirrorPulse.Host.exe"
@@ -188,6 +235,39 @@ try {
     }
 
     if ($Regression) {
+        [ordered]@{schemaVersion=1;instanceId=$instanceId;rootId=$registeredRoot.rootId
+            rootKey=$registeredRoot.uniquenessKey;directoryName=$rootDirectory} |
+            ConvertTo-Json | Set-Content -LiteralPath (Join-Path $runRoot '.mp-cli-fixture.json') -Encoding utf8
+        $onlineRead = Invoke-CliFixtureProbe -Mode read -Phase Online
+        $deadline = [DateTime]::UtcNow.AddSeconds(30)
+        do {
+            $readStatus = Invoke-MirrorPulseCli @('--json', '--developer-mode', 'status')
+            if ($readStatus.data.pendingUploads -eq 0) { break }
+            Start-Sleep -Milliseconds 500
+        } while ([DateTime]::UtcNow -lt $deadline)
+        if ($readStatus.data.pendingUploads -ne 0) {
+            Write-MirrorPulseUploadDiagnostics
+            throw 'Read-only hydration left pending uploads.'
+        }
+        Invoke-MirrorPulseCli @('--json', '--developer-mode', 'host', 'stop') | Out-Null
+        Wait-MirrorPulseHostStopped
+        $beforeWriteAudit = Invoke-CliFixtureProbe -Mode audit -Phase BeforeLocalWrite
+        if ($beforeWriteAudit.routeVerified -ne $true -or $beforeWriteAudit.readOnlyFileMutations -ne 0 -or
+            $beforeWriteAudit.queuedFileMutations -ne 0) { throw 'Hydration recorded a redundant content upload before any local write.' }
+        $stoppedRead = Invoke-CliFixtureProbe -Mode read -Phase HostStopped
+        if ($stoppedRead.binarySha256 -cne $onlineRead.binarySha256) { throw 'Resident content changed after the Host stopped.' }
+        Invoke-MirrorPulseCli @('--json', '--developer-mode', 'host', 'start') | Out-Null
+        $deadline = [DateTime]::UtcNow.AddSeconds(30)
+        do {
+            $restartedReadStatus = Invoke-MirrorPulseCli @('--json', '--developer-mode', 'status')
+            $restartedReadInstance = @($restartedReadStatus.data.instances) | Where-Object instanceId -eq $instanceId | Select-Object -First 1
+            if ($restartedReadInstance.phase -eq 'Connected') { break }
+            Start-Sleep -Milliseconds 500
+        } while ([DateTime]::UtcNow -lt $deadline)
+        if ($restartedReadInstance.phase -ne 'Connected') { throw 'The Local Worker did not reconnect for the repeated-read check.' }
+        $restartedRead = Invoke-CliFixtureProbe -Mode read -Phase HostRestarted
+        if ($restartedRead.binarySha256 -cne $onlineRead.binarySha256) { throw 'Resident content changed after the Host restarted.' }
+
         $roundTrip = Join-Path $sourceRoot "cli-roundtrip.txt"
         Set-Content -LiteralPath $roundTrip -Value "remote-before-local" -NoNewline
         Invoke-MirrorPulseCli @("--json", "--developer-mode", "sync", "refresh") | Out-Null
@@ -231,6 +311,8 @@ try {
         if ($null -eq $offlineInstance -or $offlineInstance.phase -ne "Offline") {
             throw "The disabled Adapter instance did not remain offline after the Host restarted."
         }
+        $disabledRead = Invoke-CliFixtureProbe -Mode read -Phase InstanceDisabled
+        if ($disabledRead.binarySha256 -cne $onlineRead.binarySha256) { throw 'Resident content changed while the Adapter was disabled.' }
         Start-Sleep -Seconds 1
         $baselineStatus = Invoke-MirrorPulseCli @("--json", "--developer-mode", "status")
         $pendingBeforeWrite = $baselineStatus.data.pendingUploads
@@ -300,6 +382,11 @@ try {
         # Both sides change while the Host is stopped. The conflict must survive another restart.
         Invoke-MirrorPulseCli @("--json", "--developer-mode", "host", "stop") | Out-Null
         Wait-MirrorPulseHostStopped
+        $afterWriteAudit = Invoke-CliFixtureProbe -Mode audit -Phase AfterLocalWrite
+        if ($afterWriteAudit.routeVerified -ne $true -or $afterWriteAudit.readOnlyFileMutations -ne 0 -or
+            $afterWriteAudit.queuedFileMutations -lt 1 -or $afterWriteAudit.acknowledgedQueuedFileMutations -ne $afterWriteAudit.queuedFileMutations) {
+            throw 'The retained intent audit did not distinguish repeated reads from the actual queued local write.'
+        }
         [IO.File]::WriteAllText($remoteFile, "local-conflict")
         [IO.File]::WriteAllText($roundTrip, "remote-conflict")
         Invoke-MirrorPulseCli @("--json", "--developer-mode", "host", "start") | Out-Null
@@ -337,6 +424,7 @@ try {
     }
 
     Invoke-MirrorPulseCli @("--json", "--developer-mode", "host", "stop") | Out-Null
+    Wait-MirrorPulseHostStopped
     Write-Output "Verified CLI -> Host -> Worker integration for $Runtime ($instanceId)."
 }
 finally {
@@ -354,13 +442,21 @@ finally {
     Remove-Item Env:\MIRRORPULSE_HOST_PATH -ErrorAction SilentlyContinue
     Remove-Item Env:\MIRRORPULSE_DEVELOPER_MODE -ErrorAction SilentlyContinue
     if (Test-Path -LiteralPath $runRoot) {
-        Remove-Item -LiteralPath $runRoot -Recurse -Force -ErrorAction SilentlyContinue
+        $cleanupRoot = [IO.Path]::GetFullPath($runRoot)
+        $cleanupParent = [IO.Path]::TrimEndingDirectorySeparator([IO.Path]::GetTempPath())
+        if ([IO.Path]::GetDirectoryName($cleanupRoot) -cne $cleanupParent -or
+            [IO.Path]::GetFileName($cleanupRoot) -cnotmatch '\AMirrorPulse-cli-integration-[0-9a-f]{32}\z' -or
+            (Get-Item -LiteralPath $cleanupRoot -Force).Attributes.HasFlag([IO.FileAttributes]::ReparsePoint)) {
+            throw 'The cleanup target is outside the isolated CLI fixture.'
+        }
+        Remove-Item -LiteralPath $cleanupRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 if ($EvidencePath) {
     [ordered]@{
-        schemaVersion=1;runtime=$Runtime;regression=$Regression.IsPresent;rangeRead=$true
+        schemaVersion=2;runtime=$Runtime;regression=$Regression.IsPresent;rangeRead=$true
         offlineQueueRetained=$Regression.IsPresent;uploadJournalDrained=$Regression.IsPresent
         conflictPersisted=$Regression.IsPresent;cursorPersisted=$Regression.IsPresent
-    } | ConvertTo-Json | Set-Content -LiteralPath $EvidencePath -Encoding utf8
+        hydration=[ordered]@{reads=@($hydrationReads.ToArray());audits=@($hydrationAudits.ToArray())}
+    } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $EvidencePath -Encoding utf8
 }
