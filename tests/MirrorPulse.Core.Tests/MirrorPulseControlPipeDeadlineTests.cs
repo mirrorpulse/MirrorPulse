@@ -1,6 +1,6 @@
 using System.Buffers.Binary;
 using System.IO.Pipes;
-using MirrorPulse.Control.Client;
+using System.Text.Json;
 using MirrorPulse.Control.Contracts;
 using MirrorPulse.Control.Dispatch;
 using MirrorPulse.Control.Transport;
@@ -19,6 +19,16 @@ public sealed class MirrorPulseControlPipeDeadlineTests
     [DataRow(3)]
     public async Task IdlePartialAndOversizedPeerCannotBlockNextRequest(int mode)
     {
+        // Measure the server frame boundary. Prepare the next frame before the
+        // listener starts so first-use client serialization and peer inspection
+        // cannot consume the deliberately short idle-peer read deadline.
+        using var arguments = JsonDocument.Parse("{}");
+        Guid requestId = Guid.NewGuid();
+        byte[] payload = MirrorPulseControlJsonCodec.Serialize(new ControlRequestEnvelope(
+            MirrorPulseControlSchema.CurrentVersion, requestId, MirrorPulseControlCommands.SyncStatus, arguments.RootElement));
+        byte[] frame = new byte[4 + payload.Length];
+        BinaryPrimitives.WriteUInt32LittleEndian(frame, (uint)payload.Length);
+        payload.CopyTo(frame, 4);
         string name = $"MirrorPulse-control-deadline-{Guid.NewGuid():N}";
         var dispatcher = new MirrorPulseControlDispatcher();
         dispatcher.Register<ControlEmptyArguments, MirrorPulseAppStatusResponse>(MirrorPulseControlCommands.SyncStatus,
@@ -43,13 +53,17 @@ public sealed class MirrorPulseControlPipeDeadlineTests
                 await stalled.WriteAsync(prefix, shutdown.Token);
             }
 
-            var client = new MirrorPulseControlClient(new()
-            {
-                PipeName = name,
-                ConnectTimeout = TimeSpan.FromSeconds(2),
-                RequestTimeout = TimeSpan.FromSeconds(3),
-            });
-            Assert.AreEqual(7, (await client.GetStatusAsync(cancellationToken: shutdown.Token)).PendingUploads);
+            using var requestDeadline = CancellationTokenSource.CreateLinkedTokenSource(shutdown.Token);
+            requestDeadline.CancelAfter(TimeSpan.FromSeconds(3));
+            await using var healthy = new NamedPipeClientStream(".", name, PipeDirection.InOut, PipeOptions.Asynchronous);
+            await healthy.ConnectAsync(2000, requestDeadline.Token);
+            await healthy.WriteAsync(frame, requestDeadline.Token);
+            ControlResponseEnvelope response = MirrorPulseControlJsonCodec.Deserialize<ControlResponseEnvelope>(
+                await MirrorPulseControlPipeTransport.ReadFrameAsync(healthy, requestDeadline.Token));
+            Assert.AreEqual(requestId, response.RequestId);
+            Assert.IsTrue(response.Succeeded);
+            Assert.AreEqual(7, MirrorPulseControlJsonCodec.Deserialize<MirrorPulseAppStatusResponse>(
+                JsonSerializer.SerializeToUtf8Bytes(response.Data!.Value)).PendingUploads);
             Assert.AreEqual(0, await stalled.ReadAsync(new byte[1], shutdown.Token));
         }
         finally
