@@ -26,6 +26,10 @@ public sealed record MirrorPulseNamespacePermissionIntent(Guid OperationId, Guid
     MirrorPulseNamespacePermissionChangeKind Kind, string RoleSid, string ExpectedDacl,
     string TargetDacl, DateTimeOffset PreparedAt);
 
+/// <summary>Pairs the original object evidence with its immutable permission intent.</summary>
+public sealed record MirrorPulseNamespacePermissionPreparation(MirrorPulseNamespacePermissionBaseline Baseline,
+    MirrorPulseNamespacePermissionIntent Intent);
+
 /// <summary>A separate read of the same object's owner and access descriptor after application.</summary>
 public sealed record MirrorPulseNamespacePermissionVerification(MirrorPulseLocalFileBinding LocalObject,
     string OwnerSid, string Dacl, DateTimeOffset ObservedAt);
@@ -46,79 +50,118 @@ public sealed partial class MirrorPulseProductCatalog
     {
         ArgumentNullException.ThrowIfNull(baseline);
         ArgumentNullException.ThrowIfNull(intent);
-        ValidatePermissionBaseline(baseline);
-        ValidatePermissionIntent(intent);
-        if (baseline.EvidenceId != intent.EvidenceId || baseline.LocalObject != intent.LocalObject ||
-            intent.PreparedAt < baseline.CapturedAt)
-            throw new ArgumentException("The permission intent does not refer to its original object evidence.");
+        return (await PrepareNamespacePermissionChangesAsync([new(baseline, intent)], cancellationToken).ConfigureAwait(false))[0];
+    }
+
+    /// <summary>Retains a bounded batch of original evidence and intents in one SQLite transaction.</summary>
+    /// <remarks>
+    /// This method performs no permission write. A batch is not a complete tree manifest or
+    /// authorization to apply it. The owner must seal all required batches before changing any
+    /// parent inheritance. Failure rolls back new records while preserving earlier owned history.
+    /// </remarks>
+    public async Task<IReadOnlyList<MirrorPulseNamespacePermissionChange>> PrepareNamespacePermissionChangesAsync(
+        IReadOnlyList<MirrorPulseNamespacePermissionPreparation> preparations, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(preparations);
+        if (preparations.Count is 0 or > 4096)
+            throw new ArgumentException("The permission preparation batch must contain between 1 and 4096 objects.", nameof(preparations));
+        MirrorPulseNamespacePermissionPreparation[] captured = preparations.ToArray();
+        var objects = new HashSet<MirrorPulseLocalFileBinding>();
+        var operations = new HashSet<Guid>();
+        foreach (MirrorPulseNamespacePermissionPreparation preparation in captured)
+        {
+            ArgumentNullException.ThrowIfNull(preparation);
+            MirrorPulseNamespacePermissionBaseline baseline = preparation.Baseline;
+            MirrorPulseNamespacePermissionIntent intent = preparation.Intent;
+            ArgumentNullException.ThrowIfNull(baseline);
+            ArgumentNullException.ThrowIfNull(intent);
+            ValidatePermissionBaseline(baseline);
+            ValidatePermissionIntent(intent);
+            if (baseline.EvidenceId != intent.EvidenceId || baseline.LocalObject != intent.LocalObject ||
+                intent.PreparedAt < baseline.CapturedAt)
+                throw new ArgumentException("The permission intent does not refer to its original object evidence.");
+            if (!objects.Add(baseline.LocalObject) || !operations.Add(intent.OperationId))
+                throw new ArgumentException("A permission preparation batch cannot repeat an object or operation.", nameof(preparations));
+        }
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             ThrowIfDisposed();
             using SqliteTransaction transaction = _connection.BeginTransaction();
-            MirrorPulseNamespacePermissionBaseline? retained = await ReadPermissionBaselineCoreAsync(
-                baseline.EvidenceId, cancellationToken, transaction).ConfigureAwait(false);
-            if (retained is not null && retained != baseline)
-                throw new InvalidOperationException("The original permission evidence is immutable.");
-            MirrorPulseNamespacePermissionChange? replay = await ReadPermissionChangeCoreAsync(
-                intent.OperationId, cancellationToken, transaction).ConfigureAwait(false);
-            if (replay is not null)
-            {
-                if (retained is null || replay.Intent != intent)
-                    throw new InvalidOperationException("A permission operation cannot adopt different evidence.");
-                return replay;
-            }
-            IReadOnlyList<MirrorPulseNamespacePermissionChange> history = await ReadPermissionChangesCoreAsync(
-                baseline.EvidenceId, cancellationToken, transaction).ConfigureAwait(false);
-            if (history.Any(change => change.Phase != MirrorPulseNamespacePermissionPhase.Verified))
-                throw new InvalidOperationException("The object has an unresolved permission change.");
-            MirrorPulseNamespacePermissionChange? previous = history.Count == 0 ? null : history[^1];
-            if (previous is null && (intent.RootId != baseline.RootId || intent.RelativePath != baseline.RelativePath))
-                throw new InvalidOperationException("Initial protection requires the original capture location.");
-            if (intent.ExpectedDacl != (previous?.Intent.TargetDacl ?? baseline.OriginalDacl) ||
-                previous is not null && intent.PreparedAt < previous.Verification!.ObservedAt)
-                throw new InvalidOperationException("The expected DACL does not follow the retained verified history.");
-            switch (intent.Kind)
-            {
-                case MirrorPulseNamespacePermissionChangeKind.Protect:
-                    if (previous is not null && previous.Intent.Kind != MirrorPulseNamespacePermissionChangeKind.Restore)
-                        throw new InvalidOperationException("An already protected object requires a role rotation.");
-                    break;
-                case MirrorPulseNamespacePermissionChangeKind.RotateRole:
-                    if (previous is null || previous.Intent.Kind == MirrorPulseNamespacePermissionChangeKind.Restore ||
-                        previous.Intent.RoleSid == intent.RoleSid)
-                        throw new InvalidOperationException("Role rotation requires verified protection and a new role.");
-                    break;
-                case MirrorPulseNamespacePermissionChangeKind.Restore:
-                    if (previous is null || previous.Intent.Kind == MirrorPulseNamespacePermissionChangeKind.Restore ||
-                        previous.Intent.RoleSid != intent.RoleSid || intent.TargetDacl != baseline.OriginalDacl)
-                        throw new InvalidOperationException("Restoration requires the owned DACL and exact original evidence.");
-                    break;
-            }
-            if (retained is null)
-            {
-                await using SqliteCommand insert = _connection.CreateCommand();
-                insert.Transaction = transaction;
-                insert.CommandText = """
+            var changes = new List<MirrorPulseNamespacePermissionChange>(captured.Length);
+            foreach (MirrorPulseNamespacePermissionPreparation preparation in captured)
+                changes.Add(await PrepareNamespacePermissionChangeCoreAsync(preparation.Baseline, preparation.Intent,
+                    transaction, cancellationToken).ConfigureAwait(false));
+            transaction.Commit();
+            return changes.AsReadOnly();
+        }
+        finally { _gate.Release(); }
+    }
+
+    private async Task<MirrorPulseNamespacePermissionChange> PrepareNamespacePermissionChangeCoreAsync(
+        MirrorPulseNamespacePermissionBaseline baseline, MirrorPulseNamespacePermissionIntent intent,
+        SqliteTransaction transaction, CancellationToken cancellationToken)
+    {
+        MirrorPulseNamespacePermissionBaseline? retained = await ReadPermissionBaselineCoreAsync(
+            baseline.EvidenceId, cancellationToken, transaction).ConfigureAwait(false);
+        if (retained is not null && retained != baseline)
+            throw new InvalidOperationException("The original permission evidence is immutable.");
+        MirrorPulseNamespacePermissionChange? replay = await ReadPermissionChangeCoreAsync(
+            intent.OperationId, cancellationToken, transaction).ConfigureAwait(false);
+        if (replay is not null)
+        {
+            if (retained is null || replay.Intent != intent)
+                throw new InvalidOperationException("A permission operation cannot adopt different evidence.");
+            return replay;
+        }
+        IReadOnlyList<MirrorPulseNamespacePermissionChange> history = await ReadPermissionChangesCoreAsync(
+            baseline.EvidenceId, cancellationToken, transaction).ConfigureAwait(false);
+        if (history.Any(change => change.Phase != MirrorPulseNamespacePermissionPhase.Verified))
+            throw new InvalidOperationException("The object has an unresolved permission change.");
+        MirrorPulseNamespacePermissionChange? previous = history.Count == 0 ? null : history[^1];
+        if (previous is null && (intent.RootId != baseline.RootId || intent.RelativePath != baseline.RelativePath))
+            throw new InvalidOperationException("Initial protection requires the original capture location.");
+        if (intent.ExpectedDacl != (previous?.Intent.TargetDacl ?? baseline.OriginalDacl) ||
+            previous is not null && intent.PreparedAt < previous.Verification!.ObservedAt)
+            throw new InvalidOperationException("The expected DACL does not follow the retained verified history.");
+        switch (intent.Kind)
+        {
+            case MirrorPulseNamespacePermissionChangeKind.Protect:
+                if (previous is not null && previous.Intent.Kind != MirrorPulseNamespacePermissionChangeKind.Restore)
+                    throw new InvalidOperationException("An already protected object requires a role rotation.");
+                break;
+            case MirrorPulseNamespacePermissionChangeKind.RotateRole:
+                if (previous is null || previous.Intent.Kind == MirrorPulseNamespacePermissionChangeKind.Restore ||
+                    previous.Intent.RoleSid == intent.RoleSid)
+                    throw new InvalidOperationException("Role rotation requires verified protection and a new role.");
+                break;
+            case MirrorPulseNamespacePermissionChangeKind.Restore:
+                if (previous is null || previous.Intent.Kind == MirrorPulseNamespacePermissionChangeKind.Restore ||
+                    previous.Intent.RoleSid != intent.RoleSid || intent.TargetDacl != baseline.OriginalDacl)
+                    throw new InvalidOperationException("Restoration requires the owned DACL and exact original evidence.");
+                break;
+        }
+        if (retained is null)
+        {
+            await using SqliteCommand insert = _connection.CreateCommand();
+            insert.Transaction = transaction;
+            insert.CommandText = """
                     INSERT INTO namespace_permission_baselines
                         (evidence_id, volume_serial, sync_root_file_id, local_file_id, payload)
                     VALUES ($evidence, $volume, $sync, $file, $payload)
                     ON CONFLICT(volume_serial, sync_root_file_id, local_file_id) DO NOTHING;
                     """;
-                insert.Parameters.AddWithValue("$evidence", baseline.EvidenceId.ToString("D"));
-                insert.Parameters.AddWithValue("$volume", baseline.LocalObject.VolumeSerialNumber.ToString(CultureInfo.InvariantCulture));
-                insert.Parameters.AddWithValue("$sync", baseline.LocalObject.SyncRootFileId.ToString("D"));
-                insert.Parameters.AddWithValue("$file", baseline.LocalObject.LocalFileId.ToString("D"));
-                insert.Parameters.AddWithValue("$payload", JsonSerializer.Serialize(baseline, TopologyJsonOptions));
-                if (await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
-                    throw new InvalidOperationException("This object already has original permission evidence.");
-            }
-            var change = new MirrorPulseNamespacePermissionChange(intent, MirrorPulseNamespacePermissionPhase.Prepared);
-            await WritePermissionChangeCoreAsync(change, cancellationToken, transaction, insert: true).ConfigureAwait(false);
-            transaction.Commit();
-            return change;
+            insert.Parameters.AddWithValue("$evidence", baseline.EvidenceId.ToString("D"));
+            insert.Parameters.AddWithValue("$volume", baseline.LocalObject.VolumeSerialNumber.ToString(CultureInfo.InvariantCulture));
+            insert.Parameters.AddWithValue("$sync", baseline.LocalObject.SyncRootFileId.ToString("D"));
+            insert.Parameters.AddWithValue("$file", baseline.LocalObject.LocalFileId.ToString("D"));
+            insert.Parameters.AddWithValue("$payload", JsonSerializer.Serialize(baseline, TopologyJsonOptions));
+            if (await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
+                throw new InvalidOperationException("This object already has original permission evidence.");
         }
-        finally { _gate.Release(); }
+        var change = new MirrorPulseNamespacePermissionChange(intent, MirrorPulseNamespacePermissionPhase.Prepared);
+        await WritePermissionChangeCoreAsync(change, cancellationToken, transaction, insert: true).ConfigureAwait(false);
+        return change;
     }
 
     public async Task<MirrorPulseNamespacePermissionBaseline?> ReadNamespacePermissionBaselineAsync(Guid evidenceId,

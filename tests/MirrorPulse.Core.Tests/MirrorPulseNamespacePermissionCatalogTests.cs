@@ -17,6 +17,111 @@ public sealed class MirrorPulseNamespacePermissionCatalogTests
     private static readonly string SecondTarget = Dacl($"D:P(A;OICI;FRFW;;;{Owner})(A;OICI;FA;;;{SecondRole})");
 
     [TestMethod]
+    public async Task PreparationBatchSurvivesRestartWithoutResettingAnAppliedMember()
+    {
+        using var fixture = new CatalogFixture();
+        var first = Baseline();
+        var second = Baseline() with
+        {
+            RootId = first.RootId,
+            RelativePath = "Docs/Nested/second.txt",
+            LocalObject = first.LocalObject with { LocalFileId = Guid.NewGuid() },
+        };
+        MirrorPulseNamespacePermissionPreparation[] batch = [new(first, Intent(first)), new(second, Intent(second))];
+        await using (var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths))
+        {
+            IReadOnlyList<MirrorPulseNamespacePermissionChange> changes = await catalog.PrepareNamespacePermissionChangesAsync(batch);
+            Assert.HasCount(2, changes);
+            CollectionAssert.AreEqual(batch.Select(item => item.Intent).ToArray(), changes.Select(item => item.Intent).ToArray());
+            Assert.IsTrue(changes.All(change => change.Phase == MirrorPulseNamespacePermissionPhase.Prepared && change.AppliedAt is null));
+            await catalog.RecordNamespacePermissionApplicationAsync(batch[0].Intent.OperationId, first.LocalObject, batch[0].Intent.PreparedAt);
+        }
+        await using (var reopened = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths))
+        {
+            IReadOnlyList<MirrorPulseNamespacePermissionChange> replay = await reopened.PrepareNamespacePermissionChangesAsync(batch);
+            Assert.AreEqual(MirrorPulseNamespacePermissionPhase.Applied, replay[0].Phase);
+            Assert.AreEqual(batch[0].Intent.PreparedAt, replay[0].AppliedAt);
+            Assert.IsNull(replay[0].Verification);
+            Assert.AreEqual(MirrorPulseNamespacePermissionPhase.Prepared, replay[1].Phase);
+            Assert.AreEqual(first, await reopened.ReadNamespacePermissionBaselineAsync(first.EvidenceId));
+            Assert.AreEqual(second, await reopened.ReadNamespacePermissionBaselineAsync(second.EvidenceId));
+            Assert.HasCount(2, await reopened.ReadNamespacePermissionChangesAsync());
+        }
+    }
+
+    [TestMethod]
+    public async Task LaterObjectConflictRollsBackEveryNewBatchRecordAndPreservesEarlierHistory()
+    {
+        using var fixture = new CatalogFixture();
+        var retained = Baseline();
+        var prior = Intent(retained);
+        var fresh = Baseline();
+        var freshIntent = Intent(fresh);
+        var alias = retained with { EvidenceId = Guid.NewGuid() };
+        var aliasIntent = Intent(alias);
+        await using (var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths))
+        {
+            await catalog.PrepareNamespacePermissionChangeAsync(retained, prior);
+            // The first insert succeeds inside the transaction; the later native-object
+            // uniqueness conflict must roll it back rather than leave partial originals.
+            await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => catalog.PrepareNamespacePermissionChangesAsync(
+                [new(fresh, freshIntent), new(alias, aliasIntent)]));
+        }
+        await using (var reopened = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths))
+        {
+            Assert.IsNull(await reopened.ReadNamespacePermissionBaselineAsync(fresh.EvidenceId));
+            Assert.IsNull(await reopened.ReadNamespacePermissionBaselineAsync(alias.EvidenceId));
+            Assert.IsNull(await reopened.ReadNamespacePermissionChangeAsync(freshIntent.OperationId));
+            Assert.IsNull(await reopened.ReadNamespacePermissionChangeAsync(aliasIntent.OperationId));
+            Assert.AreEqual(retained, await reopened.ReadNamespacePermissionBaselineAsync(retained.EvidenceId));
+            Assert.AreEqual(prior, (await reopened.ReadNamespacePermissionChangeAsync(prior.OperationId))!.Intent);
+            Assert.HasCount(1, await reopened.ReadNamespacePermissionChangesAsync());
+        }
+    }
+
+    [TestMethod]
+    [DataRow("object")]
+    [DataRow("operation")]
+    [DataRow("empty")]
+    [DataRow("oversized")]
+    [DataRow("misbound")]
+    public async Task InvalidPreparationBatchLeavesNoOriginals(string scenario)
+    {
+        using var fixture = new CatalogFixture();
+        await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        var first = Baseline();
+        var second = scenario == "object" ? first with { EvidenceId = Guid.NewGuid() } : Baseline();
+        var firstIntent = Intent(first);
+        var secondIntent = Intent(second);
+        if (scenario == "operation") secondIntent = secondIntent with { OperationId = firstIntent.OperationId };
+        if (scenario == "misbound") secondIntent = secondIntent with { EvidenceId = Guid.NewGuid() };
+        MirrorPulseNamespacePermissionPreparation[] batch = scenario switch
+        {
+            "empty" => [],
+            "oversized" => Enumerable.Repeat(new MirrorPulseNamespacePermissionPreparation(first, firstIntent), 4097).ToArray(),
+            _ => [new(first, firstIntent), new(second, secondIntent)],
+        };
+        await Assert.ThrowsAsync<ArgumentException>(() => catalog.PrepareNamespacePermissionChangesAsync(batch));
+        Assert.IsNull(await catalog.ReadNamespacePermissionBaselineAsync(first.EvidenceId));
+        Assert.IsNull(await catalog.ReadNamespacePermissionBaselineAsync(second.EvidenceId));
+        Assert.IsEmpty(await catalog.ReadNamespacePermissionChangesAsync());
+    }
+
+    [TestMethod]
+    public async Task CancelledPreparationBatchRetainsNoNewEvidence()
+    {
+        using var fixture = new CatalogFixture();
+        await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        var baseline = Baseline();
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        await Assert.ThrowsAsync<OperationCanceledException>(() => catalog.PrepareNamespacePermissionChangesAsync(
+            [new(baseline, Intent(baseline))], cancelled.Token));
+        Assert.IsNull(await catalog.ReadNamespacePermissionBaselineAsync(baseline.EvidenceId));
+        Assert.IsEmpty(await catalog.ReadNamespacePermissionChangesAsync());
+    }
+
+    [TestMethod]
     public async Task OriginalAclBindingAndSeparateApplicationVerificationSurviveOwnersAndRoleRotation()
     {
         using var fixture = new CatalogFixture();

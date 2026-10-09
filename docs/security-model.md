@@ -106,6 +106,12 @@ Descriptors and SIDs remain private catalog data, outside client status and
 ordinary diagnostic output. These records do not authorize namespace operations
 or prove that an entire subtree is protected.
 
+Original evidence and intents can be prepared in bounded batches of up to 4096
+objects in one SQLite transaction. A later conflict rolls back every new record
+from that batch and retains previously committed history. Replay preserves each
+member's existing application and verification facts. Batch preparation does
+not write permissions, seal a complete tree manifest, or authorize operations.
+
 The permission coordinator reconciles a prepared intent through a caller-owned
 stable object lease. A pending intent may write only when the observed DACL is
 the expected value. If the original object already has the exact target DACL,
@@ -117,6 +123,10 @@ accepted reconciliation before releasing its gate.
 
 The Windows permission lease retains the final object and its ancestor chain
 without delete sharing, and rejects foreign reparse points and unrouted scope.
+Its handles request read-data or directory-list access so they participate in
+native sharing checks. They open reparse objects without recall and never read
+content through those handles; cold-file inspection requires separate native
+verification.
 CfSharp's public inspection supplies object bindings and placeholder
 classification. .NET `NativeObjectSecurity` reads and writes the access section
 through the retained handle; MP does not implement another Cloud Files binding
