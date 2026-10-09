@@ -105,11 +105,20 @@ public sealed class MirrorPulseJournalUploadSourceTests
                 paths.SyncRootPath, paths.DataRootPath, _ => true, completion, ranges: remote, directories: remote, fileSystem: fileSystem);
             await pump.StartAsync(timeout.Token);
             MirrorPulseMutationRecord? accepted;
-            while ((accepted = await catalog.ReadMutationAsync(later, timeout.Token))?.State != MirrorPulseMutationState.Acknowledged)
+            while ((accepted = await catalog.ReadMutationAsync(later, timeout.Token))?.State != MirrorPulseMutationState.Acknowledged ||
+                !pump.Health.Healthy)
             {
-                Assert.IsTrue(pump.Health.Healthy, "The active operation must not hide an acknowledgement fault.");
-                await Task.Delay(20, timeout.Token);
+                try { await Task.Delay(20, timeout.Token); }
+                catch (OperationCanceledException)
+                {
+                    // Recoverable faults use the production backoff. The acceptance
+                    // oracle waits for both durable acknowledgement and health;
+                    // it neither retries the test nor ignores a terminal fault.
+                    TestContext.WriteLine($"PublicJournalAcceptanceTimeout: state={accepted?.State}; health={pump.Health}.");
+                    throw;
+                }
             }
+            Assert.IsTrue(pump.Health.Healthy, "Acceptance requires the production runner to clear all recovered faults.");
             Assert.AreEqual("active", await File.ReadAllTextAsync(Path.Combine(remoteRoot, "later.txt"), timeout.Token));
             Assert.AreEqual(Convert.ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(Path.Combine(remoteRoot, "later.txt"), timeout.Token))), accepted.Intent.ContentSha256);
             Assert.IsNotNull(accepted.Intent.UploadBinding);
@@ -131,6 +140,9 @@ public sealed class MirrorPulseJournalUploadSourceTests
         }
         finally
         {
+            string log = Path.Combine(paths.DataRootPath, "logs", "mirrorpulse.log");
+            if (File.Exists(log))
+                foreach (string line in File.ReadLines(log).TakeLast(30)) TestContext.WriteLine($"PublicJournalPumpDiagnostic: {line}");
             cloud.Unregister(paths.SyncRootPath);
             if (Directory.Exists(root)) Directory.Delete(root, true);
         }
