@@ -68,6 +68,7 @@ public sealed class CfSharpMirrorPulseCloudRootRegistry : IMirrorPulseCloudRootR
             !string.Equals(registered.ProviderName, MirrorPulseSyncRootRegistrationService.ProviderName, StringComparison.Ordinal) ||
             !string.Equals(registered.ProviderVersion, definition.ProviderVersion, StringComparison.Ordinal) ||
             registered.InSyncPolicy != CloudInSyncPolicy.None ||
+            registered.HardLinkPolicy != CloudHardLinkPolicy.Disallowed ||
             !registered.SyncRootIdentity.SequenceEqual(definition.Identity))
         {
             throw new InvalidDataException("CfSharp registration metadata does not match the MirrorPulse root.");

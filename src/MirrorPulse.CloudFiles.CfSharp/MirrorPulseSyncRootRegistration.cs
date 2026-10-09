@@ -84,6 +84,7 @@ public sealed class MirrorPulseSyncRootRegistrationService
             .WithSyncRootIdentity(definition.Identity)
             .WithHydrationPolicy(CloudHydrationPolicy.Full, CloudHydrationPolicyModifiers.None)
             .WithInSyncPolicy(CloudInSyncPolicy.None)
+            .AllowHardLinks(false)
             .WithRootMarkedInSync(true)
             .WithExistingRegistrationUpdate(true)
             .Build();
