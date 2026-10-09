@@ -56,9 +56,8 @@ public sealed class MirrorPulseNamespacePermissionCoordinator(MirrorPulseProduct
         {
             await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
             entered = true;
-            MirrorPulseNamespacePermissionChange change = await _catalog.ReadNamespacePermissionChangeAsync(
-                operationId, cancellationToken).ConfigureAwait(false)
-                ?? throw new FileNotFoundException("The owned permission intent is missing.");
+            MirrorPulseNamespacePermissionChange change = await _catalog.ReadNamespacePermissionChangeForApplicationAsync(
+                operationId, cancellationToken).ConfigureAwait(false);
             MirrorPulseNamespacePermissionBaseline baseline = await _catalog.ReadNamespacePermissionBaselineAsync(
                 change.Intent.EvidenceId, cancellationToken).ConfigureAwait(false)
                 ?? throw new InvalidDataException("The original permission evidence is missing.");

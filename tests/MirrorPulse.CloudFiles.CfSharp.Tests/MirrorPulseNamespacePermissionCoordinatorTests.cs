@@ -7,7 +7,7 @@ using MirrorPulse.Core.State;
 namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 
 [TestClass]
-public sealed class MirrorPulseNamespacePermissionCoordinatorTests
+public sealed partial class MirrorPulseNamespacePermissionCoordinatorTests
 {
     private const string Owner = "S-1-5-21-100-200-300-1001";
     private static readonly string Original = Canonical($"D:AI(A;OICI;FA;;;{Owner})");

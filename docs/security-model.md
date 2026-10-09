@@ -164,9 +164,11 @@ replacing originals. The seal covers the definition and every member with a
 SHA256 fingerprint; it requires the declared complete count and validates all
 bounded pages. Schema migration preserves earlier permission history.
 
-An open capture blocks preparation of permission changes in that root and its
-sync-root parent, including alternate operation IDs. Other roots can still
-prepare their own changes. Capturing and sealing do not write ACLs or create
+An open capture blocks preparation and application of permission changes in that
+root and its sync-root parent, including alternate operation IDs and intents
+prepared before the capture or a process restart. Application reads recheck the
+durable fence without replacing existing permission history. Other roots can
+still prepare their own changes. Capturing and sealing do not write ACLs or create
 executable changes. After sealing, only the captured intent can use its operation
 ID. Sealed describes retained evidence, not independent completeness of the
 live tree or permission to admit namespace operations. Runtime draining, retained

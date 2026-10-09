@@ -181,6 +181,33 @@ public sealed partial class MirrorPulseProductCatalog
         finally { _gate.Release(); }
     }
 
+    /// <summary>Reads an owned intent only after rechecking durable permission capture admission.</summary>
+    /// <remarks>
+    /// This also fences intents prepared before a capture or a process restart. The Host must
+    /// serialize capture creation with runtime admission and drain already accepted operations;
+    /// this transaction cannot exclude a concurrent native write on its own.
+    /// </remarks>
+    public async Task<MirrorPulseNamespacePermissionChange> ReadNamespacePermissionChangeForApplicationAsync(
+        Guid operationId, CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            using SqliteTransaction transaction = _connection.BeginTransaction();
+            MirrorPulseNamespacePermissionChange change = await ReadPermissionChangeCoreAsync(
+                operationId, cancellationToken, transaction).ConfigureAwait(false)
+                ?? throw new FileNotFoundException("The owned permission intent is missing.");
+            MirrorPulseNamespacePermissionBaseline baseline = await ReadPermissionBaselineCoreAsync(
+                change.Intent.EvidenceId, cancellationToken, transaction).ConfigureAwait(false)
+                ?? throw new InvalidDataException("The original permission evidence is missing.");
+            await ValidatePermissionTreeAdmissionAsync(baseline, change.Intent, transaction, cancellationToken).ConfigureAwait(false);
+            transaction.Commit();
+            return change;
+        }
+        finally { _gate.Release(); }
+    }
+
     /// <summary>Returns retained changes in preparation order, including unresolved recovery records.</summary>
     public async Task<IReadOnlyList<MirrorPulseNamespacePermissionChange>> ReadNamespacePermissionChangesAsync(
         CancellationToken cancellationToken = default)
