@@ -89,6 +89,28 @@ credential. Credential removal detaches the pointer before retirement. Rotation
 and removal are available through the typed control contract; CLI input wiring
 and applying changes to running Workers are separate implementation steps.
 
+## Owned namespace permission evidence
+
+Product catalog schema 22 retains each object's original volume, registered-root
+and file binding, capture location, owner SID and canonical DACL. The baseline
+and the first change intent commit together before any permission write. A
+different object at the same path cannot replace that evidence. Role rotation
+and restoration retain the first baseline and follow the previous verified
+DACL; restoration targets the exact original access descriptor.
+
+Application and independent read-back verification are separate durable facts.
+Verification must match the original object and owner and the intended DACL.
+Only one unresolved permission change may exist per object. A recovery record
+retains the original and application facts and blocks subsequent changes.
+Descriptors and SIDs remain private catalog data, outside client status and
+ordinary diagnostic output. These records do not authorize namespace operations
+or prove that an entire subtree is protected.
+
+The execution-session component and catalog evidence do not yet enable strict
+protection in the Host. Applying and auditing object permissions, rotating the
+Host role, controlled file operations, and their client commands require
+separate integration and acceptance.
+
 ## Remaining work
 
 Package inventories, entrypoints and locale resources use one canonical Windows
