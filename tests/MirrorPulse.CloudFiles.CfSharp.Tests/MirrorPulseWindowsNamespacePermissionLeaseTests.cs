@@ -1,4 +1,5 @@
 using System.Runtime.Versioning;
+using System.Security.AccessControl;
 using CfSharp;
 using MirrorPulse.CloudFiles.CfSharp;
 using MirrorPulse.Core.CloudFiles;
@@ -31,6 +32,7 @@ public sealed class MirrorPulseWindowsNamespacePermissionLeaseTests
         var router = new MirrorPulseRootRouter(paths.SyncRootPath, [registration]);
         string filePath = Path.Combine(paths.SyncRootPath, "Docs", "unsent.txt");
         MirrorPulseNamespacePermissionBaseline? original = null;
+        MirrorPulseNamespacePermissionBaseline? originalDirectoryBaseline = null;
         MirrorPulseNamespacePermissionIntent? first = null;
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
         try
@@ -95,6 +97,39 @@ public sealed class MirrorPulseWindowsNamespacePermissionLeaseTests
                     };
                     await catalog.PrepareNamespacePermissionChangeAsync(original, rotation, timeout.Token);
                     Assert.AreEqual(MirrorPulseNamespacePermissionOutcome.Verified, (await coordinator.ApplyAsync(rotation.OperationId, counted, timeout.Token)).Outcome);
+                    await using var directoryLease = await MirrorPulseWindowsNamespacePermissionLease.OpenAsync(fileSystem.GetDirectory("Docs"), router, timeout.Token);
+                    MirrorPulseNamespacePermissionObject originalDirectory = await directoryLease.InspectAsync(timeout.Token);
+                    var directoryBaseline = new MirrorPulseNamespacePermissionBaseline(Guid.NewGuid(), originalDirectory.RootId, originalDirectory.LocalObject,
+                        originalDirectory.RelativePath, true, originalDirectory.OwnerSid, originalDirectory.Dacl, originalDirectory.ObservedAt);
+                    originalDirectoryBaseline = directoryBaseline;
+                    var directoryProtection = new MirrorPulseNamespacePermissionIntent(Guid.NewGuid(), directoryBaseline.EvidenceId,
+                        directoryBaseline.LocalObject, directoryBaseline.RootId, directoryBaseline.RelativePath,
+                        MirrorPulseNamespacePermissionChangeKind.Protect, role.RoleSid.Value, directoryBaseline.OriginalDacl,
+                        MirrorPulseNamespacePermissionPolicy.CreateProtectedDacl(role, isDirectory: true), DateTimeOffset.UtcNow);
+                    await catalog.PrepareNamespacePermissionChangeAsync(directoryBaseline, directoryProtection, timeout.Token);
+                    Assert.AreEqual(MirrorPulseNamespacePermissionOutcome.Verified, (await coordinator.ApplyAsync(directoryProtection.OperationId, directoryLease, timeout.Token)).Outcome);
+                    await role.RunNamespaceOperationAsync(async () => await fileSystem.GetDirectory("Docs").CreatePlaceholdersAsync([
+                        CloudFilePlaceholderSpec.CreateBuilder("born.bin", router.CreateFileIdentity(registration.InstanceId, "docs", "born", "v1"), 16)
+                            .WithInSyncState(true).WithInitialAvailability(CloudAvailabilityTarget.OnlineOnly).Build()], cancellationToken: timeout.Token));
+                    string born = Path.Combine(paths.SyncRootPath, "Docs", "born.bin");
+                    Assert.IsTrue((await fileSystem.GetFile("Docs/born.bin").InspectAsync(timeout.Token)).IsPlaceholder);
+                    FileSystemAccessRule[] inheritedUser = new FileInfo(born).GetAccessControl(AccessControlSections.Access)
+                        .GetAccessRules(includeExplicit: true, includeInherited: true, typeof(System.Security.Principal.SecurityIdentifier))
+                        .Cast<FileSystemAccessRule>().Where(rule => rule.IdentityReference.Equals(role.OwnerSid)).ToArray();
+                    Assert.IsTrue(inheritedUser.Any(rule => rule.IsInherited && rule.AccessControlType == AccessControlType.Allow));
+                    Assert.IsFalse(inheritedUser.Any(rule => rule.AccessControlType == AccessControlType.Allow &&
+                        (rule.FileSystemRights & FileSystemRights.Delete) != 0));
+                    await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() => File.Delete(born), timeout.Token));
+                    var directoryRestore = directoryProtection with
+                    {
+                        OperationId = Guid.NewGuid(),
+                        Kind = MirrorPulseNamespacePermissionChangeKind.Restore,
+                        ExpectedDacl = directoryProtection.TargetDacl,
+                        TargetDacl = directoryBaseline.OriginalDacl,
+                        PreparedAt = DateTimeOffset.UtcNow,
+                    };
+                    await catalog.PrepareNamespacePermissionChangeAsync(directoryBaseline, directoryRestore, timeout.Token);
+                    Assert.AreEqual(MirrorPulseNamespacePermissionOutcome.Verified, (await coordinator.ApplyAsync(directoryRestore.OperationId, directoryLease, timeout.Token)).Outcome);
                     var restore = rotation with
                     {
                         OperationId = Guid.NewGuid(),
@@ -108,15 +143,21 @@ public sealed class MirrorPulseWindowsNamespacePermissionLeaseTests
                     Assert.AreEqual(2, counted.Writes);
                     Assert.AreEqual(original.OriginalDacl, (await lease.InspectAsync(timeout.Token)).Dacl);
                     Assert.AreEqual(original, await catalog.ReadNamespacePermissionBaselineAsync(original.EvidenceId, timeout.Token));
-                    Assert.HasCount(3, await catalog.ReadNamespacePermissionChangesAsync(timeout.Token));
+                    Assert.HasCount(5, await catalog.ReadNamespacePermissionChangesAsync(timeout.Token));
                 }
                 Assert.AreEqual("latest unsent bytes", await File.ReadAllTextAsync(filePath, timeout.Token));
             }
-            TestContext.WriteLine($"OwnedPermissionLease: architecture={System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture}; twoStoreOwners=True; publicBinding=True; retainedHandle=True; unrecordedWriteRecovered=True; repeatedRecoveryWrites=0; rotationAndExactRestore=True; latestBytesRetained=True; disabledRoot=True; sourceAccess=False; productIntegrated=False.");
+            TestContext.WriteLine($"OwnedPermissionLease: architecture={System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture}; twoStoreOwners=True; publicBinding=True; retainedHandle=True; unrecordedWriteRecovered=True; repeatedRecoveryWrites=0; rotationAndExactRestore=True; fileAndDirectory=True; cfapiCreationInheritsProtection=True; latestBytesRetained=True; disabledRoot=True; sourceAccess=False; productIntegrated=False.");
         }
         finally
         {
             registry.Unregister(paths.SyncRootPath);
+            if (originalDirectoryBaseline is not null && Directory.Exists(Path.GetDirectoryName(filePath)))
+            {
+                var cleanupDirectory = new DirectorySecurity();
+                cleanupDirectory.SetSecurityDescriptorSddlForm(originalDirectoryBaseline.OriginalDacl, AccessControlSections.Access);
+                new DirectoryInfo(Path.GetDirectoryName(filePath)!).SetAccessControl(cleanupDirectory);
+            }
             if (original is not null && File.Exists(filePath))
             {
                 var cleanup = new System.Security.AccessControl.FileSecurity();

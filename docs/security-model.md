@@ -124,6 +124,12 @@ or projection mechanism. Target descriptors use `FileSystemSecurity` canonical
 ACE ordering and the expected Windows auto-inheritance completion flag before
 the write. A directory write can propagate inheritance, so every original
 descriptor must be retained before applying any tree permissions.
+The policy exposes a separate creation descriptor because Windows sets different
+auto-inheritance flags at creation. Controlled creation supplies it to the native
+creation call. Directory descriptors also inherit content access and the role's
+namespace rights, so CFAPI placeholder creation can inherit protection without
+a subsequent permission write. Existing descendants still require original
+evidence before parent inheritance changes.
 
 The execution-session component and catalog evidence do not yet enable strict
 protection in the Host. Applying and auditing object permissions, rotating the

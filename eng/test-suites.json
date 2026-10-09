@@ -59,6 +59,7 @@
   ],
   "required": {
     "namespace": [
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseNamespacePermissionPolicyTests.ExplicitPolicyMatchesNtfsAndControlledCreationIsProtectedAtBirth",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseNamespaceExecutionSessionTests.RoleFlowsAcrossAwaitAndRestoresTheOriginalCurrentUser",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseNamespaceExecutionSessionTests.DisposalDrainsActiveWorkAndRejectsNewOperations",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseNamespaceExecutionSessionTests.FailedOperationRestoresCallerAndDoesNotPreventDisposal",

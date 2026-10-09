@@ -13,7 +13,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Namespace verification build failed.' }
     $env:MIRRORPULSE_NATIVE_TEST = '1'
     $env:MIRRORPULSE_NAMESPACE_TEST_ARCHITECTURE = $ExpectedArchitecture
-    $filter = 'FullyQualifiedName~MirrorPulseNamespaceExecutionSessionTests|FullyQualifiedName~NativeNamespaceRoleKeepsAclClosedDuringControlledOperationsAndCfSharpRestart|FullyQualifiedName~NativeStrictTreeAclPreservesLatestBytesHydrationAndConfirmationAcrossRestart|FullyQualifiedName~NativeOwnedPermissionLeaseReconcilesUnrecordedWriteRotationAndRestorationAcrossRestart'
+    $filter = 'FullyQualifiedName~MirrorPulseNamespaceExecutionSessionTests|FullyQualifiedName~ExplicitPolicyMatchesNtfsAndControlledCreationIsProtectedAtBirth|FullyQualifiedName~NativeNamespaceRoleKeepsAclClosedDuringControlledOperationsAndCfSharpRestart|FullyQualifiedName~NativeStrictTreeAclPreservesLatestBytesHydrationAndConfirmationAcrossRestart|FullyQualifiedName~NativeOwnedPermissionLeaseReconcilesUnrecordedWriteRotationAndRestorationAcrossRestart'
     & dotnet test $testProject --configuration Release --no-build --filter $filter --logger trx --results-directory $resultsDirectory
     if ($LASTEXITCODE -ne 0) { throw 'Namespace verification failed.' }
     & (Join-Path $PSScriptRoot 'verify-test-results.ps1') -Suite namespace -ResultsDirectory $resultsDirectory `
