@@ -6,6 +6,14 @@ inconclusive results when prerequisites are absent. `eng/verify-test-results.ps1
 checks executed counts and requires every named test in a dedicated suite.
 Ordinary CfSharp tests are not all native Cloud Files tests.
 
+The x64 native and ARM64 namespace suites both require the real NTFS retained
+handle alias test. It checks rejection of an existing or newly observed hard
+link, retention of original permissions and latest bytes, and handle cleanup
+without ACL writes. It does not register Cloud Files and does not prove that a
+retained handle prevents new links. The namespace report requires all eight
+registered tests to pass exactly once, without skips; missing, repeated, or
+partially executed results fail the gate.
+
 ## Independent Adapter template gate
 
 `SignedTemplateWorkerProcessTests` requires `MP_TEMPLATE_PACKAGE` and

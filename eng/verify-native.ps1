@@ -12,7 +12,7 @@ $evidenceDirectory = Join-Path $PSScriptRoot "../artifacts/test-results/native"
 $resultsDirectory = Join-Path $evidenceDirectory ([guid]::NewGuid().ToString("N"))
 try {
     $env:MIRRORPULSE_NATIVE_TEST = "1"
-    & dotnet test $testProject --configuration Release --no-build --filter "FullyQualifiedName~Native" `
+    & dotnet test $testProject --configuration Release --no-build --filter "FullyQualifiedName~Native|FullyQualifiedName~RetainedHandleRejectsExistingAndNewlyObservedAliasesWithoutAclWrites" `
         --logger trx --results-directory $resultsDirectory
     if ($LASTEXITCODE -ne 0) {
         throw "Native Cloud Files verification failed with exit code $LASTEXITCODE."
