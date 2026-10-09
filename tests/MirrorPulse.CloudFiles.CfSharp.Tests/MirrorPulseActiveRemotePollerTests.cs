@@ -16,6 +16,45 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 public sealed class MirrorPulseActiveRemotePollerTests
 {
     [TestMethod]
+    public async Task PollerUsesCurrentLabelAndAvailabilityWithoutChangingObjectIdentity()
+    {
+        InstanceId instance = InstanceId.New();
+        RootRegistration root = AdapterRootRegistrationMapper.Map(AdapterId.Parse("example.current-root"), instance,
+            new AdapterRootDefinition("files", "Files", "Files", false), RootRegistrationState.Active,
+            identityScope: RootIdentityScope.InstanceRoot);
+        var adapter = new AdapterInstance(root.AdapterId, InstallId.New(), instance, "Files",
+            new Dictionary<string, string>(), [], Path.GetTempPath(), Path.GetTempPath(), true,
+            AdapterLifecycleState.Enabled, null, DateTimeOffset.UtcNow);
+        var router = new MirrorPulseRootRouter(Path.Combine(Path.GetTempPath(), "MirrorPulse-current-root"), [root]);
+        RootRegistration Renamed(RootRegistrationState state) => new(root.AdapterId, root.InstanceId, root.RootId,
+            root.UniquenessKey, "Renamed", "Renamed", root.CustomEntry, state, root.RegisteredAt, root.IdentityScope);
+        var source = new FakeDirectorySource();
+        var batches = new List<CloudRemoteChangeBatch>();
+        await using var poller = new MirrorPulseActiveRemotePoller(source, [adapter], [root], (_, batch, _) =>
+        {
+            batches.Add(batch);
+            return ValueTask.FromResult(new MirrorPulseRemotePollApplyOutcome(true, batch.FinalCursor));
+        }, currentRoots: () => router.Registrations);
+        source.Set(new FakeEntry("file", "v1", CloudItemKind.File, "file.bin", 3));
+        Assert.IsFalse(await poller.PollOnceAsync(instance));
+        router.ReplaceRegistrations([Renamed(RootRegistrationState.Active)]);
+        Assert.IsFalse(await poller.PollOnceAsync(instance), "A display rename must not generate a source object move.");
+        source.Set(new FakeEntry("file", "v2", CloudItemKind.File, "file.bin", 4));
+        router.ReplaceRegistrations([Renamed(RootRegistrationState.Disabled)]);
+        int reads = source.Reads;
+        Assert.IsFalse(await poller.PollOnceAsync(instance));
+        Assert.AreEqual(reads, source.Reads, "A disabled root must not enumerate its source.");
+        Assert.IsEmpty(batches);
+        router.ReplaceRegistrations([Renamed(RootRegistrationState.Active)]);
+        Assert.IsTrue(await poller.PollOnceAsync(instance));
+        CloudRemoteChange changed = batches.Single().Changes.Single();
+        Assert.AreEqual("Renamed\\file.bin", changed.RelativePath);
+        Assert.AreEqual(router.CreateFileIdentity(instance, "files", "file", "v2").ItemId, changed.ItemId);
+        Assert.AreEqual(MirrorPulsePlaceholderIdentity.CreateForRoot(root, "file", "v1").ToCfSharp().ItemId, changed.ItemId);
+        Assert.AreEqual(CloudRemoteChangeKind.FileUpsert, changed.Kind);
+    }
+
+    [TestMethod]
     [DataRow(false)]
     [DataRow(true)]
     public async Task AddingRemoteSiblingDoesNotInvalidateUnchangedContent(bool metadataChanged)

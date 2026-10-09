@@ -160,13 +160,13 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
             {
                 AdapterRemoteChangeBatch adapterBatch = payload.Deserialize<AdapterRemoteChangeBatch>()
                     ?? throw new InvalidDataException("The Adapter remote batch payload is empty.");
-                CloudRemoteChangeBatch batch = MirrorPulseAdapterRemoteBatchMapper.Map(
-                    instanceId, topology.Roots, adapterBatch);
                 await remoteScheduler.RunAsync(instanceId, async token =>
                 {
                     // A streamed batch must not overtake the immutable polling intent.
                     if (await catalog.ReadPendingRemoteBatchAsync(instanceId, token).ConfigureAwait(false) is not null)
                         throw new InvalidOperationException("A remote polling batch must converge before streamed changes apply.");
+                    CloudRemoteChangeBatch batch = MirrorPulseAdapterRemoteBatchMapper.Map(
+                        instanceId, rootRouter.Registrations, adapterBatch);
                     return await ApplyCloudRemoteBatchAsync(instanceId, batch, token).ConfigureAwait(false);
                 }, batchCancellationToken).ConfigureAwait(false);
             }
@@ -186,7 +186,7 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
                 directorySource, topology.Instances, topology.Roots, ApplyCloudRemoteBatchAsync,
                 snapshotStore: remoteSnapshotStore,
                 pendingStore: new MirrorPulseCatalogRemotePollPendingStore(catalog), scheduler: remoteScheduler,
-                mayPoll: namespaceFence.CanPollAsync);
+                mayPoll: namespaceFence.CanPollAsync, currentRoots: () => rootRouter.Registrations);
 
             var application = new MirrorPulseHostApplication(
                 paths, configurationStore, configuration, hostLease, catalog, conflictCenter, systemNotifications,

@@ -21,6 +21,7 @@ public sealed class MirrorPulseActiveRemotePoller : IAsyncDisposable
     private readonly IMirrorPulseDirectoryPageSource _source;
     private readonly IReadOnlyList<InstanceId> _instances;
     private readonly Dictionary<InstanceId, IReadOnlyList<RootRegistration>> _roots;
+    private readonly Func<IReadOnlyList<RootRegistration>>? _currentRoots;
     private readonly Func<InstanceId, CloudRemoteChangeBatch, CancellationToken, ValueTask<MirrorPulseRemotePollApplyOutcome>> _apply;
     private readonly TimeSpan _interval;
     private readonly int _pageSize;
@@ -45,7 +46,8 @@ public sealed class MirrorPulseActiveRemotePoller : IAsyncDisposable
         IMirrorPulseRemotePollSnapshotStore? snapshotStore = null,
         IMirrorPulseRemotePollPendingStore? pendingStore = null,
         MirrorPulseInstanceScheduler? scheduler = null,
-        Func<RootRegistration, CancellationToken, ValueTask<bool>>? mayPoll = null)
+        Func<RootRegistration, CancellationToken, ValueTask<bool>>? mayPoll = null,
+        Func<IReadOnlyList<RootRegistration>>? currentRoots = null)
     {
         _source = source ?? throw new ArgumentNullException(nameof(source));
         ArgumentNullException.ThrowIfNull(instances);
@@ -70,6 +72,7 @@ public sealed class MirrorPulseActiveRemotePoller : IAsyncDisposable
         _snapshotStore = snapshotStore;
         _pendingStore = pendingStore;
         _mayPoll = mayPoll;
+        _currentRoots = currentRoots;
         _ownsScheduler = scheduler is null;
         _scheduler = scheduler ?? new MirrorPulseInstanceScheduler();
         if (pendingStore is not null && snapshotStore is null)
@@ -90,7 +93,10 @@ public sealed class MirrorPulseActiveRemotePoller : IAsyncDisposable
     private async ValueTask<bool> PollCoreAsync(InstanceId instanceId, CancellationToken cancellationToken)
     {
         if (!_instances.Contains(instanceId)) return false;
-        if (!_roots.TryGetValue(instanceId, out IReadOnlyList<RootRegistration>? roots) || roots.Count != 1)
+        IReadOnlyList<RootRegistration>? roots = _currentRoots is null
+            ? _roots.GetValueOrDefault(instanceId)
+            : _currentRoots().Where(root => root.InstanceId == instanceId && root.State == RootRegistrationState.Active).ToArray();
+        if (roots is null || roots.Count != 1)
         {
             // A multi-root Adapter needs an explicit remote-root mapping before an active
             // snapshot can be attributed to one first-level Cloud Files directory. Demand

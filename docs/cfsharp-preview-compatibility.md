@@ -78,5 +78,7 @@ external authorization, verifies its stable root binding on replay, and uses the
 public reconciliation result before changing the product Label. Legacy records
 without the original encoded proof remain fenced; recovery cannot replace them
 with the identity currently found at a path. The native gate verifies external
-renames for active and disabled roots across an owner restart. Host callback,
-CLI command and remote polling integration are still separate pending work.
+renames for active and disabled roots across an owner restart. Host polling and
+streamed remote changes use the router's current mapping within instance
+scheduling. Callback authorization, CLI commands and fault recovery integration
+are still separate pending work.
