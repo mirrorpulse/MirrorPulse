@@ -53,7 +53,8 @@
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeExternalRootRenameRecoversOriginalPublicProofAcrossRestart",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeRootDeleteProtectionRetainsEntryAfterChildFirstRecursiveDelete",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeChildDeleteDenialExposesUnconvertedFileProtectionBoundary",
-    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeStrictTreeAclPreservesLatestBytesHydrationAndConfirmationAcrossRestart"
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeStrictTreeAclPreservesLatestBytesHydrationAndConfirmationAcrossRestart",
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeNamespaceRoleKeepsAclClosedDuringControlledOperationsAndCfSharpRestart"
   ],
   "required": {
     "native": [
@@ -88,7 +89,8 @@
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeExternalRootRenameRecoversOriginalPublicProofAcrossRestart",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeRootDeleteProtectionRetainsEntryAfterChildFirstRecursiveDelete",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeChildDeleteDenialExposesUnconvertedFileProtectionBoundary",
-    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeStrictTreeAclPreservesLatestBytesHydrationAndConfirmationAcrossRestart"
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeStrictTreeAclPreservesLatestBytesHydrationAndConfirmationAcrossRestart",
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeNamespaceRoleKeepsAclClosedDuringControlledOperationsAndCfSharpRestart"
     ],
     "official": [
       "MirrorPulse.Core.Tests.FtpWorkerProcessTests.SignedFtpReleaseReadsAndConditionallyUploadsThroughHostAndCfSharp",
