@@ -16,7 +16,7 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 
 [TestClass]
 [SupportedOSPlatform("windows10.0.19041")]
-public sealed class MirrorPulseManagedRootNamespaceTests
+public sealed partial class MirrorPulseManagedRootNamespaceTests
 {
     public TestContext TestContext { get; set; } = null!;
 
@@ -56,7 +56,7 @@ public sealed class MirrorPulseManagedRootNamespaceTests
             await File.WriteAllTextAsync(replacement, "replacement bytes");
             await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() => File.Move(replacement, child, overwrite: true)));
             Assert.AreEqual("unsent latest edit", await File.ReadAllTextAsync(child));
-            TestContext.WriteLine("TreeAclProbe: recursive ordinary-file deletion denied; latest in-place edit retained; individual child deletion and atomic-save replacement also denied. This is a compatibility boundary, not the selected product policy.");
+            TestContext.WriteLine("TreeAclProbe: recursive ordinary-file deletion denied; latest in-place edit retained; individual child deletion and atomic-save replacement also denied. Product persistence and controlled operations require separate acceptance.");
         }
         finally
         {
@@ -78,6 +78,9 @@ public sealed class MirrorPulseManagedRootNamespaceTests
     [DataRow("delete-empty")]
     [DataRow("delete-tree")]
     [DataRow("rename")]
+    [DataRow("delete-child")]
+    [DataRow("rename-child")]
+    [DataRow("replace-child")]
     public async Task NamespaceConsumerRejectsUnmarkedAndOutOfScopeDirectories(string mode)
     {
         string[] roots = [Path.Combine(Path.GetTempPath(), "MirrorPulse-native-tests", Guid.NewGuid().ToString("N")),

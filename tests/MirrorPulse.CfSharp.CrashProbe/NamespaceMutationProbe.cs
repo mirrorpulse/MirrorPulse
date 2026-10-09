@@ -15,12 +15,16 @@ public static class NamespaceMutationProbe
             !root.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ||
             !Guid.TryParseExact(Path.GetFileName(root), "N", out _) ||
             !File.Exists(Path.Combine(root, ".mp-namespace-fixture")) ||
-            mode is not ("delete-empty" or "delete-tree" or "rename")) return Task.FromResult(2);
+            mode is not ("delete-empty" or "delete-tree" or "rename" or "delete-child" or "rename-child" or "replace-child"))
+            return Task.FromResult(2);
         string path = Path.Combine(root, "sync", "Docs");
         NamespaceMutationProbeResult result;
         try
         {
             if (mode == "rename") Directory.Move(path, Path.Combine(root, "sync", "Renamed"));
+            else if (mode == "delete-child") File.Delete(Path.Combine(path, "Nested", "unsent.txt"));
+            else if (mode == "rename-child") File.Move(Path.Combine(path, "Nested", "unsent.txt"), Path.Combine(path, "Nested", "Renamed.txt"));
+            else if (mode == "replace-child") File.Move(Path.Combine(path, "Nested", "replacement.tmp"), Path.Combine(path, "Nested", "unsent.txt"), overwrite: true);
             else Directory.Delete(path, recursive: mode == "delete-tree");
             result = new(true, null, null);
         }

@@ -86,3 +86,18 @@ namespace fences. Explicit recovery shares the same instance scheduler as upload
 and remote application. `mp root recover OPERATION_ID` uses that same Host service
 and reports incomplete recovery as pending. Callback authorization, preparation of
 a new rename from the CLI and the full fault recovery matrix remain pending work.
+
+## Strict tree protection status
+
+The product policy requires protection of every managed root and descendant,
+including ordinary files containing edits that have not been uploaded. Namespace
+changes will use Host-controlled operations; in-place content editing remains a
+requirement. Root delete callbacks alone do not provide recursive protection.
+
+A disposable native gate now combines inherited delete ACLs with actual demand
+hydration, public content confirmation and reopening the official store. This
+component gate does not establish production protection or controlled operations.
+Same-volume ordinary file moves can retain their previous ACL instead of the
+destination's inherited protection. Controlled creation and import, persistent
+permission ownership, concurrent access and crash recovery therefore also need
+acceptance before enabling strict protection in the product.
