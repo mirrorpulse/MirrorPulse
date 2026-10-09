@@ -7,7 +7,7 @@ using Microsoft.Data.Sqlite;
 
 namespace MirrorPulse.Core.State;
 
-public enum MirrorPulseNamespacePermissionTreePhase { Capturing, Sealed }
+public enum MirrorPulseNamespacePermissionTreePhase { Capturing, Sealed, Cancelled }
 
 /// <summary>An immutable capture definition for one existing managed-root subtree.</summary>
 /// <remarks>ExpectedMembers describes the capture, not independent proof that the live tree is complete.</remarks>
@@ -21,9 +21,14 @@ public sealed record MirrorPulseNamespacePermissionTreeMember(int Sequence, Guid
 
 public sealed record MirrorPulseNamespacePermissionTreeSeal(int MemberCount, string Fingerprint, DateTimeOffset SealedAt);
 
+/// <summary>A durable cancellation of capture admission, retaining the entire captured original evidence set.</summary>
+/// <remarks>Cancellation neither restores permissions nor proves that previously admitted work drained.</remarks>
+public sealed record MirrorPulseNamespacePermissionTreeCancellation(int CapturedMembers, string Fingerprint, DateTimeOffset CancelledAt);
+
 /// <summary>A durable evidence set. Sealed is not TreeReady or authorization to mutate the namespace.</summary>
 public sealed record MirrorPulseNamespacePermissionTree(MirrorPulseNamespacePermissionTreeDefinition Definition,
-    MirrorPulseNamespacePermissionTreePhase Phase, int CapturedMembers, MirrorPulseNamespacePermissionTreeSeal? Seal = null);
+    MirrorPulseNamespacePermissionTreePhase Phase, int CapturedMembers, MirrorPulseNamespacePermissionTreeSeal? Seal = null,
+    MirrorPulseNamespacePermissionTreeCancellation? Cancellation = null);
 
 public sealed partial class MirrorPulseProductCatalog
 {
@@ -42,6 +47,7 @@ public sealed partial class MirrorPulseProductCatalog
             if (retained is not null)
             {
                 if (retained.Definition != definition) throw new InvalidOperationException("The permission tree definition is immutable.");
+                await ValidatePermissionTreeCancellationCoreAsync(retained, cancellationToken).ConfigureAwait(false);
                 return retained;
             }
             await using SqliteCommand insert = _connection.CreateCommand();
@@ -79,6 +85,8 @@ public sealed partial class MirrorPulseProductCatalog
             using SqliteTransaction transaction = _connection.BeginTransaction();
             MirrorPulseNamespacePermissionTree tree = await ReadPermissionTreeCoreAsync(manifestId, cancellationToken, transaction).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The permission tree is not registered.");
+            if (tree.Phase == MirrorPulseNamespacePermissionTreePhase.Cancelled)
+                throw new InvalidOperationException("A cancelled permission capture cannot accept or replay members.");
             foreach (MirrorPulseNamespacePermissionTreeMember member in captured) ValidatePermissionTreeMember(tree.Definition, member);
             int first = captured[0].Sequence;
             long end = (long)first + captured.Length;
@@ -124,25 +132,12 @@ public sealed partial class MirrorPulseProductCatalog
             using SqliteTransaction transaction = _connection.BeginTransaction();
             MirrorPulseNamespacePermissionTree tree = await ReadPermissionTreeCoreAsync(manifestId, cancellationToken, transaction).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The permission tree is not registered.");
+            if (tree.Phase == MirrorPulseNamespacePermissionTreePhase.Cancelled)
+                throw new InvalidOperationException("A cancelled permission capture cannot be sealed.");
             if (tree.CapturedMembers != tree.Definition.ExpectedMembers || sealedAt < tree.Definition.CreatedAt)
                 throw new InvalidOperationException("The original permission capture is incomplete.");
-            using IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-            AppendPermissionTreeFingerprint(hash, JsonSerializer.Serialize(tree.Definition, TopologyJsonOptions));
-            int count = 0;
-            while (count < tree.CapturedMembers)
-            {
-                IReadOnlyList<MirrorPulseNamespacePermissionTreeMember> page = await ReadPermissionTreeMembersCoreAsync(
-                    tree.Definition, count - 1, PermissionTreePageLimit, cancellationToken, transaction).ConfigureAwait(false);
-                if (page.Count == 0) throw new InvalidDataException("The permission capture has a missing page.");
-                foreach (MirrorPulseNamespacePermissionTreeMember member in page)
-                {
-                    if (member.Sequence != count++ || member.Preparation.Intent.PreparedAt > sealedAt)
-                        throw new InvalidDataException("The permission capture has an invalid sequence or observation time.");
-                    AppendPermissionTreeFingerprint(hash, JsonSerializer.Serialize(member, TopologyJsonOptions));
-                }
-            }
-            if (count != tree.CapturedMembers) throw new InvalidDataException("The permission capture cursor does not match its members.");
-            var seal = new MirrorPulseNamespacePermissionTreeSeal(count, Convert.ToHexString(hash.GetHashAndReset()), sealedAt);
+            string fingerprint = await ComputePermissionTreeFingerprintCoreAsync(tree, sealedAt, cancellationToken, transaction).ConfigureAwait(false);
+            var seal = new MirrorPulseNamespacePermissionTreeSeal(tree.CapturedMembers, fingerprint, sealedAt);
             if (tree.Phase == MirrorPulseNamespacePermissionTreePhase.Sealed)
             {
                 if (tree.Seal != seal) throw new InvalidOperationException("The retained permission seal is immutable.");
@@ -154,7 +149,7 @@ public sealed partial class MirrorPulseProductCatalog
             write.CommandText = "UPDATE namespace_permission_trees SET phase=1,seal=$seal WHERE manifest_id=$id AND phase=0 AND captured_count=$count;";
             write.Parameters.AddWithValue("$id", manifestId.ToString("D"));
             write.Parameters.AddWithValue("$seal", JsonSerializer.Serialize(seal, TopologyJsonOptions));
-            write.Parameters.AddWithValue("$count", count);
+            write.Parameters.AddWithValue("$count", tree.CapturedMembers);
             if (await write.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
                 throw new InvalidDataException("The permission tree could not be sealed.");
             transaction.Commit();
@@ -167,7 +162,13 @@ public sealed partial class MirrorPulseProductCatalog
         CancellationToken cancellationToken = default)
     {
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try { ThrowIfDisposed(); return await ReadPermissionTreeCoreAsync(manifestId, cancellationToken).ConfigureAwait(false); }
+        try
+        {
+            ThrowIfDisposed();
+            MirrorPulseNamespacePermissionTree? tree = await ReadPermissionTreeCoreAsync(manifestId, cancellationToken).ConfigureAwait(false);
+            if (tree is not null) await ValidatePermissionTreeCancellationCoreAsync(tree, cancellationToken).ConfigureAwait(false);
+            return tree;
+        }
         finally { _gate.Release(); }
     }
 
@@ -192,7 +193,11 @@ public sealed partial class MirrorPulseProductCatalog
     {
         await using SqliteCommand query = _connection.CreateCommand();
         query.Transaction = transaction;
-        query.CommandText = "SELECT payload,phase,captured_count,seal,root_id,volume_serial,sync_root_file_id FROM namespace_permission_trees WHERE manifest_id=$id;";
+        query.CommandText = """
+            SELECT t.payload,t.phase,t.captured_count,t.seal,t.root_id,t.volume_serial,t.sync_root_file_id,c.payload
+            FROM namespace_permission_trees t LEFT JOIN namespace_permission_tree_cancellations c ON c.manifest_id=t.manifest_id
+            WHERE t.manifest_id=$id;
+            """;
         query.Parameters.AddWithValue("$id", manifestId.ToString("D"));
         await using SqliteDataReader reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
         if (!await reader.ReadAsync(token).ConfigureAwait(false)) return null;
@@ -202,15 +207,21 @@ public sealed partial class MirrorPulseProductCatalog
         var phase = (MirrorPulseNamespacePermissionTreePhase)reader.GetInt32(1);
         int count = reader.GetInt32(2);
         var seal = reader.IsDBNull(3) ? null : JsonSerializer.Deserialize<MirrorPulseNamespacePermissionTreeSeal>(reader.GetString(3), TopologyJsonOptions);
+        var cancelled = reader.IsDBNull(7) ? null : JsonSerializer.Deserialize<MirrorPulseNamespacePermissionTreeCancellation>(reader.GetString(7), TopologyJsonOptions)
+            ?? throw new InvalidDataException("The permission capture cancellation is missing.");
         if (definition.ManifestId != manifestId || definition.Anchor.Intent.RootId!.Value.Value.ToString("D") != reader.GetString(4) ||
             definition.Anchor.Baseline.LocalObject.VolumeSerialNumber.ToString(CultureInfo.InvariantCulture) != reader.GetString(5) ||
             definition.Anchor.Baseline.LocalObject.SyncRootFileId.ToString("D") != reader.GetString(6) ||
-            !Enum.IsDefined(phase) || count < 0 || count > definition.ExpectedMembers ||
+            phase is not (MirrorPulseNamespacePermissionTreePhase.Capturing or MirrorPulseNamespacePermissionTreePhase.Sealed) || count < 0 || count > definition.ExpectedMembers ||
             (phase == MirrorPulseNamespacePermissionTreePhase.Sealed) != (seal is not null) || seal is not null &&
             (count != definition.ExpectedMembers || seal.MemberCount != count || seal.SealedAt < definition.CreatedAt ||
                 seal.Fingerprint is null || seal.Fingerprint.Length != 64 || seal.Fingerprint.Any(character => !char.IsAsciiHexDigitUpper(character))))
             throw new InvalidDataException("The retained permission tree is inconsistent.");
-        return new(definition, phase, count, seal);
+        if (cancelled is not null && (phase != MirrorPulseNamespacePermissionTreePhase.Capturing ||
+            cancelled.CapturedMembers != count || cancelled.CancelledAt < definition.CreatedAt ||
+            cancelled.Fingerprint is null || cancelled.Fingerprint.Length != 64 || cancelled.Fingerprint.Any(character => !char.IsAsciiHexDigitUpper(character))))
+            throw new InvalidDataException("The retained permission capture cancellation is inconsistent.");
+        return new(definition, cancelled is null ? phase : MirrorPulseNamespacePermissionTreePhase.Cancelled, count, seal, cancelled);
     }
 
     private async Task<IReadOnlyList<MirrorPulseNamespacePermissionTreeMember>> ReadPermissionTreeMembersCoreAsync(
@@ -322,51 +333,81 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task ValidatePermissionTreeAdmissionAsync(MirrorPulseNamespacePermissionBaseline baseline,
         MirrorPulseNamespacePermissionIntent intent, SqliteTransaction transaction, CancellationToken token)
     {
-        await using (SqliteCommand capture = _connection.CreateCommand())
+        string afterManifest = string.Empty;
+        while (true)
         {
+            await using SqliteCommand capture = _connection.CreateCommand();
             capture.Transaction = transaction;
             capture.CommandText = """
-                SELECT 1 FROM namespace_permission_trees WHERE phase=0 AND volume_serial=$volume
-                    AND sync_root_file_id=$sync AND (root_id=$root OR $root IS NULL) LIMIT 1;
+                SELECT manifest_id FROM namespace_permission_trees WHERE phase=0 AND volume_serial=$volume
+                    AND sync_root_file_id=$sync AND (root_id=$root OR $root IS NULL) AND manifest_id>$after
+                ORDER BY manifest_id LIMIT 64;
                 """;
             capture.Parameters.AddWithValue("$volume", baseline.LocalObject.VolumeSerialNumber.ToString(CultureInfo.InvariantCulture));
             capture.Parameters.AddWithValue("$sync", baseline.LocalObject.SyncRootFileId.ToString("D"));
             capture.Parameters.AddWithValue("$root", (object?)intent.RootId?.Value.ToString("D") ?? DBNull.Value);
-            if (await capture.ExecuteScalarAsync(token).ConfigureAwait(false) is not null)
-                throw new InvalidOperationException("Permission capture must be sealed before changing this root or its sync-root parent.");
+            capture.Parameters.AddWithValue("$after", afterManifest);
+            var ids = new List<Guid>(64);
+            await using (SqliteDataReader reader = await capture.ExecuteReaderAsync(token).ConfigureAwait(false))
+                while (await reader.ReadAsync(token).ConfigureAwait(false)) ids.Add(Guid.Parse(reader.GetString(0)));
+            if (ids.Count == 0) break;
+            foreach (Guid id in ids)
+            {
+                MirrorPulseNamespacePermissionTree tree = await ReadPermissionTreeCoreAsync(id, token, transaction).ConfigureAwait(false)
+                    ?? throw new InvalidDataException("The original permission capture is missing.");
+                if (tree.Cancellation is null)
+                    throw new InvalidOperationException("Permission capture must be sealed or cancelled before changing this root or its sync-root parent.");
+                await ValidatePermissionTreeCancellationCoreAsync(tree, token, transaction).ConfigureAwait(false);
+                if (tree.Definition.Anchor.Intent.OperationId == intent.OperationId)
+                    throw new InvalidOperationException("Cancelled permission capture operations cannot become executable.");
+            }
+            afterManifest = ids[^1].ToString("D");
         }
-        await using SqliteCommand query = _connection.CreateCommand();
-        query.Transaction = transaction;
-        query.CommandText = """
-            SELECT t.phase,m.payload,m.fingerprint,m.sequence,m.evidence_id,m.operation_id,
-                m.volume_serial,m.sync_root_file_id,m.local_file_id,m.relative_path,m.parent_evidence_id,m.relative_path_key
-            FROM namespace_permission_tree_members m
-            JOIN namespace_permission_trees t ON t.manifest_id=m.manifest_id
-            WHERE m.operation_id=$id OR (m.volume_serial=$volume AND m.sync_root_file_id=$sync AND m.local_file_id=$file);
-            """;
-        query.Parameters.AddWithValue("$id", intent.OperationId.ToString("D"));
-        query.Parameters.AddWithValue("$volume", baseline.LocalObject.VolumeSerialNumber.ToString(CultureInfo.InvariantCulture));
-        query.Parameters.AddWithValue("$sync", baseline.LocalObject.SyncRootFileId.ToString("D"));
-        query.Parameters.AddWithValue("$file", baseline.LocalObject.LocalFileId.ToString("D"));
-        await using SqliteDataReader reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
-        while (await reader.ReadAsync(token).ConfigureAwait(false))
+        long afterRow = 0;
+        while (true)
         {
-            string payload = reader.GetString(1);
-            var member = JsonSerializer.Deserialize<MirrorPulseNamespacePermissionTreeMember>(payload, TopologyJsonOptions)
-                ?? throw new InvalidDataException("The original permission tree member is missing.");
-            ValidatePermissionTreePreparation(member.Preparation);
-            MirrorPulseLocalFileBinding binding = member.Preparation.Baseline.LocalObject;
-            if (!SHA256.HashData(Encoding.UTF8.GetBytes(payload)).AsSpan().SequenceEqual(reader.GetFieldValue<byte[]>(2)) ||
-                member.Sequence != reader.GetInt32(3) || member.Preparation.Baseline.EvidenceId.ToString("D") != reader.GetString(4) ||
-                member.Preparation.Intent.OperationId.ToString("D") != reader.GetString(5) ||
-                binding.VolumeSerialNumber.ToString(CultureInfo.InvariantCulture) != reader.GetString(6) ||
-                binding.SyncRootFileId.ToString("D") != reader.GetString(7) || binding.LocalFileId.ToString("D") != reader.GetString(8) ||
-                member.Preparation.Intent.RelativePath != reader.GetString(9) || member.ParentEvidenceId?.ToString("D") != (reader.IsDBNull(10) ? null : reader.GetString(10)) ||
-                !string.Equals(member.Preparation.Intent.RelativePath.ToUpperInvariant(), reader.GetString(11), StringComparison.Ordinal))
-                throw new InvalidDataException("The original permission tree member's indexes or fingerprint changed.");
-            if (reader.GetInt32(0) != (int)MirrorPulseNamespacePermissionTreePhase.Sealed ||
-                member.Preparation.Intent.OperationId == intent.OperationId && member.Preparation != new MirrorPulseNamespacePermissionPreparation(baseline, intent))
-                throw new InvalidOperationException("Original permission changes require a sealed capture of this object.");
+            await using SqliteCommand query = _connection.CreateCommand();
+            query.Transaction = transaction;
+            query.CommandText = """
+                SELECT rowid,manifest_id,sequence FROM namespace_permission_tree_members
+                WHERE rowid>$after AND (operation_id=$id OR (volume_serial=$volume AND sync_root_file_id=$sync AND local_file_id=$file))
+                ORDER BY rowid LIMIT 64;
+                """;
+            query.Parameters.AddWithValue("$after", afterRow);
+            query.Parameters.AddWithValue("$id", intent.OperationId.ToString("D"));
+            query.Parameters.AddWithValue("$volume", baseline.LocalObject.VolumeSerialNumber.ToString(CultureInfo.InvariantCulture));
+            query.Parameters.AddWithValue("$sync", baseline.LocalObject.SyncRootFileId.ToString("D"));
+            query.Parameters.AddWithValue("$file", baseline.LocalObject.LocalFileId.ToString("D"));
+            var matches = new List<(long Row, Guid Manifest, int Sequence)>(64);
+            await using (SqliteDataReader reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false))
+                while (await reader.ReadAsync(token).ConfigureAwait(false)) matches.Add((reader.GetInt64(0), Guid.Parse(reader.GetString(1)), reader.GetInt32(2)));
+            if (matches.Count == 0) break;
+            foreach (var match in matches)
+            {
+                MirrorPulseNamespacePermissionTree tree = await ReadPermissionTreeCoreAsync(match.Manifest, token, transaction).ConfigureAwait(false)
+                    ?? throw new InvalidDataException("The original permission capture is missing.");
+                IReadOnlyList<MirrorPulseNamespacePermissionTreeMember> page;
+                try
+                {
+                    page = await ReadPermissionTreeMembersCoreAsync(tree.Definition, match.Sequence - 1, 1, token, transaction).ConfigureAwait(false);
+                }
+                catch (ArgumentException exception)
+                {
+                    throw new InvalidDataException("The original permission capture member is invalid.", exception);
+                }
+                if (page.Count != 1 || page[0].Sequence != match.Sequence) throw new InvalidDataException("The original permission capture member is missing.");
+                MirrorPulseNamespacePermissionTreeMember member = page[0];
+                if (tree.Cancellation is not null)
+                {
+                    await ValidatePermissionTreeCancellationCoreAsync(tree, token, transaction).ConfigureAwait(false);
+                    if (member.Preparation.Intent.OperationId == intent.OperationId)
+                        throw new InvalidOperationException("Cancelled permission capture operations cannot become executable.");
+                }
+                else if (tree.Phase != MirrorPulseNamespacePermissionTreePhase.Sealed ||
+                    member.Preparation.Intent.OperationId == intent.OperationId && member.Preparation != new MirrorPulseNamespacePermissionPreparation(baseline, intent))
+                    throw new InvalidOperationException("Original permission changes require a sealed capture of this object.");
+            }
+            afterRow = matches[^1].Row;
         }
     }
 

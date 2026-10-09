@@ -7,7 +7,7 @@ using MirrorPulse.Core.State;
 namespace MirrorPulse.Core.Tests;
 
 [TestClass]
-public sealed class MirrorPulseNamespacePermissionTreeCatalogTests
+public sealed partial class MirrorPulseNamespacePermissionTreeCatalogTests
 {
     private const string Owner = "S-1-5-21-100-200-300-1001";
     private const string Role = "S-1-5-5-123-456";
@@ -304,7 +304,7 @@ public sealed class MirrorPulseNamespacePermissionTreeCatalogTests
         await connection.OpenAsync();
         await using var command = connection.CreateCommand();
         command.CommandText = "PRAGMA user_version;";
-        Assert.AreEqual(23L, await command.ExecuteScalarAsync());
+        Assert.AreEqual(24L, await command.ExecuteScalarAsync());
     }
 
     [TestMethod]

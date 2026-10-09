@@ -171,8 +171,17 @@ executable changes. After sealing, only the captured intent can use its operatio
 ID. Sealed describes retained evidence, not independent completeness of the
 live tree or permission to admit namespace operations. Runtime draining, retained
 whole-tree handles, independent membership audits and protected-birth restoration
-evidence still require integration. An abandoned partial capture must remain
-fenced until a separate recovery policy resolves it.
+evidence still require integration. An unsealed capture can be cancelled through
+the Host-owned catalog. Schema 24 adds a separate immutable cancellation receipt
+without rewriting the original capture or permission history. Its count and
+SHA-256 cover every retained member in bounded pages, including an empty prefix.
+Admission verifies that retained evidence before releasing only the cancelled
+capture's preparation fence; another open capture continues to block the root
+and its sync-root parent. Cancelled operation IDs remain non-executable. A new
+capture uses fresh operation IDs and retains the old evidence for recovery.
+Cancellation does not restore ACLs, cancel already executable changes, prove
+that existing work drained or admit namespace operations. Sealed captures cannot
+be cancelled by this API.
 
 The execution-session component and catalog evidence do not yet enable strict
 protection in the Host. Applying and auditing object permissions, rotating the

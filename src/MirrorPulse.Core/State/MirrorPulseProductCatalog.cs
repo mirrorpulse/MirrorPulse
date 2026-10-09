@@ -102,7 +102,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                 version.CommandText = "PRAGMA user_version;";
                 long currentVersion = (long)(await version.ExecuteScalarAsync(cancellationToken)
                     .ConfigureAwait(false) ?? 0L);
-                if (currentVersion > 23)
+                if (currentVersion > 24)
                 {
                     throw new InvalidDataException("The MP product catalog schema is newer than this Host supports.");
                 }
@@ -247,6 +247,10 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                     );
                     CREATE INDEX IF NOT EXISTS namespace_permission_tree_capture_scope
                         ON namespace_permission_trees(volume_serial, sync_root_file_id, root_id) WHERE phase=0;
+                    CREATE TABLE IF NOT EXISTS namespace_permission_tree_cancellations (
+                        manifest_id TEXT PRIMARY KEY REFERENCES namespace_permission_trees(manifest_id),
+                        payload TEXT NOT NULL
+                    );
                     CREATE TABLE IF NOT EXISTS namespace_permission_tree_members (
                         manifest_id TEXT NOT NULL REFERENCES namespace_permission_trees(manifest_id),
                         sequence INTEGER NOT NULL CHECK (sequence >= 0),
@@ -334,7 +338,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                     alter.CommandText = "ALTER TABLE worker_requests ADD COLUMN stable_fingerprint BLOB NULL;";
                     await alter.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
                 }
-                version.CommandText = "PRAGMA user_version=23;";
+                version.CommandText = "PRAGMA user_version=24;";
                 await version.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
 
