@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Security.AccessControl;
 using CfSharp;
+using CfSharp.Native;
 using MirrorPulse.CloudFiles.CfSharp;
 using MirrorPulse.Core.CloudFiles;
 using MirrorPulse.Core.Configuration;
@@ -93,6 +94,11 @@ public sealed partial class MirrorPulseNamespaceHandleTests
                     AssertHardLinkDenied(outside);
                     latest += " retained edit";
                     await File.WriteAllTextAsync(target, latest, timeout.Token);
+                    CloudItemSnapshot afterEdit = await file.InspectAsync(timeout.Token);
+                    int nativeInfo = QueryNativePlaceholderInfo(target, out uint infoBytes);
+                    TestContext.WriteLine($"PlaceholderAfterOverwrite: architecture={RuntimeInformation.ProcessArchitecture}; owner={owner}; placeholder={afterEdit.IsPlaceholder}; placeholderState={afterEdit.PlaceholderState}; reparsePoint={afterEdit.Attributes?.HasFlag(FileAttributes.ReparsePoint)}; synchronizationState={afterEdit.SynchronizationState}; nativeInfoHResult={nativeInfo:X8}; nativeInfoBytes={infoBytes}; originalBindingRetained={afterEdit.LocalBinding == originalBinding}; originalPermissionsRetained={ReadDacl(target) == originalDacl}; latestBytesRetained={await File.ReadAllTextAsync(target, timeout.Token) == latest}; sourceReads={provider.Reads}; aclWrites=0.");
+                    AssertHardLinkDenied(inside);
+                    AssertHardLinkDenied(outside);
                     await AssertPlaceholderRetainedAsync(file);
                 }
                 AssertHardLinkDenied(inside);
@@ -148,6 +154,20 @@ public sealed partial class MirrorPulseNamespaceHandleTests
 
     private static string ReadDacl(string path) => new FileInfo(path).GetAccessControl(AccessControlSections.Access)
         .GetSecurityDescriptorSddlForm(AccessControlSections.Access);
+
+    private static unsafe int QueryNativePlaceholderInfo(string path, out uint infoBytes)
+    {
+        using var handle = File.OpenHandle(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        Span<byte> buffer = stackalloc byte[8192];
+        fixed (byte* pointer = buffer)
+        {
+            uint returned = 0;
+            int result = CfApi.CfGetPlaceholderInfo(handle.DangerousGetHandle(), CfPlaceholderInfoClass.Standard,
+                pointer, (uint)buffer.Length, &returned);
+            infoBytes = returned;
+            return result;
+        }
+    }
 
     private sealed class NoSourceReadProvider : ICloudFileContentProvider
     {
