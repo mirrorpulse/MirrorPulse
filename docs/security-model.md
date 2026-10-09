@@ -149,6 +149,24 @@ namespace rights, so CFAPI placeholder creation can inherit protection without
 a subsequent permission write. Existing descendants still require original
 evidence before parent inheritance changes.
 
+The catalog also retains an immutable permission-tree capture for an existing
+managed root. Capture pages have contiguous sequences, original object bindings,
+access descriptors and planned changes, with the immediate directory captured
+before each child. Each page commits atomically and can be replayed without
+replacing originals. The seal covers the definition and every member with a
+SHA256 fingerprint; it requires the declared complete count and validates all
+bounded pages. Schema migration preserves earlier permission history.
+
+An open capture blocks preparation of permission changes in that root and its
+sync-root parent, including alternate operation IDs. Other roots can still
+prepare their own changes. Capturing and sealing do not write ACLs or create
+executable changes. After sealing, only the captured intent can use its operation
+ID. Sealed describes retained evidence, not independent completeness of the
+live tree or permission to admit namespace operations. Runtime draining, retained
+whole-tree handles, independent membership audits and protected-birth restoration
+evidence still require integration. An abandoned partial capture must remain
+fenced until a separate recovery policy resolves it.
+
 The execution-session component and catalog evidence do not yet enable strict
 protection in the Host. Applying and auditing object permissions, rotating the
 Host role, controlled file operations, and their client commands require

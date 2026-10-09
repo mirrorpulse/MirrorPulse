@@ -102,6 +102,7 @@ public sealed partial class MirrorPulseProductCatalog
         MirrorPulseNamespacePermissionBaseline baseline, MirrorPulseNamespacePermissionIntent intent,
         SqliteTransaction transaction, CancellationToken cancellationToken)
     {
+        await ValidatePermissionTreeAdmissionAsync(baseline, intent, transaction, cancellationToken).ConfigureAwait(false);
         MirrorPulseNamespacePermissionBaseline? retained = await ReadPermissionBaselineCoreAsync(
             baseline.EvidenceId, cancellationToken, transaction).ConfigureAwait(false);
         if (retained is not null && retained != baseline)

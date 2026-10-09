@@ -102,7 +102,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                 version.CommandText = "PRAGMA user_version;";
                 long currentVersion = (long)(await version.ExecuteScalarAsync(cancellationToken)
                     .ConfigureAwait(false) ?? 0L);
-                if (currentVersion > 22)
+                if (currentVersion > 23)
                 {
                     throw new InvalidDataException("The MP product catalog schema is newer than this Host supports.");
                 }
@@ -235,6 +235,38 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                     );
                     CREATE UNIQUE INDEX IF NOT EXISTS namespace_permission_pending_object
                         ON namespace_permission_changes(evidence_id) WHERE phase IN (0,1,3);
+                    CREATE TABLE IF NOT EXISTS namespace_permission_trees (
+                        manifest_id TEXT PRIMARY KEY,
+                        root_id TEXT NOT NULL,
+                        volume_serial TEXT NOT NULL,
+                        sync_root_file_id TEXT NOT NULL,
+                        payload TEXT NOT NULL,
+                        phase INTEGER NOT NULL CHECK (phase IN (0,1)),
+                        captured_count INTEGER NOT NULL CHECK (captured_count >= 0),
+                        seal TEXT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS namespace_permission_tree_capture_scope
+                        ON namespace_permission_trees(volume_serial, sync_root_file_id, root_id) WHERE phase=0;
+                    CREATE TABLE IF NOT EXISTS namespace_permission_tree_members (
+                        manifest_id TEXT NOT NULL REFERENCES namespace_permission_trees(manifest_id),
+                        sequence INTEGER NOT NULL CHECK (sequence >= 0),
+                        evidence_id TEXT NOT NULL,
+                        operation_id TEXT NOT NULL UNIQUE,
+                        volume_serial TEXT NOT NULL,
+                        sync_root_file_id TEXT NOT NULL,
+                        local_file_id TEXT NOT NULL,
+                        relative_path TEXT NOT NULL,
+                        relative_path_key TEXT NOT NULL,
+                        parent_evidence_id TEXT NULL,
+                        payload TEXT NOT NULL,
+                        fingerprint BLOB NOT NULL CHECK (length(fingerprint) = 32),
+                        PRIMARY KEY(manifest_id, sequence),
+                        UNIQUE(manifest_id, evidence_id),
+                        UNIQUE(manifest_id, volume_serial, sync_root_file_id, local_file_id),
+                        UNIQUE(manifest_id, relative_path_key),
+                        FOREIGN KEY(manifest_id, parent_evidence_id)
+                            REFERENCES namespace_permission_tree_members(manifest_id, evidence_id)
+                    );
                     INSERT OR IGNORE INTO managed_root_rename_history (operation_id, root_id, payload)
                         SELECT json_extract(payload, '$.OperationId'), root_id, payload FROM managed_root_renames;
                     CREATE TABLE IF NOT EXISTS notification_snoozes (
@@ -302,7 +334,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                     alter.CommandText = "ALTER TABLE worker_requests ADD COLUMN stable_fingerprint BLOB NULL;";
                     await alter.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
                 }
-                version.CommandText = "PRAGMA user_version=22;";
+                version.CommandText = "PRAGMA user_version=23;";
                 await version.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
 
