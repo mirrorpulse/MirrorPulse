@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "allowSkipped": [
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseNamespaceHandleTests.NativePlaceholderHardLinkPolicyPreservesUnacceptedBytesAndRejectsExistingAliasesAcrossRestart",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseContentConfirmationRecoveryTests.NativeRejectedProductProofDoesNotPrepareOrModifyContent",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseContentConfirmationRecoveryTests.NativeProductProofProjectionFailureReplaysAfterRuntimeRestart",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseContentConfirmationRecoveryTests.NativePostMarkCancellationRetainsVerifiedReceipt",
@@ -59,6 +60,7 @@
   ],
   "required": {
     "namespace": [
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseNamespaceHandleTests.NativePlaceholderHardLinkPolicyPreservesUnacceptedBytesAndRejectsExistingAliasesAcrossRestart",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseNamespaceHandleTests.RetainedHandleRejectsExistingAndNewlyObservedAliasesWithoutAclWrites",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseNamespacePermissionPolicyTests.ExplicitPolicyMatchesNtfsAndControlledCreationIsProtectedAtBirth",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseNamespaceExecutionSessionTests.RoleFlowsAcrossAwaitAndRestoresTheOriginalCurrentUser",
@@ -69,6 +71,7 @@
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeOwnedPermissionLeaseReconcilesUnrecordedWriteRotationAndRestorationAcrossRestart"
     ],
     "native": [
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseNamespaceHandleTests.NativePlaceholderHardLinkPolicyPreservesUnacceptedBytesAndRejectsExistingAliasesAcrossRestart",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseNamespaceHandleTests.RetainedHandleRejectsExistingAndNewlyObservedAliasesWithoutAclWrites",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseContentConfirmationRecoveryTests.NativeRejectedProductProofDoesNotPrepareOrModifyContent",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseContentConfirmationRecoveryTests.NativeProductProofProjectionFailureReplaysAfterRuntimeRestart",

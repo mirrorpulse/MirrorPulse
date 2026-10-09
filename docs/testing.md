@@ -10,7 +10,15 @@ The x64 native and ARM64 namespace suites both require the real NTFS retained
 handle alias test. It checks rejection of an existing or newly observed hard
 link, retention of original permissions and latest bytes, and handle cleanup
 without ACL writes. It does not register Cloud Files and does not prove that a
-retained handle prevents new links. The namespace report requires all eight
+retained handle prevents new links. A separate Cloud Files test exercises
+CfSharp's public content-preserving conversion while the original object lease
+is retained, then attempts links inside and outside the root before and after
+the lease is released and after the official SQLite owner restarts. It requires
+the original file ID, permissions and latest unaccepted bytes to remain intact,
+without marking content in sync or reading an Adapter source. Existing aliased
+ordinary files must refuse conversion without changing their permissions or
+bytes. This is a component boundary test; it does not enable whole-tree
+protection in the Host. The namespace report requires all nine
 registered tests to pass exactly once, without skips; missing, repeated, or
 partially executed results fail the gate.
 
