@@ -43,7 +43,7 @@ public sealed class MirrorPulseJournalUploadSourceTests
             await using CloudLocalChangeFeed feed = fileSystem.CreateLocalChangeFeed(new() { BatchSize = 4 });
             await feed.StartAsync(timeout.Token);
             await new MirrorPulseRootPopulationCoordinator(fileSystem, feed).PopulateAsync(router, timeout.Token);
-            for (int index = 0; index < 16; index++)
+            for (int index = 0; index < 80; index++)
                 await File.WriteAllTextAsync(Path.Combine(paths.SyncRootPath, "Offline", $"queued-{index:D2}.txt"), "offline", timeout.Token);
             async Task<Guid> WaitForJournalAsync(string path)
             {
@@ -58,7 +58,8 @@ public sealed class MirrorPulseJournalUploadSourceTests
                     await Task.Delay(20, timeout.Token);
                 }
             }
-            await WaitForJournalAsync("Offline/queued-15.txt");
+            await WaitForJournalAsync("Offline/queued-79.txt");
+            Guid firstDeferred = await WaitForJournalAsync("Offline/queued-00.txt");
             await File.WriteAllTextAsync(Path.Combine(paths.SyncRootPath, "Docs", "later.txt"), "active", timeout.Token);
             Guid later = await WaitForJournalAsync("Docs/later.txt");
             await using var catalog = await MirrorPulseProductCatalog.OpenAsync(paths, timeout.Token);
@@ -66,14 +67,19 @@ public sealed class MirrorPulseJournalUploadSourceTests
             for (int pass = 0; pass < 4; pass++)
             {
                 MirrorPulseJournalUploadBatch batch = await source.ReadPendingAsync(timeout.Token);
-                Assert.IsEmpty(batch.ReadyCommands);
+                Assert.IsTrue(batch.ReadyCommands.Any(command => command.OperationId == later && command.RootKey == "docs"));
+                Assert.IsFalse(batch.ReadyCommands.Any(command => command.RootKey == "offline"));
+                Assert.IsFalse(batch.RequiresFullRescan);
                 Assert.IsGreaterThan(0, batch.DeferredCount);
                 Assert.IsFalse((await feed.ReadBatchAsync(timeout.Token)).Changes.Any(change => change.OperationId == later));
             }
             await using ICloudStateTransaction retained = await state.OpenStore.BeginTransactionAsync(timeout.Token);
             Assert.IsNotNull(await retained.Operations.GetAsync(later, timeout.Token));
+            Assert.IsNotNull(await retained.Operations.GetAsync(firstDeferred, timeout.Token));
+            IReadOnlyList<CloudOperationJournalEntry> remaining = await retained.Operations.ListAsync(512, timeout.Token);
+            Assert.IsGreaterThanOrEqualTo(80, remaining.Count);
             await retained.RollbackAsync(timeout.Token);
-            TestContext.WriteLine($"CfSharp 0.1.0-preview.3: BatchSize=4 returns the retained earliest journal head; a later active-root operation remains durable but unreachable without settling earlier disabled-root operations. OS={Environment.OSVersion.Version}. No native call failed.");
+            TestContext.WriteLine($"CfSharp 0.1.0-preview.4: the legacy BatchSize=4 still retains the earliest disabled head, while MP's finite public scan reaches the later active root across 64-entry pages without acknowledging either root. OS={Environment.OSVersion.Version}.");
         }
         finally
         {

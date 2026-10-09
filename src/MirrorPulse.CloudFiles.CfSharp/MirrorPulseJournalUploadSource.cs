@@ -20,6 +20,7 @@ public sealed record MirrorPulseJournalUploadBatch(
 [SupportedOSPlatform("windows10.0.16299")]
 public sealed class MirrorPulseJournalUploadSource
 {
+    private const int ScanPageSize = 64;
     private readonly CloudLocalChangeFeed _feed;
     private readonly MirrorPulseRootRouter _router;
     private readonly MirrorPulseProductCatalog _catalog;
@@ -49,8 +50,49 @@ public sealed class MirrorPulseJournalUploadSource
     public async ValueTask<MirrorPulseJournalUploadBatch> ReadPendingAsync(
         CancellationToken cancellationToken = default)
     {
-        CloudLocalChangeBatch batch = await _feed.ReadBatchAsync(cancellationToken).ConfigureAwait(false);
-        MirrorPulseLocalBatchPlan plan = MirrorPulseLocalBatchMapper.Map(batch, _router);
+        // Preserve the feed's wait-for-notification behavior when the journal is
+        // empty. This head is only a wake-up observation, never the planning window.
+        CloudLocalChangeBatch head = await _feed.ReadBatchAsync(cancellationToken).ConfigureAwait(false);
+        if (head.RequiresFullRescan)
+        {
+            RequiresFullRescan = true;
+            return new([], 0, true);
+        }
+
+        // A legacy batch always starts at the earliest pending row. Retaining a
+        // disabled root's head must not make unrelated active roots unreachable.
+        // Read the finite public scan completely before planning so dependencies
+        // on earlier pages survive page boundaries. No cursor is persisted, and
+        // scanning never acknowledges or replaces an official journal record.
+        CloudLocalChangeScan scan = await _feed.BeginScanAsync(cancellationToken).ConfigureAwait(false);
+        if (scan.RequiresFullRescan)
+        {
+            RequiresFullRescan = true;
+            return new([], 0, true);
+        }
+
+        var observations = new List<MirrorPulseLocalChangeObservation>();
+        long afterSequence = 0;
+        while (true)
+        {
+            CloudLocalChangePage page = await _feed.ReadPageAsync(scan, afterSequence, ScanPageSize,
+                cancellationToken).ConfigureAwait(false);
+            if (page.RequiresFullRescan)
+            {
+                RequiresFullRescan = true;
+                return new([], 0, true);
+            }
+
+            foreach (CloudLocalChange change in page.Changes)
+                observations.Add(new(change.OperationId, change.Sequence, change.Kind, change.ItemId,
+                    change.RelativePath, change.PreviousRelativePath, change.IsDirectory, change.ObservedAt));
+            if (!page.HasMore) break;
+            if (page.LastScannedSequence <= afterSequence || page.LastScannedSequence > scan.ThroughSequence)
+                throw new InvalidDataException("The public journal scan did not advance inside its captured boundary.");
+            afterSequence = page.LastScannedSequence;
+        }
+
+        MirrorPulseLocalBatchPlan plan = MirrorPulseLocalBatchMapper.MapObservations(observations, _router);
         if (plan.RequiresFullRescan)
         {
             RequiresFullRescan = true;
