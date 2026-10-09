@@ -9,6 +9,62 @@ namespace MirrorPulse.Core.Tests;
 public sealed class MirrorPulseRootRenameEvidenceTests
 {
     [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task EncodedDirectoryEvidenceSurvivesRestartAndCannotBeAddedOrReplacedLater(bool includeEvidence)
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "MirrorPulse-rename-envelope", Guid.NewGuid().ToString("N"));
+        var paths = new MirrorPulseStoragePaths(Path.Combine(directory, "sync"), Path.Combine(directory, "data"));
+        var proof = new MirrorPulseRootRenameProof(Guid.NewGuid(), new(1, Guid.NewGuid(), Guid.NewGuid()),
+            Convert.ToBase64String([1, 2, 3]), DateTimeOffset.UtcNow, includeEvidence ? Convert.ToBase64String([4, 5, 6]) : null);
+        Guid operation;
+        try
+        {
+            await using (var catalog = await MirrorPulseProductCatalog.OpenAsync(paths))
+            {
+                RootRegistration root = await AddRootAsync(catalog, directory);
+                operation = (await catalog.PrepareManagedRootRenameAsync(root.RootId, "New Files")).OperationId;
+                await catalog.SaveManagedRootRenameProofAsync(operation, proof);
+            }
+            await using (var reopened = await MirrorPulseProductCatalog.OpenAsync(paths))
+            {
+                Assert.AreEqual(proof, (await reopened.ReadManagedRootRenameHistoryAsync()).Single().Proof);
+                await reopened.SaveManagedRootRenameProofAsync(operation, proof);
+                await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => reopened.SaveManagedRootRenameProofAsync(operation,
+                    proof with { DirectoryMoveEvidence = Convert.ToBase64String([7, 8, 9]) }));
+                if (includeEvidence)
+                    await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => reopened.SaveManagedRootRenameProofAsync(operation,
+                        proof with { DirectoryMoveEvidence = null }));
+            }
+        }
+        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+    }
+
+    [TestMethod]
+    [DataRow("")]
+    [DataRow(" ")]
+    [DataRow("not base64")]
+    [DataRow("AQ==\n")]
+    [DataRow("oversize")]
+    public async Task InvalidDirectoryEvidenceIsRejectedBeforeAnOriginalProofIsSaved(string value)
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "MirrorPulse-rename-envelope", Guid.NewGuid().ToString("N"));
+        var paths = new MirrorPulseStoragePaths(Path.Combine(directory, "sync"), Path.Combine(directory, "data"));
+        try
+        {
+            await using var catalog = await MirrorPulseProductCatalog.OpenAsync(paths);
+            RootRegistration root = await AddRootAsync(catalog, directory);
+            Guid operation = (await catalog.PrepareManagedRootRenameAsync(root.RootId, "New Files")).OperationId;
+            var proof = new MirrorPulseRootRenameProof(Guid.NewGuid(), new(1, Guid.NewGuid(), Guid.NewGuid()),
+                Convert.ToBase64String([1]), DateTimeOffset.UtcNow,
+                value == "oversize" ? Convert.ToBase64String(new byte[131073]) : value);
+            await Assert.ThrowsExactlyAsync<ArgumentException>(() => catalog.SaveManagedRootRenameProofAsync(operation, proof));
+            Assert.IsNull((await catalog.ReadManagedRootRenameHistoryAsync()).Single().Proof);
+        }
+        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+    }
+
+    [TestMethod]
     public async Task CompletedRenameKeepsOriginalProofWhenTheNextRenameIsPreparedAndRestarted()
     {
         string directory = Path.Combine(Path.GetTempPath(), "MirrorPulse-rename-evidence", Guid.NewGuid().ToString("N"));

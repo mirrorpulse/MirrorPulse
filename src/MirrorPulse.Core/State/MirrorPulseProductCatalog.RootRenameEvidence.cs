@@ -5,7 +5,7 @@ namespace MirrorPulse.Core.State;
 
 /// <summary>Captured at the original path before allowing a native rename.</summary>
 public sealed record MirrorPulseRootRenameProof(Guid ItemId, MirrorPulseLocalFileBinding LocalObject,
-    string PlaceholderIdentity, DateTimeOffset CapturedAt);
+    string PlaceholderIdentity, DateTimeOffset CapturedAt, string? DirectoryMoveEvidence = null);
 
 /// <summary>The same object inspected at the intended destination after native rename.</summary>
 public sealed record MirrorPulseRootRenameObservation(MirrorPulseLocalFileBinding LocalObject,
@@ -59,6 +59,7 @@ public sealed partial class MirrorPulseProductCatalog
     {
         ArgumentNullException.ThrowIfNull(proof);
         ValidateRenameBinding(proof.LocalObject, proof.PlaceholderIdentity);
+        ValidateDirectoryMoveEvidence(proof.DirectoryMoveEvidence);
         if (proof.ItemId == Guid.Empty || proof.CapturedAt == default) throw new ArgumentException("The original root proof is incomplete.", nameof(proof));
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -127,5 +128,21 @@ public sealed partial class MirrorPulseProductCatalog
         { throw new ArgumentException("The root's placeholder identity is invalid.", exception); }
         if (bytes.Length is 0 or > 4096 || Convert.ToBase64String(bytes) != identity)
             throw new ArgumentException("The exact root placeholder identity is required.");
+    }
+
+    private static void ValidateDirectoryMoveEvidence(string? evidence)
+    {
+        // Core preserves the public library's encoded proof as opaque bytes.
+        // Only the CfSharp integration can decode and establish its provenance.
+        // Null keeps older observations readable; it does not grant rename authority.
+        if (evidence is null) return;
+        if (evidence.Length is 0 or > 174764)
+            throw new ArgumentException("The encoded directory move evidence is outside its size bound.");
+        byte[] bytes;
+        try { bytes = Convert.FromBase64String(evidence); }
+        catch (FormatException exception)
+        { throw new ArgumentException("The encoded directory move evidence is invalid.", exception); }
+        if (bytes.Length is 0 or > 131072 || Convert.ToBase64String(bytes) != evidence)
+            throw new ArgumentException("The exact encoded directory move evidence is required.");
     }
 }
