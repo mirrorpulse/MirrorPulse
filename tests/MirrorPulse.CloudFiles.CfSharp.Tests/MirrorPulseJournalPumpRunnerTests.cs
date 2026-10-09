@@ -7,7 +7,7 @@ using MirrorPulse.Core.Sync;
 namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 
 [TestClass]
-public sealed class MirrorPulseJournalPumpRunnerTests
+public sealed partial class MirrorPulseJournalPumpRunnerTests
 {
     [TestMethod]
     [DataRow(false)]

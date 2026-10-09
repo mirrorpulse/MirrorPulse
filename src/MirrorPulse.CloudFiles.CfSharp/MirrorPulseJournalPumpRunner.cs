@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.CloudFiles.CfSharp;
@@ -9,6 +10,17 @@ public sealed record MirrorPulseJournalPumpHealth(bool Healthy, int PendingFault
 public sealed class MirrorPulseJournalPumpRunner
 {
     private readonly ConcurrentDictionary<Guid, string> _faults = new();
+    private readonly int _maximumCommandsPerCycle;
+    private readonly int _maximumCommandsPerRoot;
+    private (InstanceId Instance, string Root)? _nextRoute;
+
+    public MirrorPulseJournalPumpRunner(int maximumCommandsPerCycle = 64, int maximumCommandsPerRoot = 8)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumCommandsPerCycle);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumCommandsPerRoot);
+        _maximumCommandsPerCycle = maximumCommandsPerCycle;
+        _maximumCommandsPerRoot = maximumCommandsPerRoot;
+    }
     public void ClearRecoveredFault(Guid operationId) => _faults.TryRemove(operationId, out _);
     public MirrorPulseJournalPumpHealth Health => new(_faults.IsEmpty, _faults.Count,
         _faults.Values.Order(StringComparer.Ordinal).FirstOrDefault());
@@ -36,24 +48,42 @@ public sealed class MirrorPulseJournalPumpRunner
         }
         if (batch.RequiresFullRescan) return false;
         bool progressed = false;
-        var held = new List<MirrorPulseWorkerChangeCommand>();
-        foreach (MirrorPulseWorkerChangeCommand command in batch.ReadyCommands.OrderBy(command => command.Sequence))
+        MirrorPulseWorkerChangeCommand[] ordered = batch.ReadyCommands.OrderBy(command => command.Sequence).ToArray();
+        var routes = ordered.GroupBy(command => (command.InstanceId, command.RootKey))
+            .Select(group => (Key: group.Key, Commands: new Queue<MirrorPulseWorkerChangeCommand>(group), Inspected: 0)).ToArray();
+        if (routes.Length == 0) return false;
+        int route = _nextRoute is { } cursor ? Array.FindIndex(routes, entry => entry.Key == cursor) : 0;
+        if (route < 0) route = 0;
+        var acceptedOperations = new HashSet<Guid>();
+        int inspected = 0;
+        while (inspected < _maximumCommandsPerCycle && routes.Any(entry => entry.Commands.Count > 0 && entry.Inspected < _maximumCommandsPerRoot))
         {
-            if (held.Any(earlier => MirrorPulseJournalOrderPolicy.DependsOn(command, earlier)))
-            {
-                held.Add(command);
+            cancellationToken.ThrowIfCancellationRequested();
+            int selected = route;
+            route = (route + 1) % routes.Length;
+            _nextRoute = routes[route].Key;
+            if (routes[selected].Commands.Count == 0 || routes[selected].Inspected >= _maximumCommandsPerRoot) continue;
+            MirrorPulseWorkerChangeCommand command = routes[selected].Commands.Dequeue();
+            routes[selected].Inspected++;
+            inspected++;
+            // An earlier operation outside this cycle's budget still fences its
+            // affected objects/subtree. Round-robin ordering is safe only for
+            // commands independent of every earlier, unaccepted original ID.
+            if (ordered.TakeWhile(earlier => earlier != command)
+                .Any(earlier => !acceptedOperations.Contains(earlier.OperationId) && MirrorPulseJournalOrderPolicy.DependsOn(command, earlier)))
                 continue;
-            }
             try
             {
                 bool accepted = await dispatch(command, cancellationToken).ConfigureAwait(false);
                 progressed |= accepted;
-                if (accepted) _faults.TryRemove(command.OperationId, out _);
-                else held.Add(command);
+                if (accepted)
+                {
+                    acceptedOperations.Add(command.OperationId);
+                    _faults.TryRemove(command.OperationId, out _);
+                }
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
-                held.Add(command);
                 await ReportAsync(command, exception is MirrorPulseJournalAcknowledgementException
                     ? "JournalAcknowledgementFailed" : exception is MirrorPulseMutationAmbiguousException ? "MutationOutcomeAmbiguous" :
                     "JournalCommandFailed", exception, report, cancellationToken).ConfigureAwait(false);
