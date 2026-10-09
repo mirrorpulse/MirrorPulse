@@ -57,6 +57,13 @@
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeNamespaceRoleKeepsAclClosedDuringControlledOperationsAndCfSharpRestart"
   ],
   "required": {
+    "namespace": [
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseNamespaceExecutionSessionTests.RoleFlowsAcrossAwaitAndRestoresTheOriginalCurrentUser",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseNamespaceExecutionSessionTests.DisposalDrainsActiveWorkAndRejectsNewOperations",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseNamespaceExecutionSessionTests.FailedOperationRestoresCallerAndDoesNotPreventDisposal",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeNamespaceRoleKeepsAclClosedDuringControlledOperationsAndCfSharpRestart",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeStrictTreeAclPreservesLatestBytesHydrationAndConfirmationAcrossRestart"
+    ],
     "native": [
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseContentConfirmationRecoveryTests.NativeRejectedProductProofDoesNotPrepareOrModifyContent",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseContentConfirmationRecoveryTests.NativeProductProofProjectionFailureReplaysAfterRuntimeRestart",

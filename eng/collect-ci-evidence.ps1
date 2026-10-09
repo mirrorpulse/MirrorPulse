@@ -11,6 +11,7 @@ param(
     [string]$InstalledPath,
     [string]$RejectedPath,
     [switch]$RequireNative,
+    [switch]$RequireNamespace,
     [switch]$RequireInstalled
 )
 
@@ -25,9 +26,13 @@ if ($env:GITHUB_SHA) {
 $suites = @()
 foreach ($path in $TestManifests) {
     $test = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
-    if ($test.schemaVersion -ne 1 -or $test.suite -notin @("managed", "native", "official", "signed", "packaged") -or
+    if ($test.schemaVersion -ne 1 -or $test.suite -notin @("managed", "native", "official", "signed", "packaged", "namespace") -or
         $test.executed -le 0 -or $test.skipped -lt 0 -or $test.selected -ne ($test.executed + $test.skipped)) {
         throw "A test evidence manifest has invalid execution counts."
+    }
+    if ($test.suite -ceq 'namespace') {
+        . (Join-Path $PSScriptRoot 'namespace-evidence-policy.ps1')
+        Assert-NamespaceTestExecution $test (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'test-suites.json') -Raw | ConvertFrom-Json)
     }
     $categories = @($test.categories | ForEach-Object {
         if ($_.category -notin @("managed", "native", "official", "signed", "packaged") -or
@@ -43,6 +48,9 @@ foreach ($path in $TestManifests) {
 if (@($suites.suite | Select-Object -Unique).Count -ne $suites.Count) { throw "Duplicate test suites cannot be counted twice." }
 $requiredSuite = switch ($Job) { "build-and-test" { "managed" }; "official-package-arm64" { "signed" }; "official-adapters" { "official" } }
 if ($suites.suite -notcontains $requiredSuite) { throw "The job's required test suite is missing." }
+if ($RequireNamespace -and ($Job -cne 'official-package-arm64' -or $suites.suite -notcontains 'namespace')) {
+    throw 'Dedicated ARM64 namespace verification is missing.'
+}
 if ($RequireNative) {
     $suiteCatalog = Get-Content -LiteralPath (Join-Path $PSScriptRoot "test-suites.json") -Raw | ConvertFrom-Json
     $requiredNativeCount = @($suiteCatalog.required.native).Count

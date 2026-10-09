@@ -209,6 +209,18 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Signed ARM64 Worker tests failed.' }
           pwsh ./eng/verify-test-results.ps1 -Suite signed -ResultsDirectory artifacts/test-results/signed
 
+      - name: Verify ARM64 namespace identity and strict Cloud Files ACLs
+        shell: pwsh
+        run: pwsh ./eng/verify-namespace.ps1 -ExpectedArchitecture Arm64
+
+      - name: Upload ARM64 namespace test results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: namespace-arm64-test-results
+          path: artifacts/test-results/namespace-arm64/**/*.trx
+          if-no-files-found: ignore
+
       - name: Verify installed ARM64 MSIX on Windows 11 desktop
         if: github.event_name == 'workflow_dispatch'
         shell: pwsh
@@ -227,7 +239,8 @@ jobs:
         run: |
           $parameters = @{
             Job = 'official-package-arm64'; Runtime = 'win-arm64'; OutputPath = 'artifacts/evidence/official-package-arm64.json'
-            TestManifests = @('artifacts/test-results/signed/test-evidence.json')
+            TestManifests = @('artifacts/test-results/signed/test-evidence.json', 'artifacts/test-results/namespace-arm64/test-evidence.json')
+            RequireNamespace = $true
             PublishDirectory = "$env:RUNNER_TEMP/mirrorpulse-cli-host-win-arm64"
             IntegrationPath = 'artifacts/evidence/cli-regression.json'
             AdapterReleaseLockPath = 'artifacts/official-adapter-releases.json'

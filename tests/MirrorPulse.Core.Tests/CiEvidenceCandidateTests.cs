@@ -24,6 +24,9 @@ public sealed class CiEvidenceCandidateTests
     [DataRow("hydration-redundant-upload", false)]
     [DataRow("hydration-no-positive-control", false)]
     [DataRow("hydration-incomplete-local-write", false)]
+    [DataRow("namespace-valid", true)]
+    [DataRow("namespace-missing", false)]
+    [DataRow("namespace-partial", false)]
     public async Task ThreeJobsMustBindTheSameOfficialCandidate(string scenario, bool succeeds)
     {
         string repository = SftpProtocolFixture.FindRepositoryRoot();
@@ -60,6 +63,24 @@ public sealed class CiEvidenceCandidateTests
                     : job == "build-and-test"
                         ? [new { name = "unsupported-server", executed = true, cliRejected = true, hostRejected = true, stateUntouched = true, osProductType = 3 }]
                         : [];
+                var tests = new List<object> { new { suite, selected = 1, executed = 1, skipped = 0 } };
+                if (arm && scenario.StartsWith("namespace-", StringComparison.Ordinal) && scenario != "namespace-missing")
+                {
+                    using JsonDocument catalog = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(repository, "eng", "test-suites.json")));
+                    string[] required = catalog.RootElement.GetProperty("required").GetProperty("namespace").EnumerateArray().Select(item => item.GetString()!).ToArray();
+                    string[] native = catalog.RootElement.GetProperty("required").GetProperty("native").EnumerateArray().Select(item => item.GetString()!).ToArray();
+                    int nativeCount = required.Count(native.Contains) - (scenario == "namespace-partial" ? 1 : 0);
+                    int managedCount = required.Count(name => !native.Contains(name));
+                    tests.Add(new
+                    {
+                        suite = "namespace",
+                        selected = nativeCount + managedCount,
+                        executed = nativeCount + managedCount,
+                        skipped = 0,
+                        categories = new[] { new { category = "native", selected = nativeCount, executed = nativeCount, skipped = 0 },
+                            new { category = "managed", selected = managedCount, executed = managedCount, skipped = 0 } },
+                    });
+                }
                 await File.WriteAllTextAsync(Path.Combine(directory, job + ".json"), JsonSerializer.Serialize(new
                 {
                     schemaVersion = 1,
@@ -67,7 +88,7 @@ public sealed class CiEvidenceCandidateTests
                     job,
                     runtime = arm ? "win-arm64" : "win-x64",
                     officialAdapterCandidateSha256 = hash,
-                    tests = new[] { new { suite, selected = 1, executed = 1, skipped = 0 } },
+                    tests,
                     checks,
                     artifacts,
                 }));
@@ -83,6 +104,7 @@ public sealed class CiEvidenceCandidateTests
                 "-EvidenceDirectory", directory, "-ExpectedSourceSha", source })
                 start.ArgumentList.Add(argument);
             if (scenario != "legacy") start.ArgumentList.Add("-RequireOfficialCandidate");
+            if (scenario.StartsWith("namespace-", StringComparison.Ordinal)) start.ArgumentList.Add("-RequireNamespace");
             using Process process = Process.Start(start)!;
             Task<string> output = process.StandardOutput.ReadToEndAsync();
             Task<string> error = process.StandardError.ReadToEndAsync();

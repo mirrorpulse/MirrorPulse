@@ -23,6 +23,8 @@ public sealed partial class MirrorPulseManagedRootNamespaceTests
     {
         if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
             Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
+        MirrorPulseNamespaceExecutionSessionTests.AssertExpectedArchitecture();
+        TestContext.WriteLine($"NamespaceRoleArchitecture: {System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture}.");
         string root = Path.Combine(Path.GetTempPath(), "MirrorPulse-native-tests", Guid.NewGuid().ToString("N"));
         var paths = new MirrorPulseStoragePaths(Path.Combine(root, "sync"), Path.Combine(root, "data"));
         var registry = new CfSharpMirrorPulseCloudRootRegistry();

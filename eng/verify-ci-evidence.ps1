@@ -4,6 +4,7 @@ param(
     [Parameter(Mandatory)][ValidatePattern('^[0-9a-f]{40}$')][string]$ExpectedSourceSha,
     [switch]$RequireNative,
     [switch]$RequireInstalled,
+    [switch]$RequireNamespace,
     [switch]$RequireOfficialCandidate
 )
 
@@ -36,6 +37,12 @@ foreach ($job in $expected.Keys) {
         }
     }
     if ($job -eq "official-package-arm64") {
+        $namespace = @($manifest.tests | Where-Object suite -ceq 'namespace')
+        if ($RequireNamespace -or $namespace.Count -gt 0) {
+            if ($namespace.Count -ne 1) { throw 'Dedicated ARM64 namespace execution is missing or repeated.' }
+            . (Join-Path $PSScriptRoot 'namespace-evidence-policy.ps1')
+            Assert-NamespaceTestExecution $namespace[0] (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'test-suites.json') -Raw | ConvertFrom-Json)
+        }
         $integration = @($manifest.checks | Where-Object name -ceq 'signed-local-cli-regression')
         if ($integration.Count -ne 1 -or $integration[0].executed -ne $true) { throw 'The ARM64 CLI regression did not execute exactly once.' }
         . (Join-Path $PSScriptRoot 'cli-regression-evidence-policy.ps1')

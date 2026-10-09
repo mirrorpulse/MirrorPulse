@@ -109,3 +109,8 @@ remain outside that context. A disposable native probe combines the role with
 closed ACLs, hydration, content confirmation and store restart. Permission ownership,
 Host integration and controlled-operation recovery remain pending. Creating a
 session alone neither changes permissions nor enables product protection.
+
+The ARM64 CI job runs the dedicated namespace suite using the native ARM64 test
+process and disposable Cloud Files roots. Its report requires all three execution
+lifecycle tests and both ACL integration tests, with no skips. Installed product
+permission ownership and operation recovery still require separate acceptance.

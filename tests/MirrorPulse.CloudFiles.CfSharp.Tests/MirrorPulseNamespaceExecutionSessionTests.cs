@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Security.Principal;
 using MirrorPulse.CloudFiles.CfSharp;
@@ -8,9 +9,16 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 [SupportedOSPlatform("windows10.0.26100")]
 public sealed class MirrorPulseNamespaceExecutionSessionTests
 {
+    internal static void AssertExpectedArchitecture()
+    {
+        string? expected = Environment.GetEnvironmentVariable("MIRRORPULSE_NAMESPACE_TEST_ARCHITECTURE");
+        if (expected is not null) Assert.AreEqual(expected, RuntimeInformation.ProcessArchitecture.ToString());
+    }
+
     [TestMethod]
     public async Task RoleFlowsAcrossAwaitAndRestoresTheOriginalCurrentUser()
     {
+        AssertExpectedArchitecture();
         using WindowsIdentity caller = WindowsIdentity.GetCurrent();
         await using var session = new MirrorPulseNamespaceExecutionSession();
         Assert.AreEqual(caller.User, session.OwnerSid);
@@ -36,6 +44,7 @@ public sealed class MirrorPulseNamespaceExecutionSessionTests
     [TestMethod]
     public async Task DisposalDrainsActiveWorkAndRejectsNewOperations()
     {
+        AssertExpectedArchitecture();
         await using var session = new MirrorPulseNamespaceExecutionSession();
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -60,6 +69,7 @@ public sealed class MirrorPulseNamespaceExecutionSessionTests
     [TestMethod]
     public async Task FailedOperationRestoresCallerAndDoesNotPreventDisposal()
     {
+        AssertExpectedArchitecture();
         using WindowsIdentity caller = WindowsIdentity.GetCurrent();
         var session = new MirrorPulseNamespaceExecutionSession();
         try
