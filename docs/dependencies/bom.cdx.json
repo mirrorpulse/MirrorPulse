@@ -23,8 +23,8 @@
     {
       "type": "library",
       "name": "CfSharp.Native",
-      "version": "0.1.0-preview.3",
-      "purl": "pkg:nuget/CfSharp.Native@0.1.0-preview.3",
+      "version": "0.1.0-preview.4",
+      "purl": "pkg:nuget/CfSharp.Native@0.1.0-preview.4",
       "licenses": [
         {
           "expression": "Apache-2.0"
@@ -33,15 +33,15 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "7ae4f7b74de4581e6fc17bfa096293e0f26bcc1f0c8c58fc544427dd8aa62daca8f7a7a78fe35b0efb8753d56e0262ce171f00ad5ef290fb4e80ef50b5599e06"
+          "content": "daaf9e2c8e60543835755f8d918c6f5b26c6b0e3f7069223e6514338c28ff0c9e8e85c64f00817b18284ed07c457aff94b36fbdb0e52292d5aa62947e3c8a6d1"
         }
       ]
     },
     {
       "type": "library",
       "name": "CfSharp.Storage.Sqlite",
-      "version": "0.1.0-preview.3",
-      "purl": "pkg:nuget/CfSharp.Storage.Sqlite@0.1.0-preview.3",
+      "version": "0.1.0-preview.4",
+      "purl": "pkg:nuget/CfSharp.Storage.Sqlite@0.1.0-preview.4",
       "licenses": [
         {
           "expression": "Apache-2.0"
@@ -50,15 +50,15 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "bc45dfc0b42af747ccd4b2ff5f77e44235c69b424734f45244287c18a19b4031179b9e6590185c8c9a0f4d8ae550a3ba56b675db775ca7e524b27d2eee0b40d9"
+          "content": "09f280178b996c2371f04f2c23704915b9f18cbc73c9ff9e2709957eacb4a05cd00d6dc7435a040810672f6c475a528a380bc4735b8c0d64d77973c804122c61"
         }
       ]
     },
     {
       "type": "library",
       "name": "CfSharp",
-      "version": "0.1.0-preview.3",
-      "purl": "pkg:nuget/CfSharp@0.1.0-preview.3",
+      "version": "0.1.0-preview.4",
+      "purl": "pkg:nuget/CfSharp@0.1.0-preview.4",
       "licenses": [
         {
           "expression": "Apache-2.0"
@@ -67,7 +67,7 @@
       "hashes": [
         {
           "alg": "SHA-512",
-          "content": "188787c442987514578e3d3fd116bc8bc7b1fa16b0232c1506b5d5742e32476c9ea63a2e406c448bd0724a9fec132dc9e145ca206c124bf2488c1313a899bfbb"
+          "content": "8f49f57c00f3687460b54c65e07174e26e89f935161a9e6b8a9a1a2e0693ae15d1c0c98a226f7eb546fbc9586378f2c62b779fbc77b98750dd9fd9c516f305ce"
         }
       ]
     },

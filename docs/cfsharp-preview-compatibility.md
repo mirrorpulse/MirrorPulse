@@ -1,6 +1,6 @@
 # CfSharp Preview Compatibility Report
 
-MirrorPulse pins `CfSharp` and `CfSharp.Storage.Sqlite` to `0.1.0-preview.3` from
+MirrorPulse pins `CfSharp` and `CfSharp.Storage.Sqlite` to `0.1.0-preview.4` from
 NuGet.org. The integration project owns CfSharp types and lifecycle; Core exposes
 MirrorPulse contracts to Adapters and the product UI.
 
@@ -47,7 +47,7 @@ transaction rolled back and `PRAGMA integrity_check` returned `ok`.
 The earlier `CF-001`, `API-001`, and `API-002` gaps were retested after pinning
 preview.2. MirrorPulse uses the public CfSharp batch and conflict contracts and
 does not read or mutate CfSharp's private SQLite tables or conflict payload
-format. Preview.3 remains a prerelease dependency until CfSharp 1.0.0 is published
+format. Preview.4 remains a prerelease dependency until CfSharp 1.0.0 is published
 and validated for the release candidate.
 
 Preview.2 also exposes a confirmation limitation: coordination USNs can be zero,
@@ -64,3 +64,11 @@ the public managed confirmation contract. The package upgrade does
 not establish complete product recovery or close the conditional-USN limitation.
 See [protected content confirmation](protected-content-confirmation.md). Product
 code keeps the anti-corruption layer and does not own a native confirmation reader.
+
+Preview.4 packages identify source commit
+`d9e0d7f8948156b70d01934c0df326c5ed43a682`. The public release adds finite
+sequence scans through `CloudLocalChangeFeed.BeginScanAsync` and `ReadPageAsync`,
+and recoverable directory moves through `CloudDirectory.PrepareMoveAsync` and
+`ReconcileMoveAsync`. The official SQLite provider supplies the corresponding
+paging and directory projection contracts. Product integration and native
+acceptance of these capabilities remain separate from upgrading the dependency.

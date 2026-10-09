@@ -18,48 +18,48 @@
     },
     {
       "id": "CfSharp.Native",
-      "version": "0.1.0-preview.3",
+      "version": "0.1.0-preview.4",
       "kind": "restored",
-      "sha512": "euT3t03kWB5vwXv6CWKT4PJrzB8MjFj8VEQn3YqmLayo96enj+NbDvuHU9VuAmLOFx8ArV7ykPtOgO9QtVmeBg==",
-      "nugetContentHash": "TFSKHLuvjcuMXjpu1boZSYCeeeOGAEdIYnSODIWLwtXyVQgO69HJcawJie5gOJTwmvdhCOQjvDy4wfBwtVJtDQ==",
+      "sha512": "2q+eLI5gVDg1dV+NkYxvWybGsOP3BpIj5lFDOMKP8Mno6Fxk8AgXsYKE7QfEV6/5Szb72w5SKS1apilH48im0Q==",
+      "nugetContentHash": "2KdyES3f02z4NNPhmWUd1wLHvzfISxxY2H0y83Bx68r0kwUSOETo8bgZqc6nJuUeJYzfrILE3DMxJpjPMEIuZg==",
       "licenseType": "expression",
       "license": "Apache-2.0",
-      "licenseTextSource": "https://raw.githubusercontent.com/MirrorPulse/CfSharp/b65b6b7a81c411e8af84f421e4259825e91536d6/LICENSE",
+      "licenseTextSource": "https://raw.githubusercontent.com/MirrorPulse/CfSharp/d9e0d7f8948156b70d01934c0df326c5ed43a682/LICENSE",
       "noticeFiles": [
-        "CfSharp.Native.0.1.0-preview.3.LICENSE.txt",
-        "CfSharp.Native.0.1.0-preview.3.NOTICE"
+        "CfSharp.Native.0.1.0-preview.4.LICENSE.txt",
+        "CfSharp.Native.0.1.0-preview.4.NOTICE"
       ],
-      "source": "https://www.nuget.org/packages/CfSharp.Native/0.1.0-preview.3"
+      "source": "https://www.nuget.org/packages/CfSharp.Native/0.1.0-preview.4"
     },
     {
       "id": "CfSharp.Storage.Sqlite",
-      "version": "0.1.0-preview.3",
+      "version": "0.1.0-preview.4",
       "kind": "restored",
-      "sha512": "vEXfwLQq90fM1LL/X3fkQjXGm0JHNPRSRCh8GKGbQDEXm55lkBhcjJoPTYrlUKO6VrZ123dcp+Uksn0u7gtA2Q==",
-      "nugetContentHash": "BTD5ItAETZfqNXHLrpI7EI0HtzMMyeXWx0yKNvuQho1PRJSUHqi012DpnhHo6uQjf1bZX4Jg6+uKi+3yc702BA==",
+      "sha512": "CfKAF4uZbCNx8E8sI3BJFbnxjLxzyf+eJwmVfqy0oFzQDW3HQ1oECBBnL2xHWlKKOAvEc1uMDWTXeXPIBBIsYQ==",
+      "nugetContentHash": "DlCRRwi5qKus34SP/nMCdXqT1o+zmoXvWwgABEVo6EFwKtwcuhJhT234N9ai79y0t8mucEY+ECQD9935BhAptA==",
       "licenseType": "expression",
       "license": "Apache-2.0",
-      "licenseTextSource": "https://raw.githubusercontent.com/MirrorPulse/CfSharp/b65b6b7a81c411e8af84f421e4259825e91536d6/LICENSE",
+      "licenseTextSource": "https://raw.githubusercontent.com/MirrorPulse/CfSharp/d9e0d7f8948156b70d01934c0df326c5ed43a682/LICENSE",
       "noticeFiles": [
-        "CfSharp.Storage.Sqlite.0.1.0-preview.3.LICENSE.txt",
-        "CfSharp.Storage.Sqlite.0.1.0-preview.3.NOTICE"
+        "CfSharp.Storage.Sqlite.0.1.0-preview.4.LICENSE.txt",
+        "CfSharp.Storage.Sqlite.0.1.0-preview.4.NOTICE"
       ],
-      "source": "https://www.nuget.org/packages/CfSharp.Storage.Sqlite/0.1.0-preview.3"
+      "source": "https://www.nuget.org/packages/CfSharp.Storage.Sqlite/0.1.0-preview.4"
     },
     {
       "id": "CfSharp",
-      "version": "0.1.0-preview.3",
+      "version": "0.1.0-preview.4",
       "kind": "restored",
-      "sha512": "GIeHxEKYdRRXjj0/0Ra8i8ex+hawIywVBrXVdC4yR2yepjouQGxEi9BySp/sEy3J4UXKIGwSS/JIjBMTqJm/uw==",
-      "nugetContentHash": "ijo8GwpNR9Y+yFx+uTlpqyDECgpbieYo209oLXzq/9KIKo2VSH1QDqnjRV6CWV3MpTnJ/9aZcEgwzmlFC7/erg==",
+      "sha512": "j0n1fADzaHRgtUxl4HF04m6J+TUWGp5ripoaLgaTrhXRwMmKIm9+tUb7yVhjePLGK3efvHe5h1Ddn9nFFvMFzg==",
+      "nugetContentHash": "UZwg1s85TQ2hUgUDhl5JuAh9g0U981VexlMD6Z4/+SNzAzKzyTMuWb3E/pllOB89PuCb5QIeKAUgwqCh9/sBBg==",
       "licenseType": "expression",
       "license": "Apache-2.0",
-      "licenseTextSource": "https://raw.githubusercontent.com/MirrorPulse/CfSharp/b65b6b7a81c411e8af84f421e4259825e91536d6/LICENSE",
+      "licenseTextSource": "https://raw.githubusercontent.com/MirrorPulse/CfSharp/d9e0d7f8948156b70d01934c0df326c5ed43a682/LICENSE",
       "noticeFiles": [
-        "CfSharp.0.1.0-preview.3.LICENSE.txt",
-        "CfSharp.0.1.0-preview.3.NOTICE"
+        "CfSharp.0.1.0-preview.4.LICENSE.txt",
+        "CfSharp.0.1.0-preview.4.NOTICE"
       ],
-      "source": "https://www.nuget.org/packages/CfSharp/0.1.0-preview.3"
+      "source": "https://www.nuget.org/packages/CfSharp/0.1.0-preview.4"
     },
     {
       "id": "FluentFTP",
