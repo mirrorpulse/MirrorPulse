@@ -66,6 +66,8 @@ public sealed class MirrorPulseWindowsNamespacePermissionLeaseTests
                 Assert.AreEqual("Docs/unsent.txt", observed.RelativePath);
                 Assert.IsFalse(observed.IsDirectory);
                 await Assert.ThrowsAsync<IOException>(() => Task.Run(() => File.Move(filePath, filePath + ".moved"), timeout.Token));
+                string docsPath = Path.GetDirectoryName(filePath)!;
+                await Assert.ThrowsAsync<IOException>(() => Task.Run(() => Directory.Move(docsPath, docsPath + ".moved"), timeout.Token));
                 if (owner == 0)
                 {
                     original = new(Guid.NewGuid(), observed.RootId, observed.LocalObject, observed.RelativePath,
@@ -114,7 +116,14 @@ public sealed class MirrorPulseWindowsNamespacePermissionLeaseTests
                         CloudFilePlaceholderSpec.CreateBuilder("born.bin", router.CreateFileIdentity(registration.InstanceId, "docs", "born", "v1"), 16)
                             .WithInSyncState(true).WithInitialAvailability(CloudAvailabilityTarget.OnlineOnly).Build()], cancellationToken: timeout.Token));
                     string born = Path.Combine(paths.SyncRootPath, "Docs", "born.bin");
-                    Assert.IsTrue((await fileSystem.GetFile("Docs/born.bin").InspectAsync(timeout.Token)).IsPlaceholder);
+                    CloudItemSnapshot cold = await fileSystem.GetFile("Docs/born.bin").InspectAsync(timeout.Token);
+                    Assert.IsTrue(cold.IsPlaceholder);
+                    Assert.AreEqual(0L, cold.OnDiskDataSize);
+                    await using (var coldLease = await MirrorPulseWindowsNamespacePermissionLease.OpenAsync(fileSystem.GetFile("Docs/born.bin"), router, timeout.Token))
+                    {
+                        Assert.AreEqual(cold.LocalBinding!.LocalFileId, (await coldLease.InspectAsync(timeout.Token)).LocalObject.LocalFileId);
+                        Assert.AreEqual(0L, (await fileSystem.GetFile("Docs/born.bin").InspectAsync(timeout.Token)).OnDiskDataSize);
+                    }
                     FileSystemAccessRule[] inheritedUser = new FileInfo(born).GetAccessControl(AccessControlSections.Access)
                         .GetAccessRules(includeExplicit: true, includeInherited: true, typeof(System.Security.Principal.SecurityIdentifier))
                         .Cast<FileSystemAccessRule>().Where(rule => rule.IdentityReference.Equals(role.OwnerSid)).ToArray();
@@ -149,7 +158,7 @@ public sealed class MirrorPulseWindowsNamespacePermissionLeaseTests
                 }
                 Assert.AreEqual("latest unsent bytes", await File.ReadAllTextAsync(filePath, timeout.Token));
             }
-            TestContext.WriteLine($"OwnedPermissionLease: architecture={System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture}; twoStoreOwners=True; publicBinding=True; retainedHandle=True; unrecordedWriteRecovered=True; repeatedRecoveryWrites=0; rotationAndExactRestore=True; fileAndDirectory=True; cfapiCreationInheritsProtection=True; latestBytesRetained=True; disabledRoot=True; sourceAccess=False; productIntegrated=False.");
+            TestContext.WriteLine($"OwnedPermissionLease: architecture={System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture}; twoStoreOwners=True; publicBinding=True; retainedHandle=True; coldLeaseNoHydration=True; unrecordedWriteRecovered=True; repeatedRecoveryWrites=0; rotationAndExactRestore=True; fileAndDirectory=True; cfapiCreationInheritsProtection=True; latestBytesRetained=True; disabledRoot=True; sourceAccess=False; productIntegrated=False.");
         }
         finally
         {

@@ -146,10 +146,12 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLease : IMirror
 
     private static SafeFileHandle Open(string path, bool target)
     {
-        // Security-descriptor writes use the retained handle. No delete sharing
-        // is admitted on any checked component, including the final object.
-        SafeFileHandle handle = CreateFile(path, ReadAttributesAccess | (target ? ReadControl | WriteDacl : 0),
-            ShareRead | ShareWrite, nint.Zero, OpenExisting, OpenReparsePoint | BackupSemantics, nint.Zero);
+        // Metadata-only access does not participate in Windows share checking. Request
+        // read-data (list-directory for ancestors) without reading bytes; opening the
+        // reparse object without recall keeps cold placeholders offline. Omitting delete
+        // sharing then retains every component against namespace replacement.
+        SafeFileHandle handle = CreateFile(path, ReadDataOrListDirectory | ReadAttributesAccess | (target ? ReadControl | WriteDacl : 0),
+            ShareRead | ShareWrite, nint.Zero, OpenExisting, OpenReparsePoint | OpenNoRecall | BackupSemantics, nint.Zero);
         if (!handle.IsInvalid) return handle;
         int error = Marshal.GetLastPInvokeError();
         handle.Dispose();
@@ -188,9 +190,9 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLease : IMirror
         InheritanceFlags inheritance, PropagationFlags propagation, AuditFlags flags)
         : AuditRule(identity, mask, inherited, inheritance, propagation, flags);
 
-    private const uint ReadAttributesAccess = 0x80, ReadControl = 0x20000, WriteDacl = 0x40000;
+    private const uint ReadDataOrListDirectory = 1, ReadAttributesAccess = 0x80, ReadControl = 0x20000, WriteDacl = 0x40000;
     private const uint ShareRead = 1, ShareWrite = 2, OpenExisting = 3;
-    private const uint OpenReparsePoint = 0x00200000, BackupSemantics = 0x02000000;
+    private const uint OpenNoRecall = 0x00100000, OpenReparsePoint = 0x00200000, BackupSemantics = 0x02000000;
     private const uint DirectoryAttribute = 0x10, ReparseAttribute = 0x400;
     private const int AttributeTagInformation = 9;
 
