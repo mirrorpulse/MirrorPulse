@@ -293,12 +293,27 @@ public sealed class MirrorPulseManagedRootNamespaceTests
                     await SaveNamespaceTopologyAsync(catalog, registration, root, timeout.Token);
                 var state = new MirrorPulseCfSharpStateSession(paths);
                 var provider = new NamespaceProbeProvider();
+                MirrorPulseManagedRootRenameRecovery? startupRecovery = null;
+                if (run == 1)
+                {
+                    // The production runtime restores original proofs before its
+                    // pump could start. It owns no Worker or source in this probe.
+                    await using IMirrorPulseCloudRuntime runtime = new CfSharpMirrorPulseCloudRuntimeFactory(
+                        provider, router: router, catalog: catalog).Create(paths);
+                    await runtime.StartAsync(timeout.Token);
+                    startupRecovery = runtime.RootRenameRecoveryResults.Single().Recovery;
+                    Assert.IsNotNull(startupRecovery);
+                    Assert.AreEqual(MirrorPulseRootRenamePhase.Completed,
+                        (await runtime.RecoverManagedRootRenameAsync(operation, timeout.Token)).Intent.Phase);
+                }
                 await using var fileSystem = new MirrorPulseCloudFileSystemBuilder(paths).WithStateStore(state)
                     .WithContentProvider(provider).Build();
                 await fileSystem.StartAsync(timeout.Token);
                 await using CloudLocalChangeFeed feed = fileSystem.CreateLocalChangeFeed();
                 await feed.StartAsync(timeout.Token);
                 var coordinator = new MirrorPulseManagedRootRenameCoordinator(fileSystem, catalog, router);
+                await using var scheduler = new MirrorPulseInstanceScheduler();
+                var recoveryService = new MirrorPulseManagedRootRenameService(catalog, scheduler, coordinator.RecoverAsync);
                 if (run == 0)
                 {
                     await new MirrorPulseRootPopulationCoordinator(fileSystem, feed).PopulateAsync(router, timeout.Token);
@@ -310,7 +325,7 @@ public sealed class MirrorPulseManagedRootNamespaceTests
                     originalProof = prepared.Proof;
                     Assert.IsNotNull(originalProof?.DirectoryMoveEvidence);
                     Assert.AreEqual(originalProof, (await coordinator.PrepareAsync(registration.RootId, "Renamed", timeout.Token)).Proof);
-                    MirrorPulseManagedRootRenameRecovery beforeMove = await coordinator.RecoverAsync(operation, timeout.Token);
+                    MirrorPulseManagedRootRenameRecovery beforeMove = await recoveryService.RecoverAsync(operation, timeout.Token);
                     Assert.AreEqual(CloudDirectoryMoveReconciliationOutcome.NotMoved, beforeMove.LibraryResult!.Outcome);
                     Assert.AreEqual(MirrorPulseRootRenamePhase.Prepared, beforeMove.Intent.Phase);
                     Assert.IsTrue((await RunNamespaceProcessAsync(root, "rename", timeout.Token)).Completed);
@@ -318,7 +333,9 @@ public sealed class MirrorPulseManagedRootNamespaceTests
                     Assert.AreEqual("Docs", (await catalog.ReadAdapterTopologyAsync(timeout.Token)).Roots.Single().Label);
                     continue; // Close both owners before recovery, including the original library preparation.
                 }
-                MirrorPulseManagedRootRenameRecovery recovery = await coordinator.RecoverAsync(operation, timeout.Token);
+                Assert.IsEmpty(await recoveryService.RestorePendingAsync(timeout.Token), "A completed runtime receipt must not be replayed on startup.");
+                MirrorPulseManagedRootRenameRecovery recovery = startupRecovery!;
+                Assert.IsNotNull(recovery);
                 Assert.IsNotNull(recovery.LibraryResult);
                 Assert.IsTrue(recovery.LibraryResult.NativeMoveObserved);
                 Assert.IsTrue(recovery.LibraryResult.DurableProjectionCommitted);

@@ -80,5 +80,8 @@ without the original encoded proof remain fenced; recovery cannot replace them
 with the identity currently found at a path. The native gate verifies external
 renames for active and disabled roots across an owner restart. Host polling and
 streamed remote changes use the router's current mapping within instance
-scheduling. Callback authorization, CLI commands and fault recovery integration
-are still separate pending work.
+scheduling. Runtime startup replays original pending proofs before starting the
+upload pump; missing legacy proofs and recoverable per-root failures retain their
+namespace fences. Explicit recovery shares the same instance scheduler as uploads
+and remote application. Callback authorization, CLI commands and the full fault
+recovery matrix are still separate pending work.

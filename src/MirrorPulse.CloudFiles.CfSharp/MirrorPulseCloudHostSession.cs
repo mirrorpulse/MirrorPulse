@@ -13,7 +13,13 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 public interface IMirrorPulseCloudRuntime : IAsyncDisposable
 {
     MirrorPulseJournalPumpHealth? JournalHealth => null;
+    IReadOnlyList<MirrorPulseManagedRootRenameRestoreResult> RootRenameRecoveryResults => [];
     ValueTask StartAsync(CancellationToken cancellationToken);
+
+    ValueTask<MirrorPulseManagedRootRenameRecovery> RecoverManagedRootRenameAsync(
+        Guid operationId, CancellationToken cancellationToken) =>
+        ValueTask.FromException<MirrorPulseManagedRootRenameRecovery>(
+            new NotSupportedException("This Cloud Files runtime does not recover managed root renames."));
 
     ValueTask<MirrorPulseCloudStatusSnapshot> ReadStatusAsync(
         IEnumerable<InstanceId> instanceIds,
@@ -122,12 +128,24 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         private MirrorPulseUploadConflictActions? _conflictActions;
         private MirrorPulseRemoteConflictActions? _remoteConflictActions;
         private MirrorPulseCloudProviderDiagnostics? _providerDiagnostics;
+        private readonly MirrorPulseInstanceScheduler _scheduler = scheduler ?? new();
+        private readonly bool _ownsScheduler = scheduler is null;
+        private MirrorPulseManagedRootRenameService? _rootRenames;
+        public IReadOnlyList<MirrorPulseManagedRootRenameRestoreResult> RootRenameRecoveryResults { get; private set; } = [];
         public MirrorPulseJournalPumpHealth? JournalHealth => _uploadPump?.Health;
 
         public async ValueTask StartAsync(CancellationToken cancellationToken)
         {
             _providerDiagnostics = new(Path.Combine(dataRootPath, "logs", "cloud-files"));
             await fileSystem.StartAsync(cancellationToken).ConfigureAwait(false);
+            if (catalog is not null && router is not null)
+            {
+                var coordinator = new MirrorPulseManagedRootRenameCoordinator(fileSystem, catalog, router);
+                _rootRenames = new(catalog, _scheduler, coordinator.RecoverAsync);
+                // Recover original namespace evidence before upload dispatch starts.
+                // Incomplete and legacy records keep their per-root durable fence.
+                RootRenameRecoveryResults = await _rootRenames.RestorePendingAsync(cancellationToken).ConfigureAwait(false);
+            }
             if (catalog is not null && conflicts is not null && notifications is not null)
                 await new MirrorPulseRemoteConflictProjector(fileSystem, catalog, conflicts, notifications)
                     .RestoreAsync(cancellationToken).ConfigureAwait(false);
@@ -139,7 +157,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                     feed, state, new BackoffPolicy(TimeSpan.FromSeconds(2), TimeSpan.FromMinutes(5)));
                 _uploadPump = new MirrorPulseJournalUploadPump(feed, router, catalog, uploads, stats, state,
                     syncRootPath, dataRootPath, mayDispatch, completion, conflicts, notifications, mutations,
-                    uploads as IMirrorPulseWorkerRangeTransport, uploads as IMirrorPulseWorkerDirectoryPageSource, fileSystem, scheduler);
+                    uploads as IMirrorPulseWorkerRangeTransport, uploads as IMirrorPulseWorkerDirectoryPageSource, fileSystem, _scheduler);
                 _conflictActions = new MirrorPulseUploadConflictActions(catalog, state, feed,
                     new BackoffPolicy(TimeSpan.FromSeconds(2), TimeSpan.FromMinutes(5)),
                     new MirrorPulseStoragePaths(syncRootPath, dataRootPath), router, mutations);
@@ -153,6 +171,11 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                     catalog, conflicts);
             }
         }
+
+        public ValueTask<MirrorPulseManagedRootRenameRecovery> RecoverManagedRootRenameAsync(
+            Guid operationId, CancellationToken cancellationToken) =>
+            (_rootRenames ?? throw new NotSupportedException("The managed root recovery service is unavailable."))
+                .RecoverAsync(operationId, cancellationToken);
 
         public ValueTask<MirrorPulseConflictResolution> ApplyUploadConflictAsync(
             Guid conflictId,
@@ -205,8 +228,15 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         {
             try
             {
-                if (_uploadPump is not null)
-                    await _uploadPump.DisposeAsync().ConfigureAwait(false);
+                try
+                {
+                    if (_uploadPump is not null)
+                        await _uploadPump.DisposeAsync().ConfigureAwait(false);
+                }
+                finally
+                {
+                    if (_ownsScheduler) await _scheduler.DisposeAsync().ConfigureAwait(false);
+                }
             }
             finally
             {
@@ -397,6 +427,14 @@ public sealed class MirrorPulseCloudHostSession : IAsyncDisposable
         }
 
         return _runtime.ReadStatusAsync(instanceIds, cancellationToken);
+    }
+
+    public ValueTask<MirrorPulseManagedRootRenameRecovery> RecoverManagedRootRenameAsync(
+        Guid operationId, CancellationToken cancellationToken = default)
+    {
+        if (!_started || _runtime is null)
+            throw new InvalidOperationException("The Cloud Files Host session has not started.");
+        return _runtime.RecoverManagedRootRenameAsync(operationId, cancellationToken);
     }
 
     public ValueTask<CloudRemoteApplyResult> ApplyRemoteBatchAsync(

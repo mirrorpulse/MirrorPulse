@@ -13,6 +13,24 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 public sealed class MirrorPulseCloudHostSessionTests
 {
     [TestMethod]
+    public async Task RootRecoveryRequiresStartedOwnerAndForwardsOriginalOperation()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "MirrorPulse-tests", Guid.NewGuid().ToString("N"));
+        var paths = new MirrorPulseStoragePaths(Path.Combine(root, "sync"), Path.Combine(root, "data"));
+        var factory = new RecordingRuntimeFactory();
+        await using var session = new MirrorPulseCloudHostSession(paths,
+            new(new RecordingShellRegistry(), new RecordingCloudRegistry()), factory,
+            new(new RecordingOwnerLock()), "S-1-5-21-123", "MirrorPulse");
+        Guid operation = Guid.NewGuid();
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => session.RecoverManagedRootRenameAsync(operation).AsTask());
+        await session.StartAsync();
+        var receipt = await session.RecoverManagedRootRenameAsync(operation);
+        Assert.AreEqual(operation, receipt.Intent.OperationId);
+        Assert.AreEqual(operation, factory.Runtimes.Single().RecoveredOperation);
+        Assert.IsNull(receipt.LibraryResult, "The recording runtime does not claim native reconciliation.");
+    }
+
+    [TestMethod]
     public async Task CustomInstanceNameSwitchesBackToUnifiedShellNameWhenAnotherInstanceAppears()
     {
         string root = Path.Combine(Path.GetTempPath(), "MirrorPulse-tests", Guid.NewGuid().ToString("N"));
@@ -233,6 +251,18 @@ public sealed class MirrorPulseCloudHostSessionTests
 
     private sealed class RecordingRuntime(bool failStart) : IMirrorPulseCloudRuntime
     {
+        public Guid? RecoveredOperation { get; private set; }
+
+        public ValueTask<MirrorPulseManagedRootRenameRecovery> RecoverManagedRootRenameAsync(
+            Guid operationId, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            RecoveredOperation = operationId;
+            return ValueTask.FromResult(new MirrorPulseManagedRootRenameRecovery(
+                new(operationId, RootId.New(), "Docs", "Renamed", MirrorPulse.Core.State.MirrorPulseRootRenamePhase.Prepared,
+                    DateTimeOffset.UtcNow), null));
+        }
+
         public int StartCount { get; private set; }
 
         public int DisposeCount { get; private set; }
