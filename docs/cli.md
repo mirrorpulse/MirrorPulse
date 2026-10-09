@@ -51,6 +51,7 @@ The default output is concise human-readable text. Automation should use `--json
 | `mp adapter remove --adapter-id ID [--install-id ID] [--purge]` | Remove an installation after Host reference checks. `uninstall` is an alias. | `--purge` removes retained package data when safe |
 | `mp instance list` | List Adapter instances and mapped roots. | `--json` |
 | `mp root list` | Inspect managed root IDs, labels, availability, required rescans, and pending namespace recovery. | `mp --json root list` |
+| `mp root recover OPERATION_ID` | Retry the original managed root rename proof through the Host. | operation ID from `root list`; `--json` includes separate native and durable projection facts |
 | `mp instance create --install-id ID --name NAME [--config k=v] [--root k=v] [--secret VALUE] [--disabled]` | Create an independently identifiable instance. | repeat `--config`/`--root` for multiple values |
 | `mp instance configure --instance-id ID --name NAME [--config k=v] [--root k=v]` | Update instance configuration and roots. | adapter-defined keys |
 | `mp instance enable\|disable --instance-id ID` | Change whether an instance participates in synchronization. | `--json` |
@@ -65,6 +66,15 @@ The default output is concise human-readable text. Automation should use `--json
 Global options must precede the command. Scalar command options accept `--name value` or `--name=value`; repeatable `--config`, `--root`, and `--enable-installation` options use separate values. Creation and configuration patches use the same Adapter field validation. A patch retains unspecified settings and the Host-managed credential reference. Secret fields and credential references are rejected in ordinary `--config` values. Secrets are accepted through `--secret` during creation. Avoid shell history and log capture. Other credential-input helpers and rotation/removal CLI options are not fully wired into these commands.
 
 See the [capability baseline](cli-capabilities.md) for limitations. Operation watch currently reads one snapshot, and cancel does not stop the underlying work. Startup and developer-mode commands persist settings but do not yet register Windows startup or allow unsigned packages. A conflict response does not prove the queued action completed.
+
+Root recovery never moves an Adapter source directory or captures a replacement
+object as an old rename proof. Runtime startup attempts the same historical
+recovery before starting uploads. Pending or incomplete reconciliation returns
+exit 11 and keeps the root fenced; a completed receipt returns 0, and a cancelled
+historical intent returns 10. Legacy records without original public evidence
+remain fenced and return an unsupported error. Historical receipts do not revert
+a later Label. Callback authorization and creating a new root rename from the CLI
+remain pending capabilities.
 
 ## Automation examples
 

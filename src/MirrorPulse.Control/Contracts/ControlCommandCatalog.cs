@@ -20,6 +20,7 @@ public static class MirrorPulseControlCommands
     public const string InstanceEnable = "instance.enable";
     public const string InstanceSelectVersion = "instance.selectVersion";
     public const string RootList = "root.list";
+    public const string RootRecover = "root.recover";
 
     public const string SyncStatus = "sync.status";
     public const string SyncRefresh = "sync.refresh";
@@ -50,6 +51,7 @@ public static class MirrorPulseControlCommands
         new(InstanceEnable, "instance", true, false),
         new(InstanceSelectVersion, "instance", true, false),
         new(RootList, "root", false, false),
+        new(RootRecover, "root", true, false),
         new(SyncStatus, "sync", false, false),
         new(SyncRefresh, "sync", true, false),
         new(ConflictList, "conflict", false, false),

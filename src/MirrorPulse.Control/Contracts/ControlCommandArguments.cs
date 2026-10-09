@@ -83,6 +83,13 @@ public sealed record MirrorPulseControlRootRename(string OperationId, string Sou
 public sealed record MirrorPulseControlRootStatus(MirrorPulseControlRoot Root, string SyncState,
     bool RequiresFullRescan, MirrorPulseControlRootRename? PendingRename);
 
+public sealed record RootRecoverArguments(Guid OperationId) : IMirrorPulseControlArguments;
+
+/// <summary>Separates the durable product phase from a fresh public reconciliation receipt.</summary>
+public sealed record MirrorPulseControlRootRecovery(Guid OperationId, string RootId, string Phase,
+    bool? NativeMoveObserved, bool? DurableProjectionCommitted, bool? RequiresFullRescan,
+    string? Outcome, string? Stage, int? NativeHResult);
+
 public sealed record MirrorPulseControlRuntimeState(
     string InstanceId,
     string Phase,

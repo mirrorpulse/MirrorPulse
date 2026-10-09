@@ -220,7 +220,26 @@ public sealed class MirrorPulseCliHostOperations : IMirrorPulseCliHostOperations
                     result = roots;
                     human = roots.Count == 0 ? "No managed roots are configured." : string.Join(Environment.NewLine,
                         roots.Select(root => $"{root.Root.Label} · {root.SyncState} · {root.Root.RootId}" +
-                            (root.PendingRename is { } pending ? $" · {pending.SourceName} -> {pending.TargetName} ({pending.Phase})" : string.Empty)));
+                            (root.PendingRename is { } pending ? $" · {pending.SourceName} -> {pending.TargetName} ({pending.Phase}) · {pending.OperationId}" : string.Empty)));
+                    break;
+                case ("root", "recover"):
+                    if (command.Arguments.Count != 1 || !Guid.TryParse(command.Arguments[0], out Guid renameOperation) || renameOperation == Guid.Empty)
+                    {
+                        await MirrorPulseCliOutputFormatter.WriteErrorAsync(MirrorPulseControlExitCodes.Validation,
+                            MirrorPulseControlErrorCodes.InvalidRequest, "root recover requires one non-empty root rename operation ID.",
+                            json, errorWriter, cancellationToken).ConfigureAwait(false);
+                        return MirrorPulseControlExitCodes.Validation;
+                    }
+                    MirrorPulseControlRootRecovery recovery = await _client.RecoverRootRenameAsync(renameOperation, cancellationToken).ConfigureAwait(false);
+                    result = recovery;
+                    human = $"Root rename {recovery.Phase} · {recovery.OperationId:D}" +
+                        (recovery.Outcome is { } renameOutcome ? $" · {renameOutcome} ({recovery.Stage})" : string.Empty);
+                    exitCode = recovery.Phase switch
+                    {
+                        "Completed" => MirrorPulseControlExitCodes.Success,
+                        "Cancelled" => MirrorPulseControlExitCodes.Cancelled,
+                        _ => MirrorPulseControlExitCodes.Pending,
+                    };
                     break;
                 case ("instance", "create"):
                     result = await _client.CreateInstanceAsync(new InstanceCreateArguments(

@@ -441,7 +441,20 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
             .Register(dispatcher);
         dispatcher.Register<ControlEmptyArguments, IReadOnlyList<MirrorPulseControlRootStatus>>(
             MirrorPulseControlCommands.RootList, async (_, token) => await ReadRootsAsync(token).ConfigureAwait(false));
+        dispatcher.Register<RootRecoverArguments, MirrorPulseControlRootRecovery>(
+            MirrorPulseControlCommands.RootRecover, RecoverRootRenameAsync);
         _controlPipe = new MirrorPulseControlPipeServer(dispatcher.DispatchAsync);
+    }
+
+    private async ValueTask<MirrorPulseControlRootRecovery> RecoverRootRenameAsync(RootRecoverArguments arguments,
+        CancellationToken cancellationToken)
+    {
+        MirrorPulseManagedRootRenameRecovery recovery = await _session.RecoverManagedRootRenameAsync(
+            arguments.OperationId, cancellationToken).ConfigureAwait(false);
+        CloudDirectoryMoveReconciliationResult? receipt = recovery.LibraryResult;
+        return new(recovery.Intent.OperationId, recovery.Intent.RootId.ToString(), recovery.Intent.Phase.ToString(),
+            receipt?.NativeMoveObserved, receipt?.DurableProjectionCommitted, receipt?.RequiresFullRescan,
+            receipt?.Outcome.ToString(), receipt?.Stage.ToString(), receipt?.NativeHResult);
     }
 
     private async Task<MirrorPulseHostStatus> StartRequestedAsync(

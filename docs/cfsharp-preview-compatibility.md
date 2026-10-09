@@ -83,5 +83,6 @@ streamed remote changes use the router's current mapping within instance
 scheduling. Runtime startup replays original pending proofs before starting the
 upload pump; missing legacy proofs and recoverable per-root failures retain their
 namespace fences. Explicit recovery shares the same instance scheduler as uploads
-and remote application. Callback authorization, CLI commands and the full fault
-recovery matrix are still separate pending work.
+and remote application. `mp root recover OPERATION_ID` uses that same Host service
+and reports incomplete recovery as pending. Callback authorization, preparation of
+a new rename from the CLI and the full fault recovery matrix remain pending work.

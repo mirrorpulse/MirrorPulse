@@ -42,7 +42,7 @@ public static class MirrorPulseCliCommandLine
             ["host"] = NewSet("status", "start", "stop", "restart"),
             ["instance"] = NewSet("list", "create", "configure", "enable", "disable", "select-version"),
             ["operation"] = NewSet("get", "watch", "cancel"),
-            ["root"] = NewSet("list"),
+            ["root"] = NewSet("list", "recover"),
             ["sync"] = NewSet("status", "refresh")
         };
 
@@ -195,6 +195,7 @@ public static class MirrorPulseCliHelp
           instance list|create|configure|enable|disable|select-version
                                          Manage Adapter instances.
           root list                      Inspect managed roots and namespace recovery.
+          root recover OPERATION_ID      Retry an original managed root rename proof.
           conflict list|show|snooze|resolve
                                          Inspect and resolve conflicts.
           operation get|watch|cancel      Inspect long-running operations.

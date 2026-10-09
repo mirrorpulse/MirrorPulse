@@ -232,6 +232,11 @@ public sealed class MirrorPulseControlClient
         SendAsync<ControlEmptyArguments, IReadOnlyList<MirrorPulseControlRootStatus>>(
             MirrorPulseControlCommands.RootList, new(), cancellationToken);
 
+    public Task<MirrorPulseControlRootRecovery> RecoverRootRenameAsync(Guid operationId,
+        CancellationToken cancellationToken = default) =>
+        SendAsync<RootRecoverArguments, MirrorPulseControlRootRecovery>(
+            MirrorPulseControlCommands.RootRecover, new(operationId), cancellationToken);
+
     public Task<MirrorPulseControlConflictList> GetConflictsAsync(
         int? limit = null,
         string? cursor = null,
