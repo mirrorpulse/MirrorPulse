@@ -72,3 +72,11 @@ and recoverable directory moves through `CloudDirectory.PrepareMoveAsync` and
 `ReconcileMoveAsync`. The official SQLite provider supplies the corresponding
 paging and directory projection contracts. Product integration and native
 acceptance of these capabilities remain separate from upgrading the dependency.
+
+The managed root rename coordinator persists the exact public move proof before
+external authorization, verifies its stable root binding on replay, and uses the
+public reconciliation result before changing the product Label. Legacy records
+without the original encoded proof remain fenced; recovery cannot replace them
+with the identity currently found at a path. The native gate verifies external
+renames for active and disabled roots across an owner restart. Host callback,
+CLI command and remote polling integration are still separate pending work.

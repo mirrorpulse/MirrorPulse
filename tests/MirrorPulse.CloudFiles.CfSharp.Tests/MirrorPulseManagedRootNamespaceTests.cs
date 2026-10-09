@@ -104,6 +104,60 @@ public sealed class MirrorPulseManagedRootNamespaceTests
     }
 
     [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task HistoricalRenameWithoutPublicProofCannotAdoptCurrentObject(bool nativeObserved)
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "MirrorPulse-root-proof-tests", Guid.NewGuid().ToString("N"));
+        var paths = new MirrorPulseStoragePaths(Path.Combine(directory, "sync"), Path.Combine(directory, "data"));
+        RootRegistration root = AdapterRootRegistrationMapper.Map(AdapterId.Parse("example.missing-proof"), InstanceId.New(),
+            new AdapterRootDefinition("docs", "Docs", "Docs", false), RootRegistrationState.Active,
+            identityScope: RootIdentityScope.InstanceRoot);
+        try
+        {
+            Directory.CreateDirectory(paths.SyncRootPath);
+            await using var catalog = await MirrorPulseProductCatalog.OpenAsync(paths);
+            await SaveNamespaceTopologyAsync(catalog, root, directory, CancellationToken.None);
+            MirrorPulseRootRenameIntent intent = await catalog.PrepareManagedRootRenameAsync(root.RootId, "Renamed");
+            CloudPlaceholderIdentity identity = MirrorPulsePlaceholderIdentity.Create(root.InstanceId, $"mirrorpulse-root:{root.RootId}").ToCfSharp();
+            var original = new MirrorPulseRootRenameProof(identity.ItemId,
+                new(1, Guid.NewGuid(), Guid.NewGuid()), Convert.ToBase64String(identity.Encode()), DateTimeOffset.UtcNow);
+            await catalog.SaveManagedRootRenameProofAsync(intent.OperationId, original);
+            if (nativeObserved)
+                intent = await catalog.ObserveManagedRootRenameAsync(intent.OperationId,
+                    new(original.LocalObject, original.PlaceholderIdentity, intent.TargetName, DateTimeOffset.UtcNow));
+            // No registration, StartAsync, item inspection, or original library record exists.
+            await using var fileSystem = new MirrorPulseCloudFileSystemBuilder(paths)
+                .WithStateStore(new MirrorPulseCfSharpStateSession(paths)).Build();
+            var coordinator = new MirrorPulseManagedRootRenameCoordinator(fileSystem, catalog,
+                new(paths.SyncRootPath, [root]));
+            await Assert.ThrowsExactlyAsync<NotSupportedException>(() => coordinator.RecoverAsync(intent.OperationId).AsTask());
+            await Assert.ThrowsExactlyAsync<NotSupportedException>(() => coordinator.PrepareAsync(root.RootId, "Renamed").AsTask());
+            MirrorPulseRootRenameHistory retained = (await catalog.ReadManagedRootRenameHistoryAsync()).Single();
+            Assert.AreEqual(original, retained.Proof);
+            Assert.AreEqual(intent.Phase, retained.Intent.Phase);
+            Assert.AreEqual("Docs", (await catalog.ReadAdapterTopologyAsync()).Roots.Single().DirectoryName);
+        }
+        finally { Directory.Delete(directory, true); }
+    }
+
+    private static async Task SaveNamespaceTopologyAsync(MirrorPulseProductCatalog catalog, RootRegistration root,
+        string directory, CancellationToken token)
+    {
+        var manifest = new AdapterManifest(1, root.AdapterId, "Example", "1.0.0", new(1, 1),
+            new Dictionary<string, string> { ["win-x64"] = "worker/adapter.exe", ["win-arm64"] = "worker/adapter.exe" },
+            new(null), new(null, null), new(true, false, true, true), ["en-US"], "1.0.0",
+            [new(root.UniquenessKey, root.Label, root.DirectoryName, false)]);
+        var installation = new InstalledAdapter(manifest, InstallId.New(), Path.Combine(directory, "installed"),
+            new(new string('A', 64)), AdapterInstallSource.LocalFile, null, true, DateTimeOffset.UtcNow, AdapterLifecycleState.Installed);
+        var configured = new AdapterInstance(root.AdapterId, installation.InstallId, root.InstanceId, "Example",
+            new Dictionary<string, string> { ["sourceDirectory"] = Path.Combine(directory, "source") }, [],
+            Path.Combine(directory, "cache", "files"), Path.Combine(directory, "cache", "transfers"),
+            root.State == RootRegistrationState.Active, AdapterLifecycleState.Enabled, null, DateTimeOffset.UtcNow);
+        await catalog.SaveAdapterTopologyAsync(new([installation], [configured], [root]), token);
+    }
+
+    [TestMethod]
     [DoNotParallelize]
     [TestCategory("NativeCloudFiles")]
     public async Task NativeRootDeleteProtectionRetainsEntryAfterChildFirstRecursiveDelete()
@@ -205,7 +259,14 @@ public sealed class MirrorPulseManagedRootNamespaceTests
     [TestMethod]
     [DoNotParallelize]
     [TestCategory("NativeCloudFiles")]
-    public async Task NativeExternalRootRenameExposesPartialStateMoveRecoveryBoundary()
+    public async Task NativeExternalRootRenameRecoversOriginalPublicProofAcrossRestart()
+    {
+        // Keep one required gate result while exercising both availability states.
+        await ProbeExternalRootRenameAsync(RootRegistrationState.Active);
+        await ProbeExternalRootRenameAsync(RootRegistrationState.Disabled);
+    }
+
+    private async Task ProbeExternalRootRenameAsync(RootRegistrationState availability)
     {
         if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
             Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
@@ -214,7 +275,7 @@ public sealed class MirrorPulseManagedRootNamespaceTests
         var registry = new CfSharpMirrorPulseCloudRootRegistry();
         InstanceId instance = InstanceId.New();
         RootRegistration registration = AdapterRootRegistrationMapper.Map(AdapterId.Parse("example.rename-probe"), instance,
-            new AdapterRootDefinition("docs", "Docs", "Docs", false), RootRegistrationState.Active,
+            new AdapterRootDefinition("docs", "Docs", "Docs", false), availability,
             identityScope: RootIdentityScope.InstanceRoot);
         var router = new MirrorPulseRootRouter(paths.SyncRootPath, [registration]);
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
@@ -222,40 +283,71 @@ public sealed class MirrorPulseManagedRootNamespaceTests
         {
             registry.Register(new(paths.SyncRootPath, "0.1.0", Guid.NewGuid(), [1, 2, 3]));
             await File.WriteAllTextAsync(Path.Combine(root, ".mp-namespace-fixture"), string.Empty, timeout.Token);
-            var state = new MirrorPulseCfSharpStateSession(paths);
-            var provider = new NamespaceProbeProvider();
-            await using var fileSystem = new MirrorPulseCloudFileSystemBuilder(paths).WithStateStore(state)
-                .WithContentProvider(provider).Build();
-            await fileSystem.StartAsync(timeout.Token);
-            await using CloudLocalChangeFeed feed = fileSystem.CreateLocalChangeFeed();
-            await feed.StartAsync(timeout.Token);
-            await new MirrorPulseRootPopulationCoordinator(fileSystem, feed).PopulateAsync(router, timeout.Token);
             CloudPlaceholderIdentity child = router.CreateFileIdentity(instance, "docs", "child", "v1");
-            await fileSystem.GetDirectory("Docs").CreatePlaceholdersAsync([
-                CloudFilePlaceholderSpec.CreateBuilder("child.txt", child, 4).WithInSyncState(true)
-                    .WithInitialAvailability(CloudAvailabilityTarget.OnlineOnly).Build()], cancellationToken: timeout.Token);
-            Assert.IsTrue((await RunNamespaceProcessAsync(root, "rename", timeout.Token)).Completed);
-            Assert.IsGreaterThan(0, provider.RenameApprovals, "The provider did not receive the external rename request.");
-            CloudItemState? movedRoot = null;
-            CloudItemState? oldChild = null;
-            while (movedRoot is null)
+            Guid operation = Guid.Empty;
+            MirrorPulseRootRenameProof? originalProof = null;
+            for (int run = 0; run < 2; run++)
             {
+                await using var catalog = await MirrorPulseProductCatalog.OpenAsync(paths, timeout.Token);
+                if (run == 0)
+                    await SaveNamespaceTopologyAsync(catalog, registration, root, timeout.Token);
+                var state = new MirrorPulseCfSharpStateSession(paths);
+                var provider = new NamespaceProbeProvider();
+                await using var fileSystem = new MirrorPulseCloudFileSystemBuilder(paths).WithStateStore(state)
+                    .WithContentProvider(provider).Build();
+                await fileSystem.StartAsync(timeout.Token);
+                await using CloudLocalChangeFeed feed = fileSystem.CreateLocalChangeFeed();
+                await feed.StartAsync(timeout.Token);
+                var coordinator = new MirrorPulseManagedRootRenameCoordinator(fileSystem, catalog, router);
+                if (run == 0)
+                {
+                    await new MirrorPulseRootPopulationCoordinator(fileSystem, feed).PopulateAsync(router, timeout.Token);
+                    await fileSystem.GetDirectory("Docs").CreatePlaceholdersAsync([
+                        CloudFilePlaceholderSpec.CreateBuilder("child.txt", child, 4).WithInSyncState(true)
+                            .WithInitialAvailability(CloudAvailabilityTarget.OnlineOnly).Build()], cancellationToken: timeout.Token);
+                    MirrorPulseRootRenameHistory prepared = await coordinator.PrepareAsync(registration.RootId, "Renamed", timeout.Token);
+                    operation = prepared.Intent.OperationId;
+                    originalProof = prepared.Proof;
+                    Assert.IsNotNull(originalProof?.DirectoryMoveEvidence);
+                    Assert.AreEqual(originalProof, (await coordinator.PrepareAsync(registration.RootId, "Renamed", timeout.Token)).Proof);
+                    MirrorPulseManagedRootRenameRecovery beforeMove = await coordinator.RecoverAsync(operation, timeout.Token);
+                    Assert.AreEqual(CloudDirectoryMoveReconciliationOutcome.NotMoved, beforeMove.LibraryResult!.Outcome);
+                    Assert.AreEqual(MirrorPulseRootRenamePhase.Prepared, beforeMove.Intent.Phase);
+                    Assert.IsTrue((await RunNamespaceProcessAsync(root, "rename", timeout.Token)).Completed);
+                    Assert.IsGreaterThan(0, provider.RenameApprovals, "The provider did not receive the external rename request.");
+                    Assert.AreEqual("Docs", (await catalog.ReadAdapterTopologyAsync(timeout.Token)).Roots.Single().Label);
+                    continue; // Close both owners before recovery, including the original library preparation.
+                }
+                MirrorPulseManagedRootRenameRecovery recovery = await coordinator.RecoverAsync(operation, timeout.Token);
+                Assert.IsNotNull(recovery.LibraryResult);
+                Assert.IsTrue(recovery.LibraryResult.NativeMoveObserved);
+                Assert.IsTrue(recovery.LibraryResult.DurableProjectionCommitted);
+                Assert.IsFalse(recovery.LibraryResult.RequiresFullRescan);
+                Assert.AreEqual(MirrorPulseRootRenamePhase.Completed, recovery.Intent.Phase,
+                    $"Public recovery outcome={recovery.LibraryResult.Outcome}; stage={recovery.LibraryResult.Stage}; nativeHResult={recovery.LibraryResult.NativeHResult:X8}.");
+                RootRegistration renamed = (await catalog.ReadAdapterTopologyAsync(timeout.Token)).Roots.Single();
+                Assert.AreEqual(registration.RootId, renamed.RootId);
+                Assert.AreEqual(registration.InstanceId, renamed.InstanceId);
+                Assert.AreEqual(registration.UniquenessKey, renamed.UniquenessKey);
+                Assert.AreEqual(availability, renamed.State);
+                Assert.AreEqual("Renamed", renamed.Label);
+                Assert.AreEqual("Renamed", renamed.DirectoryName);
+                MirrorPulseRootRenameHistory completed = (await catalog.ReadManagedRootRenameHistoryAsync(timeout.Token)).Single();
+                Assert.AreEqual(originalProof, completed.Proof);
+                Assert.AreEqual(originalProof!.LocalObject, completed.Observation!.LocalObject);
+                Assert.AreEqual(originalProof.PlaceholderIdentity, completed.Observation.PlaceholderIdentity);
+                Assert.AreEqual(MirrorPulseRootRenamePhase.Completed, (await coordinator.RecoverAsync(operation, timeout.Token)).Intent.Phase);
                 await using ICloudStateTransaction transaction = await state.OpenStore.BeginTransactionAsync(timeout.Token);
-                movedRoot = await transaction.Items.GetByRelativePathAsync("Renamed", timeout.Token);
-                oldChild = await transaction.Items.GetByRelativePathAsync(Path.Combine("Docs", "child.txt"), timeout.Token);
+                CloudItemState? movedRoot = await transaction.Items.GetByRelativePathAsync("Renamed", timeout.Token);
+                CloudItemState? movedChild = await transaction.Items.GetByRelativePathAsync(Path.Combine("Renamed", "child.txt"), timeout.Token);
+                Assert.AreEqual(originalProof.ItemId, movedRoot!.ItemId);
+                Assert.AreEqual(child.ItemId, movedChild!.ItemId);
+                Assert.IsNull(await transaction.Items.GetByRelativePathAsync(Path.Combine("Docs", "child.txt"), timeout.Token));
                 await transaction.RollbackAsync(timeout.Token);
-                if (movedRoot is null) await Task.Delay(20, timeout.Token);
+                Assert.IsTrue(File.Exists(Path.Combine(paths.SyncRootPath, "Renamed", "child.txt")));
+                Assert.AreEqual("docs", router.ResolveCurrentPath(Path.Combine("Renamed", "child.txt")).RootKey);
+                TestContext.WriteLine($"PublicRootRenameRecovery: availability={availability}; originalProofRetained=True; stableRoot=True; stableChild=True; runtimeRestart=True; sourceCalls=0.");
             }
-            Assert.IsNotNull(oldChild);
-            Assert.AreEqual(child.ItemId, oldChild.ItemId);
-            CloudItemSnapshot nativeRoot = await fileSystem.GetDirectory("Renamed").InspectAsync(timeout.Token);
-            Assert.IsTrue(nativeRoot.Exists && nativeRoot.IsPlaceholder);
-            Assert.AreEqual(movedRoot.ItemId, CloudPlaceholderIdentity.Decode(nativeRoot.PlaceholderIdentity.Span).ItemId);
-            Assert.IsTrue(File.Exists(Path.Combine(paths.SyncRootPath, "Renamed", "child.txt")));
-            InvalidOperationException failure = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
-                fileSystem.GetDirectory("Docs").MoveToAsync(fileSystem.Root, "Renamed", cancellationToken: timeout.Token).AsTask());
-            Assert.AreEqual("Durable state already identifies an unrelated item at the destination path.", failure.Message);
-            TestContext.WriteLine("CfSharp 0.1.0-preview.3: an external root rename moves the root's journal item, retains child item paths, and prevents public MoveToAsync replay after partial projection. The native rename succeeded; the managed replay reports InvalidOperationException before a native operation.");
         }
         finally
         {

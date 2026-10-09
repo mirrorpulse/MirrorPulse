@@ -50,7 +50,7 @@
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeDisabledSiblingRootKeepsResidentDataAndJournalWithoutRemoteAccess",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeBoundedJournalKeepsDeferredHeadAndLaterActiveOperationsDurable",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativePendingRootRenameFencesJournalAndRescanAcrossRestart",
-    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeExternalRootRenameExposesPartialStateMoveRecoveryBoundary",
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeExternalRootRenameRecoversOriginalPublicProofAcrossRestart",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeRootDeleteProtectionRetainsEntryAfterChildFirstRecursiveDelete",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeChildDeleteDenialExposesUnconvertedFileProtectionBoundary"
   ],
@@ -84,7 +84,7 @@
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeDisabledSiblingRootKeepsResidentDataAndJournalWithoutRemoteAccess",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeBoundedJournalKeepsDeferredHeadAndLaterActiveOperationsDurable",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativePendingRootRenameFencesJournalAndRescanAcrossRestart",
-      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeExternalRootRenameExposesPartialStateMoveRecoveryBoundary",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeExternalRootRenameRecoversOriginalPublicProofAcrossRestart",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeRootDeleteProtectionRetainsEntryAfterChildFirstRecursiveDelete",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeChildDeleteDenialExposesUnconvertedFileProtectionBoundary"
     ],
