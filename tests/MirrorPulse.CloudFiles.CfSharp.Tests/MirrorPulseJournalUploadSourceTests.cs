@@ -1,4 +1,5 @@
 using System.Runtime.Versioning;
+using System.Security.Cryptography;
 using CfSharp;
 using MirrorPulse.CloudFiles.CfSharp;
 using MirrorPulse.Core.CloudFiles;
@@ -73,13 +74,60 @@ public sealed class MirrorPulseJournalUploadSourceTests
                 Assert.IsGreaterThan(0, batch.DeferredCount);
                 Assert.IsFalse((await feed.ReadBatchAsync(timeout.Token)).Changes.Any(change => change.OperationId == later));
             }
-            await using ICloudStateTransaction retained = await state.OpenStore.BeginTransactionAsync(timeout.Token);
-            Assert.IsNotNull(await retained.Operations.GetAsync(later, timeout.Token));
-            Assert.IsNotNull(await retained.Operations.GetAsync(firstDeferred, timeout.Token));
-            IReadOnlyList<CloudOperationJournalEntry> remaining = await retained.Operations.ListAsync(512, timeout.Token);
-            Assert.IsGreaterThanOrEqualTo(80, remaining.Count);
-            await retained.RollbackAsync(timeout.Token);
-            TestContext.WriteLine($"CfSharp 0.1.0-preview.4: the legacy BatchSize=4 still retains the earliest disabled head, while MP's finite public scan reaches the later active root across 64-entry pages without acknowledging either root. OS={Environment.OSVersion.Version}.");
+            Guid[] originalDeferred;
+            await using (ICloudStateTransaction retained = await state.OpenStore.BeginTransactionAsync(timeout.Token))
+            {
+                Assert.IsNotNull(await retained.Operations.GetAsync(later, timeout.Token));
+                Assert.IsNotNull(await retained.Operations.GetAsync(firstDeferred, timeout.Token));
+                var offlineItems = new HashSet<Guid>();
+                for (int index = 0; index < 80; index++)
+                {
+                    CloudItemState item = (await retained.Items.GetByRelativePathAsync(Path.Combine("Offline", $"queued-{index:D2}.txt"), timeout.Token))!;
+                    Assert.IsNotNull(item);
+                    offlineItems.Add(item.ItemId);
+                }
+                originalDeferred = (await retained.Operations.ListAsync(512, timeout.Token))
+                    .Where(entry => entry.ItemId is { } item && offlineItems.Contains(item)).Select(entry => entry.OperationId).ToArray();
+                Assert.IsGreaterThanOrEqualTo(80, originalDeferred.Length);
+                await retained.RollbackAsync(timeout.Token);
+            }
+            // Readiness alone is not acceptance. Start the real production pump on
+            // a fresh feed and require remote bytes, native confirmation and the
+            // original active journal acknowledgement while every deferred ID stays.
+            await feed.DisposeAsync();
+            string remoteRoot = Path.Combine(root, "accepted-source");
+            Directory.CreateDirectory(remoteRoot);
+            var remote = new ActiveFileTransport(instance, remoteRoot);
+            await using CloudLocalChangeFeed pumpFeed = fileSystem.CreateLocalChangeFeed(new() { BatchSize = 4 });
+            var completion = new MirrorPulseJournalUploadCompletion(pumpFeed, state,
+                new BackoffPolicy(TimeSpan.FromSeconds(2), TimeSpan.FromMinutes(5)));
+            await using var pump = new MirrorPulseJournalUploadPump(pumpFeed, router, catalog, remote, remote, state,
+                paths.SyncRootPath, paths.DataRootPath, _ => true, completion, ranges: remote, directories: remote, fileSystem: fileSystem);
+            await pump.StartAsync(timeout.Token);
+            MirrorPulseMutationRecord? accepted;
+            while ((accepted = await catalog.ReadMutationAsync(later, timeout.Token))?.State != MirrorPulseMutationState.Acknowledged)
+            {
+                Assert.IsTrue(pump.Health.Healthy, "The active operation must not hide an acknowledgement fault.");
+                await Task.Delay(20, timeout.Token);
+            }
+            Assert.AreEqual("active", await File.ReadAllTextAsync(Path.Combine(remoteRoot, "later.txt"), timeout.Token));
+            Assert.AreEqual(Convert.ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(Path.Combine(remoteRoot, "later.txt"), timeout.Token))), accepted.Intent.ContentSha256);
+            Assert.IsNotNull(accepted.Intent.UploadBinding);
+            MirrorPulseContentConfirmationReceipt receipt = (await catalog.ReadContentConfirmationReceiptAsync(later, timeout.Token))!;
+            Assert.IsNotNull(receipt);
+            Assert.IsTrue(receipt.NativeConfirmationVerified);
+            Assert.IsTrue(receipt.DurableProjectionCommitted);
+            Assert.IsTrue(receipt.MayAcknowledge);
+            Assert.Contains(later, remote.UploadedOperations);
+            await using (ICloudStateTransaction after = await state.OpenStore.BeginTransactionAsync(timeout.Token))
+            {
+                Assert.IsNull(await after.Operations.GetAsync(later, timeout.Token));
+                foreach (Guid operation in originalDeferred)
+                    Assert.IsNotNull(await after.Operations.GetAsync(operation, timeout.Token), "No disabled original ID may be acknowledged to make progress.");
+                await after.RollbackAsync(timeout.Token);
+            }
+            Assert.AreEqual("offline", await File.ReadAllTextAsync(Path.Combine(paths.SyncRootPath, "Offline", "queued-00.txt"), timeout.Token));
+            TestContext.WriteLine($"PublicJournalFairAcceptance: deferredFiles=80; deferredOriginalIds={originalDeferred.Length}; batchSize=4; pageSize=64; activeRemoteBytesVerified=True; originalActiveIdAcknowledged=True; nativeConfirmation=True; durableProjection=True; disabledSourceCalls=0; OS={Environment.OSVersion.Version}.");
         }
         finally
         {
@@ -313,6 +361,60 @@ public sealed class MirrorPulseJournalUploadSourceTests
             Directory.Delete(root, recursive: true);
         }
     }
+    private sealed class ActiveFileTransport(InstanceId instance, string root) : IMirrorPulseWorkerUploadTransport,
+        IMirrorPulseWorkerStatTransport, IMirrorPulseWorkerDirectoryPageSource, IMirrorPulseWorkerRangeTransport
+    {
+        public List<Guid> UploadedOperations { get; } = [];
+
+        private string Resolve(InstanceId requestedInstance, string? rootKey, string path)
+        {
+            Assert.AreEqual(instance, requestedInstance);
+            Assert.AreEqual("docs", rootKey, "The production pump must never contact the disabled sibling source.");
+            Assert.IsTrue(path is "later.txt" or "", "The fixture exposes only one active file and its parent.");
+            return Path.Combine(root, path);
+        }
+
+        public async ValueTask<string> UploadAsync(MirrorPulseWorkerUploadRequest request, CancellationToken token)
+        {
+            string path = Resolve(request.InstanceId, request.RootKey, request.NormalizedPath);
+            Assert.IsNotNull(request.OperationId);
+            Assert.IsNull(request.ExpectedRevision);
+            Assert.IsTrue(request.DestinationMustBeAbsent);
+            await using (var target = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                await request.Content.CopyToAsync(target, token);
+            byte[] bytes = await File.ReadAllBytesAsync(path, token);
+            Assert.AreEqual(request.Length, bytes.LongLength);
+            string revision = Convert.ToHexString(SHA256.HashData(bytes));
+            Assert.AreEqual(request.ExpectedContentSha256, revision);
+            UploadedOperations.Add(request.OperationId.Value);
+            return revision;
+        }
+
+        public async ValueTask<string?> StatAsync(MirrorPulseWorkerStatRequest request, CancellationToken token)
+        {
+            string path = Resolve(request.InstanceId, request.RootKey, request.NormalizedPath);
+            return File.Exists(path) ? Convert.ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(path, token))) : null;
+        }
+
+        public async ValueTask<MirrorPulseWorkerDirectoryPage> ReadDirectoryPageAsync(MirrorPulseWorkerDirectoryPageRequest request, CancellationToken token)
+        {
+            _ = Resolve(request.InstanceId, request.RootKey, request.NormalizedPath);
+            Assert.IsTrue(request.ContinuationCursor.IsEmpty);
+            string path = Path.Combine(root, "later.txt");
+            if (!File.Exists(path)) return new([], ReadOnlyMemory<byte>.Empty, true);
+            byte[] bytes = await File.ReadAllBytesAsync(path, token);
+            var info = new FileInfo(path);
+            return new([new("active:later.txt", Convert.ToHexString(SHA256.HashData(bytes)), "File", "later.txt", bytes.LongLength,
+                info.CreationTimeUtc, info.LastWriteTimeUtc, false)], ReadOnlyMemory<byte>.Empty, true);
+        }
+
+        public async ValueTask<Stream> ReadRangeAsync(MirrorPulseWorkerReadRangeRequest request, CancellationToken token)
+        {
+            byte[] bytes = await File.ReadAllBytesAsync(Resolve(request.InstanceId, request.RootKey, request.NormalizedPath), token);
+            return new MemoryStream(bytes.AsSpan(checked((int)request.Offset), checked((int)request.Length)).ToArray(), writable: false);
+        }
+    }
+
     private sealed class RejectingRangeTransport : IMirrorPulseWorkerRangeTransport
     {
         public int Requests { get; private set; }
