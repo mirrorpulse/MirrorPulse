@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Reflection;
 using System.Runtime.Versioning;
 using System.Security.AccessControl;
 using System.Security.Cryptography;
@@ -19,6 +20,10 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 [SupportedOSPlatform("windows10.0.19041")]
 public sealed class MirrorPulseFullRescanPolicyTests
 {
+    private static readonly string LoadedCfSharpVersion = typeof(CloudFileSystem).Assembly
+        .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+        ?? typeof(CloudFileSystem).Assembly.GetName().Version?.ToString() ?? "unknown";
+
     public TestContext TestContext { get; set; } = null!;
 
     [TestMethod]
@@ -108,7 +113,7 @@ public sealed class MirrorPulseFullRescanPolicyTests
             try { await RetryRetainedConfirmationAsync(() => new MirrorPulseCfSharpFullRescanAdapter(feed, policy.ReconcileAsync).HandleAsync(signal, timeout.Token).AsTask()); }
             catch (CloudFilesException exception)
             {
-                Assert.Fail($"CfSharp 0.1.0-preview.3: {exception.Operation}, HRESULT 0x{exception.HResult:X8}, Win32 {exception.Win32ErrorCode}; {exception}");
+                Assert.Fail($"CfSharp {LoadedCfSharpVersion}: {exception.Operation}, HRESULT 0x{exception.HResult:X8}, Win32 {exception.Win32ErrorCode}; {exception}");
             }
             CollectionAssert.AreEqual(new[] { second.RootId }, (await catalog.ReadDeferredRescanRootsAsync(timeout.Token)).ToArray());
             Assert.AreEqual(1, transport.Uploads.GetValueOrDefault(active));
@@ -195,7 +200,7 @@ public sealed class MirrorPulseFullRescanPolicyTests
         CloudPlaceholderMutationResult patched = await file.UpdatePlaceholderAsync(CloudPlaceholderPatch.CreateBuilder()
             .WithMetadata(CloudPlaceholderMetadata.CreateFileBuilder().WithLastWriteTime(DateTimeOffset.UtcNow.AddMinutes(-1)).Build())
             .WithInSyncState(false).Build(), token);
-        TestContext.WriteLine($"CfSharp 0.1.0-preview.3 coordination USNs: convert={converted.OperationUsn}, clear={cleared.OperationUsn}, mark={marked.OperationUsn}, changed={changed.OperationUsn}, metadata={patched.OperationUsn}; OS={Environment.OSVersion.Version}.");
+        TestContext.WriteLine($"CfSharp {LoadedCfSharpVersion} coordination USNs: convert={converted.OperationUsn}, clear={cleared.OperationUsn}, mark={marked.OperationUsn}, changed={changed.OperationUsn}, metadata={patched.OperationUsn}; OS={Environment.OSVersion.Version}.");
         string path = Path.Combine(syncRoot, name);
         var native = SetNativeOutOfSync(path);
         TestContext.WriteLine($"CfSharp.Native direct coordination: HRESULT=0x{native.HResult:X8}, USN={native.Usn}.");
