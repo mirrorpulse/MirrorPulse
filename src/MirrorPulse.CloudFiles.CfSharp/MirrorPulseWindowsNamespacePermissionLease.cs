@@ -112,6 +112,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLease : IMirror
             (ReadAttributes(_target).Attributes & ReparseAttribute) != 0 && !snapshot.IsPlaceholder)
             throw new InvalidDataException("The retained namespace object cannot provide an owned permission binding.");
         cancellationToken.ThrowIfCancellationRequested();
+        ValidateRetainedHandle(_target);
         var descriptor = new HandleSecurity(_target, _isDirectory);
         string owner = ((SecurityIdentifier?)descriptor.GetOwner(typeof(SecurityIdentifier)))?.Value
             ?? throw new InvalidDataException("The retained namespace object has no owner SID.");
@@ -130,6 +131,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLease : IMirror
         if (parsed.Owner is not null || parsed.Group is not null || parsed.SystemAcl is not null || parsed.DiscretionaryAcl is null ||
             parsed.BinaryLength > 65_536 || parsed.GetSddlForm(AccessControlSections.Access) != dacl)
             throw new ArgumentException("The permission lease accepts only a canonical access descriptor.", nameof(dacl));
+        ValidateRetainedHandle(_target);
         var descriptor = new HandleSecurity(_target, _isDirectory);
         descriptor.SetSecurityDescriptorSddlForm(dacl, AccessControlSections.Access);
         descriptor.PersistAccess(_target);
@@ -144,7 +146,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLease : IMirror
         return ValueTask.CompletedTask;
     }
 
-    private static SafeFileHandle Open(string path, bool target)
+    internal static SafeFileHandle Open(string path, bool target)
     {
         // Metadata-only access does not participate in Windows share checking. Request
         // read-data (list-directory for ancestors) without reading bytes; opening the
@@ -152,10 +154,26 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLease : IMirror
         // sharing then retains every component against namespace replacement.
         SafeFileHandle handle = CreateFile(path, ReadDataOrListDirectory | ReadAttributesAccess | (target ? ReadControl | WriteDacl : 0),
             ShareRead | ShareWrite, nint.Zero, OpenExisting, OpenReparsePoint | OpenNoRecall | BackupSemantics, nint.Zero);
-        if (!handle.IsInvalid) return handle;
+        if (!handle.IsInvalid)
+        {
+            try { ValidateRetainedHandle(handle); return handle; }
+            catch { handle.Dispose(); throw; }
+        }
         int error = Marshal.GetLastPInvokeError();
         handle.Dispose();
         throw new Win32Exception(error);
+    }
+
+    internal static void ValidateRetainedHandle(SafeFileHandle handle)
+    {
+        ArgumentNullException.ThrowIfNull(handle);
+        if (!GetFileInformationByHandleEx(handle, StandardInformation, out StandardInfo information, (uint)Marshal.SizeOf<StandardInfo>()))
+            throw new Win32Exception(Marshal.GetLastPInvokeError());
+        // An ACL belongs to the object, not one directory entry. Reject ordinary hard-link
+        // aliases before capture or writes, including links outside the managed namespace.
+        // CfSharp remains responsible for IDs, placeholder classification and CFAPI policy.
+        if (information.DeletePending != 0 || information.Directory == 0 && information.NumberOfLinks != 1)
+            throw new InvalidDataException("A deleted or multiply linked object cannot own namespace permission evidence.");
     }
 
     private static AttributeTag ReadAttributes(SafeFileHandle handle)
@@ -194,7 +212,15 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLease : IMirror
     private const uint ShareRead = 1, ShareWrite = 2, OpenExisting = 3;
     private const uint OpenNoRecall = 0x00100000, OpenReparsePoint = 0x00200000, BackupSemantics = 0x02000000;
     private const uint DirectoryAttribute = 0x10, ReparseAttribute = 0x400;
-    private const int AttributeTagInformation = 9;
+    private const int StandardInformation = 1, AttributeTagInformation = 9;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct StandardInfo
+    {
+        public long AllocationSize, EndOfFile;
+        public uint NumberOfLinks;
+        public byte DeletePending, Directory;
+    }
 
     [StructLayout(LayoutKind.Sequential)]
     private struct AttributeTag { public uint Attributes; public uint Tag; }
@@ -207,4 +233,9 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLease : IMirror
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool GetFileInformationByHandleEx(SafeFileHandle handle, int information, out AttributeTag data, uint length);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetFileInformationByHandleEx(SafeFileHandle handle, int information, out StandardInfo data, uint length);
 }

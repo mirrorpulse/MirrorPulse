@@ -8,6 +8,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="MirrorPulse.CloudFiles.CfSharp.Tests" />
     <PackageReference Include="CfSharp" />
     <PackageReference Include="CfSharp.Storage.Sqlite" />
     <ProjectReference Include="..\MirrorPulse.Core\MirrorPulse.Core.csproj" />

@@ -135,6 +135,13 @@ Its handles request read-data or directory-list access so they participate in
 native sharing checks. They open reparse objects without recall and never read
 content through those handles; cold-file inspection requires separate native
 verification.
+The lease also reads native standard information before capture, fresh inspection
+and a permission write. A delete-pending object or a file with multiple hard links
+is rejected because its access descriptor also applies to aliases outside the
+managed namespace. This is a fresh observation, not an atomic freeze of link
+creation: Windows tests permit a new hard link even without file sharing, and an
+exclusive referenced CFAPI oplock did not prevent it on the tested system.
+Whole-tree initialization must resolve this concurrency boundary before admission.
 CfSharp's public inspection supplies object bindings and placeholder
 classification. .NET `NativeObjectSecurity` reads and writes the access section
 through the retained handle; MP does not implement another Cloud Files binding
