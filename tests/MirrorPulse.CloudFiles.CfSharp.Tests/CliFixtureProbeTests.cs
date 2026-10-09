@@ -120,6 +120,24 @@ public sealed class CliFixtureProbeTests
             Assert.AreEqual(CliFixtureProbe.BinaryLength, read.BinaryLength);
             Assert.AreEqual(64, read.BinarySha256.Length);
         }
+        else
+        {
+            StringAssert.Contains(result.Error, "hresult=");
+            Assert.IsFalse(result.Error.Contains(fixture.Root, StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
+    [TestMethod]
+    public async Task InspectionRefusesAnUnregisteredFixtureWithoutOpeningTheHostCatalog()
+    {
+        await using Fixture fixture = await Fixture.CreateAsync();
+        byte[] catalogBefore = await File.ReadAllBytesAsync(fixture.Paths.ProductCatalogDatabasePath);
+        var result = await RunAsync(fixture.Root, audit: false, inspect: true);
+        Assert.AreNotEqual(0, result.ExitCode);
+        Assert.AreEqual(string.Empty, result.Output.Trim());
+        StringAssert.Contains(result.Error, "hresult=");
+        Assert.IsFalse(result.Error.Contains(fixture.Root, StringComparison.OrdinalIgnoreCase));
+        CollectionAssert.AreEqual(catalogBefore, await File.ReadAllBytesAsync(fixture.Paths.ProductCatalogDatabasePath));
     }
 
     private static async Task SeedAsync(MirrorPulseProductCatalog catalog, CliFixtureMarker marker, string relative, MirrorPulseMutationState state)
@@ -140,10 +158,11 @@ public sealed class CliFixtureProbeTests
             await catalog.TransitionMutationAsync(id, MirrorPulseMutationState.RemoteAccepted, state, "after");
     }
 
-    private static async Task<(int ExitCode, string Output, string Error)> RunAsync(string root, bool audit)
+    private static async Task<(int ExitCode, string Output, string Error)> RunAsync(string root, bool audit, bool inspect = false)
     {
         var start = new ProcessStartInfo("dotnet") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
-        foreach (string argument in new[] { typeof(ProbeMarker).Assembly.Location, audit ? "--audit-cli-fixture" : "--read-cli-fixture", root })
+        foreach (string argument in new[] { typeof(ProbeMarker).Assembly.Location,
+            inspect ? "--inspect-cli-fixture" : audit ? "--audit-cli-fixture" : "--read-cli-fixture", root })
             start.ArgumentList.Add(argument);
         using Process process = Process.Start(start)!;
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));

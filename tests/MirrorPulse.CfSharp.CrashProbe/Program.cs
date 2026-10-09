@@ -3,9 +3,18 @@ using MirrorPulse.CfSharp.CrashProbe;
 using MirrorPulse.CloudFiles.CfSharp;
 using MirrorPulse.Core.Configuration;
 
-if (args.Length == 2 && args[0] is "--read-cli-fixture" or "--audit-cli-fixture")
+if (args.Length == 2 && args[0] is "--read-cli-fixture" or "--audit-cli-fixture" or "--inspect-cli-fixture")
 {
-    return await CliFixtureProbe.RunAsync(args[1], audit: args[0] == "--audit-cli-fixture");
+    try
+    {
+        return await CliFixtureProbe.RunAsync(args[1], audit: args[0] == "--audit-cli-fixture",
+            inspect: args[0] == "--inspect-cli-fixture");
+    }
+    catch (Exception exception)
+    {
+        Console.Error.WriteLine($"Fixture consumer failure: hresult={exception.HResult:X8}; type={exception.GetType().Name}.");
+        return 1;
+    }
 }
 
 if (args.Length == 3 && args[0] == "--protected-writer")

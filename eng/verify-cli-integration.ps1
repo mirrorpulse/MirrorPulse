@@ -25,7 +25,7 @@ $hydrationReads = [Collections.Generic.List[object]]::new()
 $hydrationAudits = [Collections.Generic.List[object]]::new()
 
 function Invoke-CliFixtureProbe {
-    param([Parameter(Mandatory)][ValidateSet('read', 'audit')][string]$Mode, [Parameter(Mandatory)][string]$Phase)
+    param([Parameter(Mandatory)][ValidateSet('read', 'audit', 'inspect')][string]$Mode, [Parameter(Mandatory)][string]$Phase)
     $start = [Diagnostics.ProcessStartInfo]::new('dotnet')
     $start.UseShellExecute = $false
     $start.CreateNoWindow = $true
@@ -46,9 +46,11 @@ function Invoke-CliFixtureProbe {
         if ($Mode -eq 'read') {
             $hydrationReads.Add($result)
             Write-Host "External consumer $Phase`: fullReads=$($result.wholeFileReads); rangeReads=$($result.rangeReads); binaryLength=$($result.binaryLength); sha256=$($result.binarySha256)."
-        } else {
+        } elseif ($Mode -eq 'audit') {
             $hydrationAudits.Add($result)
             Write-Host "Retained intent audit $Phase`: readOnly=$($result.readOnlyFileMutations); queued=$($result.queuedFileMutations); acknowledged=$($result.acknowledgedQueuedFileMutations)."
+        } else {
+            Write-Host "Public placeholder observations $Phase`: $($result | ConvertTo-Json -Depth 5 -Compress)"
         }
         return $result
     } finally {
@@ -285,6 +287,7 @@ try {
             throw "The remote batch did not hydrate the expected content."
         }
         $cursorStatus = Invoke-MirrorPulseCli @("--json", "--developer-mode", "status")
+        Invoke-CliFixtureProbe -Mode inspect -Phase BeforeDisable | Out-Null
         $cursorBeforeRestart = @($cursorStatus.data.instances) |
             Where-Object { $_.instanceId -eq $instanceId } |
             Select-Object -First 1 -ExpandProperty cursorFingerprint
@@ -311,6 +314,7 @@ try {
         if ($null -eq $offlineInstance -or $offlineInstance.phase -ne "Offline") {
             throw "The disabled Adapter instance did not remain offline after the Host restarted."
         }
+        Invoke-CliFixtureProbe -Mode inspect -Phase InstanceDisabled | Out-Null
         $disabledRead = Invoke-CliFixtureProbe -Mode read -Phase InstanceDisabled
         if ($disabledRead.binarySha256 -cne $onlineRead.binarySha256) { throw 'Resident content changed while the Adapter was disabled.' }
         Start-Sleep -Seconds 1

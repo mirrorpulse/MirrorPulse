@@ -1,5 +1,7 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using CfSharp;
+using CfSharp.Storage.Sqlite;
 using Microsoft.Data.Sqlite;
 using MirrorPulse.Core.Configuration;
 using MirrorPulse.Core.Contracts;
@@ -12,6 +14,10 @@ public sealed record CliFixtureMarker(int SchemaVersion, string InstanceId, stri
 public sealed record CliFixtureReadResult(int SchemaVersion, int WholeFileReads, int RangeReads, long BinaryLength, string BinarySha256);
 public sealed record CliFixtureAuditResult(int SchemaVersion, bool RouteVerified, int EnumeratedMutations,
     int ReadOnlyFileMutations, int QueuedFileMutations, int AcknowledgedQueuedFileMutations);
+public sealed record CliFixtureItemObservation(string Role, bool Exists, bool IsPlaceholder, string PlaceholderState,
+    string ContentAvailability, string SynchronizationState, long? Length, long? OnDiskDataSize,
+    long? ValidatedDataSize, long? ModifiedDataSize);
+public sealed record CliFixtureInspectionResult(int SchemaVersion, IReadOnlyList<CliFixtureItemObservation> Items);
 
 /// <summary>Independent consumers and a stopped-Host catalog oracle for synthetic CLI fixtures only.</summary>
 public static class CliFixtureProbe
@@ -21,7 +27,7 @@ public static class CliFixtureProbe
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private static readonly string[] ReadOnlyPaths = ["nested/fixture.txt", "nested/fixture.bin"];
 
-    public static async Task<int> RunAsync(string directory, bool audit)
+    public static async Task<int> RunAsync(string directory, bool audit, bool inspect = false)
     {
         string root = Path.GetFullPath(directory);
         string parent = Path.TrimEndingDirectorySeparator(Path.GetTempPath());
@@ -40,9 +46,41 @@ public static class CliFixtureProbe
             !Guid.TryParse(marker.RootId, out Guid rootId) || rootId == Guid.Empty || string.IsNullOrWhiteSpace(marker.RootKey) ||
             string.IsNullOrWhiteSpace(marker.DirectoryName) || marker.DirectoryName is "." or ".." ||
             marker.DirectoryName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0) return 2;
-        object result = audit ? await AuditAsync(root, marker) : await ReadAsync(root, marker);
+        object result = inspect ? await InspectAsync(root, marker) : audit ? await AuditAsync(root, marker) : await ReadAsync(root, marker);
         Console.WriteLine(JsonSerializer.Serialize(result, JsonOptions));
         return 0;
+    }
+
+    private static async Task<CliFixtureInspectionResult> InspectAsync(string root, CliFixtureMarker marker)
+    {
+        // Open the existing registered root without registration or a content
+        // provider. The independent official store never opens the Host database.
+        string inspectionRoot = Path.Combine(root, "inspection");
+        if (Path.Exists(inspectionRoot) && (File.GetAttributes(inspectionRoot) & FileAttributes.ReparsePoint) != 0)
+            throw new InvalidDataException("The inspection state directory was redirected.");
+        Directory.CreateDirectory(inspectionRoot);
+        string database = Path.Combine(inspectionRoot, "cfsharp.db");
+        if (Path.Exists(database) && (File.GetAttributes(database) & FileAttributes.ReparsePoint) != 0)
+            throw new InvalidDataException("The inspection database was redirected.");
+        await using var fileSystem = CloudFileSystem.CreateBuilder(Path.Combine(root, "sync"))
+            .WithStateStore(new SqliteCloudStateStoreFactory(database)).Build();
+        await fileSystem.StartAsync();
+        var items = new List<CliFixtureItemObservation>();
+        foreach ((string role, string relative, bool isDirectory) in new[]
+        {
+            ("ManagedRoot", marker.DirectoryName, true),
+            ("NestedDirectory", Path.Combine(marker.DirectoryName, "nested"), true),
+            ("TextFile", Path.Combine(marker.DirectoryName, ReadOnlyPaths[0]), false),
+            ("BinaryFile", Path.Combine(marker.DirectoryName, ReadOnlyPaths[1]), false),
+        })
+        {
+            CloudItem item = isDirectory ? fileSystem.GetDirectory(relative) : fileSystem.GetFile(relative);
+            CloudItemSnapshot snapshot = await item.InspectAsync();
+            items.Add(new(role, snapshot.Exists, snapshot.IsPlaceholder, snapshot.PlaceholderState.ToString(),
+                snapshot.ContentAvailability.ToString(), snapshot.SynchronizationState.ToString(), snapshot.Length,
+                snapshot.OnDiskDataSize, snapshot.ValidatedDataSize, snapshot.ModifiedDataSize));
+        }
+        return new(1, items.AsReadOnly());
     }
 
     private static async Task<CliFixtureReadResult> ReadAsync(string root, CliFixtureMarker marker)
