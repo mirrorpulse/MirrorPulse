@@ -10,6 +10,7 @@ using MirrorPulse.Core.CloudFiles;
 using MirrorPulse.Core.Configuration;
 using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.State;
+using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 
@@ -50,7 +51,8 @@ public sealed partial class MirrorPulseManagedRootNamespaceTests
             for (int run = 0; run < 2; run++)
             {
                 var state = new MirrorPulseCfSharpStateSession(paths);
-                var provider = new StrictProtectionProvider(payload, identity);
+                var source = new StrictProtectionRangeSource(payload, instance);
+                var provider = new MirrorPulseDemandProvider(router, source);
                 await using var fileSystem = new MirrorPulseCloudFileSystemBuilder(paths).WithStateStore(state)
                     .WithContentProvider(provider).Build();
                 await fileSystem.StartAsync(timeout.Token);
@@ -101,7 +103,7 @@ public sealed partial class MirrorPulseManagedRootNamespaceTests
                 // Actual CFAPI hydration and the product's public confirmation ACL
                 // run while the deny ACEs stay installed throughout the tree.
                 CollectionAssert.AreEqual(payload, await File.ReadAllBytesAsync(Path.Combine(managed, "online.bin"), timeout.Token));
-                if (run == 0) Assert.IsGreaterThan(0, provider.Hydrations);
+                if (run == 0) Assert.IsGreaterThan(0, source.Hydrations);
                 CloudFile accepted = fileSystem.GetFile(Path.Combine("Docs", "accepted.txt"));
                 MirrorPulseContentConfirmationReceipt receipt = await MirrorPulseContentConfirmation.ConfirmAsync(accepted, originalProof!, timeout.Token);
                 for (int attempt = 1; attempt < 3 && receipt.Outcome is
@@ -173,20 +175,19 @@ public sealed partial class MirrorPulseManagedRootNamespaceTests
         }
     }
 
-    private sealed class StrictProtectionProvider(byte[] content, CloudPlaceholderIdentity identity) : ICloudDemandProvider
+    private sealed class StrictProtectionRangeSource(byte[] content, InstanceId instance) : IMirrorPulseWorkerRangeTransport
     {
         private int _hydrations;
         public int Hydrations => Volatile.Read(ref _hydrations);
-        public ValueTask<Stream> OpenReadAsync(CloudFileFetchRequest request, CancellationToken cancellationToken)
+        public ValueTask<Stream> ReadRangeAsync(MirrorPulseWorkerReadRangeRequest request, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            Assert.AreEqual(Path.Combine("Docs", "online.bin"), request.NormalizedPath.Replace('/', Path.DirectorySeparatorChar));
-            CollectionAssert.AreEqual(identity.Encode(), request.FileIdentity.ToArray());
+            Assert.AreEqual(instance, request.InstanceId);
+            Assert.AreEqual("docs", request.RootKey);
+            Assert.AreEqual("online.bin", request.NormalizedPath);
             Interlocked.Increment(ref _hydrations);
             return ValueTask.FromResult<Stream>(new MemoryStream(content.AsSpan(checked((int)request.Offset),
-                checked((int)Math.Min(request.Length, content.LongLength - request.Offset))).ToArray(), writable: false));
+                checked((int)request.Length)).ToArray(), writable: false));
         }
-        public ValueTask<CloudProviderDirectoryPage> FetchChildrenAsync(CloudProviderFetchPlaceholdersRequest request,
-            CancellationToken cancellationToken) => ValueTask.FromResult(new CloudProviderDirectoryPage([]));
     }
 }
