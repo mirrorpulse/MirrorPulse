@@ -43,13 +43,15 @@ public sealed class MirrorPulseWindowsNamespacePermissionLeaseTests
             {
                 await using var role = new MirrorPulseNamespaceExecutionSession();
                 var state = new MirrorPulseCfSharpStateSession(paths);
-                await using var fileSystem = new MirrorPulseCloudFileSystemBuilder(paths).WithStateStore(state).Build();
+                await using var fileSystem = new MirrorPulseCloudFileSystemBuilder(paths).WithStateStore(state)
+                    .WithContentProvider(MirrorPulseDemandProvider.CreateWithoutAdapters(paths.SyncRootPath)).Build();
                 await fileSystem.StartAsync(timeout.Token);
                 await using var feed = fileSystem.CreateLocalChangeFeed();
                 await feed.StartAsync(timeout.Token);
                 if (owner == 0)
                 {
                     await new MirrorPulseRootPopulationCoordinator(fileSystem, feed).PopulateAsync(router, timeout.Token);
+                    Assert.IsTrue((await fileSystem.GetDirectory("Docs").InspectAsync(timeout.Token)).IsPlaceholder);
                     await fileSystem.GetDirectory("Docs").SetPopulationStateAsync(CloudDirectoryPopulationState.Complete, cancellationToken: timeout.Token);
                     await File.WriteAllTextAsync(filePath, "latest unsent bytes", timeout.Token);
                 }
