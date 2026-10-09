@@ -115,6 +115,16 @@ read-back retains the application fact; cancellation after a successful write
 does not discard verification. Shutdown rejects new admission and drains
 accepted reconciliation before releasing its gate.
 
+The Windows permission lease retains the final object and its ancestor chain
+without delete sharing, and rejects foreign reparse points and unrouted scope.
+CfSharp's public inspection supplies object bindings and placeholder
+classification. .NET `NativeObjectSecurity` reads and writes the access section
+through the retained handle; MP does not implement another Cloud Files binding
+or projection mechanism. Target descriptors use `FileSystemSecurity` canonical
+ACE ordering and the expected Windows auto-inheritance completion flag before
+the write. A directory write can propagate inheritance, so every original
+descriptor must be retained before applying any tree permissions.
+
 The execution-session component and catalog evidence do not yet enable strict
 protection in the Host. Applying and auditing object permissions, rotating the
 Host role, controlled file operations, and their client commands require
