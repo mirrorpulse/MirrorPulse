@@ -171,19 +171,30 @@ durable fence without replacing existing permission history. Other roots can
 still prepare their own changes. Capturing and sealing do not write ACLs or create
 executable changes. After sealing, only the captured intent can use its operation
 ID. Sealed describes retained evidence, not independent completeness of the
-live tree or permission to admit namespace operations. Runtime draining, retained
+live tree or permission to admit namespace operations. Retained
 whole-tree handles, independent membership audits and protected-birth restoration
 evidence still require integration. An unsealed capture can be cancelled through
 the Host-owned catalog. Schema 24 adds a separate immutable cancellation receipt
 without rewriting the original capture or permission history. Its count and
 SHA-256 cover every retained member in bounded pages, including an empty prefix.
 Admission verifies that retained evidence before releasing only the cancelled
-capture's preparation fence; another open capture continues to block the root
+capture's admission fence; another open capture continues to block the root
 and its sync-root parent. Cancelled operation IDs remain non-executable. A new
 capture uses fresh operation IDs and retains the old evidence for recovery.
 Cancellation does not restore ACLs, cancel already executable changes, prove
 that existing work drained or admit namespace operations. Sealed captures cannot
 be cancelled by this API.
+
+The permission coordinator supplies a separate runtime capture boundary. One
+Host-owned coordinator rejects new applications for the target stable root and
+its sync-root parent, then drains previously admitted reconciliation before
+invoking the anchor-definition and capture callbacks. It does not hold the
+application gate across capture, so other roots can continue. Callbacks may
+append, seal or cancel catalog evidence; a failed open capture stays fenced
+across restart. Cancellation and disposal wait for callbacks to actually exit.
+Capture creation must use this owner rather than bypassing its runtime fence.
+This protects MP permission admission; it does not freeze external writers or
+establish physical tree completeness. Host integration remains pending.
 
 The execution-session component and catalog evidence do not yet enable strict
 protection in the Host. Applying and auditing object permissions, rotating the

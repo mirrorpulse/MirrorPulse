@@ -32,7 +32,7 @@ public sealed record MirrorPulseNamespacePermissionResult(Guid OperationId,
 /// platform lease, enable Host protection or declare a subtree ready. Cancellation or failure
 /// after a native write leaves the original intent pending for inspection on the next attempt.
 /// </remarks>
-public sealed class MirrorPulseNamespacePermissionCoordinator(MirrorPulseProductCatalog catalog) : IAsyncDisposable
+public sealed partial class MirrorPulseNamespacePermissionCoordinator(MirrorPulseProductCatalog catalog) : IAsyncDisposable
 {
     private readonly MirrorPulseProductCatalog _catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -46,11 +46,12 @@ public sealed class MirrorPulseNamespacePermissionCoordinator(MirrorPulseProduct
         IMirrorPulseNamespacePermissionLease lease, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(lease);
-        lock (_admission)
-        {
-            ObjectDisposedException.ThrowIf(_disposing, this);
-            _operations++;
-        }
+        lock (_admission) ObjectDisposedException.ThrowIf(_disposing, this);
+        MirrorPulseNamespacePermissionChange admitted = await _catalog.ReadNamespacePermissionChangeAsync(
+            operationId, cancellationToken).ConfigureAwait(false)
+            ?? throw new FileNotFoundException("The owned permission intent is missing.");
+        PermissionAdmissionScope scope = PermissionAdmissionScope.From(admitted.Intent);
+        EnterApplication(scope);
         bool entered = false;
         try
         {
@@ -58,6 +59,8 @@ public sealed class MirrorPulseNamespacePermissionCoordinator(MirrorPulseProduct
             entered = true;
             MirrorPulseNamespacePermissionChange change = await _catalog.ReadNamespacePermissionChangeForApplicationAsync(
                 operationId, cancellationToken).ConfigureAwait(false);
+            if (change.Intent != admitted.Intent)
+                throw new InvalidDataException("The admitted permission intent changed before application.");
             MirrorPulseNamespacePermissionBaseline baseline = await _catalog.ReadNamespacePermissionBaselineAsync(
                 change.Intent.EvidenceId, cancellationToken).ConfigureAwait(false)
                 ?? throw new InvalidDataException("The original permission evidence is missing.");
@@ -97,11 +100,7 @@ public sealed class MirrorPulseNamespacePermissionCoordinator(MirrorPulseProduct
         finally
         {
             if (entered) _gate.Release();
-            lock (_admission)
-            {
-                _operations--;
-                if (_disposing && _operations == 0) _drained?.TrySetResult();
-            }
+            ExitApplication(scope);
         }
     }
 
