@@ -1,4 +1,6 @@
 using System.Runtime.Versioning;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using CfSharp;
 using MirrorPulse.CloudFiles.CfSharp;
 using MirrorPulse.Core.CloudFiles;
@@ -13,6 +15,118 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 [TestClass]
 public sealed class MirrorPulseActiveRemotePollerTests
 {
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task AddingRemoteSiblingDoesNotInvalidateUnchangedContent(bool metadataChanged)
+    {
+        InstanceId instance = InstanceId.New();
+        RootRegistration root = AdapterRootRegistrationMapper.Map(AdapterId.Parse("example.resident-poll"), instance,
+            new AdapterRootDefinition("files", "Files", "Files", false), RootRegistrationState.Active);
+        var adapter = new AdapterInstance(root.AdapterId, InstallId.New(), instance, "Files",
+            new Dictionary<string, string>(), [], Path.GetTempPath(), Path.GetTempPath(), true,
+            AdapterLifecycleState.Enabled, null, DateTimeOffset.UtcNow);
+        var source = new FakeDirectorySource();
+        var batches = new List<CloudRemoteChangeBatch>();
+        await using var poller = new MirrorPulseActiveRemotePoller(source, [adapter], [root], (_, batch, _) =>
+        {
+            batches.Add(batch);
+            return ValueTask.FromResult(new MirrorPulseRemotePollApplyOutcome(true, batch.FinalCursor));
+        });
+        source.Set(new FakeEntry("resident", "v1", CloudItemKind.File, "resident.bin", 2097409));
+        Assert.IsFalse(await poller.PollOnceAsync(instance));
+        source.Set(new FakeEntry("resident", "v1", CloudItemKind.File, "resident.bin", 2097409,
+            metadataChanged ? DateTimeOffset.UnixEpoch.AddYears(55) : null),
+            new FakeEntry("sibling", "v1", CloudItemKind.File, "sibling.txt", 1));
+        Assert.IsTrue(await poller.PollOnceAsync(instance));
+        Assert.HasCount(1, batches.Single().Changes,
+            "An unrelated remote addition must not turn unchanged resident bytes into a FileUpsert.");
+        Assert.AreEqual("Files\\sibling.txt", batches.Single().Changes.Single().RelativePath);
+        source.Set(new FakeEntry("resident", "v2", CloudItemKind.File, "resident.bin", 2097409),
+            new FakeEntry("sibling", "v1", CloudItemKind.File, "sibling.txt", 1));
+        Assert.IsTrue(await poller.PollOnceAsync(instance));
+        CloudRemoteChange changed = batches[1].Changes.Single();
+        Assert.AreEqual(CloudRemoteChangeKind.FileUpsert, changed.Kind);
+        Assert.AreEqual("v1", changed.PreviousRemoteRevision);
+        Assert.AreEqual("v2", changed.RemoteRevision);
+    }
+
+    [TestMethod]
+    public async Task LegacyPendingBatchKeepsItsOriginalFingerprintBeforeNewProjectionRuns()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "MirrorPulse-poll-version-tests", Guid.NewGuid().ToString("N"));
+        var paths = new MirrorPulseStoragePaths(Path.Combine(directory, "sync"), Path.Combine(directory, "data"));
+        InstanceId instance = InstanceId.New();
+        RootRegistration root = AdapterRootRegistrationMapper.Map(AdapterId.Parse("example.legacy-poll"), instance,
+            new AdapterRootDefinition("files", "Files", "Files", false), RootRegistrationState.Active);
+        var adapter = new AdapterInstance(root.AdapterId, InstallId.New(), instance, "Files",
+            new Dictionary<string, string>(), [], Path.GetTempPath(), Path.GetTempPath(), true,
+            AdapterLifecycleState.Enabled, null, DateTimeOffset.UtcNow);
+        var source = new FakeDirectorySource();
+        var snapshots = new MirrorPulseFileRemotePollSnapshotStore(paths.DataRootPath);
+        var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web) { Converters = { new JsonStringEnumConverter() } };
+        try
+        {
+            await using var catalog = await MirrorPulseProductCatalog.OpenAsync(paths);
+            var pendingStore = new MirrorPulseCatalogRemotePollPendingStore(catalog);
+            CloudRemoteChangeBatch? captured = null;
+            await using (var first = new MirrorPulseActiveRemotePoller(source, [adapter], [root], (_, batch, _) =>
+            {
+                captured = batch;
+                throw new IOException("fixture retains the captured batch");
+            }, snapshotStore: snapshots, pendingStore: pendingStore))
+            {
+                source.Set(new FakeEntry("resident", "v1", CloudItemKind.File, "resident.bin", 3));
+                Assert.IsFalse(await first.PollOnceAsync(instance));
+                source.Set(new FakeEntry("resident", "v1", CloudItemKind.File, "resident.bin", 3),
+                    new FakeEntry("sibling", "v1", CloudItemKind.File, "sibling.txt", 1));
+                await Assert.ThrowsExactlyAsync<IOException>(() => first.PollOnceAsync(instance).AsTask());
+            }
+            Assert.IsNotNull(captured);
+            MirrorPulsePendingRemotePoll retained = (await pendingStore.LoadAsync(instance, CancellationToken.None))!;
+            Assert.AreEqual(2, retained.ProjectionVersion);
+            CloudPlaceholderIdentity identity = MirrorPulsePlaceholderIdentity.CreateForRoot(root, "resident", "v1").ToCfSharp();
+            var legacyResidentChange = new CloudRemoteChange($"{instance}/resident/{Convert.ToHexString(captured.FinalCursor.Span)}",
+                CloudRemoteChangeKind.FileUpsert, identity.RemoteId, "v1", CloudItemKind.File, "Files\\resident.bin",
+                identity.ItemId, "v1", null, 3,
+                CloudPlaceholderMetadata.CreateFileBuilder().WithLastWriteTime(new(2024, 1, 1, 0, 0, 0, TimeSpan.Zero)).Build(),
+                captured.FinalCursor);
+            var legacyBatch = new CloudRemoteChangeBatch(captured.BatchId, captured.InitialCursor,
+                [legacyResidentChange, captured.Changes.Single()], captured.FinalCursor);
+            // Emulate an actual pre-upgrade payload: no projection-version property.
+            byte[] legacyPayload = JsonSerializer.SerializeToUtf8Bytes(new
+            {
+                schemaVersion = 1,
+                batchId = retained.BatchId,
+                fingerprint = legacyBatch.Fingerprint.ToArray(),
+                rootDirectoryName = retained.RootDirectoryName,
+                previous = retained.Previous,
+            }, jsonOptions);
+            await pendingStore.ClearAsync(instance, retained.BatchId, CancellationToken.None);
+            await catalog.SavePendingRemoteBatchAsync(new(instance, retained.BatchId, legacyPayload,
+                JsonSerializer.SerializeToUtf8Bytes(retained.Candidate, jsonOptions)));
+            Assert.AreEqual(1, (await pendingStore.LoadAsync(instance, CancellationToken.None))!.ProjectionVersion);
+            CollectionAssert.AreEqual(legacyPayload, (await catalog.ReadPendingRemoteBatchAsync(instance))!.Payload);
+            int reads = source.Reads;
+            var replayed = new List<CloudRemoteChangeBatch>();
+            await using var reopened = new MirrorPulseActiveRemotePoller(source, [adapter], [root], (_, batch, _) =>
+            {
+                replayed.Add(batch);
+                return ValueTask.FromResult(new MirrorPulseRemotePollApplyOutcome(true, batch.FinalCursor));
+            }, snapshotStore: snapshots, pendingStore: pendingStore);
+            Assert.IsTrue(await reopened.PollOnceAsync(instance));
+            Assert.AreEqual(reads, source.Reads, "Recovery must settle the original batch before enumerating again.");
+            CollectionAssert.AreEqual(legacyBatch.Fingerprint.ToArray(), replayed.Single().Fingerprint.ToArray());
+            Assert.HasCount(2, replayed.Single().Changes);
+            source.Set(new FakeEntry("resident", "v1", CloudItemKind.File, "resident.bin", 3),
+                new FakeEntry("sibling", "v1", CloudItemKind.File, "sibling.txt", 1),
+                new FakeEntry("third", "v1", CloudItemKind.File, "third.txt", 1));
+            Assert.IsTrue(await reopened.PollOnceAsync(instance));
+            Assert.AreEqual("Files\\third.txt", replayed[1].Changes.Single().RelativePath);
+        }
+        finally { Directory.Delete(directory, true); }
+    }
+
     [TestMethod]
     public async Task NamespaceFencePreventsEnumerationUntilRecoveryReleasesTheRoot()
     {
@@ -384,7 +498,7 @@ public sealed class MirrorPulseActiveRemotePollerTests
                 if (entry.Kind == CloudItemKind.File)
                 {
                     metadata = CloudPlaceholderMetadata.CreateFileBuilder()
-                        .WithLastWriteTime(new DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero))
+                        .WithLastWriteTime(entry.LastWriteTime ?? new DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero))
                         .Build();
                 }
                 _entries.Add(entry.RemoteId, new CloudRemoteDirectoryEntry(entry.RemoteId,
@@ -414,5 +528,5 @@ public sealed class MirrorPulseActiveRemotePollerTests
         string Revision,
         CloudItemKind Kind,
         string Path,
-        long Length);
+        long Length, DateTimeOffset? LastWriteTime = null);
 }

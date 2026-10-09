@@ -109,7 +109,7 @@ public sealed class MirrorPulseActiveRemotePoller : IAsyncDisposable
                 throw new InvalidDataException("A pending batch belongs to a different root mapping.");
             IReadOnlyDictionary<string, SnapshotEntry> prior = FromDurableSnapshot(pending.Previous);
             IReadOnlyDictionary<string, SnapshotEntry> candidate = FromDurableSnapshot(pending.Candidate);
-            CloudRemoteChangeBatch replay = CreateBatch(instanceId, root, prior, candidate);
+            CloudRemoteChangeBatch replay = CreateBatch(instanceId, root, prior, candidate, pending.ProjectionVersion);
             if (replay.BatchId != pending.BatchId || !replay.Fingerprint.Span.SequenceEqual(pending.Fingerprint))
                 throw new InvalidDataException("The pending poll intent does not recreate its immutable batch.");
             // Do not enumerate a newer remote tree until this exact batch has converged.
@@ -145,10 +145,11 @@ public sealed class MirrorPulseActiveRemotePoller : IAsyncDisposable
             return false;
         }
 
-        CloudRemoteChangeBatch batch = CreateBatch(instanceId, root, previous!, current);
+        const int projectionVersion = 2;
+        CloudRemoteChangeBatch batch = CreateBatch(instanceId, root, previous!, current, projectionVersion);
         if (_pendingStore is not null)
             await _pendingStore.SaveAsync(instanceId, new(batch.BatchId, batch.Fingerprint.ToArray(), root.DirectoryName,
-                ToDurableSnapshot(previous!), ToDurableSnapshot(current)), cancellationToken).ConfigureAwait(false);
+                ToDurableSnapshot(previous!), ToDurableSnapshot(current), projectionVersion), cancellationToken).ConfigureAwait(false);
         return await ApplyAndCommitAsync(instanceId, batch, current, cancellationToken).ConfigureAwait(false);
     }
 
@@ -280,8 +281,11 @@ public sealed class MirrorPulseActiveRemotePoller : IAsyncDisposable
         InstanceId instanceId,
         RootRegistration root,
         IReadOnlyDictionary<string, SnapshotEntry> previous,
-        IReadOnlyDictionary<string, SnapshotEntry> current)
+        IReadOnlyDictionary<string, SnapshotEntry> current,
+        int projectionVersion)
     {
+        if (projectionVersion is not (1 or 2))
+            throw new InvalidDataException("The remote poll projection version is unsupported.");
         byte[] initialCursor = Fingerprint(previous);
         byte[] finalCursor = Fingerprint(current);
         var changes = new List<CloudRemoteChange>();
@@ -299,9 +303,13 @@ public sealed class MirrorPulseActiveRemotePoller : IAsyncDisposable
                 : prior.RelativePath != entry.RelativePath
                     ? CloudRemoteChangeKind.Move
                     : UpsertKind(entry.ItemKind);
+            // Each enumeration builds new metadata objects. Reference equality
+            // invalidated unchanged file bytes whenever an unrelated object changed.
+            // Version 2 follows the content policy: metadata alone is not a content
+            // revision. Keep version 1 only to reproduce an already captured intent.
             if ((kind is CloudRemoteChangeKind.FileUpsert or CloudRemoteChangeKind.DirectoryUpsert) &&
-                prior.RemoteRevision == entry.RemoteRevision && prior.Length == entry.Length &&
-                Equals(prior.Metadata, entry.Metadata)) continue;
+                prior.ItemKind == entry.ItemKind && prior.RemoteRevision == entry.RemoteRevision && prior.Length == entry.Length &&
+                (projectionVersion == 2 || Equals(prior.Metadata, entry.Metadata))) continue;
             changes.Add(ToChange(instanceId, root, entry, kind, prior.RemoteRevision,
                 kind == CloudRemoteChangeKind.Move ? prior.RelativePath : null, finalCursor));
         }

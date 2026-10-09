@@ -16,6 +16,13 @@ content acceptance proof. Local metadata notifications still pass through the
 official change feed and product routing; they do not establish acceptance of
 remote metadata or authorize deletion after an incomplete scan.
 
+Snapshot polling compares object kind, path, content revision and length. Adding
+an unrelated remote object does not create a content update for an unchanged
+resident file, even when an enumeration returns new metadata objects or changed
+timestamps. Explicit Adapter metadata updates still use CfSharp's metadata
+operation. Pending polling batches retain their projection version and original
+fingerprint across upgrades; recovery does not silently rewrite an earlier intent.
+
 ## Local metadata results
 
 The current Worker protocol has no timestamp, DOS attribute or ACL mutation.
