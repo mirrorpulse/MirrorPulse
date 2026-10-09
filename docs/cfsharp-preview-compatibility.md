@@ -101,3 +101,11 @@ Same-volume ordinary file moves can retain their previous ACL instead of the
 destination's inherited protection. Controlled creation and import, persistent
 permission ownership, concurrent access and crash recovery therefore also need
 acceptance before enabling strict protection in the product.
+
+`MirrorPulseNamespaceExecutionSession` provides an ephemeral execution role that
+retains the current local user and flows across asynchronous namespace work. Its
+owner drains active operations before disposal; source access and Worker RPC must
+remain outside that context. A disposable native probe combines the role with
+closed ACLs, hydration, content confirmation and store restart. Permission ownership,
+Host integration and controlled-operation recovery remain pending. Creating a
+session alone neither changes permissions nor enables product protection.

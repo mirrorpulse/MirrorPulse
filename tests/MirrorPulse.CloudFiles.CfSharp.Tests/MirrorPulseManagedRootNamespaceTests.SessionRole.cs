@@ -18,6 +18,7 @@ public sealed partial class MirrorPulseManagedRootNamespaceTests
     [TestMethod]
     [DoNotParallelize]
     [TestCategory("NativeCloudFiles")]
+    [SupportedOSPlatform("windows10.0.26100")]
     public async Task NativeNamespaceRoleKeepsAclClosedDuringControlledOperationsAndCfSharpRestart()
     {
         if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
@@ -46,7 +47,7 @@ public sealed partial class MirrorPulseManagedRootNamespaceTests
             await File.WriteAllTextAsync(Path.Combine(root, ".mp-namespace-fixture"), string.Empty, timeout.Token);
             for (int run = 0; run < 2; run++)
             {
-                using var role = new NamespaceSessionRole();
+                await using var role = new MirrorPulseNamespaceExecutionSession();
                 if (previousRole is not null) Assert.AreNotEqual(previousRole, role.RoleSid);
                 previousRole = role.RoleSid;
                 if (run == 1) InstallFixtureNamespaceAcl(paths.SyncRootPath, user.User!, role.RoleSid);
@@ -54,14 +55,14 @@ public sealed partial class MirrorPulseManagedRootNamespaceTests
                 var state = new MirrorPulseCfSharpStateSession(paths);
                 await using var fileSystem = new MirrorPulseCloudFileSystemBuilder(paths).WithStateStore(state)
                     .WithContentProvider(new MirrorPulseDemandProvider(router, source)).Build();
-                await role.RunAsync(async () => await fileSystem.StartAsync(timeout.Token));
+                await role.RunNamespaceOperationAsync(async () => await fileSystem.StartAsync(timeout.Token));
                 await using CloudLocalChangeFeed feed = fileSystem.CreateLocalChangeFeed();
                 await feed.StartAsync(timeout.Token);
                 if (run == 0)
                 {
-                    await role.RunAsync(async () => await new MirrorPulseRootPopulationCoordinator(fileSystem, feed).PopulateAsync(router, timeout.Token));
+                    await role.RunNamespaceOperationAsync(async () => await new MirrorPulseRootPopulationCoordinator(fileSystem, feed).PopulateAsync(router, timeout.Token));
                     InstallFixtureNamespaceAcl(paths.SyncRootPath, user.User!, role.RoleSid);
-                    await role.RunAsync(async () =>
+                    await role.RunNamespaceOperationAsync(async () =>
                     {
                         Directory.CreateDirectory(nested);
                         await File.WriteAllTextAsync(unsent, "original unsent", timeout.Token);
@@ -88,7 +89,7 @@ public sealed partial class MirrorPulseManagedRootNamespaceTests
                 Assert.AreEqual("outside bytes", await File.ReadAllTextAsync(outside, timeout.Token));
                 string controlled = Path.Combine(nested, "controlled.txt");
                 string renamed = Path.Combine(nested, "renamed.txt");
-                await role.RunAsync(async () =>
+                await role.RunNamespaceOperationAsync(async () =>
                 {
                     await File.WriteAllTextAsync(controlled, "controlled create", timeout.Token);
                     File.Move(controlled, renamed);
@@ -98,7 +99,7 @@ public sealed partial class MirrorPulseManagedRootNamespaceTests
                 });
                 Assert.AreEqual("controlled replacement", await File.ReadAllTextAsync(renamed, timeout.Token));
                 await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() => File.Delete(renamed), timeout.Token));
-                await role.RunAsync(() => { File.Delete(renamed); return Task.CompletedTask; });
+                await role.RunNamespaceOperationAsync(() => { File.Delete(renamed); return Task.CompletedTask; });
                 Assert.IsFalse(File.Exists(renamed));
                 CollectionAssert.AreEqual(online, await File.ReadAllBytesAsync(Path.Combine(docs, "online.bin"), timeout.Token));
                 if (run == 0) Assert.IsGreaterThan(0, source.Hydrations);
