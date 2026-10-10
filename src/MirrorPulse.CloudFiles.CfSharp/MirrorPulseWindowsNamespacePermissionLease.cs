@@ -44,6 +44,10 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLease : IMirror
         MirrorPulseRootRouter router, CancellationToken cancellationToken = default) =>
         OpenCoreAsync(item, router, metadataOnlyTarget: false, cancellationToken);
 
+    internal static Task<MirrorPulseWindowsNamespacePermissionLease> OpenMetadataAsync(CloudItem item,
+        MirrorPulseRootRouter router, CancellationToken cancellationToken) =>
+        OpenCoreAsync(item, router, metadataOnlyTarget: true, cancellationToken);
+
     private static async Task<MirrorPulseWindowsNamespacePermissionLease> OpenCoreAsync(CloudItem item,
         MirrorPulseRootRouter router, bool metadataOnlyTarget, CancellationToken cancellationToken)
     {

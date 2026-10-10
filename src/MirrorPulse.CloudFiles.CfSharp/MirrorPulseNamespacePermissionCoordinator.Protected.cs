@@ -43,21 +43,31 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinator
             throw new ArgumentException("Local permission preparation cannot introduce a remote acceptance revision.", nameof(initialLocalIdentity));
         if (item.Kind == CloudItemKind.Directory && initialLocalIdentity is not null)
             throw new ArgumentException("Directory permission work does not prepare a file identity.", nameof(initialLocalIdentity));
-        return RunAdmittedPermissionWorkAsync(operationId, async (change, baseline, stop) =>
-        {
-            if (change.Phase == MirrorPulseNamespacePermissionPhase.RecoveryRequired)
-                return new MirrorPulseProtectedNamespacePermissionResult(
-                    new(operationId, MirrorPulseNamespacePermissionOutcome.RecoveryRequired, change.RecoveryReason), null);
-            MirrorPulseNamespacePermissionResult? permission = null;
-            CloudProtectedLocalOperationResult receipt = await MirrorPulseWindowsNamespacePermissionLease.RunOwnedProtectedAsync(
-                item, router, baseline.LocalObject, async (lease, token) =>
-                {
-                    permission = await ApplyWithinProtectionAsync(change, baseline, lease, initialLocalIdentity, token).ConfigureAwait(false);
-                }, stop).ConfigureAwait(false);
-            if (receipt.Outcome == CloudProtectedLocalOperationOutcome.LocalObjectMismatch)
-                permission = await FenceAsync(change, MirrorPulseNamespacePermissionRecoveryReason.ObjectChanged).ConfigureAwait(false);
-            return new(permission, receipt);
-        }, cancellationToken);
+        return RunAdmittedPermissionWorkAsync(operationId,
+            (change, baseline, stop) => ApplyProtectedAdmittedAsync(change, baseline, item, router, initialLocalIdentity, stop),
+            cancellationToken);
+    }
+
+    private async Task<MirrorPulseProtectedNamespacePermissionResult> ApplyProtectedAdmittedAsync(
+        MirrorPulseNamespacePermissionChange change, MirrorPulseNamespacePermissionBaseline baseline, CloudItem item,
+        MirrorPulseRootRouter router, CloudPlaceholderIdentity? initialLocalIdentity, CancellationToken stop)
+    {
+        if (initialLocalIdentity?.RemoteRevision is not null)
+            throw new ArgumentException("Local permission preparation cannot introduce a remote acceptance revision.", nameof(initialLocalIdentity));
+        if (item.Kind == CloudItemKind.Directory && initialLocalIdentity is not null)
+            throw new ArgumentException("Directory permission work does not prepare a file identity.", nameof(initialLocalIdentity));
+        if (change.Phase == MirrorPulseNamespacePermissionPhase.RecoveryRequired)
+            return new MirrorPulseProtectedNamespacePermissionResult(
+                new(change.Intent.OperationId, MirrorPulseNamespacePermissionOutcome.RecoveryRequired, change.RecoveryReason), null);
+        MirrorPulseNamespacePermissionResult? permission = null;
+        CloudProtectedLocalOperationResult receipt = await MirrorPulseWindowsNamespacePermissionLease.RunOwnedProtectedAsync(
+            item, router, baseline.LocalObject, async (lease, token) =>
+            {
+                permission = await ApplyWithinProtectionAsync(change, baseline, lease, initialLocalIdentity, token).ConfigureAwait(false);
+            }, stop).ConfigureAwait(false);
+        if (receipt.Outcome == CloudProtectedLocalOperationOutcome.LocalObjectMismatch)
+            permission = await FenceAsync(change, MirrorPulseNamespacePermissionRecoveryReason.ObjectChanged).ConfigureAwait(false);
+        return new(permission, receipt);
     }
 
     /// <summary>Runs only inside admitted product work and one library-owned protected callback.</summary>

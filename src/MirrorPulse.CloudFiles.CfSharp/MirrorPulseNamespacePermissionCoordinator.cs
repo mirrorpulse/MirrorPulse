@@ -90,7 +90,7 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinator(MirrorPuls
         }
     }
 
-    private async Task<MirrorPulseNamespacePermissionResult> ApplyAdmittedAsync(MirrorPulseNamespacePermissionChange change,
+    internal async Task<MirrorPulseNamespacePermissionResult> ApplyAdmittedAsync(MirrorPulseNamespacePermissionChange change,
         MirrorPulseNamespacePermissionBaseline baseline, IMirrorPulseNamespacePermissionLease lease,
         CancellationToken cancellationToken)
     {

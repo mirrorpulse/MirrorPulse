@@ -24,6 +24,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         var provider = new ProtectedPermissionNoSourceProvider();
         MirrorPulseNamespacePermissionBaseline[]? originals = null;
         MirrorPulseNamespacePermissionIntent[]? protections = null;
+        Guid manifestId = Guid.NewGuid();
         MirrorPulseNamespacePermissionLocalIdentity? retainedFileIdentity = null;
         MirrorPulseNamespacePermissionLocalIdentity? retainedColdIdentity = null;
         CloudLocalFileBinding? firstBinding = null;
@@ -71,20 +72,45 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                             MirrorPulseNamespacePermissionPolicy.CreateProtectedDacl(role, observed.IsDirectory), DateTimeOffset.UtcNow);
                         Assert.AreNotEqual(observed.Dacl, protections[index].TargetDacl);
                     }
-                    // All originals exist before the parent inheritance changes. These three
-                    // records are component evidence, not a sealed or audited product tree.
-                    await catalog.PrepareNamespacePermissionChangesAsync(originals.Select((original, index) =>
-                        new MirrorPulseNamespacePermissionPreparation(original, protections[index])).ToArray(), timeout.Token);
+                    var anchor = new MirrorPulseNamespacePermissionPreparation(originals[2], protections[2]);
+                    var definition = new MirrorPulseNamespacePermissionTreeDefinition(manifestId, anchor,
+                        items.Length, originals.Min(original => original.CapturedAt));
+                    await catalog.CreateNamespacePermissionTreeAsync(definition, timeout.Token);
+                    await catalog.AppendNamespacePermissionTreeMembersAsync(manifestId,
+                        [new(0, null, anchor), new(1, anchor.Baseline.EvidenceId, new(originals[0], protections[0])),
+                            new(2, anchor.Baseline.EvidenceId, new(originals[1], protections[1]))], timeout.Token);
+                    await catalog.SealNamespacePermissionTreeAsync(manifestId, DateTimeOffset.UtcNow, timeout.Token);
                     CloudItemSnapshot before = await items[0].InspectAsync(timeout.Token);
                     firstBinding = before.LocalBinding;
                     Assert.IsNotNull(firstBinding);
                     CloudPlaceholderIdentity mapped = router.CreateFileIdentity(registration.InstanceId, "docs", "host-selected-local");
                     var candidate = new CloudPlaceholderIdentity(mapped.ItemId, mapped.RemoteId);
+                    await using (var treeLease = await MirrorPulseWindowsNamespacePermissionTreeLease.OpenAsync(
+                        fileSystem.GetDirectory("Docs"), router, timeout.Token))
+                    {
+                        var tree = await coordinator.ReconcileTreeAsync(manifestId, treeLease, role,
+                            baseline => baseline.RelativePath == "Docs/unsent.txt" ? candidate : null, timeout.Token);
+                        Assert.AreEqual(MirrorPulseNamespacePermissionTreeOutcome.Verified, tree.Outcome);
+                        Assert.AreEqual(3, tree.CompletedMembers);
+                        TestContext.WriteLine($"ProtectedOwnedTree: architecture={System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture}; originalSeal=True; retainedMetadata=True; bottomUpApplication=True; independentLiveAudit=True; completed={tree.CompletedMembers}; hostEnabled=False.");
+                    }
+                    string addedPath = Path.Combine(paths.SyncRootPath, "Docs", "unexpected.txt");
+                    await role.RunNamespaceOperationAsync(() => File.WriteAllTextAsync(addedPath, "synthetic extra member", timeout.Token));
+                    await using (var changedLease = await MirrorPulseWindowsNamespacePermissionTreeLease.OpenAsync(
+                        fileSystem.GetDirectory("Docs"), router, timeout.Token))
+                    {
+                        var changed = await coordinator.ReconcileTreeAsync(manifestId, changedLease, role,
+                            cancellationToken: timeout.Token);
+                        Assert.AreEqual(MirrorPulseNamespacePermissionTreeOutcome.RecoveryRequired, changed.Outcome);
+                        Assert.AreEqual(MirrorPulseNamespacePermissionRecoveryReason.ObjectChanged, changed.RecoveryReason);
+                        Assert.AreEqual(0, changed.CompletedMembers);
+                    }
+                    await role.RunNamespaceOperationAsync(() => { File.Delete(addedPath); return Task.CompletedTask; });
                     for (int index = 0; index < items.Length; index++)
                     {
                         var applied = await ApplyOwnedAsync(protections[index], items[index], index == 0 ? candidate : null);
-                        Assert.AreEqual(MirrorPulseNamespacePermissionOutcome.Verified, applied.Permission!.Outcome);
-                        Assert.IsTrue(applied.Receipt!.AccessDescriptorApplied);
+                        Assert.AreEqual(MirrorPulseNamespacePermissionOutcome.AlreadyVerified, applied.Permission!.Outcome);
+                        Assert.IsFalse(applied.Receipt!.AccessDescriptorApplied);
                         Assert.IsTrue(applied.Receipt.AccessDescriptorReadBack);
                         if (index == 0)
                         {
