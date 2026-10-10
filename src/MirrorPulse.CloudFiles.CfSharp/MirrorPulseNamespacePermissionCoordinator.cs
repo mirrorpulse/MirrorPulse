@@ -6,7 +6,11 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 /// <summary>Private local-object facts inspected through a retained namespace lease.</summary>
 public sealed record MirrorPulseNamespacePermissionObject(MirrorPulseLocalFileBinding LocalObject,
     RootId? RootId, string RelativePath, bool IsDirectory, string OwnerSid, string Dacl,
-    DateTimeOffset ObservedAt);
+    DateTimeOffset ObservedAt)
+{
+    /// <summary>The actual retained object's link count, when supplied by a native lease.</summary>
+    public uint? LinkCount { get; init; }
+}
 
 /// <summary>The platform boundary for one stable, already scope-validated object.</summary>
 /// <remarks>

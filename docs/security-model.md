@@ -138,6 +138,13 @@ an upload. Actual protection, current membership and native journal delivery are
 independent steps. Missing historical observations are never inferred during an
 upgrade.
 
+The Windows birth observer retains the target and its ancestor names, reads the
+actual handle link count and compares the native placeholder envelope with the
+original public CfSharp identity encoding. It does not depend on a successful
+durable item projection to invent an identity. A repeated observation preserves
+the first descriptor and timestamp while rejecting a different native object.
+Local births marked in sync without their required acceptance remain rejected.
+
 Product catalog schema 22 retains each object's original volume, registered-root
 and file binding, capture location, owner SID and canonical DACL. The baseline
 and the first change intent commit together before any permission write. A

@@ -87,7 +87,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLease
             string owner = metadata.ReadOwnerSid(original);
             return new(new(original.VolumeSerialNumber, original.SyncRootFileId, original.LocalFileId), metadata._rootId,
                 metadata._item.RelativePath.Replace('\\', '/'), metadata._isDirectory, owner,
-                descriptor.GetSecurityDescriptorSddlForm(AccessControlSections.Access), DateTimeOffset.UtcNow);
+                descriptor.GetSecurityDescriptorSddlForm(AccessControlSections.Access), DateTimeOffset.UtcNow)
+            { LinkCount = ValidateRetainedHandle(metadata._target) };
         }
 
         public async ValueTask ApplyDaclAsync(string dacl, CancellationToken cancellationToken)

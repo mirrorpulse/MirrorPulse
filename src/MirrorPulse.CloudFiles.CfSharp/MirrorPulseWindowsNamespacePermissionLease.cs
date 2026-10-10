@@ -122,13 +122,14 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLease : IMirror
             (ReadAttributes(_target).Attributes & ReparseAttribute) != 0 && !snapshot.IsPlaceholder)
             throw new InvalidDataException("The retained namespace object cannot provide an owned permission binding.");
         cancellationToken.ThrowIfCancellationRequested();
-        ValidateRetainedHandle(_target);
+        uint linkCount = ValidateRetainedHandle(_target);
         var descriptor = new HandleSecurity(_target, _isDirectory);
         string owner = ((SecurityIdentifier?)descriptor.GetOwner(typeof(SecurityIdentifier)))?.Value
             ?? throw new InvalidDataException("The retained namespace object has no owner SID.");
         return new(new(binding.VolumeSerialNumber, binding.SyncRootFileId, binding.LocalFileId), _rootId,
             _item.RelativePath.Replace('\\', '/'), _isDirectory, owner,
-            descriptor.GetSecurityDescriptorSddlForm(AccessControlSections.Access), DateTimeOffset.UtcNow);
+            descriptor.GetSecurityDescriptorSddlForm(AccessControlSections.Access), DateTimeOffset.UtcNow)
+        { LinkCount = linkCount };
     }
 
     public ValueTask ApplyDaclAsync(string dacl, CancellationToken cancellationToken)
@@ -182,7 +183,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLease : IMirror
         throw new Win32Exception(error);
     }
 
-    internal static void ValidateRetainedHandle(SafeFileHandle handle)
+    internal static uint ValidateRetainedHandle(SafeFileHandle handle)
     {
         ArgumentNullException.ThrowIfNull(handle);
         if (!GetFileInformationByHandleEx(handle, StandardInformation, out StandardInfo information, (uint)Marshal.SizeOf<StandardInfo>()))
@@ -192,6 +193,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLease : IMirror
         // CfSharp remains responsible for IDs, placeholder classification and CFAPI policy.
         if (information.DeletePending != 0 || information.Directory == 0 && information.NumberOfLinks != 1)
             throw new InvalidDataException("A deleted or multiply linked object cannot own namespace permission evidence.");
+        return information.NumberOfLinks;
     }
 
     private static AttributeTag ReadAttributes(SafeFileHandle handle)
