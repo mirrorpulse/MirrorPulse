@@ -34,6 +34,7 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinatorTests
     }
 
     [TestMethod]
+    [DoNotParallelize] // Keep the short gate budget independent of unrelated suite scheduling; work inside the test still competes.
     public async Task DeferredWorkStartsAfterGateAndReadsTheLatestRetainedPhase()
     {
         using var fixture = new Fixture();
