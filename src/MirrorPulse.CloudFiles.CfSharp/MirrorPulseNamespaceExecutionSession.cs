@@ -47,6 +47,10 @@ public sealed partial class MirrorPulseNamespaceExecutionSession : IAsyncDisposa
                 throw new InvalidOperationException("The namespace execution identity has no unique added logon SID.");
             OwnerSid = _normalUser.User;
             RoleSid = new(added[0]);
+            // Elevated tokens may default new objects to the Administrators group. Set only
+            // the ephemeral namespace token's default owner, before it can create anything.
+            // Existing objects and the normal source token remain unchanged.
+            SetNamespaceDefaultOwner(_token, OwnerSid);
         }
         catch { _token.Dispose(); _normalUser.Dispose(); throw; }
     }
@@ -139,9 +143,31 @@ public sealed partial class MirrorPulseNamespaceExecutionSession : IAsyncDisposa
         finally { Marshal.FreeHGlobal(buffer); }
     }
 
+    private static void SetNamespaceDefaultOwner(SafeAccessTokenHandle token, SecurityIdentifier owner)
+    {
+        using (var current = new WindowsIdentity(token.DangerousGetHandle()))
+            if (current.Owner is { } defaultOwner && owner.Equals(defaultOwner)) return;
+        byte[] sid = new byte[owner.BinaryLength];
+        owner.GetBinaryForm(sid, 0);
+        nint buffer = Marshal.AllocHGlobal(nint.Size + sid.Length);
+        try
+        {
+            nint sidPointer = buffer + nint.Size;
+            Marshal.WriteIntPtr(buffer, sidPointer);
+            Marshal.Copy(sid, 0, sidPointer, sid.Length);
+            if (!SetTokenInformation(token, TokenOwner, buffer, nint.Size))
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            using var verified = new WindowsIdentity(token.DangerousGetHandle());
+            if (verified.Owner is not { } verifiedOwner || !owner.Equals(verifiedOwner))
+                throw new InvalidOperationException("The namespace token's default owner is not the current user.");
+        }
+        finally { Marshal.FreeHGlobal(buffer); }
+    }
+
     private const int NewCredentials = 9;
     private const int WinNt50 = 3;
     private const int TokenGroups = 2;
+    private const int TokenOwner = 4;
     private const uint LogonId = 0xC0000000;
 
     [LibraryImport("advapi32.dll", EntryPoint = "LogonUserW", StringMarshalling = StringMarshalling.Utf16, SetLastError = true)]
@@ -153,4 +179,9 @@ public sealed partial class MirrorPulseNamespaceExecutionSession : IAsyncDisposa
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool GetTokenInformation(SafeAccessTokenHandle token, int kind, nint data, int length, out int required);
+
+    [LibraryImport("advapi32.dll", SetLastError = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool SetTokenInformation(SafeAccessTokenHandle token, int kind, nint data, int length);
 }

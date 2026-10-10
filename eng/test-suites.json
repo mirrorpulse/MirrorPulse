@@ -75,7 +75,8 @@
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeStrictTreeAclPreservesLatestBytesHydrationAndConfirmationAcrossRestart",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeProtectedDirectoryPopulationAndColdHydrationKeepSourceOutsideNamespaceRole",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeSyncRootGuardBlocksAncestorMovesWithoutBlockingControlledChildOperations",
-      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeOwnedPermissionLeaseReconcilesUnrecordedWriteRotationAndRestorationAcrossRestart"
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeOwnedPermissionLeaseReconcilesUnrecordedWriteRotationAndRestorationAcrossRestart",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseNamespaceExecutionSessionTests.NamespaceBirthUsesCurrentUserOwnerWithoutChangingTheNormalSourceToken"
     ],
     "native": [
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseNamespaceHandleTests.NativePlaceholderHardLinkPolicyPreservesUnacceptedBytesAndRejectsExistingAliasesAcrossRestart",

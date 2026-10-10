@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using System.Security.AccessControl;
 using System.Security.Principal;
 using MirrorPulse.CloudFiles.CfSharp;
 
@@ -9,6 +10,42 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 [SupportedOSPlatform("windows10.0.26100")]
 public sealed class MirrorPulseNamespaceExecutionSessionTests
 {
+    [TestMethod]
+    public async Task NamespaceBirthUsesCurrentUserOwnerWithoutChangingTheNormalSourceToken()
+    {
+        AssertExpectedArchitecture();
+        using WindowsIdentity caller = WindowsIdentity.GetCurrent();
+        SecurityIdentifier? originalDefaultOwner = caller.Owner;
+        string directory = Path.Combine(Path.GetTempPath(), "MirrorPulse-namespace-default-owner", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        string file = Path.Combine(directory, "born.txt");
+        try
+        {
+            await using var session = new MirrorPulseNamespaceExecutionSession();
+            await session.RunNamespaceOperationAsync(async () =>
+            {
+                using WindowsIdentity active = WindowsIdentity.GetCurrent();
+                Assert.AreEqual(caller.User, active.User);
+                Assert.AreEqual(caller.User, active.Owner);
+                Assert.IsTrue(new WindowsPrincipal(active).IsInRole(session.RoleSid));
+                await File.WriteAllTextAsync(file, "owned at creation");
+            });
+            Assert.AreEqual(caller.User, new FileInfo(file).GetAccessControl(AccessControlSections.Owner).GetOwner(typeof(SecurityIdentifier)));
+            Assert.AreEqual("owned at creation", await File.ReadAllTextAsync(file));
+            await session.RunNormalUserOperationAsync(() =>
+            {
+                using WindowsIdentity normal = WindowsIdentity.GetCurrent();
+                Assert.AreEqual(caller.User, normal.User);
+                Assert.AreEqual(originalDefaultOwner, normal.Owner);
+                Assert.IsFalse(new WindowsPrincipal(normal).IsInRole(session.RoleSid));
+                return Task.CompletedTask;
+            });
+            using WindowsIdentity restored = WindowsIdentity.GetCurrent();
+            Assert.AreEqual(originalDefaultOwner, restored.Owner);
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
     internal static void AssertExpectedArchitecture()
     {
         string? expected = Environment.GetEnvironmentVariable("MIRRORPULSE_NAMESPACE_TEST_ARCHITECTURE");

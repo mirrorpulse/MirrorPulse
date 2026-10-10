@@ -91,6 +91,13 @@ and applying changes to running Workers are separate implementation steps.
 
 ## Owned namespace permission evidence
 
+The ephemeral namespace token sets its default owner to the current user's SID
+before admitting work. This prevents newly created objects from defaulting to an
+administrator group under an elevated caller. It does not change existing object
+owners, the normal source token, privileges or group membership. Failure to set
+and verify this owner prevents session construction. Windows defines this setting
+through [TOKEN_OWNER](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-token_owner).
+
 Schema 27 adds immutable birth intents for controlled creation, import and remote
 population under a protected parent. Admission requires that parent's latest
 verified protection, native binding, stable root and current role. A separate
