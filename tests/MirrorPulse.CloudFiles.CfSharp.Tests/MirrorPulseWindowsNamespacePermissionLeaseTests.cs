@@ -11,7 +11,7 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 
 [TestClass]
 [SupportedOSPlatform("windows10.0.26100")]
-public sealed class MirrorPulseWindowsNamespacePermissionLeaseTests
+public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
 {
     public TestContext TestContext { get; set; } = null!;
 
@@ -170,6 +170,7 @@ public sealed class MirrorPulseWindowsNamespacePermissionLeaseTests
                 }
                 Assert.AreEqual("latest unsent bytes", await File.ReadAllTextAsync(filePath, timeout.Token));
             }
+            await VerifyProtectedCoordinatorAcrossRestartAsync();
             TestContext.WriteLine($"OwnedPermissionLease: architecture={System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture}; twoStoreOwners=True; publicBinding=True; retainedHandle=True; coldLeaseNoHydration=True; unrecordedWriteRecovered=True; repeatedRecoveryWrites=0; rotationAndOriginalPermissionsRestored=True; nativeReadbackRetained=True; fileAndDirectory=True; cfapiCreationInheritsProtection=True; latestBytesRetained=True; disabledRoot=True; sourceAccess=False; productIntegrated=False.");
         }
         finally
