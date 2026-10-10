@@ -146,6 +146,21 @@ public sealed partial class MirrorPulseProductCatalog
             observation.LocalObject.LocalFileId == birth.ParentLocalObject.SyncRootFileId ||
             birth.Origin != MirrorPulseNamespaceBirthOrigin.RemotePopulation && observation.IsInSync)
             throw new InvalidOperationException("The actual birth must match its original parent, location, identity and start without inventing acceptance.");
+        var conversion = await ReadNamespaceBirthConversionCoreAsync(observation.OperationId, transaction, token).ConfigureAwait(false);
+        if (conversion is not null && (observation.LocalObject != conversion.LocalObject ||
+            observation.OwnerSid != conversion.OwnerSid || observation.IsDirectory != conversion.IsDirectory ||
+            observation.ObservedAt < conversion.PreparedAt))
+            throw new InvalidOperationException("The placeholder must retain the actual object prepared before conversion.");
+        await using SqliteCommand another = _connection.CreateCommand();
+        another.Transaction = transaction;
+        another.CommandText = """
+            SELECT 1 FROM namespace_birth_conversions WHERE operation_id<>$operation AND
+                volume_serial=$volume AND sync_root_file_id=$sync AND local_file_id=$file;
+            """;
+        another.Parameters.AddWithValue("$operation", observation.OperationId.ToString("D"));
+        AddNamespaceBirthBindingParameters(another, observation.LocalObject);
+        if (await another.ExecuteScalarAsync(token).ConfigureAwait(false) is not null)
+            throw new InvalidOperationException("A birth cannot adopt another operation's prepared ordinary object.");
     }
 
     private static void ValidateNamespaceBirthObservation(MirrorPulseNamespaceBirthObservation observation)

@@ -149,6 +149,9 @@ public sealed partial class MirrorPulseProductCatalog
                 born.Transaction = transaction;
                 born.CommandText = """
                     SELECT 1 FROM namespace_birth_observations
+                    WHERE volume_serial=$volume AND sync_root_file_id=$sync AND local_file_id=$file
+                    UNION ALL
+                    SELECT 1 FROM namespace_birth_conversions
                     WHERE volume_serial=$volume AND sync_root_file_id=$sync AND local_file_id=$file;
                     """;
                 AddNamespaceBirthBindingParameters(born, baseline.LocalObject);

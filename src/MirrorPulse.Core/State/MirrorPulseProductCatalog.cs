@@ -103,7 +103,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                 version.CommandText = "PRAGMA user_version;";
                 long currentVersion = (long)(await version.ExecuteScalarAsync(cancellationToken)
                     .ConfigureAwait(false) ?? 0L);
-                if (currentVersion > 29)
+                if (currentVersion > 30)
                 {
                     throw new InvalidDataException("The MP product catalog schema is newer than this Host supports.");
                 }
@@ -289,6 +289,15 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                         fingerprint BLOB NOT NULL CHECK (length(fingerprint)=32),
                         UNIQUE(volume_serial,sync_root_file_id,local_file_id)
                     );
+                    CREATE TABLE IF NOT EXISTS namespace_birth_conversions (
+                        operation_id TEXT PRIMARY KEY REFERENCES namespace_birth_starts(operation_id),
+                        volume_serial TEXT NOT NULL,
+                        sync_root_file_id TEXT NOT NULL,
+                        local_file_id TEXT NOT NULL,
+                        payload BLOB NOT NULL,
+                        fingerprint BLOB NOT NULL CHECK (length(fingerprint)=32),
+                        UNIQUE(volume_serial,sync_root_file_id,local_file_id)
+                    );
                     CREATE TABLE IF NOT EXISTS namespace_permission_trees (
                         manifest_id TEXT PRIMARY KEY,
                         root_id TEXT NOT NULL,
@@ -392,7 +401,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                     alter.CommandText = "ALTER TABLE worker_requests ADD COLUMN stable_fingerprint BLOB NULL;";
                     await alter.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
                 }
-                version.CommandText = "PRAGMA user_version=29;";
+                version.CommandText = "PRAGMA user_version=30;";
                 await version.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
 

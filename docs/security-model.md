@@ -145,6 +145,17 @@ durable item projection to invent an identity. A repeated observation preserves
 the first descriptor and timestamp while rejecting a different native object.
 Local births marked in sync without their required acceptance remain rejected.
 
+Schema 30 separately retains the actual ordinary-object binding, owner, kind,
+single-link observation and birth descriptor before local conversion. Its
+expected converted descriptor is an intent, not proof that permission work
+completed. A subsequent placeholder observation must retain that object and
+cannot precede its preparation. Other births and pre-protection baselines cannot
+adopt the prepared binding. Bounded recovery pages expose the original
+preparation without creating a new journal sequence or accepting remote state.
+Missing preparations in older catalogs remain missing; they cannot be backfilled
+after an existing placeholder observation. Native conversion, current permission
+verification and startup recovery still require their own admission and evidence.
+
 Identity mapping preserves an absent revision as `null` in CfSharp's public
 envelope. It does not turn absence into an explicit empty revision. Stable item
 IDs and root scope remain independent of revisions; existing explicit empty

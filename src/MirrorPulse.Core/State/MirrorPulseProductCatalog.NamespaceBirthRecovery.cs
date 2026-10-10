@@ -9,7 +9,10 @@ public sealed record MirrorPulseNamespaceBirthRecoveryScan(long ThroughSequence)
 /// <summary>Historical facts to reconcile against an actual object, not permission to repeat creation.</summary>
 public sealed record MirrorPulseNamespaceBirthRecoveryEntry(long Sequence, MirrorPulseNamespaceBirthIntent Intent,
     MirrorPulseNamespaceBirthPlan? Plan, MirrorPulseNamespaceBirthStart? Start,
-    MirrorPulseNamespaceBirthObservation? Observation, bool OwnsNameReservation);
+    MirrorPulseNamespaceBirthObservation? Observation, bool OwnsNameReservation)
+{
+    public MirrorPulseNamespaceBirthConversionPreparation? ConversionPreparation { get; init; }
+}
 
 public sealed record MirrorPulseNamespaceBirthRecoveryPage(IReadOnlyList<MirrorPulseNamespaceBirthRecoveryEntry> Entries,
     long LastScannedSequence, bool HasMore);
@@ -92,7 +95,8 @@ public sealed partial class MirrorPulseProductCatalog
                         reader.GetString(1) != expectedNameKey))
                         throw new InvalidDataException("The original birth name reservation is inconsistent.");
                 }
-                entries.Add(new(admission.Sequence, intent, plan, start, observation, reserved));
+                var conversion = await ReadNamespaceBirthConversionCoreAsync(admission.OperationId, transaction, cancellationToken).ConfigureAwait(false);
+                entries.Add(new(admission.Sequence, intent, plan, start, observation, reserved) { ConversionPreparation = conversion });
             }
             transaction.Commit();
             return new(entries.AsReadOnly(), entries.Count == 0 ? afterSequence : entries[^1].Sequence, hasMore);
