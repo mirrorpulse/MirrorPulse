@@ -27,6 +27,18 @@ public sealed class CiEvidenceCandidateTests
     [DataRow("namespace-valid", true)]
     [DataRow("namespace-missing", false)]
     [DataRow("namespace-partial", false)]
+    [DataRow("nonadmin-valid", true)]
+    [DataRow("nonadmin-missing", false)]
+    [DataRow("nonadmin-administrator", false)]
+    [DataRow("nonadmin-string-boolean", false)]
+    [DataRow("nonadmin-partial", false)]
+    [DataRow("nonadmin-wrong-source", false)]
+    [DataRow("nonadmin-wrong-architecture", false)]
+    [DataRow("nonadmin-context-mismatch", false)]
+    [DataRow("nonadmin-missing-trx", false)]
+    [DataRow("nonadmin-not-cleaned", false)]
+    [DataRow("nonadmin-no-payload-digest", false)]
+    [DataRow("nonadmin-duplicate", false)]
     public async Task ThreeJobsMustBindTheSameOfficialCandidate(string scenario, bool succeeds)
     {
         string repository = SftpProtocolFixture.FindRepositoryRoot();
@@ -63,6 +75,21 @@ public sealed class CiEvidenceCandidateTests
                     : job == "build-and-test"
                         ? [new { name = "unsupported-server", executed = true, cliRejected = true, hostRejected = true, stateUntouched = true, osProductType = 3 }]
                         : [];
+                if (arm && scenario.StartsWith("nonadmin-", StringComparison.Ordinal) && scenario != "nonadmin-missing")
+                {
+                    var observations = await CreateOrdinaryUserObservationsAsync(repository, scenario, source, shared);
+                    var check = new { name = "namespace-nonadmin", executed = true, observations };
+                    checks = [.. checks, check];
+                    if (scenario == "nonadmin-duplicate") checks = [.. checks, check];
+                    artifacts.Add(new
+                    {
+                        path = "namespace-nonadmin/context.json",
+                        length = 10,
+                        sha256 = scenario == "nonadmin-context-mismatch" ? new string('c', 64) : shared
+                    });
+                    if (scenario != "nonadmin-missing-trx")
+                        artifacts.Add(new { path = "namespace-nonadmin/namespace.trx", length = 10, sha256 = shared });
+                }
                 var tests = new List<object> { new { suite, selected = 1, executed = 1, skipped = 0 } };
                 if (arm && scenario.StartsWith("namespace-", StringComparison.Ordinal) && scenario != "namespace-missing")
                 {
@@ -105,6 +132,7 @@ public sealed class CiEvidenceCandidateTests
                 start.ArgumentList.Add(argument);
             if (scenario != "legacy") start.ArgumentList.Add("-RequireOfficialCandidate");
             if (scenario.StartsWith("namespace-", StringComparison.Ordinal)) start.ArgumentList.Add("-RequireNamespace");
+            if (scenario.StartsWith("nonadmin-", StringComparison.Ordinal)) start.ArgumentList.Add("-RequireNonAdminNamespace");
             using Process process = Process.Start(start)!;
             Task<string> output = process.StandardOutput.ReadToEndAsync();
             Task<string> error = process.StandardError.ReadToEndAsync();
@@ -112,5 +140,40 @@ public sealed class CiEvidenceCandidateTests
             Assert.AreEqual(succeeds, process.ExitCode == 0, await output + await error);
         }
         finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    private static async Task<Dictionary<string, object>> CreateOrdinaryUserObservationsAsync(string repository,
+        string scenario, string source, string hash)
+    {
+        using JsonDocument catalog = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(repository, "eng", "test-suites.json")));
+        string[] required = catalog.RootElement.GetProperty("required").GetProperty("namespace").EnumerateArray().Select(item => item.GetString()!).ToArray();
+        string[] native = catalog.RootElement.GetProperty("required").GetProperty("native").EnumerateArray().Select(item => item.GetString()!).ToArray();
+        int nativeCount = required.Count(native.Contains) - (scenario == "nonadmin-partial" ? 1 : 0);
+        int managedCount = required.Count(name => !native.Contains(name));
+        return new()
+        {
+            ["schemaVersion"] = 1,
+            ["sourceSha"] = scenario == "nonadmin-wrong-source" ? new string('c', 40) : source,
+            ["architecture"] = scenario == "nonadmin-wrong-architecture" ? "X64" : "Arm64",
+            ["nonAdministrator"] = scenario == "nonadmin-string-boolean" ? "true" : scenario != "nonadmin-administrator",
+            ["freshUser"] = true,
+            ["expectedUserMatched"] = true,
+            ["profileLoaded"] = true,
+            ["accountRemoved"] = scenario != "nonadmin-not-cleaned",
+            ["profileRemoved"] = true,
+            ["workspaceRemoved"] = true,
+            ["testAssemblySha256"] = scenario == "nonadmin-no-payload-digest" ? "missing" : hash,
+            ["contextSha256"] = hash,
+            ["trxSha256"] = hash,
+            ["tests"] = new
+            {
+                suite = "namespace",
+                selected = nativeCount + managedCount,
+                executed = nativeCount + managedCount,
+                skipped = 0,
+                categories = new[] { new { category = "native", selected = nativeCount, executed = nativeCount, skipped = 0 },
+                    new { category = "managed", selected = managedCount, executed = managedCount, skipped = 0 } },
+            },
+        };
     }
 }

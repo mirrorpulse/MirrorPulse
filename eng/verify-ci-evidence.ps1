@@ -5,6 +5,7 @@ param(
     [switch]$RequireNative,
     [switch]$RequireInstalled,
     [switch]$RequireNamespace,
+    [switch]$RequireNonAdminNamespace,
     [switch]$RequireOfficialCandidate
 )
 
@@ -37,6 +38,22 @@ foreach ($job in $expected.Keys) {
         }
     }
     if ($job -eq "official-package-arm64") {
+        $ordinary = @($manifest.checks | Where-Object name -ceq 'namespace-nonadmin')
+        if ($RequireNonAdminNamespace -or $ordinary.Count -gt 0) {
+            if ($ordinary.Count -ne 1 -or $ordinary[0].executed -isnot [bool] -or $ordinary[0].executed -ne $true -or
+                $ordinary[0].observations.sourceSha -cne $ExpectedSourceSha) {
+                throw 'Actual ordinary-user namespace execution is missing, repeated, or from another source.'
+            }
+            . (Join-Path $PSScriptRoot 'namespace-nonadmin-evidence-policy.ps1')
+            Assert-OrdinaryUserNamespaceEvidence $ordinary[0].observations (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'test-suites.json') -Raw | ConvertFrom-Json) 'Arm64'
+            foreach ($item in @(@{path='namespace-nonadmin/context.json';hash=$ordinary[0].observations.contextSha256},
+                @{path='namespace-nonadmin/namespace.trx';hash=$ordinary[0].observations.trxSha256})) {
+                $original = @($manifest.artifacts | Where-Object path -ceq $item.path)
+                if ($original.Count -ne 1 -or $original[0].sha256 -cne $item.hash -or $original[0].length -le 0) {
+                    throw 'The ordinary-user context or original TRX artifact is missing or differs from the check.'
+                }
+            }
+        }
         $namespace = @($manifest.tests | Where-Object suite -ceq 'namespace')
         if ($RequireNamespace -or $namespace.Count -gt 0) {
             if ($namespace.Count -ne 1) { throw 'Dedicated ARM64 namespace execution is missing or repeated.' }

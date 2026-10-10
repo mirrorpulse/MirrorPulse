@@ -13,6 +13,12 @@ public sealed class MirrorPulseNamespaceExecutionSessionTests
     {
         string? expected = Environment.GetEnvironmentVariable("MIRRORPULSE_NAMESPACE_TEST_ARCHITECTURE");
         if (expected is not null) Assert.AreEqual(expected, RuntimeInformation.ProcessArchitecture.ToString());
+        if (Environment.GetEnvironmentVariable("MIRRORPULSE_NAMESPACE_REQUIRE_NONADMIN") == "1")
+        {
+            using WindowsIdentity caller = WindowsIdentity.GetCurrent();
+            Assert.IsFalse(new WindowsPrincipal(caller).IsInRole(WindowsBuiltInRole.Administrator),
+                "The dedicated ordinary-user gate must execute with a non-administrator token.");
+        }
     }
 
     [TestMethod]

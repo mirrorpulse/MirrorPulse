@@ -10,6 +10,7 @@ param(
     [string]$IntegrationPath,
     [string]$InstalledPath,
     [string]$RejectedPath,
+    [string]$NamespaceNonAdminPath,
     [switch]$RequireNative,
     [switch]$RequireNamespace,
     [switch]$RequireInstalled
@@ -97,6 +98,19 @@ if ($AdapterReleaseLockPath) {
 }
 if ($artifacts.Count -eq 0) { throw "No artifact hashes were verified." }
 $checks = @()
+if ($NamespaceNonAdminPath) {
+    if ($Job -cne 'official-package-arm64') { throw 'The ordinary-user namespace gate belongs to the ARM64 job.' }
+    $ordinary = Get-Content -LiteralPath $NamespaceNonAdminPath -Raw | ConvertFrom-Json
+    . (Join-Path $PSScriptRoot 'namespace-nonadmin-evidence-policy.ps1')
+    Assert-OrdinaryUserNamespaceEvidence $ordinary (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'test-suites.json') -Raw | ConvertFrom-Json) 'Arm64'
+    if ($ordinary.sourceSha -cne $sourceSha) { throw 'The ordinary-user evidence describes another source commit.' }
+    $ordinaryRoot = [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($NamespaceNonAdminPath))
+    foreach ($item in @(@{path='context.json';hash=$ordinary.contextSha256}, @{path='namespace.trx';hash=$ordinary.trxSha256})) {
+        $original = Get-Item -LiteralPath (Join-Path $ordinaryRoot $item.path)
+        $artifacts += Add-Artifact $ordinaryRoot $item.path 'namespace-nonadmin' $item.hash $original.Length
+    }
+    $checks += [ordered]@{name='namespace-nonadmin';executed=$true;observations=$ordinary}
+}
 if ($IntegrationPath) {
     $integration = Get-Content -LiteralPath $IntegrationPath -Raw | ConvertFrom-Json
     if ($integration.schemaVersion -ne 2 -or $integration.runtime -ne $Runtime -or $integration.regression -ne $true) {

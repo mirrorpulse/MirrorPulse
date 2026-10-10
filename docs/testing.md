@@ -22,6 +22,22 @@ protection in the Host. The namespace report requires all nine
 registered tests to pass exactly once, without skips; missing, repeated, or
 partially executed results fail the gate.
 
+The ARM64 job also runs the same nine tests as a fresh local user in the built-in
+Users group, with a loaded Windows profile and an actual non-administrator token.
+`eng/verify-namespace-nonadmin.ps1` is restricted to disposable GitHub-hosted Windows
+runners. It copies the compiled test payload to a marked temporary workspace;
+credentials and the runner's private profile are not exposed to the test child.
+The password stays in memory, and the child receives a restricted environment.
+It does not build or restore packages as the test user.
+
+Original context and TRX results are uploaded separately as
+`namespace-nonadmin-arm64-test-results`. The ordinary-user check does not increase
+the elevated namespace suite's counts. Evidence requires all nine tests without
+skips, matching source and digests, and successful account, profile and workspace
+cleanup. `eng/verify-ci-evidence.ps1 -RequireNonAdminNamespace` rejects missing or
+partial evidence. This component gate does not establish installed Host identity
+or enable strict protection and controlled operations in the product.
+
 ## Independent Adapter template gate
 
 `SignedTemplateWorkerProcessTests` requires `MP_TEMPLATE_PACKAGE` and

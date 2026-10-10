@@ -221,6 +221,19 @@ jobs:
           path: artifacts/test-results/namespace-arm64/**/*.trx
           if-no-files-found: ignore
 
+      - name: Verify strict Cloud Files ACLs as a fresh non-administrator user
+        shell: pwsh
+        timeout-minutes: 12
+        run: pwsh ./eng/verify-namespace-nonadmin.ps1 -ExpectedArchitecture Arm64
+
+      - name: Upload original ordinary-user namespace results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: namespace-nonadmin-arm64-test-results
+          path: artifacts/test-results/namespace-nonadmin-arm64/**
+          if-no-files-found: ignore
+
       - name: Verify installed ARM64 MSIX on Windows 11 desktop
         if: github.event_name == 'workflow_dispatch'
         shell: pwsh
@@ -241,6 +254,7 @@ jobs:
             Job = 'official-package-arm64'; Runtime = 'win-arm64'; OutputPath = 'artifacts/evidence/official-package-arm64.json'
             TestManifests = @('artifacts/test-results/signed/test-evidence.json', 'artifacts/test-results/namespace-arm64/test-evidence.json')
             RequireNamespace = $true
+            NamespaceNonAdminPath = 'artifacts/test-results/namespace-nonadmin-arm64/ordinary-user-evidence.json'
             PublishDirectory = "$env:RUNNER_TEMP/mirrorpulse-cli-host-win-arm64"
             IntegrationPath = 'artifacts/evidence/cli-regression.json'
             AdapterReleaseLockPath = 'artifacts/official-adapter-releases.json'
