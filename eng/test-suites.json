@@ -68,6 +68,7 @@
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseNormalUserWorkerTransportTests.SessionDisposalDrainsLazySourceReadAndDisposal",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseNamespaceHandleTests.NativePlaceholderHardLinkPolicyPreservesUnacceptedBytesAndRejectsExistingAliasesAcrossRestart",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseNamespaceHandleTests.RetainedHandleRejectsExistingAndNewlyObservedAliasesWithoutAclWrites",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseNamespaceHandleTests.RoleOnlyOrdinaryBirthRejectsNormalAliasesBeforeAnyCloudConversion",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseNamespacePermissionPolicyTests.ExplicitPolicyMatchesNtfsAndControlledCreationIsProtectedAtBirth",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseNamespacePermissionPolicyTests.WindowsInheritanceMatchesActualBirthRotationAndRestorationWithoutChildAclWrites",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseNamespaceExecutionSessionTests.RoleFlowsAcrossAwaitAndRestoresTheOriginalCurrentUser",

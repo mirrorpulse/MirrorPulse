@@ -13,7 +13,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Namespace verification build failed.' }
     $env:MIRRORPULSE_NATIVE_TEST = '1'
     $env:MIRRORPULSE_NAMESPACE_TEST_ARCHITECTURE = $ExpectedArchitecture
-    $filter = 'FullyQualifiedName~MirrorPulseNamespaceExecutionSessionTests|FullyQualifiedName~MirrorPulseNormalUserWorkerTransportTests|FullyQualifiedName~ExplicitPolicyMatchesNtfsAndControlledCreationIsProtectedAtBirth|FullyQualifiedName~NativeNamespaceRoleKeepsAclClosedDuringControlledOperationsAndCfSharpRestart|FullyQualifiedName~NativeStrictTreeAclPreservesLatestBytesHydrationAndConfirmationAcrossRestart|FullyQualifiedName~NativeSyncRootGuardBlocksAncestorMovesWithoutBlockingControlledChildOperations|FullyQualifiedName~NativeProtectedDirectoryPopulationAndColdHydrationKeepSourceOutsideNamespaceRole|FullyQualifiedName~NativeOwnedPermissionLeaseReconcilesUnrecordedWriteRotationAndRestorationAcrossRestart|FullyQualifiedName~RetainedHandleRejectsExistingAndNewlyObservedAliasesWithoutAclWrites|FullyQualifiedName~NativePlaceholderHardLinkPolicyPreservesUnacceptedBytesAndRejectsExistingAliasesAcrossRestart|FullyQualifiedName~NativeControlledBirthRetainsIdentityBytesAndOfficialJournalAcrossRestart'
+    $catalog = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'test-suites.json') -Raw | ConvertFrom-Json
+    $filter = (@($catalog.required.namespace) | ForEach-Object { 'FullyQualifiedName=' + $_ }) -join '|'
     & dotnet test $testProject --configuration Release --no-build --filter $filter --logger trx --results-directory $resultsDirectory
     if ($LASTEXITCODE -ne 0) { throw 'Namespace verification failed.' }
     & (Join-Path $PSScriptRoot 'verify-test-results.ps1') -Suite namespace -ResultsDirectory $resultsDirectory `
