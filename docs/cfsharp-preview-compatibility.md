@@ -147,6 +147,12 @@ normal context and wrap every actual source operation; returning a lazy object
 does not authorize later reads outside that boundary. This API does not change
 Worker process identity or prove the identity of native provider callbacks.
 
+Native directory-population and cold-read acceptance uses a separate ordinary
+consumer process. The consumer verifies its actual user and architecture and
+rejects the namespace role. Provider-process directory enumeration returned no
+source callback in the recorded native regression; it cannot substitute for the
+external-consumer boundary.
+
 The production Host now owns this session and routes all demand, polling, rescan,
 upload, stat and mutation transports through `MirrorPulseNormalUserWorkerTransport`.
 The boundary reads and disposes lazy source ranges as the normal user, returning

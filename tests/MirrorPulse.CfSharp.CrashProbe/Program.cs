@@ -3,6 +3,19 @@ using MirrorPulse.CfSharp.CrashProbe;
 using MirrorPulse.CloudFiles.CfSharp;
 using MirrorPulse.Core.Configuration;
 
+if (args.Length == 4 && args[0] == "--namespace-source-consumer")
+{
+    try
+    {
+        return await NamespaceSourceConsumerProbe.RunAsync(args[1], args[2], args[3]);
+    }
+    catch (Exception exception)
+    {
+        Console.Error.WriteLine($"Source consumer failure: hresult={exception.HResult:X8}; type={exception.GetType().Name}.");
+        return 1;
+    }
+}
+
 if (args.Length == 2 && args[0] is "--read-cli-fixture" or "--audit-cli-fixture" or "--inspect-cli-fixture")
 {
     try

@@ -1,6 +1,9 @@
+using System.Diagnostics;
 using System.Security.AccessControl;
 using System.Security.Principal;
+using System.Text.Json;
 using CfSharp;
+using MirrorPulse.CfSharp.CrashProbe;
 using MirrorPulse.CloudFiles.CfSharp;
 using MirrorPulse.Core.CloudFiles;
 using MirrorPulse.Core.Configuration;
@@ -86,19 +89,21 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
                 File.WriteAllTextAsync(Path.Combine(docs.FullPath, "ordinary.txt"), "not admitted", timeout.Token));
             Assert.AreEqual(0, worker.Calls.Count(call => call == "directory"));
-            // Windows drives a real FETCH_PLACEHOLDERS callback in this ordinary-user enumeration.
-            string[] local = await Task.Run(() => Directory.GetFiles(docs.FullPath), timeout.Token);
+            // Use an independent consumer, as in the existing external callback acceptance test.
+            // A directory enumeration inside the provider process produced no source callback.
+            var enumeration = await RunSourceConsumerAsync(directory, "enumerate", role, timeout.Token);
+            string[] local = enumeration.Names;
             TestContext.WriteLine($"NativeSourceEnumeration: actualPopulationPolicy=Full; localEntries={local.Length}; sourcePages={worker.Calls.Count(call => call == "directory")}; sourceRanges={worker.Calls.Count(call => call == "range-open")}.");
-            Assert.IsTrue(local.Contains(Path.Combine(docs.FullPath, "cold.bin"), StringComparer.OrdinalIgnoreCase));
+            Assert.IsTrue(local.Contains("cold.bin", StringComparer.OrdinalIgnoreCase));
             Assert.IsGreaterThan(0, worker.Calls.Count(call => call == "directory"));
             Assert.AreEqual(0, worker.Calls.Count(call => call == "range-open"));
             var cold = await fileSystem.GetFile("Docs/cold.bin").InspectAsync(timeout.Token);
             Assert.IsTrue(cold.IsPlaceholder);
             await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
                 Task.Run(() => File.Delete(Path.Combine(docs.FullPath, "cold.bin")), timeout.Token));
-            // Opening a cold file now drives a real FETCH_DATA callback, including its lazy body.
+            // The same independent consumer drives FETCH_DATA, including the lazy source body.
             CollectionAssert.AreEqual(new byte[] { 1, 2, 3, 4 },
-                await File.ReadAllBytesAsync(Path.Combine(docs.FullPath, "cold.bin"), timeout.Token));
+                (await RunSourceConsumerAsync(directory, "read", role, timeout.Token)).Content);
             Assert.IsGreaterThan(0, worker.Calls.Count(call => call == "range-open"));
             Assert.IsGreaterThan(0, worker.Calls.Count(call => call == "range-read"));
             Assert.AreEqual(worker.Calls.Count(call => call == "range-open"), worker.Calls.Count(call => call == "range-dispose"));
@@ -111,13 +116,52 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 Assert.AreEqual(preparation.Baseline.OwnerSid, observed.OwnerSid);
                 Assert.IsTrue(MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(preparation.Intent.TargetDacl, observed.Dacl));
             }
-            TestContext.WriteLine($"NativeSourceContext: ordinaryEnumeration=True; inheritedDeleteProtection=True; coldHydration=True; lazyRangeDisposedAsNormalUser=True; closedParentDacls=True; rootGuardRetained=True; elevatedCaller={new WindowsPrincipal(caller).IsInRole(WindowsBuiltInRole.Administrator)}; hostStrictIntegrated=False.");
+            TestContext.WriteLine($"NativeSourceContext: externalOrdinaryConsumer=True; ordinaryEnumeration=True; inheritedDeleteProtection=True; coldHydration=True; lazyRangeDisposedAsNormalUser=True; closedParentDacls=True; rootGuardRetained=True; elevatedCaller={new WindowsPrincipal(caller).IsInRole(WindowsBuiltInRole.Administrator)}; hostStrictIntegrated=False.");
         }
         finally
         {
             registry.Unregister(paths.SyncRootPath);
             RestoreSourceContextFixtureForCleanup(directory, paths.SyncRootPath, caller.User!);
             DeleteFixture(directory);
+        }
+    }
+
+    private static async Task<NamespaceSourceConsumerResult> RunSourceConsumerAsync(string directory, string mode,
+        MirrorPulseNamespaceExecutionSession role, CancellationToken token)
+    {
+        using WindowsIdentity caller = WindowsIdentity.GetCurrent();
+        Assert.AreNotEqual(true, caller.Groups?.Any(group => group.Value == role.RoleSid.Value));
+        var start = new ProcessStartInfo("dotnet")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        foreach (string argument in new[] { typeof(ProbeMarker).Assembly.Location,
+            "--namespace-source-consumer", directory, mode, role.RoleSid.Value })
+            start.ArgumentList.Add(argument);
+        using Process process = Process.Start(start) ?? throw new AssertFailedException("The source consumer did not start.");
+        Task<string> stdout = process.StandardOutput.ReadToEndAsync(token);
+        Task<string> stderr = process.StandardError.ReadToEndAsync(token);
+        try
+        {
+            await process.WaitForExitAsync(token);
+            Assert.AreEqual(0, process.ExitCode, await stderr);
+            var result = JsonSerializer.Deserialize<NamespaceSourceConsumerResult>(await stdout)
+                ?? throw new AssertFailedException("The source consumer returned no result.");
+            Assert.AreEqual(role.OwnerSid.Value, result.UserSid);
+            Assert.IsFalse(result.NamespaceRolePresent);
+            Assert.AreEqual(System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture.ToString(), result.ProcessArchitecture);
+            return result;
+        }
+        finally
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync(CancellationToken.None);
+            }
         }
     }
 
