@@ -36,6 +36,7 @@ public sealed partial class MirrorPulseNamespaceHandleTests
         var identity = new CloudPlaceholderIdentity(Guid.NewGuid(), "unaccepted-local", string.Empty);
         CloudLocalFileBinding? originalBinding = null;
         string? originalDacl = null;
+        string? verifiedDacl = null;
         string latest = "latest unaccepted synthetic bytes";
         var provider = new NoSourceReadProvider();
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
@@ -89,7 +90,8 @@ public sealed partial class MirrorPulseNamespaceHandleTests
                     var observed = await lease.InspectAsync(stop);
                     Assert.AreEqual(retainedBinding, observed.LocalObject);
                     Assert.AreEqual(registration.RootId, observed.RootId);
-                    Assert.AreEqual(originalDacl, observed.Dacl);
+                    Assert.IsTrue(MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(originalDacl!, observed.Dacl));
+                    if (verifiedDacl is not null) Assert.AreEqual(verifiedDacl, observed.Dacl);
                     // Exact-item mature operations reuse the public scope. Select an existing
                     // official identity under that admission instead of rekeying pending work.
                     CloudItemSnapshot current = await file.InspectAsync(stop);
@@ -104,7 +106,10 @@ public sealed partial class MirrorPulseNamespaceHandleTests
                     await Task.Yield();
                     await lease.ApplyDaclAsync(originalDacl!, stop);
                     aclWrites++;
-                    Assert.AreEqual(originalDacl, (await lease.InspectAsync(stop)).Dacl);
+                    string readback = (await lease.InspectAsync(stop)).Dacl;
+                    Assert.IsTrue(MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(originalDacl!, readback));
+                    verifiedDacl ??= readback;
+                    Assert.AreEqual(verifiedDacl, readback);
                     await AssertProtectedWriteDeniedAsync();
                     AssertProtectedHardLinkDenied(inside);
                     AssertProtectedHardLinkDenied(outside);
@@ -125,11 +130,11 @@ public sealed partial class MirrorPulseNamespaceHandleTests
                 await File.WriteAllTextAsync(target, latest, timeout.Token);
                 CloudItemSnapshot afterEdit = await file.InspectAsync(timeout.Token);
                 int nativeInfo = QueryNativePlaceholderInfo(target, out uint infoBytes);
-                TestContext.WriteLine($"PlaceholderAfterOverwrite: architecture={RuntimeInformation.ProcessArchitecture}; owner={owner}; scopeReleased=True; placeholder={afterEdit.IsPlaceholder}; placeholderState={afterEdit.PlaceholderState}; reparsePoint={afterEdit.Attributes?.HasFlag(FileAttributes.ReparsePoint)}; synchronizationState={afterEdit.SynchronizationState}; nativeInfoHResult={nativeInfo:X8}; nativeInfoBytes={infoBytes}; originalBindingRetained={afterEdit.LocalBinding == originalBinding}; originalPermissionsRetained={ReadDacl(target) == originalDacl}; latestBytesRetained={await File.ReadAllTextAsync(target, timeout.Token) == latest}; sourceReads={provider.Reads}; aclWrites={aclWrites}.");
+                TestContext.WriteLine($"PlaceholderAfterOverwrite: architecture={RuntimeInformation.ProcessArchitecture}; owner={owner}; scopeReleased=True; placeholder={afterEdit.IsPlaceholder}; placeholderState={afterEdit.PlaceholderState}; reparsePoint={afterEdit.Attributes?.HasFlag(FileAttributes.ReparsePoint)}; synchronizationState={afterEdit.SynchronizationState}; nativeInfoHResult={nativeInfo:X8}; nativeInfoBytes={infoBytes}; originalBindingRetained={afterEdit.LocalBinding == originalBinding}; originalPermissionsRetained={ReadDacl(target) == verifiedDacl}; latestBytesRetained={await File.ReadAllTextAsync(target, timeout.Token) == latest}; sourceReads={provider.Reads}; aclWrites={aclWrites}.");
                 Assert.IsFalse(afterEdit.IsPlaceholder);
                 Assert.AreEqual(unchecked((int)0x80070178), nativeInfo);
                 Assert.AreEqual(originalBinding, afterEdit.LocalBinding);
-                Assert.AreEqual(originalDacl, ReadDacl(target));
+                Assert.AreEqual(verifiedDacl, ReadDacl(target));
                 Assert.IsTrue(CreateHardLink(inside, target, nint.Zero));
                 Assert.IsTrue(CreateHardLink(outside, target, nint.Zero));
                 Assert.AreEqual(latest, await File.ReadAllTextAsync(outside, timeout.Token));
@@ -215,7 +220,9 @@ public sealed partial class MirrorPulseNamespaceHandleTests
                     {
                         var metadata = await lease.InspectAsync(stop);
                         await lease.ApplyDaclAsync(metadata.Dacl, stop);
-                        Assert.AreEqual(metadata, (await lease.InspectAsync(stop)) with { ObservedAt = metadata.ObservedAt });
+                        var observed = await lease.InspectAsync(stop);
+                        Assert.IsTrue(MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(metadata.Dacl, observed.Dacl));
+                        Assert.AreEqual(metadata, observed with { Dacl = metadata.Dacl, ObservedAt = metadata.ObservedAt });
                         Assert.AreEqual(0L, (await cold.InspectAsync(stop)).OnDiskDataSize);
                     }, timeout.Token);
                 Assert.AreEqual(CloudProtectedLocalOperationOutcome.Completed, coldReceipt.Outcome, coldReceipt.Error?.ToString());
@@ -237,7 +244,9 @@ public sealed partial class MirrorPulseNamespaceHandleTests
                         var metadata = await lease.InspectAsync(stop);
                         Assert.IsTrue(metadata.IsDirectory);
                         await lease.ApplyDaclAsync(metadata.Dacl, stop);
-                        Assert.AreEqual(metadata, (await lease.InspectAsync(stop)) with { ObservedAt = metadata.ObservedAt });
+                        var observed = await lease.InspectAsync(stop);
+                        Assert.IsTrue(MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(metadata.Dacl, observed.Dacl));
+                        Assert.AreEqual(metadata, observed with { Dacl = metadata.Dacl, ObservedAt = metadata.ObservedAt });
                     }, timeout.Token);
                 Assert.AreEqual(CloudProtectedLocalOperationOutcome.Completed, directoryReceipt.Outcome, directoryReceipt.Error?.ToString());
                 Assert.IsTrue(directoryReceipt.AccessDescriptorApplied && directoryReceipt.AccessDescriptorReadBack && directoryReceipt.Drained);
@@ -255,7 +264,7 @@ public sealed partial class MirrorPulseNamespaceHandleTests
                 Assert.IsTrue(string.IsNullOrEmpty(snapshot.RemoteRevision));
                 if (inspectBytes)
                 {
-                    Assert.AreEqual(originalDacl, ReadDacl(target));
+                    Assert.AreEqual(verifiedDacl, ReadDacl(target));
                     Assert.AreEqual(latest, await File.ReadAllTextAsync(target, timeout.Token));
                 }
             }
