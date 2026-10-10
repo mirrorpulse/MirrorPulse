@@ -145,6 +145,13 @@ durable item projection to invent an identity. A repeated observation preserves
 the first descriptor and timestamp while rejecting a different native object.
 Local births marked in sync without their required acceptance remain rejected.
 
+Startup recovery can enumerate every birth admission in bounded finite pages.
+Each entry retains its original plan, start and observation separately, including
+missing facts and missing name reservations. A missing reservation is visible
+recovery work. Paging neither repairs history nor authorizes a new creation or
+marks an admission complete. Scans are short-lived and cannot be reused across
+a catalog migration.
+
 Product catalog schema 22 retains each object's original volume, registered-root
 and file binding, capture location, owner SID and canonical DACL. The baseline
 and the first change intent commit together before any permission write. A
