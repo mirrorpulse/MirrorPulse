@@ -109,11 +109,10 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                             if (isDirectory) Directory.CreateDirectory(child.FullPath);
                             else
                             {
-                                var roleOnly = new FileSecurity();
-                                roleOnly.SetAccessRuleProtection(true, false);
-                                roleOnly.AddAccessRule(new FileSystemAccessRule(role.RoleSid, FileSystemRights.FullControl, AccessControlType.Allow));
+                                var birthSecurity = new FileSecurity();
+                                birthSecurity.SetSecurityDescriptorSddlForm(MirrorPulseNamespacePermissionPolicy.CreateOrdinaryFileBirthDacl(role), AccessControlSections.Access);
                                 await using FileStream writer = new FileInfo(child.FullPath).Create(FileMode.CreateNew,
-                                    FileSystemRights.Write, FileShare.None, 4096, FileOptions.None, roleOnly);
+                                    FileSystemRights.Write, FileShare.None, 4096, FileOptions.None, birthSecurity);
                                 await writer.WriteAsync(payload, timeout.Token);
                                 writer.Flush(flushToDisk: true);
                             }
@@ -207,7 +206,27 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     var pending = await WaitForBirthJournalAsync(feed, births[0].Plan.ItemId, births[1].Plan.ItemId, timeout.Token);
                     CollectionAssert.IsSubsetOf(journalIds, pending.Select(change => change.OperationId).ToArray());
                     await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() => File.Delete(filePath), timeout.Token));
-                    await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() => Directory.Delete(Path.Combine(docs.FullPath, "empty")), timeout.Token));
+                    string directoryPath = Path.Combine(docs.FullPath, "empty");
+                    try
+                    {
+                        Directory.Delete(directoryPath);
+                        Assert.Fail("Ordinary managed deletion must not remove the protected directory.");
+                    }
+                    catch (Exception error) when (error is UnauthorizedAccessException or IOException)
+                    {
+                        TestContext.WriteLine($"ControlledBirthManagedDirectoryDelete: exception={error.GetType().Name}; hResult={error.HResult:X8}.");
+                    }
+                    bool removed = RemoveBirthDirectory(directoryPath);
+                    int removalError = removed ? 0 : Marshal.GetLastPInvokeError();
+                    TestContext.WriteLine($"ControlledBirthDirectoryDelete: removed={removed}; nativeError={removalError}.");
+                    Assert.IsFalse(removed);
+                    Assert.AreEqual(5, removalError, "The native deletion must be refused with access denied.");
+                    var retainedDirectory = await fileSystem.GetDirectory("Docs/empty").InspectAsync(timeout.Token);
+                    Assert.IsTrue(retainedDirectory.Exists && retainedDirectory.IsPlaceholder);
+                    Assert.AreEqual(observations[1].LocalObject.LocalFileId, retainedDirectory.LocalBinding!.LocalFileId);
+                    await using (var retainedLease = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(
+                        fileSystem.GetDirectory("Docs/empty"), router, timeout.Token))
+                        Assert.AreEqual(observations[1].BirthDacl, (await retainedLease.InspectAsync(timeout.Token)).Dacl);
                     Assert.HasCount(2, await catalog.ReadNamespacePermissionChangesAsync(timeout.Token));
                     foreach (var original in originals)
                         Assert.AreEqual(original.Baseline, await catalog.ReadNamespacePermissionBaselineAsync(original.Baseline.EvidenceId, timeout.Token));
@@ -275,4 +294,9 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool CreateBirthHardLink(string alias, string target, nint attributes);
+
+    [LibraryImport("kernel32.dll", EntryPoint = "RemoveDirectoryW", StringMarshalling = StringMarshalling.Utf16, SetLastError = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool RemoveBirthDirectory(string path);
 }
