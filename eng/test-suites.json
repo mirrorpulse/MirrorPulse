@@ -61,6 +61,9 @@
   ],
   "required": {
     "namespace": [
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseNormalUserWorkerTransportTests.WorkerCallsAndLazyRangeBodiesNeverInheritNamespaceRole",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseNormalUserWorkerTransportTests.FailedOrCanceledSourceReadReturnsNoPartialBodyAndRestoresCaller",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseNormalUserWorkerTransportTests.SessionDisposalDrainsLazySourceReadAndDisposal",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseNamespaceHandleTests.NativePlaceholderHardLinkPolicyPreservesUnacceptedBytesAndRejectsExistingAliasesAcrossRestart",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseNamespaceHandleTests.RetainedHandleRejectsExistingAndNewlyObservedAliasesWithoutAclWrites",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseNamespacePermissionPolicyTests.ExplicitPolicyMatchesNtfsAndControlledCreationIsProtectedAtBirth",
