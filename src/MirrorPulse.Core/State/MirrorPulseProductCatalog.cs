@@ -103,7 +103,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                 version.CommandText = "PRAGMA user_version;";
                 long currentVersion = (long)(await version.ExecuteScalarAsync(cancellationToken)
                     .ConfigureAwait(false) ?? 0L);
-                if (currentVersion > 25)
+                if (currentVersion > 26)
                 {
                     throw new InvalidDataException("The MP product catalog schema is newer than this Host supports.");
                 }
@@ -247,6 +247,13 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                     );
                     CREATE UNIQUE INDEX IF NOT EXISTS namespace_permission_pending_object
                         ON namespace_permission_changes(evidence_id) WHERE phase IN (0,1,3);
+                    CREATE TABLE IF NOT EXISTS namespace_permission_local_identities (
+                        evidence_id TEXT PRIMARY KEY REFERENCES namespace_permission_baselines(evidence_id),
+                        operation_id TEXT NOT NULL UNIQUE REFERENCES namespace_permission_changes(operation_id),
+                        item_id TEXT NOT NULL UNIQUE,
+                        payload BLOB NOT NULL,
+                        fingerprint BLOB NOT NULL
+                    );
                     CREATE TABLE IF NOT EXISTS namespace_permission_trees (
                         manifest_id TEXT PRIMARY KEY,
                         root_id TEXT NOT NULL,
@@ -350,7 +357,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                     alter.CommandText = "ALTER TABLE worker_requests ADD COLUMN stable_fingerprint BLOB NULL;";
                     await alter.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
                 }
-                version.CommandText = "PRAGMA user_version=25;";
+                version.CommandText = "PRAGMA user_version=26;";
                 await version.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
 
