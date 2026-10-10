@@ -295,6 +295,15 @@ protection in the Host. Applying and auditing object permissions, rotating the
 Host role, controlled file operations, and their client commands require
 separate integration and acceptance.
 
+An ordinary NTFS recovery fixture gives the owner explicit metadata permissions
+at birth, without content or namespace rights. After the original role exits,
+the owner can replace its ACL entry through a retained metadata handle; the new
+role can read the original bytes while ordinary reads, writes, aliases and
+namespace changes remain denied. This requires a protected parent. A metadata
+handle alone does not freeze the object's name, so production recovery also
+needs the Host's shared namespace actor and durable object-binding admission.
+The fixture does not establish Cloud Files conversion recovery or Host integration.
+
 ## Remaining work
 
 Package inventories, entrypoints and locale resources use one canonical Windows

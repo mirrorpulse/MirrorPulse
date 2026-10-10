@@ -22,6 +22,23 @@ public static class MirrorPulseNamespacePermissionPolicy
     public static string CreateNewObjectDacl(MirrorPulseNamespaceExecutionSession session, bool isDirectory) =>
         CreateDacl(session, isDirectory, forCreation: true);
 
+    /// <summary>Reserves ordinary-file content access for the role until protected Cloud Files conversion.</summary>
+    /// <remarks>
+    /// Supply this descriptor atomically at creation. Explicit owner metadata rights support
+    /// later ACL recovery without ordinary content access. Recovery still requires durable
+    /// object-binding admission, a protected parent and the Host's shared namespace actor.
+    /// </remarks>
+    public static string CreateOrdinaryFileBirthDacl(MirrorPulseNamespaceExecutionSession session)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        var security = new FileSecurity();
+        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        security.AddAccessRule(new FileSystemAccessRule(session.OwnerSid, FileSystemRights.ReadAttributes |
+            FileSystemRights.ReadPermissions | FileSystemRights.ChangePermissions | FileSystemRights.Synchronize, AccessControlType.Allow));
+        security.AddAccessRule(new FileSystemAccessRule(session.RoleSid, FileSystemRights.FullControl, AccessControlType.Allow));
+        return security.GetSecurityDescriptorSddlForm(AccessControlSections.Access);
+    }
+
     private static string CreateDacl(MirrorPulseNamespaceExecutionSession session, bool isDirectory, bool forCreation)
     {
         ArgumentNullException.ThrowIfNull(session);

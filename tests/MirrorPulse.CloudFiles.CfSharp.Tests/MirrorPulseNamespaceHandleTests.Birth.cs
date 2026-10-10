@@ -63,6 +63,11 @@ public sealed partial class MirrorPulseNamespaceHandleTests
         {
             if (!File.Exists(Path.Combine(fixture, ".mp-role-birth-fixture")))
                 throw new InvalidOperationException("The role birth fixture marker is missing.");
+            var directoryCleanup = new DirectorySecurity();
+            directoryCleanup.SetAccessRuleProtection(true, false);
+            directoryCleanup.AddAccessRule(new FileSystemAccessRule(callerSid, FileSystemRights.FullControl,
+                InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
+            new DirectoryInfo(fixture).SetAccessControl(directoryCleanup);
             if (File.Exists(file))
             {
                 var cleanup = new FileSecurity();
