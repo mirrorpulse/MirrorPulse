@@ -145,6 +145,11 @@ durable item projection to invent an identity. A repeated observation preserves
 the first descriptor and timestamp while rejecting a different native object.
 Local births marked in sync without their required acceptance remain rejected.
 
+Identity mapping preserves an absent revision as `null` in CfSharp's public
+envelope. It does not turn absence into an explicit empty revision. Stable item
+IDs and root scope remain independent of revisions; existing explicit empty
+envelopes remain readable without rewriting them.
+
 Startup recovery can enumerate every birth admission in bounded finite pages.
 Each entry retains its original plan, start and observation separately, including
 missing facts and missing name reservations. A missing reservation is visible

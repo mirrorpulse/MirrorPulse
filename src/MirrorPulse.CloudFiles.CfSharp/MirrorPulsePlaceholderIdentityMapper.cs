@@ -18,10 +18,10 @@ public sealed record MirrorPulsePlaceholderIdentity(
     public CloudPlaceholderIdentity ToCfSharp()
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(RemoteId);
-        if (RootKey is null) return new(CreateItemId(InstanceId, RemoteId), RemoteId.Trim(), RemoteRevision?.Trim() ?? string.Empty);
+        if (RootKey is null) return new(CreateItemId(InstanceId, RemoteId), RemoteId.Trim(), RemoteRevision?.Trim());
         ArgumentException.ThrowIfNullOrWhiteSpace(RootKey);
         string scoped = "mp2:" + InstanceId.Value.ToString("N") + ":" + EncodePart(RootKey) + ":" + EncodePart(RemoteId.Trim());
-        return new(CreateItemId(InstanceId, "v2/" + scoped), scoped, RemoteRevision?.Trim() ?? string.Empty);
+        return new(CreateItemId(InstanceId, "v2/" + scoped), scoped, RemoteRevision?.Trim());
     }
 
     public byte[] Encode() => ToCfSharp().Encode();
