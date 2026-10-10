@@ -36,6 +36,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         var originals = new List<MirrorPulseNamespacePermissionPreparation>();
         var observations = new List<MirrorPulseNamespaceBirthObservation>();
         var originalBindings = new List<CloudLocalFileBinding>();
+        var conversions = new List<MirrorPulseNamespaceBirthConversionPreparation>();
         Guid[] journalIds = [];
         byte[] payload = Encoding.UTF8.GetBytes("controlled local bytes with no remote acceptance");
         string filePath = Path.Combine(paths.SyncRootPath, "Docs", "born.bin");
@@ -120,6 +121,12 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                             Assert.IsFalse(ordinary.IsPlaceholder);
                             Assert.IsNotNull(ordinary.LocalBinding);
                             originalBindings.Add(ordinary.LocalBinding);
+                            var preparation = await MirrorPulseNamespaceBirthConversionPreparer.RecordAsync(catalog,
+                                birth.OperationId, child, router, MirrorPulseWindowsNamespaceInheritance.CreateInheritedDacl(parent.Intent.TargetDacl, isDirectory), timeout.Token);
+                            conversions.Add(preparation);
+                            Assert.AreEqual(originalBindings[^1].LocalFileId, preparation.LocalObject.LocalFileId);
+                            Assert.AreEqual(preparation, await MirrorPulseNamespaceBirthConversionPreparer.RecordAsync(catalog,
+                                birth.OperationId, child, router, preparation.ExpectedConvertedDacl, timeout.Token));
                         });
                         if (!isDirectory)
                         {
@@ -177,6 +184,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     {
                         Assert.IsFalse((await catalog.RecordNamespaceBirthStartAsync(start, timeout.Token)).NewlyRecorded);
                         CloudItem child = birth.IsDirectory ? fileSystem.GetDirectory(birth.RelativePath) : fileSystem.GetFile(birth.RelativePath);
+                        Assert.AreEqual(conversions[observations.Count], await catalog.ReadNamespaceBirthConversionAsync(birth.OperationId, timeout.Token));
                         var observed = await MirrorPulseNamespaceBirthObserver.RecordAsync(catalog, birth.OperationId, child, router, timeout.Token);
                         observations.Add(observed);
                         Assert.AreEqual(caller.User!.Value, observed.OwnerSid);
@@ -211,7 +219,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         preparation.Baseline.RootId is null ? fileSystem.Root : docs, router, timeout.Token);
                     Assert.AreEqual(preparation.Intent.TargetDacl, (await lease.InspectAsync(timeout.Token)).Dacl);
                 }
-                TestContext.WriteLine($"ControlledBirth: owner={owner}; architecture={RuntimeInformation.ProcessArchitecture}; roleOnlyOrdinaryBirth=True; sameObjectConversion=True; fileModeOpen=True; aliasesDenied=True; originalsRetained=True; nativeBirthUnrecorded={owner == 0}; officialJournalIds={journalIds.Length}; sourceReads={source.Reads}; parentAclClosed=True; elevatedCaller={new WindowsPrincipal(caller).IsInRole(WindowsBuiltInRole.Administrator)}; hostIntegrated=False.");
+                TestContext.WriteLine($"ControlledBirth: owner={owner}; architecture={RuntimeInformation.ProcessArchitecture}; roleOnlyOrdinaryBirth=True; ordinaryBindingDurableBeforeConversion=True; sameObjectConversion=True; fileModeOpen=True; aliasesDenied=True; originalsRetained=True; nativeBirthUnrecorded={owner == 0}; officialJournalIds={journalIds.Length}; sourceReads={source.Reads}; parentAclClosed=True; elevatedCaller={new WindowsPrincipal(caller).IsInRole(WindowsBuiltInRole.Administrator)}; hostIntegrated=False.");
             }
         }
         finally
