@@ -90,7 +90,10 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinator
             if (retained is null)
                 await _catalog.PrepareNamespacePermissionLocalIdentityAsync(new(1, baseline.EvidenceId, change.Intent.OperationId,
                     baseline.LocalObject, identity.ItemId, identity.RemoteId, DateTimeOffset.UtcNow), cancellationToken).ConfigureAwait(false);
-            if (!local.IsPlaceholder)
+            // Native presence does not establish that a previous official projection committed.
+            // The public preparation replay repairs that projection without reconverting the
+            // matching native identity. Accepted placeholders remain Access-only.
+            if (!local.IsPlaceholder || local.PlaceholderIdentity!.RemoteRevision is null)
                 await lease.PrepareLocalIdentityAsync(identity, cancellationToken).ConfigureAwait(false);
         }
         return await ApplyAdmittedAsync(change, baseline, lease, cancellationToken).ConfigureAwait(false);

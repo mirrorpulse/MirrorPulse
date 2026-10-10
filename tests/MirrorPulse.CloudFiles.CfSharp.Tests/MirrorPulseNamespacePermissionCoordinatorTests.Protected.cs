@@ -36,7 +36,7 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinatorTests
         Assert.AreEqual(MirrorPulseNamespacePermissionOutcome.Verified, result.Outcome);
         Assert.AreEqual(known ? existing.ItemId : candidate.ItemId, lease.ConvertedIdentity!.ItemId);
         Assert.AreEqual(known ? existing.RemoteId : candidate.RemoteId, lease.ConvertedIdentity.RemoteId);
-        Assert.AreEqual(1, lease.Conversions);
+        Assert.AreEqual(1, lease.Preparations);
         Assert.AreEqual(1, lease.Object.Writes);
         Assert.AreEqual(Target, lease.Object.Current.Dacl);
         Assert.IsFalse(lease.Disposed);
@@ -53,7 +53,7 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinatorTests
         var lease = new ProtectedObjectLease(fixture) { Identity = new(accepted.ItemId, accepted.RemoteId, true, accepted) };
         var result = await ApplyProtectedFixtureAsync(coordinator, fixture.Intent.OperationId, lease, null);
         Assert.AreEqual(MirrorPulseNamespacePermissionOutcome.Verified, result.Outcome);
-        Assert.AreEqual(0, lease.Conversions);
+        Assert.AreEqual(0, lease.Preparations);
         Assert.AreSame(accepted, lease.Identity.PlaceholderIdentity);
         var retained = (await catalog.ReadNamespacePermissionLocalIdentityAsync(fixture.Baseline.EvidenceId))!;
         Assert.AreEqual(accepted.ItemId, retained.ItemId);
@@ -80,7 +80,7 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinatorTests
         var result = await ApplyProtectedFixtureAsync(coordinator, fixture.Intent.OperationId, lease, new(Guid.NewGuid(), "candidate"));
         Assert.AreEqual(MirrorPulseNamespacePermissionOutcome.RecoveryRequired, result.Outcome);
         Assert.AreEqual(0, lease.IdentityReads);
-        Assert.AreEqual(0, lease.Conversions);
+        Assert.AreEqual(0, lease.Preparations);
         Assert.AreEqual(0, lease.Object.Writes);
         Assert.IsNull(await catalog.ReadNamespacePermissionLocalIdentityAsync(fixture.Baseline.EvidenceId));
         Assert.AreEqual(fixture.Baseline, await catalog.ReadNamespacePermissionBaselineAsync(fixture.Baseline.EvidenceId));
@@ -110,7 +110,7 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinatorTests
         };
         var result = await ApplyProtectedFixtureAsync(coordinator, fixture.Intent.OperationId, lease, new(Guid.NewGuid(), "replacement"));
         Assert.AreEqual(MirrorPulseNamespacePermissionRecoveryReason.ObjectChanged, result.RecoveryReason);
-        Assert.AreEqual(0, lease.Conversions);
+        Assert.AreEqual(0, lease.Preparations);
         Assert.AreEqual(0, lease.Object.Writes);
         Assert.IsNull(await catalog.ReadNamespacePermissionLocalIdentityAsync(fixture.Baseline.EvidenceId));
     }
@@ -142,7 +142,7 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinatorTests
         Assert.AreEqual(retained, await second.ReadNamespacePermissionLocalIdentityAsync(fixture.Baseline.EvidenceId));
         Assert.AreEqual(candidate.ItemId, lease.Identity.ItemId);
         Assert.AreEqual(candidate.RemoteId, lease.Identity.RemoteId);
-        Assert.AreEqual(nativeApplied ? 1 : 2, lease.Conversions);
+        Assert.AreEqual(2, lease.Preparations, "Native presence still requires replay of the public durable projection preparation.");
         Assert.AreEqual(1, lease.Object.Writes);
     }
 
@@ -172,7 +172,7 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinatorTests
         lease.Object.BeforeRead = null;
         Assert.AreEqual(MirrorPulseNamespacePermissionOutcome.Verified, (await ApplyProtectedFixtureAsync(recovered,
             fixture.Intent.OperationId, lease, null)).Outcome);
-        Assert.AreEqual(1, lease.Conversions);
+        Assert.AreEqual(2, lease.Preparations, "Unaccepted native identity does not prove its earlier projection committed.");
         Assert.AreEqual(1, lease.Object.Writes);
         Assert.AreEqual(retained, await second.ReadNamespacePermissionLocalIdentityAsync(fixture.Baseline.EvidenceId));
     }
@@ -194,7 +194,7 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinatorTests
         var result = await ApplyProtectedFixtureAsync(coordinator, fixture.Intent.OperationId, lease, new(Guid.NewGuid(), "current-path"));
         Assert.AreEqual(MirrorPulseNamespacePermissionRecoveryReason.Interrupted, result.RecoveryReason);
         Assert.AreEqual(0, lease.IdentityReads);
-        Assert.AreEqual(0, lease.Conversions);
+        Assert.AreEqual(0, lease.Preparations);
         Assert.AreEqual(0, lease.Object.Writes);
         Assert.IsNull(await catalog.ReadNamespacePermissionLocalIdentityAsync(fixture.Baseline.EvidenceId));
         Assert.AreEqual(verified ? MirrorPulseNamespacePermissionPhase.Verified : MirrorPulseNamespacePermissionPhase.RecoveryRequired,
@@ -214,7 +214,7 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinatorTests
             (await ApplyProtectedFixtureAsync(coordinator, fixture.Intent.OperationId, lease, null)).Outcome);
         Assert.AreEqual(0, lease.Object.Reads);
         Assert.AreEqual(0, lease.IdentityReads);
-        Assert.AreEqual(0, lease.Conversions);
+        Assert.AreEqual(0, lease.Preparations);
         Assert.AreEqual(0, lease.Object.Writes);
     }
 
@@ -232,7 +232,7 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinatorTests
         Assert.AreEqual(MirrorPulseNamespacePermissionOutcome.Verified,
             (await ApplyProtectedFixtureAsync(coordinator, intent.OperationId, lease, null)).Outcome);
         Assert.AreEqual(0, lease.IdentityReads);
-        Assert.AreEqual(0, lease.Conversions);
+        Assert.AreEqual(0, lease.Preparations);
         Assert.AreEqual(1, lease.Object.Writes);
         Assert.IsNull(await catalog.ReadNamespacePermissionLocalIdentityAsync(baseline.EvidenceId));
     }
@@ -258,7 +258,7 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinatorTests
         Assert.AreEqual(MirrorPulseNamespacePermissionOutcome.AlreadyVerified,
             (await ApplyProtectedFixtureAsync(recovered, fixture.Intent.OperationId, lease, new(Guid.NewGuid(), "replacement"))).Outcome);
         Assert.AreEqual(retained, await second.ReadNamespacePermissionLocalIdentityAsync(fixture.Baseline.EvidenceId));
-        Assert.AreEqual(2, lease.Conversions);
+        Assert.AreEqual(2, lease.Preparations);
         Assert.AreEqual(1, lease.Object.Writes);
         Assert.AreEqual(candidate.ItemId, lease.ConvertedIdentity!.ItemId);
     }
@@ -276,7 +276,7 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinatorTests
         var lease = new ProtectedObjectLease(fixture) { Identity = new(Guid.NewGuid(), "replacement-official", false, null) };
         Assert.AreEqual(MirrorPulseNamespacePermissionRecoveryReason.ObjectChanged,
             (await ApplyProtectedFixtureAsync(coordinator, fixture.Intent.OperationId, lease, null)).RecoveryReason);
-        Assert.AreEqual(0, lease.Conversions);
+        Assert.AreEqual(0, lease.Preparations);
         Assert.AreEqual(0, lease.Object.Writes);
         Assert.AreEqual(retained, await catalog.ReadNamespacePermissionLocalIdentityAsync(fixture.Baseline.EvidenceId));
     }
@@ -290,10 +290,44 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinatorTests
         await using var coordinator = new MirrorPulseNamespacePermissionCoordinator(catalog);
         var lease = new ProtectedObjectLease(fixture);
         await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => ApplyProtectedFixtureAsync(coordinator, fixture.Intent.OperationId, lease, null));
-        Assert.AreEqual(0, lease.Conversions);
+        Assert.AreEqual(0, lease.Preparations);
         Assert.AreEqual(0, lease.Object.Writes);
         Assert.IsNull(await catalog.ReadNamespacePermissionLocalIdentityAsync(fixture.Baseline.EvidenceId));
         Assert.AreEqual(MirrorPulseNamespacePermissionPhase.Prepared, (await catalog.ReadNamespacePermissionChangeAsync(fixture.Intent.OperationId))!.Phase);
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task FailedProjectionReplayOnAnExistingLocalPlaceholderCannotStartPermissionWork(bool previouslyVerified)
+    {
+        using var fixture = new Fixture();
+        await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        await catalog.PrepareNamespacePermissionChangeAsync(fixture.Baseline, fixture.Intent);
+        await using var coordinator = new MirrorPulseNamespacePermissionCoordinator(catalog);
+        var identity = new CloudPlaceholderIdentity(Guid.NewGuid(), "retained-local");
+        var retained = new MirrorPulseNamespacePermissionLocalIdentity(1, fixture.Baseline.EvidenceId,
+            fixture.Intent.OperationId, fixture.Baseline.LocalObject, identity.ItemId, identity.RemoteId, DateTimeOffset.UtcNow);
+        await catalog.PrepareNamespacePermissionLocalIdentityAsync(retained);
+        var lease = new ProtectedObjectLease(fixture) { Identity = new(identity.ItemId, identity.RemoteId, true, identity), FailConversion = true };
+        if (previouslyVerified)
+        {
+            await catalog.RecordNamespacePermissionApplicationAsync(fixture.Intent.OperationId, fixture.Baseline.LocalObject, DateTimeOffset.UtcNow);
+            await catalog.VerifyNamespacePermissionChangeAsync(fixture.Intent.OperationId,
+                new(fixture.Baseline.LocalObject, Owner, Target, DateTimeOffset.UtcNow));
+            lease.Object.Current = lease.Object.Current with { Dacl = Target };
+        }
+        var before = (await catalog.ReadNamespacePermissionChangeAsync(fixture.Intent.OperationId))!;
+        await Assert.ThrowsExactlyAsync<IOException>(() => ApplyProtectedFixtureAsync(coordinator, fixture.Intent.OperationId, lease, null));
+        Assert.AreEqual(1, lease.Preparations);
+        Assert.AreEqual(0, lease.Object.Writes);
+        Assert.AreEqual(before, await catalog.ReadNamespacePermissionChangeAsync(fixture.Intent.OperationId));
+        Assert.AreEqual(retained, await catalog.ReadNamespacePermissionLocalIdentityAsync(fixture.Baseline.EvidenceId));
+        lease.FailConversion = false;
+        var recovered = await ApplyProtectedFixtureAsync(coordinator, fixture.Intent.OperationId, lease, null);
+        Assert.AreEqual(previouslyVerified ? MirrorPulseNamespacePermissionOutcome.AlreadyVerified : MirrorPulseNamespacePermissionOutcome.Verified, recovered.Outcome);
+        Assert.AreEqual(2, lease.Preparations);
+        Assert.AreEqual(previouslyVerified ? 0 : 1, lease.Object.Writes);
     }
 
     private static Task<MirrorPulseNamespacePermissionResult> ApplyProtectedFixtureAsync(
@@ -307,7 +341,7 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinatorTests
         public ObjectLease Object { get; } = new(fixture.Baseline, fixture.Intent);
         public MirrorPulseProtectedLocalIdentityObservation Identity { get; set; } = new(null, null, false, null);
         public int IdentityReads { get; private set; }
-        public int Conversions { get; private set; }
+        public int Preparations { get; private set; }
         public bool FailConversion { get; set; }
         public bool FailAfterConversion { get; set; }
         public bool Disposed { get; private set; }
@@ -324,7 +358,7 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinatorTests
         public async ValueTask PrepareLocalIdentityAsync(CloudPlaceholderIdentity identity, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            Conversions++;
+            Preparations++;
             if (BeforeConversion is not null) await BeforeConversion(identity);
             if (!FailConversion || FailAfterConversion)
             {

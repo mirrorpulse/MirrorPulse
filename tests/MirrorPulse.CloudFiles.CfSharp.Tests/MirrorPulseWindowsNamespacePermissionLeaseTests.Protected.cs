@@ -121,6 +121,11 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         Assert.AreEqual(MirrorPulseNamespacePermissionOutcome.AlreadyVerified, replayed.Permission!.Outcome);
                         Assert.IsFalse(replayed.Receipt!.NativeConverted);
                         Assert.IsFalse(replayed.Receipt.AccessDescriptorApplied);
+                        if (index == 0)
+                        {
+                            Assert.IsTrue(replayed.Receipt.NativeIdentityPrepared);
+                            Assert.IsTrue(replayed.Receipt.DurableProjectionCommitted);
+                        }
                         var previous = (await catalog.ReadNamespacePermissionChangeAsync(protections[index].OperationId, timeout.Token))!;
                         var rotation = protections[index] with
                         {
