@@ -16,6 +16,7 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 public sealed partial class MirrorPulseNamespaceExecutionSession : IAsyncDisposable
 {
     private readonly SafeAccessTokenHandle _token;
+    private readonly WindowsIdentity _normalUser;
     private readonly object _gate = new();
     private int _operations;
     private bool _disposing;
@@ -27,30 +28,50 @@ public sealed partial class MirrorPulseNamespaceExecutionSession : IAsyncDisposa
 
     public MirrorPulseNamespaceExecutionSession()
     {
-        using WindowsIdentity caller = WindowsIdentity.GetCurrent();
+        _normalUser = WindowsIdentity.GetCurrent();
         if (!LogonUser("MirrorPulseNamespace", ".", Guid.NewGuid().ToString("N"),
             NewCredentials, WinNt50, out _token))
         {
             int error = Marshal.GetLastWin32Error();
             _token.Dispose();
+            _normalUser.Dispose();
             throw new Win32Exception(error);
         }
         try
         {
             using var clone = new WindowsIdentity(_token.DangerousGetHandle());
-            if (caller.User is null || clone.User is null || !caller.User.Equals(clone.User))
+            if (_normalUser.User is null || clone.User is null || !_normalUser.User.Equals(clone.User))
                 throw new InvalidOperationException("The namespace execution identity changed the local user.");
-            string[] added = ReadLogonGroups(_token).Except(ReadLogonGroups(caller.AccessToken)).ToArray();
+            string[] added = ReadLogonGroups(_token).Except(ReadLogonGroups(_normalUser.AccessToken)).ToArray();
             if (added.Length != 1 || !added[0].StartsWith("S-1-5-5-", StringComparison.Ordinal))
                 throw new InvalidOperationException("The namespace execution identity has no unique added logon SID.");
-            OwnerSid = caller.User;
+            OwnerSid = _normalUser.User;
             RoleSid = new(added[0]);
         }
-        catch { _token.Dispose(); throw; }
+        catch { _token.Dispose(); _normalUser.Dispose(); throw; }
     }
 
     /// <summary>Flows the role across asynchronous local namespace work and restores the caller.</summary>
-    public async Task RunNamespaceOperationAsync(Func<Task> operation)
+    public Task RunNamespaceOperationAsync(Func<Task> operation) => RunOwnedOperationAsync(_token, operation);
+
+    /// <summary>Runs source access using the captured Host user, even when called from local namespace work.</summary>
+    /// <remarks>
+    /// Construct the session in the Host's normal user context. This boundary removes the session's
+    /// namespace role; it neither grants network access nor changes Worker process identity.
+    /// The owner drains normal-user work along with namespace work before releasing either token.
+    /// </remarks>
+    public Task RunNormalUserOperationAsync(Func<Task> operation) => RunOwnedOperationAsync(_normalUser.AccessToken, operation);
+
+    /// <summary>Returns a source result without flowing the namespace role into source access.</summary>
+    public async Task<T> RunNormalUserOperationAsync<T>(Func<Task<T>> operation)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+        T result = default!;
+        await RunNormalUserOperationAsync(async () => { result = await operation().ConfigureAwait(false); }).ConfigureAwait(false);
+        return result;
+    }
+
+    private async Task RunOwnedOperationAsync(SafeAccessTokenHandle token, Func<Task> operation)
     {
         ArgumentNullException.ThrowIfNull(operation);
         lock (_gate)
@@ -58,7 +79,7 @@ public sealed partial class MirrorPulseNamespaceExecutionSession : IAsyncDisposa
             ObjectDisposedException.ThrowIf(_disposing, this);
             _operations++;
         }
-        try { await WindowsIdentity.RunImpersonatedAsync(_token, operation).ConfigureAwait(false); }
+        try { await WindowsIdentity.RunImpersonatedAsync(token, operation).ConfigureAwait(false); }
         finally
         {
             lock (_gate)
@@ -88,6 +109,7 @@ public sealed partial class MirrorPulseNamespaceExecutionSession : IAsyncDisposa
     {
         await drain.ConfigureAwait(false);
         _token.Dispose();
+        _normalUser.Dispose();
     }
 
     private static string[] ReadLogonGroups(SafeAccessTokenHandle token)

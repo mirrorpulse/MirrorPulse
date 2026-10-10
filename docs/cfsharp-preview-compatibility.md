@@ -139,6 +139,14 @@ closed ACLs, hydration, content confirmation and store restart. Permission owner
 Host integration and controlled-operation recovery remain pending. Creating a
 session alone neither changes permissions nor enables product protection.
 
+The session captures the Host's normal Windows identity at construction.
+`RunNormalUserOperationAsync` explicitly uses that identity for a source boundary,
+including when called from an active local namespace role. Both contexts drain
+before their tokens are released. The owner must construct the session in its
+normal context and wrap every actual source operation; returning a lazy object
+does not authorize later reads outside that boundary. This API does not change
+Worker process identity or prove the identity of native provider callbacks.
+
 The ARM64 CI job runs the dedicated namespace suite using the native ARM64 test
 process and disposable Cloud Files roots. Its report requires the execution
 lifecycle, role, strict ACL, permission ownership, alias and protected-operation
