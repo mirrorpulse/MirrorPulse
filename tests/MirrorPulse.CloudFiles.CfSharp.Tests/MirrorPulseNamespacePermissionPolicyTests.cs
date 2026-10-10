@@ -14,6 +14,88 @@ public sealed class MirrorPulseNamespacePermissionPolicyTests
 
     [TestMethod]
     [DoNotParallelize]
+    public async Task WindowsInheritanceMatchesActualBirthRotationAndRestorationWithoutChildAclWrites()
+    {
+        MirrorPulseNamespaceExecutionSessionTests.AssertExpectedArchitecture();
+        string fixture = Path.Combine(Path.GetTempPath(), "MirrorPulse-explicit-acl-tests", Guid.NewGuid().ToString("N"));
+        string sync = Path.Combine(fixture, "sync");
+        string docs = Path.Combine(sync, "Docs");
+        string file = Path.Combine(docs, "born.txt");
+        string child = Path.Combine(docs, "born-dir");
+        string nested = Path.Combine(child, "nested.txt");
+        using WindowsIdentity caller = WindowsIdentity.GetCurrent();
+        await using var first = new MirrorPulseNamespaceExecutionSession();
+        await using var next = new MirrorPulseNamespaceExecutionSession();
+        try
+        {
+            Directory.CreateDirectory(docs);
+            await File.WriteAllTextAsync(Path.Combine(fixture, ".mp-explicit-acl-fixture"), "synthetic");
+            string originalSync = ReadDacl(sync, true);
+            string originalDocs = ReadDacl(docs, true);
+            string parentDacl = MirrorPulseNamespacePermissionPolicy.CreateProtectedDacl(first, true);
+            SetDirectoryAcl(sync, parentDacl);
+            SetDirectoryAcl(docs, parentDacl);
+            await first.RunNamespaceOperationAsync(async () =>
+            {
+                await File.WriteAllTextAsync(file, "first local bytes");
+                Directory.CreateDirectory(child);
+                await File.WriteAllTextAsync(nested, "nested local bytes");
+            });
+            AssertInheritance(parentDacl);
+            await File.AppendAllTextAsync(file, " latest");
+            await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() => File.Delete(file)));
+            await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() => Directory.Delete(child, true)));
+            Assert.AreEqual("first local bytes latest", await File.ReadAllTextAsync(file));
+            Assert.AreEqual("nested local bytes", await File.ReadAllTextAsync(nested));
+            string firstBirthDacl = ReadDacl(file, false);
+            string rotatedParent = MirrorPulseNamespacePermissionPolicy.CreateProtectedDacl(next, true);
+            await next.RunNamespaceOperationAsync(() =>
+            {
+                SetDirectoryAcl(sync, rotatedParent);
+                SetDirectoryAcl(docs, rotatedParent);
+                return Task.CompletedTask;
+            });
+            AssertInheritance(rotatedParent);
+            Assert.IsFalse(ReadDacl(file, false).Contains(first.RoleSid.Value, StringComparison.Ordinal));
+            Assert.IsTrue(ReadDacl(file, false).Contains(next.RoleSid.Value, StringComparison.Ordinal));
+            Assert.AreNotEqual(firstBirthDacl, ReadDacl(file, false));
+            await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() => File.Move(file, file + ".renamed")));
+            await File.AppendAllTextAsync(nested, " latest");
+            await next.RunNamespaceOperationAsync(() =>
+            {
+                // Restore only the captured original parents, never a child's birth descriptor.
+                SetDirectoryAcl(sync, originalSync);
+                SetDirectoryAcl(docs, originalDocs);
+                return Task.CompletedTask;
+            });
+            AssertInheritance(ReadDacl(docs, true));
+            foreach (var subject in new[] { (file, false), (child, true), (nested, false) })
+            {
+                string actual = ReadDacl(subject.Item1, subject.Item2);
+                Assert.IsFalse(actual.Contains(first.RoleSid.Value, StringComparison.Ordinal));
+                Assert.IsFalse(actual.Contains(next.RoleSid.Value, StringComparison.Ordinal));
+            }
+            Assert.AreEqual("nested local bytes latest", await File.ReadAllTextAsync(nested));
+            File.Delete(file);
+            Directory.Delete(child, true);
+            TestContext.WriteLine("InheritedBirth: actualNtfs=True; parentOnlyRotation=True; parentOnlyRestoration=True; nestedChild=True; childAclWrites=0; latestBytesRetained=True; cloudRootRegistered=False.");
+
+            void AssertInheritance(string parent)
+            {
+                Assert.AreEqual(MirrorPulseWindowsNamespaceInheritance.CreateInheritedDacl(parent, false), ReadDacl(file, false));
+                Assert.AreEqual(MirrorPulseWindowsNamespaceInheritance.CreateInheritedDacl(parent, true), ReadDacl(child, true));
+                Assert.AreEqual(MirrorPulseWindowsNamespaceInheritance.CreateInheritedDacl(ReadDacl(child, true), false), ReadDacl(nested, false));
+            }
+        }
+        finally { DeleteMarkedFixture(fixture, caller.User!); }
+    }
+
+    private static string ReadDacl(string path, bool directory) => directory
+        ? new DirectoryInfo(path).GetAccessControl(AccessControlSections.Access).GetSecurityDescriptorSddlForm(AccessControlSections.Access)
+        : new FileInfo(path).GetAccessControl(AccessControlSections.Access).GetSecurityDescriptorSddlForm(AccessControlSections.Access);
+
+    [TestMethod]
+    [DoNotParallelize]
     public async Task ExplicitPolicyMatchesNtfsAndControlledCreationIsProtectedAtBirth()
     {
         MirrorPulseNamespaceExecutionSessionTests.AssertExpectedArchitecture();

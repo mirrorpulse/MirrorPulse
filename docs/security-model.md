@@ -157,6 +157,14 @@ recovery work. Paging neither repairs history nor authorizes a new creation or
 marks an admission complete. Scans are short-lived and cannot be reused across
 a catalog migration.
 
+Inherited birth descriptors are predicted by Windows'
+[CreatePrivateObjectSecurityEx](https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-createprivateobjectsecurityex),
+using the exact canonical parent access descriptor and the current creator token.
+MP does not implement its own ACE inheritance rules. Prediction writes no ACL and
+does not prove the child's binding, actual permissions or current membership.
+Restoration and role rotation require independent native inspection of descendants;
+the first birth descriptor remains historical evidence, never an original DACL.
+
 Product catalog schema 22 retains each object's original volume, registered-root
 and file binding, capture location, owner SID and canonical DACL. The baseline
 and the first change intent commit together before any permission write. A
