@@ -103,7 +103,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                 version.CommandText = "PRAGMA user_version;";
                 long currentVersion = (long)(await version.ExecuteScalarAsync(cancellationToken)
                     .ConfigureAwait(false) ?? 0L);
-                if (currentVersion > 30)
+                if (currentVersion > 31)
                 {
                     throw new InvalidDataException("The MP product catalog schema is newer than this Host supports.");
                 }
@@ -298,6 +298,17 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                         fingerprint BLOB NOT NULL CHECK (length(fingerprint)=32),
                         UNIQUE(volume_serial,sync_root_file_id,local_file_id)
                     );
+                    CREATE TABLE IF NOT EXISTS namespace_birth_protections (
+                        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                        protection_id TEXT NOT NULL UNIQUE,
+                        birth_operation_id TEXT NOT NULL REFERENCES namespace_birth_observations(operation_id),
+                        previous_protection_id TEXT NULL UNIQUE REFERENCES namespace_birth_protections(protection_id),
+                        parent_permission_operation_id TEXT NOT NULL REFERENCES namespace_permission_changes(operation_id),
+                        payload BLOB NOT NULL,
+                        fingerprint BLOB NOT NULL CHECK (length(fingerprint)=32)
+                    );
+                    CREATE INDEX IF NOT EXISTS namespace_birth_latest_protection
+                        ON namespace_birth_protections(birth_operation_id,sequence DESC);
                     CREATE TABLE IF NOT EXISTS namespace_permission_trees (
                         manifest_id TEXT PRIMARY KEY,
                         root_id TEXT NOT NULL,
@@ -401,7 +412,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                     alter.CommandText = "ALTER TABLE worker_requests ADD COLUMN stable_fingerprint BLOB NULL;";
                     await alter.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
                 }
-                version.CommandText = "PRAGMA user_version=30;";
+                version.CommandText = "PRAGMA user_version=31;";
                 await version.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
 

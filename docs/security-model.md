@@ -156,6 +156,16 @@ Missing preparations in older catalogs remain missing; they cannot be backfilled
 after an existing placeholder observation. Native conversion, current permission
 verification and startup recovery still require their own admission and evidence.
 
+Schema 31 retains append-only protection epochs for an observed born object.
+Each epoch preserves its original binding and owner, references the preceding
+epoch and the direct parent's verified permission operation, and retains a
+separate descriptor read. New epochs require the latest protected parent and
+cannot fork retained history. Rotation leaves the first birth and all original
+permissions unchanged. Recovery pages expose the latest historical epoch;
+migration does not invent one. The Host must independently verify the current
+native identity and inherited policy before recording an epoch. These records
+do not release name reservations, accept content or enable strict protection.
+
 Identity mapping preserves an absent revision as `null` in CfSharp's public
 envelope. It does not turn absence into an explicit empty revision. Stable item
 IDs and root scope remain independent of revisions; existing explicit empty

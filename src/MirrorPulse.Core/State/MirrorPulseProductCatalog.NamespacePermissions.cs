@@ -241,6 +241,27 @@ public sealed partial class MirrorPulseProductCatalog
         finally { _gate.Release(); }
     }
 
+    /// <summary>Reads one original object's latest historical change without enumerating its history.</summary>
+    public async Task<MirrorPulseNamespacePermissionChange?> ReadLatestNamespacePermissionChangeAsync(Guid evidenceId,
+        CancellationToken cancellationToken = default)
+    {
+        if (evidenceId == Guid.Empty) throw new ArgumentException("Original permission evidence is required.", nameof(evidenceId));
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try { ThrowIfDisposed(); return await ReadLatestPermissionChangeCoreAsync(evidenceId, cancellationToken).ConfigureAwait(false); }
+        finally { _gate.Release(); }
+    }
+
+    private async Task<MirrorPulseNamespacePermissionChange?> ReadLatestPermissionChangeCoreAsync(Guid evidenceId,
+        CancellationToken token, SqliteTransaction? transaction = null)
+    {
+        await using SqliteCommand query = _connection.CreateCommand();
+        query.Transaction = transaction;
+        query.CommandText = PermissionChangeQuery + " WHERE c.evidence_id=$id ORDER BY c.rowid DESC LIMIT 1;";
+        query.Parameters.AddWithValue("$id", evidenceId.ToString("D"));
+        await using SqliteDataReader reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
+        return await reader.ReadAsync(token).ConfigureAwait(false) ? ReadPermissionChange(reader) : null;
+    }
+
     /// <summary>Retains an application fact; a later independent read is still required.</summary>
     public async Task<MirrorPulseNamespacePermissionChange> RecordNamespacePermissionApplicationAsync(Guid operationId,
         MirrorPulseLocalFileBinding localObject, DateTimeOffset appliedAt, CancellationToken cancellationToken = default)
