@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
 using MirrorPulse.Core.Contracts;
@@ -81,6 +82,44 @@ public sealed class WorkerStartupDiagnosticsTests
         });
     }
 
+    [TestMethod]
+    [DataRow("IdleBeforePipeWithOpenFile")]
+    [DataRow("IgnoreStopWithOpenFile")]
+    [DataRow("NormalWithOpenFile")]
+    public async Task SupervisorDisposalWaitsForActualWorkerExitAndReleasesOwnedFileLocks(string mode)
+    {
+        await RunFixtureAsync(mode, async (catalog, instanceId, supervisor, diagnostics, stop) =>
+        {
+            var topology = await catalog.ReadAdapterTopologyAsync();
+            string cache = topology.Instances.Single().TransferCacheDirectory;
+            string pidPath = Path.Combine(cache, ".mp-startup-fixture-pid");
+            string resource = Path.Combine(cache, ".mp-startup-fixture-open-resource");
+            await supervisor.StartAsync(topology);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            while (!File.Exists(pidPath)) await Task.Delay(25, timeout.Token);
+            using Process worker = Process.GetProcessById(int.Parse(await File.ReadAllTextAsync(pidPath, timeout.Token), CultureInfo.InvariantCulture));
+            Assert.IsFalse(worker.HasExited);
+            var locked = Assert.ThrowsExactly<IOException>(() => { using var competing = File.OpenHandle(resource, FileMode.Open, FileAccess.ReadWrite, FileShare.None); });
+            Assert.AreEqual(32, locked.HResult & 0xffff);
+            if (mode != "IdleBeforePipeWithOpenFile")
+                while ((await catalog.ReadInstanceRuntimeStateAsync(instanceId, timeout.Token))?.Phase != "Connected")
+                {
+                    if ((await catalog.ReadInstanceRuntimeStateAsync(instanceId, timeout.Token))?.Phase is "Worker failed" or "Worker error")
+                        Assert.Fail(await WorkerFailureTestDiagnostics.ReadAsync(diagnostics));
+                    await Task.Delay(25, timeout.Token);
+                }
+            TestContext.WriteLine($"WorkerExitDrainBefore: mode={mode}; pid={worker.Id}; process={worker.ProcessName}; phase={(await catalog.ReadInstanceRuntimeStateAsync(instanceId))?.Phase}; lockedNativeError={locked.HResult & 0xffff}.");
+            await stop();
+            TestContext.WriteLine($"WorkerExitDrainAfter: mode={mode}; exited={worker.HasExited}; diagnostics={await WorkerFailureTestDiagnostics.ReadAsync(diagnostics)}.");
+            Assert.IsTrue(worker.HasExited, "Supervisor disposal must await real exit after graceful or Job Object termination.");
+            using (File.OpenHandle(resource, FileMode.Open, FileAccess.ReadWrite, FileShare.None)) { }
+            File.Delete(resource);
+            Assert.IsFalse(File.Exists(resource));
+            Assert.IsFalse(File.Exists(Path.Combine(diagnostics, "mirrorpulse.log")));
+            Assert.IsNull((await catalog.ReadInstanceRuntimeStateAsync(instanceId))?.LastErrorCode);
+        });
+    }
+
     private static async Task RunFixtureAsync(string mode,
         Func<MirrorPulseProductCatalog, InstanceId, AdapterInstanceProcessSupervisor, string, Func<Task>, Task> verify)
     {
@@ -107,10 +146,14 @@ public sealed class WorkerStartupDiagnosticsTests
                 new(null), new(null, null), new(true, false, true, true), ["en-US"], "1.0.0");
             var installed = new InstalledAdapter(manifest, installId, Path.GetDirectoryName(executable)!,
                 new(new string('A', 64)), AdapterInstallSource.LocalFile, null, true, DateTimeOffset.UtcNow, AdapterLifecycleState.Installed);
-            var instance = new AdapterInstance(adapter, installId, instanceId, "Fixture", new Dictionary<string, string>(), [],
+            bool withResource = mode.EndsWith("WithOpenFile", StringComparison.Ordinal);
+            var instance = new AdapterInstance(adapter, installId, instanceId, "Fixture", withResource
+                ? new Dictionary<string, string> { ["root.left.sourcePath"] = "left-source" } : new Dictionary<string, string>(), [],
                 Path.Combine(directory, "files"), cache, true, AdapterLifecycleState.Enabled, null, DateTimeOffset.UtcNow);
             await using var catalog = await MirrorPulseProductCatalog.OpenAsync(new(Path.Combine(directory, "sync"), Path.Combine(directory, "data")));
-            await catalog.SaveAdapterTopologyAsync(new([installed], [instance], []));
+            RootRegistration[] roots = withResource ? [new(adapter, instanceId, RootId.New(), "left", "left", "left", false,
+                RootRegistrationState.Active, DateTimeOffset.UtcNow)] : [];
+            await catalog.SaveAdapterTopologyAsync(new([installed], [instance], roots));
             var supervisor = new AdapterInstanceProcessSupervisor(catalog, new WindowsCredentialManagerStore(), diagnosticsDirectory: diagnostics);
             bool disposed = false;
             async Task StopAsync()

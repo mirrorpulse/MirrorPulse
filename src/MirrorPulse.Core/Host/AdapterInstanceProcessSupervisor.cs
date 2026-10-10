@@ -286,10 +286,12 @@ public sealed class AdapterInstanceProcessSupervisor :
             using var job = WorkerJobObject.Create();
             observation.Advance(WorkerSessionStage.StartProcess);
             using WorkerProcessHandle worker = WorkerProcessLauncher.Start(request);
+            bool jobAttached = false;
             try
             {
                 observation.Advance(WorkerSessionStage.AttachJob);
                 job.Attach(worker.Process);
+                jobAttached = true;
                 using var connectionTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 connectionTimeout.CancelAfter(TimeSpan.FromSeconds(15));
                 observation.Advance(WorkerSessionStage.AwaitPipe);
@@ -324,21 +326,40 @@ public sealed class AdapterInstanceProcessSupervisor :
                     observation.Advance(WorkerSessionStage.StopWorker);
                     failureObservation = observation.Capture(sessionId, worker.Process, pipe);
                 }
-                if (pipe.IsConnected && !worker.Process.HasExited)
+                try
                 {
-                    try
+                    if (pipe.IsConnected && !worker.Process.HasExited)
                     {
-                        using var stopTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-                        await WriteAsync(pipe, new ControlFrameEnvelope(selectedVersion, "Stop", Guid.NewGuid(),
-                            instance.InstanceId, sessionId, false, JsonSerializer.SerializeToElement(new { })),
-                            stopTimeout.Token).ConfigureAwait(false);
-                        await worker.WaitForExitAsync(stopTimeout.Token).ConfigureAwait(false);
+                        try
+                        {
+                            using var stopTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                            await WriteAsync(pipe, new ControlFrameEnvelope(selectedVersion, "Stop", Guid.NewGuid(),
+                                instance.InstanceId, sessionId, false, JsonSerializer.SerializeToElement(new { })),
+                                stopTimeout.Token).ConfigureAwait(false);
+                            await worker.WaitForExitAsync(stopTimeout.Token).ConfigureAwait(false);
+                        }
+                        catch (Exception exception) when (exception is IOException or OperationCanceledException or
+                            EndOfStreamException)
+                        {
+                            // The existing grace period ended; drain forced termination below.
+                        }
                     }
-                    catch (Exception exception) when (exception is IOException or OperationCanceledException or
-                        EndOfStreamException)
+                }
+                finally
+                {
+                    // Closing a kill-on-close Job Object only requests termination. Retain the
+                    // process reference until exit so private runtime mappings and file locks
+                    // cannot outlive supervisor disposal or race package/cache reclamation.
+                    if (jobAttached) job.Terminate();
+                    else if (!worker.Process.HasExited)
                     {
-                        // Disposing the Job Object below terminates the remaining process tree.
+                        try { worker.Process.Kill(entireProcessTree: true); }
+                        catch (InvalidOperationException) when (worker.Process.HasExited) { }
                     }
+                    // WaitForExitAsync may short-circuit through HasExited/GetExitCodeProcess
+                    // before Windows signals completed termination. The mature synchronous
+                    // wait uses that signal; await it without blocking the Host's control path.
+                    await Task.Run(worker.Process.WaitForExit, CancellationToken.None).ConfigureAwait(false);
                 }
             }
         }

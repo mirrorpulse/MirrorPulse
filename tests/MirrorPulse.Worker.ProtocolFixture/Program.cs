@@ -11,12 +11,21 @@ WorkerSessionId session = WorkerSessionId.Parse(args[3]);
 string? cache = Environment.GetEnvironmentVariable("MP_TRANSFER_CACHE_DIR");
 string? modePath = cache is null ? null : Path.Combine(cache, ".mp-startup-fixture-mode");
 string mode = modePath is not null && File.Exists(modePath) ? (await File.ReadAllTextAsync(modePath)).Trim() : "Normal";
+using FileStream? heldResource = mode is "IgnoreStopWithOpenFile" or "IdleBeforePipeWithOpenFile" or "NormalWithOpenFile"
+    ? new FileStream(Path.Combine(cache!, ".mp-startup-fixture-open-resource"), FileMode.Create, FileAccess.ReadWrite, FileShare.None)
+    : null;
+if (heldResource is not null)
+{
+    string pid = Path.Combine(cache!, ".mp-startup-fixture-pid");
+    await File.WriteAllTextAsync(pid + ".pending", Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    File.Move(pid + ".pending", pid);
+}
 if (mode == "ExitBeforePipe")
 {
     while (!File.Exists(Path.Combine(cache!, ".mp-startup-fixture-exit"))) await Task.Delay(10);
     Environment.Exit(73);
 }
-if (mode == "IdleBeforePipe") await Task.Delay(Timeout.InfiniteTimeSpan);
+if (mode is "IdleBeforePipe" or "IdleBeforePipeWithOpenFile") await Task.Delay(Timeout.InfiniteTimeSpan);
 await using var pipe = new NamedPipeClientStream(".", args[5], PipeDirection.InOut, PipeOptions.Asynchronous);
 await pipe.ConnectAsync(10000);
 if (mode == "IdleBeforeHello") await Task.Delay(Timeout.InfiniteTimeSpan);
@@ -58,7 +67,11 @@ var acceptedOperations = new Dictionary<Guid, (string Signature, string? Revisio
 while (true)
 {
     ControlFrameEnvelope request = await ReadAsync();
-    if (request.MessageType == "Stop") return;
+    if (request.MessageType == "Stop")
+    {
+        if (mode == "IgnoreStopWithOpenFile") await Task.Delay(Timeout.InfiniteTimeSpan);
+        return;
+    }
     string requestRoot = request.Payload.GetProperty("rootKey").GetString()!;
     string requestPath = request.Payload.TryGetProperty("path", out JsonElement pathElement) ? pathElement.GetString()! : "";
     if (request.MessageType == "Stat")
