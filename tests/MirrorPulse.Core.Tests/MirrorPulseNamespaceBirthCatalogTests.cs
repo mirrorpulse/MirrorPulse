@@ -9,7 +9,7 @@ using MirrorPulse.Core.State;
 namespace MirrorPulse.Core.Tests;
 
 [TestClass]
-public sealed class MirrorPulseNamespaceBirthCatalogTests
+public sealed partial class MirrorPulseNamespaceBirthCatalogTests
 {
     private const string Owner = "S-1-5-21-100-200-300-1001";
     private const string Role = "S-1-5-5-123-456";
@@ -237,7 +237,7 @@ public sealed class MirrorPulseNamespaceBirthCatalogTests
         }
         await using var connection = Connection(fixture.Paths); await connection.OpenAsync();
         await using var query = connection.CreateCommand(); query.CommandText = "PRAGMA user_version;";
-        Assert.AreEqual(27L, await query.ExecuteScalarAsync());
+        Assert.AreEqual(28L, await query.ExecuteScalarAsync());
     }
 
     [TestMethod]

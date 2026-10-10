@@ -41,13 +41,7 @@ public sealed partial class MirrorPulseProductCatalog
                 transaction.Commit();
                 return retained;
             }
-            var parent = await ValidateNamespaceBirthParentAsync(intent, transaction, cancellationToken).ConfigureAwait(false);
-            var history = await ReadPermissionChangesCoreAsync(intent.ParentEvidenceId, cancellationToken, transaction).ConfigureAwait(false);
-            if (history.Count == 0 || history[^1].Intent.OperationId != parent.Intent.OperationId)
-                throw new InvalidOperationException("Birth admission requires the parent's latest verified protection.");
-            var original = await ReadPermissionBaselineCoreAsync(intent.ParentEvidenceId, cancellationToken, transaction).ConfigureAwait(false)
-                ?? throw new InvalidDataException("The original parent evidence is missing.");
-            await ValidatePermissionTreeAdmissionAsync(original, parent.Intent, transaction, cancellationToken).ConfigureAwait(false);
+            await ValidateNamespaceBirthCurrentParentAsync(intent, transaction, cancellationToken).ConfigureAwait(false);
             byte[] payload = JsonSerializer.SerializeToUtf8Bytes(intent, TopologyJsonOptions);
             if (payload.Length > 131_072) throw new ArgumentException("The birth admission payload is not bounded.", nameof(intent));
             await using SqliteCommand insert = _connection.CreateCommand();
@@ -160,5 +154,17 @@ public sealed partial class MirrorPulseProductCatalog
             intent.PreparedAt == default || !Enum.IsDefined(intent.Origin) ||
             string.IsNullOrWhiteSpace(intent.RelativePath))
             throw new ArgumentException("The birth admission requires one exact relative child location.", nameof(intent));
+    }
+
+    private async Task ValidateNamespaceBirthCurrentParentAsync(MirrorPulseNamespaceBirthIntent intent,
+        SqliteTransaction transaction, CancellationToken token)
+    {
+        var parent = await ValidateNamespaceBirthParentAsync(intent, transaction, token).ConfigureAwait(false);
+        var history = await ReadPermissionChangesCoreAsync(intent.ParentEvidenceId, token, transaction).ConfigureAwait(false);
+        if (history.Count == 0 || history[^1].Intent.OperationId != parent.Intent.OperationId)
+            throw new InvalidOperationException("Birth admission requires the parent's latest verified protection.");
+        var original = await ReadPermissionBaselineCoreAsync(intent.ParentEvidenceId, token, transaction).ConfigureAwait(false)
+            ?? throw new InvalidDataException("The original parent evidence is missing.");
+        await ValidatePermissionTreeAdmissionAsync(original, parent.Intent, transaction, token).ConfigureAwait(false);
     }
 }

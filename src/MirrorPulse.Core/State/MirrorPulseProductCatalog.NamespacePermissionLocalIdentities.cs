@@ -53,6 +53,14 @@ public sealed partial class MirrorPulseProductCatalog
                 history[0].Intent.OperationId != identity.PermissionOperationId)
                 throw new InvalidOperationException("Historical permission application cannot invent a missing original local identity.");
             await ValidatePermissionTreeAdmissionAsync(original, change.Intent, transaction, cancellationToken).ConfigureAwait(false);
+            await using (SqliteCommand planned = _connection.CreateCommand())
+            {
+                planned.Transaction = transaction;
+                planned.CommandText = "SELECT 1 FROM namespace_birth_plans WHERE item_id=$item;";
+                planned.Parameters.AddWithValue("$item", identity.ItemId.ToString("D"));
+                if (await planned.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null)
+                    throw new InvalidOperationException("An original file cannot adopt a planned birth identity.");
+            }
             byte[] payload = JsonSerializer.SerializeToUtf8Bytes(identity, TopologyJsonOptions);
             await using SqliteCommand insert = _connection.CreateCommand();
             insert.Transaction = transaction;

@@ -105,6 +105,18 @@ reservation completion and native execution remain separate work; the intent
 alone does not authorize replay, prove protection or enable controlled CLI
 operations.
 
+Schema 28 separately retains the planned logical placeholder identity and a
+start intent before native creation. Local creation and import cannot claim an
+accepted remote revision. Planned identities and original protected-file
+identities cannot adopt each other. Missing historical plans remain missing;
+upgrades do not infer them from today's path.
+
+A newly committed start is distinguished from historical replay. Neither fact
+proves that an object exists or permits another native creation attempt. The Host
+must reconcile the original plan against actual birth evidence after interruption.
+The parent and pending name are checked again before the first start; exact
+historical replay remains immutable after role rotation.
+
 Product catalog schema 22 retains each object's original volume, registered-root
 and file binding, capture location, owner SID and canonical DACL. The baseline
 and the first change intent commit together before any permission write. A
