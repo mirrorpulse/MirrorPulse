@@ -33,7 +33,7 @@ public sealed partial class MirrorPulseNamespaceHandleTests
         string outside = Path.Combine(fixture, "outside-link.txt");
         string aliased = Path.Combine(paths.SyncRootPath, "Docs", "aliased.txt");
         string retainedAlias = Path.Combine(fixture, "retained-alias.txt");
-        var identity = new CloudPlaceholderIdentity(Guid.NewGuid(), "unaccepted-local", string.Empty);
+        var identity = new CloudPlaceholderIdentity(Guid.NewGuid(), "unaccepted-local");
         CloudLocalFileBinding? originalBinding = null;
         string? originalDacl = null;
         string? verifiedDacl = null;
@@ -96,7 +96,7 @@ public sealed partial class MirrorPulseNamespaceHandleTests
                     // official identity under that admission instead of rekeying pending work.
                     CloudItemSnapshot current = await file.InspectAsync(stop);
                     if (owner == 0 && current.ItemId is { } knownId)
-                        identity = new(knownId, current.RemoteId ?? "unaccepted-local", string.Empty);
+                        identity = new(knownId, current.RemoteId ?? "unaccepted-local");
                     CloudPlaceholderMutationResult conversion = await file.ConvertToPlaceholderAsync(identity, cancellationToken: stop);
                     Assert.IsTrue(conversion.Snapshot.IsPlaceholder);
                     await AssertPlaceholderRetainedAsync(file, inspectBytes: false);
@@ -186,8 +186,10 @@ public sealed partial class MirrorPulseNamespaceHandleTests
                 CloudFile rejected = fileSystem.GetFile("Docs/aliased.txt");
                 CloudItemSnapshot rejectedBefore = await rejected.InspectAsync(timeout.Token);
                 Assert.IsFalse(rejectedBefore.IsPlaceholder);
+                var rejectedIdentity = new CloudPlaceholderIdentity(rejectedBefore.ItemId ?? Guid.NewGuid(),
+                    rejectedBefore.RemoteId ?? "unaccepted-aliased");
                 CloudFilesException failure = await Assert.ThrowsAsync<CloudFilesException>(() =>
-                    rejected.ConvertToPlaceholderAsync(new(Guid.NewGuid(), "unaccepted-aliased", string.Empty), cancellationToken: timeout.Token).AsTask());
+                    rejected.ConvertToPlaceholderAsync(rejectedIdentity, cancellationToken: timeout.Token).AsTask());
                 TestContext.WriteLine($"PlaceholderAliasConversionRefused: owner={owner}; nativeHResult={failure.HResult:X8}; nativeError={failure.Win32ErrorCode}; originalPermissionsRetained={ReadDacl(aliased) == originalAliasedDacl}.");
                 Assert.AreEqual(396, failure.Win32ErrorCode); // ERROR_CLOUD_FILE_INCOMPATIBLE_HARDLINKS.
                 CloudItemSnapshot refused = await rejected.InspectAsync(timeout.Token);
@@ -197,7 +199,7 @@ public sealed partial class MirrorPulseNamespaceHandleTests
                 Assert.AreEqual(originalAliasedDacl, ReadDacl(retainedAlias));
                 Assert.AreEqual("aliased unaccepted bytes", await File.ReadAllTextAsync(retainedAlias, timeout.Token));
                 var refusedScope = await rejected.RunProtectedLocalOperationAsync(CloudProtectedLocalOperationRequest.ForLocalConversion(
-                    rejectedBefore.LocalBinding!, new(Guid.NewGuid(), "unaccepted-aliased-scope", string.Empty)),
+                    rejectedBefore.LocalBinding!, rejectedIdentity),
                     (_, _) => throw new AssertFailedException("An existing alias must prevent all permission callbacks."), timeout.Token);
                 Assert.AreEqual(CloudProtectedLocalOperationOutcome.NotApplicable, refusedScope.Outcome);
                 Assert.IsFalse(refusedScope.CallbackStarted || refusedScope.NativeConverted || refusedScope.AccessDescriptorApplied);
@@ -261,7 +263,7 @@ public sealed partial class MirrorPulseNamespaceHandleTests
                 Assert.AreEqual(originalBinding, snapshot.LocalBinding);
                 Assert.AreEqual(CloudContentAvailability.FullyAvailable, snapshot.ContentAvailability);
                 Assert.AreEqual(CloudSynchronizationState.NotInSync, snapshot.SynchronizationState);
-                Assert.IsTrue(string.IsNullOrEmpty(snapshot.RemoteRevision));
+                Assert.IsNull(snapshot.RemoteRevision);
                 if (inspectBytes)
                 {
                     Assert.AreEqual(verifiedDacl, ReadDacl(target));

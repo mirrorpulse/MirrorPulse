@@ -96,6 +96,9 @@ local work. It provides same-object conversion, inspection and Access-only
 descriptor operations, with distinct native, projection, application and drain
 receipts. Directory metadata mode does not freeze descendants. This package
 upgrade alone does not establish MirrorPulse permission or product acceptance.
+Local preparation identities use a null remote revision, retaining any existing
+official ItemId and RemoteId. An empty revision string is still a revision value
+and cannot introduce remote acceptance through this operation.
 
 `MirrorPulseWindowsNamespacePermissionLease.RunProtectedAsync` adapts the public
 scope to the existing permission coordinator contract. CfSharp performs
