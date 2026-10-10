@@ -94,6 +94,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         CloudPlaceholderIdentity identity = router.CreateFileIdentity(registration.InstanceId, "docs", "local:" + birth.OperationId.ToString("N"));
                         var plan = new MirrorPulseNamespaceBirthPlan(1, birth.OperationId, identity.ItemId, identity.RemoteId, null, DateTimeOffset.UtcNow);
                         await catalog.PrepareNamespaceBirthAsync(birth, timeout.Token); await catalog.PrepareNamespaceBirthPlanAsync(plan, timeout.Token);
+                        Assert.IsTrue(await MirrorPulseNamespaceBirthIdentityProjection.PrepareAsync(catalog, state.OpenStore, birth.OperationId, timeout.Token));
                         var start = new MirrorPulseNamespaceBirthStart(1, birth.OperationId, DateTimeOffset.UtcNow);
                         Assert.IsTrue((await catalog.RecordNamespaceBirthStartAsync(start, timeout.Token)).NewlyRecorded);
                         births.Add((birth, plan, start));
@@ -114,6 +115,9 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         Assert.AreEqual(plan.ItemId, snapshot.ItemId);
                         Assert.IsNull(snapshot.RemoteRevision);
                         Assert.AreEqual(CloudSynchronizationState.NotInSync, snapshot.SynchronizationState);
+                        await using (var bornLease = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(child, router, timeout.Token))
+                            Assert.AreEqual(MirrorPulseWindowsNamespaceInheritance.CreateInheritedDacl(parent.Intent.TargetDacl, isDirectory),
+                                (await bornLease.InspectAsync(timeout.Token)).Dacl);
                         Assert.IsNull(await catalog.ReadNamespaceBirthObservationAsync(birth.OperationId, timeout.Token));
                     }
                     AssertBirthAliasDenied(Path.Combine(directory, "before-write.link"), filePath);
@@ -178,8 +182,9 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         }
     }
 
-    private static async Task<CloudLocalChange[]> WaitForBirthJournalAsync(CloudLocalChangeFeed feed, Guid file, Guid directory, CancellationToken token)
+    private async Task<CloudLocalChange[]> WaitForBirthJournalAsync(CloudLocalChangeFeed feed, Guid file, Guid directory, CancellationToken token)
     {
+        string? previousDiagnostic = null;
         while (true)
         {
             var scan = await feed.BeginScanAsync(token);
@@ -194,6 +199,12 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 if (!page.HasMore) break;
                 Assert.IsGreaterThan(after, page.LastScannedSequence);
                 after = page.LastScannedSequence;
+            }
+            string diagnostic = $"count={changes.Count}; fileCreate={changes.Count(change => change.ItemId == file && change.Kind == CloudLocalChangeKind.Create)}; directoryCreate={changes.Count(change => change.ItemId == directory && change.Kind == CloudLocalChangeKind.Create)}";
+            if (diagnostic != previousDiagnostic)
+            {
+                TestContext.WriteLine("ControlledBirthJournal: " + diagnostic);
+                previousDiagnostic = diagnostic;
             }
             if (changes.Any(change => change.ItemId == file && change.Kind == CloudLocalChangeKind.Create && !change.IsDirectory) &&
                 changes.Any(change => change.ItemId == directory && change.Kind == CloudLocalChangeKind.Create && change.IsDirectory))

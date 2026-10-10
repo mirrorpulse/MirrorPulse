@@ -165,6 +165,15 @@ does not prove the child's binding, actual permissions or current membership.
 Restoration and role rotation require independent native inspection of descendants;
 the first birth descriptor remains historical evidence, never an original DACL.
 
+Before recording a native birth start, MP commits the original logical identity
+to CfSharp's public item repository. This prevents a creation notification from
+discovering a different item ID before the native batch projects its result.
+The planned row has no native file ID or acceptance claim. Existing conflicting
+rows are retained and rejected; a started birth with a missing row requires
+native recovery. Replay preserves forward progress. The Host must keep the birth
+offline under its namespace gate until actual creation, protection and content
+completion have been verified. All watcher journals remain encoded by CfSharp.
+
 Product catalog schema 22 retains each object's original volume, registered-root
 and file binding, capture location, owner SID and canonical DACL. The baseline
 and the first change intent commit together before any permission write. A
