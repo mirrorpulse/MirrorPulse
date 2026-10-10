@@ -14,8 +14,9 @@ public sealed record MirrorPulseNamespacePermissionObject(MirrorPulseLocalFileBi
 
 /// <summary>The platform boundary for one stable, already scope-validated object.</summary>
 /// <remarks>
-/// Implementations must hold the target and its ancestor chain against replacement throughout
-/// the lease, reject foreign reparse points, and apply the DACL to that retained object handle.
+/// The runtime owner retains namespace admission and ancestor lifetime guards. Metadata handles
+/// alone do not freeze names. Implementations reject foreign reparse points, recheck the actual
+/// binding and apply the DACL to the retained object handle under that admission.
 /// A read must freshly inspect owner and DACL, not return a cached descriptor. The caller owns
 /// the lease. This contract does not expose source access, Worker RPC or namespace mutations.
 /// </remarks>

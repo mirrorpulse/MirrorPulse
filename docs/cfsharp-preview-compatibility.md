@@ -169,8 +169,9 @@ permission ownership and operation recovery still require separate acceptance.
 Controlled local creation uses a different boundary from remote placeholder
 population. Its native fixture reserves an immutable product operation and
 projects the planned identity through the official item repository before the
-filesystem notification. An ordinary file is created atomically with access
-restricted to the namespace role. After its original native binding is inspected,
+filesystem notification. An ordinary file is created atomically with content
+restricted to the namespace role and explicit owner metadata rights for recovery.
+After its original native binding is inspected,
 CfSharp performs content-preserving same-object conversion inside its public
 protected operation; ordinary content access is granted only after conversion.
 Directories inherit the already protected parent and use public conversion.
@@ -180,3 +181,13 @@ two CfSharp owners. No product-generated copy of the private journal payload is
 used. These component checks do not enable strict production Host protection or
 deliver the controlled CLI operations; durable conversion admission, current
 membership and complete operation recovery remain required before that activation.
+
+The birth-protection verifier independently reads the retained direct parent and
+child, checks the original owner, native binding and public logical identity,
+and derives the expected inherited descriptor through Windows' public API.
+It requires the current execution role and rechecks the parent before recording
+an immutable protection epoch. The native fixture also rotates both protected
+parents, verifies inherited protection under the new role and retains the first
+birth and epoch. This path performs no conversion, ACL write, hydration or
+journal acknowledgement. The caller must still retain the Host's shared actor
+and lifetime guards; recorded epochs alone do not authorize future mutations.

@@ -17,6 +17,8 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 /// Files state is independently projected. The caller must drain operations before disposal.
 /// Applying a directory DACL can propagate inheritance; tree preparation must capture every
 /// original descriptor before any application. This lease alone does not enable tree protection.
+/// Metadata-only handles do not freeze names; the owner also retains namespace admission and
+/// root/ancestor lifetime guards before inspecting or changing a member.
 /// </remarks>
 [SupportedOSPlatform("windows10.0.26100")]
 public sealed partial class MirrorPulseWindowsNamespacePermissionLease : IMirrorPulseNamespacePermissionLease
