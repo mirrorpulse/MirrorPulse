@@ -14,13 +14,14 @@ public sealed class MirrorPulseNamespaceBirthIdentityProjectionTests
     public async Task OfficialProjectionPrecedesNativeStartAndReplaysWithoutInventingBindingOrJournal(bool directory)
     {
         await using var fixture = await Fixture.OpenAsync(directory);
-        Assert.IsTrue(await MirrorPulseNamespaceBirthIdentityProjection.PrepareAsync(fixture.Catalog, fixture.Store, fixture.Plan.OperationId));
+        Assert.IsTrue(await MirrorPulseNamespaceBirthIdentityProjection.PrepareCoreAsync(fixture.Catalog, fixture.Store, fixture.Plan.OperationId, Fixture.NativeRelativePath, fixture.Kind));
         await fixture.Catalog.RecordNamespaceBirthStartAsync(new(1, fixture.Plan.OperationId, DateTimeOffset.UtcNow));
-        Assert.IsFalse(await MirrorPulseNamespaceBirthIdentityProjection.PrepareAsync(fixture.Catalog, fixture.Store, fixture.Plan.OperationId));
+        Assert.IsFalse(await MirrorPulseNamespaceBirthIdentityProjection.PrepareCoreAsync(fixture.Catalog, fixture.Store, fixture.Plan.OperationId, Fixture.NativeRelativePath, fixture.Kind));
         await using var read = await fixture.Store.BeginTransactionAsync();
         var item = await read.Items.GetByItemIdAsync(fixture.Plan.ItemId);
         Assert.IsNotNull(item);
-        Assert.AreEqual(fixture.Birth.RelativePath, item.RelativePath);
+        Assert.AreEqual(Fixture.NativeRelativePath, item.RelativePath);
+        Assert.AreEqual(fixture.Birth.RelativePath, item.RelativePath.Replace('\\', '/'));
         Assert.AreEqual(fixture.Plan.RemoteId, item.RemoteId);
         Assert.AreEqual(directory ? CloudItemKind.Directory : CloudItemKind.File, item.Kind);
         Assert.IsNull(item.RemoteRevision);
@@ -33,12 +34,28 @@ public sealed class MirrorPulseNamespaceBirthIdentityProjectionTests
     }
 
     [TestMethod]
+    [DataRow("path")]
+    [DataRow("kind")]
+    public async Task AContradictingNativeLocationCannotPublishTheRetainedBirthIdentity(string scenario)
+    {
+        await using var fixture = await Fixture.OpenAsync(false);
+        string path = scenario == "path" ? @"Docs\another" : Fixture.NativeRelativePath;
+        CloudItemKind kind = scenario == "kind" ? CloudItemKind.Directory : CloudItemKind.File;
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(() => MirrorPulseNamespaceBirthIdentityProjection.PrepareCoreAsync(
+            fixture.Catalog, fixture.Store, fixture.Plan.OperationId, path, kind));
+        await using var read = await fixture.Store.BeginTransactionAsync();
+        Assert.IsNull(await read.Items.GetByItemIdAsync(fixture.Plan.ItemId));
+        Assert.HasCount(0, await read.Operations.ListAsync(16));
+        Assert.IsNull(await fixture.Catalog.ReadNamespaceBirthStartAsync(fixture.Plan.OperationId));
+        Assert.IsFalse(Directory.Exists(fixture.Paths.SyncRootPath));
+    }
+
+    [TestMethod]
     public async Task MissingOfficialRowAfterNativeStartRequiresRecoveryWithoutInventingAnItem()
     {
         await using var fixture = await Fixture.OpenAsync(false);
         await fixture.Catalog.RecordNamespaceBirthStartAsync(new(1, fixture.Plan.OperationId, DateTimeOffset.UtcNow));
-        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => MirrorPulseNamespaceBirthIdentityProjection.PrepareAsync(
-            fixture.Catalog, fixture.Store, fixture.Plan.OperationId));
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => MirrorPulseNamespaceBirthIdentityProjection.PrepareCoreAsync(fixture.Catalog, fixture.Store, fixture.Plan.OperationId, Fixture.NativeRelativePath, fixture.Kind));
         await using var read = await fixture.Store.BeginTransactionAsync();
         Assert.IsNull(await read.Items.GetByItemIdAsync(fixture.Plan.ItemId));
         Assert.HasCount(0, await read.Operations.ListAsync(16));
@@ -57,13 +74,12 @@ public sealed class MirrorPulseNamespaceBirthIdentityProjectionTests
         await using var fixture = await Fixture.OpenAsync(false);
         var existing = new CloudItemState(conflict is "item" or "remote-index" ? Guid.NewGuid() : fixture.Plan.ItemId,
             conflict == "remote" ? "another-remote" : fixture.Plan.RemoteId,
-            conflict is "path" or "remote-index" ? "Docs/another" : fixture.Birth.RelativePath,
+            conflict is "path" or "remote-index" ? "Docs/another" : Fixture.NativeRelativePath,
             conflict == "kind" ? CloudItemKind.Directory : CloudItemKind.File,
             conflict == "revision" ? "not-this-birth" : null, 42L, conflict == "tombstone", DateTimeOffset.UtcNow);
         await using (var write = await fixture.Store.BeginTransactionAsync())
         { await write.Items.UpsertAsync(existing); await write.CommitAsync(); }
-        await Assert.ThrowsExactlyAsync<InvalidDataException>(() => MirrorPulseNamespaceBirthIdentityProjection.PrepareAsync(
-            fixture.Catalog, fixture.Store, fixture.Plan.OperationId));
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(() => MirrorPulseNamespaceBirthIdentityProjection.PrepareCoreAsync(fixture.Catalog, fixture.Store, fixture.Plan.OperationId, Fixture.NativeRelativePath, fixture.Kind));
         await using var read = await fixture.Store.BeginTransactionAsync();
         var retained = await read.Items.GetByItemIdAsync(existing.ItemId);
         Assert.IsNotNull(retained);
@@ -83,13 +99,12 @@ public sealed class MirrorPulseNamespaceBirthIdentityProjectionTests
         DateTimeOffset observedAt = DateTimeOffset.UtcNow;
         await using (var write = await fixture.Store.BeginTransactionAsync())
         {
-            await write.Items.UpsertAsync(new(fixture.Plan.ItemId, fixture.Plan.RemoteId, fixture.Birth.RelativePath,
+            await write.Items.UpsertAsync(new(fixture.Plan.ItemId, fixture.Plan.RemoteId, Fixture.NativeRelativePath,
                 CloudItemKind.File, null, 42L, false, observedAt));
             await write.CommitAsync();
         }
-        if (started) Assert.IsFalse(await MirrorPulseNamespaceBirthIdentityProjection.PrepareAsync(fixture.Catalog, fixture.Store, fixture.Plan.OperationId));
-        else await Assert.ThrowsExactlyAsync<InvalidDataException>(() => MirrorPulseNamespaceBirthIdentityProjection.PrepareAsync(
-            fixture.Catalog, fixture.Store, fixture.Plan.OperationId));
+        if (started) Assert.IsFalse(await MirrorPulseNamespaceBirthIdentityProjection.PrepareCoreAsync(fixture.Catalog, fixture.Store, fixture.Plan.OperationId, Fixture.NativeRelativePath, fixture.Kind));
+        else await Assert.ThrowsExactlyAsync<InvalidDataException>(() => MirrorPulseNamespaceBirthIdentityProjection.PrepareCoreAsync(fixture.Catalog, fixture.Store, fixture.Plan.OperationId, Fixture.NativeRelativePath, fixture.Kind));
         await using var read = await fixture.Store.BeginTransactionAsync();
         var row = await read.Items.GetByItemIdAsync(fixture.Plan.ItemId);
         Assert.IsNotNull(row);
@@ -106,6 +121,8 @@ public sealed class MirrorPulseNamespaceBirthIdentityProjectionTests
         public ICloudStateStore Store { get; private set; } = null!;
         public MirrorPulseNamespaceBirthIntent Birth { get; private set; } = null!;
         public MirrorPulseNamespaceBirthPlan Plan { get; private set; } = null!;
+        public const string NativeRelativePath = @"Docs\born";
+        public CloudItemKind Kind => Birth.IsDirectory ? CloudItemKind.Directory : CloudItemKind.File;
 
         public static async Task<Fixture> OpenAsync(bool directory)
         {

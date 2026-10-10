@@ -95,12 +95,12 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                             "Docs/" + name, isDirectory, MirrorPulseNamespaceBirthOrigin.ControlledCreation, role.RoleSid.Value, DateTimeOffset.UtcNow);
                         CloudPlaceholderIdentity identity = router.CreateFileIdentity(registration.InstanceId, "docs", "local:" + birth.OperationId.ToString("N"));
                         var plan = new MirrorPulseNamespaceBirthPlan(1, birth.OperationId, identity.ItemId, identity.RemoteId, null, DateTimeOffset.UtcNow);
+                        CloudItem child = isDirectory ? fileSystem.GetDirectory(birth.RelativePath) : fileSystem.GetFile(birth.RelativePath);
                         await catalog.PrepareNamespaceBirthAsync(birth, timeout.Token); await catalog.PrepareNamespaceBirthPlanAsync(plan, timeout.Token);
-                        Assert.IsTrue(await MirrorPulseNamespaceBirthIdentityProjection.PrepareAsync(catalog, state.OpenStore, birth.OperationId, timeout.Token));
+                        Assert.IsTrue(await MirrorPulseNamespaceBirthIdentityProjection.PrepareAsync(catalog, state.OpenStore, birth.OperationId, child, timeout.Token));
                         var start = new MirrorPulseNamespaceBirthStart(1, birth.OperationId, DateTimeOffset.UtcNow);
                         Assert.IsTrue((await catalog.RecordNamespaceBirthStartAsync(start, timeout.Token)).NewlyRecorded);
                         births.Add((birth, plan, start));
-                        CloudItem child = isDirectory ? fileSystem.GetDirectory(birth.RelativePath) : fileSystem.GetFile(birth.RelativePath);
                         // Public remote placeholder population does not describe a local create.
                         // Create locally under protection, then use CfSharp's same-object conversion.
                         await role.RunNamespaceOperationAsync(async () =>
