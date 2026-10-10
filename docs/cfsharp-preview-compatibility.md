@@ -97,6 +97,24 @@ descriptor operations, with distinct native, projection, application and drain
 receipts. Directory metadata mode does not freeze descendants. This package
 upgrade alone does not establish MirrorPulse permission or product acceptance.
 
+`MirrorPulseWindowsNamespacePermissionLease.RunProtectedAsync` adapts the public
+scope to the existing permission coordinator contract. CfSharp performs
+same-object conversion, fresh Access descriptor reads and writes, inspection and
+draining. MirrorPulse retains ancestor names and reads the original object's owner
+through a separate read-only metadata reference, comparing its complete native
+volume/file ID with the scoped object before reading the owner. That reference
+cannot write a DACL or open file content. Callers must persist original evidence
+and hold product application admission before conversion or permission application. The Host does
+not yet enable strict protection through this component.
+
+The native component probe checks competing writes and hardlinks inside the
+scope, real descriptor application, cancellation and callback failure, and
+official-store reopen. It also checks cold-file metadata without hydration and
+directory metadata with the original binding. It retains the Windows overwrite regression after scope release:
+an edited placeholder can become an ordinary file, requiring fresh same-object
+preparation before subsequent permission work. No permanent ordinary-file alias
+freeze or whole-tree readiness is inferred from a completed scope.
+
 The product policy requires protection of every managed root and descendant,
 including ordinary files containing edits that have not been uploaded. Namespace
 changes will use Host-controlled operations; in-place content editing remains a
@@ -119,6 +137,7 @@ Host integration and controlled-operation recovery remain pending. Creating a
 session alone neither changes permissions nor enables product protection.
 
 The ARM64 CI job runs the dedicated namespace suite using the native ARM64 test
-process and disposable Cloud Files roots. Its report requires all three execution
-lifecycle tests and both ACL integration tests, with no skips. Installed product
+process and disposable Cloud Files roots. Its report requires the execution
+lifecycle, role, strict ACL, permission ownership, alias and protected-operation
+probes, with no skips. Installed product
 permission ownership and operation recovery still require separate acceptance.

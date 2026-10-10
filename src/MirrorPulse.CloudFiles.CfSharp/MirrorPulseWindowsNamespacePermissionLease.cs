@@ -26,20 +26,26 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLease : IMirror
     private readonly List<SafeFileHandle> _handles;
     private readonly SafeFileHandle _target;
     private readonly bool _isDirectory;
+    private readonly bool _metadataOnly;
     private bool _disposed;
 
-    private MirrorPulseWindowsNamespacePermissionLease(CloudItem item, RootId? rootId, List<SafeFileHandle> handles)
+    private MirrorPulseWindowsNamespacePermissionLease(CloudItem item, RootId? rootId, List<SafeFileHandle> handles, bool metadataOnly = false)
     {
         _item = item;
         _rootId = rootId;
         _handles = handles;
         _target = handles[^1];
         _isDirectory = item.Kind == CloudItemKind.Directory;
+        _metadataOnly = metadataOnly;
     }
 
     /// <summary>Opens only a currently routed root or its descendant in an already started CfSharp session.</summary>
-    public static async Task<MirrorPulseWindowsNamespacePermissionLease> OpenAsync(CloudItem item,
-        MirrorPulseRootRouter router, CancellationToken cancellationToken = default)
+    public static Task<MirrorPulseWindowsNamespacePermissionLease> OpenAsync(CloudItem item,
+        MirrorPulseRootRouter router, CancellationToken cancellationToken = default) =>
+        OpenCoreAsync(item, router, metadataOnlyTarget: false, cancellationToken);
+
+    private static async Task<MirrorPulseWindowsNamespacePermissionLease> OpenCoreAsync(CloudItem item,
+        MirrorPulseRootRouter router, bool metadataOnlyTarget, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(item);
         ArgumentNullException.ThrowIfNull(router);
@@ -79,7 +85,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLease : IMirror
                 cancellationToken.ThrowIfCancellationRequested();
                 if (index >= 0) current = Path.Combine(current, parts[index]);
                 bool target = index == parts.Length - 1;
-                SafeFileHandle handle = Open(current, target);
+                SafeFileHandle handle = Open(current, target, metadataOnlyTarget);
                 handles.Add(handle);
                 AttributeTag attributes = ReadAttributes(handle);
                 if ((attributes.Attributes & DirectoryAttribute) == 0 && (!target || item.Kind == CloudItemKind.Directory) ||
@@ -92,8 +98,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLease : IMirror
                         throw new InvalidDataException("A foreign reparse point cannot own namespace permission evidence.");
                 }
             }
-            var lease = new MirrorPulseWindowsNamespacePermissionLease(item, rootId, handles);
-            _ = await lease.InspectAsync(cancellationToken).ConfigureAwait(false);
+            var lease = new MirrorPulseWindowsNamespacePermissionLease(item, rootId, handles, metadataOnlyTarget);
+            if (!metadataOnlyTarget) _ = await lease.InspectAsync(cancellationToken).ConfigureAwait(false);
             return lease;
         }
         catch
@@ -125,17 +131,23 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLease : IMirror
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         cancellationToken.ThrowIfCancellationRequested();
+        if (_metadataOnly) throw new InvalidOperationException("Protected permission writes belong to the CfSharp scope.");
+        ValidateAccessDescriptor(dacl);
+        ValidateRetainedHandle(_target);
+        var descriptor = new HandleSecurity(_target, _isDirectory);
+        descriptor.SetSecurityDescriptorSddlForm(dacl, AccessControlSections.Access);
+        descriptor.PersistAccess(_target);
+        return ValueTask.CompletedTask;
+    }
+
+    private static void ValidateAccessDescriptor(string dacl)
+    {
         if (string.IsNullOrEmpty(dacl) || dacl.Length > 65_536)
             throw new ArgumentException("The access descriptor is not bounded.", nameof(dacl));
         var parsed = new RawSecurityDescriptor(dacl);
         if (parsed.Owner is not null || parsed.Group is not null || parsed.SystemAcl is not null || parsed.DiscretionaryAcl is null ||
             parsed.BinaryLength > 65_536 || parsed.GetSddlForm(AccessControlSections.Access) != dacl)
             throw new ArgumentException("The permission lease accepts only a canonical access descriptor.", nameof(dacl));
-        ValidateRetainedHandle(_target);
-        var descriptor = new HandleSecurity(_target, _isDirectory);
-        descriptor.SetSecurityDescriptorSddlForm(dacl, AccessControlSections.Access);
-        descriptor.PersistAccess(_target);
-        return ValueTask.CompletedTask;
     }
 
     public ValueTask DisposeAsync()
@@ -146,13 +158,15 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLease : IMirror
         return ValueTask.CompletedTask;
     }
 
-    internal static SafeFileHandle Open(string path, bool target)
+    internal static SafeFileHandle Open(string path, bool target, bool metadataOnlyTarget = false)
     {
-        // Metadata-only access does not participate in Windows share checking. Request
-        // read-data (list-directory for ancestors) without reading bytes; opening the
-        // reparse object without recall keeps cold placeholders offline. Omitting delete
-        // sharing then retains every component against namespace replacement.
-        SafeFileHandle handle = CreateFile(path, ReadDataOrListDirectory | ReadAttributesAccess | (target ? ReadControl | WriteDacl : 0),
+        // Ancestors and legacy targets request read-data without reading content, retaining
+        // their names against replacement. The protected target requests only read-only
+        // metadata; CfSharp owns its data-sharing protection and DACL writes. Reparse-object
+        // and no-recall flags keep cold metadata operations offline.
+        uint access = ReadAttributesAccess | (target && metadataOnlyTarget ? ReadControl :
+            ReadDataOrListDirectory | (target ? ReadControl | WriteDacl : 0));
+        SafeFileHandle handle = CreateFile(path, access,
             ShareRead | ShareWrite, nint.Zero, OpenExisting, OpenReparsePoint | OpenNoRecall | BackupSemantics, nint.Zero);
         if (!handle.IsInvalid)
         {
@@ -212,7 +226,10 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLease : IMirror
     private const uint ShareRead = 1, ShareWrite = 2, OpenExisting = 3;
     private const uint OpenNoRecall = 0x00100000, OpenReparsePoint = 0x00200000, BackupSemantics = 0x02000000;
     private const uint DirectoryAttribute = 0x10, ReparseAttribute = 0x400;
-    private const int StandardInformation = 1, AttributeTagInformation = 9;
+    private const int StandardInformation = 1, AttributeTagInformation = 9, FileIdInformation = 18;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct FileIdInfo { public ulong VolumeSerialNumber; public Guid FileId; }
 
     [StructLayout(LayoutKind.Sequential)]
     private struct StandardInfo
@@ -238,4 +255,9 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLease : IMirror
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool GetFileInformationByHandleEx(SafeFileHandle handle, int information, out StandardInfo data, uint length);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetFileInformationByHandleEx(SafeFileHandle handle, int information, out FileIdInfo data, uint length);
 }
