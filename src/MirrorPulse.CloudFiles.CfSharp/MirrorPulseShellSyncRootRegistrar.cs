@@ -118,6 +118,7 @@ public static class MirrorPulseShellSyncRootRegistrar
         {
             StorageProviderSyncRootInfo actual = StorageProviderSyncRootManager.GetSyncRootInformationForId(profile.RegistrationId);
             if (actual.InSyncPolicy != ContentInSyncPolicy ||
+                actual.PopulationPolicy != StorageProviderPopulationPolicy.Full ||
                 !string.Equals(actual.Path.Path, path, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException("The actual Shell root policy does not match content synchronization.");
         }

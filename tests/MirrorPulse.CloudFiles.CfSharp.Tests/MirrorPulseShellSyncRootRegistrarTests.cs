@@ -58,12 +58,14 @@ public sealed class MirrorPulseShellSyncRootRegistrarTests
             Assert.AreEqual("Personal drive", customInfo.DisplayNameResource);
             Assert.AreEqual(StorageProviderHydrationPolicy.Full, customInfo.HydrationPolicy);
             Assert.AreEqual(StorageProviderHydrationPolicyModifier.None, customInfo.HydrationPolicyModifier);
+            Assert.AreEqual(StorageProviderPopulationPolicy.Full, customInfo.PopulationPolicy);
             Assert.AreEqual(MirrorPulseShellSyncRootRegistrar.ContentInSyncPolicy, customInfo.InSyncPolicy);
 
             await MirrorPulseShellSyncRootRegistrar.RegisterAsync(unified);
             StorageProviderSyncRootInfo unifiedInfo =
                 StorageProviderSyncRootManager.GetSyncRootInformationForId(unified.RegistrationId);
             Assert.AreEqual("MirrorPulse", unifiedInfo.DisplayNameResource);
+            Assert.AreEqual(StorageProviderPopulationPolicy.Full, unifiedInfo.PopulationPolicy);
             Assert.AreEqual(MirrorPulseShellSyncRootRegistrar.ContentInSyncPolicy, unifiedInfo.InSyncPolicy);
         }
         finally

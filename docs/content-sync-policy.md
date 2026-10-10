@@ -16,6 +16,13 @@ content acceptance proof. Local metadata notifications still pass through the
 official change feed and product routing; they do not establish acceptance of
 remote metadata or authorize deletion after an incomplete scan.
 
+Directory population uses `CloudPopulationPolicy.Full` and the Shell's matching
+`StorageProviderPopulationPolicy.Full`. The Host verifies the actual policies
+after registration and updates existing owned roots without replacing their
+identity or files. Windows does not support the native `Partial` population
+policy; `Full` requests all entries in a directory through bounded provider pages.
+See the [Windows population policy contract](https://learn.microsoft.com/en-us/windows/win32/api/cfapi/ne-cfapi-cf_population_policy_primary).
+
 Snapshot polling compares object kind, path, content revision and length. Adding
 an unrelated remote object does not create a content update for an unchanged
 resident file, even when an enumeration returns new metadata objects or changed

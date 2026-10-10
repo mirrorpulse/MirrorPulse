@@ -44,6 +44,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             await using var fileSystem = new MirrorPulseCloudFileSystemBuilder(paths).WithStateStore(state)
                 .WithContentProvider(provider).Build();
             await role.RunNamespaceOperationAsync(async () => await fileSystem.StartAsync(timeout.Token));
+            Assert.AreEqual(CloudPopulationPolicy.Full, CloudSyncRoot.Open(paths.SyncRootPath).GetInfo().PopulationPolicy);
             await using var feed = fileSystem.CreateLocalChangeFeed();
             await feed.StartAsync(timeout.Token);
             await role.RunNamespaceOperationAsync(async () =>
@@ -87,6 +88,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             Assert.AreEqual(0, worker.Calls.Count(call => call == "directory"));
             // Windows drives a real FETCH_PLACEHOLDERS callback in this ordinary-user enumeration.
             string[] local = await Task.Run(() => Directory.GetFiles(docs.FullPath), timeout.Token);
+            TestContext.WriteLine($"NativeSourceEnumeration: actualPopulationPolicy=Full; localEntries={local.Length}; sourcePages={worker.Calls.Count(call => call == "directory")}; sourceRanges={worker.Calls.Count(call => call == "range-open")}.");
             Assert.IsTrue(local.Contains(Path.Combine(docs.FullPath, "cold.bin"), StringComparer.OrdinalIgnoreCase));
             Assert.IsGreaterThan(0, worker.Calls.Count(call => call == "directory"));
             Assert.AreEqual(0, worker.Calls.Count(call => call == "range-open"));

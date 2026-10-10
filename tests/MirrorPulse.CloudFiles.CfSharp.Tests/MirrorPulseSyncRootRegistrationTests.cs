@@ -25,6 +25,7 @@ public sealed class MirrorPulseSyncRootRegistrationTests
         Assert.IsTrue(registrar.Options.MarkRootInSync);
         Assert.AreEqual(CloudHydrationPolicy.Full, registrar.Options.HydrationPolicy);
         Assert.AreEqual(CloudHydrationPolicyModifiers.None, registrar.Options.HydrationModifiers);
+        Assert.AreEqual(CloudPopulationPolicy.Full, registrar.Options.PopulationPolicy);
         Assert.AreEqual(CloudInSyncPolicy.None, registrar.Options.InSyncPolicy);
         Assert.AreEqual(CloudHardLinkPolicy.Disallowed, registrar.Options.HardLinkPolicy);
         Assert.AreEqual(CloudInSyncPolicy.TrackAll, SyncRootRegistrationOptions.CreateBuilder("Other", "1.0").Build().InSyncPolicy);
@@ -63,11 +64,13 @@ public sealed class MirrorPulseSyncRootRegistrationTests
                 .WithProviderId(definition.ProviderId).WithSyncRootIdentity(definition.Identity).AllowHardLinks(true).Build());
             CloudSyncRootInfo previous = CloudSyncRoot.Open(path).GetInfo();
             Assert.AreEqual(CloudInSyncPolicy.TrackAll, previous.InSyncPolicy);
+            Assert.AreEqual(CloudPopulationPolicy.Partial, previous.PopulationPolicy);
             Assert.AreEqual(CloudHardLinkPolicy.Allowed, previous.HardLinkPolicy);
             registry.EnsureCompatible(definition);
             registry.Register(definition);
             CloudSyncRootInfo migrated = CloudSyncRoot.Open(path).GetInfo();
             Assert.AreEqual(CloudInSyncPolicy.None, migrated.InSyncPolicy);
+            Assert.AreEqual(CloudPopulationPolicy.Full, migrated.PopulationPolicy);
             Assert.AreEqual(CloudHardLinkPolicy.Disallowed, migrated.HardLinkPolicy);
             Assert.AreEqual(previous.FileId, migrated.FileId);
             CollectionAssert.AreEqual(previous.SyncRootIdentity.ToArray(), migrated.SyncRootIdentity.ToArray());
