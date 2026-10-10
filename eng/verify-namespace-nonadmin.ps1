@@ -76,13 +76,8 @@ try {
             Add-LocalGroupMember -SID $usersGroup -Member $user
         }
         $credential = [pscredential]::new($env:COMPUTERNAME + '\' + $userName, $password)
-        $acl = [IO.DirectoryInfo]::new($scratch).GetAccessControl([Security.AccessControl.AccessControlSections]::Access)
-        $inheritance = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
-        $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($user.SID, 'ReadAndExecute', $inheritance, 'None', 'Allow'))
-        [IO.DirectoryInfo]::new($scratch).SetAccessControl($acl)
-        $acl = [IO.DirectoryInfo]::new($work).GetAccessControl([Security.AccessControl.AccessControlSections]::Access)
-        $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($user.SID, 'FullControl', $inheritance, 'None', 'Allow'))
-        [IO.DirectoryInfo]::new($work).SetAccessControl($acl)
+        . (Join-Path $PSScriptRoot 'namespace-nonadmin-workspace.ps1')
+        Set-OrdinaryUserNamespaceWorkspacePermissions -Workspace $scratch -WorkDirectory $work -UserSid $user.SID
         $configuration = Join-Path $scratch 'configuration.json'
         [ordered]@{ schemaVersion=1; expectedArchitecture=$ExpectedArchitecture; expectedUserSid=$user.SID.Value;
             expectedUserName=$userName; workDirectory=$work; testAssembly=(Join-Path $copiedPayload $assemblyName);
