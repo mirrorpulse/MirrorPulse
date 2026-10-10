@@ -98,12 +98,10 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinator(MirrorPuls
         if (change.Phase == MirrorPulseNamespacePermissionPhase.RecoveryRequired)
             return new(operationId, MirrorPulseNamespacePermissionOutcome.RecoveryRequired, change.RecoveryReason);
         MirrorPulseNamespacePermissionObject observed = await lease.InspectAsync(cancellationToken).ConfigureAwait(false);
-        MirrorPulseNamespacePermissionRecoveryReason? mismatch = MatchObject(baseline, change.Intent, observed);
+        MirrorPulseNamespacePermissionRecoveryReason? mismatch = MatchApplicationObservation(baseline, change, observed);
         if (mismatch is not null) return await FenceAsync(change, mismatch.Value).ConfigureAwait(false);
         if (change.Phase == MirrorPulseNamespacePermissionPhase.Verified)
-            return observed.Dacl == change.Verification!.Dacl
-                ? new(operationId, MirrorPulseNamespacePermissionOutcome.AlreadyVerified)
-                : await FenceAsync(change, MirrorPulseNamespacePermissionRecoveryReason.DaclChanged).ConfigureAwait(false);
+            return new(operationId, MirrorPulseNamespacePermissionOutcome.AlreadyVerified);
 
         if (change.Phase == MirrorPulseNamespacePermissionPhase.Prepared)
         {
@@ -112,8 +110,6 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinator(MirrorPuls
                 cancellationToken.ThrowIfCancellationRequested();
                 await lease.ApplyDaclAsync(change.Intent.TargetDacl, cancellationToken).ConfigureAwait(false);
             }
-            else if (!MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(change.Intent.TargetDacl, observed.Dacl))
-                return await FenceAsync(change, MirrorPulseNamespacePermissionRecoveryReason.DaclChanged).ConfigureAwait(false);
             // Either the write returned successfully, or recovery observed the exact target
             // on the original object. Retain that fact before the separate read-back.
             change = await _catalog.RecordNamespacePermissionApplicationAsync(operationId, baseline.LocalObject,
@@ -169,5 +165,17 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinator(MirrorPuls
         if (observed.OwnerSid != baseline.OwnerSid) return MirrorPulseNamespacePermissionRecoveryReason.OwnerChanged;
         if (observed.ObservedAt < intent.PreparedAt) throw new InvalidDataException("The object observation predates its permission intent.");
         return null;
+    }
+
+    private static MirrorPulseNamespacePermissionRecoveryReason? MatchApplicationObservation(
+        MirrorPulseNamespacePermissionBaseline baseline, MirrorPulseNamespacePermissionChange change,
+        MirrorPulseNamespacePermissionObject observed)
+    {
+        MirrorPulseNamespacePermissionRecoveryReason? mismatch = MatchObject(baseline, change.Intent, observed);
+        if (mismatch is not null) return mismatch;
+        bool matches = change.Phase == MirrorPulseNamespacePermissionPhase.Verified ? observed.Dacl == change.Verification!.Dacl :
+            change.Phase == MirrorPulseNamespacePermissionPhase.Prepared && observed.Dacl == change.Intent.ExpectedDacl ||
+            MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(change.Intent.TargetDacl, observed.Dacl);
+        return matches ? null : MirrorPulseNamespacePermissionRecoveryReason.DaclChanged;
     }
 }

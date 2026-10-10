@@ -100,6 +100,22 @@ public sealed class MirrorPulseNamespacePermissionLocalIdentityCatalogTests
     }
 
     [TestMethod]
+    public async Task ObjectHistoryReadsOnlyTheRequestedOriginalAndRejectsEmptyEvidence()
+    {
+        using var fixture = new CatalogFixture();
+        await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        var first = Baseline(); var firstIntent = Intent(first);
+        var second = Baseline(); var secondIntent = Intent(second);
+        await catalog.PrepareNamespacePermissionChangesAsync([new(first, firstIntent), new(second, secondIntent)]);
+        var history = await catalog.ReadNamespacePermissionObjectHistoryAsync(first.EvidenceId);
+        Assert.HasCount(1, history);
+        Assert.AreEqual(firstIntent, history[0].Intent);
+        Assert.HasCount(0, await catalog.ReadNamespacePermissionObjectHistoryAsync(Guid.NewGuid()));
+        await Assert.ThrowsAsync<ArgumentException>(() => catalog.ReadNamespacePermissionObjectHistoryAsync(Guid.Empty));
+        Assert.HasCount(2, await catalog.ReadNamespacePermissionChangesAsync());
+    }
+
+    [TestMethod]
     [DataRow("applied")]
     [DataRow("verified")]
     [DataRow("recovery")]

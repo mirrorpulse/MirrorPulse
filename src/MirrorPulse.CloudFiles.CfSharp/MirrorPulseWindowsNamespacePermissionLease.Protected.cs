@@ -15,11 +15,27 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLease
     /// root routing and an independent read-only owner-SID check. No source or Worker work belongs
     /// in this callback. The receipt alone proves no tree readiness or synchronization acceptance.
     /// </remarks>
-    public static async Task<CloudProtectedLocalOperationResult> RunProtectedAsync(CloudItem item,
+    public static Task<CloudProtectedLocalOperationResult> RunProtectedAsync(CloudItem item,
         MirrorPulseRootRouter router, MirrorPulseLocalFileBinding originalBinding,
         CloudPlaceholderIdentity? localIdentity,
         Func<IMirrorPulseNamespacePermissionLease, CancellationToken, ValueTask> callback,
         CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(callback);
+        return RunProtectedCoreAsync(item, router, originalBinding, localIdentity,
+            (lease, stop) => callback(lease, stop), cancellationToken);
+    }
+
+    internal static Task<CloudProtectedLocalOperationResult> RunOwnedProtectedAsync(CloudItem item,
+        MirrorPulseRootRouter router, MirrorPulseLocalFileBinding originalBinding,
+        Func<IMirrorPulseProtectedNamespacePermissionLease, CancellationToken, ValueTask> callback,
+        CancellationToken cancellationToken) =>
+        RunProtectedCoreAsync(item, router, originalBinding, localIdentity: null, callback, cancellationToken);
+
+    private static async Task<CloudProtectedLocalOperationResult> RunProtectedCoreAsync(CloudItem item,
+        MirrorPulseRootRouter router, MirrorPulseLocalFileBinding originalBinding, CloudPlaceholderIdentity? localIdentity,
+        Func<IMirrorPulseProtectedNamespacePermissionLease, CancellationToken, ValueTask> callback,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(item);
         ArgumentNullException.ThrowIfNull(router);
@@ -57,7 +73,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLease
     }
 
     private sealed class ProtectedPermissionLease(MirrorPulseWindowsNamespacePermissionLease metadata,
-        CloudProtectedLocalOperationContext scope, CloudLocalFileBinding original) : IMirrorPulseNamespacePermissionLease
+        CloudProtectedLocalOperationContext scope, CloudLocalFileBinding original) : IMirrorPulseProtectedNamespacePermissionLease
     {
         private bool _disposed;
 
@@ -81,6 +97,23 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLease
             FileSystemSecurity descriptor = metadata._isDirectory ? new DirectorySecurity() : new FileSecurity();
             descriptor.SetSecurityDescriptorSddlForm(dacl, AccessControlSections.Access);
             _ = await scope.ApplyAccessDescriptorAsync(descriptor, cancellationToken).ConfigureAwait(false);
+        }
+
+        public async ValueTask<MirrorPulseProtectedLocalIdentityObservation> InspectLocalIdentityAsync(CancellationToken cancellationToken)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            CloudItemSnapshot snapshot = await scope.InspectAsync(cancellationToken).ConfigureAwait(false);
+            if (!snapshot.Exists || snapshot.LocalBinding != original || snapshot.Kind != CloudItemKind.File || snapshot.IsTombstone)
+                throw new InvalidDataException("Local preparation requires the retained original file.");
+            CloudPlaceholderIdentity? nativeIdentity = null;
+            if (snapshot.IsPlaceholder) _ = CloudPlaceholderIdentity.TryDecode(snapshot.PlaceholderIdentity.Span, out nativeIdentity);
+            return new(snapshot.ItemId, snapshot.RemoteId, snapshot.IsPlaceholder, nativeIdentity);
+        }
+
+        public async ValueTask PrepareLocalIdentityAsync(CloudPlaceholderIdentity identity, CancellationToken cancellationToken)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            _ = await scope.ConvertToPlaceholderAsync(identity, cancellationToken).ConfigureAwait(false);
         }
 
         public ValueTask DisposeAsync()

@@ -173,6 +173,16 @@ public sealed partial class MirrorPulseProductCatalog
         finally { _gate.Release(); }
     }
 
+    /// <summary>Reads one original object's history without scanning unrelated permission records.</summary>
+    public async Task<IReadOnlyList<MirrorPulseNamespacePermissionChange>> ReadNamespacePermissionObjectHistoryAsync(
+        Guid evidenceId, CancellationToken cancellationToken = default)
+    {
+        if (evidenceId == Guid.Empty) throw new ArgumentException("Original evidence is required.", nameof(evidenceId));
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try { ThrowIfDisposed(); return await ReadPermissionChangesCoreAsync(evidenceId, cancellationToken).ConfigureAwait(false); }
+        finally { _gate.Release(); }
+    }
+
     public async Task<MirrorPulseNamespacePermissionChange?> ReadNamespacePermissionChangeAsync(Guid operationId,
         CancellationToken cancellationToken = default)
     {
