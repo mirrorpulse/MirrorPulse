@@ -52,7 +52,7 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinator
                             MirrorPulseNamespacePermissionOutcome.AlreadyVerified;
                     if (!completed) { failedOperation = native; failedOperationId = preparation.Intent.OperationId; }
                     return completed;
-                }, cancellationToken, session.OwnerSid.Value).ConfigureAwait(false);
+                }, session.OwnerSid.Value, cancellationToken).ConfigureAwait(false);
         }).ConfigureAwait(false);
         return result! with { FailedOperation = failedOperation, FailedOperationId = failedOperationId };
     }
@@ -61,7 +61,7 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinator
     internal async Task<MirrorPulseNamespacePermissionTreeResult> ReconcileTreeCoreAsync(Guid manifestId,
         string roleSid, Func<CancellationToken, IAsyncEnumerable<MirrorPulseNamespacePermissionObject>> inspect,
         Func<MirrorPulseNamespacePermissionPreparation, CancellationToken, Task<bool>> apply,
-        CancellationToken cancellationToken, string? ownerSid = null)
+        string? ownerSid = null, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(inspect);
         ArgumentNullException.ThrowIfNull(apply);

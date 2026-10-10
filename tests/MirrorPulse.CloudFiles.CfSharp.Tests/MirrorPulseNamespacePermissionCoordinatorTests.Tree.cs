@@ -119,6 +119,22 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinatorTests
     }
 
     [TestMethod]
+    public async Task InitialTreeApplicationRejectsAnOwnerDifferentFromTheHostUserBeforePlatformAdmission()
+    {
+        using var fixture = new Fixture();
+        await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        var (tree, members) = await CreateTreeAsync(catalog, fixture);
+        await using var coordinator = new MirrorPulseNamespacePermissionCoordinator(catalog);
+        var model = new TreeModel(catalog, coordinator, members);
+        var result = await model.RunAsync(tree, owner: "S-1-5-21-100-200-300-1002");
+        Assert.AreEqual(MirrorPulseNamespacePermissionTreeOutcome.RecoveryRequired, result.Outcome);
+        Assert.AreEqual(MirrorPulseNamespacePermissionRecoveryReason.OwnerChanged, result.RecoveryReason);
+        Assert.AreEqual(0, model.Audits);
+        Assert.IsTrue(model.Objects.All(item => item.Writes == 0));
+        Assert.IsNull(result.FailedOperation);
+    }
+
+    [TestMethod]
     public async Task WholeTreeApplicationCrossesBoundedPagesWithoutApplyingAParentEarly()
     {
         using var fixture = new Fixture();
@@ -235,8 +251,8 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinatorTests
         public Func<MirrorPulseNamespacePermissionPreparation, Task>? BeforePreparationApply { get; set; }
 
         public Task<MirrorPulseNamespacePermissionTreeResult> RunAsync(MirrorPulseNamespacePermissionTree tree,
-            string? role = null, CancellationToken cancellationToken = default) => coordinator.ReconcileTreeCoreAsync(
-                tree.Definition.ManifestId, role ?? tree.Definition.Anchor.Intent.RoleSid, InspectAsync, ApplyAsync, cancellationToken);
+            string? role = null, string? owner = null, CancellationToken cancellationToken = default) => coordinator.ReconcileTreeCoreAsync(
+                tree.Definition.ManifestId, role ?? tree.Definition.Anchor.Intent.RoleSid, InspectAsync, ApplyAsync, owner, cancellationToken);
 
         public Task<MirrorPulseNamespacePermissionTreeResult> RestoreAsync(MirrorPulseNamespacePermissionTree tree,
             string role, string target, string owner = Owner, CancellationToken cancellationToken = default) => coordinator.RestoreTreeCoreAsync(

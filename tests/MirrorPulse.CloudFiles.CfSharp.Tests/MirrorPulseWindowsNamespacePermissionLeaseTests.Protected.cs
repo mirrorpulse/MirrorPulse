@@ -61,10 +61,18 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 {
                     originals = new MirrorPulseNamespacePermissionBaseline[items.Length];
                     protections = new MirrorPulseNamespacePermissionIntent[items.Length];
+                    int normalizedOwners = 0;
+                    using WindowsIdentity fixtureUser = WindowsIdentity.GetCurrent();
+                    foreach (CloudItem item in items)
+                    {
+                        if (SetProtectedFixtureUserOwner(item, fixtureUser.User!)) normalizedOwners++;
+                    }
+                    TestContext.WriteLine($"ProtectedOwnedFixtureOwner: currentUserObjects=True; normalizedOwners={normalizedOwners}; beforeOriginalCapture=True; noProductOwnerRelaxation=True.");
                     for (int index = 0; index < items.Length; index++)
                     {
                         await using var capture = await MirrorPulseWindowsNamespacePermissionLease.OpenAsync(items[index], router, timeout.Token);
                         var observed = await capture.InspectAsync(timeout.Token);
+                        Assert.AreEqual(fixtureUser.User!.Value, observed.OwnerSid);
                         originals[index] = new(Guid.NewGuid(), observed.RootId, observed.LocalObject, observed.RelativePath,
                             observed.IsDirectory, observed.OwnerSid, observed.Dacl, observed.ObservedAt);
                         protections[index] = new(Guid.NewGuid(), originals[index].EvidenceId, observed.LocalObject, observed.RootId,
@@ -92,6 +100,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         {
                             var blocked = await coordinator.ReconcileTreeAsync(manifestId, treeLease, role,
                                 baseline => baseline.RelativePath == "Docs/unsent.txt" ? candidate : null, timeout.Token);
+                            TestContext.WriteLine($"ProtectedOwnedTreeAdmission: reason={blocked.RecoveryReason}; completed={blocked.CompletedMembers}; nativeReceiptPresent={blocked.FailedOperation?.Receipt is not null}; originalOwnerMatchesCurrentUser={originals[2].OwnerSid == role.OwnerSid.Value}.");
                             Assert.AreEqual(MirrorPulseNamespacePermissionTreeOutcome.RecoveryRequired, blocked.Outcome);
                             Assert.AreEqual(protections[0].OperationId, blocked.FailedOperationId);
                             Assert.IsNotNull(blocked.FailedOperation);
@@ -247,6 +256,21 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         if (Directory.Exists(directory) && !File.Exists(Path.Combine(directory, ".mp-protected-permission-fixture")))
             throw new InvalidOperationException("The protected permission fixture marker is missing.");
         DeleteFixture(directory);
+    }
+
+    private static bool SetProtectedFixtureUserOwner(CloudItem item, SecurityIdentifier owner)
+    {
+        // An elevated CI token may create objects owned by Administrators. This synthetic
+        // fixture models the product's current-user objects before originals are captured;
+        // do not relax production ownership policy or change an already retained baseline.
+        FileSystemSecurity security = item.Kind == CloudItemKind.Directory
+            ? new DirectoryInfo(item.FullPath).GetAccessControl(AccessControlSections.Owner)
+            : new FileInfo(item.FullPath).GetAccessControl(AccessControlSections.Owner);
+        if (owner.Equals(security.GetOwner(typeof(SecurityIdentifier)))) return false;
+        security.SetOwner(owner);
+        if (security is DirectorySecurity directory) new DirectoryInfo(item.FullPath).SetAccessControl(directory);
+        else new FileInfo(item.FullPath).SetAccessControl((FileSecurity)security);
+        return true;
     }
 
     private sealed class ProtectedPermissionNoSourceProvider : ICloudFileContentProvider
