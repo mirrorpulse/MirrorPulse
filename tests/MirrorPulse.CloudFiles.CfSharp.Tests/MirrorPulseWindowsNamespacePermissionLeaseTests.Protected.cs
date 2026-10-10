@@ -133,7 +133,19 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         var applied = await ApplyOwnedAsync(protections[index], items[index], index == 0 ? candidate : null);
                         Assert.AreEqual(MirrorPulseNamespacePermissionOutcome.AlreadyVerified, applied.Permission!.Outcome);
                         Assert.IsFalse(applied.Receipt!.AccessDescriptorApplied);
-                        Assert.IsTrue(applied.Receipt.AccessDescriptorReadBack);
+                        // CfSharp's flag records readback after a DACL write, not every
+                        // metadata inspection. Replay verifies permissions without another write.
+                        Assert.IsFalse(applied.Receipt.AccessDescriptorReadBack);
+                        Assert.AreEqual(CloudProtectedLocalOperationOutcome.Completed, applied.Receipt.Outcome);
+                        Assert.IsTrue(applied.Receipt.Drained);
+                        await using (var audit = await MirrorPulseWindowsNamespacePermissionLease.OpenAsync(items[index], router, timeout.Token))
+                        {
+                            var observed = await audit.InspectAsync(timeout.Token);
+                            Assert.AreEqual(originals[index].LocalObject, observed.LocalObject);
+                            Assert.AreEqual(originals[index].OwnerSid, observed.OwnerSid);
+                            Assert.IsTrue(MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(
+                                protections[index].TargetDacl, observed.Dacl));
+                        }
                         if (index == 0)
                         {
                             Assert.IsTrue(applied.Receipt.NativeIdentityPrepared);
@@ -144,6 +156,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         }
                         else Assert.IsFalse(applied.Receipt.NativeConverted);
                     }
+                    TestContext.WriteLine("ProtectedOwnedReplay: writeAfterReadback=False; independentCurrentDescriptorAudit=True; originalBindingAndOwner=True; noAclRewrite=True.");
                     retainedColdIdentity = (await catalog.ReadNamespacePermissionLocalIdentityAsync(originals[1].EvidenceId, timeout.Token))!;
                     Assert.IsNull(await catalog.ReadNamespacePermissionLocalIdentityAsync(originals[2].EvidenceId, timeout.Token));
                     await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() => File.Delete(filePath), timeout.Token));
