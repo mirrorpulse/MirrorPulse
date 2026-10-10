@@ -117,6 +117,20 @@ must reconcile the original plan against actual birth evidence after interruptio
 The parent and pending name are checked again before the first start; exact
 historical replay remains immutable after role rotation.
 
+Schema 29 retains the first actual native birth observation against that original
+plan and start. Its owner, root, path, logical identity and native binding must
+agree with the admitted parent; multiply linked or ordinary non-placeholder
+objects are rejected. Local births remain unaccepted. A birth cannot adopt an
+original object's native binding, and a born object cannot be recaptured as a
+pre-protection baseline.
+
+The recorded birth DACL describes creation under protection. It supplies no
+original restoration target. Observation leaves the pending name reserved and
+does not mark the object protected, add it to a sealed original tree, or enqueue
+an upload. Actual protection, current membership and native journal delivery are
+independent steps. Missing historical observations are never inferred during an
+upgrade.
+
 Product catalog schema 22 retains each object's original volume, registered-root
 and file binding, capture location, owner SID and canonical DACL. The baseline
 and the first change intent commit together before any permission write. A

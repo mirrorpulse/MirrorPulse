@@ -144,6 +144,17 @@ public sealed partial class MirrorPulseProductCatalog
         }
         if (retained is null)
         {
+            await using (SqliteCommand born = _connection.CreateCommand())
+            {
+                born.Transaction = transaction;
+                born.CommandText = """
+                    SELECT 1 FROM namespace_birth_observations
+                    WHERE volume_serial=$volume AND sync_root_file_id=$sync AND local_file_id=$file;
+                    """;
+                AddNamespaceBirthBindingParameters(born, baseline.LocalObject);
+                if (await born.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null)
+                    throw new InvalidOperationException("A protected birth descriptor cannot become pre-protection original evidence.");
+            }
             await using SqliteCommand insert = _connection.CreateCommand();
             insert.Transaction = transaction;
             insert.CommandText = """
