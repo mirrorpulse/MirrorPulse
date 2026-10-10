@@ -1,6 +1,6 @@
 # CfSharp Preview Compatibility Report
 
-MirrorPulse pins `CfSharp` and `CfSharp.Storage.Sqlite` to `0.1.0-preview.4` from
+MirrorPulse pins `CfSharp` and `CfSharp.Storage.Sqlite` to `0.1.0-preview.5` from
 NuGet.org. The integration project owns CfSharp types and lifecycle; Core exposes
 MirrorPulse contracts to Adapters and the product UI.
 
@@ -47,7 +47,7 @@ transaction rolled back and `PRAGMA integrity_check` returned `ok`.
 The earlier `CF-001`, `API-001`, and `API-002` gaps were retested after pinning
 preview.2. MirrorPulse uses the public CfSharp batch and conflict contracts and
 does not read or mutate CfSharp's private SQLite tables or conflict payload
-format. Preview.4 remains a prerelease dependency until CfSharp 1.0.0 is published
+format. Preview.5 remains a prerelease dependency until CfSharp 1.0.0 is published
 and validated for the release candidate.
 
 Preview.2 also exposes a confirmation limitation: coordination USNs can be zero,
@@ -88,6 +88,14 @@ and reports incomplete recovery as pending. Callback authorization, preparation 
 a new rename from the CLI and the full fault recovery matrix remain pending work.
 
 ## Strict tree protection status
+
+Preview.5 packages identify source commit
+`adad62f2eb232ec381e537cd5c4c9e45eccc1095`. The public protected local operation
+contract retains one native object and official store lifetime across awaited
+local work. It provides same-object conversion, inspection and Access-only
+descriptor operations, with distinct native, projection, application and drain
+receipts. Directory metadata mode does not freeze descendants. This package
+upgrade alone does not establish MirrorPulse permission or product acceptance.
 
 The product policy requires protection of every managed root and descendant,
 including ordinary files containing edits that have not been uploaded. Namespace

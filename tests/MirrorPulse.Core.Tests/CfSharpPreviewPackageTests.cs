@@ -15,7 +15,7 @@ public sealed class CfSharpPreviewPackageTests
 
         Assert.IsFalse(project.Contains("<PackageReference Include=\"CfSharp\" />", StringComparison.Ordinal));
         StringAssert.Contains(integration, "<PackageReference Include=\"CfSharp\" />");
-        StringAssert.Contains(packageProps, "<PackageVersion Include=\"CfSharp\" Version=\"0.1.0-preview.4\" />");
+        StringAssert.Contains(packageProps, "<PackageVersion Include=\"CfSharp\" Version=\"0.1.0-preview.5\" />");
     }
 
     [TestMethod]
@@ -27,6 +27,6 @@ public sealed class CfSharpPreviewPackageTests
         var packageProps = File.ReadAllText(packagePropsPath);
 
         StringAssert.Contains(integrationProject, "<PackageReference Include=\"CfSharp.Storage.Sqlite\" />");
-        StringAssert.Contains(packageProps, "<PackageVersion Include=\"CfSharp.Storage.Sqlite\" Version=\"0.1.0-preview.4\" />");
+        StringAssert.Contains(packageProps, "<PackageVersion Include=\"CfSharp.Storage.Sqlite\" Version=\"0.1.0-preview.5\" />");
     }
 }
