@@ -135,8 +135,8 @@ acceptance before enabling strict protection in the product.
 retains the current local user and flows across asynchronous namespace work. Its
 owner drains active operations before disposal; source access and Worker RPC must
 remain outside that context. A disposable native probe combines the role with
-closed ACLs, hydration, content confirmation and store restart. Permission ownership,
-Host integration and controlled-operation recovery remain pending. Creating a
+closed ACLs, hydration, content confirmation and store restart. Host permission
+application and controlled-operation recovery remain pending. Creating a
 session alone neither changes permissions nor enables product protection.
 
 The session captures the Host's normal Windows identity at construction.
@@ -146,6 +146,13 @@ before their tokens are released. The owner must construct the session in its
 normal context and wrap every actual source operation; returning a lazy object
 does not authorize later reads outside that boundary. This API does not change
 Worker process identity or prove the identity of native provider callbacks.
+
+The production Host now owns this session and routes all demand, polling, rescan,
+upload, stat and mutation transports through `MirrorPulseNormalUserWorkerTransport`.
+The boundary reads and disposes lazy source ranges as the normal user, returning
+only a detached buffer bounded by the Worker range limit. The Host releases the
+identities after Cloud Files and Worker teardown. This source integration does
+not apply the strict namespace ACLs or deliver controlled local operations.
 
 The ARM64 CI job runs the dedicated namespace suite using the native ARM64 test
 process and disposable Cloud Files roots. Its report requires the execution

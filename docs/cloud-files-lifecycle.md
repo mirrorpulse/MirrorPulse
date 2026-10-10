@@ -15,6 +15,11 @@ checks because they have a different acknowledgement boundary.
 
 1. The Host checks the Windows version, loads product configuration and the
    installed Adapter topology, then derives separate sync-root and data-root paths.
+   It captures the normal user in a Host-owned execution session. Worker RPC,
+   polling, range reads and uploads use that normal identity even when called
+   from local namespace work. Each bounded source range is read and disposed
+   before returning a detached buffer. Creating the execution session does not
+   apply ACLs or enable strict protection.
 2. `MirrorPulseCloudHostSession` obtains the current-user owner lock and ensures
    the Shell and CfSharp registrations agree with its stable root identity.
 3. The session starts one `CloudFileSystem` with the official
@@ -27,6 +32,10 @@ checks because they have a different acknowledgement boundary.
    the owner lock.
    Registration and the SQLite database remain for the next run. Explicit
    account removal has a separate unregister path.
+
+The execution identities are released after the Cloud Files session and Worker
+owner have stopped; active source operations drain before token release. A
+namespace identity cannot be created by relaxing permissions on failure.
 
 The WinUI install flow verifies and registers a signed `.mpadapter` package
 before creating an instance. Current packages carry their signed inventory at

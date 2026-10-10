@@ -33,6 +33,7 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
     private readonly MirrorPulseConflictCenter _conflictCenter;
     private readonly MirrorPulseSystemNotificationPublisher _systemNotifications;
     private readonly AdapterInstanceProcessSupervisor _workers;
+    private readonly MirrorPulseNamespaceExecutionSession _namespaceExecution;
     private readonly MirrorPulseCloudHostSession _session;
     private readonly MirrorPulseActiveRemotePoller _remotePoller;
     private readonly MirrorPulseInstanceScheduler _remoteScheduler;
@@ -55,6 +56,7 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
         MirrorPulseConflictCenter conflictCenter,
         MirrorPulseSystemNotificationPublisher systemNotifications,
         AdapterInstanceProcessSupervisor workers,
+        MirrorPulseNamespaceExecutionSession namespaceExecution,
         MirrorPulseCloudHostSession session,
         MirrorPulseActiveRemotePoller remotePoller,
         MirrorPulseInstanceScheduler remoteScheduler,
@@ -68,6 +70,7 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
         _conflictCenter = conflictCenter;
         _systemNotifications = systemNotifications;
         _workers = workers;
+        _namespaceExecution = namespaceExecution;
         _session = session;
         _remotePoller = remotePoller;
         _remoteScheduler = remoteScheduler;
@@ -107,6 +110,7 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
         MirrorPulseProductCatalog? catalog = null;
         MirrorPulseSystemNotificationPublisher? systemNotifications = null;
         AdapterInstanceProcessSupervisor? workers = null;
+        MirrorPulseNamespaceExecutionSession? namespaceExecution = null;
         MirrorPulseCloudHostSession? session = null;
         MirrorPulseActiveRemotePoller? remotePoller = null;
         var remoteScheduler = new MirrorPulseInstanceScheduler();
@@ -173,13 +177,18 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
 
             workers = new AdapterInstanceProcessSupervisor(catalog, credentialStore, ApplyRemoteBatchAsync,
                 Path.Combine(paths.DataRootPath, "logs", "workers"));
-            var directorySource = new MirrorPulseAdapterDirectoryPageSource(workers);
-            var provider = new MirrorPulseDemandProvider(rootRouter, workers, directorySource);
+            // Capture the normal Host user before local namespace work can impersonate its role.
+            // All source RPC and lazy range bodies share this boundary, including polling and rescan.
+            namespaceExecution = new MirrorPulseNamespaceExecutionSession();
+            var source = new MirrorPulseNormalUserWorkerTransport(namespaceExecution,
+                workers, workers, workers, workers, workers);
+            var directorySource = new MirrorPulseAdapterDirectoryPageSource(source);
+            var provider = new MirrorPulseDemandProvider(rootRouter, source, directorySource);
             session = MirrorPulseCloudHostSession.CreateDefault(
-                paths, topology.Instances, topology.Roots, provider, workers, workers,
+                paths, topology.Instances, topology.Roots, provider, source, source,
                 rootRouter, catalog, instanceId => topology.Instances.Any(instance =>
                     instance.InstanceId == instanceId && instance.Enabled),
-                conflictCenter, conflictNotifications, workers, remoteScheduler);
+                conflictCenter, conflictNotifications, source, remoteScheduler);
             currentSession = session;
             var remoteSnapshotStore = new MirrorPulseFileRemotePollSnapshotStore(paths.DataRootPath);
             remotePoller = new MirrorPulseActiveRemotePoller(
@@ -190,7 +199,7 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
 
             var application = new MirrorPulseHostApplication(
                 paths, configurationStore, configuration, hostLease, catalog, conflictCenter, systemNotifications,
-                workers, session, remotePoller, remoteScheduler, topology);
+                workers, namespaceExecution, session, remotePoller, remoteScheduler, topology);
             application.InitializeControlPlane(credentialStore);
             return application;
         }
@@ -211,6 +220,11 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
             if (workers is not null)
             {
                 await workers.DisposeAsync().ConfigureAwait(false);
+            }
+
+            if (namespaceExecution is not null)
+            {
+                await namespaceExecution.DisposeAsync().ConfigureAwait(false);
             }
 
             if (catalog is not null)
@@ -866,8 +880,16 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
 
         await _remotePoller.DisposeAsync().ConfigureAwait(false);
         await _remoteScheduler.DisposeAsync().ConfigureAwait(false);
-        await _session.DisposeAsync().ConfigureAwait(false);
-        await _workers.DisposeAsync().ConfigureAwait(false);
+        try
+        {
+            await _session.DisposeAsync().ConfigureAwait(false);
+            await _workers.DisposeAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            // The captured identities outlive normal-user RPC, including source-body disposal.
+            await _namespaceExecution.DisposeAsync().ConfigureAwait(false);
+        }
         await _catalog.DisposeAsync().ConfigureAwait(false);
         _systemNotifications.Dispose();
         _shutdown.Dispose();
