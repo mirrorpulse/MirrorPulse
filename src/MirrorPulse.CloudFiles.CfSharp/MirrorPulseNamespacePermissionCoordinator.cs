@@ -46,6 +46,22 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinator(MirrorPuls
         IMirrorPulseNamespacePermissionLease lease, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(lease);
+        return await RunAdmittedPermissionWorkAsync(operationId,
+            (change, baseline, stop) => ApplyAdmittedAsync(change, baseline, lease, stop), cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Admits and drains local work before it acquires a native protection scope.</summary>
+    /// <remarks>
+    /// One owner supplies the permission application and capture fences. Work starts only after
+    /// the application gate and fresh durable admission checks. The callback must await all native
+    /// work to completion and cannot recursively apply, capture or dispose this owner. It receives
+    /// immutable original evidence, not permission to recapture a replacement or access a source.
+    /// </remarks>
+    internal async Task<T> RunAdmittedPermissionWorkAsync<T>(Guid operationId,
+        Func<MirrorPulseNamespacePermissionChange, MirrorPulseNamespacePermissionBaseline, CancellationToken, Task<T>> work,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(work);
         lock (_admission) ObjectDisposedException.ThrowIf(_disposing, this);
         MirrorPulseNamespacePermissionChange admitted = await _catalog.ReadNamespacePermissionChangeAsync(
             operationId, cancellationToken).ConfigureAwait(false)
@@ -64,44 +80,53 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinator(MirrorPuls
             MirrorPulseNamespacePermissionBaseline baseline = await _catalog.ReadNamespacePermissionBaselineAsync(
                 change.Intent.EvidenceId, cancellationToken).ConfigureAwait(false)
                 ?? throw new InvalidDataException("The original permission evidence is missing.");
-            if (change.Phase == MirrorPulseNamespacePermissionPhase.RecoveryRequired)
-                return new(operationId, MirrorPulseNamespacePermissionOutcome.RecoveryRequired, change.RecoveryReason);
-            MirrorPulseNamespacePermissionObject observed = await lease.InspectAsync(cancellationToken).ConfigureAwait(false);
-            MirrorPulseNamespacePermissionRecoveryReason? mismatch = MatchObject(baseline, change.Intent, observed);
-            if (mismatch is not null) return await FenceAsync(change, mismatch.Value).ConfigureAwait(false);
-            if (change.Phase == MirrorPulseNamespacePermissionPhase.Verified)
-                return observed.Dacl == change.Verification!.Dacl
-                    ? new(operationId, MirrorPulseNamespacePermissionOutcome.AlreadyVerified)
-                    : await FenceAsync(change, MirrorPulseNamespacePermissionRecoveryReason.DaclChanged).ConfigureAwait(false);
-
-            if (change.Phase == MirrorPulseNamespacePermissionPhase.Prepared)
-            {
-                if (observed.Dacl == change.Intent.ExpectedDacl)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    await lease.ApplyDaclAsync(change.Intent.TargetDacl, cancellationToken).ConfigureAwait(false);
-                }
-                else if (!MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(change.Intent.TargetDacl, observed.Dacl))
-                    return await FenceAsync(change, MirrorPulseNamespacePermissionRecoveryReason.DaclChanged).ConfigureAwait(false);
-                // Either the write returned successfully, or recovery observed the exact target
-                // on the original object. Retain that fact before the separate read-back.
-                change = await _catalog.RecordNamespacePermissionApplicationAsync(operationId, baseline.LocalObject,
-                    DateTimeOffset.UtcNow, CancellationToken.None).ConfigureAwait(false);
-                observed = await lease.InspectAsync(CancellationToken.None).ConfigureAwait(false);
-                mismatch = MatchObject(baseline, change.Intent, observed);
-                if (mismatch is not null) return await FenceAsync(change, mismatch.Value).ConfigureAwait(false);
-            }
-            if (!MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(change.Intent.TargetDacl, observed.Dacl))
-                return await FenceAsync(change, MirrorPulseNamespacePermissionRecoveryReason.DaclChanged).ConfigureAwait(false);
-            await _catalog.VerifyNamespacePermissionChangeAsync(operationId,
-                new(observed.LocalObject, observed.OwnerSid, observed.Dacl, observed.ObservedAt), CancellationToken.None).ConfigureAwait(false);
-            return new(operationId, MirrorPulseNamespacePermissionOutcome.Verified);
+            cancellationToken.ThrowIfCancellationRequested();
+            return await work(change, baseline, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
             if (entered) _gate.Release();
             ExitApplication(scope);
         }
+    }
+
+    private async Task<MirrorPulseNamespacePermissionResult> ApplyAdmittedAsync(MirrorPulseNamespacePermissionChange change,
+        MirrorPulseNamespacePermissionBaseline baseline, IMirrorPulseNamespacePermissionLease lease,
+        CancellationToken cancellationToken)
+    {
+        Guid operationId = change.Intent.OperationId;
+        if (change.Phase == MirrorPulseNamespacePermissionPhase.RecoveryRequired)
+            return new(operationId, MirrorPulseNamespacePermissionOutcome.RecoveryRequired, change.RecoveryReason);
+        MirrorPulseNamespacePermissionObject observed = await lease.InspectAsync(cancellationToken).ConfigureAwait(false);
+        MirrorPulseNamespacePermissionRecoveryReason? mismatch = MatchObject(baseline, change.Intent, observed);
+        if (mismatch is not null) return await FenceAsync(change, mismatch.Value).ConfigureAwait(false);
+        if (change.Phase == MirrorPulseNamespacePermissionPhase.Verified)
+            return observed.Dacl == change.Verification!.Dacl
+                ? new(operationId, MirrorPulseNamespacePermissionOutcome.AlreadyVerified)
+                : await FenceAsync(change, MirrorPulseNamespacePermissionRecoveryReason.DaclChanged).ConfigureAwait(false);
+
+        if (change.Phase == MirrorPulseNamespacePermissionPhase.Prepared)
+        {
+            if (observed.Dacl == change.Intent.ExpectedDacl)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                await lease.ApplyDaclAsync(change.Intent.TargetDacl, cancellationToken).ConfigureAwait(false);
+            }
+            else if (!MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(change.Intent.TargetDacl, observed.Dacl))
+                return await FenceAsync(change, MirrorPulseNamespacePermissionRecoveryReason.DaclChanged).ConfigureAwait(false);
+            // Either the write returned successfully, or recovery observed the exact target
+            // on the original object. Retain that fact before the separate read-back.
+            change = await _catalog.RecordNamespacePermissionApplicationAsync(operationId, baseline.LocalObject,
+                DateTimeOffset.UtcNow, CancellationToken.None).ConfigureAwait(false);
+            observed = await lease.InspectAsync(CancellationToken.None).ConfigureAwait(false);
+            mismatch = MatchObject(baseline, change.Intent, observed);
+            if (mismatch is not null) return await FenceAsync(change, mismatch.Value).ConfigureAwait(false);
+        }
+        if (!MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(change.Intent.TargetDacl, observed.Dacl))
+            return await FenceAsync(change, MirrorPulseNamespacePermissionRecoveryReason.DaclChanged).ConfigureAwait(false);
+        await _catalog.VerifyNamespacePermissionChangeAsync(operationId,
+            new(observed.LocalObject, observed.OwnerSid, observed.Dacl, observed.ObservedAt), CancellationToken.None).ConfigureAwait(false);
+        return new(operationId, MirrorPulseNamespacePermissionOutcome.Verified);
     }
 
     /// <summary>Rejects new admission and drains accepted reconciliation before disposing its gate.</summary>
