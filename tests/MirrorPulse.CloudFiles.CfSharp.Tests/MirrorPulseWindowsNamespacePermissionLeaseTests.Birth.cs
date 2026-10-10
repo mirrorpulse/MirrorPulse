@@ -263,6 +263,18 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     CollectionAssert.IsSubsetOf(journalIds, pending.Select(change => change.OperationId).ToArray());
                     await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() => File.Delete(filePath), timeout.Token));
                     string directoryPath = Path.Combine(docs.FullPath, "empty");
+                    var directoryProtection = await catalog.ReadLatestNamespaceBirthProtectionAsync(births[1].Birth.OperationId, timeout.Token);
+                    Assert.IsNotNull(directoryProtection);
+                    Assert.AreEqual(nextRole.RoleSid.Value, directoryProtection.RoleSid);
+                    Assert.AreNotEqual(observations[1].BirthDacl, directoryProtection.Verification.Dacl,
+                        "Role rotation must retain the first birth descriptor and verify a separate current descriptor.");
+                    await using (var beforeDeleteLease = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(
+                        fileSystem.GetDirectory("Docs/empty"), router, timeout.Token))
+                    {
+                        var beforeDelete = await beforeDeleteLease.InspectAsync(timeout.Token);
+                        Assert.AreEqual(directoryProtection.Verification.LocalObject, beforeDelete.LocalObject);
+                        Assert.AreEqual(directoryProtection.Verification.Dacl, beforeDelete.Dacl);
+                    }
                     try
                     {
                         Directory.Delete(directoryPath);
@@ -282,7 +294,13 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     Assert.AreEqual(observations[1].LocalObject.LocalFileId, retainedDirectory.LocalBinding!.LocalFileId);
                     await using (var retainedLease = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(
                         fileSystem.GetDirectory("Docs/empty"), router, timeout.Token))
-                        Assert.AreEqual(observations[1].BirthDacl, (await retainedLease.InspectAsync(timeout.Token)).Dacl);
+                    {
+                        var afterDelete = await retainedLease.InspectAsync(timeout.Token);
+                        Assert.AreEqual(directoryProtection.Verification.LocalObject, afterDelete.LocalObject);
+                        Assert.AreEqual(directoryProtection.Verification.Dacl, afterDelete.Dacl);
+                    }
+                    Assert.AreEqual(directoryProtection, await catalog.ReadLatestNamespaceBirthProtectionAsync(births[1].Birth.OperationId, timeout.Token));
+                    Assert.AreEqual(observations[1], await catalog.ReadNamespaceBirthObservationAsync(births[1].Birth.OperationId, timeout.Token));
                     Assert.HasCount(4, await catalog.ReadNamespacePermissionChangesAsync(timeout.Token));
                     foreach (var original in originals)
                         Assert.AreEqual(original.Baseline, await catalog.ReadNamespacePermissionBaselineAsync(original.Baseline.EvidenceId, timeout.Token));
