@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text;
 using CfSharp;
@@ -34,6 +35,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         var births = new List<(MirrorPulseNamespaceBirthIntent Birth, MirrorPulseNamespaceBirthPlan Plan, MirrorPulseNamespaceBirthStart Start)>();
         var originals = new List<MirrorPulseNamespacePermissionPreparation>();
         var observations = new List<MirrorPulseNamespaceBirthObservation>();
+        var originalBindings = new List<CloudLocalFileBinding>();
         Guid[] journalIds = [];
         byte[] payload = Encoding.UTF8.GetBytes("controlled local bytes with no remote acceptance");
         string filePath = Path.Combine(paths.SyncRootPath, "Docs", "born.bin");
@@ -98,20 +100,57 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         var start = new MirrorPulseNamespaceBirthStart(1, birth.OperationId, DateTimeOffset.UtcNow);
                         Assert.IsTrue((await catalog.RecordNamespaceBirthStartAsync(start, timeout.Token)).NewlyRecorded);
                         births.Add((birth, plan, start));
+                        CloudItem child = isDirectory ? fileSystem.GetDirectory(birth.RelativePath) : fileSystem.GetFile(birth.RelativePath);
+                        // Public remote placeholder population does not describe a local create.
+                        // Create locally under protection, then use CfSharp's same-object conversion.
                         await role.RunNamespaceOperationAsync(async () =>
                         {
-                            CloudPlaceholderSpec spec = isDirectory
-                                ? CloudDirectoryPlaceholderSpec.CreateBuilder(name, identity).WithInSyncState(false)
-                                    .WithPopulationState(CloudDirectoryPopulationState.Complete).Build()
-                                : CloudFilePlaceholderSpec.CreateBuilder(name, identity, 0).WithInSyncState(false)
-                                    .WithInitialAvailability(CloudAvailabilityTarget.LocallyAvailable).Build();
-                            var result = await docs.CreatePlaceholdersAsync([spec], cancellationToken: timeout.Token);
-                            result.ThrowIfAnyFailed();
+                            if (isDirectory) Directory.CreateDirectory(child.FullPath);
+                            else
+                            {
+                                var roleOnly = new FileSecurity();
+                                roleOnly.SetAccessRuleProtection(true, false);
+                                roleOnly.AddAccessRule(new FileSystemAccessRule(role.RoleSid, FileSystemRights.FullControl, AccessControlType.Allow));
+                                await using FileStream writer = new FileInfo(child.FullPath).Create(FileMode.CreateNew,
+                                    FileSystemRights.Write, FileShare.None, 4096, FileOptions.None, roleOnly);
+                                await writer.WriteAsync(payload, timeout.Token);
+                                writer.Flush(flushToDisk: true);
+                            }
+                            var ordinary = await child.InspectAsync(timeout.Token);
+                            Assert.IsFalse(ordinary.IsPlaceholder);
+                            Assert.IsNotNull(ordinary.LocalBinding);
+                            originalBindings.Add(ordinary.LocalBinding);
                         });
-                        CloudItem child = isDirectory ? fileSystem.GetDirectory(birth.RelativePath) : fileSystem.GetFile(birth.RelativePath);
+                        if (!isDirectory)
+                        {
+                            await Assert.ThrowsAsync<UnauthorizedAccessException>(() => File.ReadAllBytesAsync(child.FullPath, timeout.Token));
+                            AssertBirthAliasDenied(Path.Combine(directory, "ordinary-birth.link"), child.FullPath, expectedError: 5);
+                        }
+                        await role.RunNamespaceOperationAsync(async () =>
+                        {
+                            if (isDirectory)
+                                await child.ConvertToPlaceholderAsync(identity, CloudPlaceholderConversionOptions.CreateBuilder()
+                                    .WithPopulationState(CloudDirectoryPopulationState.Complete).Build(), timeout.Token);
+                            else
+                            {
+                                var binding = originalBindings[^1];
+                                var retained = new MirrorPulseLocalFileBinding(binding.VolumeSerialNumber, binding.SyncRootFileId, binding.LocalFileId);
+                                var receipt = await MirrorPulseWindowsNamespacePermissionLease.RunProtectedAsync(child, router, retained, identity,
+                                    async (lease, stop) =>
+                                    {
+                                        await child.ConvertToPlaceholderAsync(identity, cancellationToken: stop);
+                                        AssertBirthAliasDenied(Path.Combine(directory, "conversion-scope.link"), child.FullPath);
+                                        await lease.ApplyDaclAsync(MirrorPulseWindowsNamespaceInheritance.CreateInheritedDacl(parent.Intent.TargetDacl, false), stop);
+                                        Assert.AreEqual(retained, (await lease.InspectAsync(stop)).LocalObject);
+                                    }, timeout.Token);
+                                Assert.AreEqual(CloudProtectedLocalOperationOutcome.Completed, receipt.Outcome, receipt.Error?.ToString());
+                                Assert.IsTrue(receipt.CallbackStarted && receipt.CallbackCompleted && receipt.Drained);
+                            }
+                        });
                         // Keep actual native birth unrecorded until after the first CfSharp/catalog owner ends.
                         var snapshot = await child.InspectAsync(timeout.Token);
                         Assert.IsTrue(snapshot.IsPlaceholder);
+                        Assert.AreEqual(originalBindings[^1], snapshot.LocalBinding);
                         Assert.AreEqual(plan.ItemId, snapshot.ItemId);
                         Assert.IsNull(snapshot.RemoteRevision);
                         Assert.AreEqual(CloudSynchronizationState.NotInSync, snapshot.SynchronizationState);
@@ -145,6 +184,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         Assert.AreEqual(plan.ItemId, observed.ItemId);
                         Assert.IsFalse(observed.IsInSync);
                         Assert.IsNull(observed.RemoteRevision);
+                        Assert.AreEqual(originalBindings[observations.Count - 1].LocalFileId, observed.LocalObject.LocalFileId);
                         Assert.AreEqual(observed, await MirrorPulseNamespaceBirthObserver.RecordAsync(catalog, birth.OperationId, child, router, timeout.Token));
                     }
                     Assert.HasCount(2, observations);
@@ -171,7 +211,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         preparation.Baseline.RootId is null ? fileSystem.Root : docs, router, timeout.Token);
                     Assert.AreEqual(preparation.Intent.TargetDacl, (await lease.InspectAsync(timeout.Token)).Dacl);
                 }
-                TestContext.WriteLine($"ControlledBirth: owner={owner}; architecture={RuntimeInformation.ProcessArchitecture}; placeholderAtBirth=True; fileModeOpen=True; aliasesDenied=True; originalsRetained=True; nativeBirthUnrecorded={owner == 0}; officialJournalIds={journalIds.Length}; sourceReads={source.Reads}; parentAclClosed=True; elevatedCaller={new WindowsPrincipal(caller).IsInRole(WindowsBuiltInRole.Administrator)}; hostIntegrated=False.");
+                TestContext.WriteLine($"ControlledBirth: owner={owner}; architecture={RuntimeInformation.ProcessArchitecture}; roleOnlyOrdinaryBirth=True; sameObjectConversion=True; fileModeOpen=True; aliasesDenied=True; originalsRetained=True; nativeBirthUnrecorded={owner == 0}; officialJournalIds={journalIds.Length}; sourceReads={source.Reads}; parentAclClosed=True; elevatedCaller={new WindowsPrincipal(caller).IsInRole(WindowsBuiltInRole.Administrator)}; hostIntegrated=False.");
             }
         }
         finally
@@ -213,13 +253,13 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         }
     }
 
-    private void AssertBirthAliasDenied(string alias, string target)
+    private void AssertBirthAliasDenied(string alias, string target, int expectedError = 396)
     {
         bool created = CreateBirthHardLink(alias, target, nint.Zero);
         int error = created ? 0 : Marshal.GetLastPInvokeError();
         TestContext.WriteLine($"ControlledBirthAlias: name={Path.GetFileName(alias)}; created={created}; nativeError={error}.");
         Assert.IsFalse(created);
-        Assert.AreEqual(396, error); // ERROR_CLOUD_FILE_INCOMPATIBLE_HARDLINKS.
+        Assert.AreEqual(expectedError, error); // Access denied before conversion; incompatible Cloud Files hardlinks afterwards.
         Assert.IsFalse(File.Exists(alias));
     }
 

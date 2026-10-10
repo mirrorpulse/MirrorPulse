@@ -165,3 +165,18 @@ process and disposable Cloud Files roots. Its report requires the execution
 lifecycle, role, strict ACL, permission ownership, alias and protected-operation
 probes, with no skips. Installed product
 permission ownership and operation recovery still require separate acceptance.
+
+Controlled local creation uses a different boundary from remote placeholder
+population. Its native fixture reserves an immutable product operation and
+projects the planned identity through the official item repository before the
+filesystem notification. An ordinary file is created atomically with access
+restricted to the namespace role. After its original native binding is inspected,
+CfSharp performs content-preserving same-object conversion inside its public
+protected operation; ordinary content access is granted only after conversion.
+Directories inherit the already protected parent and use public conversion.
+The fixture requires actual local `Create` journal records with the planned IDs,
+unchanged native bindings, retained bytes, denied aliases and recovery across
+two CfSharp owners. No product-generated copy of the private journal payload is
+used. These component checks do not enable strict production Host protection or
+deliver the controlled CLI operations; durable conversion admission, current
+membership and complete operation recovery remain required before that activation.
