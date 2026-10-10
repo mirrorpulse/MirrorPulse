@@ -90,3 +90,24 @@ journal acknowledgement and the rescan generation.
 See [protected content confirmation](protected-content-confirmation.md) and
 [Cloud Files lifecycle](cloud-files-lifecycle.md). Full native rescan and installed
 MSIX evidence remain required before this recovery path is accepted.
+
+## Unsent file chains
+
+The product catalog can retain an immutable execution preparation for a complete
+unsent file-chain decision. It binds the final length, SHA-256 and upload-time
+native object, the original remote baseline, and fingerprints of transferred
+never-started mutation intents. Recovery refuses changed bindings, baselines,
+original intent or ownership indexes. Schema 25 preserves earlier plans and
+permission history without inventing execution evidence for existing records.
+
+Derived remote-effect IDs are distinct from every original journal ID and cannot
+be claimed by ordinary mutation preparation. Move followed by upload uses two
+separate effect IDs; a coalesced deletion targets the original remote name because
+intermediate local names were never sent. Create followed by deletion prepares
+absence checks rather than a remote write. All original journal IDs remain owned
+by their plan and pending in the official store.
+
+Preparation neither dispatches an effect nor establishes acceptance, content
+confirmation, identity projection or journal acknowledgement. Host execution and
+recovery, followed by confirmation and acknowledgement of all original IDs, still
+require integration and their failure matrix.

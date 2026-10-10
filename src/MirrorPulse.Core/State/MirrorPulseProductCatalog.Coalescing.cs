@@ -98,7 +98,7 @@ public sealed partial class MirrorPulseProductCatalog
             await using (SqliteCommand aggregate = _connection.CreateCommand())
             {
                 aggregate.Transaction = transaction;
-                aggregate.CommandText = "SELECT 1 FROM mutation_intents WHERE operation_id=$plan UNION ALL SELECT 1 FROM journal_coalescing_members WHERE operation_id=$plan LIMIT 1;";
+                aggregate.CommandText = "SELECT 1 FROM mutation_intents WHERE operation_id=$plan UNION ALL SELECT 1 FROM journal_coalescing_members WHERE operation_id=$plan UNION ALL SELECT 1 FROM journal_coalescing_steps WHERE operation_id=$plan LIMIT 1;";
                 aggregate.Parameters.AddWithValue("$plan", plan.PlanId.ToString());
                 if (await aggregate.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null)
                     throw new InvalidOperationException("The aggregate operation ID is already owned by another operation.");
@@ -107,7 +107,7 @@ public sealed partial class MirrorPulseProductCatalog
             {
                 await using SqliteCommand fence = _connection.CreateCommand();
                 fence.Transaction = transaction;
-                fence.CommandText = "SELECT 1 FROM journal_coalescing_members WHERE operation_id=$operation UNION ALL SELECT 1 FROM journal_coalescing_plans WHERE plan_id=$operation LIMIT 1;";
+                fence.CommandText = "SELECT 1 FROM journal_coalescing_members WHERE operation_id=$operation UNION ALL SELECT 1 FROM journal_coalescing_plans WHERE plan_id=$operation UNION ALL SELECT 1 FROM journal_coalescing_steps WHERE operation_id=$operation LIMIT 1;";
                 fence.Parameters.AddWithValue("$operation", member.OperationId.ToString());
                 if (await fence.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null)
                     throw new InvalidOperationException("An operation with existing coalescing ownership cannot be merged.");

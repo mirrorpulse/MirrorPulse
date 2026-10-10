@@ -45,7 +45,8 @@ public sealed partial class MirrorPulseProductCatalog
             {
                 ownership.CommandText = """
                     SELECT 1 FROM journal_coalescing_members WHERE operation_id=$operation
-                    UNION ALL SELECT 1 FROM journal_coalescing_plans WHERE plan_id=$operation LIMIT 1;
+                    UNION ALL SELECT 1 FROM journal_coalescing_plans WHERE plan_id=$operation
+                    UNION ALL SELECT 1 FROM journal_coalescing_steps WHERE operation_id=$operation LIMIT 1;
                     """;
                 ownership.Parameters.AddWithValue("$operation", intent.OperationId.ToString());
                 if (await ownership.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null)

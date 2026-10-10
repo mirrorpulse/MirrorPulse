@@ -102,7 +102,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                 version.CommandText = "PRAGMA user_version;";
                 long currentVersion = (long)(await version.ExecuteScalarAsync(cancellationToken)
                     .ConfigureAwait(false) ?? 0L);
-                if (currentVersion > 24)
+                if (currentVersion > 25)
                 {
                     throw new InvalidDataException("The MP product catalog schema is newer than this Host supports.");
                 }
@@ -218,6 +218,17 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                     CREATE TABLE IF NOT EXISTS journal_coalescing_members (
                         operation_id TEXT PRIMARY KEY,
                         plan_id TEXT NOT NULL REFERENCES journal_coalescing_plans(plan_id)
+                    );
+                    CREATE TABLE IF NOT EXISTS journal_coalescing_executions (
+                        plan_id TEXT PRIMARY KEY REFERENCES journal_coalescing_plans(plan_id),
+                        payload BLOB NOT NULL,
+                        fingerprint BLOB NOT NULL
+                    );
+                    CREATE TABLE IF NOT EXISTS journal_coalescing_steps (
+                        operation_id TEXT PRIMARY KEY,
+                        plan_id TEXT NOT NULL REFERENCES journal_coalescing_executions(plan_id),
+                        ordinal INTEGER NOT NULL CHECK (ordinal IN (0,1)),
+                        UNIQUE(plan_id, ordinal)
                     );
                     CREATE TABLE IF NOT EXISTS namespace_permission_baselines (
                         evidence_id TEXT PRIMARY KEY,
@@ -338,7 +349,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                     alter.CommandText = "ALTER TABLE worker_requests ADD COLUMN stable_fingerprint BLOB NULL;";
                     await alter.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
                 }
-                version.CommandText = "PRAGMA user_version=24;";
+                version.CommandText = "PRAGMA user_version=25;";
                 await version.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
 
