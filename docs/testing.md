@@ -18,11 +18,11 @@ the original file ID, permissions and latest unaccepted bytes to remain intact,
 without marking content in sync or reading an Adapter source. Existing aliased
 ordinary files must refuse conversion without changing their permissions or
 bytes. This is a component boundary test; it does not enable whole-tree
-protection in the Host. The namespace report requires all nine
+protection in the Host. The namespace report requires all ten
 registered tests to pass exactly once, without skips; missing, repeated, or
 partially executed results fail the gate.
 
-The ARM64 job also runs the same nine tests as a fresh local user in the built-in
+The ARM64 job also runs the same ten tests as a fresh local user in the built-in
 Users group, with a loaded Windows profile and an actual non-administrator token.
 `eng/verify-namespace-nonadmin.ps1` is restricted to disposable GitHub-hosted Windows
 runners. It copies the compiled test payload to a marked temporary workspace;
@@ -32,11 +32,18 @@ It does not build or restore packages as the test user.
 
 Original context and TRX results are uploaded separately as
 `namespace-nonadmin-arm64-test-results`. The ordinary-user check does not increase
-the elevated namespace suite's counts. Evidence requires all nine tests without
+the elevated namespace suite's counts. Evidence requires all ten tests without
 skips, matching source and digests, and successful account, profile and workspace
 cleanup. `eng/verify-ci-evidence.ps1 -RequireNonAdminNamespace` rejects missing or
 partial evidence. This component gate does not establish installed Host identity
 or enable strict protection and controlled operations in the product.
+
+The sync-root guard probe retains the root and its ancestors throughout a short
+session. It requires root and ancestor rename attempts to fail while controlled
+child creation, rename and deletion succeed. Original root permissions and native
+binding are retained and restored through the product coordinator. The test never
+writes ancestor permissions, and it does not establish the Host's lifetime guard
+or controlled-operation durability.
 
 ## Independent Adapter template gate
 
