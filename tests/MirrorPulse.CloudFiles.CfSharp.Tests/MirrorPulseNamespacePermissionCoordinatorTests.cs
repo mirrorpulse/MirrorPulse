@@ -7,6 +7,7 @@ using MirrorPulse.Core.State;
 namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 
 [TestClass]
+[DoNotParallelize] // Short gate budgets measure competing operations within each test, independently of unrelated suite scheduling.
 public sealed partial class MirrorPulseNamespacePermissionCoordinatorTests
 {
     private const string Owner = "S-1-5-21-100-200-300-1001";
