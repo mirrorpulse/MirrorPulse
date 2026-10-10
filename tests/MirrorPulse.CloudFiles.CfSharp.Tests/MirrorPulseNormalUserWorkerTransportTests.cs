@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Runtime.Versioning;
 using System.Security.Principal;
 using MirrorPulse.CloudFiles.CfSharp;
@@ -39,7 +40,7 @@ public sealed class MirrorPulseNormalUserWorkerTransportTests
             Assert.AreEqual("moved", await transport.MoveAsync(new(instance, "file.bin", "renamed.bin", "revision", false), default));
             AssertRole(session, expected: true);
         });
-        CollectionAssert.AreEquivalent(ExpectedCalls, worker.Calls);
+        CollectionAssert.AreEquivalent(ExpectedCalls, worker.Calls.ToArray());
         AssertRole(session, expected: false);
     }
 
@@ -66,7 +67,7 @@ public sealed class MirrorPulseNormalUserWorkerTransportTests
             using var canceled = new CancellationTokenSource();
             canceled.Cancel();
             await Assert.ThrowsAsync<OperationCanceledException>(() => transport.ReadRangeAsync(request, canceled.Token).AsTask());
-            Assert.HasCount(calls, worker.Calls);
+            Assert.HasCount(calls, worker.Calls.ToArray());
             worker.FailStat = true;
             await Assert.ThrowsExactlyAsync<IOException>(() => transport.StatAsync(new(request.InstanceId, request.NormalizedPath), default).AsTask());
             AssertRole(session, expected: true);
@@ -92,7 +93,7 @@ public sealed class MirrorPulseNormalUserWorkerTransportTests
         finally { worker.ReleaseRead.TrySetResult(); }
         using Stream detached = await reading.WaitAsync(TimeSpan.FromSeconds(5));
         await disposing.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.AreEqual("range-dispose", worker.Calls[^1]);
+        Assert.AreEqual("range-dispose", worker.Calls.ToArray()[^1]);
         byte[] body = new byte[4];
         await detached.ReadExactlyAsync(body);
         CollectionAssert.AreEqual(new byte[] { 1, 2, 3, 4 }, body);
@@ -109,11 +110,12 @@ public sealed class MirrorPulseNormalUserWorkerTransportTests
         Assert.AreEqual(expected, new WindowsPrincipal(current).IsInRole(session.RoleSid));
     }
 
-    private sealed class IdentityProbeWorker(MirrorPulseNamespaceExecutionSession session) : IMirrorPulseWorkerRangeTransport,
+    internal sealed class IdentityProbeWorker(MirrorPulseNamespaceExecutionSession session) : IMirrorPulseWorkerRangeTransport,
         IMirrorPulseWorkerUploadTransport, IMirrorPulseWorkerStatTransport, IMirrorPulseWorkerDirectoryPageSource,
         IMirrorPulseWorkerMutationTransport
     {
-        public List<string> Calls { get; } = [];
+        public ConcurrentQueue<string> Calls { get; } = new();
+        public MirrorPulseWorkerDirectoryPage? DirectoryPage { get; init; }
         public bool CancelDuringRead { get; set; }
         public bool PauseRead { get; init; }
         public bool FailStat { get; set; }
@@ -123,7 +125,7 @@ public sealed class MirrorPulseNormalUserWorkerTransportTests
         public void Record(string call)
         {
             AssertRole(session, expected: false);
-            Calls.Add(call);
+            Calls.Enqueue(call);
         }
 
         public async ValueTask<Stream> ReadRangeAsync(MirrorPulseWorkerReadRangeRequest request, CancellationToken cancellationToken)
@@ -156,7 +158,7 @@ public sealed class MirrorPulseNormalUserWorkerTransportTests
         {
             await Task.Yield();
             Record("directory");
-            return new([], default, true);
+            return DirectoryPage ?? new([], default, true);
         }
 
         public async ValueTask<string> CreateDirectoryAsync(MirrorPulseWorkerCreateDirectoryRequest request,

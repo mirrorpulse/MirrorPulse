@@ -18,11 +18,11 @@ the original file ID, permissions and latest unaccepted bytes to remain intact,
 without marking content in sync or reading an Adapter source. Existing aliased
 ordinary files must refuse conversion without changing their permissions or
 bytes. This is a component boundary test; it does not enable whole-tree
-protection in the Host. The namespace report requires all thirteen
+protection in the Host. The namespace report requires all fourteen
 registered tests to pass exactly once, without skips; missing, repeated, or
 partially executed results fail the gate.
 
-The ARM64 job also runs the same thirteen tests as a fresh local user in the built-in
+The ARM64 job also runs the same fourteen tests as a fresh local user in the built-in
 Users group, with a loaded Windows profile and an actual non-administrator token.
 `eng/verify-namespace-nonadmin.ps1` is restricted to disposable GitHub-hosted Windows
 runners. It copies the compiled test payload to a marked temporary workspace;
@@ -32,7 +32,7 @@ It does not build or restore packages as the test user.
 
 Original context and TRX results are uploaded separately as
 `namespace-nonadmin-arm64-test-results`. The ordinary-user check does not increase
-the elevated namespace suite's counts. Evidence requires all thirteen tests without
+the elevated namespace suite's counts. Evidence requires all fourteen tests without
 skips, matching source and digests, and successful account, profile and workspace
 cleanup. `eng/verify-ci-evidence.ps1 -RequireNonAdminNamespace` rejects missing or
 partial evidence. This component gate does not establish installed Host identity
@@ -51,6 +51,12 @@ Lazy range bodies are read and disposed before leaving the normal-user context;
 only a detached buffer within the Worker range limit is returned. Source failures,
 cancellation and owner disposal must retain this identity boundary. These tests
 do not establish the identity of a remote Worker process or enable Host protection.
+
+The native source-context probe requires ordinary directory enumeration to populate
+a child under closed parent ACLs and a subsequent cold read to hydrate through the
+normal-user transport. Both callbacks, inherited deletion protection, lazy body
+disposal, unchanged parent descriptors and retained root binding must be observed.
+This isolated callback probe does not establish product operation recovery.
 
 ## Independent Adapter template gate
 
