@@ -232,10 +232,15 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinatorTests
         public string? FailAt { get; init; }
         public Func<MirrorPulseNamespacePermissionObject[], MirrorPulseNamespacePermissionObject[]>? Transform { get; set; }
         public Func<string, Task>? BeforeApply { get; set; }
+        public Func<MirrorPulseNamespacePermissionPreparation, Task>? BeforePreparationApply { get; set; }
 
         public Task<MirrorPulseNamespacePermissionTreeResult> RunAsync(MirrorPulseNamespacePermissionTree tree,
             string? role = null, CancellationToken cancellationToken = default) => coordinator.ReconcileTreeCoreAsync(
                 tree.Definition.ManifestId, role ?? tree.Definition.Anchor.Intent.RoleSid, InspectAsync, ApplyAsync, cancellationToken);
+
+        public Task<MirrorPulseNamespacePermissionTreeResult> RestoreAsync(MirrorPulseNamespacePermissionTree tree,
+            string role, string target, string owner = Owner, CancellationToken cancellationToken = default) => coordinator.RestoreTreeCoreAsync(
+                tree.Definition.ManifestId, owner, role, _ => target, InspectAsync, ApplyAsync, cancellationToken);
 
         private async IAsyncEnumerable<MirrorPulseNamespacePermissionObject> InspectAsync([EnumeratorCancellation] CancellationToken stop)
         {
@@ -253,6 +258,7 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinatorTests
         {
             string path = preparation.Intent.RelativePath;
             if (BeforeApply is not null) await BeforeApply(path);
+            if (BeforePreparationApply is not null) await BeforePreparationApply(preparation);
             if (path == FailAt) return false;
             Applications.Add(path);
             var change = await catalog.ReadNamespacePermissionChangeForApplicationAsync(preparation.Intent.OperationId, stop);

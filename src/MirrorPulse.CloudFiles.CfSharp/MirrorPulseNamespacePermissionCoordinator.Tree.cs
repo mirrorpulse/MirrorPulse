@@ -11,7 +11,8 @@ public enum MirrorPulseNamespacePermissionTreeOutcome { Verified, RecoveryRequir
 /// <remarks>No journal acknowledgement, remote acceptance or content freeze is implied.</remarks>
 public sealed record MirrorPulseNamespacePermissionTreeResult(Guid ManifestId,
     MirrorPulseNamespacePermissionTreeOutcome Outcome, int CompletedMembers, DateTimeOffset ObservedAt,
-    MirrorPulseNamespacePermissionRecoveryReason? RecoveryReason = null);
+    MirrorPulseNamespacePermissionRecoveryReason? RecoveryReason = null, Guid? FailedOperationId = null,
+    MirrorPulseProtectedNamespacePermissionResult? FailedOperation = null);
 
 public sealed partial class MirrorPulseNamespacePermissionCoordinator
 {
@@ -34,6 +35,8 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinator
         ArgumentNullException.ThrowIfNull(lease);
         ArgumentNullException.ThrowIfNull(session);
         MirrorPulseNamespacePermissionTreeResult? result = null;
+        MirrorPulseProtectedNamespacePermissionResult? failedOperation = null;
+        Guid? failedOperationId = null;
         await session.RunNamespaceOperationAsync(async () =>
         {
             result = await ReconcileTreeCoreAsync(manifestId, session.RoleSid.Value, lease.InspectObjectsAsync,
@@ -44,38 +47,30 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinator
                     var native = await ApplyProtectedAdmittedAsync(change, preparation.Baseline,
                         lease.GetItem(preparation.Intent.RelativePath), lease.Router,
                         selectLocalIdentity?.Invoke(preparation.Baseline), stop).ConfigureAwait(false);
-                    return native.Receipt?.Outcome == CloudProtectedLocalOperationOutcome.Completed &&
+                    bool completed = native.Receipt?.Outcome == CloudProtectedLocalOperationOutcome.Completed &&
                         native.Permission?.Outcome is MirrorPulseNamespacePermissionOutcome.Verified or
                             MirrorPulseNamespacePermissionOutcome.AlreadyVerified;
-                }, cancellationToken).ConfigureAwait(false);
+                    if (!completed) { failedOperation = native; failedOperationId = preparation.Intent.OperationId; }
+                    return completed;
+                }, cancellationToken, session.OwnerSid.Value).ConfigureAwait(false);
         }).ConfigureAwait(false);
-        return result!;
+        return result! with { FailedOperation = failedOperation, FailedOperationId = failedOperationId };
     }
 
     // This boundary is internal so policy tests cannot manufacture a public native receipt.
     internal async Task<MirrorPulseNamespacePermissionTreeResult> ReconcileTreeCoreAsync(Guid manifestId,
         string roleSid, Func<CancellationToken, IAsyncEnumerable<MirrorPulseNamespacePermissionObject>> inspect,
         Func<MirrorPulseNamespacePermissionPreparation, CancellationToken, Task<bool>> apply,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, string? ownerSid = null)
     {
         ArgumentNullException.ThrowIfNull(inspect);
         ArgumentNullException.ThrowIfNull(apply);
         _ = new SecurityIdentifier(roleSid);
-        MirrorPulseNamespacePermissionTree initial = await _catalog.ReadNamespacePermissionTreeAsync(
-            manifestId, cancellationToken).ConfigureAwait(false) ?? throw new FileNotFoundException("The original tree capture is missing.");
-        if (initial.Phase != MirrorPulseNamespacePermissionTreePhase.Sealed)
-            throw new InvalidOperationException("Whole-tree permission application requires a sealed original capture.");
-        PermissionAdmissionScope scope = PermissionAdmissionScope.From(initial.Definition.Anchor.Intent);
-        EnterApplication(scope);
-        bool entered = false;
         int completed = 0;
-        try
+        return await RunAdmittedTreeWorkAsync(manifestId, async tree =>
         {
-            await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-            entered = true;
-            // Seal replay rechecks the complete original fingerprint under a catalog transaction.
-            MirrorPulseNamespacePermissionTree tree = await _catalog.SealNamespacePermissionTreeAsync(
-                manifestId, initial.Seal!.SealedAt, cancellationToken).ConfigureAwait(false);
+            if (ownerSid is not null && tree.Definition.Anchor.Baseline.OwnerSid != ownerSid)
+                return Recover(MirrorPulseNamespacePermissionRecoveryReason.OwnerChanged);
             var expected = new Dictionary<string, Guid>(StringComparer.OrdinalIgnoreCase);
             int after = -1;
             while (after + 1 < tree.CapturedMembers)
@@ -116,12 +111,7 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinator
             mismatch = await AuditAsync(expected, inspect, requireVerified: true, cancellationToken).ConfigureAwait(false);
             return mismatch is null ? new(manifestId, MirrorPulseNamespacePermissionTreeOutcome.Verified,
                 completed, DateTimeOffset.UtcNow) : Recover(mismatch.Value);
-        }
-        finally
-        {
-            if (entered) _gate.Release();
-            ExitApplication(scope);
-        }
+        }, cancellationToken).ConfigureAwait(false);
 
         MirrorPulseNamespacePermissionTreeResult Recover(MirrorPulseNamespacePermissionRecoveryReason reason) =>
             new(manifestId, MirrorPulseNamespacePermissionTreeOutcome.RecoveryRequired, completed, DateTimeOffset.UtcNow, reason);
@@ -137,6 +127,9 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinator
             if (!expected.TryGetValue(observed.RelativePath, out Guid operationId) || !seen.Add(observed.RelativePath))
                 return MirrorPulseNamespacePermissionRecoveryReason.ObjectChanged;
             var change = await _catalog.ReadNamespacePermissionChangeForApplicationAsync(operationId, cancellationToken).ConfigureAwait(false);
+            var history = await _catalog.ReadNamespacePermissionObjectHistoryAsync(change.Intent.EvidenceId, cancellationToken).ConfigureAwait(false);
+            if (history.Count == 0 || history[^1].Intent.OperationId != operationId)
+                return MirrorPulseNamespacePermissionRecoveryReason.Interrupted;
             var baseline = await _catalog.ReadNamespacePermissionBaselineAsync(change.Intent.EvidenceId, cancellationToken).ConfigureAwait(false)
                 ?? throw new InvalidDataException("The original tree permission evidence is missing.");
             if (change.Phase == MirrorPulseNamespacePermissionPhase.RecoveryRequired)
@@ -147,5 +140,32 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinator
             if (mismatch is not null) return mismatch;
         }
         return seen.Count == expected.Count ? null : MirrorPulseNamespacePermissionRecoveryReason.ObjectChanged;
+    }
+
+    private async Task<T> RunAdmittedTreeWorkAsync<T>(Guid manifestId,
+        Func<MirrorPulseNamespacePermissionTree, Task<T>> work, CancellationToken cancellationToken)
+    {
+        MirrorPulseNamespacePermissionTree initial = await _catalog.ReadNamespacePermissionTreeAsync(
+            manifestId, cancellationToken).ConfigureAwait(false) ?? throw new FileNotFoundException("The original tree capture is missing.");
+        if (initial.Phase != MirrorPulseNamespacePermissionTreePhase.Sealed)
+            throw new InvalidOperationException("Whole-tree permission application requires a sealed original capture.");
+        PermissionAdmissionScope scope = PermissionAdmissionScope.From(initial.Definition.Anchor.Intent);
+        EnterApplication(scope);
+        bool entered = false;
+        try
+        {
+            await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            entered = true;
+            // Revalidate all original fingerprints before acquiring or applying native scopes.
+            var tree = await _catalog.SealNamespacePermissionTreeAsync(manifestId, initial.Seal!.SealedAt,
+                cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            return await work(tree).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (entered) _gate.Release();
+            ExitApplication(scope);
+        }
     }
 }

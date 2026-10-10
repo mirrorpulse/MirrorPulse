@@ -88,6 +88,19 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     await using (var treeLease = await MirrorPulseWindowsNamespacePermissionTreeLease.OpenAsync(
                         fileSystem.GetDirectory("Docs"), router, timeout.Token))
                     {
+                        using (var writer = new FileStream(filePath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite))
+                        {
+                            var blocked = await coordinator.ReconcileTreeAsync(manifestId, treeLease, role,
+                                baseline => baseline.RelativePath == "Docs/unsent.txt" ? candidate : null, timeout.Token);
+                            Assert.AreEqual(MirrorPulseNamespacePermissionTreeOutcome.RecoveryRequired, blocked.Outcome);
+                            Assert.AreEqual(protections[0].OperationId, blocked.FailedOperationId);
+                            Assert.IsNotNull(blocked.FailedOperation);
+                            Assert.AreEqual(CloudProtectedLocalOperationOutcome.Busy, blocked.FailedOperation.Receipt!.Outcome);
+                            Assert.IsFalse(blocked.FailedOperation.Receipt.CallbackStarted);
+                            Assert.AreEqual(MirrorPulseNamespacePermissionPhase.Prepared,
+                                (await catalog.ReadNamespacePermissionChangeAsync(protections[2].OperationId, timeout.Token))!.Phase);
+                            TestContext.WriteLine("ProtectedOwnedTreeBusy: originalReceiptRetained=True; callbackStarted=False; parentNotApplied=True; noFalseTreeVerification=True.");
+                        }
                         var tree = await coordinator.ReconcileTreeAsync(manifestId, treeLease, role,
                             baseline => baseline.RelativePath == "Docs/unsent.txt" ? candidate : null, timeout.Token);
                         Assert.AreEqual(MirrorPulseNamespacePermissionTreeOutcome.Verified, tree.Outcome);
@@ -152,21 +165,27 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                             Assert.IsTrue(replayed.Receipt.NativeIdentityPrepared);
                             Assert.IsTrue(replayed.Receipt.DurableProjectionCommitted);
                         }
-                        var previous = (await catalog.ReadNamespacePermissionChangeAsync(protections[index].OperationId, timeout.Token))!;
-                        var rotation = protections[index] with
-                        {
-                            OperationId = Guid.NewGuid(),
-                            Kind = MirrorPulseNamespacePermissionChangeKind.RotateRole,
-                            RoleSid = role.RoleSid.Value,
-                            ExpectedDacl = previous.Verification!.Dacl,
-                            TargetDacl = MirrorPulseNamespacePermissionPolicy.CreateProtectedDacl(role, originals[index].IsDirectory),
-                            PreparedAt = DateTimeOffset.UtcNow,
-                        };
-                        Assert.AreNotEqual(rotation.ExpectedDacl, rotation.TargetDacl);
-                        await catalog.PrepareNamespacePermissionChangeAsync(originals[index], rotation, timeout.Token);
-                        var rotated = await ApplyOwnedAsync(rotation, items[index], null);
-                        Assert.AreEqual(MirrorPulseNamespacePermissionOutcome.Verified, rotated.Permission!.Outcome);
-                        Assert.IsTrue(rotated.Receipt!.AccessDescriptorApplied);
+                    }
+                    await using (var treeLease = await MirrorPulseWindowsNamespacePermissionTreeLease.OpenAsync(
+                        fileSystem.GetDirectory("Docs"), router, timeout.Token))
+                    {
+                        var restored = await coordinator.RestoreTreeAsync(manifestId, treeLease, role, cancellationToken: timeout.Token);
+                        Assert.AreEqual(MirrorPulseNamespacePermissionTreeOutcome.Verified, restored.Outcome);
+                        Assert.AreEqual(3, restored.CompletedMembers);
+                        Assert.AreEqual(MirrorPulseNamespacePermissionTreeOutcome.Verified,
+                            (await coordinator.RestoreTreeAsync(manifestId, treeLease, role, cancellationToken: timeout.Token)).Outcome);
+                        TestContext.WriteLine($"ProtectedOwnedTreeRestore: architecture={System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture}; currentOwner=True; newRole=True; originalsUnchanged=True; allRotationIntentsDurableBeforeWrite=True; independentLiveAudit=True; sourceReads={provider.Reads}; hostEnabled=False.");
+                    }
+                    for (int index = 0; index < items.Length; index++)
+                    {
+                        var history = await catalog.ReadNamespacePermissionObjectHistoryAsync(originals[index].EvidenceId, timeout.Token);
+                        Assert.HasCount(2, history);
+                        Assert.AreEqual(MirrorPulseNamespacePermissionChangeKind.RotateRole, history[^1].Intent.Kind);
+                        Assert.AreEqual(role.RoleSid.Value, history[^1].Intent.RoleSid);
+                        Assert.AreNotEqual(history[^1].Intent.ExpectedDacl, history[^1].Intent.TargetDacl);
+                        var rotated = await ApplyOwnedAsync(history[^1].Intent, items[index], null);
+                        Assert.AreEqual(MirrorPulseNamespacePermissionOutcome.AlreadyVerified, rotated.Permission!.Outcome);
+                        Assert.IsFalse(rotated.Receipt!.AccessDescriptorApplied);
                         Assert.IsFalse(rotated.Receipt.NativeConverted);
                     }
                 }
