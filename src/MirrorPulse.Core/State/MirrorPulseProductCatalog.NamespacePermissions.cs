@@ -448,9 +448,16 @@ public sealed partial class MirrorPulseProductCatalog
 
     private static void ValidatePermissionLocation(RootId? rootId, string path, MirrorPulseLocalFileBinding binding)
     {
+        ValidatePermissionRelativePath(path);
         if (path is null || path.Length > 32_767 || rootId?.Value == Guid.Empty ||
             (path.Length == 0) != (binding.LocalFileId == binding.SyncRootFileId) || (path.Length == 0) != (rootId is null))
             throw new ArgumentException("The permission evidence's root and relative location are inconsistent.");
+    }
+
+    private static void ValidatePermissionRelativePath(string path)
+    {
+        if (path is null || path.Length > 32_767)
+            throw new ArgumentException("The namespace permission location must be bounded.");
         if (path.Length == 0) return;
         if (path.Contains('\\') || path.Split('/').Any(segment => segment.Length is 0 or > 255 || segment is "." or ".." ||
             segment.EndsWith(' ') || segment.EndsWith('.') || segment.Any(character => char.IsControl(character) || character is ':' or '<' or '>' or '"' or '|' or '?' or '*')))

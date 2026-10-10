@@ -91,6 +91,20 @@ and applying changes to running Workers are separate implementation steps.
 
 ## Owned namespace permission evidence
 
+Schema 27 adds immutable birth intents for controlled creation, import and remote
+population under a protected parent. Admission requires that parent's latest
+verified protection, native binding, stable root and current role. A separate
+pending reservation uses the parent evidence and child name, so renaming the
+parent cannot bypass a concurrent name reservation. Exact historical replay
+preserves the original intent after role rotation; new stale-role admission fails.
+
+These records contain no child native binding or original child DACL. Upgrading
+an older catalog creates no historical birth evidence and leaves existing
+permission baselines and sealed captures unchanged. Birth observation,
+reservation completion and native execution remain separate work; the intent
+alone does not authorize replay, prove protection or enable controlled CLI
+operations.
+
 Product catalog schema 22 retains each object's original volume, registered-root
 and file binding, capture location, owner SID and canonical DACL. The baseline
 and the first change intent commit together before any permission write. A
