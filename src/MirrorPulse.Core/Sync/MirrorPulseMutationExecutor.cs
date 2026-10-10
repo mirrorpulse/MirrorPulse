@@ -57,6 +57,14 @@ public sealed class MirrorPulseMutationExecutor(MirrorPulseProductCatalog catalo
         ArgumentNullException.ThrowIfNull(mutate);
         ArgumentNullException.ThrowIfNull(acknowledge);
         MirrorPulseMutationRecord record = await _catalog.PrepareMutationAsync(intent, cancellationToken).ConfigureAwait(false);
+        await ExecutePreparedAsync(record, mutate, acknowledge, cancellationToken).ConfigureAwait(false);
+    }
+
+    internal async ValueTask ExecutePreparedAsync(MirrorPulseMutationRecord record,
+        Func<CancellationToken, ValueTask<string?>> mutate,
+        Func<string?, CancellationToken, ValueTask> acknowledge, CancellationToken cancellationToken)
+    {
+        MirrorPulseMutationIntent intent = record.Intent;
         if (record.State == MirrorPulseMutationState.Acknowledged) return;
         if (record.State != MirrorPulseMutationState.Prepared) throw new MirrorPulseMutationAmbiguousException();
         await _catalog.TransitionMutationAsync(intent.OperationId, record.State, MirrorPulseMutationState.Executing,

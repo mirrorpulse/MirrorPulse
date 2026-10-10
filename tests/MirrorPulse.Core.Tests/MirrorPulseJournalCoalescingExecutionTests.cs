@@ -334,7 +334,7 @@ public sealed class MirrorPulseJournalCoalescingExecutionTests
     private static Task<MirrorPulseJournalCoalescingExecution> PrepareAsync(MirrorPulseProductCatalog catalog, Fixture fixture) =>
         catalog.PrepareJournalCoalescingExecutionAsync(fixture.Plan, fixture.Window, fixture.Revision, fixture.Content);
 
-    private sealed class Fixture : IDisposable
+    internal sealed class Fixture : IDisposable
     {
         private readonly string _directory = Path.Combine(Path.GetTempPath(), "MirrorPulse-coalescing-execution", Guid.NewGuid().ToString("N"));
         public MirrorPulseStoragePaths Paths { get; }
@@ -344,7 +344,7 @@ public sealed class MirrorPulseJournalCoalescingExecutionTests
         public string? Revision { get; }
         private readonly MirrorPulseUploadBinding _binding = new(new(42, Guid.NewGuid(), Guid.NewGuid()), MirrorPulseContentPreparation.ConvertRegularFile);
 
-        public Fixture(MirrorPulseCoalescedEffect effect)
+        public Fixture(MirrorPulseCoalescedEffect effect, string? baseline = null)
         {
             Paths = new(Path.Combine(_directory, "sync"), Path.Combine(_directory, "data"));
             InstanceId instance = InstanceId.New();
@@ -364,7 +364,7 @@ public sealed class MirrorPulseJournalCoalescingExecutionTests
             };
             Plan = MirrorPulseJournalCoalescingPlanner.TryPlan(Window, item, 100, new HashSet<Guid>())!;
             Assert.AreEqual(effect, Plan.Effect);
-            Revision = effect is MirrorPulseCoalescedEffect.CreateFile or MirrorPulseCoalescedEffect.VerifyRemoteAbsence ? null : "baseline";
+            Revision = effect is MirrorPulseCoalescedEffect.CreateFile or MirrorPulseCoalescedEffect.VerifyRemoteAbsence ? null : baseline ?? "baseline";
             Content = effect is MirrorPulseCoalescedEffect.CreateFile or MirrorPulseCoalescedEffect.UpdateFile or MirrorPulseCoalescedEffect.MoveAndUpdateFile
                 ? new(4, Convert.ToHexString(SHA256.HashData(new byte[] { 1, 2, 3, 4 })), _binding) : null;
         }

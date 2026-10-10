@@ -45,6 +45,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
     private readonly SqliteConnection _connection;
     private readonly SemaphoreSlim _gate = new(1, 1);
     internal SemaphoreSlim CredentialGate { get; } = new(1, 1);
+    internal MirrorPulseInstanceScheduler CoalescingScheduler { get; } = new();
     private bool _disposed;
 
     private MirrorPulseProductCatalog(FileStream owner, SqliteConnection connection)
@@ -703,6 +704,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
             return;
         }
 
+        await CoalescingScheduler.DisposeAsync().ConfigureAwait(false);
         await _gate.WaitAsync().ConfigureAwait(false);
         try
         {

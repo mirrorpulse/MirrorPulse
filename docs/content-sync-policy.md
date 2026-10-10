@@ -108,6 +108,24 @@ absence checks rather than a remote write. All original journal IDs remain owned
 by their plan and pending in the official store.
 
 Preparation neither dispatches an effect nor establishes acceptance, content
-confirmation, identity projection or journal acknowledgement. Host execution and
-recovery, followed by confirmation and acknowledgement of all original IDs, still
-require integration and their failure matrix.
+confirmation, identity projection or journal acknowledgement.
+
+The coalesced executor uses the existing durable mutation executor, remote
+readback and Worker transports. Only its owning preparation can create a derived
+intent. Effects execute in order, and an upload after a move uses that move's
+accepted revision as its conditional baseline. An unknown result is reconciled
+by readback without resending the mutation. Verification-only effects issue Stat
+requests and never write remote metadata or content.
+
+Derived intents have a separate origin. Their `Acknowledged` state records only
+completion of that remote effect; it does not acknowledge the original journal.
+Generic journal projection recovery cannot treat a missing derived ID in the
+official store as acknowledgement. One catalog-owned instance scheduler prevents
+concurrent executor objects from reconciling work still in flight, allows other
+instances to progress, and drains accepted work before the catalog closes.
+
+The Host pump does not yet select coalesced execution. Final local content or
+namespace confirmation, identity projection and acknowledgement of every
+original ID still require integration and their failure matrix. The content
+opener must check the retained native object and reject a replacement; the Worker
+upload transport checks the length and SHA-256 of bytes actually sent.
