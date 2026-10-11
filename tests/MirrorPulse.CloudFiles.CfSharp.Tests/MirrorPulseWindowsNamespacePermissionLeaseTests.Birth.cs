@@ -40,19 +40,27 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         var conversions = new List<MirrorPulseNamespaceBirthConversionPreparation>();
         var birthProtections = new List<MirrorPulseNamespaceBirthProtection>();
         var nestedBirths = new List<NativeNestedBirth>();
+        NativeStagedBirth? stagedBirth = null;
         Guid[] journalIds = [];
         Guid[] nestedJournalIds = [];
+        Guid[] stagedJournalIds = [];
         byte[] payload = Encoding.UTF8.GetBytes("controlled local bytes with no remote acceptance");
         string filePath = Path.Combine(paths.SyncRootPath, "Docs", "born.bin");
         try
         {
             registry.Register(new(paths.SyncRootPath, "0.1.0", Guid.NewGuid(), [1, 2, 3]));
             await File.WriteAllTextAsync(Path.Combine(directory, ".mp-permission-fixture"), string.Empty, timeout.Token);
-            for (int owner = 0; owner < 3; owner++)
+            for (int owner = 0; owner < 4; owner++)
             {
+                if (owner == 2)
+                {
+                    // Both CfSharp owners started under the old role have fully drained.
+                    await role.DisposeAsync();
+                    await Assert.ThrowsAsync<ObjectDisposedException>(() => role.RunNamespaceOperationAsync(() => Task.CompletedTask));
+                }
                 var state = new MirrorPulseCfSharpStateSession(paths);
                 await using var fileSystem = new MirrorPulseCloudFileSystemBuilder(paths).WithStateStore(state).WithContentProvider(source).Build();
-                await (owner == 2 ? nextRole : role).RunNamespaceOperationAsync(async () => await fileSystem.StartAsync(timeout.Token));
+                await (owner >= 2 ? nextRole : role).RunNamespaceOperationAsync(async () => await fileSystem.StartAsync(timeout.Token));
                 await using var feed = fileSystem.CreateLocalChangeFeed();
                 await feed.StartAsync(timeout.Token);
                 CloudDirectory docs = fileSystem.GetDirectory("Docs");
@@ -180,6 +188,10 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     var pending = await WaitForBirthJournalAsync(feed, births[0].Plan.ItemId, births[1].Plan.ItemId, timeout.Token);
                     journalIds = pending.Select(change => change.OperationId).ToArray();
                     Assert.IsGreaterThan(0, journalIds.Length);
+                    stagedBirth = await StageNativeAbandonedBirthAsync(fileSystem, state, catalog, router, role,
+                        registration.InstanceId, originals[1], payload, timeout.Token);
+                    stagedJournalIds = (await WaitForBirthJournalAsync(feed, stagedBirth.Plan.ItemId,
+                        births[1].Plan.ItemId, timeout.Token)).Select(change => change.OperationId).ToArray();
                 }
                 else if (owner == 1)
                 {
@@ -318,9 +330,16 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     var pending = await WaitForBirthJournalAsync(feed, births[0].Plan.ItemId, births[1].Plan.ItemId, timeout.Token);
                     CollectionAssert.IsSubsetOf(journalIds, pending.Select(change => change.OperationId).ToArray());
                     CollectionAssert.IsSubsetOf(nestedJournalIds, await ReadNativeNestedBirthJournalAsync(feed, nestedBirths, timeout.Token));
+                    Assert.IsNotNull(stagedBirth);
+                    if (owner == 2)
+                        await RecoverNativeAbandonedBirthAsync(fileSystem, catalog, router, nextRole, stagedBirth, payload, timeout.Token);
+                    else
+                        await VerifyRecoveredNativeBirthAsync(fileSystem, state, catalog, router, nextRole, stagedBirth, payload, timeout.Token);
+                    CollectionAssert.IsSubsetOf(stagedJournalIds, (await WaitForBirthJournalAsync(feed,
+                        stagedBirth.Plan.ItemId, births[1].Plan.ItemId, timeout.Token)).Select(change => change.OperationId).ToArray());
                     Assert.AreEqual(Encoding.UTF8.GetString(payload) + " latest", await File.ReadAllTextAsync(filePath, timeout.Token));
                     Assert.HasCount(4, await catalog.ReadNamespacePermissionChangesAsync(timeout.Token));
-                    TestContext.WriteLine("ControlledNestedBirth: threeCfSharpOwners=True; bornDirectParents=True; depth=3; publicParentIdentity=True; firstBindingsAndBytesRetained=True; originalJournalIdsRetained=True; roleOnlyNamespace=True; sourceReads=0; hostIntegrated=False.");
+                    TestContext.WriteLine($"ControlledNestedBirth: cfSharpOwner={owner}; bornDirectParents=True; depth=3; publicParentIdentity=True; firstBindingsAndBytesRetained=True; originalJournalIdsRetained=True; roleOnlyNamespace=True; sourceReads=0; hostIntegrated=False.");
                 }
                 Assert.AreEqual(0, source.Reads);
                 foreach (var preparation in originals)

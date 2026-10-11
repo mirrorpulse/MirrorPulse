@@ -200,3 +200,13 @@ followed by a third CfSharp owner: original identities, bytes, reservations and
 local `Create` journal IDs must survive; ordinary creation, deletion and rename
 must remain denied. These checks still do not establish Host activation or the
 controlled CLI operation paths.
+
+The same fixture also stages a role-only ordinary file with its original native
+binding recorded before conversion. After both old-role CfSharp owners drain and
+the execution session is disposed, a new role must retain the original bytes and
+identity while completing public same-object conversion. A metadata-only owner
+handoff must grant no normal content access before placeholder preparation. The
+first placeholder observation is deferred until another official-store reopen;
+the historical conversion intent and original journal operations remain intact.
+This is a technical recovery probe. Production recovery still requires a durable
+action before any handoff write, shared namespace admission and Host integration.

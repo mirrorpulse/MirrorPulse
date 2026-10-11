@@ -4,6 +4,7 @@ using System.Security.AccessControl;
 using System.Security.Principal;
 using Microsoft.Win32.SafeHandles;
 using MirrorPulse.CloudFiles.CfSharp;
+using MirrorPulse.Core.State;
 
 namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 
@@ -120,4 +121,42 @@ public sealed partial class MirrorPulseNamespaceHandleTests
     [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     private static partial SafeFileHandle OpenOwnerMetadata(string path, uint access, uint share,
         nint attributes, uint disposition, uint flags, nint template);
+
+    // Technical probe only. Product recovery must persist its own before-write action and
+    // retain shared namespace admission before granting a new role any ordinary-file access.
+    internal static void ApplyOrdinaryBirthRoleHandoffForProbe(string path,
+        MirrorPulseNamespaceBirthConversionPreparation original, string nextDacl)
+    {
+        using SafeFileHandle metadata = OpenOwnerMetadata(path, 0x00060080, 3, nint.Zero, 3, 0x02300000, nint.Zero);
+        if (metadata.IsInvalid) throw new Win32Exception(Marshal.GetLastPInvokeError());
+        CheckOriginal();
+        var descriptor = new OwnerMetadataSecurity(metadata);
+        Assert.AreEqual(original.OwnerSid, ((SecurityIdentifier?)descriptor.GetOwner(typeof(SecurityIdentifier)))?.Value);
+        Assert.AreEqual(original.BirthDacl, descriptor.GetSecurityDescriptorSddlForm(AccessControlSections.Access));
+        descriptor.SetSecurityDescriptorSddlForm(nextDacl, AccessControlSections.Access);
+        descriptor.Apply(metadata);
+        CheckOriginal();
+        var readback = new OwnerMetadataSecurity(metadata);
+        Assert.AreEqual(original.OwnerSid, ((SecurityIdentifier?)readback.GetOwner(typeof(SecurityIdentifier)))?.Value);
+        Assert.IsTrue(MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(nextDacl,
+            readback.GetSecurityDescriptorSddlForm(AccessControlSections.Access)));
+
+        void CheckOriginal()
+        {
+            Assert.AreEqual(1U, MirrorPulseWindowsNamespacePermissionLease.ValidateRetainedHandle(metadata));
+            if (!ReadOwnerMetadataFileId(metadata, 18, out OwnerMetadataFileId id, (uint)Marshal.SizeOf<OwnerMetadataFileId>()))
+                throw new Win32Exception(Marshal.GetLastPInvokeError());
+            Assert.AreEqual(original.LocalObject.VolumeSerialNumber, id.VolumeSerialNumber);
+            Assert.AreEqual(original.LocalObject.LocalFileId, id.FileId);
+        }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct OwnerMetadataFileId { public ulong VolumeSerialNumber; public Guid FileId; }
+
+    [LibraryImport("kernel32.dll", EntryPoint = "GetFileInformationByHandleEx", SetLastError = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool ReadOwnerMetadataFileId(SafeFileHandle handle, int informationClass,
+        out OwnerMetadataFileId information, uint size);
 }
