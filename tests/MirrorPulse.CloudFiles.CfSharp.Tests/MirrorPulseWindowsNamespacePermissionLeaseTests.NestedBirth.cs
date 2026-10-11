@@ -124,7 +124,10 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         foreach (var original in births)
         {
             var entry = recovered.Single(entry => entry.Intent.OperationId == original.Birth.OperationId);
-            Assert.IsTrue(entry.OwnsNameReservation);
+            Assert.IsFalse(entry.OwnsNameReservation);
+            Assert.IsNotNull(entry.MemberRegistration);
+            Assert.AreEqual(original.Birth.OperationId, entry.MemberRegistration.OriginId);
+            Assert.AreEqual(original.Observation.LocalObject, entry.MemberRegistration.LocalObject);
             Assert.AreEqual(original.Protection, entry.LatestProtection);
         }
     }

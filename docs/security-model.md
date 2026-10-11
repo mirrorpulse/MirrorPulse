@@ -373,8 +373,17 @@ admission checks registered occupancy as well as pending reservations. Recovery
 pages report registration separately from reservation ownership; neither
 absence of a reservation nor presence of a member implies source acceptance,
 journal acknowledgement or Host readiness. Schema upgrades backfill no members.
-The first registration location is historical. Relocation, retirement, fresh
-native registration checks and Host/CLI integration remain separate work.
+The native registrar reuses the current product protection resolver, public
+CfSharp inspection and retained metadata leases. It checks the current caller
+role, original child and direct-parent bindings, owners, locations, descriptors
+and retained public identities, then rechecks the parent and protection records
+before registration. Original file members require the identity retained before
+conversion; a missing legacy identity is not inferred from the current path.
+Historical replay also performs fresh native checks; it
+does not refresh immutable provenance. This path changes no ACL, converts no
+object and recalls no content. The first registration location is historical.
+Relocation, retirement and shared Host admission/CLI integration remain separate
+work; metadata handles alone do not establish a namespace actor or tree readiness.
 
 ## Remaining work
 

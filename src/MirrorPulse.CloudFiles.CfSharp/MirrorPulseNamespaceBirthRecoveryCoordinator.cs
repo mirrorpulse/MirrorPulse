@@ -124,7 +124,7 @@ public sealed class MirrorPulseNamespaceBirthRecoveryCoordinator
     }
 
     private sealed record Context(MirrorPulseNamespaceBirthIntent Birth, MirrorPulseNamespaceBirthPlan Plan,
-        MirrorPulseNamespaceBirthConversionPreparation Conversion, MirrorPulseNamespaceBirthProtectionVerifier.RetainedParent Parent);
+        MirrorPulseNamespaceBirthConversionPreparation Conversion, MirrorPulseNamespaceProtectionProof Parent);
 
     private async Task<Context> ReadContextAsync(Guid operationId, CloudFile file, CloudDirectory parent, CancellationToken token)
     {

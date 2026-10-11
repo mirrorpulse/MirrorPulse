@@ -1,7 +1,6 @@
 using System.Runtime.Versioning;
 using System.Security.Principal;
 using CfSharp;
-using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.State;
 
 namespace MirrorPulse.CloudFiles.CfSharp;
@@ -65,7 +64,7 @@ public static class MirrorPulseNamespaceBirthProtectionVerifier
     }
 
     internal static async Task<MirrorPulseNamespacePermissionObject> InspectRetainedParentAsync(MirrorPulseNamespaceBirthIntent birth,
-        CloudDirectory parent, RetainedParent retainedParent, MirrorPulseWindowsNamespacePermissionLease parentLease, CancellationToken token)
+        CloudDirectory parent, MirrorPulseNamespaceProtectionProof retainedParent, MirrorPulseWindowsNamespacePermissionLease parentLease, CancellationToken token)
     {
         var before = await parentLease.InspectAsync(token).ConfigureAwait(false);
         if (!before.IsDirectory || before.LocalObject != birth.ParentLocalObject || before.OwnerSid != retainedParent.OwnerSid ||
@@ -92,34 +91,16 @@ public static class MirrorPulseNamespaceBirthProtectionVerifier
             throw new InvalidDataException("The protected parent changed during the native child verification.");
     }
 
-    internal sealed record RetainedParent(RootId? RootId, string RelativePath, string OwnerSid, string RoleSid,
-        MirrorPulseNamespacePermissionVerification Verification, string ExpectedDacl, Guid PermissionOperationId,
-        MirrorPulseNamespaceBornParent? BornParent, MirrorPulseNamespaceBirthObservation? Observation);
-
-    internal static async Task<RetainedParent> ReadRetainedParentAsync(MirrorPulseProductCatalog catalog,
+    internal static async Task<MirrorPulseNamespaceProtectionProof> ReadRetainedParentAsync(MirrorPulseProductCatalog catalog,
         MirrorPulseNamespaceBirthIntent birth, CancellationToken token)
     {
         if (birth.BornParent is { } bornParent)
         {
-            var parentBirth = await catalog.ReadNamespaceBirthAsync(bornParent.BirthOperationId, token).ConfigureAwait(false)
-                ?? throw new InvalidDataException("The original direct-parent birth is missing.");
-            var parentOriginal = await catalog.ReadNamespaceBirthObservationAsync(bornParent.BirthOperationId, token).ConfigureAwait(false)
-                ?? throw new InvalidDataException("The original direct-parent native observation is missing.");
-            var parentProtection = await catalog.ReadLatestNamespaceBirthProtectionAsync(bornParent.BirthOperationId, token).ConfigureAwait(false)
-                ?? throw new InvalidOperationException("The direct born parent requires verified protection.");
-            if (!parentBirth.IsDirectory || parentOriginal.LocalObject != birth.ParentLocalObject)
+            var proof = await MirrorPulseNamespaceProtectionProofReader.ReadBirthAsync(catalog, bornParent.BirthOperationId, token).ConfigureAwait(false);
+            if (!proof.IsDirectory || proof.Verification.LocalObject != birth.ParentLocalObject)
                 throw new InvalidDataException("The retained born parent is not the admitted native directory.");
-            return new(parentBirth.RootId, parentBirth.RelativePath, parentOriginal.OwnerSid, parentProtection.RoleSid,
-                parentProtection.Verification, parentProtection.Verification.Dacl, Guid.Empty,
-                new(parentBirth.OperationId, parentProtection.ProtectionId), parentOriginal);
+            return proof;
         }
-        var original = await catalog.ReadNamespacePermissionBaselineAsync(birth.ParentEvidenceId, token).ConfigureAwait(false)
-            ?? throw new InvalidDataException("The original parent evidence is missing.");
-        var protection = await catalog.ReadLatestNamespacePermissionChangeAsync(birth.ParentEvidenceId, token).ConfigureAwait(false);
-        if (protection is not { Phase: MirrorPulseNamespacePermissionPhase.Verified, Verification: { } verification } ||
-            protection.Intent.Kind == MirrorPulseNamespacePermissionChangeKind.Restore)
-            throw new InvalidOperationException("The direct parent requires current verified protection.");
-        return new(protection.Intent.RootId, protection.Intent.RelativePath, original.OwnerSid, protection.Intent.RoleSid,
-            verification, protection.Intent.TargetDacl, protection.Intent.OperationId, null, null);
+        return await MirrorPulseNamespaceProtectionProofReader.ReadOriginalAsync(catalog, birth.ParentEvidenceId, token).ConfigureAwait(false);
     }
 }

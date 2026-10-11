@@ -196,7 +196,7 @@ For a born direct parent, verification also checks its original public directory
 identity against the current native binding and latest separate protection
 epoch. Original-parent and born-parent references remain distinct. The native
 birth fixture requires a further nested directory chain and resident file,
-followed by a third CfSharp owner: original identities, bytes, reservations and
+followed by a third CfSharp owner: original identities, bytes, owned child names and
 local `Create` journal IDs must survive; ordinary creation, deletion and rename
 must remain denied. These checks still do not establish Host activation or the
 controlled CLI operation paths.
@@ -214,6 +214,12 @@ native verification. It requires recovery after cancellation before writing,
 interruption after role handoff, a failed protected callback after conversion,
 and native success without a verification record. Repeated recovery must preserve
 the identity and bytes without another conversion or ACL write. First observation
-remains deferred across the next owner. Shared Host namespace admission, current
-membership, strict startup and controlled CLI integration remain separate work;
-these component assertions do not establish Host readiness.
+remains deferred across the next owner. The native member registrar must verify
+the original sync-root and managed-root members, then transfer protected born
+and nested objects' pending reservations to owned child names. Four owners must
+retain the same member provenance across role rotation; normal callers, wrong
+direct parents and substituted bindings must be refused. The staged object must
+remain unregistered until its first actual birth observation and protection are
+recorded. Shared Host namespace admission, live relocation/retirement, strict
+startup and controlled CLI integration remain separate work; these component
+assertions do not establish Host readiness.
