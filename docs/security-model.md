@@ -358,6 +358,24 @@ Successful conversion is independently inspected before verification is stored;
 replay keeps the original facts and avoids redundant ACL writes. This component
 does not supply the Host's shared actor, enable a root or publish a first birth.
 
+Schema 35 adds immutable member provenance for captured originals and protected
+births. A registration retains its first native binding, owner, location, stable
+direct member parent and the independently verified protection record. Original
+capture manifests and pre-protection descriptors remain unchanged. A born
+member cannot acquire an original descriptor or substitute an ancestor for its
+direct parent. New registration requires current protection throughout the
+parent lineage; exact historical replay grants no current authorization.
+
+Registering a born member transfers its pending name reservation into an owned
+case-insensitive direct child name in one transaction. Failure retains the
+reservation and rolls back both membership and occupancy. Subsequent birth
+admission checks registered occupancy as well as pending reservations. Recovery
+pages report registration separately from reservation ownership; neither
+absence of a reservation nor presence of a member implies source acceptance,
+journal acknowledgement or Host readiness. Schema upgrades backfill no members.
+The first registration location is historical. Relocation, retirement, fresh
+native registration checks and Host/CLI integration remain separate work.
+
 ## Remaining work
 
 Package inventories, entrypoints and locale resources use one canonical Windows

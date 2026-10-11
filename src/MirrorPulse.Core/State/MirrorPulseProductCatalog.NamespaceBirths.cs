@@ -51,6 +51,7 @@ public sealed partial class MirrorPulseProductCatalog
                 return retained;
             }
             await ValidateNamespaceBirthCurrentParentAsync(intent, transaction, cancellationToken).ConfigureAwait(false);
+            await RequireNamespaceBirthUnoccupiedMemberNameAsync(intent, transaction, cancellationToken).ConfigureAwait(false);
             byte[] payload = JsonSerializer.SerializeToUtf8Bytes(intent, TopologyJsonOptions);
             if (payload.Length > 131_072) throw new ArgumentException("The birth admission payload is not bounded.", nameof(intent));
             await using SqliteCommand insert = _connection.CreateCommand();

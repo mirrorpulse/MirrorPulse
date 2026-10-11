@@ -15,6 +15,7 @@ public sealed record MirrorPulseNamespaceBirthRecoveryEntry(long Sequence, Mirro
     public MirrorPulseNamespaceBirthProtection? LatestProtection { get; init; }
     public MirrorPulseNamespaceBirthRecoveryAction? LatestRecoveryAction { get; init; }
     public MirrorPulseNamespaceBirthRecoveryVerification? LatestRecoveryVerification { get; init; }
+    public MirrorPulseNamespaceMemberRegistration? MemberRegistration { get; init; }
 }
 
 public sealed record MirrorPulseNamespaceBirthRecoveryPage(IReadOnlyList<MirrorPulseNamespaceBirthRecoveryEntry> Entries,
@@ -106,6 +107,7 @@ public sealed partial class MirrorPulseProductCatalog
                     ConversionPreparation = conversion,
                     LatestProtection = protection,
                     LatestRecoveryAction = recovery,
+                    MemberRegistration = await ReadNamespaceMemberForBirthCoreAsync(admission.OperationId, transaction, cancellationToken).ConfigureAwait(false),
                     LatestRecoveryVerification = recovery is null ? null :
                         await ReadNamespaceBirthRecoveryVerificationCoreAsync(recovery.RecoveryId, transaction, cancellationToken).ConfigureAwait(false),
                 });
