@@ -88,12 +88,12 @@ public sealed partial class MirrorPulseProductCatalog
                 await using (SqliteCommand query = _connection.CreateCommand())
                 {
                     query.Transaction = transaction;
-                    query.CommandText = "SELECT parent_evidence_id,child_name_key FROM namespace_birth_reservations WHERE operation_id=$operation;";
+                    query.CommandText = "SELECT parent_kind,parent_id,child_name_key FROM namespace_birth_reservations WHERE operation_id=$operation;";
                     query.Parameters.AddWithValue("$operation", admission.OperationId.ToString("D"));
                     await using SqliteDataReader reader = await query.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
                     reserved = await reader.ReadAsync(cancellationToken).ConfigureAwait(false);
-                    if (reserved && (reader.GetString(0) != intent.ParentEvidenceId.ToString("D") ||
-                        reader.GetString(1) != expectedNameKey))
+                    if (reserved && (reader.GetInt32(0) != (intent.BornParent is null ? 0 : 1) ||
+                        reader.GetString(1) != NamespaceBirthParentId(intent).ToString("D") || reader.GetString(2) != expectedNameKey))
                         throw new InvalidDataException("The original birth name reservation is inconsistent.");
                 }
                 var conversion = await ReadNamespaceBirthConversionCoreAsync(admission.OperationId, transaction, cancellationToken).ConfigureAwait(false);

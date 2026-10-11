@@ -87,6 +87,17 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task<MirrorPulseNamespaceBirthObservation?> ReadNamespaceBirthObservationCoreAsync(Guid operationId,
         SqliteTransaction? transaction, CancellationToken token)
     {
+        var observation = await ReadNamespaceBirthObservationRowAsync(operationId, transaction, token).ConfigureAwait(false);
+        if (observation is null) return null;
+        try { await ValidateNamespaceBirthObservationReferencesAsync(observation, transaction, token).ConfigureAwait(false); }
+        catch (Exception exception) when (exception is InvalidOperationException or FileNotFoundException)
+        { throw new InvalidDataException("The birth observation lost its original references.", exception); }
+        return observation;
+    }
+
+    private async Task<MirrorPulseNamespaceBirthObservation?> ReadNamespaceBirthObservationRowAsync(Guid operationId,
+        SqliteTransaction? transaction, CancellationToken token)
+    {
         MirrorPulseNamespaceBirthObservation observation;
         await using (SqliteCommand query = _connection.CreateCommand())
         {
@@ -119,9 +130,6 @@ public sealed partial class MirrorPulseProductCatalog
                 !JsonSerializer.SerializeToUtf8Bytes(observation, TopologyJsonOptions).AsSpan().SequenceEqual(payload))
                 throw new InvalidDataException("The birth observation's index or canonical payload is inconsistent.");
         }
-        try { await ValidateNamespaceBirthObservationReferencesAsync(observation, transaction, token).ConfigureAwait(false); }
-        catch (Exception exception) when (exception is InvalidOperationException or FileNotFoundException)
-        { throw new InvalidDataException("The birth observation lost its original references.", exception); }
         return observation;
     }
 
@@ -130,23 +138,30 @@ public sealed partial class MirrorPulseProductCatalog
     {
         var birth = await ReadNamespaceBirthCoreAsync(observation.OperationId, transaction, token).ConfigureAwait(false)
             ?? throw new FileNotFoundException("The original birth admission is missing.");
-        var plan = await ReadNamespaceBirthPlanCoreAsync(observation.OperationId, transaction, token).ConfigureAwait(false)
+        var parent = await ValidateNamespaceBirthParentAsync(birth, transaction, token).ConfigureAwait(false);
+        await ValidateNamespaceBirthObservationLocalReferencesAsync(observation, birth, parent.OwnerSid, transaction, token).ConfigureAwait(false);
+    }
+
+    private async Task ValidateNamespaceBirthObservationLocalReferencesAsync(MirrorPulseNamespaceBirthObservation observation,
+        MirrorPulseNamespaceBirthIntent birth, string parentOwnerSid, SqliteTransaction? transaction, CancellationToken token)
+    {
+        var plan = await ReadNamespaceBirthPlanRowAsync(observation.OperationId, transaction, token).ConfigureAwait(false)
             ?? throw new FileNotFoundException("The original birth identity plan is missing.");
-        var start = await ReadNamespaceBirthStartCoreAsync(observation.OperationId, transaction, token).ConfigureAwait(false)
+        var start = await ReadNamespaceBirthStartRowAsync(observation.OperationId, transaction, token).ConfigureAwait(false)
             ?? throw new FileNotFoundException("The original birth start intent is missing.");
-        var parent = await ReadPermissionBaselineCoreAsync(birth.ParentEvidenceId, token, transaction).ConfigureAwait(false)
-            ?? throw new InvalidDataException("The birth parent lost its original permission evidence.");
+        ValidateNamespaceBirthPlanReference(plan, birth);
         if (observation.RootId != birth.RootId || observation.RelativePath != birth.RelativePath ||
             observation.IsDirectory != birth.IsDirectory || observation.ItemId != plan.ItemId ||
             observation.RemoteId != plan.RemoteId || observation.RemoteRevision != plan.RemoteRevision ||
-            observation.OwnerSid != parent.OwnerSid || observation.ObservedAt < start.StartedAt ||
+            observation.OwnerSid != parentOwnerSid || start.StartedAt < plan.PreparedAt || observation.ObservedAt < start.StartedAt ||
             observation.LocalObject.VolumeSerialNumber != birth.ParentLocalObject.VolumeSerialNumber ||
             observation.LocalObject.SyncRootFileId != birth.ParentLocalObject.SyncRootFileId ||
             observation.LocalObject.LocalFileId == birth.ParentLocalObject.LocalFileId ||
             observation.LocalObject.LocalFileId == birth.ParentLocalObject.SyncRootFileId ||
             birth.Origin != MirrorPulseNamespaceBirthOrigin.RemotePopulation && observation.IsInSync)
             throw new InvalidOperationException("The actual birth must match its original parent, location, identity and start without inventing acceptance.");
-        var conversion = await ReadNamespaceBirthConversionCoreAsync(observation.OperationId, transaction, token).ConfigureAwait(false);
+        var conversion = await ReadNamespaceBirthConversionRowAsync(observation.OperationId, transaction, token).ConfigureAwait(false);
+        if (conversion is not null) ValidateNamespaceBirthConversionReference(conversion, birth, start, parentOwnerSid);
         if (conversion is not null && (observation.LocalObject != conversion.LocalObject ||
             observation.OwnerSid != conversion.OwnerSid || observation.IsDirectory != conversion.IsDirectory ||
             observation.ObservedAt < conversion.PreparedAt))

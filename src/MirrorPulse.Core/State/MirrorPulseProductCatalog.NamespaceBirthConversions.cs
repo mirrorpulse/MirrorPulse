@@ -85,6 +85,17 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task<MirrorPulseNamespaceBirthConversionPreparation?> ReadNamespaceBirthConversionCoreAsync(Guid operationId,
         SqliteTransaction? transaction, CancellationToken token)
     {
+        var preparation = await ReadNamespaceBirthConversionRowAsync(operationId, transaction, token).ConfigureAwait(false);
+        if (preparation is null) return null;
+        try { _ = await ValidateNamespaceBirthConversionReferencesAsync(preparation, transaction, token).ConfigureAwait(false); }
+        catch (Exception exception) when (exception is InvalidOperationException or FileNotFoundException)
+        { throw new InvalidDataException("The ordinary birth preparation lost its original references.", exception); }
+        return preparation;
+    }
+
+    private async Task<MirrorPulseNamespaceBirthConversionPreparation?> ReadNamespaceBirthConversionRowAsync(Guid operationId,
+        SqliteTransaction? transaction, CancellationToken token)
+    {
         MirrorPulseNamespaceBirthConversionPreparation preparation;
         await using (SqliteCommand query = _connection.CreateCommand())
         {
@@ -115,9 +126,6 @@ public sealed partial class MirrorPulseProductCatalog
                 !JsonSerializer.SerializeToUtf8Bytes(preparation, TopologyJsonOptions).AsSpan().SequenceEqual(payload))
                 throw new InvalidDataException("The ordinary birth preparation's index or canonical payload is inconsistent.");
         }
-        try { _ = await ValidateNamespaceBirthConversionReferencesAsync(preparation, transaction, token).ConfigureAwait(false); }
-        catch (Exception exception) when (exception is InvalidOperationException or FileNotFoundException)
-        { throw new InvalidDataException("The ordinary birth preparation lost its original references.", exception); }
         return preparation;
     }
 
@@ -128,16 +136,21 @@ public sealed partial class MirrorPulseProductCatalog
             ?? throw new FileNotFoundException("The original birth admission is missing.");
         var start = await ReadNamespaceBirthStartCoreAsync(preparation.OperationId, transaction, token).ConfigureAwait(false)
             ?? throw new FileNotFoundException("The original birth start is missing.");
-        var parent = await ReadPermissionBaselineCoreAsync(birth.ParentEvidenceId, token, transaction).ConfigureAwait(false)
-            ?? throw new InvalidDataException("The original parent permission evidence is missing.");
+        var parent = await ValidateNamespaceBirthParentAsync(birth, transaction, token).ConfigureAwait(false);
+        ValidateNamespaceBirthConversionReference(preparation, birth, start, parent.OwnerSid);
+        return birth;
+    }
+
+    private static void ValidateNamespaceBirthConversionReference(MirrorPulseNamespaceBirthConversionPreparation preparation,
+        MirrorPulseNamespaceBirthIntent birth, MirrorPulseNamespaceBirthStart start, string parentOwnerSid)
+    {
         if (birth.Origin == MirrorPulseNamespaceBirthOrigin.RemotePopulation || preparation.IsDirectory != birth.IsDirectory ||
-            preparation.OwnerSid != parent.OwnerSid || preparation.PreparedAt < start.StartedAt ||
+            preparation.OwnerSid != parentOwnerSid || preparation.PreparedAt < start.StartedAt ||
             preparation.LocalObject.VolumeSerialNumber != birth.ParentLocalObject.VolumeSerialNumber ||
             preparation.LocalObject.SyncRootFileId != birth.ParentLocalObject.SyncRootFileId ||
             preparation.LocalObject.LocalFileId == birth.ParentLocalObject.LocalFileId ||
             preparation.LocalObject.LocalFileId == birth.ParentLocalObject.SyncRootFileId)
             throw new InvalidOperationException("Ordinary birth preparation requires its original local admission, parent, owner, kind and start.");
-        return birth;
     }
 
     private static void ValidateNamespaceBirthConversion(MirrorPulseNamespaceBirthConversionPreparation preparation)

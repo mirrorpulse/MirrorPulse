@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Data.Sqlite;
 
 namespace MirrorPulse.Core.State;
@@ -13,7 +14,11 @@ namespace MirrorPulse.Core.State;
 /// </remarks>
 public sealed record MirrorPulseNamespaceBirthProtection(int Version, Guid ProtectionId, Guid BirthOperationId,
     Guid? PreviousProtectionId, Guid ParentPermissionOperationId, string RoleSid,
-    MirrorPulseNamespacePermissionVerification Verification, bool IsPlaceholder, uint LinkCount);
+    MirrorPulseNamespacePermissionVerification Verification, bool IsPlaceholder, uint LinkCount)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public MirrorPulseNamespaceBornParent? BornParent { get; init; }
+}
 
 public sealed partial class MirrorPulseProductCatalog
 {
@@ -41,27 +46,22 @@ public sealed partial class MirrorPulseProductCatalog
                 latest is not null && protection.Verification.ObservedAt < latest.Verification.ObservedAt)
                 throw new InvalidOperationException("Birth protection must extend the latest retained epoch.");
             if (latest is null) await RequireNamespaceBirthReservationAsync(birth, transaction, cancellationToken).ConfigureAwait(false);
-            var parent = await ReadPermissionChangeCoreAsync(protection.ParentPermissionOperationId, cancellationToken, transaction).ConfigureAwait(false)
-                ?? throw new InvalidDataException("The birth protection parent is missing.");
-            var currentParent = await ReadLatestPermissionChangeCoreAsync(birth.ParentEvidenceId, cancellationToken, transaction).ConfigureAwait(false);
-            if (currentParent?.Intent.OperationId != parent.Intent.OperationId)
-                throw new InvalidOperationException("Birth protection requires the parent's latest verified protection.");
-            var original = await ReadPermissionBaselineCoreAsync(birth.ParentEvidenceId, cancellationToken, transaction).ConfigureAwait(false)
-                ?? throw new InvalidDataException("The original parent evidence is missing.");
-            await ValidatePermissionTreeAdmissionAsync(original, parent.Intent, transaction, cancellationToken).ConfigureAwait(false);
+            _ = await ValidateNamespaceBirthLineageAsync(birth, protection, true, transaction, cancellationToken).ConfigureAwait(false);
             byte[] payload = JsonSerializer.SerializeToUtf8Bytes(protection, TopologyJsonOptions);
             if (payload.Length > 131_072) throw new ArgumentException("Birth protection must be bounded.", nameof(protection));
             await using SqliteCommand insert = _connection.CreateCommand();
             insert.Transaction = transaction;
             insert.CommandText = """
                 INSERT INTO namespace_birth_protections(protection_id,birth_operation_id,previous_protection_id,
-                    parent_permission_operation_id,payload,fingerprint)
-                VALUES($id,$birth,$previous,$parent,$payload,$fingerprint);
+                    parent_permission_operation_id,parent_birth_operation_id,parent_birth_protection_id,payload,fingerprint)
+                VALUES($id,$birth,$previous,$parent,$born,$epoch,$payload,$fingerprint);
                 """;
             insert.Parameters.AddWithValue("$id", protection.ProtectionId.ToString("D"));
             insert.Parameters.AddWithValue("$birth", protection.BirthOperationId.ToString("D"));
             insert.Parameters.AddWithValue("$previous", (object?)protection.PreviousProtectionId?.ToString("D") ?? DBNull.Value);
-            insert.Parameters.AddWithValue("$parent", protection.ParentPermissionOperationId.ToString("D"));
+            insert.Parameters.AddWithValue("$parent", protection.BornParent is null ? protection.ParentPermissionOperationId.ToString("D") : DBNull.Value);
+            insert.Parameters.AddWithValue("$born", (object?)protection.BornParent?.BirthOperationId.ToString("D") ?? DBNull.Value);
+            insert.Parameters.AddWithValue("$epoch", (object?)protection.BornParent?.ProtectionId.ToString("D") ?? DBNull.Value);
             insert.Parameters.AddWithValue("$payload", payload);
             insert.Parameters.AddWithValue("$fingerprint", SHA256.HashData(payload));
             await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
@@ -135,7 +135,8 @@ public sealed partial class MirrorPulseProductCatalog
         await using SqliteCommand query = _connection.CreateCommand();
         query.Transaction = transaction;
         query.CommandText = """
-            SELECT sequence,protection_id,birth_operation_id,previous_protection_id,parent_permission_operation_id,payload,fingerprint
+            SELECT sequence,protection_id,birth_operation_id,previous_protection_id,parent_permission_operation_id,payload,fingerprint,
+                parent_birth_operation_id,parent_birth_protection_id
             FROM namespace_birth_protections WHERE protection_id=$id;
             """;
         query.Parameters.AddWithValue("$id", protectionId.ToString("D"));
@@ -159,7 +160,9 @@ public sealed partial class MirrorPulseProductCatalog
         if (reader.GetInt64(0) <= 0 || protection.ProtectionId != protectionId ||
             reader.GetString(1) != protectionId.ToString("D") || reader.GetString(2) != protection.BirthOperationId.ToString("D") ||
             (reader.IsDBNull(3) ? null : reader.GetString(3)) != protection.PreviousProtectionId?.ToString("D") ||
-            reader.GetString(4) != protection.ParentPermissionOperationId.ToString("D") ||
+            (reader.IsDBNull(4) ? null : reader.GetString(4)) != (protection.BornParent is null ? protection.ParentPermissionOperationId.ToString("D") : null) ||
+            (reader.IsDBNull(7) ? null : reader.GetString(7)) != protection.BornParent?.BirthOperationId.ToString("D") ||
+            (reader.IsDBNull(8) ? null : reader.GetString(8)) != protection.BornParent?.ProtectionId.ToString("D") ||
             !JsonSerializer.SerializeToUtf8Bytes(protection, TopologyJsonOptions).AsSpan().SequenceEqual(payload))
             throw new InvalidDataException("The birth protection index or canonical payload is inconsistent.");
         return (reader.GetInt64(0), protection);
@@ -168,22 +171,9 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task<MirrorPulseNamespaceBirthIntent> ValidateNamespaceBirthProtectionReferencesAsync(
         MirrorPulseNamespaceBirthProtection protection, SqliteTransaction? transaction, CancellationToken token)
     {
-        var observation = await ReadNamespaceBirthObservationCoreAsync(protection.BirthOperationId, transaction, token).ConfigureAwait(false)
-            ?? throw new FileNotFoundException("An original native birth observation is required before protection verification.");
-        var birth = await ReadNamespaceBirthCoreAsync(protection.BirthOperationId, transaction, token).ConfigureAwait(false)
+        var birth = await ReadNamespaceBirthRowAsync(protection.BirthOperationId, transaction, token).ConfigureAwait(false)
             ?? throw new InvalidDataException("The original birth admission is missing.");
-        var parent = await ReadPermissionChangeCoreAsync(protection.ParentPermissionOperationId, token, transaction).ConfigureAwait(false)
-            ?? throw new FileNotFoundException("Verified direct-parent protection is required.");
-        int separator = birth.RelativePath.LastIndexOf('/');
-        string parentPath = separator < 0 ? string.Empty : birth.RelativePath[..separator];
-        if (protection.Verification.LocalObject != observation.LocalObject || protection.Verification.OwnerSid != observation.OwnerSid ||
-            protection.Verification.ObservedAt < observation.ObservedAt || parent.Intent.EvidenceId != birth.ParentEvidenceId ||
-            parent.Intent.LocalObject != birth.ParentLocalObject || parent.Phase != MirrorPulseNamespacePermissionPhase.Verified ||
-            parent.Intent.Kind == MirrorPulseNamespacePermissionChangeKind.Restore || protection.RoleSid != parent.Intent.RoleSid ||
-            protection.Verification.ObservedAt < parent.Verification!.ObservedAt ||
-            (parent.Intent.RootId is null ? !birth.IsDirectory : parent.Intent.RootId != birth.RootId) ||
-            parent.Intent.RelativePath != parentPath)
-            throw new InvalidOperationException("Birth protection must retain the original child and its exact verified parent.");
+        _ = await ValidateNamespaceBirthLineageAsync(birth, protection, false, transaction, token).ConfigureAwait(false);
         return birth;
     }
 
@@ -194,8 +184,10 @@ public sealed partial class MirrorPulseProductCatalog
         ValidatePermissionSid(protection.Verification.OwnerSid, role: false);
         ValidatePermissionSid(protection.RoleSid, role: true);
         ValidatePermissionDacl(protection.Verification.Dacl);
-        if (protection.Version != 1 || protection.ProtectionId == Guid.Empty || protection.BirthOperationId == Guid.Empty ||
-            protection.ParentPermissionOperationId == Guid.Empty || protection.PreviousProtectionId == Guid.Empty ||
+        if (!(protection.Version == 1 && protection.BornParent is null && protection.ParentPermissionOperationId != Guid.Empty ||
+            protection.Version == 2 && protection.ParentPermissionOperationId == Guid.Empty && protection.BornParent is { BirthOperationId: var parent, ProtectionId: var epoch } &&
+            parent != Guid.Empty && epoch != Guid.Empty && parent != protection.BirthOperationId && epoch != protection.ProtectionId) ||
+            protection.ProtectionId == Guid.Empty || protection.BirthOperationId == Guid.Empty || protection.PreviousProtectionId == Guid.Empty ||
             protection.PreviousProtectionId == protection.ProtectionId || protection.Verification.ObservedAt == default ||
             !protection.IsPlaceholder || protection.LinkCount != 1)
             throw new ArgumentException("Birth protection requires an original, single-link placeholder and complete verification.", nameof(protection));

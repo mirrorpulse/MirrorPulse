@@ -166,6 +166,19 @@ migration does not invent one. The Host must independently verify the current
 native identity and inherited policy before recording an epoch. These records
 do not release name reservations, accept content or enable strict protection.
 
+Schema 32 distinguishes a pre-existing direct parent from a directory born under
+protection. Version 2 admissions and epochs explicitly reference the parent's
+stable birth ID and its separate protection epoch; they leave original-parent
+IDs empty. Name reservations belong to that direct stable parent, independent
+of its role epochs. New admission checks current protection throughout the
+referenced ancestry, including original-tree capture fences. Historical reads
+retain earlier roles and descriptors. The iterative reader validates referenced
+birth, identity, start, conversion and observation facts without recursive
+history enumeration or a new directory-depth restriction. Migration copies
+original payloads, fingerprints and sequence values verbatim, checks foreign
+keys before committing, and restores foreign-key enforcement. These catalog
+capabilities still require native parent checks and Host operation integration.
+
 Identity mapping preserves an absent revision as `null` in CfSharp's public
 envelope. It does not turn absence into an explicit empty revision. Stable item
 IDs and root scope remain independent of revisions; existing explicit empty

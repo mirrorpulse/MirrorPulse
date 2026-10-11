@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Data.Sqlite;
 using MirrorPulse.Core.Contracts;
 
@@ -7,10 +8,14 @@ namespace MirrorPulse.Core.State;
 
 public enum MirrorPulseNamespaceBirthOrigin { ControlledCreation, Import, RemotePopulation }
 
+/// <summary>The stable direct-parent birth and the separate protection epoch used at admission.</summary>
+public sealed record MirrorPulseNamespaceBornParent(Guid BirthOperationId, Guid ProtectionId);
+
 /// <summary>An immutable intent retained before creating an object under an owned protected parent.</summary>
 /// <remarks>
 /// The child has no native binding or original DACL yet. The parent evidence refers to its
-/// pre-protection original; its verified operation records the protection at admission.
+/// pre-protection original, or BornParent names a directory created under protection. Neither
+/// a born directory nor its ancestor is substituted for a pre-protection original.
 /// Neither this intent nor its presence proves that a child was created, protected, accepted
 /// remotely or added to a sealed original tree. Native execution requires a separate current
 /// parent check and durable birth observation. Never replay creation merely because this exists.
@@ -18,7 +23,11 @@ public enum MirrorPulseNamespaceBirthOrigin { ControlledCreation, Import, Remote
 public sealed record MirrorPulseNamespaceBirthIntent(int Version, Guid OperationId, RootId RootId,
     Guid ParentEvidenceId, Guid ParentPermissionOperationId, MirrorPulseLocalFileBinding ParentLocalObject,
     string RelativePath, bool IsDirectory, MirrorPulseNamespaceBirthOrigin Origin, string RoleSid,
-    DateTimeOffset PreparedAt);
+    DateTimeOffset PreparedAt)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public MirrorPulseNamespaceBornParent? BornParent { get; init; }
+}
 
 public sealed partial class MirrorPulseProductCatalog
 {
@@ -48,14 +57,18 @@ public sealed partial class MirrorPulseProductCatalog
             insert.Transaction = transaction;
             insert.CommandText = """
                 INSERT INTO namespace_birth_intents(operation_id,parent_evidence_id,parent_operation_id,
-                    relative_path_key,payload,fingerprint)
-                VALUES($operation,$parent,$protection,$path,$payload,$fingerprint);
-                INSERT INTO namespace_birth_reservations(parent_evidence_id,child_name_key,operation_id)
-                VALUES($parent,$child,$operation);
+                    parent_birth_operation_id,parent_birth_protection_id,relative_path_key,payload,fingerprint)
+                VALUES($operation,$original,$protection,$born,$epoch,$path,$payload,$fingerprint);
+                INSERT INTO namespace_birth_reservations(parent_kind,parent_id,child_name_key,operation_id)
+                VALUES($kind,$parent,$child,$operation);
                 """;
             insert.Parameters.AddWithValue("$operation", intent.OperationId.ToString("D"));
-            insert.Parameters.AddWithValue("$parent", intent.ParentEvidenceId.ToString("D"));
-            insert.Parameters.AddWithValue("$protection", intent.ParentPermissionOperationId.ToString("D"));
+            insert.Parameters.AddWithValue("$original", intent.BornParent is null ? intent.ParentEvidenceId.ToString("D") : DBNull.Value);
+            insert.Parameters.AddWithValue("$protection", intent.BornParent is null ? intent.ParentPermissionOperationId.ToString("D") : DBNull.Value);
+            insert.Parameters.AddWithValue("$born", (object?)intent.BornParent?.BirthOperationId.ToString("D") ?? DBNull.Value);
+            insert.Parameters.AddWithValue("$epoch", (object?)intent.BornParent?.ProtectionId.ToString("D") ?? DBNull.Value);
+            insert.Parameters.AddWithValue("$kind", intent.BornParent is null ? 0 : 1);
+            insert.Parameters.AddWithValue("$parent", NamespaceBirthParentId(intent).ToString("D"));
             insert.Parameters.AddWithValue("$path", intent.RelativePath.ToUpperInvariant());
             insert.Parameters.AddWithValue("$child", intent.RelativePath[(intent.RelativePath.LastIndexOf('/') + 1)..].ToUpperInvariant());
             insert.Parameters.AddWithValue("$payload", payload);
@@ -80,12 +93,26 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task<MirrorPulseNamespaceBirthIntent?> ReadNamespaceBirthCoreAsync(Guid operationId,
         SqliteTransaction? transaction, CancellationToken token)
     {
+        var intent = await ReadNamespaceBirthRowAsync(operationId, transaction, token).ConfigureAwait(false);
+        if (intent is null) return null;
+        try { _ = await ValidateNamespaceBirthParentAsync(intent, transaction, token).ConfigureAwait(false); }
+        catch (Exception exception) when (exception is InvalidOperationException or FileNotFoundException)
+        {
+            throw new InvalidDataException("The historical birth admission lost its direct parent protection.", exception);
+        }
+        return intent;
+    }
+
+    private async Task<MirrorPulseNamespaceBirthIntent?> ReadNamespaceBirthRowAsync(Guid operationId,
+        SqliteTransaction? transaction, CancellationToken token)
+    {
         MirrorPulseNamespaceBirthIntent intent;
         await using (SqliteCommand query = _connection.CreateCommand())
         {
             query.Transaction = transaction;
             query.CommandText = """
-                SELECT operation_id,parent_evidence_id,parent_operation_id,relative_path_key,payload,fingerprint
+                SELECT operation_id,parent_evidence_id,parent_operation_id,relative_path_key,payload,fingerprint,
+                    parent_birth_operation_id,parent_birth_protection_id
                 FROM namespace_birth_intents WHERE operation_id=$operation;
                 """;
             query.Parameters.AddWithValue("$operation", operationId.ToString("D"));
@@ -108,40 +135,20 @@ public sealed partial class MirrorPulseProductCatalog
             }
             string pathKey = intent.RelativePath.ToUpperInvariant();
             if (intent.OperationId != operationId || intent.OperationId.ToString("D") != reader.GetString(0) ||
-                intent.ParentEvidenceId.ToString("D") != reader.GetString(1) ||
-                intent.ParentPermissionOperationId.ToString("D") != reader.GetString(2) ||
+                (intent.BornParent is null ? intent.ParentEvidenceId.ToString("D") : null) != (reader.IsDBNull(1) ? null : reader.GetString(1)) ||
+                (intent.BornParent is null ? intent.ParentPermissionOperationId.ToString("D") : null) != (reader.IsDBNull(2) ? null : reader.GetString(2)) ||
+                intent.BornParent?.BirthOperationId.ToString("D") != (reader.IsDBNull(6) ? null : reader.GetString(6)) ||
+                intent.BornParent?.ProtectionId.ToString("D") != (reader.IsDBNull(7) ? null : reader.GetString(7)) ||
                 pathKey != reader.GetString(3) ||
                 !JsonSerializer.SerializeToUtf8Bytes(intent, TopologyJsonOptions).AsSpan().SequenceEqual(payload))
                 throw new InvalidDataException("The birth admission's index or canonical payload is inconsistent.");
         }
-        try { _ = await ValidateNamespaceBirthParentAsync(intent, transaction, token).ConfigureAwait(false); }
-        catch (Exception exception) when (exception is InvalidOperationException or FileNotFoundException)
-        {
-            throw new InvalidDataException("The historical birth admission lost its original parent protection.", exception);
-        }
         return intent;
     }
 
-    private async Task<MirrorPulseNamespacePermissionChange> ValidateNamespaceBirthParentAsync(
+    private Task<NamespaceBirthParent> ValidateNamespaceBirthParentAsync(
         MirrorPulseNamespaceBirthIntent intent, SqliteTransaction? transaction, CancellationToken token)
-    {
-        var original = await ReadPermissionBaselineCoreAsync(intent.ParentEvidenceId, token, transaction).ConfigureAwait(false)
-            ?? throw new FileNotFoundException("Original parent permissions are required before birth admission.");
-        var parent = await ReadPermissionChangeCoreAsync(intent.ParentPermissionOperationId, token, transaction).ConfigureAwait(false)
-            ?? throw new FileNotFoundException("Verified parent protection is required before birth admission.");
-        string parentPath = parent.Intent.RelativePath;
-        int separator = intent.RelativePath.LastIndexOf('/');
-        string actualParent = separator < 0 ? string.Empty : intent.RelativePath[..separator];
-        if (!original.IsDirectory || original.LocalObject != intent.ParentLocalObject ||
-            parent.Intent.EvidenceId != original.EvidenceId || parent.Intent.LocalObject != original.LocalObject ||
-            parent.Phase != MirrorPulseNamespacePermissionPhase.Verified ||
-            parent.Intent.Kind == MirrorPulseNamespacePermissionChangeKind.Restore ||
-            parent.Intent.RoleSid != intent.RoleSid || intent.PreparedAt < parent.Verification!.ObservedAt ||
-            !string.Equals(parentPath, actualParent, StringComparison.Ordinal) ||
-            (parent.Intent.RootId is null ? !intent.IsDirectory || separator >= 0 : parent.Intent.RootId != intent.RootId))
-            throw new InvalidOperationException("Birth admission must name a direct child of its verified protected parent.");
-        return parent;
-    }
+        => ValidateNamespaceBirthLineageAsync(intent, null, false, transaction, token);
 
     private static void ValidateNamespaceBirth(MirrorPulseNamespaceBirthIntent intent)
     {
@@ -149,8 +156,10 @@ public sealed partial class MirrorPulseProductCatalog
         ValidatePermissionSid(intent.RoleSid, role: true);
         // No child binding exists before native creation. Validate the name without fabricating one.
         ValidatePermissionRelativePath(intent.RelativePath);
-        if (intent.Version != 1 || intent.OperationId == Guid.Empty || intent.RootId.Value == Guid.Empty ||
-            intent.ParentEvidenceId == Guid.Empty || intent.ParentPermissionOperationId == Guid.Empty ||
+        if (!(intent.Version == 1 && intent.BornParent is null && intent.ParentEvidenceId != Guid.Empty && intent.ParentPermissionOperationId != Guid.Empty ||
+            intent.Version == 2 && intent.ParentEvidenceId == Guid.Empty && intent.ParentPermissionOperationId == Guid.Empty &&
+            intent.BornParent is { BirthOperationId: var parent, ProtectionId: var epoch } && parent != Guid.Empty && epoch != Guid.Empty && parent != intent.OperationId) ||
+            intent.OperationId == Guid.Empty || intent.RootId.Value == Guid.Empty ||
             intent.PreparedAt == default || !Enum.IsDefined(intent.Origin) ||
             string.IsNullOrWhiteSpace(intent.RelativePath))
             throw new ArgumentException("The birth admission requires one exact relative child location.", nameof(intent));
@@ -159,12 +168,8 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task ValidateNamespaceBirthCurrentParentAsync(MirrorPulseNamespaceBirthIntent intent,
         SqliteTransaction transaction, CancellationToken token)
     {
-        var parent = await ValidateNamespaceBirthParentAsync(intent, transaction, token).ConfigureAwait(false);
-        var history = await ReadPermissionChangesCoreAsync(intent.ParentEvidenceId, token, transaction).ConfigureAwait(false);
-        if (history.Count == 0 || history[^1].Intent.OperationId != parent.Intent.OperationId)
-            throw new InvalidOperationException("Birth admission requires the parent's latest verified protection.");
-        var original = await ReadPermissionBaselineCoreAsync(intent.ParentEvidenceId, token, transaction).ConfigureAwait(false)
-            ?? throw new InvalidDataException("The original parent evidence is missing.");
-        await ValidatePermissionTreeAdmissionAsync(original, parent.Intent, transaction, token).ConfigureAwait(false);
+        _ = await ValidateNamespaceBirthLineageAsync(intent, null, true, transaction, token).ConfigureAwait(false);
     }
+
+    private static Guid NamespaceBirthParentId(MirrorPulseNamespaceBirthIntent birth) => birth.BornParent?.BirthOperationId ?? birth.ParentEvidenceId;
 }

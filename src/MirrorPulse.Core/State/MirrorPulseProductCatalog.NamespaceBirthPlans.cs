@@ -141,6 +141,18 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task<MirrorPulseNamespaceBirthPlan?> ReadNamespaceBirthPlanCoreAsync(Guid operationId,
         SqliteTransaction? transaction, CancellationToken token)
     {
+        var plan = await ReadNamespaceBirthPlanRowAsync(operationId, transaction, token).ConfigureAwait(false);
+        if (plan is null) return null;
+        var birth = await ReadNamespaceBirthCoreAsync(operationId, transaction, token).ConfigureAwait(false)
+            ?? throw new InvalidDataException("The birth identity plan lost its original admission.");
+        try { ValidateNamespaceBirthPlanReference(plan, birth); }
+        catch (InvalidOperationException exception) { throw new InvalidDataException("The birth identity plan reference is inconsistent.", exception); }
+        return plan;
+    }
+
+    private async Task<MirrorPulseNamespaceBirthPlan?> ReadNamespaceBirthPlanRowAsync(Guid operationId,
+        SqliteTransaction? transaction, CancellationToken token)
+    {
         var artifact = await ReadNamespaceBirthArtifactCoreAsync(operationId, isPlan: true, transaction, token).ConfigureAwait(false);
         if (artifact is null) return null;
         MirrorPulseNamespaceBirthPlan plan;
@@ -155,14 +167,21 @@ public sealed partial class MirrorPulseProductCatalog
         if (plan.OperationId != operationId || plan.ItemId.ToString("D") != artifact.Value.ItemId ||
             !JsonSerializer.SerializeToUtf8Bytes(plan, TopologyJsonOptions).AsSpan().SequenceEqual(artifact.Value.Payload))
             throw new InvalidDataException("The birth identity plan's index or canonical payload is inconsistent.");
-        var birth = await ReadNamespaceBirthCoreAsync(operationId, transaction, token).ConfigureAwait(false)
-            ?? throw new InvalidDataException("The birth identity plan lost its original admission.");
-        try { ValidateNamespaceBirthPlanReference(plan, birth); }
-        catch (InvalidOperationException exception) { throw new InvalidDataException("The birth identity plan reference is inconsistent.", exception); }
         return plan;
     }
 
     private async Task<MirrorPulseNamespaceBirthStart?> ReadNamespaceBirthStartCoreAsync(Guid operationId,
+        SqliteTransaction? transaction, CancellationToken token)
+    {
+        var start = await ReadNamespaceBirthStartRowAsync(operationId, transaction, token).ConfigureAwait(false);
+        if (start is null) return null;
+        var plan = await ReadNamespaceBirthPlanCoreAsync(operationId, transaction, token).ConfigureAwait(false)
+            ?? throw new InvalidDataException("The birth start intent lost its original plan.");
+        if (start.StartedAt < plan.PreparedAt) throw new InvalidDataException("The birth start intent predates its original plan.");
+        return start;
+    }
+
+    private async Task<MirrorPulseNamespaceBirthStart?> ReadNamespaceBirthStartRowAsync(Guid operationId,
         SqliteTransaction? transaction, CancellationToken token)
     {
         var artifact = await ReadNamespaceBirthArtifactCoreAsync(operationId, isPlan: false, transaction, token).ConfigureAwait(false);
@@ -179,9 +198,6 @@ public sealed partial class MirrorPulseProductCatalog
         if (start.OperationId != operationId || !JsonSerializer.SerializeToUtf8Bytes(start, TopologyJsonOptions)
             .AsSpan().SequenceEqual(artifact.Value.Payload))
             throw new InvalidDataException("The birth start intent's index or canonical payload is inconsistent.");
-        var plan = await ReadNamespaceBirthPlanCoreAsync(operationId, transaction, token).ConfigureAwait(false)
-            ?? throw new InvalidDataException("The birth start intent lost its original plan.");
-        if (start.StartedAt < plan.PreparedAt) throw new InvalidDataException("The birth start intent predates its original plan.");
         return start;
     }
 
@@ -210,8 +226,9 @@ public sealed partial class MirrorPulseProductCatalog
     {
         await using SqliteCommand query = _connection.CreateCommand();
         query.Transaction = transaction;
-        query.CommandText = "SELECT operation_id FROM namespace_birth_reservations WHERE parent_evidence_id=$parent AND child_name_key=$child;";
-        query.Parameters.AddWithValue("$parent", birth.ParentEvidenceId.ToString("D"));
+        query.CommandText = "SELECT operation_id FROM namespace_birth_reservations WHERE parent_kind=$kind AND parent_id=$parent AND child_name_key=$child;";
+        query.Parameters.AddWithValue("$kind", birth.BornParent is null ? 0 : 1);
+        query.Parameters.AddWithValue("$parent", NamespaceBirthParentId(birth).ToString("D"));
         query.Parameters.AddWithValue("$child", birth.RelativePath[(birth.RelativePath.LastIndexOf('/') + 1)..].ToUpperInvariant());
         if ((string?)await query.ExecuteScalarAsync(token).ConfigureAwait(false) != birth.OperationId.ToString("D"))
             throw new InvalidOperationException("The original birth no longer owns its pending child name.");
