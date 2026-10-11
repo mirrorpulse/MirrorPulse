@@ -177,7 +177,7 @@ protected operation; ordinary content access is granted only after conversion.
 Directories inherit the already protected parent and use public conversion.
 The fixture requires actual local `Create` journal records with the planned IDs,
 unchanged native bindings, retained bytes, denied aliases and recovery across
-two CfSharp owners. No product-generated copy of the private journal payload is
+reopened CfSharp owners. No product-generated copy of the private journal payload is
 used. These component checks do not enable strict production Host protection or
 deliver the controlled CLI operations; durable conversion admission, current
 membership and complete operation recovery remain required before that activation.
@@ -191,3 +191,12 @@ parents, verifies inherited protection under the new role and retains the first
 birth and epoch. This path performs no conversion, ACL write, hydration or
 journal acknowledgement. The caller must still retain the Host's shared actor
 and lifetime guards; recorded epochs alone do not authorize future mutations.
+
+For a born direct parent, verification also checks its original public directory
+identity against the current native binding and latest separate protection
+epoch. Original-parent and born-parent references remain distinct. The native
+birth fixture requires a further nested directory chain and resident file,
+followed by a third CfSharp owner: original identities, bytes, reservations and
+local `Create` journal IDs must survive; ordinary creation, deletion and rename
+must remain denied. These checks still do not establish Host activation or the
+controlled CLI operation paths.
