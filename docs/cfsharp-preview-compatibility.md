@@ -208,5 +208,12 @@ identity while completing public same-object conversion. A metadata-only owner
 handoff must grant no normal content access before placeholder preparation. The
 first placeholder observation is deferred until another official-store reopen;
 the historical conversion intent and original journal operations remain intact.
-This is a technical recovery probe. Production recovery still requires a durable
-action before any handoff write, shared namespace admission and Host integration.
+The fixture invokes the production staged recovery coordinator, which persists
+the original action before the owner-metadata write and independently records
+native verification. It requires recovery after cancellation before writing,
+interruption after role handoff, a failed protected callback after conversion,
+and native success without a verification record. Repeated recovery must preserve
+the identity and bytes without another conversion or ACL write. First observation
+remains deferred across the next owner. Shared Host namespace admission, current
+membership, strict startup and controlled CLI integration remain separate work;
+these component assertions do not establish Host readiness.

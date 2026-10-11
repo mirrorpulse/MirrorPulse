@@ -348,6 +348,16 @@ reports verification only for its latest action. These finite observations do
 not establish current tree membership, release the reservation, accept source
 content or acknowledge any journal entry. Upgrades create no historical facts.
 
+Staged execution admission is separate from historical replay: it requires the
+latest action, no first birth observation, current direct-parent protection,
+capture fences and the original reservation. The native coordinator derives
+the current role-only and inherited policies, verifies the retained object and
+parent, and performs the sole ordinary-file owner-metadata handoff before public
+CfSharp same-object conversion. Failed or incomplete receipts remain pending.
+Successful conversion is independently inspected before verification is stored;
+replay keeps the original facts and avoids redundant ACL writes. This component
+does not supply the Host's shared actor, enable a root or publish a first birth.
+
 ## Remaining work
 
 Package inventories, entrypoints and locale resources use one canonical Windows

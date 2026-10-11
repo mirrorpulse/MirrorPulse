@@ -80,6 +80,33 @@ public sealed partial class MirrorPulseProductCatalog
         finally { _gate.Release(); }
     }
 
+    /// <summary>Checks current admission independently of immutable historical action replay.</summary>
+    /// <remarks>The Host must retain its namespace actor and lifetime guards across native work.</remarks>
+    public async Task<MirrorPulseNamespaceBirthRecoveryAction> ValidateNamespaceBirthRecoveryExecutionAsync(Guid recoveryId,
+        CancellationToken cancellationToken = default)
+    {
+        if (recoveryId == Guid.Empty) throw new ArgumentException("A recovery ID is required.", nameof(recoveryId));
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            using SqliteTransaction transaction = _connection.BeginTransaction();
+            var action = await ReadNamespaceBirthRecoveryActionCoreAsync(recoveryId, transaction, cancellationToken).ConfigureAwait(false)
+                ?? throw new FileNotFoundException("The original recovery action is missing.");
+            var latest = await ReadLatestNamespaceBirthRecoveryActionCoreAsync(action.BirthOperationId, transaction, cancellationToken).ConfigureAwait(false);
+            var birth = await ReadNamespaceBirthCoreAsync(action.BirthOperationId, transaction, cancellationToken).ConfigureAwait(false)
+                ?? throw new InvalidDataException("The original birth disappeared during admission.");
+            if (latest?.RecoveryId != recoveryId ||
+                await ReadNamespaceBirthObservationCoreAsync(birth.OperationId, transaction, cancellationToken).ConfigureAwait(false) is not null)
+                throw new InvalidOperationException("Staged execution requires the latest action before first birth observation.");
+            _ = await ValidateNamespaceBirthLineageAsync(birth, null, true, RecoveryParentClaim(action), transaction, cancellationToken).ConfigureAwait(false);
+            await RequireNamespaceBirthReservationAsync(birth, transaction, cancellationToken).ConfigureAwait(false);
+            transaction.Commit();
+            return action;
+        }
+        finally { _gate.Release(); }
+    }
+
     public async Task<MirrorPulseNamespaceBirthRecoveryAction?> ReadLatestNamespaceBirthRecoveryActionAsync(Guid birthOperationId,
         CancellationToken cancellationToken = default)
     {

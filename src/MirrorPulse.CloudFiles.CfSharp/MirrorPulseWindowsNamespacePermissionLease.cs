@@ -52,6 +52,10 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLease : IMirror
 
     private static async Task<MirrorPulseWindowsNamespacePermissionLease> OpenCoreAsync(CloudItem item,
         MirrorPulseRootRouter router, bool metadataOnlyTarget, CancellationToken cancellationToken)
+        => await OpenCoreAsync(item, router, metadataOnlyTarget, ownerMetadataWrite: false, cancellationToken).ConfigureAwait(false);
+
+    private static async Task<MirrorPulseWindowsNamespacePermissionLease> OpenCoreAsync(CloudItem item,
+        MirrorPulseRootRouter router, bool metadataOnlyTarget, bool ownerMetadataWrite, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(item);
         ArgumentNullException.ThrowIfNull(router);
@@ -91,7 +95,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLease : IMirror
                 cancellationToken.ThrowIfCancellationRequested();
                 if (index >= 0) current = Path.Combine(current, parts[index]);
                 bool target = index == parts.Length - 1;
-                SafeFileHandle handle = Open(current, target, metadataOnlyTarget);
+                SafeFileHandle handle = Open(current, target, metadataOnlyTarget, ownerMetadataWrite);
                 handles.Add(handle);
                 AttributeTag attributes = ReadAttributes(handle);
                 if ((attributes.Attributes & DirectoryAttribute) == 0 && (!target || item.Kind == CloudItemKind.Directory) ||
@@ -126,8 +130,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLease : IMirror
         cancellationToken.ThrowIfCancellationRequested();
         uint linkCount = ValidateRetainedHandle(_target);
         var descriptor = new HandleSecurity(_target, _isDirectory);
-        string owner = ((SecurityIdentifier?)descriptor.GetOwner(typeof(SecurityIdentifier)))?.Value
-            ?? throw new InvalidDataException("The retained namespace object has no owner SID.");
+        string owner = ReadOwnerSid(binding);
         return new(new(binding.VolumeSerialNumber, binding.SyncRootFileId, binding.LocalFileId), _rootId,
             _item.RelativePath.Replace('\\', '/'), _isDirectory, owner,
             descriptor.GetSecurityDescriptorSddlForm(AccessControlSections.Access), DateTimeOffset.UtcNow)
@@ -165,13 +168,14 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLease : IMirror
         return ValueTask.CompletedTask;
     }
 
-    internal static SafeFileHandle Open(string path, bool target, bool metadataOnlyTarget = false)
+    internal static SafeFileHandle Open(string path, bool target, bool metadataOnlyTarget = false, bool ownerMetadataWrite = false)
     {
         // Ancestors and legacy targets request read-data without reading content, retaining
         // their names against replacement. The protected target requests only read-only
-        // metadata; CfSharp owns its data-sharing protection and DACL writes. Reparse-object
+        // metadata; the staged ordinary-file handoff separately adds owner WRITE_DAC.
+        // CfSharp owns placeholder data-sharing protection and DACL writes. Reparse-object
         // and no-recall flags keep cold metadata operations offline.
-        uint access = ReadAttributesAccess | (target && metadataOnlyTarget ? ReadControl :
+        uint access = ReadAttributesAccess | (target && metadataOnlyTarget ? ReadControl | (ownerMetadataWrite ? WriteDacl : 0) :
             ReadDataOrListDirectory | (target ? ReadControl | WriteDacl : 0));
         SafeFileHandle handle = CreateFile(path, access,
             ShareRead | ShareWrite, nint.Zero, OpenExisting, OpenReparsePoint | OpenNoRecall | BackupSemantics, nint.Zero);
