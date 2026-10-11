@@ -327,6 +327,18 @@ handle alone does not freeze the object's name, so production recovery also
 needs the Host's shared namespace actor and durable object-binding admission.
 The fixture does not establish Cloud Files conversion recovery or Host integration.
 
+Catalog schema 33 retains immutable recovery actions for staged local files before
+any owner-metadata handoff. Each action references the first recorded ordinary
+binding and owner, its exact direct parent, and the latest preceding action.
+The first expected descriptor must be the recorded birth descriptor; subsequent
+expectations must match a descriptor already owned by the preceding intent.
+New admission requires the current parent protection and capture fences, while
+historical action replay preserves the original records. Recovery scans report
+the latest action without claiming that any native write or conversion occurred.
+This ledger does not derive native policy, grant access, replace a missing binding,
+release a reservation or establish Host readiness. The native coordinator must
+independently verify the original object and record actual completion facts.
+
 ## Remaining work
 
 Package inventories, entrypoints and locale resources use one canonical Windows

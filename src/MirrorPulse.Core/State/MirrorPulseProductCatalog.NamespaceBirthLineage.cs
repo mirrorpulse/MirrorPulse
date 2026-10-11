@@ -10,26 +10,36 @@ public sealed partial class MirrorPulseProductCatalog
         MirrorPulseNamespacePermissionBaseline? Original, MirrorPulseNamespacePermissionChange? Permission,
         MirrorPulseNamespaceBirthIntent? Birth, MirrorPulseNamespaceBirthProtection? Protection);
 
+    // A new recovery intent can claim a current parent without rewriting the original birth
+    // or inventing a placeholder observation for an ordinary object.
+    private sealed record NamespaceBirthParentClaim(Guid ParentPermissionOperationId,
+        MirrorPulseNamespaceBornParent? BornParent, string RoleSid, DateTimeOffset ClaimedAt);
+
     // Resolve the referenced graph iteratively. A born parent must be one exact, shorter
     // directory path. Do not recursively enumerate histories or impose a new nesting limit.
-    private async Task<NamespaceBirthParent> ValidateNamespaceBirthLineageAsync(MirrorPulseNamespaceBirthIntent birth,
+    private Task<NamespaceBirthParent> ValidateNamespaceBirthLineageAsync(MirrorPulseNamespaceBirthIntent birth,
         MirrorPulseNamespaceBirthProtection? protection, bool requireCurrentParent,
+        SqliteTransaction? transaction, CancellationToken token) =>
+        ValidateNamespaceBirthLineageAsync(birth, protection, requireCurrentParent, null, transaction, token);
+
+    private async Task<NamespaceBirthParent> ValidateNamespaceBirthLineageAsync(MirrorPulseNamespaceBirthIntent birth,
+        MirrorPulseNamespaceBirthProtection? protection, bool requireCurrentParent, NamespaceBirthParentClaim? directParentClaim,
         SqliteTransaction? transaction, CancellationToken token)
     {
-        var pending = new Stack<(MirrorPulseNamespaceBirthIntent Birth, MirrorPulseNamespaceBirthProtection? Protection, bool Current, bool CheckPrevious)>();
+        var pending = new Stack<(MirrorPulseNamespaceBirthIntent Birth, MirrorPulseNamespaceBirthProtection? Protection, bool Current, bool CheckPrevious, NamespaceBirthParentClaim? Claim)>();
         var visited = new HashSet<(Guid Birth, Guid Protection, bool Current, bool CheckPrevious)>();
-        pending.Push((birth, protection, requireCurrentParent, false));
+        pending.Push((birth, protection, requireCurrentParent, false, directParentClaim));
         NamespaceBirthParent? first = null;
         while (pending.TryPop(out var node))
         {
             token.ThrowIfCancellationRequested();
             if (!visited.Add((node.Birth.OperationId, node.Protection?.ProtectionId ?? Guid.Empty, node.Current, node.CheckPrevious))) continue;
-            var parent = await ResolveNamespaceBirthParentAsync(node.Birth, node.Protection, transaction, token).ConfigureAwait(false);
+            var parent = await ResolveNamespaceBirthParentAsync(node.Birth, node.Protection, node.Claim, transaction, token).ConfigureAwait(false);
             first ??= parent;
             int separator = node.Birth.RelativePath.LastIndexOf('/');
             string parentPath = separator < 0 ? string.Empty : node.Birth.RelativePath[..separator];
-            string role = node.Protection?.RoleSid ?? node.Birth.RoleSid;
-            DateTimeOffset observedAt = node.Protection?.Verification.ObservedAt ?? node.Birth.PreparedAt;
+            string role = node.Claim?.RoleSid ?? node.Protection?.RoleSid ?? node.Birth.RoleSid;
+            DateTimeOffset observedAt = node.Claim?.ClaimedAt ?? node.Protection?.Verification.ObservedAt ?? node.Birth.PreparedAt;
             if (!parent.IsDirectory || parent.LocalObject != node.Birth.ParentLocalObject || parent.RelativePath != parentPath ||
                 parent.RoleSid != role || observedAt < parent.VerifiedAt ||
                 (parent.RootId is null ? !node.Birth.IsDirectory || separator >= 0 : parent.RootId != node.Birth.RootId))
@@ -43,7 +53,7 @@ public sealed partial class MirrorPulseProductCatalog
                 if (childProtection.BirthOperationId != node.Birth.OperationId || childProtection.Verification.LocalObject != observation.LocalObject ||
                     childProtection.Verification.OwnerSid != observation.OwnerSid || childProtection.Verification.ObservedAt < observation.ObservedAt)
                     throw new InvalidOperationException("Birth protection must retain the original native object and owner.");
-                pending.Push((node.Birth, null, false, false));
+                pending.Push((node.Birth, null, false, false, null));
                 if (node.CheckPrevious && childProtection.PreviousProtectionId is { } previousId)
                 {
                     var previous = await ReadNamespaceBirthProtectionRowAsync(previousId, transaction, token).ConfigureAwait(false)
@@ -53,7 +63,7 @@ public sealed partial class MirrorPulseProductCatalog
                     if (previous.Sequence >= current.Sequence || previous.Protection.BirthOperationId != childProtection.BirthOperationId ||
                         previous.Protection.Verification.ObservedAt > childProtection.Verification.ObservedAt)
                         throw new InvalidDataException("The parent protection predecessor is inconsistent.");
-                    pending.Push((node.Birth, previous.Protection, false, false));
+                    pending.Push((node.Birth, previous.Protection, false, false, null));
                 }
             }
             if (node.Current)
@@ -77,23 +87,24 @@ public sealed partial class MirrorPulseProductCatalog
                 }
             }
             if (parent.Birth is { } parentBirth)
-                pending.Push((parentBirth, parent.Protection, node.Current, true));
+                pending.Push((parentBirth, parent.Protection, node.Current, true, null));
         }
         return first ?? throw new InvalidDataException("The direct parent is missing.");
     }
 
     private async Task<NamespaceBirthParent> ResolveNamespaceBirthParentAsync(MirrorPulseNamespaceBirthIntent birth,
-        MirrorPulseNamespaceBirthProtection? protection, SqliteTransaction? transaction, CancellationToken token)
+        MirrorPulseNamespaceBirthProtection? protection, NamespaceBirthParentClaim? claim,
+        SqliteTransaction? transaction, CancellationToken token)
     {
-        var born = protection?.BornParent ?? birth.BornParent;
-        if (protection is not null && (protection.BornParent?.BirthOperationId != birth.BornParent?.BirthOperationId ||
-            (protection.BornParent is null) != (birth.BornParent is null)))
-            throw new InvalidOperationException("Protection cannot substitute another stable direct parent.");
+        var born = claim is not null ? claim.BornParent : protection is not null ? protection.BornParent : birth.BornParent;
+        if ((protection is not null || claim is not null) &&
+            (born?.BirthOperationId != birth.BornParent?.BirthOperationId || (born is null) != (birth.BornParent is null)))
+            throw new InvalidOperationException("Protection or recovery cannot substitute another stable direct parent.");
         if (born is null)
         {
             var original = await ReadPermissionBaselineCoreAsync(birth.ParentEvidenceId, token, transaction).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The original parent permissions are missing.");
-            var permission = await ReadPermissionChangeCoreAsync(protection?.ParentPermissionOperationId ?? birth.ParentPermissionOperationId, token, transaction).ConfigureAwait(false)
+            var permission = await ReadPermissionChangeCoreAsync(claim?.ParentPermissionOperationId ?? protection?.ParentPermissionOperationId ?? birth.ParentPermissionOperationId, token, transaction).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("Verified direct-parent protection is missing.");
             if (permission.Intent.EvidenceId != original.EvidenceId || permission.Intent.LocalObject != original.LocalObject ||
                 permission.Phase != MirrorPulseNamespacePermissionPhase.Verified || permission.Intent.Kind == MirrorPulseNamespacePermissionChangeKind.Restore)
