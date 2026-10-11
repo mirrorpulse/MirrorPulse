@@ -339,6 +339,15 @@ This ledger does not derive native policy, grant access, replace a missing bindi
 release a reservation or establish Host readiness. The native coordinator must
 independently verify the original object and record actual completion facts.
 
+Schema 34 retains those independent native verification facts separately from
+the recovery intent. Each record must refer to the latest action, its first
+native object binding, owner, planned public identity and converted descriptor.
+New facts require the current direct-parent protection and original name
+reservation; historical records remain immutable after role rotation. A scan
+reports verification only for its latest action. These finite observations do
+not establish current tree membership, release the reservation, accept source
+content or acknowledge any journal entry. Upgrades create no historical facts.
+
 ## Remaining work
 
 Package inventories, entrypoints and locale resources use one canonical Windows

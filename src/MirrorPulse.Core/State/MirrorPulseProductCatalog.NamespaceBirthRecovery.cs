@@ -14,6 +14,7 @@ public sealed record MirrorPulseNamespaceBirthRecoveryEntry(long Sequence, Mirro
     public MirrorPulseNamespaceBirthConversionPreparation? ConversionPreparation { get; init; }
     public MirrorPulseNamespaceBirthProtection? LatestProtection { get; init; }
     public MirrorPulseNamespaceBirthRecoveryAction? LatestRecoveryAction { get; init; }
+    public MirrorPulseNamespaceBirthRecoveryVerification? LatestRecoveryVerification { get; init; }
 }
 
 public sealed record MirrorPulseNamespaceBirthRecoveryPage(IReadOnlyList<MirrorPulseNamespaceBirthRecoveryEntry> Entries,
@@ -105,6 +106,8 @@ public sealed partial class MirrorPulseProductCatalog
                     ConversionPreparation = conversion,
                     LatestProtection = protection,
                     LatestRecoveryAction = recovery,
+                    LatestRecoveryVerification = recovery is null ? null :
+                        await ReadNamespaceBirthRecoveryVerificationCoreAsync(recovery.RecoveryId, transaction, cancellationToken).ConfigureAwait(false),
                 });
             }
             transaction.Commit();
