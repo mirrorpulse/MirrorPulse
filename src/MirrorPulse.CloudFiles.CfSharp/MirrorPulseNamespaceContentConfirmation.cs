@@ -46,15 +46,75 @@ public sealed class MirrorPulseNamespaceContentConfirmation(MirrorPulseProductCa
                 mutation.Intent.InstanceId != route.InstanceId || mutation.Intent.RootKey != route.RootKey ||
                 (await catalog.ReadNamespaceRecoveryRootsAsync(token).ConfigureAwait(false)).Contains(member.RootId.Value))
                 throw new InvalidOperationException("Content confirmation requires this member's committed location and unfenced owning root.");
-            MirrorPulseContentConfirmationReceipt receipt = null!;
-            await namespaceExecution.RunNamespaceOperationAsync(async () =>
-            {
-                receipt = await ConfirmAndSaveAsync(file, proof, token).ConfigureAwait(false);
-                if (receipt.MayAcknowledge)
-                    await RetainConfirmedIdentityAsync(catalog, proof, receipt, namespaceActor, CancellationToken.None).ConfigureAwait(false);
-            }).ConfigureAwait(false);
-            return receipt;
+            return await ConfirmProtectedMemberAsync(file, proof, member, location, namespaceExecution, namespaceActor, token).ConfigureAwait(false);
         }, cancellationToken).ConfigureAwait(false);
+    }
+
+    [SupportedOSPlatform("windows10.0.26100")]
+    private async Task<MirrorPulseContentConfirmationReceipt> ConfirmProtectedMemberAsync(CloudFile file,
+        MirrorPulseContentAcceptanceProof proof, MirrorPulseNamespaceMemberRegistration member,
+        MirrorPulseNamespaceMemberLocation location, MirrorPulseNamespaceExecutionSession execution,
+        MirrorPulseNamespaceActor actor, CancellationToken token)
+    {
+        // Validate durable acceptance and predecessor identity before the public native mark.
+        if (await catalog.ReadContentAcceptanceProofAsync(proof.OperationId, token).ConfigureAwait(false) != proof ||
+            proof.UploadBinding.Preparation != MirrorPulseContentPreparation.ReplacePlaceholderIdentity)
+            throw new InvalidDataException("Protected confirmation requires its retained upload proof and previous public identity.");
+        var identity = await catalog.ReadNamespaceMemberIdentityAsync(member.MemberId, token).ConfigureAwait(false);
+        var previous = CloudPlaceholderIdentity.Decode(Convert.FromBase64String(proof.UploadBinding.PreviousPlaceholderIdentity!));
+        bool replay = identity.AcceptanceOperationId == proof.OperationId;
+        if (replay ? identity.ItemId != proof.AcceptedItemId || identity.RemoteId != proof.RemoteId :
+            identity.ItemId != previous.ItemId || identity.RemoteId != previous.RemoteId)
+            throw new InvalidDataException("Protected confirmation cannot rewrite a superseded member identity.");
+        var childProof = await MirrorPulseNamespaceProtectionProofReader.ReadMemberAsync(catalog, member, token).ConfigureAwait(false);
+        var parentMember = await catalog.ReadNamespaceMemberAsync(location.ParentMemberId!.Value, token).ConfigureAwait(false)
+            ?? throw new FileNotFoundException("The committed confirmation parent is missing.");
+        var parentLocation = await catalog.ReadNamespaceMemberLocationAsync(parentMember.MemberId, token).ConfigureAwait(false);
+        var parentProof = await MirrorPulseNamespaceProtectionProofReader.ReadMemberAsync(catalog, parentMember, token).ConfigureAwait(false);
+        CloudDirectory parent = file.Parent ?? throw new InvalidDataException("Confirmation requires the actual direct parent.");
+        if (parent.RelativePath.Replace('\\', '/') != parentLocation.RelativePath || parentMember.RootId is { } root && root != member.RootId ||
+            childProof.RoleSid != execution.RoleSid.Value || parentProof.RoleSid != execution.RoleSid.Value ||
+            member.OwnerSid != execution.OwnerSid.Value || parentMember.OwnerSid != execution.OwnerSid.Value)
+            throw new InvalidDataException("Confirmation requires the current owner, namespace role and committed direct parent.");
+        MirrorPulseContentConfirmationReceipt receipt = null!;
+        await execution.RunNamespaceOperationAsync(async () =>
+        {
+            await using var parentLease = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(parent, router, token).ConfigureAwait(false);
+            await using var childLease = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(file, router, token).ConfigureAwait(false);
+            var parentBefore = await parentLease.InspectAsync(token).ConfigureAwait(false);
+            RequireProtectedObject(parentBefore, await parent.InspectAsync(token).ConfigureAwait(false), parentMember, parentProof, parentLocation.RelativePath);
+            RequireProtectedObject(await childLease.InspectAsync(token).ConfigureAwait(false), await file.InspectAsync(token).ConfigureAwait(false),
+                member, childProof, location.RelativePath);
+            receipt = await ConfirmAndSaveAsync(file, proof, token).ConfigureAwait(false);
+            if (!receipt.MayAcknowledge) return;
+            CancellationToken durable = CancellationToken.None;
+            RequireProtectedObject(await childLease.InspectAsync(durable).ConfigureAwait(false), await file.InspectAsync(durable).ConfigureAwait(false),
+                member, childProof, location.RelativePath);
+            RequireProtectedObject(await parentLease.InspectAsync(durable).ConfigureAwait(false), await parent.InspectAsync(durable).ConfigureAwait(false),
+                parentMember, parentProof, parentLocation.RelativePath);
+            MirrorPulseNamespaceBirthProtectionVerifier.RequireUnchangedParent(parentBefore, await parentLease.InspectAsync(durable).ConfigureAwait(false));
+            if (await MirrorPulseNamespaceProtectionProofReader.ReadMemberAsync(catalog, member, durable).ConfigureAwait(false) != childProof ||
+                await MirrorPulseNamespaceProtectionProofReader.ReadMemberAsync(catalog, parentMember, durable).ConfigureAwait(false) != parentProof)
+                throw new InvalidDataException("Protection changed across public content confirmation.");
+            actor.AssertAccess();
+            await RetainConfirmedIdentityAsync(catalog, proof, receipt, actor, durable).ConfigureAwait(false);
+        }).ConfigureAwait(false);
+        return receipt;
+    }
+
+    [SupportedOSPlatform("windows10.0.26100")]
+    private static void RequireProtectedObject(MirrorPulseNamespacePermissionObject facts, CloudItemSnapshot snapshot,
+        MirrorPulseNamespaceMemberRegistration member, MirrorPulseNamespaceProtectionProof proof, string path)
+    {
+        if (!snapshot.Exists || snapshot.IsTombstone || snapshot.LocalBinding is not { } binding ||
+            facts.LocalObject != new MirrorPulseLocalFileBinding(binding.VolumeSerialNumber, binding.SyncRootFileId, binding.LocalFileId) ||
+            facts.LocalObject != member.LocalObject || facts.LocalObject != proof.Verification.LocalObject ||
+            facts.OwnerSid != member.OwnerSid || facts.OwnerSid != proof.OwnerSid || facts.OwnerSid != proof.Verification.OwnerSid ||
+            facts.RootId != member.RootId || facts.RootId != proof.RootId || facts.RelativePath != path ||
+            facts.IsDirectory != member.IsDirectory || facts.IsDirectory != proof.IsDirectory ||
+            (snapshot.Kind == CloudItemKind.Directory) != member.IsDirectory || facts.LinkCount != 1 ||
+            facts.Dacl != proof.Verification.Dacl || !MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(proof.ExpectedDacl, facts.Dacl))
+            throw new InvalidDataException("Content confirmation requires the current protected object and its actual committed location.");
     }
 
     private async ValueTask<MirrorPulseContentConfirmationReceipt> ConfirmAndSaveAsync(CloudFile file,

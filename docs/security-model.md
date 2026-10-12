@@ -250,6 +250,11 @@ A started birth without its original binding requires explicit recovery, and an
 occupied destination is never overwritten. This boundary supports empty local
 creation; it does not implement imports, deletion or replacement saves.
 
+Registered-file upload confirmation verifies current child and direct-parent
+bindings, owners and DACLs under metadata and ancestor guards, before the public
+native mark and again before identity correlation. A missing protection epoch,
+changed descriptor or superseded identity cannot authorize a new confirmation.
+
 `mp namespace birth recover RECOVERY_ID` invokes an already retained staged-file
 recovery action through the same Host contract. It reports the drained public
 CfSharp receipt and independently retained verification, returning exit code 11

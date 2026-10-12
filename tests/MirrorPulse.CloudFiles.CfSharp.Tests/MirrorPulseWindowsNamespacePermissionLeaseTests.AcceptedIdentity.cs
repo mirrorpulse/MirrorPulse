@@ -1,3 +1,4 @@
+using System.Security.AccessControl;
 using System.Security.Cryptography;
 using System.Security.Principal;
 using CfSharp;
@@ -84,6 +85,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     acceptedIdentity.RemoteId, revision, bytes.Length, intent.ContentSha256!);
                 await catalog.SaveContentAcceptanceProofAsync(proof, deadline.Token);
                 var confirmation = new MirrorPulseNamespaceContentConfirmation(catalog, router, actor, role);
+                if (owner == 0)
+                    await AssertConfirmationRejectsForeignProtectionAsync(fileSystem, catalog, role, confirmation, file, proof, deadline.Token);
                 var receipt = await confirmation.ConfirmAsync(file, proof, deadline.Token);
                 for (int retry = 1; retry < 3 && receipt.Outcome is MirrorPulseContentConfirmationOutcome.Busy or MirrorPulseContentConfirmationOutcome.ProtectionLost; retry++)
                 {
@@ -123,13 +126,45 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() => File.Delete(fileSystem.GetFile(currentPath).FullPath), deadline.Token));
             }
             Assert.AreEqual(0, source.Reads);
-            TestContext.WriteLine("AcceptedIdentityMove: publicConfirmation=True; fullBinding=True; acceptedItemIdChanged=True; originalMembershipUnchanged=True; officialProjection=True; productionMovePreparation=True; productionMoveCoordinator=True; owners=2; historicalReplayDoesNotRewind=True; strictDeleteDenied=True; fixtureRemoteAcceptance=True; actualWorkerUpload=False; hostIntegrated=False.");
+            TestContext.WriteLine("AcceptedIdentityMove: publicConfirmation=True; currentProtectionBeforeMark=True; foreignChildAndParentAclRejected=True; fullBinding=True; acceptedItemIdChanged=True; originalMembershipUnchanged=True; officialProjection=True; productionMovePreparation=True; productionMoveCoordinator=True; owners=2; historicalReplayDoesNotRewind=True; strictDeleteDenied=True; fixtureRemoteAcceptance=True; actualWorkerUpload=False; hostIntegrated=False.");
         }
         finally
         {
             registry.Unregister(paths.SyncRootPath);
             RestoreSourceContextFixtureForCleanup(directory, paths.SyncRootPath, caller.User!);
             DeleteFixture(directory);
+        }
+    }
+
+    private static async Task AssertConfirmationRejectsForeignProtectionAsync(CloudFileSystem fileSystem, MirrorPulseProductCatalog catalog,
+        MirrorPulseNamespaceExecutionSession role, MirrorPulseNamespaceContentConfirmation confirmation, CloudFile file,
+        MirrorPulseContentAcceptanceProof proof, CancellationToken token)
+    {
+        byte[] before = (await file.InspectAsync(token)).PlaceholderIdentity.ToArray();
+        foreach (CloudItem subject in new CloudItem[] { file, fileSystem.GetDirectory("Docs") })
+        {
+            bool directory = subject.Kind == CloudItemKind.Directory;
+            FileSystemSecurity original = directory ? new DirectoryInfo(subject.FullPath).GetAccessControl(AccessControlSections.Access) :
+                new FileInfo(subject.FullPath).GetAccessControl(AccessControlSections.Access);
+            FileSystemSecurity foreign = directory ? new DirectorySecurity() : new FileSecurity();
+            foreign.SetSecurityDescriptorSddlForm(original.GetSecurityDescriptorSddlForm(AccessControlSections.Access), AccessControlSections.Access);
+            foreign.AddAccessRule(new FileSystemAccessRule(role.OwnerSid, FileSystemRights.Delete, AccessControlType.Allow));
+            try
+            {
+                SetDescriptor(foreign);
+                await Assert.ThrowsAsync<InvalidDataException>(() => confirmation.ConfirmAsync(file, proof, token).AsTask());
+                Assert.IsNull(await catalog.ReadContentConfirmationReceiptAsync(proof.OperationId, token));
+                var observed = await file.InspectAsync(token);
+                CollectionAssert.AreEqual(before, observed.PlaceholderIdentity.ToArray());
+                Assert.AreEqual(CloudSynchronizationState.NotInSync, observed.SynchronizationState);
+            }
+            finally { SetDescriptor(original); }
+
+            void SetDescriptor(FileSystemSecurity descriptor)
+            {
+                if (directory) new DirectoryInfo(subject.FullPath).SetAccessControl((DirectorySecurity)descriptor);
+                else new FileInfo(subject.FullPath).SetAccessControl((FileSecurity)descriptor);
+            }
         }
     }
 
