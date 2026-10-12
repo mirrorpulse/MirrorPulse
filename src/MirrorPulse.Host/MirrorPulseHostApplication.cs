@@ -469,6 +469,8 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
             MirrorPulseControlCommands.RootList, async (_, token) => await ReadRootsAsync(token).ConfigureAwait(false));
         dispatcher.Register<RootRecoverArguments, MirrorPulseControlRootRecovery>(
             MirrorPulseControlCommands.RootRecover, RecoverRootRenameAsync);
+        dispatcher.Register<RootPrepareRenameArguments, MirrorPulseControlRootRenamePreparation>(
+            MirrorPulseControlCommands.RootPrepareRename, PrepareRootRenameAsync);
         dispatcher.Register<NamespaceMemberInspectArguments, MirrorPulseControlNamespaceMemberInspection>(
             MirrorPulseControlCommands.NamespaceMemberInspect, InspectNamespaceMemberAsync);
         dispatcher.Register<NamespaceMemberPrepareMoveArguments, MirrorPulseControlNamespaceMemberMovePreparation>(
@@ -491,6 +493,17 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
         return new(recovery.Intent.OperationId, recovery.Intent.RootId.ToString(), recovery.Intent.Phase.ToString(),
             receipt?.NativeMoveObserved, receipt?.DurableProjectionCommitted, receipt?.RequiresFullRescan,
             receipt?.Outcome.ToString(), receipt?.Stage.ToString(), receipt?.NativeHResult);
+    }
+
+    private async ValueTask<MirrorPulseControlRootRenamePreparation> PrepareRootRenameAsync(
+        RootPrepareRenameArguments arguments, CancellationToken cancellationToken)
+    {
+        if (arguments.RootId == Guid.Empty) throw new ArgumentException("A root ID is required.", nameof(arguments));
+        ArgumentException.ThrowIfNullOrWhiteSpace(arguments.Label);
+        var history = await _session.PrepareManagedRootRenameAsync(
+            RootId.Parse(arguments.RootId.ToString("D")), arguments.Label, cancellationToken).ConfigureAwait(false);
+        return new(history.Intent.OperationId.ToString("D"), history.Intent.RootId.ToString(), history.Intent.SourceName,
+            history.Intent.TargetName, history.Intent.Phase.ToString(), history.Intent.UpdatedAt);
     }
 
     private async ValueTask<MirrorPulseControlNamespaceMemberCreation> CreateNamespaceMemberAsync(

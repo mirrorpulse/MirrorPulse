@@ -222,6 +222,13 @@ public sealed class MirrorPulseCliHostOperations : IMirrorPulseCliHostOperations
                         roots.Select(root => $"{root.Root.Label} · {root.SyncState} · {root.Root.RootId}" +
                             (root.PendingRename is { } pending ? $" · {pending.SourceName} -> {pending.TargetName} ({pending.Phase}) · {pending.OperationId}" : string.Empty)));
                     break;
+                case ("root", "prepare-rename"):
+                    if (command.Arguments.Count != 2 || !Guid.TryParse(command.Arguments[0], out Guid rootId) || rootId == Guid.Empty)
+                        throw new ArgumentException("root prepare-rename requires a root ID and one Label.");
+                    var rootRename = await _client.PrepareRootRenameAsync(rootId, command.Arguments[1], cancellationToken).ConfigureAwait(false);
+                    result = rootRename;
+                    human = $"Root Label rename prepared · {rootRename.OperationId} · {rootRename.SourceName} -> {rootRename.TargetName}";
+                    break;
                 case ("namespace", "member") when command.Path.Count > 2 &&
                     command.Path[2].Equals("inspect", StringComparison.OrdinalIgnoreCase):
                     if (command.Arguments.Count is < 1 or > 2 ||

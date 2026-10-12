@@ -11,6 +11,16 @@ namespace MirrorPulse.Cli.Tests;
 public sealed class MirrorPulseCliRootRecoveryTests
 {
     [TestMethod]
+    public void RootPrepareRenameParsesRootIdAndLabel()
+    {
+        Guid rootId = Guid.NewGuid();
+        var parsed = MirrorPulseCliCommandLine.Parse(["root", "prepare-rename", rootId.ToString("D"), "My Files"]);
+        Assert.IsTrue(parsed.Succeeded);
+        Assert.AreEqual("root prepare-rename", string.Join(' ', parsed.Command!.Path));
+        CollectionAssert.AreEqual(new[] { rootId.ToString("D"), "My Files" }, parsed.Command.Arguments.ToArray());
+    }
+
+    [TestMethod]
     [DataRow("Prepared", 11)]
     [DataRow("NativeObserved", 11)]
     [DataRow("LocalProjected", 11)]

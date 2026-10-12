@@ -42,7 +42,7 @@ public static class MirrorPulseCliCommandLine
             ["host"] = NewSet("status", "start", "stop", "restart"),
             ["instance"] = NewSet("list", "create", "configure", "enable", "disable", "select-version"),
             ["operation"] = NewSet("get", "watch", "cancel"),
-            ["root"] = NewSet("list", "recover"),
+            ["root"] = NewSet("list", "prepare-rename", "recover"),
             ["namespace"] = NewSet("member", "birth"),
             ["sync"] = NewSet("status", "refresh")
         };
@@ -137,7 +137,7 @@ public static class MirrorPulseCliCommandLine
                 commandArguments.Count == 0)
             {
                 bool allowed = commandPath[1].Equals("member", StringComparison.OrdinalIgnoreCase)
-                    ? token.Equals("inspect", StringComparison.OrdinalIgnoreCase) || token.Equals("prepare-move", StringComparison.OrdinalIgnoreCase) || token.Equals("move", StringComparison.OrdinalIgnoreCase) || token.Equals("create", StringComparison.OrdinalIgnoreCase)
+                    ? token.Equals("inspect", StringComparison.OrdinalIgnoreCase) || token.Equals("prepare-move", StringComparison.OrdinalIgnoreCase) || token.Equals("move", StringComparison.OrdinalIgnoreCase) || token.Equals("create", StringComparison.OrdinalIgnoreCase) || token.Equals("prepare-retire", StringComparison.OrdinalIgnoreCase) || token.Equals("retire", StringComparison.OrdinalIgnoreCase)
                     : token.Equals("recover", StringComparison.OrdinalIgnoreCase);
                 if (!allowed)
                     return Failure($"Unknown subcommand '{token}' for 'namespace {commandPath[1]}'.", options);
@@ -209,6 +209,8 @@ public static class MirrorPulseCliHelp
           instance list|create|configure|enable|disable|select-version
                                          Manage Adapter instances.
           root list                      Inspect managed roots and namespace recovery.
+          root prepare-rename ROOT_ID LABEL
+                                         Prepare a Label-only managed root rename.
           root recover OPERATION_ID      Retry an original managed root rename proof.
           namespace member inspect RELATIVE_PATH [--directory]
                                          Look up a registered native member and its parent.

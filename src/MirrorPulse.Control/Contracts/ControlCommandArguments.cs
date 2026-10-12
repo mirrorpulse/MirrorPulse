@@ -80,10 +80,15 @@ public sealed record MirrorPulseControlRoot(
 public sealed record MirrorPulseControlRootRename(string OperationId, string SourceName, string TargetName,
     string Phase, DateTimeOffset UpdatedAt);
 
+public sealed record MirrorPulseControlRootRenamePreparation(string OperationId, string RootId,
+    string SourceName, string TargetName, string Phase, DateTimeOffset UpdatedAt);
+
 public sealed record MirrorPulseControlRootStatus(MirrorPulseControlRoot Root, string SyncState,
     bool RequiresFullRescan, MirrorPulseControlRootRename? PendingRename);
 
 public sealed record RootRecoverArguments(Guid OperationId) : IMirrorPulseControlArguments;
+
+public sealed record RootPrepareRenameArguments(Guid RootId, string Label) : IMirrorPulseControlArguments;
 
 public sealed record NamespaceMemberMoveArguments(Guid OperationId) : IMirrorPulseControlArguments;
 

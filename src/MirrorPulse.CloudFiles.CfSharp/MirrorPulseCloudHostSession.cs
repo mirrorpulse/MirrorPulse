@@ -61,6 +61,11 @@ public interface IMirrorPulseCloudRuntime : IAsyncDisposable
         ValueTask.FromException<MirrorPulseManagedRootRenameRecovery>(
             new NotSupportedException("This Cloud Files runtime does not recover managed root renames."));
 
+    [SupportedOSPlatform("windows10.0.26100")]
+    ValueTask<MirrorPulseRootRenameHistory> PrepareManagedRootRenameAsync(RootId rootId, string label,
+        CancellationToken cancellationToken) => ValueTask.FromException<MirrorPulseRootRenameHistory>(
+            new NotSupportedException("This Cloud Files runtime does not prepare managed root renames."));
+
     ValueTask<MirrorPulseCloudStatusSnapshot> ReadStatusAsync(
         IEnumerable<InstanceId> instanceIds,
         CancellationToken cancellationToken) =>
@@ -339,6 +344,16 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             Guid operationId, CancellationToken cancellationToken) =>
             (_rootRenames ?? throw new NotSupportedException("The managed root recovery service is unavailable."))
                 .RecoverAsync(operationId, cancellationToken);
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        public async ValueTask<MirrorPulseRootRenameHistory> PrepareManagedRootRenameAsync(RootId rootId, string label,
+            CancellationToken cancellationToken)
+        {
+            if (router is null || catalog is null) throw new NotSupportedException("Managed root rename requires the Host namespace boundary.");
+            var root = (await catalog.ReadAdapterTopologyAsync(cancellationToken).ConfigureAwait(false)).Roots.Single(item => item.RootId == rootId);
+            var coordinator = new MirrorPulseManagedRootRenameCoordinator(fileSystem, catalog, router);
+            return await _scheduler.RunAsync(root.InstanceId, token => coordinator.PrepareAsync(rootId, label, token), cancellationToken).ConfigureAwait(false);
+        }
 
         public ValueTask<MirrorPulseConflictResolution> ApplyUploadConflictAsync(
             Guid conflictId,
@@ -661,6 +676,14 @@ public sealed class MirrorPulseCloudHostSession : IAsyncDisposable
         if (!_started || _runtime is null)
             throw new InvalidOperationException("The Cloud Files Host session has not started.");
         return _runtime.RecoverManagedRootRenameAsync(operationId, cancellationToken);
+    }
+
+    [SupportedOSPlatform("windows10.0.26100")]
+    public ValueTask<MirrorPulseRootRenameHistory> PrepareManagedRootRenameAsync(RootId rootId, string label,
+        CancellationToken cancellationToken = default)
+    {
+        if (!_started || _runtime is null) throw new InvalidOperationException("The Cloud Files Host session has not started.");
+        return _runtime.PrepareManagedRootRenameAsync(rootId, label, cancellationToken);
     }
 
     public ValueTask<CloudRemoteApplyResult> ApplyRemoteBatchAsync(
