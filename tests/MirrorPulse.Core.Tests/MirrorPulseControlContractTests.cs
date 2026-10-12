@@ -412,11 +412,14 @@ public sealed class MirrorPulseControlContractTests
     public async Task TypedClientConvertsHostDisconnectToStructuredError()
     {
         var pipeName = $"MirrorPulse-control-disconnect-{Guid.NewGuid():N}";
-        var acceptTask = Task.Run(async () =>
+        using var lifetime = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await using var server = SecureNamedPipeServerFactory.Create(new NamedPipeServerOptions(pipeName));
+        async Task DisconnectAsync()
         {
-            await using var server = SecureNamedPipeServerFactory.Create(new NamedPipeServerOptions(pipeName));
-            await server.WaitForConnectionAsync();
-        });
+            await server.WaitForConnectionAsync(lifetime.Token);
+            await server.DisposeAsync();
+        }
+        Task acceptTask = DisconnectAsync();
         var client = new MirrorPulseControlClient(new MirrorPulseControlClientOptions
         {
             PipeName = pipeName,
@@ -424,11 +427,19 @@ public sealed class MirrorPulseControlContractTests
             RequestTimeout = TimeSpan.FromSeconds(5)
         });
 
-        var exception = await Assert.ThrowsExactlyAsync<MirrorPulseControlException>(async () =>
-            await client.GetStatusAsync());
-        await acceptTask;
-
-        Assert.AreEqual(MirrorPulseControlErrorCodes.HostUnavailable, exception.Error.Code);
+        try
+        {
+            var exception = await Assert.ThrowsExactlyAsync<MirrorPulseControlException>(async () =>
+                await client.GetStatusAsync());
+            await acceptTask;
+            Assert.AreEqual(MirrorPulseControlErrorCodes.HostUnavailable, exception.Error.Code);
+        }
+        finally
+        {
+            await lifetime.CancelAsync();
+            try { await acceptTask; }
+            catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
+        }
     }
 
     [TestMethod]
