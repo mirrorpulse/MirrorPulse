@@ -16,7 +16,7 @@ internal enum MirrorPulseNamespaceMemberMoveCheckpoint { AfterNativeMove, AfterN
 /// retry. Directory moves require the separate subtree settlement boundary, which is pending.
 /// </remarks>
 [SupportedOSPlatform("windows10.0.26100")]
-public sealed class MirrorPulseNamespaceMemberMoveCoordinator
+public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
 {
     private readonly CloudFileSystem _fileSystem;
     private readonly MirrorPulseCfSharpStateSession _state;
@@ -175,11 +175,16 @@ public sealed class MirrorPulseNamespaceMemberMoveCoordinator
     {
         _actor.AssertAccess();
         if (await _catalog.ValidateNamespaceMemberMoveExecutionAsync(intent.OperationId, token).ConfigureAwait(false) != intent ||
-            await ReadProofAsync(intent.MemberId, intent.ProtectionId, intent, token).ConfigureAwait(false) != child ||
-            await ReadProofAsync(intent.Source.ParentMemberId, intent.Source.ParentProtectionId, intent, token).ConfigureAwait(false) != source ||
-            await ReadProofAsync(intent.Target.ParentMemberId, intent.Target.ParentProtectionId, intent, token).ConfigureAwait(false) != target)
+            !await HasUnchangedProofsAsync(intent, child, source, target, token).ConfigureAwait(false))
             throw new InvalidOperationException("Move admission or protection changed during execution.");
     }
+
+    private async Task<bool> HasUnchangedProofsAsync(MirrorPulseNamespaceMemberMoveIntent intent,
+        MirrorPulseNamespaceProtectionProof child, MirrorPulseNamespaceProtectionProof source, MirrorPulseNamespaceProtectionProof target,
+        CancellationToken token) =>
+            await ReadProofAsync(intent.MemberId, intent.ProtectionId, intent, token).ConfigureAwait(false) == child &&
+            await ReadProofAsync(intent.Source.ParentMemberId, intent.Source.ParentProtectionId, intent, token).ConfigureAwait(false) == source &&
+            await ReadProofAsync(intent.Target.ParentMemberId, intent.Target.ParentProtectionId, intent, token).ConfigureAwait(false) == target;
 
     private static void RequireCaller(MirrorPulseNamespaceMemberMoveIntent intent)
     {

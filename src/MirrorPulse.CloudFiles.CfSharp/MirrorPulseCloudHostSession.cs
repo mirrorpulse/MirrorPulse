@@ -17,6 +17,18 @@ public interface IMirrorPulseCloudRuntime : IAsyncDisposable
     ValueTask StartAsync(CancellationToken cancellationToken);
 
     [SupportedOSPlatform("windows10.0.26100")]
+    ValueTask<MirrorPulseNamespaceMemberInspection> InspectNamespaceMemberAsync(string relativePath,
+        bool isDirectory, CancellationToken cancellationToken) =>
+        ValueTask.FromException<MirrorPulseNamespaceMemberInspection>(
+            new NotSupportedException("This Cloud Files runtime does not inspect namespace membership."));
+
+    [SupportedOSPlatform("windows10.0.26100")]
+    ValueTask<MirrorPulseNamespaceMemberMoveIntent> PrepareNamespaceMemberMoveAsync(Guid operationId, Guid memberId,
+        Guid targetParentMemberId, string targetName, CancellationToken cancellationToken) =>
+        ValueTask.FromException<MirrorPulseNamespaceMemberMoveIntent>(
+            new NotSupportedException("This Cloud Files runtime does not prepare controlled member moves."));
+
+    [SupportedOSPlatform("windows10.0.26100")]
     ValueTask<MirrorPulseNamespaceMemberMoveCompletion> ExecuteNamespaceMemberMoveAsync(
         Guid operationId, CancellationToken cancellationToken) =>
         ValueTask.FromException<MirrorPulseNamespaceMemberMoveCompletion>(
@@ -155,6 +167,30 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         private MirrorPulseManagedRootRenameService? _rootRenames;
         public IReadOnlyList<MirrorPulseManagedRootRenameRestoreResult> RootRenameRecoveryResults { get; private set; } = [];
         public MirrorPulseJournalPumpHealth? JournalHealth => _uploadPump?.Health;
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        public ValueTask<MirrorPulseNamespaceMemberInspection> InspectNamespaceMemberAsync(string relativePath,
+            bool isDirectory, CancellationToken cancellationToken)
+        {
+            if (router is null || catalog is null || _namespaceExecution is null || _namespaceActor is null)
+                throw new NotSupportedException("Membership inspection requires the Host namespace boundary.");
+            return new MirrorPulseNamespaceMemberInspector(fileSystem, catalog, router, _namespaceExecution, _namespaceActor)
+                .InspectAsync(relativePath, isDirectory, cancellationToken);
+        }
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        public async ValueTask<MirrorPulseNamespaceMemberMoveIntent> PrepareNamespaceMemberMoveAsync(Guid operationId, Guid memberId,
+            Guid targetParentMemberId, string targetName, CancellationToken cancellationToken)
+        {
+            if (router is null || catalog is null || _namespaceExecution is null || _namespaceActor is null)
+                throw new NotSupportedException("Controlled move preparation requires the Host namespace boundary.");
+            var member = await catalog.ReadNamespaceMemberAsync(memberId, cancellationToken).ConfigureAwait(false)
+                ?? throw new FileNotFoundException("The source member is not registered.");
+            var registration = router.Registrations.Single(root => root.RootId == member.RootId);
+            var coordinator = new MirrorPulseNamespaceMemberMoveCoordinator(fileSystem, state, catalog, router, _namespaceExecution, _namespaceActor);
+            return await _scheduler.RunAsync(registration.InstanceId,
+                token => coordinator.PrepareAsync(operationId, memberId, targetParentMemberId, targetName, token), cancellationToken).ConfigureAwait(false);
+        }
 
         [SupportedOSPlatform("windows10.0.26100")]
         public async ValueTask<MirrorPulseNamespaceMemberMoveCompletion> ExecuteNamespaceMemberMoveAsync(
@@ -484,6 +520,24 @@ public sealed class MirrorPulseCloudHostSession : IAsyncDisposable
 
             throw;
         }
+    }
+
+    [SupportedOSPlatform("windows10.0.26100")]
+    public ValueTask<MirrorPulseNamespaceMemberInspection> InspectNamespaceMemberAsync(string relativePath,
+        bool isDirectory, CancellationToken cancellationToken = default)
+    {
+        if (!_started || _runtime is null)
+            throw new InvalidOperationException("The Cloud Files Host session has not started.");
+        return _runtime.InspectNamespaceMemberAsync(relativePath, isDirectory, cancellationToken);
+    }
+
+    [SupportedOSPlatform("windows10.0.26100")]
+    public ValueTask<MirrorPulseNamespaceMemberMoveIntent> PrepareNamespaceMemberMoveAsync(Guid operationId, Guid memberId,
+        Guid targetParentMemberId, string targetName, CancellationToken cancellationToken = default)
+    {
+        if (!_started || _runtime is null)
+            throw new InvalidOperationException("The Cloud Files Host session has not started.");
+        return _runtime.PrepareNamespaceMemberMoveAsync(operationId, memberId, targetParentMemberId, targetName, cancellationToken);
     }
 
     [SupportedOSPlatform("windows10.0.26100")]
