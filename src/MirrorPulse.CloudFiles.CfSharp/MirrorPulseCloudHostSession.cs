@@ -17,6 +17,12 @@ public interface IMirrorPulseCloudRuntime : IAsyncDisposable
     ValueTask StartAsync(CancellationToken cancellationToken);
 
     [SupportedOSPlatform("windows10.0.26100")]
+    ValueTask<MirrorPulseNamespaceMemberRegistration> CreateNamespaceMemberAsync(Guid operationId, Guid parentMemberId,
+        string name, bool isDirectory, CancellationToken cancellationToken) =>
+        ValueTask.FromException<MirrorPulseNamespaceMemberRegistration>(
+            new NotSupportedException("This Cloud Files runtime does not create controlled local members."));
+
+    [SupportedOSPlatform("windows10.0.26100")]
     ValueTask<MirrorPulseNamespaceMemberInspection> InspectNamespaceMemberAsync(string relativePath,
         bool isDirectory, CancellationToken cancellationToken) =>
         ValueTask.FromException<MirrorPulseNamespaceMemberInspection>(
@@ -167,6 +173,21 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         private MirrorPulseManagedRootRenameService? _rootRenames;
         public IReadOnlyList<MirrorPulseManagedRootRenameRestoreResult> RootRenameRecoveryResults { get; private set; } = [];
         public MirrorPulseJournalPumpHealth? JournalHealth => _uploadPump?.Health;
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        public async ValueTask<MirrorPulseNamespaceMemberRegistration> CreateNamespaceMemberAsync(Guid operationId,
+            Guid parentMemberId, string name, bool isDirectory, CancellationToken cancellationToken)
+        {
+            if (router is null || catalog is null || _namespaceExecution is null || _namespaceActor is null)
+                throw new NotSupportedException("Controlled creation requires the Host namespace boundary.");
+            var parent = await catalog.ReadNamespaceMemberAsync(parentMemberId, cancellationToken).ConfigureAwait(false)
+                ?? throw new FileNotFoundException("The creation parent is not registered.");
+            if (parent.RootId is null) throw new InvalidOperationException("Creation requires an Adapter's managed root.");
+            var registration = router.Registrations.Single(root => root.RootId == parent.RootId);
+            var coordinator = new MirrorPulseNamespaceCreationCoordinator(fileSystem, state, catalog, router, _namespaceExecution, _namespaceActor);
+            return await _scheduler.RunAsync(registration.InstanceId,
+                token => coordinator.CreateAsync(operationId, parentMemberId, name, isDirectory, token), cancellationToken).ConfigureAwait(false);
+        }
 
         [SupportedOSPlatform("windows10.0.26100")]
         public ValueTask<MirrorPulseNamespaceMemberInspection> InspectNamespaceMemberAsync(string relativePath,
@@ -521,6 +542,15 @@ public sealed class MirrorPulseCloudHostSession : IAsyncDisposable
 
             throw;
         }
+    }
+
+    [SupportedOSPlatform("windows10.0.26100")]
+    public ValueTask<MirrorPulseNamespaceMemberRegistration> CreateNamespaceMemberAsync(Guid operationId, Guid parentMemberId,
+        string name, bool isDirectory, CancellationToken cancellationToken = default)
+    {
+        if (!_started || _runtime is null)
+            throw new InvalidOperationException("The Cloud Files Host session has not started.");
+        return _runtime.CreateNamespaceMemberAsync(operationId, parentMemberId, name, isDirectory, cancellationToken);
     }
 
     [SupportedOSPlatform("windows10.0.26100")]

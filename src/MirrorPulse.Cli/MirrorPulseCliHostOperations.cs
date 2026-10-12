@@ -259,6 +259,27 @@ public sealed class MirrorPulseCliHostOperations : IMirrorPulseCliHostOperations
                     human = $"Member move committed · {move.OperationId:D} · {move.RelativePath}" +
                         (move.RequiresSubtreeReconciliation ? " · subtree reconciliation pending" : string.Empty);
                     break;
+                case ("namespace", "member") when command.Path.Count > 2 &&
+                    command.Path[2].Equals("create", StringComparison.OrdinalIgnoreCase):
+                    if (command.Arguments.Count < 2 || !Guid.TryParse(command.Arguments[0], out Guid createParent) ||
+                        createParent == Guid.Empty || string.IsNullOrWhiteSpace(command.Arguments[1]) ||
+                        command.Arguments[1] is "." or ".." || command.Arguments[1].Contains('/') || command.Arguments[1].Contains('\\'))
+                        throw new ArgumentException("namespace member create requires a parent ID and one child name.");
+                    Guid createOperation = Guid.NewGuid(); bool createDirectory = false; bool operationSpecified = false;
+                    for (int option = 2; option < command.Arguments.Count; option++)
+                    {
+                        string value = command.Arguments[option];
+                        if (value.Equals("--directory", StringComparison.OrdinalIgnoreCase) && !createDirectory) createDirectory = true;
+                        else if (value.Equals("--operation-id", StringComparison.OrdinalIgnoreCase) && !operationSpecified &&
+                            ++option < command.Arguments.Count && Guid.TryParse(command.Arguments[option], out createOperation) && createOperation != Guid.Empty)
+                            operationSpecified = true;
+                        else throw new ArgumentException("Creation accepts --directory and --operation-id GUID once each.");
+                    }
+                    var creation = await _client.CreateNamespaceMemberAsync(createOperation, createParent, command.Arguments[1],
+                        createDirectory, cancellationToken).ConfigureAwait(false);
+                    result = creation;
+                    human = $"Local member created · {creation.OperationId:D} · {creation.RelativePath}";
+                    break;
                 case ("namespace", "birth") when command.Path.Count > 2 &&
                     command.Path[2].Equals("recover", StringComparison.OrdinalIgnoreCase):
                     if (command.Arguments.Count != 1 || !Guid.TryParse(command.Arguments[0], out Guid birthRecoveryId) || birthRecoveryId == Guid.Empty)

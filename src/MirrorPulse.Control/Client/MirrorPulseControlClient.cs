@@ -237,6 +237,11 @@ public sealed class MirrorPulseControlClient
         SendAsync<RootRecoverArguments, MirrorPulseControlRootRecovery>(
             MirrorPulseControlCommands.RootRecover, new(operationId), cancellationToken);
 
+    public Task<MirrorPulseControlNamespaceMemberCreation> CreateNamespaceMemberAsync(Guid operationId, Guid parentMemberId,
+        string name, bool isDirectory = false, CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceMemberCreateArguments, MirrorPulseControlNamespaceMemberCreation>(
+            MirrorPulseControlCommands.NamespaceMemberCreate, new(operationId, parentMemberId, name, isDirectory), cancellationToken);
+
     public Task<MirrorPulseControlNamespaceMemberInspection> InspectNamespaceMemberAsync(string relativePath, bool isDirectory = false,
         CancellationToken cancellationToken = default) =>
         SendAsync<NamespaceMemberInspectArguments, MirrorPulseControlNamespaceMemberInspection>(

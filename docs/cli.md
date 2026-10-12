@@ -52,6 +52,7 @@ The default output is concise human-readable text. Automation should use `--json
 | `mp instance list` | List Adapter instances and mapped roots. | `--json` |
 | `mp root list` | Inspect managed root IDs, labels, availability, required rescans, and pending namespace recovery. | `mp --json root list` |
 | `mp root recover OPERATION_ID` | Retry the original managed root rename proof through the Host. | operation ID from `root list`; `--json` includes separate native and durable projection facts |
+| `mp namespace member create PARENT_ID NAME [--directory] [--operation-id GUID]` | Create an empty local file or directory under a registered protected directory. | retain `operationId` for retry; this does not prove remote acceptance |
 | `mp instance create --install-id ID --name NAME [--config k=v] [--root k=v] [--secret VALUE] [--disabled]` | Create an independently identifiable instance. | repeat `--config`/`--root` for multiple values |
 | `mp instance configure --instance-id ID --name NAME [--config k=v] [--root k=v]` | Update instance configuration and roots. | adapter-defined keys |
 | `mp instance enable\|disable --instance-id ID` | Change whether an instance participates in synchronization. | `--json` |
@@ -77,6 +78,14 @@ a later Label. Callback authorization and creating a new root rename from the CL
 remain pending capabilities.
 
 ## Automation examples
+
+Controlled creation requires a Host that already owns the parent's registered
+protected namespace. It supports empty files, directories and children of born
+directories. The Host retains the birth intent, identity, start and first native
+binding before conversion and independently verifies protection before membership.
+Retry with the original operation ID. A start without its original native binding
+requires explicit recovery and is never repeated by path. Imports, replacement
+saves, controlled deletion and full installed strict-tree startup remain pending.
 
 ```powershell
 # Read a stable machine-readable status.

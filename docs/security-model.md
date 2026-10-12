@@ -237,6 +237,19 @@ projections and chronology, and reject forks, cycles or missing receipts. The
 original member registration and first ACL remain unchanged. Migration leaves
 legacy first-move predecessors absent and invents no native or source evidence.
 
+`mp namespace member create PARENT_ID NAME [--directory] [--operation-id GUID]`
+creates an empty local file or directory through the shared Host scheduler,
+namespace actor and execution role. Current parent binding, owner, DACL and
+protection epoch are checked under retained ancestor guards. Ordinary files are
+created with a role-only DACL before public CfSharp same-object conversion; born
+directories inherit the verified parent policy. First binding, conversion,
+observation and independent protection verification precede member registration.
+The caller's cancellation cannot discard persistence after native creation.
+Historical member replay performs no native write or source acknowledgement.
+A started birth without its original binding requires explicit recovery, and an
+occupied destination is never overwritten. This boundary supports empty local
+creation; it does not implement imports, deletion or replacement saves.
+
 `mp namespace birth recover RECOVERY_ID` invokes an already retained staged-file
 recovery action through the same Host contract. It reports the drained public
 CfSharp receipt and independently retained verification, returning exit code 11

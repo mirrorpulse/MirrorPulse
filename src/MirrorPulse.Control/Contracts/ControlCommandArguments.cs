@@ -87,6 +87,12 @@ public sealed record RootRecoverArguments(Guid OperationId) : IMirrorPulseContro
 
 public sealed record NamespaceMemberMoveArguments(Guid OperationId) : IMirrorPulseControlArguments;
 
+public sealed record NamespaceMemberCreateArguments(Guid OperationId, Guid ParentMemberId,
+    string Name, bool IsDirectory = false) : IMirrorPulseControlArguments;
+
+public sealed record MirrorPulseControlNamespaceMemberCreation(Guid OperationId, Guid MemberId,
+    Guid ParentMemberId, string RelativePath, bool IsDirectory, bool Registered);
+
 public sealed record NamespaceMemberInspectArguments(string RelativePath, bool IsDirectory = false) : IMirrorPulseControlArguments;
 
 public sealed record NamespaceMemberPrepareMoveArguments(Guid OperationId, Guid MemberId,

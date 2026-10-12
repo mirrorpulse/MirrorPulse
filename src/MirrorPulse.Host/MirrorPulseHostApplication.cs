@@ -473,6 +473,8 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
             MirrorPulseControlCommands.NamespaceMemberInspect, InspectNamespaceMemberAsync);
         dispatcher.Register<NamespaceMemberPrepareMoveArguments, MirrorPulseControlNamespaceMemberMovePreparation>(
             MirrorPulseControlCommands.NamespaceMemberPrepareMove, PrepareNamespaceMemberMoveAsync);
+        dispatcher.Register<NamespaceMemberCreateArguments, MirrorPulseControlNamespaceMemberCreation>(
+            MirrorPulseControlCommands.NamespaceMemberCreate, CreateNamespaceMemberAsync);
         _controlPipe = new MirrorPulseControlPipeServer(dispatcher.DispatchAsync);
     }
 
@@ -485,6 +487,17 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
         return new(recovery.Intent.OperationId, recovery.Intent.RootId.ToString(), recovery.Intent.Phase.ToString(),
             receipt?.NativeMoveObserved, receipt?.DurableProjectionCommitted, receipt?.RequiresFullRescan,
             receipt?.Outcome.ToString(), receipt?.Stage.ToString(), receipt?.NativeHResult);
+    }
+
+    private async ValueTask<MirrorPulseControlNamespaceMemberCreation> CreateNamespaceMemberAsync(
+        NamespaceMemberCreateArguments arguments, CancellationToken cancellationToken)
+    {
+        if (arguments.OperationId == Guid.Empty || arguments.ParentMemberId == Guid.Empty)
+            throw new ArgumentException("Operation and parent member IDs are required.", nameof(arguments));
+        ArgumentException.ThrowIfNullOrWhiteSpace(arguments.Name);
+        var member = await _session.CreateNamespaceMemberAsync(arguments.OperationId, arguments.ParentMemberId,
+            arguments.Name, arguments.IsDirectory, cancellationToken).ConfigureAwait(false);
+        return new(arguments.OperationId, member.MemberId, member.ParentMemberId!.Value, member.RelativePath, member.IsDirectory, true);
     }
 
     private async ValueTask<MirrorPulseControlNamespaceMemberInspection> InspectNamespaceMemberAsync(
