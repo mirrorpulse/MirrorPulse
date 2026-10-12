@@ -12,7 +12,7 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 /// are historical facts and grant no current filesystem or permission authority.
 /// </remarks>
 [SupportedOSPlatform("windows10.0.16299")]
-public sealed class MirrorPulseNamespaceContentConfirmation(MirrorPulseProductCatalog catalog, MirrorPulseRootRouter router,
+public sealed partial class MirrorPulseNamespaceContentConfirmation(MirrorPulseProductCatalog catalog, MirrorPulseRootRouter router,
     MirrorPulseNamespaceActor? namespaceActor = null, MirrorPulseNamespaceExecutionSession? namespaceExecution = null)
 {
     public async ValueTask<MirrorPulseContentConfirmationReceipt> ConfirmAsync(CloudFile file,
@@ -57,15 +57,16 @@ public sealed class MirrorPulseNamespaceContentConfirmation(MirrorPulseProductCa
         MirrorPulseNamespaceActor actor, CancellationToken token)
     {
         // Validate durable acceptance and predecessor identity before the public native mark.
-        if (await catalog.ReadContentAcceptanceProofAsync(proof.OperationId, token).ConfigureAwait(false) != proof ||
-            proof.UploadBinding.Preparation != MirrorPulseContentPreparation.ReplacePlaceholderIdentity)
+        if (await catalog.ReadContentAcceptanceProofAsync(proof.OperationId, token).ConfigureAwait(false) != proof)
             throw new InvalidDataException("Protected confirmation requires its retained upload proof and previous public identity.");
         var identity = await catalog.ReadNamespaceMemberIdentityAsync(member.MemberId, token).ConfigureAwait(false);
-        var previous = CloudPlaceholderIdentity.Decode(Convert.FromBase64String(proof.UploadBinding.PreviousPlaceholderIdentity!));
+        var previous = ReadPreviousIdentity(proof.UploadBinding, member.MemberId);
         bool replay = identity.AcceptanceOperationId == proof.OperationId;
         if (replay ? identity.ItemId != proof.AcceptedItemId || identity.RemoteId != proof.RemoteId :
             identity.ItemId != previous.ItemId || identity.RemoteId != previous.RemoteId)
             throw new InvalidDataException("Protected confirmation cannot rewrite a superseded member identity.");
+        if (!replay && proof.UploadBinding.NamespaceIdentity is { } uploaded && uploaded.AcceptanceOperationId != identity.AcceptanceOperationId)
+            throw new InvalidDataException("Ordinary conversion must retain its upload-time identity predecessor.");
         var childProof = await MirrorPulseNamespaceProtectionProofReader.ReadMemberAsync(catalog, member, token).ConfigureAwait(false);
         var parentMember = await catalog.ReadNamespaceMemberAsync(location.ParentMemberId!.Value, token).ConfigureAwait(false)
             ?? throw new FileNotFoundException("The committed confirmation parent is missing.");
@@ -138,14 +139,14 @@ public sealed class MirrorPulseNamespaceContentConfirmation(MirrorPulseProductCa
         cancellationToken.ThrowIfCancellationRequested(); namespaceActor.AssertAccess();
         var member = await catalog.ReadNamespaceMemberByBindingAsync(proof.UploadBinding.LocalObject, cancellationToken).ConfigureAwait(false);
         if (member is null) return null;
-        if (!receipt.MayAcknowledge || proof.UploadBinding.Preparation != MirrorPulseContentPreparation.ReplacePlaceholderIdentity ||
+        if (!receipt.MayAcknowledge ||
             await catalog.ReadContentAcceptanceProofAsync(proof.OperationId, cancellationToken).ConfigureAwait(false) != proof ||
             await catalog.ReadContentConfirmationReceiptAsync(proof.OperationId, cancellationToken).ConfigureAwait(false) != receipt)
             throw new InvalidDataException("Identity correlation requires the exact retained acceptance and successful public confirmation.");
         CloudPlaceholderIdentity previous, observed;
         try
         {
-            previous = CloudPlaceholderIdentity.Decode(Convert.FromBase64String(proof.UploadBinding.PreviousPlaceholderIdentity ?? string.Empty));
+            previous = ReadPreviousIdentity(proof.UploadBinding, member.MemberId);
             observed = CloudPlaceholderIdentity.Decode(Convert.FromBase64String(receipt.ObservedPlaceholderIdentity ?? string.Empty));
         }
         catch (Exception error) when (error is ArgumentException or FormatException or InvalidDataException)
@@ -170,4 +171,13 @@ public sealed class MirrorPulseNamespaceContentConfirmation(MirrorPulseProductCa
         return await catalog.RecordNamespaceIdentityAcceptanceAsync(member.MemberId, proof.OperationId, current.AcceptanceOperationId,
             previous.ItemId, previous.RemoteId, cancellationToken).ConfigureAwait(false);
     }
+
+    private static CloudPlaceholderIdentity ReadPreviousIdentity(MirrorPulseUploadBinding binding, Guid memberId) => binding.Preparation switch
+    {
+        MirrorPulseContentPreparation.ReplacePlaceholderIdentity =>
+            CloudPlaceholderIdentity.Decode(Convert.FromBase64String(binding.PreviousPlaceholderIdentity ?? string.Empty)),
+        MirrorPulseContentPreparation.ConvertRegularFile when binding.NamespaceIdentity is { } identity && identity.MemberId == memberId =>
+            new(identity.ItemId, identity.RemoteId, string.Empty),
+        _ => throw new InvalidDataException("Registered conversion requires its original upload-time product identity; it cannot be inferred from the current path."),
+    };
 }

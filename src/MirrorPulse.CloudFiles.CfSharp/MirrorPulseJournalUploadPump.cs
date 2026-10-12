@@ -237,8 +237,9 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
             await using var content = new FileStream(localPath, FileMode.Open, FileAccess.Read,
                 FileShare.Read, 64 * 1024, FileOptions.Asynchronous);
             dispatchPhase = "InspectBinding";
-            MirrorPulseUploadBinding binding = MirrorPulseContentConfirmation.CaptureUploadBinding(
-                await _fileSystem.GetFile(syncRootRelativePath).InspectAsync(cancellationToken).ConfigureAwait(false));
+            CloudFile uploadFile = _fileSystem.GetFile(syncRootRelativePath);
+            MirrorPulseUploadBinding binding = await _contentConfirmation.CaptureUploadBindingAsync(uploadFile,
+                await uploadFile.InspectAsync(cancellationToken).ConfigureAwait(false), cancellationToken).ConfigureAwait(false);
             dispatchPhase = "HashContent";
             string hash = Convert.ToHexString(await SHA256.HashDataAsync(content, cancellationToken).ConfigureAwait(false));
             content.Position = 0;

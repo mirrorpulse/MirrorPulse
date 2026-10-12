@@ -140,7 +140,8 @@ public sealed class MirrorPulseFullRescanPolicy(CloudFileSystem fileSystem, Clou
             // captures the object and previous identity. Never substitute this observation for
             // a historical intent's binding.
             CloudItemSnapshot lockedSnapshot = await observation.Item.InspectAsync(cancellationToken).ConfigureAwait(false);
-            MirrorPulseUploadBinding binding = MirrorPulseContentConfirmation.CaptureUploadBinding(lockedSnapshot);
+            MirrorPulseUploadBinding binding = await _contentConfirmation.CaptureUploadBindingAsync((CloudFile)observation.Item,
+                lockedSnapshot, cancellationToken).ConfigureAwait(false);
             if (observation.Snapshot.LocalBinding != lockedSnapshot.LocalBinding ||
                 pending is not null && pending.Intent.UploadBinding!.LocalObject != binding.LocalObject)
                 throw new MirrorPulseMutationAmbiguousException("The upload object changed after discovery or historical acceptance.");

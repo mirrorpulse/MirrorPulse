@@ -66,9 +66,23 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 Assert.IsNotNull(member);
                 Assert.AreEqual(member, await catalog.ReadNamespaceMemberAsync(member.MemberId, deadline.Token));
                 var file = fileSystem.GetFile(currentPath);
+                if (owner == 1)
+                {
+                    bytes = [2, 4, 6, 8, 10, 12];
+                    await File.WriteAllBytesAsync(file.FullPath, bytes, deadline.Token);
+                }
                 var before = await file.InspectAsync(deadline.Token);
-                var binding = MirrorPulseContentConfirmation.CaptureUploadBinding(before);
+                var confirmation = new MirrorPulseNamespaceContentConfirmation(catalog, router, actor, role);
+                var binding = await confirmation.CaptureUploadBindingAsync(file, before, deadline.Token);
                 Assert.AreEqual(member.LocalObject, binding.LocalObject);
+                if (owner == 1)
+                {
+                    Assert.IsFalse(before.IsPlaceholder, "A real ordinary overwrite exercises public reconversion.");
+                    Assert.AreEqual(MirrorPulseContentPreparation.ConvertRegularFile, binding.Preparation);
+                    Assert.IsNotNull(binding.NamespaceIdentity);
+                    Assert.AreEqual(member.MemberId, binding.NamespaceIdentity.MemberId);
+                    Assert.AreEqual(firstAcceptance!.Proof.OperationId, binding.NamespaceIdentity.AcceptanceOperationId);
+                }
                 var intent = new MirrorPulseMutationIntent(Guid.NewGuid(), root.InstanceId, root.UniquenessKey,
                     MirrorPulseWorkerChangeKind.ContentUpdate, currentPath[5..], null, false, before.RemoteRevision,
                     bytes.Length, Convert.ToHexString(SHA256.HashData(bytes)), MirrorPulseMutationOrigin.Journal, binding);
@@ -84,7 +98,6 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 var proof = new MirrorPulseContentAcceptanceProof(intent.OperationId, binding, acceptedIdentity.ItemId,
                     acceptedIdentity.RemoteId, revision, bytes.Length, intent.ContentSha256!);
                 await catalog.SaveContentAcceptanceProofAsync(proof, deadline.Token);
-                var confirmation = new MirrorPulseNamespaceContentConfirmation(catalog, router, actor, role);
                 if (owner == 0)
                     await AssertConfirmationRejectsForeignProtectionAsync(fileSystem, catalog, router, role, confirmation, file, proof, deadline.Token);
                 var receipt = await confirmation.ConfirmAsync(file, proof, deadline.Token);
@@ -126,7 +139,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() => File.Delete(fileSystem.GetFile(currentPath).FullPath), deadline.Token));
             }
             Assert.AreEqual(0, source.Reads);
-            TestContext.WriteLine("AcceptedIdentityMove: publicConfirmation=True; currentProtectionBeforeMark=True; foreignChildAndParentAclRejected=True; fullBinding=True; acceptedItemIdChanged=True; originalMembershipUnchanged=True; officialProjection=True; productionMovePreparation=True; productionMoveCoordinator=True; owners=2; historicalReplayDoesNotRewind=True; strictDeleteDenied=True; fixtureRemoteAcceptance=True; actualWorkerUpload=False; hostIntegrated=False.");
+            TestContext.WriteLine("AcceptedIdentityMove: publicConfirmation=True; ordinaryEditReconverted=True; uploadTimeMemberIdentity=True; currentProtectionBeforeMark=True; foreignChildAndParentAclRejected=True; fullBinding=True; acceptedItemIdChanged=True; originalMembershipUnchanged=True; officialProjection=True; productionMovePreparation=True; productionMoveCoordinator=True; owners=2; historicalReplayDoesNotRewind=True; strictDeleteDenied=True; fixtureRemoteAcceptance=True; actualWorkerUpload=False; hostIntegrated=False.");
         }
         finally
         {

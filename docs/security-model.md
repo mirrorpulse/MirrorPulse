@@ -260,6 +260,14 @@ first membership, original ACL and birth observation remain unchanged.
 A new directory receives both the current-user owner and the guarded parent's
 derived access descriptor at creation, before the first binding is recorded.
 
+Before uploading a registered file that an in-place edit made ordinary, the Host
+retains its member ID, public identity and identity-history predecessor in the
+immutable upload binding. Journal and rescan use the same capture boundary with
+fresh protected child/parent checks; source transfers run after its role scope
+has ended. Public CfSharp conversion and confirmation retain the exact native
+binding and accepted content proof. A legacy accepted upload without this member
+lineage cannot invent it from a current path or later catalog identity.
+
 `mp namespace birth recover RECOVERY_ID` invokes an already retained staged-file
 recovery action through the same Host contract. It reports the drained public
 CfSharp receipt and independently retained verification, returning exit code 11
