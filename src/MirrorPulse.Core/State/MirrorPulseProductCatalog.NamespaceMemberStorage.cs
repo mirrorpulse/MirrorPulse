@@ -227,6 +227,13 @@ public sealed partial class MirrorPulseProductCatalog
                 child_name_key TEXT NOT NULL,
                 UNIQUE(parent_member_id,child_name_key)
             );
+            CREATE TABLE IF NOT EXISTS namespace_member_retirements (
+                operation_id TEXT NOT NULL PRIMARY KEY,
+                member_id TEXT NOT NULL REFERENCES namespace_members(member_id),
+                payload BLOB NOT NULL,
+                fingerprint BLOB NOT NULL CHECK(length(fingerprint)=32),
+                phase INTEGER NOT NULL CHECK(phase IN (0,1,2,3))
+            );
             """;
         await schema.ExecuteNonQueryAsync(token).ConfigureAwait(false);
         transaction.Commit();

@@ -21,6 +21,8 @@ public sealed partial class MirrorPulseProductCatalog
             var member = await ReadNamespaceMemberCoreAsync(memberId, transaction, cancellationToken).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The namespace member is not registered.");
             var location = await ReadNamespaceMemberLocationCoreAsync(member, transaction, cancellationToken).ConfigureAwait(false);
+            if (await ReadCompletedNamespaceRetirementForMemberCoreAsync(memberId, transaction, cancellationToken).ConfigureAwait(false))
+                throw new FileNotFoundException("The namespace member has been retired.");
             await RequireNamespaceMemberNameAsync(member, transaction, cancellationToken).ConfigureAwait(false);
             transaction.Commit();
             return location;
