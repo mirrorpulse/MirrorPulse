@@ -5,7 +5,7 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 
 public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
 {
-    /// <summary>Retains a first file relocation after fresh inspection, without issuing a native move.</summary>
+    /// <summary>Retains a file relocation after fresh inspection, without issuing a native move.</summary>
     /// <remarks>
     /// The caller drains previous instance work before admission. Reusing an operation ID returns
     /// its original admission only when the requested member, parent and name agree; this replay
@@ -33,13 +33,14 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
                 ?? throw new FileNotFoundException("The source member is not registered.");
             if (member.IsDirectory)
                 throw new NotSupportedException("Directory preparation requires public subtree proof and product subtree settlement.");
-            var sourceParent = await _catalog.ReadNamespaceMemberAsync(member.ParentMemberId!.Value, token).ConfigureAwait(false)
-                ?? throw new FileNotFoundException("The original source parent is not registered.");
+            var location = await _catalog.ReadNamespaceMemberLocationAsync(memberId, token).ConfigureAwait(false);
+            var sourceParent = await _catalog.ReadNamespaceMemberAsync(location.ParentMemberId!.Value, token).ConfigureAwait(false)
+                ?? throw new FileNotFoundException("The committed source parent is not registered.");
             var targetParent = await _catalog.ReadNamespaceMemberAsync(targetParentMemberId, token).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The target parent is not registered.");
             if (!targetParent.IsDirectory || targetParent.RootId != member.RootId || targetParent.OwnerSid != member.OwnerSid)
                 throw new ArgumentException("The target parent must be a protected directory in the same managed root.", nameof(targetParentMemberId));
-            CloudFile source = _fileSystem.GetFile(member.RelativePath);
+            CloudFile source = _fileSystem.GetFile(location.RelativePath);
             CloudDirectory sourceDirectory = source.Parent ?? throw new InvalidDataException("A member requires a direct source parent.");
             CloudDirectory targetDirectory = _fileSystem.GetDirectory(targetParent.RelativePath);
             // Reuse CfSharp's public name validation before retaining any product intent.
@@ -62,7 +63,8 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
                     member.RootId!.Value, member.LocalObject, identity.ItemId, identity.RemoteId, member.OwnerSid, _execution.RoleSid.Value,
                     new(sourceParent.MemberId, sourceParent.LocalObject, sourceProof.ProtectionId, source.RelativePath.Replace('\\', '/')),
                     new(targetParent.MemberId, targetParent.LocalObject, targetProof.ProtectionId, target.RelativePath.Replace('\\', '/')),
-                    DateTimeOffset.UtcNow);
+                    DateTimeOffset.UtcNow)
+                { PreviousMoveOperationId = location.CompletedMoveOperationId };
                 RequireCaller(intent);
                 MirrorPulseNamespaceMemberMoveInspection.RequireChild(facts, snapshot, childProof, intent.Source.RelativePath, intent);
                 var sourceBefore = await InspectParentAsync(sourceDirectory, sourceLease, sourceProof, intent.Source, intent, token).ConfigureAwait(false);

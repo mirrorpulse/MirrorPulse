@@ -213,7 +213,7 @@ public static class MirrorPulseCliHelp
           namespace member inspect RELATIVE_PATH [--directory]
                                          Look up a registered native member and its parent.
           namespace member prepare-move MEMBER_ID PARENT_ID NAME [--operation-id GUID]
-                                         Prepare a first file move within its managed root.
+                                         Prepare a file move within its managed root.
           namespace member move OPERATION_ID
                                          Execute or retry an admitted protected member move.
           namespace birth recover RECOVERY_ID

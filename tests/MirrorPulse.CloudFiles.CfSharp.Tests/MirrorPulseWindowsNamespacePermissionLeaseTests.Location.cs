@@ -113,10 +113,25 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         Assert.AreEqual(member.MemberId, movedMember.MemberId);
         Assert.AreEqual(destinationParent.MemberId, movedMember.ActualParentMemberId);
         Assert.AreEqual(selected.NativeItemId, movedMember.NativeItemId);
+        var back = await coordinator.PrepareAsync(Guid.NewGuid(), member.MemberId, member.ParentMemberId!.Value, "born.bin", token);
+        Assert.AreEqual(intent.OperationId, back.PreviousMoveOperationId);
+        await coordinator.ExecuteAsync(back.OperationId, token);
+        Assert.AreEqual(completion, await coordinator.ExecuteAsync(intent.OperationId, token));
+        Assert.IsTrue((await original.InspectAsync(token)).Exists, "A historical replay cannot move the current object back to its old destination.");
+        Assert.IsFalse((await target.InspectAsync(token)).Exists);
+        Assert.AreEqual(back.OperationId, (await catalog.ReadNamespaceMemberLocationAsync(member.MemberId, token)).CompletedMoveOperationId);
+        var forward = await coordinator.PrepareAsync(Guid.NewGuid(), member.MemberId, destinationParent.MemberId, "member-location-probe.bin", token);
+        Assert.AreEqual(back.OperationId, forward.PreviousMoveOperationId);
+        await coordinator.ExecuteAsync(forward.OperationId, token);
+        Assert.AreEqual(new(member.MemberId, destinationParent.MemberId, target.RelativePath.Replace('\\', '/'), forward.OperationId),
+            await catalog.ReadNamespaceMemberLocationAsync(member.MemberId, token));
+        Assert.AreEqual(member, await catalog.ReadNamespaceMemberAsync(member.MemberId, token));
+        Assert.IsNull(await catalog.ReadNamespaceMemberChildAsync(member.ParentMemberId.Value, "born.bin", token));
+        Assert.AreEqual(member, await catalog.ReadNamespaceMemberChildAsync(destinationParent.MemberId, "member-location-probe.bin", token));
         CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(target.FullPath, token));
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() => File.Delete(target.FullPath), token));
         CollectionAssert.IsSubsetOf(retainedJournalIds,
             (await WaitForBirthJournalAsync(feed, intent.ItemId, directoryItemId, token)).Select(change => change.OperationId).ToArray());
-        TestContext.WriteLine("ControlledMemberLocation: sharedAdmission=True; officialItemIdLookup=True; publicMoveTo=True; nativeBindingAndBytes=True; originalRegistrationUnchanged=True; journalIdsRetained=True; pendingMemberMoveFencesPoll=True; pendingMemberMoveDefersJournal=True; productionMoveCoordinator=True; productionMovePreparation=True; nativeMemberInspection=True; preparationReplay=True; changedDescriptorRejectedBeforeStart=True; nativeObservationProjectionInterruptionsRecovered=True; immutableStartAndFacts=True; currentNameCommitted=True; completedReplay=True; hostIntegrated=False.");
+        TestContext.WriteLine("ControlledMemberLocation: sharedAdmission=True; officialItemIdLookup=True; publicMoveTo=True; nativeBindingAndBytes=True; originalRegistrationUnchanged=True; journalIdsRetained=True; pendingMemberMoveFencesPoll=True; pendingMemberMoveDefersJournal=True; productionMoveCoordinator=True; productionMovePreparation=True; nativeMemberInspection=True; preparationReplay=True; changedDescriptorRejectedBeforeStart=True; nativeObservationProjectionInterruptionsRecovered=True; immutableStartAndFacts=True; currentNameCommitted=True; completedReplay=True; repeatedMoves=True; historicalReplayDoesNotRewind=True; hostIntegrated=False.");
     }
 }

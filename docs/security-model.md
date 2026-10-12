@@ -174,10 +174,9 @@ location, while child-name lookup follows a verified completed move.
 Completion reads revalidate the retained start, native observation and official
 projection, including the operation ID, bindings, descriptors and observation
 order. A canonical payload and valid fingerprint alone are insufficient. Once
-a move is completed, rewinding the current-name index to the first location is
-rejected. Current admission supports the first relocation only; repeated moves
-need a current receipt chain and are still pending implementation. A directory
-cannot use single-item completion to release its subtree fence.
+a move is completed, changing the current-name index without a new completion is
+rejected. Repeated moves follow an explicit chain of completed relocations. A
+directory cannot use single-item completion to release its subtree fence.
 
 The Host now owns this execution boundary through one shared namespace actor and
 the current-user namespace execution session. The versioned Control contract
@@ -207,7 +206,7 @@ authorize a later operation. The Host must inspect again when preparing and
 executing a move.
 
 `mp namespace member prepare-move MEMBER_ID PARENT_ID NAME [--operation-id GUID]`
-asks the Host to retain a first file move within its managed root. The Host
+asks the Host to retain a file move within its managed root. The Host
 drains earlier instance work, enters the shared actor, retains both ancestor
 chains, and checks native identity, binding, owner, permissions, parent and
 official projection before reserving the destination. Preparation makes no
@@ -215,8 +214,17 @@ native move and acknowledges no source operation. Reusing the same operation ID
 with the same request returns the immutable preparation; a different request is
 rejected. Specify the ID to recover a preparation whose response was lost.
 `namespace member move OPERATION_ID` executes or retries that preparation.
-Repeated relocations, accepted remote identity changes and directory subtree
-settlement still require their separate completion paths.
+Accepted remote identity changes and directory subtree settlement still require
+their separate completion paths.
+
+Schema 39 links each later relocation to its immediately preceding completed
+operation. The committed position advances only with native/public verification
+and name handover; an admitted or interrupted next move preserves the previous
+position. Historical replay never rewinds it. Reads validate the linked
+intents, original bindings, retained protection, native observations, official
+projections and chronology, and reject forks, cycles or missing receipts. The
+original member registration and first ACL remain unchanged. Migration leaves
+legacy first-move predecessors absent and invents no native or source evidence.
 
 `mp namespace birth recover RECOVERY_ID` invokes an already retained staged-file
 recovery action through the same Host contract. It reports the drained public
