@@ -10,7 +10,7 @@ public enum MirrorPulseNamespaceRetirementPhase { Prepared, NativeDeleted, Compl
 /// <summary>Immutable admission to remove one registered non-root member through the Host.</summary>
 public sealed record MirrorPulseNamespaceRetirementIntent(int Version, Guid OperationId, Guid MemberId,
     RootId RootId, MirrorPulseLocalFileBinding LocalObject, string RelativePath, bool IsDirectory,
-    string OwnerSid, DateTimeOffset PreparedAt);
+    string OwnerSid, string RoleSid, DateTimeOffset PreparedAt);
 
 /// <summary>Durable native and membership settlement facts for a controlled deletion.</summary>
 public sealed record MirrorPulseNamespaceRetirement(Guid OperationId, MirrorPulseNamespaceRetirementIntent Intent,
@@ -145,7 +145,7 @@ public sealed partial class MirrorPulseProductCatalog
 
     private static void ValidateNamespaceRetirementIntent(MirrorPulseNamespaceRetirementIntent intent)
     {
-        ValidatePermissionBinding(intent.LocalObject); ValidatePermissionRelativePath(intent.RelativePath); ValidatePermissionSid(intent.OwnerSid, role: false);
+        ValidatePermissionBinding(intent.LocalObject); ValidatePermissionRelativePath(intent.RelativePath); ValidatePermissionSid(intent.OwnerSid, role: false); ValidatePermissionSid(intent.RoleSid, role: true);
         if (intent.Version != 1 || intent.OperationId == Guid.Empty || intent.MemberId == Guid.Empty || intent.RootId.Value == Guid.Empty || intent.PreparedAt == default || intent.RelativePath.Length == 0 || intent.RelativePath.Contains("..", StringComparison.Ordinal)) throw new ArgumentException("The namespace retirement intent is incomplete.", nameof(intent));
     }
 }

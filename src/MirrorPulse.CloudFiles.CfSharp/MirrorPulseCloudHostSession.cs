@@ -41,6 +41,16 @@ public interface IMirrorPulseCloudRuntime : IAsyncDisposable
             new NotSupportedException("This Cloud Files runtime does not execute controlled member moves."));
 
     [SupportedOSPlatform("windows10.0.26100")]
+    ValueTask<MirrorPulseNamespaceRetirement> PrepareNamespaceMemberRetirementAsync(Guid operationId, Guid memberId,
+        CancellationToken cancellationToken) => ValueTask.FromException<MirrorPulseNamespaceRetirement>(
+            new NotSupportedException("This Cloud Files runtime does not prepare controlled retirements."));
+
+    [SupportedOSPlatform("windows10.0.26100")]
+    ValueTask<MirrorPulseNamespaceRetirement> ExecuteNamespaceMemberRetirementAsync(Guid operationId,
+        CancellationToken cancellationToken) => ValueTask.FromException<MirrorPulseNamespaceRetirement>(
+            new NotSupportedException("This Cloud Files runtime does not execute controlled retirements."));
+
+    [SupportedOSPlatform("windows10.0.26100")]
     ValueTask<MirrorPulseNamespaceBirthRecoveryResult> ExecuteNamespaceBirthRecoveryAsync(
         Guid recoveryId, CancellationToken cancellationToken) =>
         ValueTask.FromException<MirrorPulseNamespaceBirthRecoveryResult>(
@@ -226,6 +236,34 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             var registration = router.Registrations.Single(root => root.RootId == intent.RootId);
             // Drain earlier instance work before entering the namespace actor. Subsequent dispatch
             // rechecks the durable root fence after acquiring this same scheduler.
+            return await _scheduler.RunAsync(registration.InstanceId,
+                token => coordinator.ExecuteAsync(operationId, token), cancellationToken).ConfigureAwait(false);
+        }
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        public async ValueTask<MirrorPulseNamespaceRetirement> PrepareNamespaceMemberRetirementAsync(Guid operationId,
+            Guid memberId, CancellationToken cancellationToken)
+        {
+            if (router is null || catalog is null || _namespaceExecution is null || _namespaceActor is null)
+                throw new NotSupportedException("Controlled retirement preparation requires the Host namespace boundary.");
+            var member = await catalog.ReadNamespaceMemberAsync(memberId, cancellationToken).ConfigureAwait(false)
+                ?? throw new FileNotFoundException("The retirement member is not registered.");
+            var registration = router.Registrations.Single(root => root.RootId == member.RootId);
+            var coordinator = new MirrorPulseNamespaceRetirementCoordinator(fileSystem, catalog, router, _namespaceExecution, _namespaceActor);
+            return await _scheduler.RunAsync(registration.InstanceId,
+                token => coordinator.PrepareAsync(operationId, memberId, token), cancellationToken).ConfigureAwait(false);
+        }
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        public async ValueTask<MirrorPulseNamespaceRetirement> ExecuteNamespaceMemberRetirementAsync(Guid operationId,
+            CancellationToken cancellationToken)
+        {
+            if (router is null || catalog is null || _namespaceExecution is null || _namespaceActor is null)
+                throw new NotSupportedException("Controlled retirements require the Host namespace boundary.");
+            var retirement = await catalog.ReadNamespaceRetirementAsync(operationId, cancellationToken).ConfigureAwait(false)
+                ?? throw new FileNotFoundException("The retirement admission is not registered.");
+            var registration = router.Registrations.Single(root => root.RootId == retirement.Intent.RootId);
+            var coordinator = new MirrorPulseNamespaceRetirementCoordinator(fileSystem, catalog, router, _namespaceExecution, _namespaceActor);
             return await _scheduler.RunAsync(registration.InstanceId,
                 token => coordinator.ExecuteAsync(operationId, token), cancellationToken).ConfigureAwait(false);
         }
@@ -578,6 +616,22 @@ public sealed class MirrorPulseCloudHostSession : IAsyncDisposable
         if (!_started || _runtime is null)
             throw new InvalidOperationException("The Cloud Files Host session has not started.");
         return _runtime.ExecuteNamespaceMemberMoveAsync(operationId, cancellationToken);
+    }
+
+    [SupportedOSPlatform("windows10.0.26100")]
+    public ValueTask<MirrorPulseNamespaceRetirement> PrepareNamespaceMemberRetirementAsync(Guid operationId, Guid memberId,
+        CancellationToken cancellationToken = default)
+    {
+        if (!_started || _runtime is null) throw new InvalidOperationException("The Cloud Files Host session has not started.");
+        return _runtime.PrepareNamespaceMemberRetirementAsync(operationId, memberId, cancellationToken);
+    }
+
+    [SupportedOSPlatform("windows10.0.26100")]
+    public ValueTask<MirrorPulseNamespaceRetirement> ExecuteNamespaceMemberRetirementAsync(Guid operationId,
+        CancellationToken cancellationToken = default)
+    {
+        if (!_started || _runtime is null) throw new InvalidOperationException("The Cloud Files Host session has not started.");
+        return _runtime.ExecuteNamespaceMemberRetirementAsync(operationId, cancellationToken);
     }
 
     [SupportedOSPlatform("windows10.0.26100")]

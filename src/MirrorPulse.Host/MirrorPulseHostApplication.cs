@@ -475,6 +475,10 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
             MirrorPulseControlCommands.NamespaceMemberPrepareMove, PrepareNamespaceMemberMoveAsync);
         dispatcher.Register<NamespaceMemberCreateArguments, MirrorPulseControlNamespaceMemberCreation>(
             MirrorPulseControlCommands.NamespaceMemberCreate, CreateNamespaceMemberAsync);
+        dispatcher.Register<NamespaceMemberPrepareRetirementArguments, MirrorPulseControlNamespaceMemberRetirementPreparation>(
+            MirrorPulseControlCommands.NamespaceMemberPrepareRetirement, PrepareNamespaceMemberRetirementAsync);
+        dispatcher.Register<NamespaceMemberRetirementArguments, MirrorPulseControlNamespaceMemberRetirementResult>(
+            MirrorPulseControlCommands.NamespaceMemberRetirement, ExecuteNamespaceMemberRetirementAsync);
         _controlPipe = new MirrorPulseControlPipeServer(dispatcher.DispatchAsync);
     }
 
@@ -507,6 +511,26 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
         var member = await _session.InspectNamespaceMemberAsync(arguments.RelativePath, arguments.IsDirectory, cancellationToken).ConfigureAwait(false);
         return new(member.MemberId, member.ActualParentMemberId, member.RootId?.ToString(), member.RelativePath,
             member.IsDirectory, member.NativeItemId, member.ObservedAt);
+    }
+
+    private async ValueTask<MirrorPulseControlNamespaceMemberRetirementPreparation> PrepareNamespaceMemberRetirementAsync(
+        NamespaceMemberPrepareRetirementArguments arguments, CancellationToken cancellationToken)
+    {
+        if (arguments.OperationId == Guid.Empty || arguments.MemberId == Guid.Empty)
+            throw new ArgumentException("Operation and member IDs are required.", nameof(arguments));
+        var retirement = await _session.PrepareNamespaceMemberRetirementAsync(arguments.OperationId, arguments.MemberId, cancellationToken).ConfigureAwait(false);
+        return new(retirement.OperationId, retirement.Intent.MemberId, retirement.Intent.RelativePath,
+            retirement.Intent.IsDirectory, retirement.Intent.PreparedAt);
+    }
+
+    private async ValueTask<MirrorPulseControlNamespaceMemberRetirementResult> ExecuteNamespaceMemberRetirementAsync(
+        NamespaceMemberRetirementArguments arguments, CancellationToken cancellationToken)
+    {
+        if (arguments.OperationId == Guid.Empty) throw new ArgumentException("A retirement operation ID is required.", nameof(arguments));
+        var retirement = await _session.ExecuteNamespaceMemberRetirementAsync(arguments.OperationId, cancellationToken).ConfigureAwait(false);
+        return new(retirement.OperationId, retirement.Intent.MemberId, retirement.Intent.RelativePath,
+            retirement.Intent.IsDirectory, retirement.Phase.ToString(), retirement.NativeDeletedAt is not null,
+            retirement.Phase == MirrorPulseNamespaceRetirementPhase.Completed);
     }
 
     private async ValueTask<MirrorPulseControlNamespaceMemberMovePreparation> PrepareNamespaceMemberMoveAsync(

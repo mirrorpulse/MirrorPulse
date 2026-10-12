@@ -218,6 +218,10 @@ public static class MirrorPulseCliHelp
                                          Execute or retry an admitted protected member move.
           namespace member create PARENT_ID NAME [--directory] [--operation-id GUID]
                                          Create an empty local file or directory under a protected member.
+          namespace member prepare-retire MEMBER_ID [--operation-id GUID]
+                                         Prepare a protected leaf deletion.
+          namespace member retire OPERATION_ID
+                                         Execute or retry a protected leaf deletion.
           namespace birth recover RECOVERY_ID
                                          Retry an already retained staged-file recovery.
           conflict list|show|snooze|resolve

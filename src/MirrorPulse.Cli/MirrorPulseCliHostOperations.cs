@@ -280,6 +280,26 @@ public sealed class MirrorPulseCliHostOperations : IMirrorPulseCliHostOperations
                     result = creation;
                     human = $"Local member created · {creation.OperationId:D} · {creation.RelativePath}";
                     break;
+                case ("namespace", "member") when command.Path.Count > 2 &&
+                    command.Path[2].Equals("prepare-retire", StringComparison.OrdinalIgnoreCase):
+                    if (command.Arguments.Count is < 1 or > 3 || !Guid.TryParse(command.Arguments[0], out Guid retireMember) || retireMember == Guid.Empty)
+                        throw new ArgumentException("namespace member prepare-retire requires a member ID and optional --operation-id GUID.");
+                    Guid retireOperation = Guid.NewGuid();
+                    if (command.Arguments.Count > 1 && (!command.Arguments[1].Equals("--operation-id", StringComparison.OrdinalIgnoreCase) ||
+                        command.Arguments.Count != 3 || !Guid.TryParse(command.Arguments[2], out retireOperation) || retireOperation == Guid.Empty))
+                        throw new ArgumentException("--operation-id requires a non-empty GUID.");
+                    var retirementPreparation = await _client.PrepareNamespaceMemberRetirementAsync(retireOperation, retireMember, cancellationToken).ConfigureAwait(false);
+                    result = retirementPreparation;
+                    human = $"Member retirement prepared · {retirementPreparation.OperationId:D} · {retirementPreparation.RelativePath}";
+                    break;
+                case ("namespace", "member") when command.Path.Count > 2 &&
+                    command.Path[2].Equals("retire", StringComparison.OrdinalIgnoreCase):
+                    if (command.Arguments.Count != 1 || !Guid.TryParse(command.Arguments[0], out Guid retireExecution) || retireExecution == Guid.Empty)
+                        throw new ArgumentException("namespace member retire requires one non-empty operation ID.");
+                    var retirement = await _client.ExecuteNamespaceMemberRetirementAsync(retireExecution, cancellationToken).ConfigureAwait(false);
+                    result = retirement;
+                    human = $"Member retirement {retirement.Phase} · {retirement.OperationId:D} · {retirement.RelativePath}";
+                    break;
                 case ("namespace", "birth") when command.Path.Count > 2 &&
                     command.Path[2].Equals("recover", StringComparison.OrdinalIgnoreCase):
                     if (command.Arguments.Count != 1 || !Guid.TryParse(command.Arguments[0], out Guid birthRecoveryId) || birthRecoveryId == Guid.Empty)

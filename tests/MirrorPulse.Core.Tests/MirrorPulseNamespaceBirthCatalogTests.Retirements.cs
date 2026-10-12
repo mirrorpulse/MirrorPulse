@@ -65,5 +65,5 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
 
     private static MirrorPulseNamespaceRetirementIntent Retire(MoveFixture setup, Guid operationId) =>
         new(1, operationId, setup.Member.MemberId, setup.Member.RootId!.Value, setup.Member.LocalObject,
-            setup.Member.RelativePath, setup.Member.IsDirectory, setup.Member.OwnerSid, DateTimeOffset.UtcNow);
+            setup.Member.RelativePath, setup.Member.IsDirectory, setup.Member.OwnerSid, setup.Born.Protection.RoleSid, DateTimeOffset.UtcNow);
 }

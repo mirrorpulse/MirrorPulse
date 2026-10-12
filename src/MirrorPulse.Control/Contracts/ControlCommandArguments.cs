@@ -87,6 +87,10 @@ public sealed record RootRecoverArguments(Guid OperationId) : IMirrorPulseContro
 
 public sealed record NamespaceMemberMoveArguments(Guid OperationId) : IMirrorPulseControlArguments;
 
+public sealed record NamespaceMemberRetirementArguments(Guid OperationId) : IMirrorPulseControlArguments;
+
+public sealed record NamespaceMemberPrepareRetirementArguments(Guid OperationId, Guid MemberId) : IMirrorPulseControlArguments;
+
 public sealed record NamespaceMemberCreateArguments(Guid OperationId, Guid ParentMemberId,
     string Name, bool IsDirectory = false) : IMirrorPulseControlArguments;
 
@@ -109,6 +113,12 @@ public sealed record NamespaceBirthRecoverArguments(Guid RecoveryId) : IMirrorPu
 public sealed record MirrorPulseControlNamespaceMemberMoveResult(Guid OperationId, Guid ItemId,
     string RemoteId, string RelativePath, bool IsDirectory, bool CurrentNameCommitted,
     bool RequiresSubtreeReconciliation, string? OfficialRemoteRevision);
+
+public sealed record MirrorPulseControlNamespaceMemberRetirementPreparation(Guid OperationId, Guid MemberId,
+    string RelativePath, bool IsDirectory, DateTimeOffset PreparedAt);
+
+public sealed record MirrorPulseControlNamespaceMemberRetirementResult(Guid OperationId, Guid MemberId,
+    string RelativePath, bool IsDirectory, string Phase, bool NativeDeleted, bool MembershipSettled);
 
 public sealed record MirrorPulseControlNamespaceBirthRecoveryResult(Guid RecoveryId, string Outcome,
     bool CallbackCompleted, bool Drained, bool NativeIdentityPrepared, bool DurableProjectionCommitted, bool VerificationRecorded);

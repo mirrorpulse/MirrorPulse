@@ -257,6 +257,16 @@ public sealed class MirrorPulseControlClient
         SendAsync<NamespaceMemberMoveArguments, MirrorPulseControlNamespaceMemberMoveResult>(
             MirrorPulseControlCommands.NamespaceMemberMove, new(operationId), cancellationToken);
 
+    public Task<MirrorPulseControlNamespaceMemberRetirementPreparation> PrepareNamespaceMemberRetirementAsync(Guid operationId,
+        Guid memberId, CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceMemberPrepareRetirementArguments, MirrorPulseControlNamespaceMemberRetirementPreparation>(
+            MirrorPulseControlCommands.NamespaceMemberPrepareRetirement, new(operationId, memberId), cancellationToken);
+
+    public Task<MirrorPulseControlNamespaceMemberRetirementResult> ExecuteNamespaceMemberRetirementAsync(Guid operationId,
+        CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceMemberRetirementArguments, MirrorPulseControlNamespaceMemberRetirementResult>(
+            MirrorPulseControlCommands.NamespaceMemberRetirement, new(operationId), cancellationToken);
+
     public Task<MirrorPulseControlNamespaceBirthRecoveryResult> ExecuteNamespaceBirthRecoveryAsync(Guid recoveryId,
         CancellationToken cancellationToken = default) =>
         SendAsync<NamespaceBirthRecoverArguments, MirrorPulseControlNamespaceBirthRecoveryResult>(
