@@ -137,7 +137,7 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
         }, ProjectAcceptedAsync, cancellationToken).ConfigureAwait(false);
         foreach (Guid operationId in repaired) _runner.ClearRecoveredFault(operationId);
         IReadOnlyList<RootId> deferred = await _catalog.ReadDeferredRescanRootsAsync(cancellationToken).ConfigureAwait(false);
-        HashSet<RootId> pendingRoots = (await _catalog.ReadNamespaceRecoveryRootsAsync(cancellationToken).ConfigureAwait(false)).ToHashSet();
+        HashSet<RootId> pendingRoots = (await _catalog.ReadNamespaceDispatchFencedRootsAsync(cancellationToken).ConfigureAwait(false)).ToHashSet();
         bool enabledDeferredRoot = _router.Registrations.Any(root => root.State == RootRegistrationState.Active &&
             _mayDispatch(root.InstanceId) && deferred.Contains(root.RootId) && !pendingRoots.Contains(root.RootId));
         MirrorPulseJournalUploadBatch batch = _source.RequiresFullRescan || enabledDeferredRoot ||
@@ -154,7 +154,7 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
 
     private async ValueTask ProjectRescanAsync(CancellationToken cancellationToken)
     {
-        HashSet<RootId> pendingRoots = (await _catalog.ReadNamespaceRecoveryRootsAsync(cancellationToken).ConfigureAwait(false)).ToHashSet();
+        HashSet<RootId> pendingRoots = (await _catalog.ReadNamespaceDispatchFencedRootsAsync(cancellationToken).ConfigureAwait(false)).ToHashSet();
         foreach (RootRegistration root in _router.Registrations.Where(root => root.State == RootRegistrationState.Active &&
             _mayDispatch(root.InstanceId) && !pendingRoots.Contains(root.RootId)))
             await _catalog.CompleteRootRescanAsync(root.RootId, cancellationToken).ConfigureAwait(false);
@@ -177,7 +177,7 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
     {
         RootRegistration root = _router.GetRegistration(command.InstanceId, command.RootKey);
         if (root.State != RootRegistrationState.Active || !_mayDispatch(command.InstanceId) ||
-            (await _catalog.ReadNamespaceRecoveryRootsAsync(cancellationToken).ConfigureAwait(false)).Contains(root.RootId))
+            (await _catalog.ReadNamespaceDispatchFencedRootsAsync(cancellationToken).ConfigureAwait(false)).Contains(root.RootId))
             return false;
         if (command.Kind is MirrorPulseWorkerChangeKind.Move or MirrorPulseWorkerChangeKind.Delete ||
             command.IsDirectory && command.Kind == MirrorPulseWorkerChangeKind.Create)

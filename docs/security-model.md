@@ -250,6 +250,14 @@ A started birth without its original binding requires explicit recovery, and an
 occupied destination is never overwritten. This boundary supports empty local
 creation; it does not implement imports, deletion or replacement saves.
 
+An unregistered birth fences ordinary journal dispatch, rescan and remote polling
+or application for its managed root, including cursor-only batches. The catalog
+reads these dispatch fences in one transaction with pending moves and Label
+changes. Conversion or observation alone cannot release the fence: verified
+member registration atomically transfers the reserved name. Birth recovery and
+membership bookkeeping remain available, and unrelated roots can synchronize.
+A missing or inconsistent pending birth reservation fails closed.
+
 Registered-file upload confirmation verifies current child and direct-parent
 bindings, owners and DACLs under metadata and ancestor guards, before the public
 native mark and again before identity correlation. A missing protection epoch,

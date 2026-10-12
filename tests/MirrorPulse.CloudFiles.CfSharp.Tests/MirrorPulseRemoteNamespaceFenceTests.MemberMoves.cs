@@ -10,6 +10,32 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 public sealed partial class MirrorPulseRemoteNamespaceFenceTests
 {
     [TestMethod]
+    public async Task UnregisteredBirthDefersRemotePollingApplyAndCursorButKeepsOtherRootsAvailable()
+    {
+        await using var fixture = await MoveFixture.OpenAsync();
+        var birth = fixture.CreateBirthIntent();
+        await fixture.Catalog.PrepareNamespaceBirthAsync(birth);
+        for (int owner = 0; owner < 2; owner++)
+        {
+            Assert.IsFalse(await fixture.Fence.CanPollAsync(fixture.Docs, default));
+            Assert.IsTrue(await fixture.Fence.CanPollAsync(fixture.Archive, default));
+            Assert.IsTrue(await fixture.Fence.CanPollAsync(fixture.Foreign, default));
+            await fixture.Fence.EnsureApplyAllowedAsync(fixture.Docs.InstanceId, Batch(@"Archive\report.txt"), default);
+            await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => fixture.Fence.EnsureApplyAllowedAsync(
+                fixture.Docs.InstanceId, Batch(@"Docs\pending.txt"), default).AsTask());
+            await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => fixture.Fence.EnsureApplyAllowedAsync(
+                fixture.Docs.InstanceId, Batch(@"Archive\report.txt", @"Docs\pending.txt"), default).AsTask());
+            await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => fixture.Fence.EnsureApplyAllowedAsync(
+                fixture.Docs.InstanceId, new("cursor-only", new byte[] { 1 }, [], new byte[] { 2 }), default).AsTask());
+            Assert.HasCount(0, await fixture.Catalog.ReadNamespaceRecoveryRootsAsync());
+            Assert.AreEqual(birth, await fixture.Catalog.PrepareNamespaceBirthAsync(birth));
+            if (owner == 0) await fixture.RestartAsync();
+        }
+        Assert.IsFalse(Directory.Exists(fixture.Paths.SyncRootPath));
+        Assert.IsFalse(File.Exists(fixture.Paths.CfSharpStateDatabasePath));
+    }
+
+    [TestMethod]
     [DataRow(false)]
     [DataRow(true)]
     public async Task ControlledMoveFencesPollingBothRemotePathsAndCursorAcrossOwners(bool started)
@@ -100,6 +126,10 @@ public sealed partial class MirrorPulseRemoteNamespaceFenceTests
         public MirrorPulseNamespaceMemberRegistration Parent { get; private set; } = null!;
         public MirrorPulseNamespaceMemberRegistration Child { get; private set; } = null!;
         public MirrorPulseNamespaceMemberMoveIntent Move { get; private set; } = null!;
+
+        public MirrorPulseNamespaceBirthIntent CreateBirthIntent() => new(1, Guid.NewGuid(), Docs.RootId,
+            Parent.OriginId, Parent.ProtectionId, Parent.LocalObject, "Docs/pending.txt", false,
+            MirrorPulseNamespaceBirthOrigin.ControlledCreation, Role, DateTimeOffset.UtcNow);
 
         public static async Task<MoveFixture> OpenAsync()
         {

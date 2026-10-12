@@ -100,7 +100,7 @@ public sealed class MirrorPulseJournalUploadSource
         }
 
         var ready = new List<MirrorPulseWorkerChangeCommand>(plan.Commands.Count);
-        HashSet<RootId> pendingRoots = (await _catalog.ReadNamespaceRecoveryRootsAsync(cancellationToken).ConfigureAwait(false)).ToHashSet();
+        HashSet<RootId> pendingRoots = (await _catalog.ReadNamespaceDispatchFencedRootsAsync(cancellationToken).ConfigureAwait(false)).ToHashSet();
         var held = new List<MirrorPulseWorkerChangeCommand>();
         int deferred = plan.BlockedOperations?.Count ?? 0;
         foreach (MirrorPulseBlockedLocalOperation blocked in plan.BlockedOperations ?? [])

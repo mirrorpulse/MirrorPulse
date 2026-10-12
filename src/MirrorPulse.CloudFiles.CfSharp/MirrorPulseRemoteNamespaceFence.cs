@@ -14,14 +14,14 @@ public sealed class MirrorPulseRemoteNamespaceFence(MirrorPulseRootRouter router
         RootRegistration current = router.GetRegistration(root.InstanceId, root.UniquenessKey);
         if (current.RootId != root.RootId || current.DirectoryName != root.DirectoryName ||
             current.State != RootRegistrationState.Active) return false;
-        return !(await catalog.ReadNamespaceRecoveryRootsAsync(cancellationToken).ConfigureAwait(false)).Contains(root.RootId);
+        return !(await catalog.ReadNamespaceDispatchFencedRootsAsync(cancellationToken).ConfigureAwait(false)).Contains(root.RootId);
     }
 
     public async ValueTask EnsureApplyAllowedAsync(InstanceId instance, CloudRemoteChangeBatch batch,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(batch);
-        HashSet<RootId> pending = (await catalog.ReadNamespaceRecoveryRootsAsync(cancellationToken).ConfigureAwait(false)).ToHashSet();
+        HashSet<RootId> pending = (await catalog.ReadNamespaceDispatchFencedRootsAsync(cancellationToken).ConfigureAwait(false)).ToHashSet();
         if (pending.Count == 0) return;
         IEnumerable<RootId> affected = batch.Changes.Count == 0
             ? router.Registrations.Where(root => root.InstanceId == instance).Select(root => root.RootId)
