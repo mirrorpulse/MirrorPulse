@@ -258,6 +258,16 @@ member registration atomically transfers the reserved name. Birth recovery and
 membership bookkeeping remain available, and unrelated roots can synchronize.
 A missing or inconsistent pending birth reservation fails closed.
 
+Controlled retirement follows the same boundary. The Host prepares one registered
+non-root member, rejects roots and directories with registered descendants, then
+opens the protected parent chain under the admitted namespace role. CfSharp's
+public `DeleteAsync` performs the native deletion only after the child binding,
+owner, parent and DACL are freshly checked. A successful native deletion is
+recorded before the member name is removed from the product catalog; a restart
+can therefore finish membership settlement without repeating native deletion.
+If the target reappears after the native receipt, recovery fails closed. Ordinary
+user deletion remains denied by the protected DACL.
+
 Registered-file upload confirmation verifies current child and direct-parent
 bindings, owners and DACLs under metadata and ancestor guards, before the public
 native mark and again before identity correlation. A missing protection epoch,

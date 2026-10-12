@@ -75,6 +75,8 @@ public sealed class MirrorPulseNamespaceRetirementCoordinator(CloudFileSystem fi
                 parentFacts.Dacl != parentProof.Verification.Dacl || parentFacts.LinkCount != 1)
                 throw new InvalidDataException("The retirement parent changed before the controlled deletion.");
             var snapshot = await item.InspectAsync(token).ConfigureAwait(false);
+            if (current.Phase == MirrorPulseNamespaceRetirementPhase.NativeDeleted && snapshot.Exists)
+                throw new InvalidDataException("A native-deleted retirement target reappeared before membership settlement.");
             if (snapshot.Exists)
             {
                 if (snapshot.LocalBinding is not { } binding ||
