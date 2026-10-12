@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.Data.Sqlite;
 
 namespace MirrorPulse.Core.State;
 
@@ -130,19 +131,27 @@ public sealed partial class MirrorPulseProductCatalog
         try
         {
             ThrowIfDisposed();
-            await using var command = _connection.CreateCommand();
-            command.CommandText = "SELECT receipt FROM content_acceptance_proofs WHERE operation_id=$operation;";
-            command.Parameters.AddWithValue("$operation", operationId.ToString("D"));
-            object? payload = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
-            return payload is byte[] bytes ? JsonSerializer.Deserialize<MirrorPulseContentConfirmationReceipt>(bytes, TopologyJsonOptions)
-                ?? throw new InvalidDataException("The confirmation receipt is empty.") : null;
+            return await ReadContentConfirmationReceiptCoreAsync(operationId, null, cancellationToken).ConfigureAwait(false);
         }
         finally { _gate.Release(); }
     }
 
-    private async Task<MirrorPulseContentAcceptanceProof?> ReadContentAcceptanceProofCoreAsync(Guid operationId, CancellationToken token)
+    private async Task<MirrorPulseContentConfirmationReceipt?> ReadContentConfirmationReceiptCoreAsync(Guid operationId,
+        SqliteTransaction? transaction, CancellationToken token)
+    {
+        await using var command = _connection.CreateCommand(); command.Transaction = transaction;
+        command.CommandText = "SELECT receipt FROM content_acceptance_proofs WHERE operation_id=$operation;";
+        command.Parameters.AddWithValue("$operation", operationId.ToString("D"));
+        object? payload = await command.ExecuteScalarAsync(token).ConfigureAwait(false);
+        return payload is byte[] bytes ? JsonSerializer.Deserialize<MirrorPulseContentConfirmationReceipt>(bytes, TopologyJsonOptions)
+            ?? throw new InvalidDataException("The confirmation receipt is empty.") : null;
+    }
+
+    private async Task<MirrorPulseContentAcceptanceProof?> ReadContentAcceptanceProofCoreAsync(Guid operationId, CancellationToken token,
+        SqliteTransaction? transaction = null)
     {
         await using var command = _connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = "SELECT payload FROM content_acceptance_proofs WHERE operation_id=$operation;";
         command.Parameters.AddWithValue("$operation", operationId.ToString("D"));
         object? payload = await command.ExecuteScalarAsync(token).ConfigureAwait(false);
@@ -150,7 +159,14 @@ public sealed partial class MirrorPulseProductCatalog
         MirrorPulseContentAcceptanceProof proof = JsonSerializer.Deserialize<MirrorPulseContentAcceptanceProof>(bytes, TopologyJsonOptions)
             ?? throw new InvalidDataException("The content acceptance proof is empty.");
         if (proof.OperationId != operationId) throw new InvalidDataException("The proof has a different operation identity.");
-        proof.UploadBinding.Validate();
-        return proof;
+        try
+        {
+            if (proof.UploadBinding is null || proof.AcceptedItemId == Guid.Empty || string.IsNullOrWhiteSpace(proof.RemoteId) ||
+                proof.Length < 0 || proof.Sha256 is null || proof.Sha256.Length != 64 || !proof.Sha256.All(Uri.IsHexDigit))
+                throw new ArgumentException("The retained upload acceptance proof is incomplete.");
+            proof.UploadBinding.Validate();
+            return proof;
+        }
+        catch (ArgumentException error) { throw new InvalidDataException("The retained upload acceptance proof is invalid.", error); }
     }
 }
