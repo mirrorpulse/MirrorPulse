@@ -40,11 +40,23 @@ internal static class MirrorPulseNamespaceProtectionProofReader
             new(birth.OperationId, protection.ProtectionId), original);
     }
 
-    internal static Task<MirrorPulseNamespaceProtectionProof> ReadMemberAsync(MirrorPulseProductCatalog catalog,
-        MirrorPulseNamespaceMemberRegistration member, CancellationToken token) => member.Origin switch
+    internal static async Task<MirrorPulseNamespaceProtectionProof> ReadMemberAsync(MirrorPulseProductCatalog catalog,
+        MirrorPulseNamespaceMemberRegistration member, CancellationToken token)
+    {
+        MirrorPulseNamespaceProtectionProof proof = await (member.Origin switch
         {
             MirrorPulseNamespaceMemberOrigin.CapturedOriginal => ReadOriginalAsync(catalog, member.OriginId, token),
             MirrorPulseNamespaceMemberOrigin.ProtectedBirth => ReadBirthAsync(catalog, member.OriginId, token),
             _ => throw new ArgumentException("The member requires one supported provenance origin.", nameof(member)),
-        };
+        }).ConfigureAwait(false);
+        var registered = await catalog.ReadNamespaceMemberAsync(member.MemberId, token).ConfigureAwait(false);
+        // Native registration also uses this reader before the member has been published.
+        if (registered is null) return proof;
+        if (registered != member)
+            throw new InvalidDataException("Current protection cannot adopt different member provenance.");
+        var location = await catalog.ReadNamespaceMemberLocationAsync(member.MemberId, token).ConfigureAwait(false);
+        // A completed product move selects the current position. Neither an official path
+        // observation nor a pending native move may rewrite the historical ACL or birth.
+        return proof with { RelativePath = location.RelativePath };
+    }
 }

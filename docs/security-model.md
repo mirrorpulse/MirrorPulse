@@ -254,6 +254,9 @@ Registered-file upload confirmation verifies current child and direct-parent
 bindings, owners and DACLs under metadata and ancestor guards, before the public
 native mark and again before identity correlation. A missing protection epoch,
 changed descriptor or superseded identity cannot authorize a new confirmation.
+Current member protection resolves its path only through completed product moves;
+a moved official projection or pending native operation cannot advance it. The
+first membership, original ACL and birth observation remain unchanged.
 
 `mp namespace birth recover RECOVERY_ID` invokes an already retained staged-file
 recovery action through the same Host contract. It reports the drained public
