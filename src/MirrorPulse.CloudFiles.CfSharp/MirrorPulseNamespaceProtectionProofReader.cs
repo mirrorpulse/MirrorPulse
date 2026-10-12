@@ -54,6 +54,9 @@ internal static class MirrorPulseNamespaceProtectionProofReader
         if (registered is null) return proof;
         if (registered != member)
             throw new InvalidDataException("Current protection cannot adopt different member provenance.");
+        var epoch = await catalog.ReadNamespaceMemberProtectionEpochAsync(member.MemberId, token).ConfigureAwait(false);
+        if (epoch.ProtectionId != proof.ProtectionId || epoch.RoleSid != proof.RoleSid || epoch.VerifiedAt != proof.Verification.ObservedAt)
+            throw new InvalidDataException("Current protection must follow the member's retained permission references.");
         var location = await catalog.ReadNamespaceMemberLocationAsync(member.MemberId, token).ConfigureAwait(false);
         // A completed product move selects the current position. Neither an official path
         // observation nor a pending native move may rewrite the historical ACL or birth.

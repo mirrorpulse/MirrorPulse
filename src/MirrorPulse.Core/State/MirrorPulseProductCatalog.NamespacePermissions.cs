@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Data.Sqlite;
 using MirrorPulse.Core.Contracts;
 
@@ -24,7 +25,15 @@ public enum MirrorPulseNamespacePermissionRecoveryReason
 public sealed record MirrorPulseNamespacePermissionIntent(Guid OperationId, Guid EvidenceId,
     MirrorPulseLocalFileBinding LocalObject, RootId? RootId, string RelativePath,
     MirrorPulseNamespacePermissionChangeKind Kind, string RoleSid, string ExpectedDacl,
-    string TargetDacl, DateTimeOffset PreparedAt);
+    string TargetDacl, DateTimeOffset PreparedAt)
+{
+    /// <summary>The completed product relocation at which this later permission change was admitted.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public MirrorPulseNamespacePermissionRelocation? Relocation { get; init; }
+}
+
+/// <summary>Retains a permission epoch's registered member and completed move without changing its original capture.</summary>
+public sealed record MirrorPulseNamespacePermissionRelocation(Guid MemberId, Guid CompletedMoveOperationId);
 
 /// <summary>Pairs the original object evidence with its immutable permission intent.</summary>
 public sealed record MirrorPulseNamespacePermissionPreparation(MirrorPulseNamespacePermissionBaseline Baseline,
@@ -115,6 +124,7 @@ public sealed partial class MirrorPulseProductCatalog
                 throw new InvalidOperationException("A permission operation cannot adopt different evidence.");
             return replay;
         }
+        await ValidatePermissionMemberLocationAsync(baseline, intent, current: true, transaction, cancellationToken).ConfigureAwait(false);
         IReadOnlyList<MirrorPulseNamespacePermissionChange> history = await ReadPermissionChangesCoreAsync(
             baseline.EvidenceId, cancellationToken, transaction).ConfigureAwait(false);
         if (history.Any(change => change.Phase != MirrorPulseNamespacePermissionPhase.Verified))
@@ -226,6 +236,7 @@ public sealed partial class MirrorPulseProductCatalog
                 change.Intent.EvidenceId, cancellationToken, transaction).ConfigureAwait(false)
                 ?? throw new InvalidDataException("The original permission evidence is missing.");
             await ValidatePermissionTreeAdmissionAsync(baseline, change.Intent, transaction, cancellationToken).ConfigureAwait(false);
+            await ValidatePermissionMemberLocationAsync(baseline, change.Intent, current: true, transaction, cancellationToken).ConfigureAwait(false);
             transaction.Commit();
             return change;
         }
@@ -473,6 +484,9 @@ public sealed partial class MirrorPulseProductCatalog
         if (intent.OperationId == Guid.Empty || intent.EvidenceId == Guid.Empty || intent.PreparedAt == default || !Enum.IsDefined(intent.Kind) ||
             intent.ExpectedDacl == intent.TargetDacl)
             throw new ArgumentException("The permission change intent is invalid.");
+        if (intent.Relocation is { } relocation && (relocation.MemberId == Guid.Empty || relocation.CompletedMoveOperationId == Guid.Empty ||
+            intent.RootId is null))
+            throw new ArgumentException("Relocated permission changes require a registered member and completed move.");
     }
 
     private static void ValidatePermissionBinding(MirrorPulseLocalFileBinding binding)

@@ -265,6 +265,12 @@ changed descriptor or superseded identity cannot authorize a new confirmation.
 Current member protection resolves its path only through completed product moves;
 a moved official projection or pending native operation cannot advance it. The
 first membership, original ACL and birth observation remain unchanged.
+Later permission changes on a moved original retain the member ID and completed
+move in their immutable intent. Preparation and native admission require the
+latest committed position; historical replay grants no authority at an earlier
+path. The epoch must follow the full completed move evidence and chronology.
+Rotation, restoration and subsequent protection keep the first descriptor intact.
+The catalog revalidates these references before exposing current member protection.
 A new directory receives the current-user owner and explicit owned birth policy
 at creation. After public conversion under retained metadata and parent guards,
 a separate public directory metadata scope applies and verifies the parent's

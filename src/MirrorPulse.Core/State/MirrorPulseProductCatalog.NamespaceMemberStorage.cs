@@ -23,9 +23,24 @@ public sealed partial class MirrorPulseProductCatalog
             if (permission is null || permission.Intent.EvidenceId != original.EvidenceId ||
                 permission.Intent.LocalObject != member.LocalObject || original.LocalObject != member.LocalObject ||
                 original.OwnerSid != member.OwnerSid || original.IsDirectory != member.IsDirectory ||
-                permission.Intent.RootId != member.RootId || permission.Intent.RelativePath != member.RelativePath ||
+                permission.Intent.RootId != member.RootId ||
                 permission.Phase != MirrorPulseNamespacePermissionPhase.Verified || permission.Intent.Kind == MirrorPulseNamespacePermissionChangeKind.Restore)
                 throw new InvalidOperationException("Original membership requires verified protection of its retained object and location.");
+            // Reject a future epoch before following its completed-move references. This
+            // also prevents cyclic protection/move references from recursing through history.
+            if (!current && (retainedAt ?? member.RegisteredAt) < permission.Verification!.ObservedAt)
+                throw new InvalidOperationException("Membership cannot predate its retained protection verification.");
+            if (permission.Intent.Relocation is null)
+            {
+                if (permission.Intent.RelativePath != member.RelativePath)
+                    throw new InvalidOperationException("Unlocated permission epochs must retain the first registered path.");
+            }
+            else
+            {
+                if (permission.Intent.Relocation.MemberId != member.MemberId)
+                    throw new InvalidOperationException("The permission epoch belongs to another registered member.");
+                await ValidatePermissionMemberLocationAsync(original, permission.Intent, current: false, transaction, token).ConfigureAwait(false);
+            }
             if (current) await ValidatePermissionTreeAdmissionAsync(original, permission.Intent, transaction, token).ConfigureAwait(false);
             proof = new(permission.Intent.OperationId, permission.Intent.RoleSid, permission.Verification!.ObservedAt);
         }
