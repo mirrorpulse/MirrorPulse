@@ -125,6 +125,19 @@ remote-acceptance evidence before a controlled mutation. Full native binding
 lookup uses volume, sync-root ID and the complete file ID in the product catalog;
 the official item's volume-specific Int64 file ID is not substituted for it.
 
+Schema 36 retains a before-native intent and start for a member's first controlled
+move within one managed root. The original member, public identity and source name
+remain unchanged. The transaction reserves the target name and retains a pending
+root fence; new births and registrations in that root wait for recovery. Other
+roots remain independently admissible. Historical intent/start replay does not
+refresh authorization after a protection epoch changes. Current execution checks
+the retained child, direct parents, full bindings, role, name indexes and ancestry.
+Directory evidence remains an opaque public CfSharp encoding; Host must decode
+and verify it through the public library before native work. These catalog APIs do
+not move files, prove a native outcome, acknowledge journal records, transfer a
+name, or enable a controlled CLI command. Product completion, current ownership,
+accepted remote-identity correlation and Host integration remain separate work.
+
 Schema 27 adds immutable birth intents for controlled creation, import and remote
 population under a protected parent. Admission requires that parent's latest
 verified protection, native binding, stable root and current role. A separate

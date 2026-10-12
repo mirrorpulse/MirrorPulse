@@ -10,7 +10,7 @@ public sealed partial class MirrorPulseProductCatalog
     private sealed record NamespaceMemberProof(Guid ProtectionId, string RoleSid, DateTimeOffset VerifiedAt);
 
     private async Task<NamespaceMemberProof> ReadNamespaceMemberProofAsync(MirrorPulseNamespaceMemberRegistration member,
-        bool current, SqliteTransaction transaction, CancellationToken token)
+        bool current, SqliteTransaction transaction, CancellationToken token, Guid? protectionId = null, DateTimeOffset? retainedAt = null)
     {
         NamespaceMemberProof proof;
         if (member.Origin == MirrorPulseNamespaceMemberOrigin.CapturedOriginal)
@@ -19,7 +19,7 @@ public sealed partial class MirrorPulseProductCatalog
                 ?? throw new FileNotFoundException("The member's pre-protection original is missing.");
             var permission = current
                 ? await ReadLatestPermissionChangeCoreAsync(member.OriginId, token, transaction).ConfigureAwait(false)
-                : await ReadPermissionChangeCoreAsync(member.ProtectionId, token, transaction).ConfigureAwait(false);
+                : await ReadPermissionChangeCoreAsync(protectionId ?? member.ProtectionId, token, transaction).ConfigureAwait(false);
             if (permission is null || permission.Intent.EvidenceId != original.EvidenceId ||
                 permission.Intent.LocalObject != member.LocalObject || original.LocalObject != member.LocalObject ||
                 original.OwnerSid != member.OwnerSid || original.IsDirectory != member.IsDirectory ||
@@ -37,7 +37,7 @@ public sealed partial class MirrorPulseProductCatalog
                 ?? throw new FileNotFoundException("The member has no native birth observation.");
             var protection = current
                 ? await ReadLatestNamespaceBirthProtectionCoreAsync(member.OriginId, transaction, token).ConfigureAwait(false)
-                : await ReadNamespaceBirthProtectionCoreAsync(member.ProtectionId, transaction, token).ConfigureAwait(false);
+                : await ReadNamespaceBirthProtectionCoreAsync(protectionId ?? member.ProtectionId, transaction, token).ConfigureAwait(false);
             if (protection is null) throw new FileNotFoundException("The member's verified birth protection is missing.");
             if (protection.BirthOperationId != member.OriginId ||
                 observation.LocalObject != member.LocalObject || observation.OwnerSid != member.OwnerSid ||
@@ -53,7 +53,7 @@ public sealed partial class MirrorPulseProductCatalog
             if (current) _ = await ValidateNamespaceBirthLineageAsync(birth, protection, true, transaction, token).ConfigureAwait(false);
             proof = new(protection.ProtectionId, protection.RoleSid, protection.Verification.ObservedAt);
         }
-        if (!current && member.RegisteredAt < proof.VerifiedAt)
+        if (!current && (retainedAt ?? member.RegisteredAt) < proof.VerifiedAt)
             throw new InvalidOperationException("Membership cannot predate its retained protection verification.");
         return proof;
     }

@@ -44,6 +44,8 @@ public sealed partial class MirrorPulseProductCatalog
                 transaction.Commit();
                 return replay;
             }
+            if (member.RootId is { } rootId)
+                await RequireNamespaceMoveRootUnfencedAsync(rootId, null, transaction, cancellationToken).ConfigureAwait(false);
             var proof = await ReadNamespaceMemberProofAsync(member, false, transaction, cancellationToken).ConfigureAwait(false);
             var current = await ReadNamespaceMemberProofAsync(member, true, transaction, cancellationToken).ConfigureAwait(false);
             if (current.ProtectionId != member.ProtectionId)
