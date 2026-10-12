@@ -48,6 +48,16 @@ public sealed partial class MirrorPulseNamespaceMemberLocatorTests
 
     private static async Task<MirrorPulseContentAcceptanceProof> RetainAcceptedIdentityAsync(Fixture fixture)
     {
+        var prepared = await PrepareAcceptedIdentityAsync(fixture);
+        await using var actor = new MirrorPulseNamespaceActor();
+        await actor.RunAsync(async token => await MirrorPulseNamespaceContentConfirmation.RetainConfirmedIdentityAsync(
+            fixture.Catalog, prepared.Proof, prepared.Receipt, actor, token));
+        return prepared.Proof;
+    }
+
+    private static async Task<(MirrorPulseContentAcceptanceProof Proof, MirrorPulseContentConfirmationReceipt Receipt)>
+        PrepareAcceptedIdentityAsync(Fixture fixture, string? mismatch = null)
+    {
         var manifest = new AdapterManifest(1, AdapterId.Parse("example.identities"), "Example", "1.0.0", new(1, 1),
             new Dictionary<string, string> { ["win-x64"] = "worker/adapter.exe", ["win-arm64"] = "worker/adapter.exe" },
             new(null), new(null, null), new(true, false, true, true), ["en-US"], "1.0.0", [new("docs", "Docs", "Docs", false)]);
@@ -59,23 +69,25 @@ public sealed partial class MirrorPulseNamespaceMemberLocatorTests
             RootRegistrationState.Active, DateTimeOffset.UtcNow, RootIdentityScope.InstanceRoot);
         await fixture.Catalog.SaveAdapterTopologyAsync(new([installation], [instance], [root]));
         var previous = await fixture.Catalog.ReadNamespaceMemberIdentityAsync(fixture.Member.MemberId);
-        var oldIdentity = new CloudPlaceholderIdentity(previous.ItemId!.Value, previous.RemoteId!, "before");
+        var oldIdentity = new CloudPlaceholderIdentity(mismatch == "previous" ? Guid.NewGuid() : previous.ItemId!.Value, previous.RemoteId!, "before");
         var binding = new MirrorPulseUploadBinding(fixture.Member.LocalObject, MirrorPulseContentPreparation.ReplacePlaceholderIdentity,
-            Convert.ToBase64String(oldIdentity.Encode()));
+            mismatch == "invalid-previous" ? "AQID" : Convert.ToBase64String(oldIdentity.Encode()));
         var intent = new MirrorPulseMutationIntent(Guid.NewGuid(), root.InstanceId, root.UniquenessKey, MirrorPulseWorkerChangeKind.ContentUpdate,
             "existing", null, false, "before", 4, new string('A', 64), MirrorPulseMutationOrigin.Journal, binding);
         await fixture.Catalog.PrepareMutationAsync(intent);
         await fixture.Catalog.TransitionMutationAsync(intent.OperationId, MirrorPulseMutationState.Prepared, MirrorPulseMutationState.Executing);
         await fixture.Catalog.TransitionMutationAsync(intent.OperationId, MirrorPulseMutationState.Executing, MirrorPulseMutationState.RemoteAccepted, "after");
-        var proof = new MirrorPulseContentAcceptanceProof(intent.OperationId, binding, Guid.NewGuid(), "source:accepted", "after", 4, intent.ContentSha256!);
+        var proof = new MirrorPulseContentAcceptanceProof(intent.OperationId, binding,
+            mismatch == "unchanged" ? previous.ItemId!.Value : Guid.NewGuid(), mismatch == "unchanged" ? previous.RemoteId! : "source:" + Guid.NewGuid(), "after", 4, intent.ContentSha256!);
         await fixture.Catalog.SaveContentAcceptanceProofAsync(proof);
         // This managed boundary supplies historical product facts; it makes no native confirmation claim.
-        await fixture.Catalog.SaveContentConfirmationReceiptAsync(intent.OperationId, new(MirrorPulseContentConfirmationOutcome.Confirmed,
+        var receipt = new MirrorPulseContentConfirmationReceipt(MirrorPulseContentConfirmationOutcome.Confirmed,
             MirrorPulseContentConfirmationStage.Complete, MirrorPulseContentConfirmationStage.Complete, true, true, true, true,
-            4, 1, 0, 0, null, null, true, Convert.ToBase64String(new CloudPlaceholderIdentity(proof.AcceptedItemId, proof.RemoteId, "after").Encode()),
-            fixture.Member.RegisteredAt.AddSeconds(1)));
-        await fixture.Catalog.RecordNamespaceIdentityAcceptanceAsync(fixture.Member.MemberId, intent.OperationId, previous.AcceptanceOperationId,
-            previous.ItemId.Value, previous.RemoteId!);
-        return proof;
+            4, 1, 0, 0, null, null, true, Convert.ToBase64String(new CloudPlaceholderIdentity(
+                mismatch == "observed-item" ? Guid.NewGuid() : proof.AcceptedItemId, proof.RemoteId,
+                mismatch == "observed-revision" ? "foreign-revision" : "after").Encode()), fixture.Member.RegisteredAt.AddSeconds(1));
+        if (mismatch == "unconfirmed") receipt = receipt with { NativeConfirmationVerified = false };
+        await fixture.Catalog.SaveContentConfirmationReceiptAsync(intent.OperationId, receipt);
+        return (proof, receipt);
     }
 }

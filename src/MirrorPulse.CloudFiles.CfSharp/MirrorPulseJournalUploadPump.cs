@@ -42,6 +42,7 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
     private readonly CloudFileSystem? _fileSystem;
     private readonly MirrorPulseInstanceScheduler _scheduler;
     private readonly bool _ownsScheduler;
+    private readonly MirrorPulseNamespaceContentConfirmation _contentConfirmation;
 
     public MirrorPulseJournalPumpHealth Health => _runner.Health;
 
@@ -62,7 +63,9 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
         IMirrorPulseWorkerRangeTransport? ranges = null,
         IMirrorPulseWorkerDirectoryPageSource? directories = null,
         CloudFileSystem? fileSystem = null,
-        MirrorPulseInstanceScheduler? scheduler = null)
+        MirrorPulseInstanceScheduler? scheduler = null,
+        MirrorPulseNamespaceActor? namespaceActor = null,
+        MirrorPulseNamespaceExecutionSession? namespaceExecution = null)
     {
         _feed = feed ?? throw new ArgumentNullException(nameof(feed));
         _router = router ?? throw new ArgumentNullException(nameof(router));
@@ -76,9 +79,10 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
         _fileSystem = fileSystem;
         _ownsScheduler = scheduler is null;
         _scheduler = scheduler ?? new MirrorPulseInstanceScheduler();
+        _contentConfirmation = new(catalog, router, namespaceActor, namespaceExecution);
         if (fileSystem is not null)
             _rescan = new(catalog, new MirrorPulseFullRescanPolicy(fileSystem, feed, state, router, catalog,
-                uploads, stats, mayDispatch, mutations, ranges, directories, conflicts, notifications, _scheduler).ReconcileAsync,
+                uploads, stats, mayDispatch, mutations, ranges, directories, conflicts, notifications, _scheduler, namespaceActor, namespaceExecution).ReconcileAsync,
                 feed.AcknowledgeFullRescanAsync, ProjectRescanAsync);
         _conflicts = conflicts;
         _notifications = notifications;
@@ -452,10 +456,8 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
                 string localPath = _router.ResolveUploadPath(record.Intent.InstanceId, record.Intent.RootKey, record.Intent.RelativePath);
                 string relative = Path.GetRelativePath(_syncRootPath, localPath).Replace(Path.DirectorySeparatorChar, '/');
                 phase = "ConfirmContent";
-                MirrorPulseContentConfirmationReceipt receipt = await MirrorPulseContentConfirmation.ConfirmAsync(
+                MirrorPulseContentConfirmationReceipt receipt = await _contentConfirmation.ConfirmAsync(
                     _fileSystem.GetFile(relative), proof, cancellationToken).ConfigureAwait(false);
-                phase = "SaveReceipt";
-                await _catalog.SaveContentConfirmationReceiptAsync(operationId, receipt, CancellationToken.None).ConfigureAwait(false);
                 if (!receipt.MayAcknowledge)
                     throw new MirrorPulseMutationAmbiguousException($"Local journal content confirmation requires recovery ({receipt.Outcome}).");
             }

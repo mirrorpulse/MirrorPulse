@@ -125,6 +125,17 @@ remote-acceptance evidence before a controlled mutation. Full native binding
 lookup uses volume, sync-root ID and the complete file ID in the product catalog;
 the official item's volume-specific Int64 file ID is not substituted for it.
 
+Confirmed file uploads may replace both the public ItemId and RemoteId. Schema 40
+retains an immutable correlation to the complete upload-time binding, accepted
+proof, successful confirmation receipt and previous identity. First membership
+and permission provenance remain unchanged. The locator follows only this
+verified identity history; a new move references its latest entry, while replay
+retains the identity observed by the historical move. Journal uploads and full
+rescans share the confirmation boundary and retain identity changes before
+acknowledgement. Registered members require the Host's shared namespace actor
+and execution role; source RPC finishes before that local boundary. A past
+confirmation never substitutes for fresh native authorization or tree readiness.
+
 Schema 36 retains a before-native intent and start for a member's first controlled
 move within one managed root. The original member, public identity and source name
 remain unchanged. The transaction reserves the target name and retains a pending
@@ -136,7 +147,7 @@ Directory evidence remains an opaque public CfSharp encoding; Host must decode
 and verify it through the public library before native work. These catalog APIs do
 not move files, prove a native outcome, acknowledge journal records, transfer a
 name, or enable a controlled CLI command. Product completion, current ownership,
-accepted remote-identity correlation and Host integration remain separate work.
+accepted identity correlation and client execution use separate boundaries.
 
 The Host's remote poll/application, journal planning/dispatch and full rescan paths
 read one durable product namespace recovery snapshot. An unresolved member move

@@ -18,10 +18,12 @@ public sealed class MirrorPulseFullRescanPolicy(CloudFileSystem fileSystem, Clou
     Func<InstanceId, bool> mayDispatch, IMirrorPulseWorkerMutationTransport? mutations = null,
     IMirrorPulseWorkerRangeTransport? ranges = null, IMirrorPulseWorkerDirectoryPageSource? directories = null,
     MirrorPulseConflictCenter? conflicts = null, MirrorPulseConflictNotificationBridge? notifications = null,
-    MirrorPulseInstanceScheduler? scheduler = null)
+    MirrorPulseInstanceScheduler? scheduler = null, MirrorPulseNamespaceActor? namespaceActor = null,
+    MirrorPulseNamespaceExecutionSession? namespaceExecution = null)
 {
     private readonly MirrorPulseMutationExecutor _executor = new(catalog);
     private readonly MirrorPulseMutationReadback _readback = new(stats, ranges, directories);
+    private readonly MirrorPulseNamespaceContentConfirmation _contentConfirmation = new(catalog, router, namespaceActor, namespaceExecution);
 
     public ValueTask<int> ReconcileAsync(CancellationToken cancellationToken)
     {
@@ -167,10 +169,8 @@ public sealed class MirrorPulseFullRescanPolicy(CloudFileSystem fileSystem, Clou
                             intent.ContentLength!.Value, intent.ContentSha256!);
                         await catalog.SaveContentAcceptanceProofAsync(proof, token).ConfigureAwait(false);
                     }
-                    MirrorPulseContentConfirmationReceipt receipt = await MirrorPulseContentConfirmation.ConfirmAsync(
+                    MirrorPulseContentConfirmationReceipt receipt = await _contentConfirmation.ConfirmAsync(
                         fileSystem.GetFile(path), proof, token).ConfigureAwait(false);
-                    // After a native commit, retain the receipt even if caller cancellation arrived.
-                    await catalog.SaveContentConfirmationReceiptAsync(intent.OperationId, receipt, CancellationToken.None).ConfigureAwait(false);
                     if (!receipt.MayAcknowledge)
                         throw new MirrorPulseMutationAmbiguousException($"Local content confirmation requires recovery ({receipt.Outcome}).");
                 }
