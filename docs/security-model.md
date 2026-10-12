@@ -149,6 +149,19 @@ as source deletions. Label preparation and display mapping cannot race a pending
 member move in the same root. This snapshot is a fence observation, not a lock:
 controlled execution still requires shared admission and draining earlier work.
 
+Schema 37 separately retains a guarded native move observation and one official
+item projection observation after the durable start. The original full child and
+target-parent bindings, owner, protected descriptors, item identity and target
+path must agree with admission. Native identity revision and the official
+baseline remain distinct facts; neither is evidence of source acceptance. These
+immutable observations survive reopening and later protection epochs without
+refreshing current authorization. Corrupt fingerprints, canonical payloads or
+references fail closed. Upgrading creates no missing historical observations.
+Recording either fact keeps the source name, target reservation and root fence.
+One directory item projection does not prove that its complete subtree has been
+reconciled. Name handover and operation completion require their own fresh native
+and public CfSharp recovery checks; these APIs issue no native move or journal ACK.
+
 Schema 27 adds immutable birth intents for controlled creation, import and remote
 population under a protected parent. Admission requires that parent's latest
 verified protection, native binding, stable root and current role. A separate
