@@ -138,6 +138,17 @@ not move files, prove a native outcome, acknowledge journal records, transfer a
 name, or enable a controlled CLI command. Product completion, current ownership,
 accepted remote-identity correlation and Host integration remain separate work.
 
+The Host's remote poll/application, journal planning/dispatch and full rescan paths
+read one durable product namespace recovery snapshot. An unresolved member move
+holds that root alongside existing Label recovery; other roots continue. Remote
+changes check both current and previous paths and retain a shared instance cursor
+when a fenced root could be affected. The journal keeps fenced content and
+unsupported metadata observations unacknowledged. Rescan omits the fenced root
+and retains its deferred generation rather than interpreting intermediate paths
+as source deletions. Label preparation and display mapping cannot race a pending
+member move in the same root. This snapshot is a fence observation, not a lock:
+controlled execution still requires shared admission and draining earlier work.
+
 Schema 27 adds immutable birth intents for controlled creation, import and remote
 population under a protected parent. Admission requires that parent's latest
 verified protection, native binding, stable root and current role. A separate

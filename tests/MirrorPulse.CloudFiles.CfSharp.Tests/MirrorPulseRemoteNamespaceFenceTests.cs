@@ -10,7 +10,7 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 
 [TestClass]
 [SupportedOSPlatform("windows10.0.16299")]
-public sealed class MirrorPulseRemoteNamespaceFenceTests
+public sealed partial class MirrorPulseRemoteNamespaceFenceTests
 {
     [TestMethod]
     public async Task DurableRenameFencesBothSidesOfRemoteMoveAcrossCatalogRestart()

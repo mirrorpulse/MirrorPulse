@@ -74,6 +74,9 @@ public sealed partial class MirrorPulseProductCatalog
             if (original.State is not (RootRegistrationState.Active or RootRegistrationState.Disabled))
                 throw new InvalidOperationException("The managed root cannot be renamed in its current state.");
             string value = label.Trim();
+            if (value != original.DirectoryName &&
+                await ReadPendingNamespaceMemberMoveCoreAsync(rootId, transaction, cancellationToken).ConfigureAwait(false) is not null)
+                throw new InvalidOperationException("A controlled member move must recover before this root's display mapping changes.");
             var updated = new RootRegistration(original.AdapterId, original.InstanceId, original.RootId,
                 original.UniquenessKey, value, value, original.CustomEntry, original.State, original.RegisteredAt, original.IdentityScope);
             var next = new MirrorPulseAdapterTopology(current.Installations, current.Instances,

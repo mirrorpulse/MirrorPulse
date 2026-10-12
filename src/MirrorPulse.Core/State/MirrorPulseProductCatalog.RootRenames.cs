@@ -54,7 +54,9 @@ public sealed partial class MirrorPulseProductCatalog
         try
         {
             ThrowIfDisposed();
+            using SqliteTransaction transaction = _connection.BeginTransaction();
             await using SqliteCommand query = _connection.CreateCommand();
+            query.Transaction = transaction;
             query.CommandText = "SELECT payload FROM adapter_topology WHERE id=1;";
             string? payload = (string?)await query.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
             MirrorPulseAdapterTopology topology = payload is null ? new([], [], []) : DeserializeTopology(payload);
@@ -63,24 +65,30 @@ public sealed partial class MirrorPulseProductCatalog
             if (root.State is not (RootRegistrationState.Active or RootRegistrationState.Disabled))
                 throw new InvalidOperationException("The managed root cannot be renamed in its current state.");
             string target = label.Trim();
-            MirrorPulseRootRenameIntent? previous = (await ReadManagedRootRenamesCoreAsync(cancellationToken).ConfigureAwait(false))
+            MirrorPulseRootRenameIntent? previous = (await ReadManagedRootRenamesCoreAsync(cancellationToken, transaction).ConfigureAwait(false))
                 .SingleOrDefault(intent => intent.RootId == rootId && intent.IsPending);
             if (previous is not null)
             {
                 if (previous.TargetName == target && (root.DirectoryName == previous.SourceName || root.DirectoryName == previous.TargetName))
+                {
+                    transaction.Commit();
                     return previous;
+                }
                 throw new InvalidOperationException("The managed root has a pending namespace transition.");
             }
+            if (await ReadPendingNamespaceMemberMoveCoreAsync(rootId, transaction, cancellationToken).ConfigureAwait(false) is not null)
+                throw new InvalidOperationException("A controlled member move must recover before this root's Label changes.");
             if (root.DirectoryName == target) throw new ArgumentException("The root already has this label.", nameof(label));
             var renamed = new RootRegistration(root.AdapterId, root.InstanceId, root.RootId, root.UniquenessKey,
                 target, target, root.CustomEntry, root.State, root.RegisteredAt, root.IdentityScope);
             var candidate = new MirrorPulseAdapterTopology(topology.Installations, topology.Instances,
                 topology.Roots.Select(item => item.RootId == rootId ? renamed : item).ToArray());
             ValidateTopology(candidate);
-            await ValidateManagedRootNamesAsync(candidate, cancellationToken).ConfigureAwait(false);
+            await ValidateManagedRootNamesAsync(candidate, cancellationToken, transaction).ConfigureAwait(false);
             var intent = new MirrorPulseRootRenameIntent(Guid.NewGuid(), rootId, root.DirectoryName, target,
                 MirrorPulseRootRenamePhase.Prepared, DateTimeOffset.UtcNow);
-            await SaveManagedRootRenameCoreAsync(intent, cancellationToken).ConfigureAwait(false);
+            await SaveManagedRootRenameCoreAsync(intent, cancellationToken, transaction).ConfigureAwait(false);
+            transaction.Commit();
             return intent;
         }
         finally { _gate.Release(); }

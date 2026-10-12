@@ -135,5 +135,7 @@ public sealed partial class MirrorPulseProductCatalog
         var pending = await ReadPendingNamespaceMemberMoveCoreAsync(rootId, transaction, token).ConfigureAwait(false);
         if (pending is not null && pending.OperationId != allowedMove)
             throw new InvalidOperationException("An unresolved controlled move has fenced this managed root.");
+        if ((await ReadManagedRootRenamesCoreAsync(token, transaction).ConfigureAwait(false)).Any(intent => intent.RootId == rootId && intent.IsPending))
+            throw new InvalidOperationException("An unresolved Label change has fenced this managed root.");
     }
 }

@@ -36,8 +36,7 @@ public sealed class MirrorPulseFullRescanPolicy(CloudFileSystem fileSystem, Clou
     private async ValueTask<int> ReconcileCoreAsync(CancellationToken cancellationToken)
     {
         if (!feed.IsStarted) throw new InvalidOperationException("Full rescan requires the authoritative local change feed.");
-        HashSet<RootId> pendingRoots = (await catalog.ReadManagedRootRenamesAsync(cancellationToken).ConfigureAwait(false))
-            .Where(intent => intent.IsPending).Select(intent => intent.RootId).ToHashSet();
+        HashSet<RootId> pendingRoots = (await catalog.ReadNamespaceRecoveryRootsAsync(cancellationToken).ConfigureAwait(false)).ToHashSet();
         var observations = new Dictionary<string, (CloudItem Item, CloudItemSnapshot Snapshot)>(StringComparer.OrdinalIgnoreCase);
         var enabled = router.Registrations.Where(root => root.State == RootRegistrationState.Active && mayDispatch(root.InstanceId) &&
             !pendingRoots.Contains(root.RootId)).ToArray();

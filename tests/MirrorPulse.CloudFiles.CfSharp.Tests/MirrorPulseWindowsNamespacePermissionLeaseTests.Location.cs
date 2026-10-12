@@ -21,7 +21,30 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             var before = await original.InspectAsync(token);
             Assert.IsNotNull(before.LocalBinding);
             Assert.IsNotNull(before.ItemId);
+            Assert.IsNotNull(before.RemoteId);
             byte[] bytes = await File.ReadAllBytesAsync(original.FullPath, token);
+            var sourceMember = await catalog.ReadNamespaceMemberAsync(member.ParentMemberId!.Value, token);
+            Assert.IsNotNull(sourceMember);
+            var sourceProtection = await catalog.ReadLatestNamespacePermissionChangeAsync(sourceMember.OriginId, token);
+            var childProtection = await catalog.ReadLatestNamespaceBirthProtectionAsync(member.OriginId, token);
+            var targetProtection = await catalog.ReadLatestNamespaceBirthProtectionAsync(destinationParent.OriginId, token);
+            Assert.IsNotNull(sourceProtection); Assert.IsNotNull(childProtection); Assert.IsNotNull(targetProtection);
+            var intent = new MirrorPulseNamespaceMemberMoveIntent(1, Guid.NewGuid(), member.MemberId, childProtection.ProtectionId,
+                member.RootId!.Value, member.LocalObject, before.ItemId.Value, before.RemoteId, member.OwnerSid, role.RoleSid.Value,
+                new(sourceMember.MemberId, sourceMember.LocalObject, sourceProtection.Intent.OperationId, member.RelativePath),
+                new(destinationParent.MemberId, destinationParent.LocalObject, targetProtection.ProtectionId,
+                    destinationParent.RelativePath + "/member-location-probe.bin"), DateTimeOffset.UtcNow);
+            await catalog.PrepareNamespaceMemberMoveAsync(intent, token);
+            var fence = new MirrorPulseRemoteNamespaceFence(router, catalog);
+            var root = router.Registrations.Single(registration => registration.RootId == intent.RootId);
+            Assert.IsFalse(await fence.CanPollAsync(root, token));
+            var pendingBatch = await new MirrorPulseJournalUploadSource(feed, router, catalog, _ => true).ReadPendingAsync(token);
+            Assert.IsFalse(pendingBatch.RequiresFullRescan);
+            Assert.HasCount(0, pendingBatch.ReadyCommands);
+            Assert.IsGreaterThan(0, pendingBatch.DeferredCount);
+            CollectionAssert.IsSubsetOf(retainedJournalIds,
+                (await WaitForBirthJournalAsync(feed, before.ItemId.Value, directoryItemId, token)).Select(change => change.OperationId).ToArray());
+            await catalog.RecordNamespaceMemberMoveStartAsync(new(1, intent.OperationId, DateTimeOffset.UtcNow), token);
             // Exercise CfSharp's public move and durable projection, not a replacement path graph.
             CloudItemMoveResult moved = await original.MoveToAsync(destination, "member-location-probe.bin", cancellationToken: token);
             try
@@ -54,7 +77,9 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             Assert.AreEqual(member.RelativePath, restored.RelativePath?.Replace('\\', '/'));
             CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(original.FullPath, token));
             Assert.AreEqual(member, await catalog.ReadNamespaceMemberChildAsync(member.ParentMemberId!.Value, Path.GetFileName(original.FullPath), token));
-            TestContext.WriteLine("ControlledMemberLocation: sharedAdmission=True; officialItemIdLookup=True; publicMoveTo=True; parentDiscoveredByFullBinding=True; nativeBindingAndBytes=True; originalRegistrationUnchanged=True; journalIdsRetained=True; hostIntegrated=False.");
+            Assert.AreEqual(intent, await catalog.ReadPendingNamespaceMemberMoveAsync(intent.RootId, token));
+            Assert.IsFalse(await fence.CanPollAsync(root, token));
+            TestContext.WriteLine("ControlledMemberLocation: sharedAdmission=True; officialItemIdLookup=True; publicMoveTo=True; parentDiscoveredByFullBinding=True; nativeBindingAndBytes=True; originalRegistrationUnchanged=True; journalIdsRetained=True; pendingMemberMoveFencesPoll=True; pendingMemberMoveDefersJournal=True; hostIntegrated=False.");
         }, token);
     }
 }

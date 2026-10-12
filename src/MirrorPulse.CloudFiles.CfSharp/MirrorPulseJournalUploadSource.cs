@@ -100,17 +100,18 @@ public sealed class MirrorPulseJournalUploadSource
         }
 
         var ready = new List<MirrorPulseWorkerChangeCommand>(plan.Commands.Count);
-        HashSet<RootId> pendingRoots = (await _catalog.ReadManagedRootRenamesAsync(cancellationToken).ConfigureAwait(false))
-            .Where(intent => intent.IsPending).Select(intent => intent.RootId).ToHashSet();
+        HashSet<RootId> pendingRoots = (await _catalog.ReadNamespaceRecoveryRootsAsync(cancellationToken).ConfigureAwait(false)).ToHashSet();
         var held = new List<MirrorPulseWorkerChangeCommand>();
         int deferred = plan.BlockedOperations?.Count ?? 0;
         foreach (MirrorPulseBlockedLocalOperation blocked in plan.BlockedOperations ?? [])
             await _catalog.SaveBlockedLocalOperationAsync(blocked, cancellationToken).ConfigureAwait(false);
         Guid[] excludedMetadata = (plan.BlockedOperations ?? [])
-            .Where(operation => operation.Reason == MirrorPulseLocalOperationBlockReason.UnsupportedMetadataChange)
+            .Where(operation => operation.Reason == MirrorPulseLocalOperationBlockReason.UnsupportedMetadataChange &&
+                !IsNamespaceFenced(operation.RelativePath, pendingRoots))
             .Select(operation => operation.OperationId).ToArray();
         if (excludedMetadata.Length != 0)
         {
+            // Retain even unsupported metadata while the root's namespace is unresolved.
             // Durable product results accept the notification's unsupported meaning,
             // not remote metadata. No revision is advanced. Settling these entries
             // also prevents excluded metadata from starving a bounded official batch.
@@ -166,5 +167,11 @@ public sealed class MirrorPulseJournalUploadSource
         }
 
         return new(ready.AsReadOnly(), deferred, false);
+    }
+
+    private bool IsNamespaceFenced(string path, HashSet<RootId> pendingRoots)
+    {
+        MirrorPulseRoutedItem routed = _router.ResolvePath(path);
+        return pendingRoots.Contains(_router.GetRegistration(routed.InstanceId, routed.RootKey).RootId);
     }
 }
