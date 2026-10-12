@@ -97,9 +97,10 @@ public sealed class MirrorPulseNamespaceCreationCoordinator(CloudFileSystem file
                 token.ThrowIfCancellationRequested();
                 _ = await catalog.RecordNamespaceBirthStartAsync(new(1, operationId, DateTimeOffset.UtcNow), token).ConfigureAwait(false);
                 // From the first native creation, drain local persistence despite client cancellation.
-                CreateOrdinaryItem(item, isDirectory);
+                string expectedDacl = MirrorPulseWindowsNamespaceInheritance.CreateInheritedDacl(before.Dacl, isDirectory);
+                CreateOrdinaryItem(item, isDirectory, expectedDacl);
                 conversion = await MirrorPulseNamespaceBirthConversionPreparer.RecordAsync(catalog, operationId, item, router,
-                    MirrorPulseWindowsNamespaceInheritance.CreateInheritedDacl(before.Dacl, isDirectory), CancellationToken.None).ConfigureAwait(false);
+                    expectedDacl, CancellationToken.None).ConfigureAwait(false);
             }
             else if (conversion is null)
                 throw new InvalidOperationException("A started creation without its first native binding requires explicit recovery; it cannot be repeated.");
@@ -136,13 +137,15 @@ public sealed class MirrorPulseNamespaceCreationCoordinator(CloudFileSystem file
         return result;
     }
 
-    private void CreateOrdinaryItem(CloudItem item, bool isDirectory)
+    private void CreateOrdinaryItem(CloudItem item, bool isDirectory, string inheritedDacl)
     {
         if (isDirectory)
         {
             // Inherit the guarded parent's DACL and select the current user as owner atomically,
             // including when a diagnostic fixture happens to use an elevated process token.
             var security = new DirectorySecurity(); security.SetOwner(execution.OwnerSid);
+            // An owner-only DirectorySecurity has an empty DACL, not implicit inheritance.
+            security.SetSecurityDescriptorSddlForm(inheritedDacl, AccessControlSections.Access);
             new DirectoryInfo(item.FullPath).Create(security);
         }
         else

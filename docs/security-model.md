@@ -257,6 +257,8 @@ changed descriptor or superseded identity cannot authorize a new confirmation.
 Current member protection resolves its path only through completed product moves;
 a moved official projection or pending native operation cannot advance it. The
 first membership, original ACL and birth observation remain unchanged.
+A new directory receives both the current-user owner and the guarded parent's
+derived access descriptor at creation, before the first binding is recorded.
 
 `mp namespace birth recover RECOVERY_ID` invokes an already retained staged-file
 recovery action through the same Host contract. It reports the drained public
