@@ -1,4 +1,5 @@
 using System.IO.MemoryMappedFiles;
+using System.Reflection;
 using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using CfSharp;
@@ -78,8 +79,14 @@ public sealed class MirrorPulseContentConfirmationRecoveryTests
                 for (int attempt = 0; attempt < 4; attempt++)
                 {
                     fixture.Faults.FailNextCommit = true;
-                    pending = await MirrorPulseContentConfirmation.ConfirmAsync(fixture.File, proof, token);
+                    var native = await fixture.File.ConfirmUploadedContentAsync(MirrorPulseContentConfirmation.CreateRequest(proof), token);
+                    pending = MirrorPulseContentConfirmation.MapReceipt(native);
                     TestContext.WriteLine($"Confirmation matrix: projectionFaultAttempt={attempt + 1}; outcome={pending.Outcome}; stage={pending.Stage}; nativeStage={pending.NativeStage}; identityPrepared={pending.NativeIdentityPrepared}; nativeApplied={pending.NativeApplied}; nativeVerified={pending.NativeConfirmationVerified}; projectionCommitted={pending.DurableProjectionCommitted}; preparationHResult={pending.PreparationHResult:X8}; markHResult={pending.NativeMarkHResult:X8}; nativeHResult={pending.NativeErrorHResult:X8}; projectionHResult={pending.ProjectionErrorHResult:X8}.");
+                    if (native.NativeError is not null || native.ProjectionError is not null)
+                    {
+                        string? libraryVersion = typeof(CloudFile).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+                        TestContext.WriteLine($"Confirmation library: version={libraryVersion}; nativeError={native.NativeError}; projectionError={native.ProjectionError}.");
+                    }
                     await fixture.Catalog.SaveContentConfirmationReceiptAsync(intent.OperationId, pending, CancellationToken.None);
                     if (pending.NativeConfirmationVerified) break;
                     Assert.IsTrue(pending.Outcome is MirrorPulseContentConfirmationOutcome.ProtectionLost or MirrorPulseContentConfirmationOutcome.Busy,
