@@ -8,7 +8,7 @@ namespace MirrorPulse.Core.State;
 /// <remarks>
 /// The Host records this only after the native move and the public CfSharp projection have both
 /// been inspected again. It transfers the product-owned name atomically; it does not acknowledge
-/// an upload or claim that a directory subtree has been reconciled.
+/// an upload. Directory settlement requires a separate subtree completion boundary.
 /// </remarks>
 public sealed record MirrorPulseNamespaceMemberMoveCompletion(int Version, Guid OperationId, Guid ItemId,
     string RemoteId, string RelativePath, bool IsDirectory, DateTimeOffset VerifiedAt,
@@ -39,23 +39,9 @@ public sealed partial class MirrorPulseProductCatalog
 
             var intent = await RequireNamespaceMemberMoveExecutionCoreAsync(completion.OperationId, transaction, cancellationToken)
                 .ConfigureAwait(false);
-            var observation = await ReadNamespaceMoveFactCoreAsync<MirrorPulseNamespaceMemberMoveObservation>(
-                completion.OperationId, true, transaction, cancellationToken).ConfigureAwait(false)
-                ?? throw new FileNotFoundException("The native move observation is missing.");
-            var projection = await ReadNamespaceMoveFactCoreAsync<MirrorPulseNamespaceMemberMoveProjection>(
-                completion.OperationId, false, transaction, cancellationToken).ConfigureAwait(false)
-                ?? throw new FileNotFoundException("The official move projection is missing.");
-            if (completion.ItemId != observation.ItemId || completion.RemoteId != observation.RemoteId ||
-                completion.RelativePath != observation.RelativePath || completion.IsDirectory != observation.IsDirectory ||
-                completion.OfficialRemoteRevision != projection.ProjectedRemoteRevision ||
-                completion.VerifiedAt <= projection.ObservedAt ||
-                !SameMoveVerification(completion.Child, observation.Child) ||
-                !SameMoveVerification(completion.Parent, observation.Parent) ||
-                completion.Child.ObservedAt <= observation.Child.ObservedAt ||
-                completion.Parent.ObservedAt <= observation.Parent.ObservedAt ||
-                completion.VerifiedAt < completion.Child.ObservedAt || completion.VerifiedAt < completion.Parent.ObservedAt)
-                throw new InvalidOperationException("Move completion requires a fresh binding and protection observation for the admitted target.");
-
+            if (completion.IsDirectory)
+                throw new InvalidOperationException("A single-item receipt cannot settle a directory move or release its subtree fence.");
+            await ValidateNamespaceMemberMoveCompletionReferencesAsync(completion, transaction, cancellationToken).ConfigureAwait(false);
             await using (SqliteCommand current = _connection.CreateCommand())
             {
                 current.Transaction = transaction;
@@ -134,9 +120,37 @@ public sealed partial class MirrorPulseProductCatalog
             (byte[])reader[2], (byte[])reader[3], NamespaceMemberMoveFactLimit, ValidateNamespaceMemberMoveCompletion);
         var intent = await ReadNamespaceMemberMoveCoreAsync(operationId, transaction, token).ConfigureAwait(false)
             ?? throw new InvalidDataException("The move completion lost its retained intent.");
-        if (reader.GetString(0) != operationId.ToString("D") || reader.GetString(1) != intent.MemberId.ToString("D"))
+        if (completion.OperationId != operationId || reader.GetString(0) != operationId.ToString("D") ||
+            reader.GetString(1) != intent.MemberId.ToString("D"))
             throw new InvalidDataException("The move completion index is invalid.");
+        try
+        {
+            if (completion.IsDirectory)
+                throw new InvalidOperationException("A directory cannot be settled by a single-item receipt.");
+            await ValidateNamespaceMemberMoveCompletionReferencesAsync(completion, transaction, token).ConfigureAwait(false);
+        }
+        catch (Exception error) when (error is InvalidOperationException or FileNotFoundException)
+        { throw new InvalidDataException("The move completion lost its original native or official projection evidence.", error); }
         return completion;
+    }
+
+    private async Task ValidateNamespaceMemberMoveCompletionReferencesAsync(MirrorPulseNamespaceMemberMoveCompletion completion,
+        SqliteTransaction transaction, CancellationToken token)
+    {
+        var observation = await ReadNamespaceMoveFactCoreAsync<MirrorPulseNamespaceMemberMoveObservation>(
+            completion.OperationId, true, transaction, token).ConfigureAwait(false)
+            ?? throw new FileNotFoundException("The native move observation is missing.");
+        var projection = await ReadNamespaceMoveFactCoreAsync<MirrorPulseNamespaceMemberMoveProjection>(
+            completion.OperationId, false, transaction, token).ConfigureAwait(false)
+            ?? throw new FileNotFoundException("The official move projection is missing.");
+        if (completion.ItemId != observation.ItemId || completion.RemoteId != observation.RemoteId ||
+            completion.RelativePath != observation.RelativePath || completion.IsDirectory != observation.IsDirectory ||
+            completion.OfficialRemoteRevision != projection.ProjectedRemoteRevision ||
+            completion.VerifiedAt <= projection.ObservedAt ||
+            !SameMoveVerification(completion.Child, observation.Child) || !SameMoveVerification(completion.Parent, observation.Parent) ||
+            completion.Child.ObservedAt <= observation.Child.ObservedAt || completion.Parent.ObservedAt <= observation.Parent.ObservedAt ||
+            completion.VerifiedAt < completion.Child.ObservedAt || completion.VerifiedAt < completion.Parent.ObservedAt)
+            throw new InvalidOperationException("Move completion requires fresh binding and protection observations for the admitted target.");
     }
 
     private static void ValidateNamespaceMemberMoveCompletion(MirrorPulseNamespaceMemberMoveCompletion completion)

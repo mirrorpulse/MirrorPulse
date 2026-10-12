@@ -74,22 +74,31 @@ public sealed partial class MirrorPulseProductCatalog
             ?? throw new InvalidDataException("The current member parent lost its provenance.");
         if (!currentParent.IsDirectory ||
             (currentParent.RootId is not null && currentParent.RootId != member.RootId) ||
-            string.IsNullOrWhiteSpace(reader.GetString(1)))
+            !await IsCurrentNamespaceMemberNameAsync(member, currentParentId, reader.GetString(1), transaction, token).ConfigureAwait(false))
             throw new InvalidDataException("The current member name points outside its managed directory.");
     }
 
-    private async Task<bool> IsCompletedMemberMoveNameAsync(Guid memberId, Guid parentMemberId, string nameKey,
+    private async Task<bool> IsCurrentNamespaceMemberNameAsync(MirrorPulseNamespaceMemberRegistration member, Guid parentMemberId, string nameKey,
         SqliteTransaction transaction, CancellationToken token)
     {
         await using SqliteCommand query = _connection.CreateCommand();
         query.Transaction = transaction;
         query.CommandText = "SELECT operation_id FROM namespace_member_move_completions WHERE member_id=$member;";
-        query.Parameters.AddWithValue("$member", memberId.ToString("D"));
-        object? value = await query.ExecuteScalarAsync(token).ConfigureAwait(false);
-        if (value is not string operationText || !Guid.TryParseExact(operationText, "D", out Guid operationId)) return false;
+        query.Parameters.AddWithValue("$member", member.MemberId.ToString("D"));
+        Guid operationId;
+        await using (SqliteDataReader reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false))
+        {
+            if (!await reader.ReadAsync(token).ConfigureAwait(false))
+                return member.ParentMemberId == parentMemberId && NamespaceMemberNameKey(member.RelativePath) == nameKey;
+            operationId = ParseNamespaceMemberId(reader.GetString(0));
+            // Admission currently permits one move from immutable first-location provenance.
+            // Repeated moves need an explicit current receipt chain; arbitrary row order is not authority.
+            if (await reader.ReadAsync(token).ConfigureAwait(false))
+                throw new InvalidDataException("The current name requires an unambiguous retained move receipt.");
+        }
         var intent = await ReadNamespaceMemberMoveCoreAsync(operationId, transaction, token).ConfigureAwait(false);
         var completion = await ReadNamespaceMemberMoveCompletionCoreAsync(operationId, transaction, token).ConfigureAwait(false);
-        return intent?.MemberId == memberId && completion is not null && intent.Target.ParentMemberId == parentMemberId &&
+        return intent?.MemberId == member.MemberId && completion is not null && intent.Target.ParentMemberId == parentMemberId &&
             NamespaceMemberNameKey(intent.Target.RelativePath) == nameKey;
     }
 

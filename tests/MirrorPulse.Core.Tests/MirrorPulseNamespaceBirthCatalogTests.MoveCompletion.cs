@@ -5,13 +5,11 @@ namespace MirrorPulse.Core.Tests;
 public sealed partial class MirrorPulseNamespaceBirthCatalogTests
 {
     [TestMethod]
-    [DataRow(false)]
-    [DataRow(true)]
-    public async Task FreshMoveCompletionTransfersTheCurrentNameAndReleasesTheRootFence(bool directory)
+    public async Task FreshMoveCompletionTransfersTheCurrentNameAndReleasesTheRootFence()
     {
         using var fixture = new Fixture();
         await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
-        var setup = await PrepareMovableMemberAsync(catalog, directory);
+        var setup = await PrepareMovableMemberAsync(catalog);
         await StartMoveAsync(catalog, setup);
         var native = MoveObservation(setup);
         var projection = MoveProjection(native);
@@ -27,6 +25,22 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         Assert.IsNull(await catalog.ReadPendingNamespaceMemberMoveAsync(setup.Move.RootId));
         Assert.AreEqual(completion, await catalog.CompleteNamespaceMemberMoveAsync(completion));
         Assert.AreEqual(setup.Member, await catalog.ReadNamespaceMemberAsync(setup.Member.MemberId));
+    }
+
+    [TestMethod]
+    public async Task SingleItemDirectoryProjectionCannotReleaseTheSubtreeFence()
+    {
+        using var fixture = new Fixture();
+        await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        var setup = await PrepareMovableMemberAsync(catalog, directory: true);
+        await StartMoveAsync(catalog, setup);
+        var native = MoveObservation(setup); var projection = MoveProjection(native);
+        await catalog.RecordNamespaceMemberMoveObservationAsync(native);
+        await catalog.RecordNamespaceMemberMoveProjectionAsync(projection);
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => catalog.CompleteNamespaceMemberMoveAsync(MoveCompletion(native, projection)));
+        Assert.AreEqual(setup.Move, await catalog.ReadPendingNamespaceMemberMoveAsync(setup.Move.RootId));
+        Assert.AreEqual(setup.Member, await catalog.ReadNamespaceMemberChildAsync(setup.ParentMember.MemberId, "new.txt"));
+        Assert.IsNull(await catalog.ReadNamespaceMemberChildAsync(setup.Move.Target.ParentMemberId, "moved.txt"));
     }
 
     [TestMethod]
