@@ -462,7 +462,8 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
             GetOperationAsync,
             CancelOperationAsync,
             RemoveAdapterAsync,
-            ExecuteNamespaceMemberMoveAsync)
+            ExecuteNamespaceMemberMoveAsync,
+            ExecuteNamespaceBirthRecoveryAsync)
             .Register(dispatcher);
         dispatcher.Register<ControlEmptyArguments, IReadOnlyList<MirrorPulseControlRootStatus>>(
             MirrorPulseControlCommands.RootList, async (_, token) => await ReadRootsAsync(token).ConfigureAwait(false));
@@ -491,6 +492,17 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
             arguments.OperationId, cancellationToken).ConfigureAwait(false);
         return new(completion.OperationId, completion.ItemId, completion.RemoteId, completion.RelativePath,
             completion.IsDirectory, true, completion.IsDirectory, completion.OfficialRemoteRevision);
+    }
+
+    private async Task<MirrorPulseControlNamespaceBirthRecoveryResult> ExecuteNamespaceBirthRecoveryAsync(
+        NamespaceBirthRecoverArguments arguments, CancellationToken cancellationToken)
+    {
+        if (arguments.RecoveryId == Guid.Empty)
+            throw new ArgumentException("A birth recovery action ID is required.", nameof(arguments));
+        var result = await _session.ExecuteNamespaceBirthRecoveryAsync(arguments.RecoveryId, cancellationToken).ConfigureAwait(false);
+        return new(result.Action.RecoveryId, result.Receipt.Outcome.ToString(), result.Receipt.CallbackCompleted,
+            result.Receipt.Drained, result.Receipt.NativeIdentityPrepared, result.Receipt.DurableProjectionCommitted,
+            result.Verification is not null);
     }
 
     private async Task<MirrorPulseHostStatus> StartRequestedAsync(

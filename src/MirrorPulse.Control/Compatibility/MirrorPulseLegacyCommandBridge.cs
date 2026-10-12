@@ -35,6 +35,8 @@ public sealed class MirrorPulseLegacyCommandBridge
         Task<MirrorPulseAppStatusResponse>>? _removeAdapter;
     private readonly Func<NamespaceMemberMoveArguments, CancellationToken,
         Task<MirrorPulseControlNamespaceMemberMoveResult>>? _moveMember;
+    private readonly Func<NamespaceBirthRecoverArguments, CancellationToken,
+        Task<MirrorPulseControlNamespaceBirthRecoveryResult>>? _recoverBirth;
     private readonly Func<CancellationToken, Task<MirrorPulseHostStatus>>? _hostStatus;
     private readonly Func<HostLifecycleArguments, CancellationToken,
         Task<MirrorPulseHostStatus>>? _hostStart;
@@ -90,7 +92,9 @@ public sealed class MirrorPulseLegacyCommandBridge
         Func<AdapterRemoveArguments, CancellationToken,
             Task<MirrorPulseAppStatusResponse>>? removeAdapter = null,
         Func<NamespaceMemberMoveArguments, CancellationToken,
-            Task<MirrorPulseControlNamespaceMemberMoveResult>>? moveMember = null)
+            Task<MirrorPulseControlNamespaceMemberMoveResult>>? moveMember = null,
+        Func<NamespaceBirthRecoverArguments, CancellationToken,
+            Task<MirrorPulseControlNamespaceBirthRecoveryResult>>? recoverBirth = null)
     {
         _readStatus = readStatus ?? throw new ArgumentNullException(nameof(readStatus));
         _snooze = snooze;
@@ -115,6 +119,7 @@ public sealed class MirrorPulseLegacyCommandBridge
         _cancelOperation = cancelOperation;
         _removeAdapter = removeAdapter;
         _moveMember = moveMember;
+        _recoverBirth = recoverBirth;
     }
 
     public void Register(MirrorPulseControlDispatcher dispatcher)
@@ -192,6 +197,13 @@ public sealed class MirrorPulseLegacyCommandBridge
             dispatcher.Register<NamespaceMemberMoveArguments, MirrorPulseControlNamespaceMemberMoveResult>(
                 MirrorPulseControlCommands.NamespaceMemberMove,
                 (arguments, cancellationToken) => new(_moveMember(arguments, cancellationToken)));
+        }
+
+        if (_recoverBirth is not null)
+        {
+            dispatcher.Register<NamespaceBirthRecoverArguments, MirrorPulseControlNamespaceBirthRecoveryResult>(
+                MirrorPulseControlCommands.NamespaceBirthRecover,
+                (arguments, cancellationToken) => new(_recoverBirth(arguments, cancellationToken)));
         }
 
         if (_settingsGet is not null)

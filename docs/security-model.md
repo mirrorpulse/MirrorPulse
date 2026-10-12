@@ -171,14 +171,40 @@ intact; an exact replay returns the retained completion without reauthorizing
 the filesystem. The immutable member registration still describes its first
 location, while child-name lookup follows a verified completed move.
 
+Completion reads revalidate the retained start, native observation and official
+projection, including the operation ID, bindings, descriptors and observation
+order. A canonical payload and valid fingerprint alone are insufficient. Once
+a move is completed, rewinding the current-name index to the first location is
+rejected. Current admission supports the first relocation only; repeated moves
+need a current receipt chain and are still pending implementation. A directory
+cannot use single-item completion to release its subtree fence.
+
 The Host now owns this execution boundary through one shared namespace actor and
 the current-user namespace execution session. The versioned Control contract
 exposes `namespace.member.move`; the CLI command is `mp namespace member move
 OPERATION_ID`. It starts only an already admitted operation, performs the native
-move under the ephemeral namespace role, reads the official CfSharp item through
+move under the ephemeral namespace role after fresh child and direct-parent
+checks, reads the official CfSharp item through
 the normal user, and settles the completion receipt. It does not accept a path
 or remote ID from the client, and it leaves the durable fence pending whenever
 the native or official verification cannot be completed.
+
+The execution boundary reuses a retained start and immutable observations on
+retry. It recognizes the original object already at the target and delegates
+missing official path projection to CfSharp's public move recovery. Native
+identity revision is decoded from the public placeholder envelope separately
+from the official revision. Post-native verification and persistence drain
+independently of client cancellation. The Host drains earlier instance work
+before entering the namespace actor, and drains the actor before disposing
+CfSharp. Production composition still needs full native and installed gates;
+directory subtree settlement remains pending.
+
+`mp namespace birth recover RECOVERY_ID` invokes an already retained staged-file
+recovery action through the same Host contract. It reports the drained public
+CfSharp receipt and independently retained verification, returning exit code 11
+while verification is pending. It does not create a new file, record its first
+birth observation, promote membership, release its name, or acknowledge source
+operations. Those creation and import workflows remain separate work.
 
 Schema 27 adds immutable birth intents for controlled creation, import and remote
 population under a protected parent. Admission requires that parent's latest

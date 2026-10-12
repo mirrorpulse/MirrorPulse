@@ -87,9 +87,14 @@ public sealed record RootRecoverArguments(Guid OperationId) : IMirrorPulseContro
 
 public sealed record NamespaceMemberMoveArguments(Guid OperationId) : IMirrorPulseControlArguments;
 
+public sealed record NamespaceBirthRecoverArguments(Guid RecoveryId) : IMirrorPulseControlArguments;
+
 public sealed record MirrorPulseControlNamespaceMemberMoveResult(Guid OperationId, Guid ItemId,
     string RemoteId, string RelativePath, bool IsDirectory, bool CurrentNameCommitted,
     bool RequiresSubtreeReconciliation, string? OfficialRemoteRevision);
+
+public sealed record MirrorPulseControlNamespaceBirthRecoveryResult(Guid RecoveryId, string Outcome,
+    bool CallbackCompleted, bool Drained, bool NativeIdentityPrepared, bool DurableProjectionCommitted, bool VerificationRecorded);
 
 /// <summary>Separates the durable product phase from a fresh public reconciliation receipt.</summary>
 public sealed record MirrorPulseControlRootRecovery(Guid OperationId, string RootId, string Phase,

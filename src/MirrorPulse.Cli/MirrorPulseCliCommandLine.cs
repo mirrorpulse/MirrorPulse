@@ -43,7 +43,7 @@ public static class MirrorPulseCliCommandLine
             ["instance"] = NewSet("list", "create", "configure", "enable", "disable", "select-version"),
             ["operation"] = NewSet("get", "watch", "cancel"),
             ["root"] = NewSet("list", "recover"),
-            ["namespace"] = NewSet("member"),
+            ["namespace"] = NewSet("member", "birth"),
             ["sync"] = NewSet("status", "refresh")
         };
 
@@ -134,11 +134,11 @@ public static class MirrorPulseCliCommandLine
 
             if (commandPath.Count == 2 &&
                 commandPath[0].Equals("namespace", StringComparison.OrdinalIgnoreCase) &&
-                commandPath[1].Equals("member", StringComparison.OrdinalIgnoreCase) &&
                 commandArguments.Count == 0)
             {
-                if (!token.Equals("move", StringComparison.OrdinalIgnoreCase))
-                    return Failure($"Unknown subcommand '{token}' for 'namespace member'.", options);
+                string verb = commandPath[1].Equals("member", StringComparison.OrdinalIgnoreCase) ? "move" : "recover";
+                if (!token.Equals(verb, StringComparison.OrdinalIgnoreCase))
+                    return Failure($"Unknown subcommand '{token}' for 'namespace {commandPath[1]}'.", options);
                 commandPath.Add(token);
                 continue;
             }
@@ -209,6 +209,7 @@ public static class MirrorPulseCliHelp
           root list                      Inspect managed roots and namespace recovery.
           root recover OPERATION_ID      Retry an original managed root rename proof.
           namespace member move OPERATION_ID
+          namespace birth recover RECOVERY_ID
                                          Execute an admitted protected member move.
           conflict list|show|snooze|resolve
                                          Inspect and resolve conflicts.

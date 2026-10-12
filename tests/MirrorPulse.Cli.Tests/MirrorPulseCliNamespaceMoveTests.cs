@@ -24,4 +24,17 @@ public sealed class MirrorPulseCliNamespaceMoveTests
         Assert.IsFalse(parsed.Succeeded);
         StringAssert.Contains(parsed.Error!, "Unknown subcommand");
     }
+
+    [TestMethod]
+    public void StagedBirthRecoveryParsesAnActionIdAndRejectsAMoveVerb()
+    {
+        Guid recoveryId = Guid.NewGuid();
+        var parsed = MirrorPulse.Cli.MirrorPulseCliCommandLine.Parse(["namespace", "birth", "recover", recoveryId.ToString("D")]);
+        Assert.IsTrue(parsed.Succeeded);
+        Assert.IsNotNull(parsed.Command);
+        Assert.AreEqual("namespace birth recover", parsed.Command.Name);
+        Assert.AreEqual(recoveryId.ToString("D"), string.Join(' ', parsed.Command.Arguments));
+        var wrong = MirrorPulse.Cli.MirrorPulseCliCommandLine.Parse(["namespace", "birth", "move", recoveryId.ToString("D")]);
+        Assert.IsFalse(wrong.Succeeded);
+    }
 }

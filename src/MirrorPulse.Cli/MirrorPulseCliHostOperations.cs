@@ -232,6 +232,15 @@ public sealed class MirrorPulseCliHostOperations : IMirrorPulseCliHostOperations
                     human = $"Member move committed · {move.OperationId:D} · {move.RelativePath}" +
                         (move.RequiresSubtreeReconciliation ? " · subtree reconciliation pending" : string.Empty);
                     break;
+                case ("namespace", "birth") when command.Path.Count > 2 &&
+                    command.Path[2].Equals("recover", StringComparison.OrdinalIgnoreCase):
+                    if (command.Arguments.Count != 1 || !Guid.TryParse(command.Arguments[0], out Guid birthRecoveryId) || birthRecoveryId == Guid.Empty)
+                        throw new ArgumentException("namespace birth recover requires one non-empty recovery action ID.");
+                    var birthRecovery = await _client.ExecuteNamespaceBirthRecoveryAsync(birthRecoveryId, cancellationToken).ConfigureAwait(false);
+                    result = birthRecovery;
+                    human = $"Staged birth recovery {birthRecovery.Outcome} · {birthRecovery.RecoveryId:D} · verification recorded: {birthRecovery.VerificationRecorded}";
+                    exitCode = birthRecovery.VerificationRecorded ? MirrorPulseControlExitCodes.Success : MirrorPulseControlExitCodes.Pending;
+                    break;
                 case ("root", "recover"):
                     if (command.Arguments.Count != 1 || !Guid.TryParse(command.Arguments[0], out Guid renameOperation) || renameOperation == Guid.Empty)
                     {
@@ -404,6 +413,12 @@ public sealed class MirrorPulseCliHostOperations : IMirrorPulseCliHostOperations
             await MirrorPulseCliOutputFormatter.WriteDataAsync(
                 result, human, json, output, cancellationToken).ConfigureAwait(false);
             return exitCode;
+        }
+        catch (ArgumentException exception)
+        {
+            await MirrorPulseCliOutputFormatter.WriteErrorAsync(MirrorPulseControlExitCodes.Validation,
+                MirrorPulseControlErrorCodes.InvalidRequest, exception.Message, json, errorWriter, cancellationToken).ConfigureAwait(false);
+            return MirrorPulseControlExitCodes.Validation;
         }
         catch (MirrorPulseControlException exception)
         {
