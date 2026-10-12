@@ -80,7 +80,7 @@ public sealed partial class MirrorPulseProductCatalog
     }
 
     private async Task<T?> ReadNamespaceMoveFactCoreAsync<T>(Guid operationId, bool native,
-        SqliteTransaction transaction, CancellationToken token) where T : class
+        SqliteTransaction transaction, CancellationToken token, bool validateRelocationChain = true) where T : class
     {
         T fact;
         await using (SqliteCommand query = _connection.CreateCommand())
@@ -95,7 +95,7 @@ public sealed partial class MirrorPulseProductCatalog
             fact = ReadNamespaceMovePayload<T>((byte[])reader[1], (byte[])reader[2], NamespaceMemberMoveFactLimit, ValidateNamespaceMoveFact);
             if (reader.GetString(0) != operationId.ToString("D")) throw new InvalidDataException("The move fact index is invalid.");
         }
-        try { await ValidateNamespaceMoveFactReferencesAsync(fact, operationId, transaction, token).ConfigureAwait(false); }
+        try { await ValidateNamespaceMoveFactReferencesAsync(fact, operationId, transaction, token, validateRelocationChain).ConfigureAwait(false); }
         catch (Exception error) when (error is InvalidOperationException or FileNotFoundException)
         { throw new InvalidDataException("The move fact lost its retained intent, start or verified object.", error); }
         return fact;

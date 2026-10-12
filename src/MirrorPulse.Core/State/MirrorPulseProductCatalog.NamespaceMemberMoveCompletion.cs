@@ -108,20 +108,14 @@ public sealed partial class MirrorPulseProductCatalog
     }
 
     private async Task<MirrorPulseNamespaceMemberMoveCompletion?> ReadNamespaceMemberMoveCompletionCoreAsync(
-        Guid operationId, SqliteTransaction transaction, CancellationToken token)
+        Guid operationId, SqliteTransaction transaction, CancellationToken token, bool validateRelocationChain = true)
     {
-        await using SqliteCommand query = _connection.CreateCommand();
-        query.Transaction = transaction;
-        query.CommandText = "SELECT operation_id,member_id,payload,fingerprint FROM namespace_member_move_completions WHERE operation_id=$id;";
-        query.Parameters.AddWithValue("$id", operationId.ToString("D"));
-        await using SqliteDataReader reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
-        if (!await reader.ReadAsync(token).ConfigureAwait(false)) return null;
-        var completion = ReadNamespaceMovePayload<MirrorPulseNamespaceMemberMoveCompletion>(
-            (byte[])reader[2], (byte[])reader[3], NamespaceMemberMoveFactLimit, ValidateNamespaceMemberMoveCompletion);
-        var intent = await ReadNamespaceMemberMoveCoreAsync(operationId, transaction, token).ConfigureAwait(false)
+        var row = await ReadNamespaceMemberMoveCompletionRowAsync(operationId, transaction, token).ConfigureAwait(false);
+        if (row is null) return null;
+        var completion = row.Value.Completion;
+        var intent = await ReadNamespaceMemberMoveCoreAsync(operationId, transaction, token, validateRelocationChain).ConfigureAwait(false)
             ?? throw new InvalidDataException("The move completion lost its retained intent.");
-        if (completion.OperationId != operationId || reader.GetString(0) != operationId.ToString("D") ||
-            reader.GetString(1) != intent.MemberId.ToString("D"))
+        if (row.Value.MemberId != intent.MemberId)
             throw new InvalidDataException("The move completion index is invalid.");
         try
         {
@@ -134,14 +128,30 @@ public sealed partial class MirrorPulseProductCatalog
         return completion;
     }
 
+    private async Task<(MirrorPulseNamespaceMemberMoveCompletion Completion, Guid MemberId)?> ReadNamespaceMemberMoveCompletionRowAsync(
+        Guid operationId, SqliteTransaction transaction, CancellationToken token)
+    {
+        await using SqliteCommand query = _connection.CreateCommand();
+        query.Transaction = transaction;
+        query.CommandText = "SELECT operation_id,member_id,payload,fingerprint FROM namespace_member_move_completions WHERE operation_id=$id;";
+        query.Parameters.AddWithValue("$id", operationId.ToString("D"));
+        await using SqliteDataReader reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
+        if (!await reader.ReadAsync(token).ConfigureAwait(false)) return null;
+        var completion = ReadNamespaceMovePayload<MirrorPulseNamespaceMemberMoveCompletion>(
+            (byte[])reader[2], (byte[])reader[3], NamespaceMemberMoveFactLimit, ValidateNamespaceMemberMoveCompletion);
+        if (completion.OperationId != operationId || reader.GetString(0) != operationId.ToString("D"))
+            throw new InvalidDataException("The move completion index is invalid.");
+        return (completion, ParseNamespaceMemberId(reader.GetString(1)));
+    }
+
     private async Task ValidateNamespaceMemberMoveCompletionReferencesAsync(MirrorPulseNamespaceMemberMoveCompletion completion,
         SqliteTransaction transaction, CancellationToken token)
     {
         var observation = await ReadNamespaceMoveFactCoreAsync<MirrorPulseNamespaceMemberMoveObservation>(
-            completion.OperationId, true, transaction, token).ConfigureAwait(false)
+            completion.OperationId, true, transaction, token, false).ConfigureAwait(false)
             ?? throw new FileNotFoundException("The native move observation is missing.");
         var projection = await ReadNamespaceMoveFactCoreAsync<MirrorPulseNamespaceMemberMoveProjection>(
-            completion.OperationId, false, transaction, token).ConfigureAwait(false)
+            completion.OperationId, false, transaction, token, false).ConfigureAwait(false)
             ?? throw new FileNotFoundException("The official move projection is missing.");
         if (completion.ItemId != observation.ItemId || completion.RemoteId != observation.RemoteId ||
             completion.RelativePath != observation.RelativePath || completion.IsDirectory != observation.IsDirectory ||

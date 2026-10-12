@@ -103,7 +103,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                 version.CommandText = "PRAGMA user_version;";
                 long currentVersion = (long)(await version.ExecuteScalarAsync(cancellationToken)
                     .ConfigureAwait(false) ?? 0L);
-                if (currentVersion > 38)
+                if (currentVersion > 39)
                 {
                     throw new InvalidDataException("The MP product catalog schema is newer than this Host supports.");
                 }
@@ -418,7 +418,8 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                 await EnsureNamespaceMemberSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
                 await EnsureNamespaceMemberMoveSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
                 await EnsureNamespaceMemberMoveFactSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
-                version.CommandText = "PRAGMA user_version=38;";
+                await EnsureNamespaceMemberMoveChainSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+                version.CommandText = "PRAGMA user_version=39;";
                 await version.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
 

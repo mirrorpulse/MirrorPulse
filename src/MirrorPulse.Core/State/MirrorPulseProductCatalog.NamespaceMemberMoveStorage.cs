@@ -15,9 +15,25 @@ public sealed partial class MirrorPulseProductCatalog
         command.Parameters.AddWithValue("$source", intent.Source.ParentMemberId.ToString("D"));
         command.Parameters.AddWithValue("$target", intent.Target.ParentMemberId.ToString("D"));
         command.Parameters.AddWithValue("$name", NamespaceMemberNameKey(intent.Target.RelativePath));
+        command.Parameters.AddWithValue("$previous", (object?)intent.PreviousMoveOperationId?.ToString("D") ?? DBNull.Value);
     }
 
     private async Task<MirrorPulseNamespaceMemberMoveIntent?> ReadNamespaceMemberMoveCoreAsync(Guid operationId,
+        SqliteTransaction transaction, CancellationToken token, bool validateRelocationChain = true)
+    {
+        var intent = await ReadNamespaceMemberMoveRowAsync(operationId, transaction, token).ConfigureAwait(false);
+        if (intent is null) return null;
+        try
+        {
+            await ValidateNamespaceMemberMoveReferencesAsync(intent, false, transaction, token).ConfigureAwait(false);
+            if (validateRelocationChain) _ = await ValidateNamespaceMemberMoveChainAsync(intent, transaction, token).ConfigureAwait(false);
+        }
+        catch (Exception error) when (error is InvalidOperationException or FileNotFoundException)
+        { throw new InvalidDataException("The move intent lost its original member, protection or predecessor references.", error); }
+        return intent;
+    }
+
+    private async Task<MirrorPulseNamespaceMemberMoveIntent?> ReadNamespaceMemberMoveRowAsync(Guid operationId,
         SqliteTransaction transaction, CancellationToken token)
     {
         MirrorPulseNamespaceMemberMoveIntent intent;
@@ -25,7 +41,7 @@ public sealed partial class MirrorPulseProductCatalog
         {
             query.Transaction = transaction;
             query.CommandText = """
-                SELECT operation_id,member_id,root_id,source_parent_id,target_parent_id,target_name_key,payload,fingerprint
+                SELECT operation_id,member_id,root_id,source_parent_id,target_parent_id,target_name_key,payload,fingerprint,previous_move_id
                 FROM namespace_member_moves WHERE operation_id=$id;
                 """;
             query.Parameters.AddWithValue("$id", operationId.ToString("D"));
@@ -36,12 +52,10 @@ public sealed partial class MirrorPulseProductCatalog
             if (intent.OperationId != operationId || reader.GetString(0) != operationId.ToString("D") ||
                 reader.GetString(1) != intent.MemberId.ToString("D") || reader.GetString(2) != intent.RootId.ToString() ||
                 reader.GetString(3) != intent.Source.ParentMemberId.ToString("D") || reader.GetString(4) != intent.Target.ParentMemberId.ToString("D") ||
-                reader.GetString(5) != NamespaceMemberNameKey(intent.Target.RelativePath))
+                reader.GetString(5) != NamespaceMemberNameKey(intent.Target.RelativePath) ||
+                (reader.IsDBNull(8) ? null : reader.GetString(8)) != intent.PreviousMoveOperationId?.ToString("D"))
                 throw new InvalidDataException("The move indexes disagree with the retained intent.");
         }
-        try { await ValidateNamespaceMemberMoveReferencesAsync(intent, false, transaction, token).ConfigureAwait(false); }
-        catch (Exception error) when (error is InvalidOperationException or FileNotFoundException)
-        { throw new InvalidDataException("The move intent lost its original member or protection references.", error); }
         return intent;
     }
 
@@ -93,7 +107,7 @@ public sealed partial class MirrorPulseProductCatalog
     }
 
     private async Task<MirrorPulseNamespaceMemberMoveStart?> ReadNamespaceMemberMoveStartCoreAsync(Guid operationId,
-        SqliteTransaction transaction, CancellationToken token)
+        SqliteTransaction transaction, CancellationToken token, bool validateRelocationChain = true)
     {
         MirrorPulseNamespaceMemberMoveStart start;
         await using (SqliteCommand query = _connection.CreateCommand())
@@ -111,7 +125,7 @@ public sealed partial class MirrorPulseProductCatalog
                 });
             if (reader.GetString(0) != operationId.ToString("D")) throw new InvalidDataException("The move start index is invalid.");
         }
-        var intent = await ReadNamespaceMemberMoveCoreAsync(operationId, transaction, token).ConfigureAwait(false)
+        var intent = await ReadNamespaceMemberMoveCoreAsync(operationId, transaction, token, validateRelocationChain).ConfigureAwait(false)
             ?? throw new InvalidDataException("The start lost its original move intent.");
         if (start.StartedAt < intent.PreparedAt) throw new InvalidDataException("The start predates its original move admission.");
         return start;

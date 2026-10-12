@@ -5,11 +5,11 @@ namespace MirrorPulse.Core.State;
 public sealed partial class MirrorPulseProductCatalog
 {
     private async Task ValidateNamespaceMoveFactReferencesAsync<T>(T fact, Guid operationId,
-        SqliteTransaction transaction, CancellationToken token) where T : class
+        SqliteTransaction transaction, CancellationToken token, bool validateRelocationChain = true) where T : class
     {
-        var intent = await ReadNamespaceMemberMoveCoreAsync(operationId, transaction, token).ConfigureAwait(false)
+        var intent = await ReadNamespaceMemberMoveCoreAsync(operationId, transaction, token, validateRelocationChain).ConfigureAwait(false)
             ?? throw new FileNotFoundException("The original move admission is missing.");
-        var start = await ReadNamespaceMemberMoveStartCoreAsync(operationId, transaction, token).ConfigureAwait(false)
+        var start = await ReadNamespaceMemberMoveStartCoreAsync(operationId, transaction, token, false).ConfigureAwait(false)
             ?? throw new FileNotFoundException("The before-native move start is missing.");
         switch (fact)
         {
@@ -29,7 +29,7 @@ public sealed partial class MirrorPulseProductCatalog
                     throw new InvalidOperationException("Native move facts require the original child, actual target parent and retained protected descriptors.");
                 break;
             case MirrorPulseNamespaceMemberMoveProjection projection:
-                var observation = await ReadNamespaceMoveFactCoreAsync<MirrorPulseNamespaceMemberMoveObservation>(operationId, true, transaction, token).ConfigureAwait(false)
+                var observation = await ReadNamespaceMoveFactCoreAsync<MirrorPulseNamespaceMemberMoveObservation>(operationId, true, transaction, token, false).ConfigureAwait(false)
                     ?? throw new FileNotFoundException("The native move observation is missing.");
                 if (projection.OperationId != operationId || projection.ItemId != observation.ItemId || projection.RemoteId != observation.RemoteId ||
                     projection.RelativePath != observation.RelativePath || projection.ObservedAt < observation.Child.ObservedAt ||

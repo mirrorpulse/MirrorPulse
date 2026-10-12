@@ -10,7 +10,7 @@ namespace MirrorPulse.Core.State;
 public sealed record MirrorPulseNamespaceMoveEndpoint(Guid ParentMemberId, MirrorPulseLocalFileBinding ParentLocalObject,
     Guid ParentProtectionId, string RelativePath);
 
-/// <summary>Product admission retained before a controlled member's first relocation.</summary>
+/// <summary>Product admission retained before a controlled member relocation.</summary>
 /// <remarks>
 /// Paths are operation snapshots, not a second CfSharp item graph. The source name remains owned
 /// and the target is reserved. Preparation neither moves an object nor authorizes native execution.
@@ -25,6 +25,9 @@ public sealed record MirrorPulseNamespaceMemberMoveIntent(int Version, Guid Oper
 {
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? DirectoryMoveEvidence { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? PreviousMoveOperationId { get; init; }
 }
 
 /// <summary>A durable before-native start; it is not evidence that the move occurred.</summary>
@@ -57,8 +60,8 @@ public sealed partial class MirrorPulseProductCatalog
             await using SqliteCommand insert = _connection.CreateCommand();
             insert.Transaction = transaction;
             insert.CommandText = """
-                INSERT INTO namespace_member_moves(operation_id,member_id,root_id,source_parent_id,target_parent_id,target_name_key,payload,fingerprint)
-                VALUES($id,$member,$root,$source,$target,$name,$payload,$fingerprint);
+                INSERT INTO namespace_member_moves(operation_id,member_id,root_id,source_parent_id,target_parent_id,target_name_key,previous_move_id,payload,fingerprint)
+                VALUES($id,$member,$root,$source,$target,$name,$previous,$payload,$fingerprint);
                 INSERT INTO namespace_member_move_pending(root_id,member_id,operation_id) VALUES($root,$member,$id);
                 INSERT INTO namespace_member_move_reservations(operation_id,parent_member_id,child_name_key) VALUES($id,$target,$name);
                 """;

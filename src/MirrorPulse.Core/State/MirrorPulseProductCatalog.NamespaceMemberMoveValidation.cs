@@ -24,6 +24,8 @@ public sealed partial class MirrorPulseProductCatalog
             intent.PreparedAt == default || string.IsNullOrWhiteSpace(intent.RemoteId) || intent.RemoteId.Length > 16_384 ||
             intent.Source.RelativePath.LastIndexOf('/') <= 0 || intent.Target.RelativePath.LastIndexOf('/') <= 0 || intent.Source.RelativePath == intent.Target.RelativePath)
             throw new ArgumentException("A controlled move requires distinct child paths and complete retained identities.", nameof(intent));
+        if (intent.PreviousMoveOperationId == Guid.Empty || intent.PreviousMoveOperationId == intent.OperationId)
+            throw new ArgumentException("A relocation predecessor must identify a distinct completed move.", nameof(intent));
         if (intent.DirectoryMoveEvidence is { } encoded)
         {
             try
@@ -44,8 +46,8 @@ public sealed partial class MirrorPulseProductCatalog
             ?? throw new FileNotFoundException("The original source parent is missing.");
         var target = await ReadNamespaceMemberCoreAsync(intent.Target.ParentMemberId, transaction, token).ConfigureAwait(false)
             ?? throw new FileNotFoundException("The target parent member is missing.");
-        if (member.ParentMemberId != source.MemberId || member.LocalObject != intent.LocalObject || member.OwnerSid != intent.OwnerSid ||
-            member.RootId != intent.RootId || member.RelativePath != intent.Source.RelativePath || source.RootId != intent.RootId ||
+        if (member.LocalObject != intent.LocalObject || member.OwnerSid != intent.OwnerSid ||
+            member.RootId != intent.RootId || source.RootId != intent.RootId ||
             target.RootId != intent.RootId || !source.IsDirectory || !target.IsDirectory ||
             source.LocalObject != intent.Source.ParentLocalObject || target.LocalObject != intent.Target.ParentLocalObject ||
             source.OwnerSid != intent.OwnerSid || target.OwnerSid != intent.OwnerSid || intent.PreparedAt < member.RegisteredAt ||
@@ -53,6 +55,14 @@ public sealed partial class MirrorPulseProductCatalog
             ParentMovePath(intent.Source.RelativePath) != source.RelativePath || ParentMovePath(intent.Target.RelativePath) != target.RelativePath ||
             target.MemberId == member.MemberId || member.IsDirectory != (intent.DirectoryMoveEvidence is not null))
             throw new InvalidOperationException("Move admission must preserve its original member and direct parents within one managed root.");
+        await RequireNamespaceMemberMoveSourceAsync(intent, member, transaction, token).ConfigureAwait(false);
+        if (current)
+        {
+            var location = await ReadNamespaceMemberLocationCoreAsync(member, transaction, token).ConfigureAwait(false);
+            if (location.CompletedMoveOperationId != intent.PreviousMoveOperationId || location.ParentMemberId != source.MemberId ||
+                location.RelativePath != intent.Source.RelativePath)
+                throw new InvalidOperationException("Move admission must start at the member's latest committed location.");
+        }
         var ancestor = target;
         while (ancestor.ParentMemberId is { } ancestorId)
         {
@@ -85,19 +95,22 @@ public sealed partial class MirrorPulseProductCatalog
                 throw new InvalidOperationException("An original file move requires its retained pre-conversion identity.");
         }
         if (itemId is not null && (intent.ItemId != itemId || intent.RemoteId != remoteId))
-            throw new InvalidOperationException("A first move cannot substitute the retained public identity or an unproved accepted remote identity.");
+            throw new InvalidOperationException("A move cannot substitute the retained public identity or an unproved accepted remote identity.");
     }
 
     private async Task RequireCurrentNamespaceMoveLineageAsync(MirrorPulseNamespaceMemberRegistration member, string roleSid,
         DateTimeOffset preparedAt, SqliteTransaction transaction, CancellationToken token)
     {
+        var visited = new HashSet<Guid>();
         while (true)
         {
+            if (!visited.Add(member.MemberId)) throw new InvalidDataException("The current member lineage contains a cycle.");
             var proof = await ReadNamespaceMemberProofAsync(member, true, transaction, token).ConfigureAwait(false);
             if (proof.RoleSid != roleSid || proof.VerifiedAt > preparedAt)
                 throw new InvalidOperationException("Move execution requires current protection throughout its retained parent lineage.");
             await RequireNamespaceMemberNameAsync(member, transaction, token).ConfigureAwait(false);
-            if (member.ParentMemberId is not { } parentId) break;
+            var location = await ReadNamespaceMemberLocationCoreAsync(member, transaction, token).ConfigureAwait(false);
+            if (location.ParentMemberId is not { } parentId) break;
             member = await ReadNamespaceMemberRowAsync(parentId, transaction, token).ConfigureAwait(false)
                 ?? throw new InvalidDataException("The protected move lineage lost a parent.");
         }
