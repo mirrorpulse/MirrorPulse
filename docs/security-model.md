@@ -98,6 +98,15 @@ owners, the normal source token, privileges or group membership. Failure to set
 and verify this owner prevents session construction. Windows defines this setting
 through [TOKEN_OWNER](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-token_owner).
 
+The shared `MirrorPulseNamespaceActor` serializes awaited local namespace callbacks
+for one sync root. Queued cancellation never starts a callback; shutdown cancels
+waiters and drains the active callback without canceling its token or discarding
+its result. Nested entry or disposal is rejected, and completed admission cannot
+be reused through a captured execution context. This component still needs Host
+wiring across controlled operations and population. It does not acquire native
+ancestor guards, grant the namespace role, authorize a mutation or make the tree
+ready. Source access and Worker RPC remain outside its callbacks.
+
 Schema 27 adds immutable birth intents for controlled creation, import and remote
 population under a protected parent. Admission requires that parent's latest
 verified protection, native binding, stable root and current role. A separate
