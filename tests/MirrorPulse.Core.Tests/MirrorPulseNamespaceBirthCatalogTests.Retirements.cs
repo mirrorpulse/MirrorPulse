@@ -45,6 +45,22 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
     }
 
     [TestMethod]
+    public async Task PendingRetirementFencesTheRootUntilMembershipSettlement()
+    {
+        using var fixture = new Fixture();
+        await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        var setup = await PrepareMovableMemberAsync(catalog);
+        var intent = Retire(setup, Guid.NewGuid());
+        await catalog.PrepareNamespaceRetirementAsync(intent);
+        CollectionAssert.Contains((await catalog.ReadNamespaceRecoveryRootsAsync()).ToArray(), intent.RootId);
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => catalog.PrepareNamespaceBirthAsync(
+            Birth(setup.Parent, setup.ParentProof) with { RelativePath = "Docs/blocked.txt" }));
+        var native = await catalog.RecordNamespaceRetirementNativeDeletedAsync(intent.OperationId, intent.PreparedAt.AddSeconds(1));
+        await catalog.CompleteNamespaceRetirementAsync(intent.OperationId, native.NativeDeletedAt!.Value.AddSeconds(1));
+        CollectionAssert.DoesNotContain((await catalog.ReadNamespaceRecoveryRootsAsync()).ToArray(), intent.RootId);
+    }
+
+    [TestMethod]
     [DataRow("foreign-binding")]
     [DataRow("stale-path")]
     [DataRow("foreign-member")]

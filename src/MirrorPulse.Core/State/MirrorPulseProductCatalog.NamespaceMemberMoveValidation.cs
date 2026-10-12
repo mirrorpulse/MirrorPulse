@@ -128,12 +128,15 @@ public sealed partial class MirrorPulseProductCatalog
     }
 
     private async Task RequireNamespaceMoveRootUnfencedAsync(RootId rootId, Guid? allowedMove,
-        SqliteTransaction transaction, CancellationToken token)
+        SqliteTransaction transaction, CancellationToken token, Guid? allowedRetirement = null)
     {
         var pending = await ReadPendingNamespaceMemberMoveCoreAsync(rootId, transaction, token).ConfigureAwait(false);
         if (pending is not null && pending.OperationId != allowedMove)
             throw new InvalidOperationException("An unresolved controlled move has fenced this managed root.");
         if ((await ReadManagedRootRenamesCoreAsync(token, transaction).ConfigureAwait(false)).Any(intent => intent.RootId == rootId && intent.IsPending))
             throw new InvalidOperationException("An unresolved Label change has fenced this managed root.");
+        foreach (var retirement in await ReadPendingNamespaceRetirementsCoreAsync(transaction, token).ConfigureAwait(false))
+            if (retirement.Intent.RootId == rootId && retirement.OperationId != allowedRetirement)
+                throw new InvalidOperationException("An unresolved controlled retirement has fenced this managed root.");
     }
 }

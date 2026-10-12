@@ -60,6 +60,51 @@ public sealed partial class MirrorPulseProductCatalog
         finally { _gate.Release(); }
     }
 
+    /// <summary>Rechecks the admitted current member and root fence before a native deletion.</summary>
+    public async Task<MirrorPulseNamespaceRetirement> ValidateNamespaceRetirementExecutionAsync(Guid operationId,
+        CancellationToken cancellationToken = default)
+    {
+        if (operationId == Guid.Empty) throw new ArgumentException("A retirement operation is required.", nameof(operationId));
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed(); using SqliteTransaction transaction = _connection.BeginTransaction(deferred: true);
+            var retirement = await ReadNamespaceRetirementCoreAsync(operationId, transaction, cancellationToken).ConfigureAwait(false)
+                ?? throw new FileNotFoundException("The retirement operation is missing.");
+            if (retirement.Phase == MirrorPulseNamespaceRetirementPhase.Completed) { transaction.Commit(); return retirement; }
+            if (retirement.Phase == MirrorPulseNamespaceRetirementPhase.RecoveryRequired)
+                throw new InvalidOperationException("The retirement requires explicit recovery.");
+            var member = await ReadNamespaceMemberCoreAsync(retirement.Intent.MemberId, transaction, cancellationToken).ConfigureAwait(false)
+                ?? throw new InvalidDataException("The retirement member provenance is missing.");
+            var location = await ReadNamespaceMemberLocationCoreAsync(member, transaction, cancellationToken).ConfigureAwait(false);
+            await RequireNamespaceMemberNameAsync(member, transaction, cancellationToken).ConfigureAwait(false);
+            if (location.RelativePath != retirement.Intent.RelativePath || member.LocalObject != retirement.Intent.LocalObject ||
+                member.RootId != retirement.Intent.RootId || member.OwnerSid != retirement.Intent.OwnerSid || member.IsDirectory != retirement.Intent.IsDirectory)
+                throw new InvalidDataException("The retirement no longer identifies its committed protected member.");
+            await RequireNamespaceMoveRootUnfencedAsync(retirement.Intent.RootId, null, transaction, cancellationToken, operationId).ConfigureAwait(false);
+            await RequireNoRegisteredDescendantsAsync(member.MemberId, transaction, cancellationToken).ConfigureAwait(false);
+            transaction.Commit(); return retirement;
+        }
+        finally { _gate.Release(); }
+    }
+
+    private async Task<List<MirrorPulseNamespaceRetirement>> ReadPendingNamespaceRetirementsCoreAsync(
+        SqliteTransaction transaction, CancellationToken token)
+    {
+        var operations = new List<Guid>();
+        await using (SqliteCommand query = _connection.CreateCommand())
+        {
+            query.Transaction = transaction; query.CommandText = "SELECT operation_id FROM namespace_member_retirements WHERE phase<>2 ORDER BY operation_id;";
+            await using SqliteDataReader reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
+            while (await reader.ReadAsync(token).ConfigureAwait(false)) operations.Add(ParseNamespaceMemberId(reader.GetString(0)));
+        }
+        var pending = new List<MirrorPulseNamespaceRetirement>(operations.Count);
+        foreach (Guid operation in operations)
+            pending.Add(await ReadNamespaceRetirementCoreAsync(operation, transaction, token).ConfigureAwait(false)
+                ?? throw new InvalidDataException("The pending retirement lost its receipt."));
+        return pending;
+    }
+
     public Task<MirrorPulseNamespaceRetirement> RecordNamespaceRetirementNativeDeletedAsync(Guid operationId,
         DateTimeOffset deletedAt, CancellationToken cancellationToken = default)
     {
@@ -109,13 +154,15 @@ public sealed partial class MirrorPulseProductCatalog
 
     private async Task<MirrorPulseNamespaceRetirement?> ReadNamespaceRetirementCoreAsync(Guid operationId, SqliteTransaction? transaction, CancellationToken token)
     {
-        await using SqliteCommand query = _connection.CreateCommand(); query.Transaction = transaction; query.CommandText = "SELECT operation_id,payload,fingerprint,phase FROM namespace_member_retirements WHERE operation_id=$id;"; query.Parameters.AddWithValue("$id", operationId.ToString("D"));
+        await using SqliteCommand query = _connection.CreateCommand(); query.Transaction = transaction; query.CommandText = "SELECT operation_id,payload,fingerprint,phase,member_id FROM namespace_member_retirements WHERE operation_id=$id;"; query.Parameters.AddWithValue("$id", operationId.ToString("D"));
         await using SqliteDataReader reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false); if (!await reader.ReadAsync(token).ConfigureAwait(false)) return null;
         byte[] payload = (byte[])reader[1], fingerprint = (byte[])reader[2];
         if (payload.Length > 131_072 || fingerprint.Length != 32 || !CryptographicOperations.FixedTimeEquals(SHA256.HashData(payload), fingerprint)) throw new InvalidDataException("The namespace retirement fingerprint is invalid.");
         var retirement = JsonSerializer.Deserialize<MirrorPulseNamespaceRetirement>(payload, TopologyJsonOptions) ?? throw new InvalidDataException("The namespace retirement is empty.");
         ValidateNamespaceRetirementIntent(retirement.Intent);
-        if (retirement.OperationId != operationId || retirement.Intent.OperationId != operationId || reader.GetString(0) != operationId.ToString("D") || reader.GetInt32(3) != (int)retirement.Phase || !JsonSerializer.SerializeToUtf8Bytes(retirement, TopologyJsonOptions).AsSpan().SequenceEqual(payload)) throw new InvalidDataException("The namespace retirement index is inconsistent.");
+        if (retirement.OperationId != operationId || retirement.Intent.OperationId != operationId || reader.GetString(0) != operationId.ToString("D") ||
+            reader.GetString(4) != retirement.Intent.MemberId.ToString("D") || reader.GetInt32(3) != (int)retirement.Phase || !Enum.IsDefined(retirement.Phase) ||
+            !JsonSerializer.SerializeToUtf8Bytes(retirement, TopologyJsonOptions).AsSpan().SequenceEqual(payload)) throw new InvalidDataException("The namespace retirement index is inconsistent.");
         return retirement;
     }
 

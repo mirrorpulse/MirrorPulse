@@ -53,6 +53,8 @@ public sealed partial class MirrorPulseProductCatalog
                     ?? throw new InvalidDataException("The pending move lost its durable root fence.");
                 roots.Add(root);
             }
+            foreach (var retirement in await ReadPendingNamespaceRetirementsCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
+                roots.Add(retirement.Intent.RootId);
             if (includeUnregisteredBirths)
                 await AddUnregisteredBirthRootFencesAsync(roots, transaction, cancellationToken).ConfigureAwait(false);
             transaction.Commit();

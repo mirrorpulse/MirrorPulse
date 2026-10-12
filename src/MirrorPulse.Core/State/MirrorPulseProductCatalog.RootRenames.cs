@@ -76,8 +76,7 @@ public sealed partial class MirrorPulseProductCatalog
                 }
                 throw new InvalidOperationException("The managed root has a pending namespace transition.");
             }
-            if (await ReadPendingNamespaceMemberMoveCoreAsync(rootId, transaction, cancellationToken).ConfigureAwait(false) is not null)
-                throw new InvalidOperationException("A controlled member move must recover before this root's Label changes.");
+            await RequireNamespaceMoveRootUnfencedAsync(rootId, null, transaction, cancellationToken).ConfigureAwait(false);
             if (root.DirectoryName == target) throw new ArgumentException("The root already has this label.", nameof(label));
             var renamed = new RootRegistration(root.AdapterId, root.InstanceId, root.RootId, root.UniquenessKey,
                 target, target, root.CustomEntry, root.State, root.RegisteredAt, root.IdentityScope);

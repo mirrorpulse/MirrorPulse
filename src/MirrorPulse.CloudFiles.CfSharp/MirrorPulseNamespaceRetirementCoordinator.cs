@@ -39,8 +39,7 @@ public sealed class MirrorPulseNamespaceRetirementCoordinator(CloudFileSystem fi
     private async ValueTask<MirrorPulseNamespaceRetirement> ExecuteAdmittedAsync(Guid operationId, CancellationToken token)
     {
         actor.AssertAccess();
-        var current = await catalog.ReadNamespaceRetirementAsync(operationId, token).ConfigureAwait(false)
-            ?? throw new FileNotFoundException("The namespace retirement operation is missing.");
+        var current = await catalog.ValidateNamespaceRetirementExecutionAsync(operationId, token).ConfigureAwait(false);
         if (current.Phase == MirrorPulseNamespaceRetirementPhase.Completed) return current;
         var member = await catalog.ReadNamespaceMemberAsync(current.Intent.MemberId, token).ConfigureAwait(false)
             ?? throw new FileNotFoundException("The retired member provenance is missing.");
