@@ -24,7 +24,8 @@ public sealed partial class MirrorPulseProductCatalog
             intent.PreparedAt == default || string.IsNullOrWhiteSpace(intent.RemoteId) || intent.RemoteId.Length > 16_384 ||
             intent.Source.RelativePath.LastIndexOf('/') <= 0 || intent.Target.RelativePath.LastIndexOf('/') <= 0 || intent.Source.RelativePath == intent.Target.RelativePath)
             throw new ArgumentException("A controlled move requires distinct child paths and complete retained identities.", nameof(intent));
-        if (intent.PreviousMoveOperationId == Guid.Empty || intent.PreviousMoveOperationId == intent.OperationId)
+        if (intent.PreviousMoveOperationId == Guid.Empty || intent.PreviousMoveOperationId == intent.OperationId ||
+            intent.IdentityAcceptanceOperationId == Guid.Empty)
             throw new ArgumentException("A relocation predecessor must identify a distinct completed move.", nameof(intent));
         if (intent.DirectoryMoveEvidence is { } encoded)
         {
@@ -55,6 +56,7 @@ public sealed partial class MirrorPulseProductCatalog
             ParentMovePath(intent.Source.RelativePath) != source.RelativePath || ParentMovePath(intent.Target.RelativePath) != target.RelativePath ||
             target.MemberId == member.MemberId || member.IsDirectory != (intent.DirectoryMoveEvidence is not null))
             throw new InvalidOperationException("Move admission must preserve its original member and direct parents within one managed root.");
+        await RequireNamespaceMoveIdentityAsync(intent, member, current, transaction, token).ConfigureAwait(false);
         await RequireNamespaceMemberMoveSourceAsync(intent, member, transaction, token).ConfigureAwait(false);
         if (current)
         {
@@ -79,23 +81,6 @@ public sealed partial class MirrorPulseProductCatalog
                 throw new InvalidOperationException("Move admission requires its retained verified protection epochs.");
             if (current) await RequireCurrentNamespaceMoveLineageAsync(pair.Member, intent.RoleSid, intent.PreparedAt, transaction, token).ConfigureAwait(false);
         }
-        Guid? itemId;
-        string? remoteId;
-        if (member.Origin == MirrorPulseNamespaceMemberOrigin.ProtectedBirth)
-        {
-            var observation = await ReadNamespaceBirthObservationCoreAsync(member.OriginId, transaction, token).ConfigureAwait(false)
-                ?? throw new InvalidDataException("The born member lost its first public identity.");
-            itemId = observation.ItemId; remoteId = observation.RemoteId;
-        }
-        else
-        {
-            var identity = await ReadPermissionLocalIdentityCoreAsync(member.OriginId, token, transaction).ConfigureAwait(false);
-            itemId = identity?.ItemId; remoteId = identity?.RemoteId;
-            if (!member.IsDirectory && identity is null)
-                throw new InvalidOperationException("An original file move requires its retained pre-conversion identity.");
-        }
-        if (itemId is not null && (intent.ItemId != itemId || intent.RemoteId != remoteId))
-            throw new InvalidOperationException("A move cannot substitute the retained public identity or an unproved accepted remote identity.");
     }
 
     private async Task RequireCurrentNamespaceMoveLineageAsync(MirrorPulseNamespaceMemberRegistration member, string roleSid,

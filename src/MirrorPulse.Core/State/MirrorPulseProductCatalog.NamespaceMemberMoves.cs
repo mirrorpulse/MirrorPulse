@@ -28,6 +28,9 @@ public sealed record MirrorPulseNamespaceMemberMoveIntent(int Version, Guid Oper
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Guid? PreviousMoveOperationId { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? IdentityAcceptanceOperationId { get; init; }
 }
 
 /// <summary>A durable before-native start; it is not evidence that the move occurred.</summary>

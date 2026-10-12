@@ -106,12 +106,13 @@ public sealed partial class MirrorPulseProductCatalog
             ?? throw new FileNotFoundException("The relocation predecessor is incomplete.");
         var completion = row.Completion;
         if (previous.MemberId != member.MemberId || row.MemberId != member.MemberId || previous.RootId != intent.RootId ||
-            previous.LocalObject != intent.LocalObject || previous.ItemId != intent.ItemId || previous.RemoteId != intent.RemoteId ||
+            previous.LocalObject != intent.LocalObject ||
             previous.OwnerSid != intent.OwnerSid || previous.Target.ParentMemberId != intent.Source.ParentMemberId ||
             previous.Target.ParentLocalObject != intent.Source.ParentLocalObject || previous.Target.RelativePath != intent.Source.RelativePath ||
-            completion.RelativePath != intent.Source.RelativePath || completion.ItemId != intent.ItemId || completion.RemoteId != intent.RemoteId ||
+            completion.RelativePath != intent.Source.RelativePath || completion.ItemId != previous.ItemId || completion.RemoteId != previous.RemoteId ||
             completion.IsDirectory != member.IsDirectory || completion.VerifiedAt > intent.PreparedAt)
             throw new InvalidOperationException("A relocation must follow the same object's completed destination and chronology.");
+        await RequireNamespaceMoveIdentitySuccessorAsync(previous, intent, completion.VerifiedAt, transaction, token).ConfigureAwait(false);
     }
 
     private static async Task EnsureNamespaceMemberMoveChainSchemaAsync(SqliteConnection connection, CancellationToken token)
