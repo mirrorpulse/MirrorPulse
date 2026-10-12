@@ -94,6 +94,8 @@ public sealed record NamespaceMemberMoveArguments(Guid OperationId) : IMirrorPul
 
 public sealed record NamespaceMemberRetirementArguments(Guid OperationId) : IMirrorPulseControlArguments;
 
+public sealed record NamespaceMemberRetirementStatusArguments(Guid OperationId) : IMirrorPulseControlArguments;
+
 public sealed record NamespaceMemberPrepareRetirementArguments(Guid OperationId, Guid MemberId) : IMirrorPulseControlArguments;
 
 public sealed record NamespaceMemberCreateArguments(Guid OperationId, Guid ParentMemberId,

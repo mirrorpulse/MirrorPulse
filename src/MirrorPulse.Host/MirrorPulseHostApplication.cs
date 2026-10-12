@@ -481,6 +481,8 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
             MirrorPulseControlCommands.NamespaceMemberPrepareRetirement, PrepareNamespaceMemberRetirementAsync);
         dispatcher.Register<NamespaceMemberRetirementArguments, MirrorPulseControlNamespaceMemberRetirementResult>(
             MirrorPulseControlCommands.NamespaceMemberRetirement, ExecuteNamespaceMemberRetirementAsync);
+        dispatcher.Register<NamespaceMemberRetirementStatusArguments, MirrorPulseControlNamespaceMemberRetirementResult>(
+            MirrorPulseControlCommands.NamespaceMemberRetirementStatus, ReadNamespaceMemberRetirementAsync);
         _controlPipe = new MirrorPulseControlPipeServer(dispatcher.DispatchAsync);
     }
 
@@ -541,6 +543,16 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
     {
         if (arguments.OperationId == Guid.Empty) throw new ArgumentException("A retirement operation ID is required.", nameof(arguments));
         var retirement = await _session.ExecuteNamespaceMemberRetirementAsync(arguments.OperationId, cancellationToken).ConfigureAwait(false);
+        return new(retirement.OperationId, retirement.Intent.MemberId, retirement.Intent.RelativePath,
+            retirement.Intent.IsDirectory, retirement.Phase.ToString(), retirement.NativeDeletedAt is not null,
+            retirement.Phase == MirrorPulseNamespaceRetirementPhase.Completed);
+    }
+
+    private async ValueTask<MirrorPulseControlNamespaceMemberRetirementResult> ReadNamespaceMemberRetirementAsync(
+        NamespaceMemberRetirementStatusArguments arguments, CancellationToken cancellationToken)
+    {
+        if (arguments.OperationId == Guid.Empty) throw new ArgumentException("A retirement operation ID is required.", nameof(arguments));
+        var retirement = await _session.ReadNamespaceMemberRetirementAsync(arguments.OperationId, cancellationToken).ConfigureAwait(false);
         return new(retirement.OperationId, retirement.Intent.MemberId, retirement.Intent.RelativePath,
             retirement.Intent.IsDirectory, retirement.Phase.ToString(), retirement.NativeDeletedAt is not null,
             retirement.Phase == MirrorPulseNamespaceRetirementPhase.Completed);

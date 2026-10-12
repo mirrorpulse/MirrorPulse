@@ -24,6 +24,7 @@ public static class MirrorPulseControlCommands
     public const string RootPrepareRename = "root.prepareRename";
     public const string NamespaceMemberMove = "namespace.member.move";
     public const string NamespaceMemberRetirement = "namespace.member.retire";
+    public const string NamespaceMemberRetirementStatus = "namespace.member.retirementStatus";
     public const string NamespaceMemberPrepareRetirement = "namespace.member.prepareRetire";
     public const string NamespaceMemberCreate = "namespace.member.create";
     public const string NamespaceMemberInspect = "namespace.member.inspect";
@@ -63,6 +64,7 @@ public static class MirrorPulseControlCommands
         new(RootPrepareRename, "root", true, false),
         new(NamespaceMemberMove, "namespace", true, false),
         new(NamespaceMemberRetirement, "namespace", true, false),
+        new(NamespaceMemberRetirementStatus, "namespace", false, false),
         new(NamespaceMemberPrepareRetirement, "namespace", true, false),
         new(NamespaceMemberCreate, "namespace", true, false),
         new(NamespaceMemberInspect, "namespace", false, false),

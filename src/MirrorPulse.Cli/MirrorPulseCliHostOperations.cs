@@ -307,6 +307,14 @@ public sealed class MirrorPulseCliHostOperations : IMirrorPulseCliHostOperations
                     result = retirement;
                     human = $"Member retirement {retirement.Phase} · {retirement.OperationId:D} · {retirement.RelativePath}";
                     break;
+                case ("namespace", "member") when command.Path.Count > 2 &&
+                    command.Path[2].Equals("retirement-status", StringComparison.OrdinalIgnoreCase):
+                    if (command.Arguments.Count != 1 || !Guid.TryParse(command.Arguments[0], out Guid retirementStatus) || retirementStatus == Guid.Empty)
+                        throw new ArgumentException("namespace member retirement-status requires one non-empty operation ID.");
+                    var retirementReceipt = await _client.GetNamespaceMemberRetirementAsync(retirementStatus, cancellationToken).ConfigureAwait(false);
+                    result = retirementReceipt;
+                    human = $"Member retirement {retirementReceipt.Phase} · {retirementReceipt.OperationId:D} · {retirementReceipt.RelativePath}";
+                    break;
                 case ("namespace", "birth") when command.Path.Count > 2 &&
                     command.Path[2].Equals("recover", StringComparison.OrdinalIgnoreCase):
                     if (command.Arguments.Count != 1 || !Guid.TryParse(command.Arguments[0], out Guid birthRecoveryId) || birthRecoveryId == Guid.Empty)

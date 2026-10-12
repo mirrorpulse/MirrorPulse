@@ -56,6 +56,7 @@ The default output is concise human-readable text. Automation should use `--json
 | `mp namespace member create PARENT_ID NAME [--directory] [--operation-id GUID]` | Create an empty local file or directory under a registered protected directory. | retain `operationId` for retry; this does not prove remote acceptance |
 | `mp namespace member prepare-retire MEMBER_ID [--operation-id GUID]` | Prepare a protected leaf deletion. | root and directories with registered descendants are rejected |
 | `mp namespace member retire OPERATION_ID` | Execute or retry a protected leaf deletion. | native deletion and membership settlement are separate durable phases |
+| `mp namespace member retirement-status OPERATION_ID` | Read a protected deletion receipt. | reports the durable native and membership phases |
 | `mp instance create --install-id ID --name NAME [--config k=v] [--root k=v] [--secret VALUE] [--disabled]` | Create an independently identifiable instance. | repeat `--config`/`--root` for multiple values |
 | `mp instance configure --instance-id ID --name NAME [--config k=v] [--root k=v]` | Update instance configuration and roots. | adapter-defined keys |
 | `mp instance enable\|disable --instance-id ID` | Change whether an instance participates in synchronization. | `--json` |
