@@ -199,6 +199,25 @@ before entering the namespace actor, and drains the actor before disposing
 CfSharp. Production composition still needs full native and installed gates;
 directory subtree settlement remains pending.
 
+`mp namespace member inspect RELATIVE_PATH [--directory]` asks the Host to look
+up the native object's complete binding and registered stable member ID. The
+returned parent ID describes the actual direct parent at inspection time. This
+read does not hydrate content, mutate membership, certify current protection, or
+authorize a later operation. The Host must inspect again when preparing and
+executing a move.
+
+`mp namespace member prepare-move MEMBER_ID PARENT_ID NAME [--operation-id GUID]`
+asks the Host to retain a first file move within its managed root. The Host
+drains earlier instance work, enters the shared actor, retains both ancestor
+chains, and checks native identity, binding, owner, permissions, parent and
+official projection before reserving the destination. Preparation makes no
+native move and acknowledges no source operation. Reusing the same operation ID
+with the same request returns the immutable preparation; a different request is
+rejected. Specify the ID to recover a preparation whose response was lost.
+`namespace member move OPERATION_ID` executes or retries that preparation.
+Repeated relocations, accepted remote identity changes and directory subtree
+settlement still require their separate completion paths.
+
 `mp namespace birth recover RECOVERY_ID` invokes an already retained staged-file
 recovery action through the same Host contract. It reports the drained public
 CfSharp receipt and independently retained verification, returning exit code 11

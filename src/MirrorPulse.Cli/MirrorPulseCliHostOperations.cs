@@ -223,6 +223,33 @@ public sealed class MirrorPulseCliHostOperations : IMirrorPulseCliHostOperations
                             (root.PendingRename is { } pending ? $" · {pending.SourceName} -> {pending.TargetName} ({pending.Phase}) · {pending.OperationId}" : string.Empty)));
                     break;
                 case ("namespace", "member") when command.Path.Count > 2 &&
+                    command.Path[2].Equals("inspect", StringComparison.OrdinalIgnoreCase):
+                    if (command.Arguments.Count is < 1 or > 2 ||
+                        command.Arguments.Count == 2 && !command.Arguments[1].Equals("--directory", StringComparison.OrdinalIgnoreCase))
+                        throw new ArgumentException("namespace member inspect requires a relative path and optional --directory.");
+                    var inspection = await _client.InspectNamespaceMemberAsync(command.Arguments[0],
+                        command.Arguments.Count == 2, cancellationToken).ConfigureAwait(false);
+                    result = inspection;
+                    human = $"Member {inspection.MemberId:D} · {inspection.RelativePath} · parent {inspection.ActualParentMemberId:D}";
+                    break;
+                case ("namespace", "member") when command.Path.Count > 2 &&
+                    command.Path[2].Equals("prepare-move", StringComparison.OrdinalIgnoreCase):
+                    if (command.Arguments.Count is not (3 or 5) ||
+                        !Guid.TryParse(command.Arguments[0], out Guid sourceMember) || sourceMember == Guid.Empty ||
+                        !Guid.TryParse(command.Arguments[1], out Guid targetParent) || targetParent == Guid.Empty ||
+                        string.IsNullOrWhiteSpace(command.Arguments[2]) || command.Arguments[2].Contains('/') || command.Arguments[2].Contains('\\'))
+                        throw new ArgumentException("namespace member prepare-move requires member ID, parent ID and one child name, with optional --operation-id GUID.");
+                    Guid prepareOperation = Guid.NewGuid();
+                    if (command.Arguments.Count == 5 &&
+                        (!command.Arguments[3].Equals("--operation-id", StringComparison.OrdinalIgnoreCase) ||
+                        !Guid.TryParse(command.Arguments[4], out prepareOperation) || prepareOperation == Guid.Empty))
+                        throw new ArgumentException("--operation-id requires a non-empty GUID.");
+                    var preparation = await _client.PrepareNamespaceMemberMoveAsync(prepareOperation, sourceMember,
+                        targetParent, command.Arguments[2], cancellationToken).ConfigureAwait(false);
+                    result = preparation;
+                    human = $"Member move prepared · {preparation.OperationId:D} · {preparation.SourceRelativePath} -> {preparation.TargetRelativePath}";
+                    break;
+                case ("namespace", "member") when command.Path.Count > 2 &&
                     command.Path[2].Equals("move", StringComparison.OrdinalIgnoreCase):
                     if (command.Arguments.Count != 1 || !Guid.TryParse(command.Arguments[0], out Guid moveOperation) || moveOperation == Guid.Empty)
                         throw new ArgumentException("namespace member move requires one non-empty operation ID.");

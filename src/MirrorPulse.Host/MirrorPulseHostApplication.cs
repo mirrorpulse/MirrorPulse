@@ -469,6 +469,10 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
             MirrorPulseControlCommands.RootList, async (_, token) => await ReadRootsAsync(token).ConfigureAwait(false));
         dispatcher.Register<RootRecoverArguments, MirrorPulseControlRootRecovery>(
             MirrorPulseControlCommands.RootRecover, RecoverRootRenameAsync);
+        dispatcher.Register<NamespaceMemberInspectArguments, MirrorPulseControlNamespaceMemberInspection>(
+            MirrorPulseControlCommands.NamespaceMemberInspect, InspectNamespaceMemberAsync);
+        dispatcher.Register<NamespaceMemberPrepareMoveArguments, MirrorPulseControlNamespaceMemberMovePreparation>(
+            MirrorPulseControlCommands.NamespaceMemberPrepareMove, PrepareNamespaceMemberMoveAsync);
         _controlPipe = new MirrorPulseControlPipeServer(dispatcher.DispatchAsync);
     }
 
@@ -481,6 +485,27 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
         return new(recovery.Intent.OperationId, recovery.Intent.RootId.ToString(), recovery.Intent.Phase.ToString(),
             receipt?.NativeMoveObserved, receipt?.DurableProjectionCommitted, receipt?.RequiresFullRescan,
             receipt?.Outcome.ToString(), receipt?.Stage.ToString(), receipt?.NativeHResult);
+    }
+
+    private async ValueTask<MirrorPulseControlNamespaceMemberInspection> InspectNamespaceMemberAsync(
+        NamespaceMemberInspectArguments arguments, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(arguments.RelativePath);
+        var member = await _session.InspectNamespaceMemberAsync(arguments.RelativePath, arguments.IsDirectory, cancellationToken).ConfigureAwait(false);
+        return new(member.MemberId, member.ActualParentMemberId, member.RootId?.ToString(), member.RelativePath,
+            member.IsDirectory, member.NativeItemId, member.ObservedAt);
+    }
+
+    private async ValueTask<MirrorPulseControlNamespaceMemberMovePreparation> PrepareNamespaceMemberMoveAsync(
+        NamespaceMemberPrepareMoveArguments arguments, CancellationToken cancellationToken)
+    {
+        if (arguments.OperationId == Guid.Empty || arguments.MemberId == Guid.Empty || arguments.TargetParentMemberId == Guid.Empty)
+            throw new ArgumentException("Operation, member and target parent IDs are required.", nameof(arguments));
+        ArgumentException.ThrowIfNullOrWhiteSpace(arguments.TargetName);
+        var intent = await _session.PrepareNamespaceMemberMoveAsync(arguments.OperationId, arguments.MemberId,
+            arguments.TargetParentMemberId, arguments.TargetName, cancellationToken).ConfigureAwait(false);
+        return new(intent.OperationId, intent.MemberId, intent.Target.ParentMemberId,
+            intent.Source.RelativePath, intent.Target.RelativePath, intent.PreparedAt);
     }
 
     private async Task<MirrorPulseControlNamespaceMemberMoveResult> ExecuteNamespaceMemberMoveAsync(
