@@ -366,13 +366,19 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     TestContext.WriteLine($"ControlledNestedBirth: cfSharpOwner={owner}; bornDirectParents=True; depth=3; publicParentIdentity=True; firstBindingsAndBytesRetained=True; originalJournalIdsRetained=True; roleOnlyNamespace=True; sourceReads=0; hostIntegrated=False.");
                 }
                 Assert.AreEqual(0, source.Reads);
-                await VerifyNativeMemberRegistrationsAsync(fileSystem, catalog, router, owner >= 1 ? nextRole : role, members, namespaceActor, timeout.Token);
+                await VerifyNativeMemberRegistrationsAsync(fileSystem, state, catalog, router, owner >= 1 ? nextRole : role, members, namespaceActor, timeout.Token);
                 Assert.HasCount(owner switch { 0 => 3, 1 or 2 => 8, _ => 9 }, members);
                 CollectionAssert.AreEqual(payload, await File.ReadAllBytesAsync(originalFile.FullPath, timeout.Token));
                 var retainedOriginalIdentity = await catalog.ReadNamespacePermissionLocalIdentityAsync(originals[2].Baseline.EvidenceId, timeout.Token);
                 Assert.IsNotNull(retainedOriginalIdentity);
                 Assert.AreEqual(originalFileExpectedItemId, retainedOriginalIdentity.ItemId);
                 Assert.AreEqual(originalFileExpectedRemoteId, retainedOriginalIdentity.RemoteId);
+                if (owner == 3)
+                {
+                    await VerifyNativeMemberLocationAfterPublicMoveAsync(fileSystem, state, catalog, router, nextRole, namespaceActor,
+                        members[births[0].Birth.OperationId], members[births[1].Birth.OperationId], feed, journalIds, births[1].Plan.ItemId, timeout.Token);
+                    Assert.AreEqual(0, source.Reads);
+                }
                 TestContext.WriteLine($"ControlledMembership: cfSharpOwner={owner}; registeredMembers={members.Count}; memberAdmission=True; originalFileIdentityAndBytes=True; freshChildAndDirectParent=True; stableOriginalAndBornProvenance=True; reservationTransferred={owner >= 1}; replayAfterRoleRotation={owner >= 1}; sourceReads={source.Reads}; hostIntegrated=False.");
                 foreach (var preparation in originals)
                 {

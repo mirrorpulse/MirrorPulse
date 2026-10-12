@@ -114,6 +114,17 @@ checks still apply, including historical registration replay. The Host must
 supply the same owner across its namespace paths and retain native lifetime guards;
 the registrar does not create a private gate for each call.
 
+`MirrorPulseNamespaceMemberLocator` reads current path candidates by the retained
+public ItemId through CfSharp's official item repository. It preserves first
+membership and first remote identity, reports current revision and RemoteId
+separately, and never adopts an item at an old path. Missing original identity,
+missing projection, a tombstone and the sync-root anchor are explicit outcomes.
+A tombstone does not retire product membership or release its name. Projected
+paths still require fresh native binding, parent and permission checks and any
+remote-acceptance evidence before a controlled mutation. Full native binding
+lookup uses volume, sync-root ID and the complete file ID in the product catalog;
+the official item's volume-specific Int64 file ID is not substituted for it.
+
 Schema 27 adds immutable birth intents for controlled creation, import and remote
 population under a protected parent. Admission requires that parent's latest
 verified protection, native binding, stable root and current role. A separate

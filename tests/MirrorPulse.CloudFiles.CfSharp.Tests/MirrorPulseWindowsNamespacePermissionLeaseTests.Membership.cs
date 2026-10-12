@@ -91,7 +91,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         Assert.AreEqual(observation, entry.Observation);
     }
 
-    private static async Task VerifyNativeMemberRegistrationsAsync(CloudFileSystem fileSystem, MirrorPulseProductCatalog catalog,
+    private static async Task VerifyNativeMemberRegistrationsAsync(CloudFileSystem fileSystem, MirrorPulseCfSharpStateSession state, MirrorPulseProductCatalog catalog,
         MirrorPulseRootRouter router, MirrorPulseNamespaceExecutionSession role,
         IReadOnlyDictionary<Guid, MirrorPulseNamespaceMemberRegistration> members, MirrorPulseNamespaceActor actor, CancellationToken token)
     {
@@ -104,6 +104,19 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 CloudDirectory? parent = original.ParentMemberId is null ? null : fileSystem.GetDirectory(
                     members.Values.Single(value => value.MemberId == original.ParentMemberId).RelativePath);
                 Assert.AreEqual(original, await MirrorPulseNamespaceMemberRegistrar.RegisterAsync(catalog, original, item, parent, router, actor, token));
+                Assert.AreEqual(original, await catalog.ReadNamespaceMemberByBindingAsync(original.LocalObject, token));
+                var location = await MirrorPulseNamespaceMemberLocator.ResolveAsync(catalog, state.OpenStore, original.MemberId, actor, token);
+                Assert.AreEqual(original, location.Member);
+                if (original.ParentMemberId is null)
+                    Assert.AreEqual(MirrorPulseNamespaceMemberLocationState.SyncRootAnchor, location.State);
+                else if (original.Origin == MirrorPulseNamespaceMemberOrigin.CapturedOriginal && original.IsDirectory)
+                    Assert.AreEqual(MirrorPulseNamespaceMemberLocationState.IdentityUnavailable, location.State);
+                else
+                {
+                    Assert.AreEqual(MirrorPulseNamespaceMemberLocationState.Projected, location.State);
+                    Assert.AreEqual(original.RelativePath, location.RelativePath?.Replace('\\', '/'));
+                    Assert.AreEqual((await item.InspectAsync(token)).ItemId, location.ItemId);
+                }
             }
         }, token);
     }
