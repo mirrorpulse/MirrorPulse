@@ -34,6 +34,7 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
             if (member.IsDirectory)
                 throw new NotSupportedException("Directory preparation requires public subtree proof and product subtree settlement.");
             var location = await _catalog.ReadNamespaceMemberLocationAsync(memberId, token).ConfigureAwait(false);
+            var retainedIdentity = await _catalog.ReadNamespaceMemberIdentityAsync(memberId, token).ConfigureAwait(false);
             var sourceParent = await _catalog.ReadNamespaceMemberAsync(location.ParentMemberId!.Value, token).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The committed source parent is not registered.");
             var targetParent = await _catalog.ReadNamespaceMemberAsync(targetParentMemberId, token).ConfigureAwait(false)
@@ -64,7 +65,7 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
                     new(sourceParent.MemberId, sourceParent.LocalObject, sourceProof.ProtectionId, source.RelativePath.Replace('\\', '/')),
                     new(targetParent.MemberId, targetParent.LocalObject, targetProof.ProtectionId, target.RelativePath.Replace('\\', '/')),
                     DateTimeOffset.UtcNow)
-                { PreviousMoveOperationId = location.CompletedMoveOperationId };
+                { PreviousMoveOperationId = location.CompletedMoveOperationId, IdentityAcceptanceOperationId = retainedIdentity.AcceptanceOperationId };
                 RequireCaller(intent);
                 MirrorPulseNamespaceMemberMoveInspection.RequireChild(facts, snapshot, childProof, intent.Source.RelativePath, intent);
                 var sourceBefore = await InspectParentAsync(sourceDirectory, sourceLease, sourceProof, intent.Source, intent, token).ConfigureAwait(false);

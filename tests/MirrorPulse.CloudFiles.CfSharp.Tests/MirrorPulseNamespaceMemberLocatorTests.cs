@@ -9,7 +9,7 @@ using MirrorPulse.Core.Sync;
 namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 
 [TestClass]
-public sealed class MirrorPulseNamespaceMemberLocatorTests
+public sealed partial class MirrorPulseNamespaceMemberLocatorTests
 {
     [TestMethod]
     [DataRow(false, false)]

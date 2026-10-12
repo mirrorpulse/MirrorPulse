@@ -40,21 +40,9 @@ public static class MirrorPulseNamespaceMemberLocator
         if (member.ParentMemberId is null)
             return Candidate(MirrorPulseNamespaceMemberLocationState.SyncRootAnchor, null, null, null);
 
-        Guid? itemId;
-        string? originalRemoteId;
-        if (member.Origin == MirrorPulseNamespaceMemberOrigin.ProtectedBirth)
-        {
-            var observation = await catalog.ReadNamespaceBirthObservationAsync(member.OriginId, cancellationToken).ConfigureAwait(false)
-                ?? throw new InvalidDataException("The registered birth lost its first identity observation.");
-            itemId = observation.ItemId;
-            originalRemoteId = observation.RemoteId;
-        }
-        else
-        {
-            var identity = await catalog.ReadNamespacePermissionLocalIdentityAsync(member.OriginId, cancellationToken).ConfigureAwait(false);
-            itemId = identity?.ItemId;
-            originalRemoteId = identity?.RemoteId;
-        }
+        var identity = await catalog.ReadNamespaceMemberIdentityAsync(memberId, cancellationToken).ConfigureAwait(false);
+        Guid? itemId = identity.ItemId;
+        string? originalRemoteId = identity.OriginalRemoteId;
         if (itemId is null)
             return Candidate(MirrorPulseNamespaceMemberLocationState.IdentityUnavailable, null, null, null);
 
