@@ -190,8 +190,13 @@ public sealed partial class MirrorPulseProductCatalog
             Guid id = ParseNamespaceMemberId(value);
             var member = await ReadNamespaceMemberCoreAsync(id, transaction, cancellationToken).ConfigureAwait(false)
                 ?? throw new InvalidDataException("The occupied child lost its member provenance.");
-            if (member.ParentMemberId != parentMemberId || NamespaceMemberNameKey(member.RelativePath) != nameKey)
-                throw new InvalidDataException("The occupied child index is inconsistent with its registered location.");
+            var currentParent = await ReadNamespaceMemberRowAsync(parentMemberId, transaction, cancellationToken).ConfigureAwait(false);
+            bool historicalName = member.ParentMemberId == parentMemberId && NamespaceMemberNameKey(member.RelativePath) == nameKey;
+            if (currentParent is null || !currentParent.IsDirectory ||
+                (currentParent.RootId is not null && currentParent.RootId != member.RootId) ||
+                (!historicalName && !await IsCompletedMemberMoveNameAsync(member.MemberId, parentMemberId, nameKey,
+                    transaction, cancellationToken).ConfigureAwait(false)))
+                throw new InvalidDataException("The occupied child index is inconsistent with its current managed parent.");
             transaction.Commit();
             return member;
         }

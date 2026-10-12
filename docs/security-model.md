@@ -162,6 +162,15 @@ One directory item projection does not prove that its complete subtree has been
 reconciled. Name handover and operation completion require their own fresh native
 and public CfSharp recovery checks; these APIs issue no native move or journal ACK.
 
+Schema 38 adds the completion receipt for that handover. The Host must supply a
+new child and direct-parent binding, owner and protected-descriptor read after
+the native move and after the official projection. MP then changes the current
+owned name and removes the move fence, reservation and pending marker in one
+SQLite transaction. A failed commit leaves the source name and recovery fence
+intact; an exact replay returns the retained completion without reauthorizing
+the filesystem. The immutable member registration still describes its first
+location, while child-name lookup follows a verified completed move.
+
 Schema 27 adds immutable birth intents for controlled creation, import and remote
 population under a protected parent. Admission requires that parent's latest
 verified protection, native binding, stable root and current role. A separate

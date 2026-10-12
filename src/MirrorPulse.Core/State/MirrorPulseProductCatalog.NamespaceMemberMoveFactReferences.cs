@@ -65,6 +65,12 @@ public sealed partial class MirrorPulseProductCatalog
                 payload BLOB NOT NULL,
                 fingerprint BLOB NOT NULL CHECK(length(fingerprint)=32)
             );
+            CREATE TABLE IF NOT EXISTS namespace_member_move_completions (
+                operation_id TEXT NOT NULL PRIMARY KEY REFERENCES namespace_member_moves(operation_id),
+                member_id TEXT NOT NULL REFERENCES namespace_members(member_id),
+                payload BLOB NOT NULL,
+                fingerprint BLOB NOT NULL CHECK(length(fingerprint)=32)
+            );
             """;
         await schema.ExecuteNonQueryAsync(token).ConfigureAwait(false);
     }

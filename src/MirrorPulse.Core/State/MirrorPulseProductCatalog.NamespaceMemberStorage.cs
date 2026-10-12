@@ -67,9 +67,30 @@ public sealed partial class MirrorPulseProductCatalog
         query.CommandText = "SELECT parent_member_id,child_name_key FROM namespace_member_names WHERE member_id=$id;";
         query.Parameters.AddWithValue("$id", member.MemberId.ToString("D"));
         await using SqliteDataReader reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
-        if (!await reader.ReadAsync(token).ConfigureAwait(false) || reader.GetString(0) != member.ParentMemberId.Value.ToString("D") ||
-            reader.GetString(1) != NamespaceMemberNameKey(member.RelativePath))
-            throw new InvalidDataException("The direct parent lost its owned member name.");
+        if (!await reader.ReadAsync(token).ConfigureAwait(false))
+            throw new InvalidDataException("The member lost its current owned name.");
+        Guid currentParentId = ParseNamespaceMemberId(reader.GetString(0));
+        var currentParent = await ReadNamespaceMemberRowAsync(currentParentId, transaction, token).ConfigureAwait(false)
+            ?? throw new InvalidDataException("The current member parent lost its provenance.");
+        if (!currentParent.IsDirectory ||
+            (currentParent.RootId is not null && currentParent.RootId != member.RootId) ||
+            string.IsNullOrWhiteSpace(reader.GetString(1)))
+            throw new InvalidDataException("The current member name points outside its managed directory.");
+    }
+
+    private async Task<bool> IsCompletedMemberMoveNameAsync(Guid memberId, Guid parentMemberId, string nameKey,
+        SqliteTransaction transaction, CancellationToken token)
+    {
+        await using SqliteCommand query = _connection.CreateCommand();
+        query.Transaction = transaction;
+        query.CommandText = "SELECT operation_id FROM namespace_member_move_completions WHERE member_id=$member;";
+        query.Parameters.AddWithValue("$member", memberId.ToString("D"));
+        object? value = await query.ExecuteScalarAsync(token).ConfigureAwait(false);
+        if (value is not string operationText || !Guid.TryParseExact(operationText, "D", out Guid operationId)) return false;
+        var intent = await ReadNamespaceMemberMoveCoreAsync(operationId, transaction, token).ConfigureAwait(false);
+        var completion = await ReadNamespaceMemberMoveCompletionCoreAsync(operationId, transaction, token).ConfigureAwait(false);
+        return intent?.MemberId == memberId && completion is not null && intent.Target.ParentMemberId == parentMemberId &&
+            NamespaceMemberNameKey(intent.Target.RelativePath) == nameKey;
     }
 
     private async Task RequireNamespaceMemberPendingNameAsync(MirrorPulseNamespaceMemberRegistration member,
