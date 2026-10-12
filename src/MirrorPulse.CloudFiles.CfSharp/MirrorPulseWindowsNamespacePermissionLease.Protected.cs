@@ -104,8 +104,9 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLease
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             CloudItemSnapshot snapshot = await scope.InspectAsync(cancellationToken).ConfigureAwait(false);
-            if (!snapshot.Exists || snapshot.LocalBinding != original || snapshot.Kind != CloudItemKind.File || snapshot.IsTombstone)
-                throw new InvalidDataException("Local preparation requires the retained original file.");
+            if (!snapshot.Exists || snapshot.LocalBinding != original ||
+                (snapshot.Kind == CloudItemKind.Directory) != metadata._isDirectory || snapshot.IsTombstone)
+                throw new InvalidDataException("Local identity inspection requires the retained original object and kind.");
             CloudPlaceholderIdentity? nativeIdentity = null;
             if (snapshot.IsPlaceholder) _ = CloudPlaceholderIdentity.TryDecode(snapshot.PlaceholderIdentity.Span, out nativeIdentity);
             return new(snapshot.ItemId, snapshot.RemoteId, snapshot.IsPlaceholder, nativeIdentity);

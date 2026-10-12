@@ -98,7 +98,7 @@ public sealed class MirrorPulseNamespaceCreationCoordinator(CloudFileSystem file
                 _ = await catalog.RecordNamespaceBirthStartAsync(new(1, operationId, DateTimeOffset.UtcNow), token).ConfigureAwait(false);
                 // From the first native creation, drain local persistence despite client cancellation.
                 string expectedDacl = MirrorPulseWindowsNamespaceInheritance.CreateInheritedDacl(before.Dacl, isDirectory);
-                CreateOrdinaryItem(item, isDirectory, expectedDacl);
+                CreateOrdinaryItem(item, isDirectory);
                 conversion = await MirrorPulseNamespaceBirthConversionPreparer.RecordAsync(catalog, operationId, item, router,
                     expectedDacl, CancellationToken.None).ConfigureAwait(false);
             }
@@ -137,15 +137,14 @@ public sealed class MirrorPulseNamespaceCreationCoordinator(CloudFileSystem file
         return result;
     }
 
-    private void CreateOrdinaryItem(CloudItem item, bool isDirectory, string inheritedDacl)
+    private void CreateOrdinaryItem(CloudItem item, bool isDirectory)
     {
         if (isDirectory)
         {
-            // Inherit the guarded parent's DACL and select the current user as owner atomically,
-            // including when a diagnostic fixture happens to use an elevated process token.
+            // Birth uses an explicit owned policy. Inherited protection is applied only
+            // after public conversion, while the first binding and parent remain guarded.
             var security = new DirectorySecurity(); security.SetOwner(execution.OwnerSid);
-            // An owner-only DirectorySecurity has an empty DACL, not implicit inheritance.
-            security.SetSecurityDescriptorSddlForm(inheritedDacl, AccessControlSections.Access);
+            security.SetSecurityDescriptorSddlForm(MirrorPulseNamespacePermissionPolicy.CreateNewObjectDacl(execution, true), AccessControlSections.Access);
             new DirectoryInfo(item.FullPath).Create(security);
         }
         else
@@ -165,13 +164,50 @@ public sealed class MirrorPulseNamespaceCreationCoordinator(CloudFileSystem file
         var facts = await lease.InspectAsync(token).ConfigureAwait(false);
         var snapshot = await item.InspectAsync(token).ConfigureAwait(false);
         var identity = new CloudPlaceholderIdentity(plan.ItemId, plan.RemoteId, plan.RemoteRevision);
-        if (!snapshot.Exists || snapshot.IsTombstone || snapshot.Kind != CloudItemKind.Directory ||
-            facts.LocalObject != conversion.LocalObject || facts.OwnerSid != conversion.OwnerSid || facts.LinkCount != 1 ||
-            facts.Dacl != conversion.BirthDacl || !MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(conversion.ExpectedConvertedDacl, facts.Dacl) ||
-            snapshot.IsPlaceholder && !snapshot.PlaceholderIdentity.Span.SequenceEqual(identity.Encode()))
-            throw new InvalidDataException("Directory conversion requires its first object, descriptor and public identity.");
+        RequireDirectory(facts, snapshot);
         if (!snapshot.IsPlaceholder)
             await item.ConvertToPlaceholderAsync(identity, CloudPlaceholderConversionOptions.CreateBuilder()
                 .WithPopulationState(CloudDirectoryPopulationState.Complete).Build(), token).ConfigureAwait(false);
+        // Directory conversion is not supported inside CfSharp's protected scope. The
+        // metadata lease pins this original name across public conversion; the separate
+        // public directory scope then owns the same-object descriptor handoff.
+        var receipt = await MirrorPulseWindowsNamespacePermissionLease.RunOwnedProtectedAsync(item, router, conversion.LocalObject,
+            async (protectedLease, stop) =>
+            {
+                var current = await protectedLease.InspectAsync(stop).ConfigureAwait(false);
+                RequireDirectoryObject(current);
+                var converted = await protectedLease.InspectLocalIdentityAsync(stop).ConfigureAwait(false);
+                if (!converted.IsPlaceholder || converted.PlaceholderIdentity is not { } nativeIdentity || !nativeIdentity.Equals(identity) ||
+                    converted.ItemId is { } projectedItem && projectedItem != plan.ItemId ||
+                    converted.RemoteId is { } projectedRemote && projectedRemote != plan.RemoteId)
+                    throw new InvalidDataException("Directory permission handoff requires its public converted identity.");
+                if (!MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(conversion.ExpectedConvertedDacl, current.Dacl))
+                    await protectedLease.ApplyDaclAsync(conversion.ExpectedConvertedDacl, stop).ConfigureAwait(false);
+                current = await protectedLease.InspectAsync(stop).ConfigureAwait(false);
+                RequireDirectoryObject(current);
+                if (!MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(conversion.ExpectedConvertedDacl, current.Dacl))
+                    throw new InvalidDataException("Directory inherited protection was not independently verified.");
+            }, token).ConfigureAwait(false);
+        if (receipt.Outcome != CloudProtectedLocalOperationOutcome.Completed || !receipt.CallbackCompleted || !receipt.Drained)
+            throw new IOException("The created directory requires protected permission recovery.", receipt.Error);
+        RequireDirectory(await lease.InspectAsync(token).ConfigureAwait(false), await item.InspectAsync(token).ConfigureAwait(false));
+
+        void RequireDirectory(MirrorPulseNamespacePermissionObject observed, CloudItemSnapshot native)
+        {
+            RequireDirectoryObject(observed);
+            if (!native.Exists || native.IsTombstone || native.Kind != CloudItemKind.Directory || native.LocalBinding is not { } binding ||
+                observed.LocalObject != new MirrorPulseLocalFileBinding(binding.VolumeSerialNumber, binding.SyncRootFileId, binding.LocalFileId) ||
+                !native.IsPlaceholder && observed.Dacl != conversion.BirthDacl ||
+                native.IsPlaceholder && !native.PlaceholderIdentity.Span.SequenceEqual(identity.Encode()))
+                throw new InvalidDataException("Directory conversion requires its first object, known descriptor and public identity.");
+        }
+
+        void RequireDirectoryObject(MirrorPulseNamespacePermissionObject observed)
+        {
+            if (observed.LocalObject != conversion.LocalObject || observed.OwnerSid != conversion.OwnerSid || !observed.IsDirectory || observed.LinkCount != 1 ||
+                observed.RelativePath != item.RelativePath.Replace('\\', '/') ||
+                (observed.Dacl != conversion.BirthDacl && !MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(conversion.ExpectedConvertedDacl, observed.Dacl)))
+                throw new InvalidDataException("Directory handoff requires its first binding, owner and known protection descriptor.");
+        }
     }
 }

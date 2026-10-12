@@ -257,8 +257,10 @@ changed descriptor or superseded identity cannot authorize a new confirmation.
 Current member protection resolves its path only through completed product moves;
 a moved official projection or pending native operation cannot advance it. The
 first membership, original ACL and birth observation remain unchanged.
-A new directory receives both the current-user owner and the guarded parent's
-derived access descriptor at creation, before the first binding is recorded.
+A new directory receives the current-user owner and explicit owned birth policy
+at creation. After public conversion under retained metadata and parent guards,
+a separate public directory metadata scope applies and verifies the parent's
+derived access descriptor on the first bound object before membership admission.
 
 Before uploading a registered file that an in-place edit made ordinary, the Host
 retains its member ID, public identity and identity-history predecessor in the
