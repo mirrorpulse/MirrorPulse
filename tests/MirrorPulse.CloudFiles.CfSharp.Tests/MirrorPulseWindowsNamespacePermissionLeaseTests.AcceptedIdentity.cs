@@ -86,7 +86,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 await catalog.SaveContentAcceptanceProofAsync(proof, deadline.Token);
                 var confirmation = new MirrorPulseNamespaceContentConfirmation(catalog, router, actor, role);
                 if (owner == 0)
-                    await AssertConfirmationRejectsForeignProtectionAsync(fileSystem, catalog, role, confirmation, file, proof, deadline.Token);
+                    await AssertConfirmationRejectsForeignProtectionAsync(fileSystem, catalog, router, role, confirmation, file, proof, deadline.Token);
                 var receipt = await confirmation.ConfirmAsync(file, proof, deadline.Token);
                 for (int retry = 1; retry < 3 && receipt.Outcome is MirrorPulseContentConfirmationOutcome.Busy or MirrorPulseContentConfirmationOutcome.ProtectionLost; retry++)
                 {
@@ -137,34 +137,34 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     }
 
     private static async Task AssertConfirmationRejectsForeignProtectionAsync(CloudFileSystem fileSystem, MirrorPulseProductCatalog catalog,
-        MirrorPulseNamespaceExecutionSession role, MirrorPulseNamespaceContentConfirmation confirmation, CloudFile file,
+        MirrorPulseRootRouter router, MirrorPulseNamespaceExecutionSession role, MirrorPulseNamespaceContentConfirmation confirmation, CloudFile file,
         MirrorPulseContentAcceptanceProof proof, CancellationToken token)
     {
         byte[] before = (await file.InspectAsync(token)).PlaceholderIdentity.ToArray();
         foreach (CloudItem subject in new CloudItem[] { file, fileSystem.GetDirectory("Docs") })
         {
             bool directory = subject.Kind == CloudItemKind.Directory;
-            FileSystemSecurity original = directory ? new DirectoryInfo(subject.FullPath).GetAccessControl(AccessControlSections.Access) :
-                new FileInfo(subject.FullPath).GetAccessControl(AccessControlSections.Access);
-            FileSystemSecurity foreign = directory ? new DirectorySecurity() : new FileSecurity();
-            foreign.SetSecurityDescriptorSddlForm(original.GetSecurityDescriptorSddlForm(AccessControlSections.Access), AccessControlSections.Access);
-            foreign.AddAccessRule(new FileSystemAccessRule(role.OwnerSid, FileSystemRights.Delete, AccessControlType.Allow));
-            try
+            await role.RunNamespaceOperationAsync(async () =>
             {
-                SetDescriptor(foreign);
-                await Assert.ThrowsAsync<InvalidDataException>(() => confirmation.ConfirmAsync(file, proof, token).AsTask());
-                Assert.IsNull(await catalog.ReadContentConfirmationReceiptAsync(proof.OperationId, token));
-                var observed = await file.InspectAsync(token);
-                CollectionAssert.AreEqual(before, observed.PlaceholderIdentity.ToArray());
-                Assert.AreEqual(CloudSynchronizationState.NotInSync, observed.SynchronizationState);
-            }
-            finally { SetDescriptor(original); }
-
-            void SetDescriptor(FileSystemSecurity descriptor)
-            {
-                if (directory) new DirectoryInfo(subject.FullPath).SetAccessControl((DirectorySecurity)descriptor);
-                else new FileInfo(subject.FullPath).SetAccessControl((FileSecurity)descriptor);
-            }
+                await using var guard = await MirrorPulseWindowsNamespacePermissionLease.OpenAsync(subject, router, token);
+                var original = await guard.InspectAsync(token);
+                FileSystemSecurity foreign = directory ? new DirectorySecurity() : new FileSecurity();
+                foreign.SetSecurityDescriptorSddlForm(original.Dacl, AccessControlSections.Access);
+                foreign.AddAccessRule(new FileSystemAccessRule(role.OwnerSid, FileSystemRights.Delete, AccessControlType.Allow));
+                string descriptor = foreign.GetSecurityDescriptorSddlForm(AccessControlSections.Access);
+                Assert.AreNotEqual(original.Dacl, descriptor);
+                try
+                {
+                    await guard.ApplyDaclAsync(descriptor, token);
+                    await Assert.ThrowsAsync<InvalidDataException>(() => confirmation.ConfirmAsync(file, proof, token).AsTask());
+                    Assert.IsNull(await catalog.ReadContentConfirmationReceiptAsync(proof.OperationId, token));
+                    var observed = await file.InspectAsync(token);
+                    CollectionAssert.AreEqual(before, observed.PlaceholderIdentity.ToArray());
+                    Assert.AreEqual(CloudSynchronizationState.NotInSync, observed.SynchronizationState);
+                }
+                finally { await guard.ApplyDaclAsync(original.Dacl, CancellationToken.None); }
+                Assert.AreEqual(original.Dacl, (await guard.InspectAsync(token)).Dacl, "The negative fixture must restore the retained descriptor before positive confirmation.");
+            });
         }
     }
 
