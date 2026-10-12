@@ -1,3 +1,4 @@
+using System.Security.AccessControl;
 using System.Security.Principal;
 using CfSharp;
 using MirrorPulse.CloudFiles.CfSharp;
@@ -97,11 +98,33 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             Assert.AreEqual(0, source.Reads);
             TestContext.WriteLine("ControlledCreation: productionCoordinator=True; emptyFile=True; emptyDirectory=True; nestedBornParent=True; twoOwners=True; stableMemberReplay=True; firstBinding=True; normalCreationDenied=True; recursiveDeletionDenied=True; currentUserOwner=True; actualWorkerUpload=False; hostIntegrated=False.");
         }
+        catch (Exception error)
+        {
+            // A later cleanup error must not hide the original boundary that failed.
+            TestContext.WriteLine("ControlledCreationFailure: " + error);
+            throw;
+        }
         finally
         {
             registry.Unregister(paths.SyncRootPath);
             RestoreSourceContextFixtureForCleanup(directory, paths.SyncRootPath, caller.User!);
+            RestoreControlledCreationFixtureForCleanup(paths.SyncRootPath, caller.User!);
             DeleteFixture(directory);
         }
+    }
+
+    private static void RestoreControlledCreationFixtureForCleanup(string syncRoot, SecurityIdentifier user)
+    {
+        // The caller has verified the exact GUID fixture, marker and root before this helper.
+        // This is the only nested directory that this fixture may have created.
+        var info = new DirectoryInfo(Path.Combine(syncRoot, "Docs", "folder"));
+        if (!info.Exists) return;
+        if (info.LinkTarget is not null)
+            throw new InvalidOperationException("Creation fixture cleanup cannot follow a directory link.");
+        var cleanup = new DirectorySecurity();
+        cleanup.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        cleanup.AddAccessRule(new FileSystemAccessRule(user, FileSystemRights.FullControl,
+            InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
+        info.SetAccessControl(cleanup);
     }
 }
