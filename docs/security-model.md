@@ -107,6 +107,13 @@ wiring across controlled operations and population. It does not acquire native
 ancestor guards, grant the namespace role, authorize a mutation or make the tree
 ready. Source access and Worker RPC remain outside its callbacks.
 
+The native member registrar requires this owner's active admission before native
+inspection and again before committing member provenance. A namespace role alone
+does not admit registration. Fresh object, direct-parent and permission evidence
+checks still apply, including historical registration replay. The Host must
+supply the same owner across its namespace paths and retain native lifetime guards;
+the registrar does not create a private gate for each call.
+
 Schema 27 adds immutable birth intents for controlled creation, import and remote
 population under a protected parent. Admission requires that parent's latest
 verified protection, native binding, stable root and current role. A separate

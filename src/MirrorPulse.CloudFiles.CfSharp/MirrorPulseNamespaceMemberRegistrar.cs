@@ -2,12 +2,13 @@ using System.Runtime.Versioning;
 using System.Security.Principal;
 using CfSharp;
 using MirrorPulse.Core.State;
+using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.CloudFiles.CfSharp;
 
 /// <summary>Registers a protected member only after fresh child and direct-parent native checks.</summary>
 /// <remarks>
-/// The caller retains the shared namespace actor and root/ancestor lifetime guards. Metadata
+/// The caller retains the supplied shared namespace actor and root/ancestor lifetime guards. Metadata
 /// handles alone do not freeze names. This boundary writes no ACL or content, performs no
 /// conversion or source operation, and supplies no tree-readiness or upload acceptance proof.
 /// First-location provenance remains immutable; relocation and retirement have separate lifecycles.
@@ -17,13 +18,15 @@ public static class MirrorPulseNamespaceMemberRegistrar
 {
     public static async Task<MirrorPulseNamespaceMemberRegistration> RegisterAsync(MirrorPulseProductCatalog catalog,
         MirrorPulseNamespaceMemberRegistration member, CloudItem item, CloudDirectory? parent,
-        MirrorPulseRootRouter router, CancellationToken cancellationToken = default)
+        MirrorPulseRootRouter router, MirrorPulseNamespaceActor namespaceActor, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(catalog);
         ArgumentNullException.ThrowIfNull(member);
         ArgumentNullException.ThrowIfNull(item);
         ArgumentNullException.ThrowIfNull(router);
+        ArgumentNullException.ThrowIfNull(namespaceActor);
         cancellationToken.ThrowIfCancellationRequested();
+        namespaceActor.AssertAccess();
         var replay = await catalog.ReadNamespaceMemberAsync(member.MemberId, cancellationToken).ConfigureAwait(false);
         if (replay is not null && replay != member)
             throw new InvalidOperationException("Native registration cannot replace immutable member provenance.");
@@ -49,6 +52,7 @@ public static class MirrorPulseNamespaceMemberRegistrar
                 await parentLease.InspectAsync(cancellationToken).ConfigureAwait(false));
             await RequireUnchangedProofAsync(catalog, parentMember, parentProof, cancellationToken).ConfigureAwait(false);
             await RequireUnchangedProofAsync(catalog, member, proof, cancellationToken).ConfigureAwait(false);
+            namespaceActor.AssertAccess();
             return await catalog.RegisterNamespaceMemberAsync(member, cancellationToken).ConfigureAwait(false);
         }
         if (parent is not null || item.Parent is not null || !router.IsSyncRoot(item.FullPath))
@@ -56,6 +60,7 @@ public static class MirrorPulseNamespaceMemberRegistrar
         await using var rootLease = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(item, router, cancellationToken).ConfigureAwait(false);
         _ = await InspectAsync(catalog, member, proof, item, rootLease, cancellationToken).ConfigureAwait(false);
         await RequireUnchangedProofAsync(catalog, member, proof, cancellationToken).ConfigureAwait(false);
+        namespaceActor.AssertAccess();
         return await catalog.RegisterNamespaceMemberAsync(member, cancellationToken).ConfigureAwait(false);
     }
 

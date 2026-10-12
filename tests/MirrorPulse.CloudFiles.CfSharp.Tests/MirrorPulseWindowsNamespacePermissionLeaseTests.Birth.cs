@@ -8,6 +8,7 @@ using MirrorPulse.Core.CloudFiles;
 using MirrorPulse.Core.Configuration;
 using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.State;
+using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 
@@ -56,6 +57,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             await File.WriteAllTextAsync(Path.Combine(directory, ".mp-permission-fixture"), string.Empty, timeout.Token);
             for (int owner = 0; owner < 4; owner++)
             {
+                await using var namespaceActor = new MirrorPulseNamespaceActor();
                 if (owner == 2)
                 {
                     // Both CfSharp owners started under the old role have fully drained.
@@ -108,7 +110,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                             Assert.AreEqual(MirrorPulseNamespacePermissionOutcome.Verified, applied.Permission!.Outcome);
                         }
                     });
-                    await RegisterNativeOriginalMembersAsync(fileSystem, catalog, router, role, originals, members, timeout.Token);
+                    await RegisterNativeOriginalMembersAsync(fileSystem, catalog, router, role, originals, members, namespaceActor, timeout.Token);
                     await Assert.ThrowsAsync<UnauthorizedAccessException>(() => File.WriteAllTextAsync(
                         Path.Combine(docs.FullPath, "ordinary.txt"), "not admitted", timeout.Token));
                     foreach (bool isDirectory in new[] { false, true })
@@ -238,7 +240,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                             Assert.AreEqual(verified, await MirrorPulseNamespaceBirthProtectionVerifier.RecordAsync(
                                 catalog, protectionId, birth.OperationId, child, docs, router, timeout.Token));
                         });
-                        await RegisterNativeBornMemberAsync(fileSystem, catalog, router, role, birth.OperationId, members, timeout.Token);
+                        await RegisterNativeBornMemberAsync(fileSystem, catalog, router, role, birth.OperationId, members, namespaceActor, timeout.Token);
                     }
                     Assert.HasCount(2, observations);
                     var rotations = originals.Select(preparation => new MirrorPulseNamespacePermissionPreparation(preparation.Baseline,
@@ -337,7 +339,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         registration.InstanceId, births[1].Birth, observations[1], parentProtection, payload, timeout.Token));
                     nestedJournalIds = await ReadNativeNestedBirthJournalAsync(feed, nestedBirths, timeout.Token);
                     foreach (var nested in nestedBirths)
-                        await RegisterNativeBornMemberAsync(fileSystem, catalog, router, nextRole, nested.Birth.OperationId, members, timeout.Token);
+                        await RegisterNativeBornMemberAsync(fileSystem, catalog, router, nextRole, nested.Birth.OperationId, members, namespaceActor, timeout.Token);
                 }
                 else
                 {
@@ -350,12 +352,12 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     {
                         await RecoverNativeAbandonedBirthAsync(fileSystem, catalog, router, nextRole, stagedBirth, payload, timeout.Token);
                         await RejectNativeStagedMemberBeforeObservationAsync(fileSystem, catalog, router, nextRole, stagedBirth,
-                            members[originals[1].Baseline.EvidenceId], timeout.Token);
+                            members[originals[1].Baseline.EvidenceId], namespaceActor, timeout.Token);
                     }
                     else
                     {
                         await VerifyRecoveredNativeBirthAsync(fileSystem, state, catalog, router, nextRole, stagedBirth, payload, timeout.Token);
-                        await RegisterNativeBornMemberAsync(fileSystem, catalog, router, nextRole, stagedBirth.Birth.OperationId, members, timeout.Token);
+                        await RegisterNativeBornMemberAsync(fileSystem, catalog, router, nextRole, stagedBirth.Birth.OperationId, members, namespaceActor, timeout.Token);
                     }
                     CollectionAssert.IsSubsetOf(stagedJournalIds, (await WaitForBirthJournalAsync(feed,
                         stagedBirth.Plan.ItemId, births[1].Plan.ItemId, timeout.Token)).Select(change => change.OperationId).ToArray());
@@ -364,14 +366,14 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     TestContext.WriteLine($"ControlledNestedBirth: cfSharpOwner={owner}; bornDirectParents=True; depth=3; publicParentIdentity=True; firstBindingsAndBytesRetained=True; originalJournalIdsRetained=True; roleOnlyNamespace=True; sourceReads=0; hostIntegrated=False.");
                 }
                 Assert.AreEqual(0, source.Reads);
-                await VerifyNativeMemberRegistrationsAsync(fileSystem, catalog, router, owner >= 1 ? nextRole : role, members, timeout.Token);
+                await VerifyNativeMemberRegistrationsAsync(fileSystem, catalog, router, owner >= 1 ? nextRole : role, members, namespaceActor, timeout.Token);
                 Assert.HasCount(owner switch { 0 => 3, 1 or 2 => 8, _ => 9 }, members);
                 CollectionAssert.AreEqual(payload, await File.ReadAllBytesAsync(originalFile.FullPath, timeout.Token));
                 var retainedOriginalIdentity = await catalog.ReadNamespacePermissionLocalIdentityAsync(originals[2].Baseline.EvidenceId, timeout.Token);
                 Assert.IsNotNull(retainedOriginalIdentity);
                 Assert.AreEqual(originalFileExpectedItemId, retainedOriginalIdentity.ItemId);
                 Assert.AreEqual(originalFileExpectedRemoteId, retainedOriginalIdentity.RemoteId);
-                TestContext.WriteLine($"ControlledMembership: cfSharpOwner={owner}; registeredMembers={members.Count}; originalFileIdentityAndBytes=True; freshChildAndDirectParent=True; stableOriginalAndBornProvenance=True; reservationTransferred={owner >= 1}; replayAfterRoleRotation={owner >= 1}; sourceReads={source.Reads}; hostIntegrated=False.");
+                TestContext.WriteLine($"ControlledMembership: cfSharpOwner={owner}; registeredMembers={members.Count}; memberAdmission=True; originalFileIdentityAndBytes=True; freshChildAndDirectParent=True; stableOriginalAndBornProvenance=True; reservationTransferred={owner >= 1}; replayAfterRoleRotation={owner >= 1}; sourceReads={source.Reads}; hostIntegrated=False.");
                 foreach (var preparation in originals)
                 {
                     await using var lease = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(
