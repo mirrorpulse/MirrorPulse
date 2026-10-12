@@ -90,7 +90,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     await Task.Delay(50, deadline.Token);
                     receipt = await confirmation.ConfirmAsync(file, proof, deadline.Token);
                 }
-                TestContext.WriteLine($"AcceptedIdentityConfirmation: owner={owner}; outcome={receipt.Outcome}; nativeStage={receipt.NativeStage}; verified={receipt.NativeConfirmationVerified}; projected={receipt.DurableProjectionCommitted}; nativeHResult={receipt.NativeErrorHResult:X8}.");
+                TestContext.WriteLine($"AcceptedIdentityConfirmation: owner={owner}; outcome={receipt.Outcome}; nativeStage={receipt.NativeStage}; verified={receipt.NativeConfirmationVerified}; projected={receipt.DurableProjectionCommitted}; bytesVerified={receipt.BytesVerified}; proofLength={proof.Length}; nativeHResult={receipt.NativeErrorHResult:X8}.");
                 Assert.IsTrue(receipt.MayAcknowledge);
                 var retained = await catalog.ReadNamespaceIdentityAcceptanceAsync(intent.OperationId, deadline.Token);
                 Assert.IsNotNull(retained); Assert.AreEqual(proof, retained.Proof);

@@ -7,9 +7,11 @@ namespace MirrorPulse.Core.Tests;
 public sealed partial class MirrorPulseNamespaceBirthCatalogTests
 {
     [TestMethod]
-    [DataRow(false)]
-    [DataRow(true)]
-    public async Task ConfirmedIdentityTransitionsSurviveRestartWithoutRewritingFirstMembershipOrLocation(bool originalFile)
+    [DataRow(false, false)]
+    [DataRow(true, false)]
+    [DataRow(false, true)]
+    [DataRow(true, true)]
+    public async Task ConfirmedIdentityTransitionsSurviveRestartWithoutRewritingFirstMembershipOrLocation(bool originalFile, bool reverified)
     {
         using var fixture = new Fixture(); MoveFixture setup; MirrorPulseNamespaceIdentityAcceptance first, second;
         await using (var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths))
@@ -19,10 +21,10 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             var root = await AddIdentityTopologyAsync(catalog, setup.Move.RootId);
             var initial = await catalog.ReadNamespaceMemberIdentityAsync(setup.Member.MemberId);
             Assert.AreEqual(new(setup.Member.MemberId, setup.Move.ItemId, setup.Move.RemoteId, null, setup.Move.ItemId, setup.Move.RemoteId), initial);
-            var upload = await PrepareIdentityUploadAsync(catalog, setup, root, setup.Member.RegisteredAt.AddSeconds(1));
+            var upload = await PrepareIdentityUploadAsync(catalog, setup, root, setup.Member.RegisteredAt.AddSeconds(1), reverified ? "reverified" : null);
             first = await CorrelateAsync(catalog, setup.Member.MemberId, initial, upload.Proof.OperationId);
             await catalog.TransitionMutationAsync(upload.Proof.OperationId, MirrorPulseMutationState.RemoteAccepted, MirrorPulseMutationState.Acknowledged);
-            var next = await PrepareIdentityUploadAsync(catalog, setup, root, first.Confirmation.ObservedAt.AddSeconds(1));
+            var next = await PrepareIdentityUploadAsync(catalog, setup, root, first.Confirmation.ObservedAt.AddSeconds(1), reverified ? "reverified" : null);
             second = await CorrelateAsync(catalog, setup.Member.MemberId,
                 await catalog.ReadNamespaceMemberIdentityAsync(setup.Member.MemberId), next.Proof.OperationId);
             // Later confirmation attempts are mutable observations; they cannot erase the original successful correlation.
@@ -142,7 +144,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         var proof = new MirrorPulseContentAcceptanceProof(intent.OperationId, binding, Guid.NewGuid(), "source:" + Guid.NewGuid(), "accepted", 4, intent.ContentSha256!);
         var receipt = new MirrorPulseContentConfirmationReceipt(MirrorPulseContentConfirmationOutcome.Confirmed,
             MirrorPulseContentConfirmationStage.Complete, MirrorPulseContentConfirmationStage.Complete, true, true,
-            mismatch != "native-unconfirmed", mismatch != "projection-pending", mismatch == "bytes" ? 3 : 4, 1,
+            mismatch != "native-unconfirmed", mismatch != "projection-pending", mismatch == "bytes" ? 3 : mismatch == "reverified" ? 8 : 4, 1,
             0, 0, null, null, true, "BAUG", observedAt);
         if (mismatch != "missing-proof") await catalog.SaveContentAcceptanceProofAsync(proof);
         if (mismatch is not ("missing-proof" or "missing-receipt")) await catalog.SaveContentConfirmationReceiptAsync(intent.OperationId, receipt);

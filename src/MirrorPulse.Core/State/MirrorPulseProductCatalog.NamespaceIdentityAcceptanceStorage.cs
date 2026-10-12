@@ -121,7 +121,9 @@ public sealed partial class MirrorPulseProductCatalog
             value.UploadIntentSha256 is null || value.UploadIntentSha256.Length != 64 || !value.UploadIntentSha256.All(Uri.IsHexDigit) ||
             proof.UploadBinding.Preparation != MirrorPulseContentPreparation.ReplacePlaceholderIdentity ||
             !receipt.MayAcknowledge || receipt.Stage != MirrorPulseContentConfirmationStage.Complete ||
-            !Enum.IsDefined(receipt.NativeStage) || receipt.BytesVerified != proof.Length || receipt.SegmentsRead < 0 || receipt.ObservedAt == default)
+            // CfSharp rehashes after identity preparation. BytesVerified is cumulative across
+            // those passes, while the exact proof and native/projection flags establish success.
+            !Enum.IsDefined(receipt.NativeStage) || receipt.BytesVerified < proof.Length || receipt.SegmentsRead < 0 || receipt.ObservedAt == default)
             throw new ArgumentException("Accepted identity correlation requires a complete upload binding and successful public confirmation.");
         try
         {
