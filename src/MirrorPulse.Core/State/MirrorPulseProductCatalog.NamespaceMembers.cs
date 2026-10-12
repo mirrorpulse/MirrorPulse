@@ -134,6 +134,36 @@ public sealed partial class MirrorPulseProductCatalog
         finally { _gate.Release(); }
     }
 
+    /// <summary>Finds retained membership by the complete native binding, never by a path or a shortened file ID.</summary>
+    /// <remarks>This reads historical ownership; it does not prove that the object still exists or occupies a name.</remarks>
+    public async Task<MirrorPulseNamespaceMemberRegistration?> ReadNamespaceMemberByBindingAsync(
+        MirrorPulseLocalFileBinding binding, CancellationToken cancellationToken = default)
+    {
+        ValidatePermissionBinding(binding);
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            using SqliteTransaction transaction = _connection.BeginTransaction(deferred: true);
+            await using SqliteCommand query = _connection.CreateCommand();
+            query.Transaction = transaction;
+            query.CommandText = """
+                SELECT member_id FROM namespace_members
+                WHERE volume_serial=$volume AND sync_root_file_id=$sync AND local_file_id=$file;
+                """;
+            AddNamespaceBirthBindingParameters(query, binding);
+            object? value = await query.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+            if (value is null) { transaction.Commit(); return null; }
+            var member = await ReadNamespaceMemberCoreAsync(ParseNamespaceMemberId(value), transaction, cancellationToken).ConfigureAwait(false)
+                ?? throw new InvalidDataException("The native binding index lost its member provenance.");
+            if (member.LocalObject != binding)
+                throw new InvalidDataException("The native binding index disagrees with retained member provenance.");
+            transaction.Commit();
+            return member;
+        }
+        finally { _gate.Release(); }
+    }
+
     /// <summary>Reads one case-insensitive occupied direct child name without enumerating history.</summary>
     public async Task<MirrorPulseNamespaceMemberRegistration?> ReadNamespaceMemberChildAsync(Guid parentMemberId,
         string childName, CancellationToken cancellationToken = default)
