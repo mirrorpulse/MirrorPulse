@@ -85,6 +85,12 @@ public sealed record MirrorPulseControlRootStatus(MirrorPulseControlRoot Root, s
 
 public sealed record RootRecoverArguments(Guid OperationId) : IMirrorPulseControlArguments;
 
+public sealed record NamespaceMemberMoveArguments(Guid OperationId) : IMirrorPulseControlArguments;
+
+public sealed record MirrorPulseControlNamespaceMemberMoveResult(Guid OperationId, Guid ItemId,
+    string RemoteId, string RelativePath, bool IsDirectory, bool CurrentNameCommitted,
+    bool RequiresSubtreeReconciliation, string? OfficialRemoteRevision);
+
 /// <summary>Separates the durable product phase from a fresh public reconciliation receipt.</summary>
 public sealed record MirrorPulseControlRootRecovery(Guid OperationId, string RootId, string Phase,
     bool? NativeMoveObserved, bool? DurableProjectionCommitted, bool? RequiresFullRescan,

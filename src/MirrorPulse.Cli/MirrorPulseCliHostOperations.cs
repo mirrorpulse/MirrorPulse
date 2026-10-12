@@ -222,6 +222,16 @@ public sealed class MirrorPulseCliHostOperations : IMirrorPulseCliHostOperations
                         roots.Select(root => $"{root.Root.Label} · {root.SyncState} · {root.Root.RootId}" +
                             (root.PendingRename is { } pending ? $" · {pending.SourceName} -> {pending.TargetName} ({pending.Phase}) · {pending.OperationId}" : string.Empty)));
                     break;
+                case ("namespace", "member") when command.Path.Count > 2 &&
+                    command.Path[2].Equals("move", StringComparison.OrdinalIgnoreCase):
+                    if (command.Arguments.Count != 1 || !Guid.TryParse(command.Arguments[0], out Guid moveOperation) || moveOperation == Guid.Empty)
+                        throw new ArgumentException("namespace member move requires one non-empty operation ID.");
+                    MirrorPulseControlNamespaceMemberMoveResult move = await _client.ExecuteNamespaceMemberMoveAsync(
+                        moveOperation, cancellationToken).ConfigureAwait(false);
+                    result = move;
+                    human = $"Member move committed · {move.OperationId:D} · {move.RelativePath}" +
+                        (move.RequiresSubtreeReconciliation ? " · subtree reconciliation pending" : string.Empty);
+                    break;
                 case ("root", "recover"):
                     if (command.Arguments.Count != 1 || !Guid.TryParse(command.Arguments[0], out Guid renameOperation) || renameOperation == Guid.Empty)
                     {

@@ -31,7 +31,7 @@ public static class MirrorPulseCliCommandLine
         StringComparer.OrdinalIgnoreCase)
     {
         "adapter", "config", "conflict", "developer-mode", "diagnostics", "help",
-        "instance", "operation", "startup", "status", "sync", "version", "host", "root"
+        "instance", "namespace", "operation", "startup", "status", "sync", "version", "host", "root"
     };
 
     private static readonly Dictionary<string, IReadOnlySet<string>> Subcommands =
@@ -43,6 +43,7 @@ public static class MirrorPulseCliCommandLine
             ["instance"] = NewSet("list", "create", "configure", "enable", "disable", "select-version"),
             ["operation"] = NewSet("get", "watch", "cancel"),
             ["root"] = NewSet("list", "recover"),
+            ["namespace"] = NewSet("member"),
             ["sync"] = NewSet("status", "refresh")
         };
 
@@ -131,6 +132,17 @@ public static class MirrorPulseCliCommandLine
                 continue;
             }
 
+            if (commandPath.Count == 2 &&
+                commandPath[0].Equals("namespace", StringComparison.OrdinalIgnoreCase) &&
+                commandPath[1].Equals("member", StringComparison.OrdinalIgnoreCase) &&
+                commandArguments.Count == 0)
+            {
+                if (!token.Equals("move", StringComparison.OrdinalIgnoreCase))
+                    return Failure($"Unknown subcommand '{token}' for 'namespace member'.", options);
+                commandPath.Add(token);
+                continue;
+            }
+
             commandArguments.Add(token);
         }
 
@@ -196,6 +208,8 @@ public static class MirrorPulseCliHelp
                                          Manage Adapter instances.
           root list                      Inspect managed roots and namespace recovery.
           root recover OPERATION_ID      Retry an original managed root rename proof.
+          namespace member move OPERATION_ID
+                                         Execute an admitted protected member move.
           conflict list|show|snooze|resolve
                                          Inspect and resolve conflicts.
           operation get|watch|cancel      Inspect long-running operations.

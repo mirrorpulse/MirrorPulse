@@ -33,6 +33,8 @@ public sealed class MirrorPulseLegacyCommandBridge
         Task<MirrorPulseControlOperation>>? _cancelOperation;
     private readonly Func<AdapterRemoveArguments, CancellationToken,
         Task<MirrorPulseAppStatusResponse>>? _removeAdapter;
+    private readonly Func<NamespaceMemberMoveArguments, CancellationToken,
+        Task<MirrorPulseControlNamespaceMemberMoveResult>>? _moveMember;
     private readonly Func<CancellationToken, Task<MirrorPulseHostStatus>>? _hostStatus;
     private readonly Func<HostLifecycleArguments, CancellationToken,
         Task<MirrorPulseHostStatus>>? _hostStart;
@@ -86,7 +88,9 @@ public sealed class MirrorPulseLegacyCommandBridge
         Func<OperationIdArguments, CancellationToken,
             Task<MirrorPulseControlOperation>>? cancelOperation = null,
         Func<AdapterRemoveArguments, CancellationToken,
-            Task<MirrorPulseAppStatusResponse>>? removeAdapter = null)
+            Task<MirrorPulseAppStatusResponse>>? removeAdapter = null,
+        Func<NamespaceMemberMoveArguments, CancellationToken,
+            Task<MirrorPulseControlNamespaceMemberMoveResult>>? moveMember = null)
     {
         _readStatus = readStatus ?? throw new ArgumentNullException(nameof(readStatus));
         _snooze = snooze;
@@ -110,6 +114,7 @@ public sealed class MirrorPulseLegacyCommandBridge
         _watchOperation = watchOperation;
         _cancelOperation = cancelOperation;
         _removeAdapter = removeAdapter;
+        _moveMember = moveMember;
     }
 
     public void Register(MirrorPulseControlDispatcher dispatcher)
@@ -180,6 +185,13 @@ public sealed class MirrorPulseLegacyCommandBridge
             dispatcher.Register<AdapterRemoveArguments, MirrorPulseAppStatusResponse>(
                 MirrorPulseControlCommands.AdapterRemove,
                 (arguments, cancellationToken) => new(_removeAdapter(arguments, cancellationToken)));
+        }
+
+        if (_moveMember is not null)
+        {
+            dispatcher.Register<NamespaceMemberMoveArguments, MirrorPulseControlNamespaceMemberMoveResult>(
+                MirrorPulseControlCommands.NamespaceMemberMove,
+                (arguments, cancellationToken) => new(_moveMember(arguments, cancellationToken)));
         }
 
         if (_settingsGet is not null)

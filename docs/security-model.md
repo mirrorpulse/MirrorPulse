@@ -171,6 +171,15 @@ intact; an exact replay returns the retained completion without reauthorizing
 the filesystem. The immutable member registration still describes its first
 location, while child-name lookup follows a verified completed move.
 
+The Host now owns this execution boundary through one shared namespace actor and
+the current-user namespace execution session. The versioned Control contract
+exposes `namespace.member.move`; the CLI command is `mp namespace member move
+OPERATION_ID`. It starts only an already admitted operation, performs the native
+move under the ephemeral namespace role, reads the official CfSharp item through
+the normal user, and settles the completion receipt. It does not accept a path
+or remote ID from the client, and it leaves the durable fence pending whenever
+the native or official verification cannot be completed.
+
 Schema 27 adds immutable birth intents for controlled creation, import and remote
 population under a protected parent. Admission requires that parent's latest
 verified protection, native binding, stable root and current role. A separate

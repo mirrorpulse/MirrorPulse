@@ -34,6 +34,7 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
     private readonly MirrorPulseSystemNotificationPublisher _systemNotifications;
     private readonly AdapterInstanceProcessSupervisor _workers;
     private readonly MirrorPulseNamespaceExecutionSession _namespaceExecution;
+    private readonly MirrorPulseNamespaceActor _namespaceActor;
     private readonly MirrorPulseCloudHostSession _session;
     private readonly MirrorPulseActiveRemotePoller _remotePoller;
     private readonly MirrorPulseInstanceScheduler _remoteScheduler;
@@ -57,6 +58,7 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
         MirrorPulseSystemNotificationPublisher systemNotifications,
         AdapterInstanceProcessSupervisor workers,
         MirrorPulseNamespaceExecutionSession namespaceExecution,
+        MirrorPulseNamespaceActor namespaceActor,
         MirrorPulseCloudHostSession session,
         MirrorPulseActiveRemotePoller remotePoller,
         MirrorPulseInstanceScheduler remoteScheduler,
@@ -71,6 +73,7 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
         _systemNotifications = systemNotifications;
         _workers = workers;
         _namespaceExecution = namespaceExecution;
+        _namespaceActor = namespaceActor;
         _session = session;
         _remotePoller = remotePoller;
         _remoteScheduler = remoteScheduler;
@@ -111,6 +114,7 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
         MirrorPulseSystemNotificationPublisher? systemNotifications = null;
         AdapterInstanceProcessSupervisor? workers = null;
         MirrorPulseNamespaceExecutionSession? namespaceExecution = null;
+        MirrorPulseNamespaceActor? namespaceActor = null;
         MirrorPulseCloudHostSession? session = null;
         MirrorPulseActiveRemotePoller? remotePoller = null;
         var remoteScheduler = new MirrorPulseInstanceScheduler();
@@ -180,6 +184,7 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
             // Capture the normal Host user before local namespace work can impersonate its role.
             // All source RPC and lazy range bodies share this boundary, including polling and rescan.
             namespaceExecution = new MirrorPulseNamespaceExecutionSession();
+            namespaceActor = new MirrorPulseNamespaceActor();
             var source = new MirrorPulseNormalUserWorkerTransport(namespaceExecution,
                 workers, workers, workers, workers, workers);
             var directorySource = new MirrorPulseAdapterDirectoryPageSource(source);
@@ -188,7 +193,7 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
                 paths, topology.Instances, topology.Roots, provider, source, source,
                 rootRouter, catalog, instanceId => topology.Instances.Any(instance =>
                     instance.InstanceId == instanceId && instance.Enabled),
-                conflictCenter, conflictNotifications, source, remoteScheduler);
+                conflictCenter, conflictNotifications, source, remoteScheduler, namespaceExecution, namespaceActor);
             currentSession = session;
             var remoteSnapshotStore = new MirrorPulseFileRemotePollSnapshotStore(paths.DataRootPath);
             remotePoller = new MirrorPulseActiveRemotePoller(
@@ -199,7 +204,7 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
 
             var application = new MirrorPulseHostApplication(
                 paths, configurationStore, configuration, hostLease, catalog, conflictCenter, systemNotifications,
-                workers, namespaceExecution, session, remotePoller, remoteScheduler, topology);
+                workers, namespaceExecution, namespaceActor, session, remotePoller, remoteScheduler, topology);
             application.InitializeControlPlane(credentialStore);
             return application;
         }
@@ -220,6 +225,11 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
             if (workers is not null)
             {
                 await workers.DisposeAsync().ConfigureAwait(false);
+            }
+
+            if (namespaceActor is not null)
+            {
+                await namespaceActor.DisposeAsync().ConfigureAwait(false);
             }
 
             if (namespaceExecution is not null)
@@ -451,7 +461,8 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
             GetOperationAsync,
             GetOperationAsync,
             CancelOperationAsync,
-            RemoveAdapterAsync)
+            RemoveAdapterAsync,
+            ExecuteNamespaceMemberMoveAsync)
             .Register(dispatcher);
         dispatcher.Register<ControlEmptyArguments, IReadOnlyList<MirrorPulseControlRootStatus>>(
             MirrorPulseControlCommands.RootList, async (_, token) => await ReadRootsAsync(token).ConfigureAwait(false));
@@ -469,6 +480,17 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
         return new(recovery.Intent.OperationId, recovery.Intent.RootId.ToString(), recovery.Intent.Phase.ToString(),
             receipt?.NativeMoveObserved, receipt?.DurableProjectionCommitted, receipt?.RequiresFullRescan,
             receipt?.Outcome.ToString(), receipt?.Stage.ToString(), receipt?.NativeHResult);
+    }
+
+    private async Task<MirrorPulseControlNamespaceMemberMoveResult> ExecuteNamespaceMemberMoveAsync(
+        NamespaceMemberMoveArguments arguments, CancellationToken cancellationToken)
+    {
+        if (arguments.OperationId == Guid.Empty)
+            throw new ArgumentException("A move operation ID is required.", nameof(arguments));
+        MirrorPulseNamespaceMemberMoveCompletion completion = await _session.ExecuteNamespaceMemberMoveAsync(
+            arguments.OperationId, cancellationToken).ConfigureAwait(false);
+        return new(completion.OperationId, completion.ItemId, completion.RemoteId, completion.RelativePath,
+            completion.IsDirectory, true, completion.IsDirectory, completion.OfficialRemoteRevision);
     }
 
     private async Task<MirrorPulseHostStatus> StartRequestedAsync(
@@ -888,6 +910,7 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
         finally
         {
             // The captured identities outlive normal-user RPC, including source-body disposal.
+            await _namespaceActor.DisposeAsync().ConfigureAwait(false);
             await _namespaceExecution.DisposeAsync().ConfigureAwait(false);
         }
         await _catalog.DisposeAsync().ConfigureAwait(false);

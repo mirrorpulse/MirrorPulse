@@ -237,6 +237,11 @@ public sealed class MirrorPulseControlClient
         SendAsync<RootRecoverArguments, MirrorPulseControlRootRecovery>(
             MirrorPulseControlCommands.RootRecover, new(operationId), cancellationToken);
 
+    public Task<MirrorPulseControlNamespaceMemberMoveResult> ExecuteNamespaceMemberMoveAsync(Guid operationId,
+        CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceMemberMoveArguments, MirrorPulseControlNamespaceMemberMoveResult>(
+            MirrorPulseControlCommands.NamespaceMemberMove, new(operationId), cancellationToken);
+
     public Task<MirrorPulseControlConflictList> GetConflictsAsync(
         int? limit = null,
         string? cursor = null,

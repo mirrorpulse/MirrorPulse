@@ -16,6 +16,12 @@ public interface IMirrorPulseCloudRuntime : IAsyncDisposable
     IReadOnlyList<MirrorPulseManagedRootRenameRestoreResult> RootRenameRecoveryResults => [];
     ValueTask StartAsync(CancellationToken cancellationToken);
 
+    [SupportedOSPlatform("windows10.0.26100")]
+    ValueTask<MirrorPulseNamespaceMemberMoveCompletion> ExecuteNamespaceMemberMoveAsync(
+        Guid operationId, CancellationToken cancellationToken) =>
+        ValueTask.FromException<MirrorPulseNamespaceMemberMoveCompletion>(
+            new NotSupportedException("This Cloud Files runtime does not execute controlled member moves."));
+
     ValueTask<MirrorPulseManagedRootRenameRecovery> RecoverManagedRootRenameAsync(
         Guid operationId, CancellationToken cancellationToken) =>
         ValueTask.FromException<MirrorPulseManagedRootRenameRecovery>(
@@ -72,6 +78,8 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
     private readonly MirrorPulseConflictCenter? _conflicts;
     private readonly MirrorPulseConflictNotificationBridge? _notifications;
     private readonly MirrorPulseInstanceScheduler? _scheduler;
+    private readonly MirrorPulseNamespaceExecutionSession? _namespaceExecution;
+    private readonly MirrorPulseNamespaceActor? _namespaceActor;
 
     public CfSharpMirrorPulseCloudRuntimeFactory(
         ICloudDemandProvider? provider = null,
@@ -83,7 +91,9 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         Func<InstanceId, bool>? mayDispatch = null,
         MirrorPulseConflictCenter? conflicts = null,
         MirrorPulseConflictNotificationBridge? notifications = null,
-        MirrorPulseInstanceScheduler? scheduler = null)
+        MirrorPulseInstanceScheduler? scheduler = null,
+        MirrorPulseNamespaceExecutionSession? namespaceExecution = null,
+        MirrorPulseNamespaceActor? namespaceActor = null)
     {
         _provider = provider;
         _uploads = uploads;
@@ -95,6 +105,8 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         _conflicts = conflicts;
         _notifications = notifications;
         _scheduler = scheduler;
+        _namespaceExecution = namespaceExecution;
+        _namespaceActor = namespaceActor;
     }
 
     public IMirrorPulseCloudRuntime Create(MirrorPulseStoragePaths paths)
@@ -105,7 +117,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             .WithStateStore(state)
             .WithContentProvider(_provider ?? MirrorPulseDemandProvider.CreateWithoutAdapters(paths.SyncRootPath))
             .Build(), state, paths.SyncRootPath, paths.DataRootPath, _uploads, _stats, _mutations, _router, _catalog,
-            _mayDispatch, _conflicts, _notifications, _scheduler);
+            _mayDispatch, _conflicts, _notifications, _scheduler, _namespaceExecution, _namespaceActor);
     }
 
     private sealed class CfSharpRuntime(
@@ -121,7 +133,9 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         Func<InstanceId, bool>? mayDispatch,
         MirrorPulseConflictCenter? conflicts,
         MirrorPulseConflictNotificationBridge? notifications,
-        MirrorPulseInstanceScheduler? scheduler)
+        MirrorPulseInstanceScheduler? scheduler,
+        MirrorPulseNamespaceExecutionSession? namespaceExecution,
+        MirrorPulseNamespaceActor? namespaceActor)
         : IMirrorPulseCloudRuntime
     {
         private MirrorPulseJournalUploadPump? _uploadPump;
@@ -130,9 +144,23 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         private MirrorPulseCloudProviderDiagnostics? _providerDiagnostics;
         private readonly MirrorPulseInstanceScheduler _scheduler = scheduler ?? new();
         private readonly bool _ownsScheduler = scheduler is null;
+        private readonly MirrorPulseNamespaceExecutionSession? _namespaceExecution = namespaceExecution;
+        private readonly MirrorPulseNamespaceActor? _namespaceActor = namespaceActor;
         private MirrorPulseManagedRootRenameService? _rootRenames;
         public IReadOnlyList<MirrorPulseManagedRootRenameRestoreResult> RootRenameRecoveryResults { get; private set; } = [];
         public MirrorPulseJournalPumpHealth? JournalHealth => _uploadPump?.Health;
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        public ValueTask<MirrorPulseNamespaceMemberMoveCompletion> ExecuteNamespaceMemberMoveAsync(
+            Guid operationId, CancellationToken cancellationToken)
+        {
+            if (router is null || catalog is null || _namespaceExecution is null || _namespaceActor is null)
+                return ValueTask.FromException<MirrorPulseNamespaceMemberMoveCompletion>(
+                    new NotSupportedException("Controlled member moves require the Host namespace boundary."));
+            var coordinator = new MirrorPulseNamespaceMemberMoveCoordinator(
+                fileSystem, state, catalog, router, _namespaceExecution, _namespaceActor);
+            return coordinator.ExecuteAsync(operationId, cancellationToken);
+        }
 
         public async ValueTask StartAsync(CancellationToken cancellationToken)
         {
@@ -355,7 +383,9 @@ public sealed class MirrorPulseCloudHostSession : IAsyncDisposable
         MirrorPulseConflictCenter? conflicts = null,
         MirrorPulseConflictNotificationBridge? notifications = null,
         IMirrorPulseWorkerMutationTransport? mutations = null,
-        MirrorPulseInstanceScheduler? scheduler = null)
+        MirrorPulseInstanceScheduler? scheduler = null,
+        MirrorPulseNamespaceExecutionSession? namespaceExecution = null,
+        MirrorPulseNamespaceActor? namespaceActor = null)
     {
         ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(uploads);
@@ -367,7 +397,7 @@ public sealed class MirrorPulseCloudHostSession : IAsyncDisposable
         string sid = identity.User?.Value ?? throw new InvalidOperationException("The current Windows user has no SID.");
         return new(paths, MirrorPulseSyncRootRegistrationCoordinator.CreateDefault(),
             new CfSharpMirrorPulseCloudRuntimeFactory(provider, uploads, stats, mutations, router, catalog,
-                mayDispatch, conflicts, notifications, scheduler),
+                mayDispatch, conflicts, notifications, scheduler, namespaceExecution, namespaceActor),
             MirrorPulseSyncRootOwner.CreateDefault(), sid, instances, registrations);
     }
 
@@ -415,6 +445,15 @@ public sealed class MirrorPulseCloudHostSession : IAsyncDisposable
 
             throw;
         }
+    }
+
+    [SupportedOSPlatform("windows10.0.26100")]
+    public ValueTask<MirrorPulseNamespaceMemberMoveCompletion> ExecuteNamespaceMemberMoveAsync(
+        Guid operationId, CancellationToken cancellationToken = default)
+    {
+        if (!_started || _runtime is null)
+            throw new InvalidOperationException("The Cloud Files Host session has not started.");
+        return _runtime.ExecuteNamespaceMemberMoveAsync(operationId, cancellationToken);
     }
 
     public ValueTask<MirrorPulseCloudStatusSnapshot> ReadStatusAsync(
