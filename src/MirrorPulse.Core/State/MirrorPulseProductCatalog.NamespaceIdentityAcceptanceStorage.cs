@@ -74,6 +74,11 @@ public sealed partial class MirrorPulseProductCatalog
             mutation.AcceptedRevision != proof.AcceptedRevision || value.Confirmation.ObservedAt < member.RegisteredAt ||
             value.UploadIntentSha256 != Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(mutation.Intent, TopologyJsonOptions))))
             throw new InvalidOperationException("Accepted identity correlation requires the same registered object and durable upload-time proof.");
+        if (proof.UploadBinding.Preparation == MirrorPulseContentPreparation.ConvertRegularFile &&
+            (proof.UploadBinding.NamespaceIdentity is not { } uploadIdentity || uploadIdentity.MemberId != value.MemberId ||
+                uploadIdentity.ItemId != value.PreviousItemId || uploadIdentity.RemoteId != value.PreviousRemoteId ||
+                uploadIdentity.AcceptanceOperationId != value.PreviousAcceptanceOperationId))
+            throw new InvalidOperationException("Ordinary conversion must follow its original upload-time member identity, not a later path or head.");
         if (value.PreviousAcceptanceOperationId is { } previousId)
         {
             var previous = await ReadNamespaceIdentityAcceptanceRowAsync(previousId, transaction, token).ConfigureAwait(false)
@@ -119,7 +124,8 @@ public sealed partial class MirrorPulseProductCatalog
             value.PreviousRemoteId.Length > 16_384 || string.IsNullOrWhiteSpace(proof.RemoteId) || proof.RemoteId.Length > 16_384 ||
             proof.Length < 0 || proof.Sha256 is null || proof.Sha256.Length != 64 || !proof.Sha256.All(Uri.IsHexDigit) ||
             value.UploadIntentSha256 is null || value.UploadIntentSha256.Length != 64 || !value.UploadIntentSha256.All(Uri.IsHexDigit) ||
-            proof.UploadBinding.Preparation != MirrorPulseContentPreparation.ReplacePlaceholderIdentity ||
+            proof.UploadBinding.Preparation != MirrorPulseContentPreparation.ReplacePlaceholderIdentity &&
+                (proof.UploadBinding.Preparation != MirrorPulseContentPreparation.ConvertRegularFile || proof.UploadBinding.NamespaceIdentity is null) ||
             !receipt.MayAcknowledge || receipt.Stage != MirrorPulseContentConfirmationStage.Complete ||
             // CfSharp rehashes after identity preparation. BytesVerified is cumulative across
             // those passes, while the exact proof and native/projection flags establish success.

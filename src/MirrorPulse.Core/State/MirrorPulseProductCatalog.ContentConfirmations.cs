@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Data.Sqlite;
 
 namespace MirrorPulse.Core.State;
@@ -8,10 +9,17 @@ public sealed record MirrorPulseLocalFileBinding(ulong VolumeSerialNumber, Guid 
 
 public enum MirrorPulseContentPreparation { None, ConvertRegularFile, ReplacePlaceholderIdentity }
 
+/// <summary>The registered identity selected before uploading a file that became ordinary.</summary>
+/// <remarks>This is product lineage, not a fabricated native placeholder identity or current path lookup.</remarks>
+public sealed record MirrorPulseNamespaceUploadIdentity(Guid MemberId, Guid ItemId, string RemoteId, Guid? AcceptanceOperationId);
+
 /// <summary>Captured before upload, including the exact previous identity when replacement is needed.</summary>
 public sealed record MirrorPulseUploadBinding(MirrorPulseLocalFileBinding LocalObject,
     MirrorPulseContentPreparation Preparation, string? PreviousPlaceholderIdentity = null)
 {
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public MirrorPulseNamespaceUploadIdentity? NamespaceIdentity { get; init; }
+
     internal void Validate()
     {
         if (LocalObject is null || LocalObject.VolumeSerialNumber == 0 || LocalObject.SyncRootFileId == Guid.Empty ||
@@ -27,6 +35,10 @@ public sealed record MirrorPulseUploadBinding(MirrorPulseLocalFileBinding LocalO
         }
         else if (PreviousPlaceholderIdentity is not null)
             throw new ArgumentException("A previous identity is only valid for explicit replacement.");
+        if (NamespaceIdentity is { } identity && (Preparation != MirrorPulseContentPreparation.ConvertRegularFile ||
+            identity.MemberId == Guid.Empty || identity.ItemId == Guid.Empty || identity.AcceptanceOperationId == Guid.Empty ||
+            string.IsNullOrWhiteSpace(identity.RemoteId) || identity.RemoteId.Length > 16_384))
+            throw new ArgumentException("An ordinary member upload requires complete retained product identity lineage.");
     }
 }
 

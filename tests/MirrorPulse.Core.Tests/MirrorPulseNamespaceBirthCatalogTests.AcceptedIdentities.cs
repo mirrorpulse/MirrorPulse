@@ -131,10 +131,13 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
     }
 
     private static async Task<(MirrorPulseContentAcceptanceProof Proof, MirrorPulseContentConfirmationReceipt Receipt)> PrepareIdentityUploadAsync(
-        MirrorPulseProductCatalog catalog, MoveFixture setup, RootRegistration root, DateTimeOffset observedAt, string? mismatch = null)
+        MirrorPulseProductCatalog catalog, MoveFixture setup, RootRegistration root, DateTimeOffset observedAt, string? mismatch = null,
+        bool ordinary = false, MirrorPulseNamespaceUploadIdentity? namespaceIdentity = null)
     {
         var binding = new MirrorPulseUploadBinding(mismatch == "binding" ? setup.Member.LocalObject with { LocalFileId = Guid.NewGuid() } : setup.Member.LocalObject,
-            MirrorPulseContentPreparation.ReplacePlaceholderIdentity, "AQID"); // Opaque synthetic Core facts; no CfSharp decoding/native success is asserted.
+            ordinary ? MirrorPulseContentPreparation.ConvertRegularFile : MirrorPulseContentPreparation.ReplacePlaceholderIdentity,
+            ordinary ? null : "AQID")
+        { NamespaceIdentity = namespaceIdentity }; // Synthetic Core facts assert no native success.
         var intent = new MirrorPulseMutationIntent(Guid.NewGuid(), mismatch == "instance" ? InstanceId.New() : root.InstanceId,
             mismatch == "root-key" ? "another-root" : root.UniquenessKey, MirrorPulseWorkerChangeKind.ContentUpdate,
             "new.txt", null, false, null, 4, new string('B', 64), MirrorPulseMutationOrigin.Journal, binding);
