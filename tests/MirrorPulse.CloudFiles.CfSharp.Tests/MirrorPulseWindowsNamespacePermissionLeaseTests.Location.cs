@@ -13,73 +13,103 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         MirrorPulseNamespaceMemberRegistration destinationParent, CloudLocalChangeFeed feed,
         Guid[] retainedJournalIds, Guid directoryItemId, CancellationToken token)
     {
+        CloudFile original = fileSystem.GetFile(member.RelativePath);
+        CloudFile target = fileSystem.GetFile(destinationParent.RelativePath + "/member-location-probe.bin");
+        byte[] bytes = await File.ReadAllBytesAsync(original.FullPath, token);
+        MirrorPulseNamespaceMemberMoveIntent intent = null!;
         await RunNativeMemberAdmissionAsync(actor, role, async () =>
         {
-            CloudFile original = fileSystem.GetFile(member.RelativePath);
-            CloudDirectory sourceParent = original.Parent!;
-            CloudDirectory destination = fileSystem.GetDirectory(destinationParent.RelativePath);
             var before = await original.InspectAsync(token);
-            Assert.IsNotNull(before.LocalBinding);
-            Assert.IsNotNull(before.ItemId);
-            Assert.IsNotNull(before.RemoteId);
-            byte[] bytes = await File.ReadAllBytesAsync(original.FullPath, token);
+            Assert.IsNotNull(before.LocalBinding); Assert.IsNotNull(before.ItemId); Assert.IsNotNull(before.RemoteId);
             var sourceMember = await catalog.ReadNamespaceMemberAsync(member.ParentMemberId!.Value, token);
             Assert.IsNotNull(sourceMember);
             var sourceProtection = await catalog.ReadLatestNamespacePermissionChangeAsync(sourceMember.OriginId, token);
             var childProtection = await catalog.ReadLatestNamespaceBirthProtectionAsync(member.OriginId, token);
             var targetProtection = await catalog.ReadLatestNamespaceBirthProtectionAsync(destinationParent.OriginId, token);
             Assert.IsNotNull(sourceProtection); Assert.IsNotNull(childProtection); Assert.IsNotNull(targetProtection);
-            var intent = new MirrorPulseNamespaceMemberMoveIntent(1, Guid.NewGuid(), member.MemberId, childProtection.ProtectionId,
-                member.RootId!.Value, member.LocalObject, before.ItemId.Value, before.RemoteId, member.OwnerSid, role.RoleSid.Value,
+            intent = new(1, Guid.NewGuid(), member.MemberId, childProtection.ProtectionId, member.RootId!.Value,
+                member.LocalObject, before.ItemId.Value, before.RemoteId, member.OwnerSid, role.RoleSid.Value,
                 new(sourceMember.MemberId, sourceMember.LocalObject, sourceProtection.Intent.OperationId, member.RelativePath),
                 new(destinationParent.MemberId, destinationParent.LocalObject, targetProtection.ProtectionId,
                     destinationParent.RelativePath + "/member-location-probe.bin"), DateTimeOffset.UtcNow);
             await catalog.PrepareNamespaceMemberMoveAsync(intent, token);
-            var fence = new MirrorPulseRemoteNamespaceFence(router, catalog);
-            var root = router.Registrations.Single(registration => registration.RootId == intent.RootId);
-            Assert.IsFalse(await fence.CanPollAsync(root, token));
             var pendingBatch = await new MirrorPulseJournalUploadSource(feed, router, catalog, _ => true).ReadPendingAsync(token);
             Assert.IsFalse(pendingBatch.RequiresFullRescan);
             Assert.HasCount(0, pendingBatch.ReadyCommands);
             Assert.IsGreaterThan(0, pendingBatch.DeferredCount);
-            CollectionAssert.IsSubsetOf(retainedJournalIds,
-                (await WaitForBirthJournalAsync(feed, before.ItemId.Value, directoryItemId, token)).Select(change => change.OperationId).ToArray());
-            await catalog.RecordNamespaceMemberMoveStartAsync(new(1, intent.OperationId, DateTimeOffset.UtcNow), token);
-            // Exercise CfSharp's public move and durable projection, not a replacement path graph.
-            CloudItemMoveResult moved = await original.MoveToAsync(destination, "member-location-probe.bin", cancellationToken: token);
+        }, token);
+        var coordinator = new MirrorPulseNamespaceMemberMoveCoordinator(fileSystem, state, catalog, router, role, actor);
+        using (var canceled = new CancellationTokenSource())
+        {
+            canceled.Cancel();
+            await Assert.ThrowsAsync<OperationCanceledException>(() => coordinator.ExecuteAsync(intent.OperationId, canceled.Token).AsTask());
+        }
+        Assert.IsNull(await catalog.ReadNamespaceMemberMoveStartAsync(intent.OperationId, token));
+        // A changed live descriptor must fail before a durable start or any native movement.
+        await role.RunNamespaceOperationAsync(async () =>
+        {
+            await using var guard = await MirrorPulseWindowsNamespacePermissionLease.OpenAsync(original, router, token);
+            var before = await guard.InspectAsync(token);
             try
             {
-                var location = await MirrorPulseNamespaceMemberLocator.ResolveAsync(catalog, state.OpenStore, member.MemberId, actor, token);
-                Assert.AreEqual(MirrorPulseNamespaceMemberLocationState.Projected, location.State);
-                Assert.AreEqual(moved.Item.RelativePath.Replace('\\', '/'), location.RelativePath?.Replace('\\', '/'));
-                Assert.AreEqual(before.ItemId, location.ItemId);
-                var after = await moved.Item.InspectAsync(token);
-                Assert.AreEqual(before.LocalBinding, after.LocalBinding);
-                var binding = after.LocalBinding!;
-                Assert.AreEqual(member, await catalog.ReadNamespaceMemberByBindingAsync(
-                    new(binding.VolumeSerialNumber, binding.SyncRootFileId, binding.LocalFileId), token));
-                await using var parentLease = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(destination, router, token);
-                var parentFacts = await parentLease.InspectAsync(token);
-                Assert.AreEqual(destinationParent, await catalog.ReadNamespaceMemberByBindingAsync(parentFacts.LocalObject, token));
-                Assert.AreEqual(member.OwnerSid, parentFacts.OwnerSid);
-                CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(moved.Item.FullPath, token));
-                Assert.AreEqual(member, await catalog.ReadNamespaceMemberAsync(member.MemberId, token));
-                CollectionAssert.IsSubsetOf(retainedJournalIds,
-                    (await WaitForBirthJournalAsync(feed, before.ItemId.Value, directoryItemId, token)).Select(change => change.OperationId).ToArray());
+                await guard.ApplyDaclAsync($"D:P(A;;FA;;;{role.OwnerSid.Value})(A;;FA;;;{role.RoleSid.Value})", token);
+                await Assert.ThrowsExactlyAsync<InvalidDataException>(() => coordinator.ExecuteAsync(intent.OperationId, token).AsTask());
+                Assert.IsNull(await catalog.ReadNamespaceMemberMoveStartAsync(intent.OperationId, token));
+                CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(original.FullPath, token));
             }
-            finally
-            {
-                // Restore this owned probe after cancellation as well; no product name ownership is changed.
-                await moved.Item.MoveToAsync(sourceParent, Path.GetFileName(original.FullPath), cancellationToken: CancellationToken.None);
-            }
-            var restored = await MirrorPulseNamespaceMemberLocator.ResolveAsync(catalog, state.OpenStore, member.MemberId, actor, token);
-            Assert.AreEqual(MirrorPulseNamespaceMemberLocationState.Projected, restored.State);
-            Assert.AreEqual(member.RelativePath, restored.RelativePath?.Replace('\\', '/'));
-            CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(original.FullPath, token));
-            Assert.AreEqual(member, await catalog.ReadNamespaceMemberChildAsync(member.ParentMemberId!.Value, Path.GetFileName(original.FullPath), token));
+            finally { await guard.ApplyDaclAsync(before.Dacl, CancellationToken.None); }
+        });
+
+        MirrorPulseNamespaceMemberMoveStart? firstStart = null;
+        MirrorPulseNamespaceMemberMoveObservation? firstNative = null;
+        MirrorPulseNamespaceMemberMoveProjection? firstProjection = null;
+        foreach (var stopAt in new[] { MirrorPulseNamespaceMemberMoveCheckpoint.AfterNativeMove,
+            MirrorPulseNamespaceMemberMoveCheckpoint.AfterNativeObservation, MirrorPulseNamespaceMemberMoveCheckpoint.AfterOfficialProjection })
+        {
+            var interrupted = new MirrorPulseNamespaceMemberMoveCoordinator(fileSystem, state, catalog, router, role, actor,
+                (checkpoint, durable) =>
+                {
+                    Assert.IsFalse(durable.CanBeCanceled, "Post-native recovery must drain independently of the client token.");
+                    if (checkpoint == stopAt) throw new IOException("Injected product move interruption.");
+                    return ValueTask.CompletedTask;
+                });
+            var failure = await Assert.ThrowsExactlyAsync<IOException>(() => interrupted.ExecuteAsync(intent.OperationId, token).AsTask());
+            StringAssert.Contains(failure.Message, "Injected product move interruption.");
+            var start = await catalog.ReadNamespaceMemberMoveStartAsync(intent.OperationId, token);
+            Assert.IsNotNull(start); firstStart ??= start; Assert.AreEqual(firstStart, start);
+            Assert.IsNull(await catalog.ReadNamespaceMemberMoveCompletionAsync(intent.OperationId, token));
             Assert.AreEqual(intent, await catalog.ReadPendingNamespaceMemberMoveAsync(intent.RootId, token));
-            Assert.IsFalse(await fence.CanPollAsync(root, token));
-            TestContext.WriteLine("ControlledMemberLocation: sharedAdmission=True; officialItemIdLookup=True; publicMoveTo=True; parentDiscoveredByFullBinding=True; nativeBindingAndBytes=True; originalRegistrationUnchanged=True; journalIdsRetained=True; pendingMemberMoveFencesPoll=True; pendingMemberMoveDefersJournal=True; hostIntegrated=False.");
-        }, token);
+            Assert.IsTrue((await catalog.ReadNamespaceRecoveryRootsAsync(token)).Contains(intent.RootId));
+            Assert.AreEqual(member, await catalog.ReadNamespaceMemberChildAsync(member.ParentMemberId!.Value, "born.bin", token));
+            Assert.IsNull(await catalog.ReadNamespaceMemberChildAsync(destinationParent.MemberId, "member-location-probe.bin", token));
+            Assert.IsFalse((await original.InspectAsync(token)).Exists);
+            var native = await catalog.ReadNamespaceMemberMoveObservationAsync(intent.OperationId, token);
+            var projection = await catalog.ReadNamespaceMemberMoveProjectionAsync(intent.OperationId, token);
+            if (stopAt == MirrorPulseNamespaceMemberMoveCheckpoint.AfterNativeMove) Assert.IsNull(native);
+            else { Assert.IsNotNull(native); firstNative ??= native; Assert.AreEqual(firstNative, native); }
+            if (stopAt == MirrorPulseNamespaceMemberMoveCheckpoint.AfterOfficialProjection) { Assert.IsNotNull(projection); firstProjection = projection; }
+            else Assert.IsNull(projection);
+            var actual = await target.InspectAsync(token);
+            Assert.AreEqual(member.LocalObject, new MirrorPulseLocalFileBinding(actual.LocalBinding!.VolumeSerialNumber, actual.LocalBinding.SyncRootFileId, actual.LocalBinding.LocalFileId));
+            CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(target.FullPath, token));
+            CollectionAssert.IsSubsetOf(retainedJournalIds,
+                (await WaitForBirthJournalAsync(feed, intent.ItemId, directoryItemId, token)).Select(change => change.OperationId).ToArray());
+        }
+
+        var completion = await coordinator.ExecuteAsync(intent.OperationId, token);
+        Assert.AreEqual(completion, await coordinator.ExecuteAsync(intent.OperationId, token));
+        Assert.AreEqual(firstStart, await catalog.ReadNamespaceMemberMoveStartAsync(intent.OperationId, token));
+        Assert.AreEqual(firstNative, await catalog.ReadNamespaceMemberMoveObservationAsync(intent.OperationId, token));
+        Assert.AreEqual(firstProjection, await catalog.ReadNamespaceMemberMoveProjectionAsync(intent.OperationId, token));
+        Assert.IsNull(await catalog.ReadPendingNamespaceMemberMoveAsync(intent.RootId, token));
+        Assert.IsFalse((await catalog.ReadNamespaceRecoveryRootsAsync(token)).Contains(intent.RootId));
+        Assert.IsNull(await catalog.ReadNamespaceMemberChildAsync(member.ParentMemberId!.Value, "born.bin", token));
+        Assert.AreEqual(member, await catalog.ReadNamespaceMemberChildAsync(destinationParent.MemberId, "member-location-probe.bin", token));
+        Assert.AreEqual(member, await catalog.ReadNamespaceMemberAsync(member.MemberId, token));
+        CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(target.FullPath, token));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() => File.Delete(target.FullPath), token));
+        CollectionAssert.IsSubsetOf(retainedJournalIds,
+            (await WaitForBirthJournalAsync(feed, intent.ItemId, directoryItemId, token)).Select(change => change.OperationId).ToArray());
+        TestContext.WriteLine("ControlledMemberLocation: sharedAdmission=True; officialItemIdLookup=True; publicMoveTo=True; nativeBindingAndBytes=True; originalRegistrationUnchanged=True; journalIdsRetained=True; pendingMemberMoveFencesPoll=True; pendingMemberMoveDefersJournal=True; productionMoveCoordinator=True; changedDescriptorRejectedBeforeStart=True; nativeObservationProjectionInterruptionsRecovered=True; immutableStartAndFacts=True; currentNameCommitted=True; completedReplay=True; hostIntegrated=False.");
     }
 }

@@ -217,6 +217,11 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
 
             await remoteScheduler.DisposeAsync().ConfigureAwait(false);
 
+            if (namespaceActor is not null)
+            {
+                await namespaceActor.DisposeAsync().ConfigureAwait(false);
+            }
+
             if (session is not null)
             {
                 await session.DisposeAsync().ConfigureAwait(false);
@@ -225,11 +230,6 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
             if (workers is not null)
             {
                 await workers.DisposeAsync().ConfigureAwait(false);
-            }
-
-            if (namespaceActor is not null)
-            {
-                await namespaceActor.DisposeAsync().ConfigureAwait(false);
             }
 
             if (namespaceExecution is not null)
@@ -902,6 +902,9 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
 
         await _remotePoller.DisposeAsync().ConfigureAwait(false);
         await _remoteScheduler.DisposeAsync().ConfigureAwait(false);
+        // Reject queued namespace work and drain active callbacks while CfSharp and its store
+        // are still available. The role identity also outlives every admitted callback.
+        await _namespaceActor.DisposeAsync().ConfigureAwait(false);
         try
         {
             await _session.DisposeAsync().ConfigureAwait(false);
@@ -910,7 +913,6 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
         finally
         {
             // The captured identities outlive normal-user RPC, including source-body disposal.
-            await _namespaceActor.DisposeAsync().ConfigureAwait(false);
             await _namespaceExecution.DisposeAsync().ConfigureAwait(false);
         }
         await _catalog.DisposeAsync().ConfigureAwait(false);

@@ -22,6 +22,12 @@ public interface IMirrorPulseCloudRuntime : IAsyncDisposable
         ValueTask.FromException<MirrorPulseNamespaceMemberMoveCompletion>(
             new NotSupportedException("This Cloud Files runtime does not execute controlled member moves."));
 
+    [SupportedOSPlatform("windows10.0.26100")]
+    ValueTask<MirrorPulseNamespaceBirthRecoveryResult> ExecuteNamespaceBirthRecoveryAsync(
+        Guid recoveryId, CancellationToken cancellationToken) =>
+        ValueTask.FromException<MirrorPulseNamespaceBirthRecoveryResult>(
+            new NotSupportedException("This Cloud Files runtime does not execute staged birth recovery."));
+
     ValueTask<MirrorPulseManagedRootRenameRecovery> RecoverManagedRootRenameAsync(
         Guid operationId, CancellationToken cancellationToken) =>
         ValueTask.FromException<MirrorPulseManagedRootRenameRecovery>(
@@ -151,15 +157,48 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         public MirrorPulseJournalPumpHealth? JournalHealth => _uploadPump?.Health;
 
         [SupportedOSPlatform("windows10.0.26100")]
-        public ValueTask<MirrorPulseNamespaceMemberMoveCompletion> ExecuteNamespaceMemberMoveAsync(
+        public async ValueTask<MirrorPulseNamespaceMemberMoveCompletion> ExecuteNamespaceMemberMoveAsync(
             Guid operationId, CancellationToken cancellationToken)
         {
             if (router is null || catalog is null || _namespaceExecution is null || _namespaceActor is null)
-                return ValueTask.FromException<MirrorPulseNamespaceMemberMoveCompletion>(
-                    new NotSupportedException("Controlled member moves require the Host namespace boundary."));
+                throw new NotSupportedException("Controlled member moves require the Host namespace boundary.");
             var coordinator = new MirrorPulseNamespaceMemberMoveCoordinator(
                 fileSystem, state, catalog, router, _namespaceExecution, _namespaceActor);
-            return coordinator.ExecuteAsync(operationId, cancellationToken);
+            var intent = await catalog.ReadNamespaceMemberMoveAsync(operationId, cancellationToken).ConfigureAwait(false)
+                ?? throw new FileNotFoundException("The move admission is not registered.");
+            var registration = router.Registrations.Single(root => root.RootId == intent.RootId);
+            // Drain earlier instance work before entering the namespace actor. Subsequent dispatch
+            // rechecks the durable root fence after acquiring this same scheduler.
+            return await _scheduler.RunAsync(registration.InstanceId,
+                token => coordinator.ExecuteAsync(operationId, token), cancellationToken).ConfigureAwait(false);
+        }
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        public async ValueTask<MirrorPulseNamespaceBirthRecoveryResult> ExecuteNamespaceBirthRecoveryAsync(
+            Guid recoveryId, CancellationToken cancellationToken)
+        {
+            if (router is null || catalog is null || _namespaceExecution is null || _namespaceActor is null)
+                throw new NotSupportedException("Staged birth recovery requires the Host namespace boundary.");
+            var action = await catalog.ReadNamespaceBirthRecoveryActionAsync(recoveryId, cancellationToken).ConfigureAwait(false)
+                ?? throw new FileNotFoundException("The recovery action is not registered.");
+            var birth = await catalog.ReadNamespaceBirthAsync(action.BirthOperationId, cancellationToken).ConfigureAwait(false)
+                ?? throw new FileNotFoundException("The birth admission is not registered.");
+            int separator = birth.RelativePath.LastIndexOf('/');
+            string parentPath = separator < 0 ? string.Empty : birth.RelativePath[..separator];
+            CloudFile file = fileSystem.GetFile(birth.RelativePath);
+            CloudDirectory parent = parentPath.Length == 0 ? fileSystem.Root : fileSystem.GetDirectory(parentPath);
+            var coordinator = new MirrorPulseNamespaceBirthRecoveryCoordinator(catalog, router, _namespaceExecution);
+            var registration = router.Registrations.Single(root => root.RootId == birth.RootId);
+            return await _scheduler.RunAsync(registration.InstanceId, async stop => await _namespaceActor.RunAsync(async token =>
+            {
+                _namespaceActor.AssertAccess();
+                MirrorPulseNamespaceBirthRecoveryResult result = null!;
+                await _namespaceExecution.RunNamespaceOperationAsync(async () =>
+                {
+                    result = await coordinator.ExecuteStagedFileAsync(recoveryId, file, parent, token).ConfigureAwait(false);
+                }).ConfigureAwait(false);
+                return result;
+            }, stop).ConfigureAwait(false), cancellationToken).ConfigureAwait(false);
         }
 
         public async ValueTask StartAsync(CancellationToken cancellationToken)
@@ -454,6 +493,15 @@ public sealed class MirrorPulseCloudHostSession : IAsyncDisposable
         if (!_started || _runtime is null)
             throw new InvalidOperationException("The Cloud Files Host session has not started.");
         return _runtime.ExecuteNamespaceMemberMoveAsync(operationId, cancellationToken);
+    }
+
+    [SupportedOSPlatform("windows10.0.26100")]
+    public ValueTask<MirrorPulseNamespaceBirthRecoveryResult> ExecuteNamespaceBirthRecoveryAsync(
+        Guid recoveryId, CancellationToken cancellationToken = default)
+    {
+        if (!_started || _runtime is null)
+            throw new InvalidOperationException("The Cloud Files Host session has not started.");
+        return _runtime.ExecuteNamespaceBirthRecoveryAsync(recoveryId, cancellationToken);
     }
 
     public ValueTask<MirrorPulseCloudStatusSnapshot> ReadStatusAsync(
