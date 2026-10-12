@@ -267,6 +267,14 @@ public sealed class MirrorPulseCliHostOperations : IMirrorPulseCliHostOperations
                         (move.RequiresSubtreeReconciliation ? " · subtree reconciliation pending" : string.Empty);
                     break;
                 case ("namespace", "member") when command.Path.Count > 2 &&
+                    command.Path[2].Equals("move-status", StringComparison.OrdinalIgnoreCase):
+                    if (command.Arguments.Count != 1 || !Guid.TryParse(command.Arguments[0], out Guid moveStatusOperation) || moveStatusOperation == Guid.Empty)
+                        throw new ArgumentException("namespace member move-status requires one non-empty operation ID.");
+                    var moveStatus = await _client.GetNamespaceMemberMoveStatusAsync(moveStatusOperation, cancellationToken).ConfigureAwait(false);
+                    result = moveStatus;
+                    human = $"Member move {moveStatus.Phase} · {moveStatus.OperationId:D} · {moveStatus.SourceRelativePath} -> {moveStatus.TargetRelativePath}";
+                    break;
+                case ("namespace", "member") when command.Path.Count > 2 &&
                     command.Path[2].Equals("create", StringComparison.OrdinalIgnoreCase):
                     if (command.Arguments.Count < 2 || !Guid.TryParse(command.Arguments[0], out Guid createParent) ||
                         createParent == Guid.Empty || string.IsNullOrWhiteSpace(command.Arguments[1]) ||

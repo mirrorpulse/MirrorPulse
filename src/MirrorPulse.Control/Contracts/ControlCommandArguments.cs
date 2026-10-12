@@ -92,6 +92,8 @@ public sealed record RootPrepareRenameArguments(Guid RootId, string Label) : IMi
 
 public sealed record NamespaceMemberMoveArguments(Guid OperationId) : IMirrorPulseControlArguments;
 
+public sealed record NamespaceMemberMoveStatusArguments(Guid OperationId) : IMirrorPulseControlArguments;
+
 public sealed record NamespaceMemberRetirementArguments(Guid OperationId) : IMirrorPulseControlArguments;
 
 public sealed record NamespaceMemberRetirementStatusArguments(Guid OperationId) : IMirrorPulseControlArguments;
@@ -120,6 +122,10 @@ public sealed record NamespaceBirthRecoverArguments(Guid RecoveryId) : IMirrorPu
 public sealed record MirrorPulseControlNamespaceMemberMoveResult(Guid OperationId, Guid ItemId,
     string RemoteId, string RelativePath, bool IsDirectory, bool CurrentNameCommitted,
     bool RequiresSubtreeReconciliation, string? OfficialRemoteRevision);
+
+public sealed record MirrorPulseControlNamespaceMemberMoveStatus(Guid OperationId, Guid MemberId, bool IsDirectory,
+    string SourceRelativePath, string TargetRelativePath, string Phase, bool Started,
+    bool NativeObserved, bool OfficialProjectionRecorded, bool CurrentNameCommitted);
 
 public sealed record MirrorPulseControlNamespaceMemberRetirementPreparation(Guid OperationId, Guid MemberId,
     string RelativePath, bool IsDirectory, DateTimeOffset PreparedAt);

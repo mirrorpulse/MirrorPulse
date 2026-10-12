@@ -36,6 +36,11 @@ public sealed record MirrorPulseNamespaceMemberMoveIntent(int Version, Guid Oper
 /// <summary>A durable before-native start; it is not evidence that the move occurred.</summary>
 public sealed record MirrorPulseNamespaceMemberMoveStart(int Version, Guid OperationId, DateTimeOffset StartedAt);
 
+/// <summary>Read-only progress assembled from the retained move intent and durable facts.</summary>
+public sealed record MirrorPulseNamespaceMemberMoveStatus(Guid OperationId, Guid MemberId, bool IsDirectory,
+    string SourceRelativePath, string TargetRelativePath, string Phase, bool Started,
+    bool NativeObserved, bool OfficialProjectionRecorded, bool CurrentNameCommitted);
+
 public sealed partial class MirrorPulseProductCatalog
 {
     public async Task<MirrorPulseNamespaceMemberMoveIntent> PrepareNamespaceMemberMoveAsync(
@@ -177,6 +182,36 @@ public sealed partial class MirrorPulseProductCatalog
             var result = await ReadNamespaceMemberMoveStartCoreAsync(operationId, transaction, cancellationToken).ConfigureAwait(false);
             transaction.Commit();
             return result;
+        }
+        finally { _gate.Release(); }
+    }
+
+    /// <summary>Reads move progress without refreshing native authorization or changing the fence.</summary>
+    public async Task<MirrorPulseNamespaceMemberMoveStatus?> ReadNamespaceMemberMoveStatusAsync(Guid operationId,
+        CancellationToken cancellationToken = default)
+    {
+        if (operationId == Guid.Empty) throw new ArgumentException("A move ID is required.", nameof(operationId));
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            using SqliteTransaction transaction = _connection.BeginTransaction(deferred: true);
+            var intent = await ReadNamespaceMemberMoveCoreAsync(operationId, transaction, cancellationToken).ConfigureAwait(false);
+            if (intent is null) { transaction.Commit(); return null; }
+            var member = await ReadNamespaceMemberRowAsync(intent.MemberId, transaction, cancellationToken).ConfigureAwait(false)
+                ?? throw new InvalidDataException("The move member provenance is missing.");
+            var start = await ReadNamespaceMemberMoveStartCoreAsync(operationId, transaction, cancellationToken).ConfigureAwait(false);
+            var observation = await ReadNamespaceMoveFactCoreAsync<MirrorPulseNamespaceMemberMoveObservation>(
+                operationId, true, transaction, cancellationToken, false).ConfigureAwait(false);
+            var projection = await ReadNamespaceMoveFactCoreAsync<MirrorPulseNamespaceMemberMoveProjection>(
+                operationId, false, transaction, cancellationToken, false).ConfigureAwait(false);
+            var completion = await ReadNamespaceMemberMoveCompletionCoreAsync(operationId, transaction, cancellationToken, false).ConfigureAwait(false);
+            string phase = completion is not null ? "Completed" : projection is not null ? "Projected" :
+                observation is not null ? "Observed" : start is not null ? "Started" : "Prepared";
+            transaction.Commit();
+            return new(operationId, member.MemberId, member.IsDirectory, intent.Source.RelativePath,
+                intent.Target.RelativePath, phase, start is not null, observation is not null,
+                projection is not null, completion is not null);
         }
         finally { _gate.Release(); }
     }

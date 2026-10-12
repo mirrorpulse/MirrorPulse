@@ -483,6 +483,8 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
             MirrorPulseControlCommands.NamespaceMemberRetirement, ExecuteNamespaceMemberRetirementAsync);
         dispatcher.Register<NamespaceMemberRetirementStatusArguments, MirrorPulseControlNamespaceMemberRetirementResult>(
             MirrorPulseControlCommands.NamespaceMemberRetirementStatus, ReadNamespaceMemberRetirementAsync);
+        dispatcher.Register<NamespaceMemberMoveStatusArguments, MirrorPulseControlNamespaceMemberMoveStatus>(
+            MirrorPulseControlCommands.NamespaceMemberMoveStatus, ReadNamespaceMemberMoveStatusAsync);
         _controlPipe = new MirrorPulseControlPipeServer(dispatcher.DispatchAsync);
     }
 
@@ -579,6 +581,17 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
             arguments.OperationId, cancellationToken).ConfigureAwait(false);
         return new(completion.OperationId, completion.ItemId, completion.RemoteId, completion.RelativePath,
             completion.IsDirectory, true, completion.IsDirectory, completion.OfficialRemoteRevision);
+    }
+
+    private async ValueTask<MirrorPulseControlNamespaceMemberMoveStatus> ReadNamespaceMemberMoveStatusAsync(
+        NamespaceMemberMoveStatusArguments arguments, CancellationToken cancellationToken)
+    {
+        if (arguments.OperationId == Guid.Empty) throw new ArgumentException("A move operation ID is required.", nameof(arguments));
+        MirrorPulseNamespaceMemberMoveStatus status = await _session.ReadNamespaceMemberMoveStatusAsync(
+            arguments.OperationId, cancellationToken).ConfigureAwait(false);
+        return new(status.OperationId, status.MemberId, status.IsDirectory, status.SourceRelativePath,
+            status.TargetRelativePath, status.Phase, status.Started, status.NativeObserved,
+            status.OfficialProjectionRecorded, status.CurrentNameCommitted);
     }
 
     private async Task<MirrorPulseControlNamespaceBirthRecoveryResult> ExecuteNamespaceBirthRecoveryAsync(

@@ -137,7 +137,7 @@ public static class MirrorPulseCliCommandLine
                 commandArguments.Count == 0)
             {
                 bool allowed = commandPath[1].Equals("member", StringComparison.OrdinalIgnoreCase)
-                    ? token.Equals("inspect", StringComparison.OrdinalIgnoreCase) || token.Equals("prepare-move", StringComparison.OrdinalIgnoreCase) || token.Equals("move", StringComparison.OrdinalIgnoreCase) || token.Equals("create", StringComparison.OrdinalIgnoreCase) || token.Equals("prepare-retire", StringComparison.OrdinalIgnoreCase) || token.Equals("retire", StringComparison.OrdinalIgnoreCase) || token.Equals("retirement-status", StringComparison.OrdinalIgnoreCase)
+                    ? token.Equals("inspect", StringComparison.OrdinalIgnoreCase) || token.Equals("prepare-move", StringComparison.OrdinalIgnoreCase) || token.Equals("move", StringComparison.OrdinalIgnoreCase) || token.Equals("move-status", StringComparison.OrdinalIgnoreCase) || token.Equals("create", StringComparison.OrdinalIgnoreCase) || token.Equals("prepare-retire", StringComparison.OrdinalIgnoreCase) || token.Equals("retire", StringComparison.OrdinalIgnoreCase) || token.Equals("retirement-status", StringComparison.OrdinalIgnoreCase)
                     : token.Equals("recover", StringComparison.OrdinalIgnoreCase);
                 if (!allowed)
                     return Failure($"Unknown subcommand '{token}' for 'namespace {commandPath[1]}'.", options);
@@ -218,6 +218,8 @@ public static class MirrorPulseCliHelp
                                          Prepare a file move within its managed root.
           namespace member move OPERATION_ID
                                          Execute or retry an admitted protected member move.
+          namespace member move-status OPERATION_ID
+                                         Read the durable move progress.
           namespace member create PARENT_ID NAME [--directory] [--operation-id GUID]
                                          Create an empty local file or directory under a protected member.
           namespace member prepare-retire MEMBER_ID [--operation-id GUID]

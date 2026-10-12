@@ -41,6 +41,11 @@ public interface IMirrorPulseCloudRuntime : IAsyncDisposable
             new NotSupportedException("This Cloud Files runtime does not execute controlled member moves."));
 
     [SupportedOSPlatform("windows10.0.26100")]
+    ValueTask<MirrorPulseNamespaceMemberMoveStatus> ReadNamespaceMemberMoveStatusAsync(Guid operationId,
+        CancellationToken cancellationToken) => ValueTask.FromException<MirrorPulseNamespaceMemberMoveStatus>(
+            new NotSupportedException("This Cloud Files runtime does not read controlled move status."));
+
+    [SupportedOSPlatform("windows10.0.26100")]
     ValueTask<MirrorPulseNamespaceRetirement> PrepareNamespaceMemberRetirementAsync(Guid operationId, Guid memberId,
         CancellationToken cancellationToken) => ValueTask.FromException<MirrorPulseNamespaceRetirement>(
             new NotSupportedException("This Cloud Files runtime does not prepare controlled retirements."));
@@ -248,6 +253,15 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             // rechecks the durable root fence after acquiring this same scheduler.
             return await _scheduler.RunAsync(registration.InstanceId,
                 token => coordinator.ExecuteAsync(operationId, token), cancellationToken).ConfigureAwait(false);
+        }
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        public async ValueTask<MirrorPulseNamespaceMemberMoveStatus> ReadNamespaceMemberMoveStatusAsync(Guid operationId,
+            CancellationToken cancellationToken)
+        {
+            if (catalog is null) throw new NotSupportedException("Move status requires the Host catalog.");
+            return await catalog.ReadNamespaceMemberMoveStatusAsync(operationId, cancellationToken).ConfigureAwait(false)
+                ?? throw new FileNotFoundException("The move operation is not registered.");
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
@@ -645,6 +659,15 @@ public sealed class MirrorPulseCloudHostSession : IAsyncDisposable
         if (!_started || _runtime is null)
             throw new InvalidOperationException("The Cloud Files Host session has not started.");
         return _runtime.ExecuteNamespaceMemberMoveAsync(operationId, cancellationToken);
+    }
+
+    [SupportedOSPlatform("windows10.0.26100")]
+    public ValueTask<MirrorPulseNamespaceMemberMoveStatus> ReadNamespaceMemberMoveStatusAsync(Guid operationId,
+        CancellationToken cancellationToken = default)
+    {
+        if (!_started || _runtime is null)
+            throw new InvalidOperationException("The Cloud Files Host session has not started.");
+        return _runtime.ReadNamespaceMemberMoveStatusAsync(operationId, cancellationToken);
     }
 
     [SupportedOSPlatform("windows10.0.26100")]

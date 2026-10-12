@@ -54,6 +54,9 @@ The default output is concise human-readable text. Automation should use `--json
 | `mp root recover OPERATION_ID` | Retry the original managed root rename proof through the Host. | operation ID from `root list`; `--json` includes separate native and durable projection facts |
 | `mp root prepare-rename ROOT_ID LABEL` | Prepare a Label-only managed root rename. | preserves the source directory and returns an operation ID for recovery |
 | `mp namespace member create PARENT_ID NAME [--directory] [--operation-id GUID]` | Create an empty local file or directory under a registered protected directory. | retain `operationId` for retry; this does not prove remote acceptance |
+| `mp namespace member prepare-move MEMBER_ID PARENT_ID NAME [--operation-id GUID]` | Prepare a protected member move. | the source name remains fenced until the move receipt is complete |
+| `mp namespace member move OPERATION_ID` | Execute or retry an admitted protected member move. | directory moves require subtree reconciliation |
+| `mp namespace member move-status OPERATION_ID` | Read durable move progress. | reports preparation, native observation, projection, and name settlement |
 | `mp namespace member prepare-retire MEMBER_ID [--operation-id GUID]` | Prepare a protected leaf deletion. | root and directories with registered descendants are rejected |
 | `mp namespace member retire OPERATION_ID` | Execute or retry a protected leaf deletion. | native deletion and membership settlement are separate durable phases |
 | `mp namespace member retirement-status OPERATION_ID` | Read a protected deletion receipt. | reports the durable native and membership phases |

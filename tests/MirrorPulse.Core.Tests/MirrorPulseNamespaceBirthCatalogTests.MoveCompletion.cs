@@ -28,6 +28,34 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
     }
 
     [TestMethod]
+    public async Task MoveStatusReportsDurablePhasesWithoutChangingAdmission()
+    {
+        using var fixture = new Fixture();
+        await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        var setup = await PrepareMovableMemberAsync(catalog);
+        var prepared = await catalog.ReadNamespaceMemberMoveStatusAsync(setup.Move.OperationId);
+        Assert.IsNull(prepared);
+        await catalog.PrepareNamespaceMemberMoveAsync(setup.Move);
+        var admitted = await catalog.ReadNamespaceMemberMoveStatusAsync(setup.Move.OperationId);
+        Assert.IsNotNull(admitted);
+        Assert.AreEqual("Prepared", admitted.Phase);
+        await catalog.RecordNamespaceMemberMoveStartAsync(new(1, setup.Move.OperationId, setup.Move.PreparedAt.AddSeconds(1)));
+        Assert.AreEqual("Started", (await catalog.ReadNamespaceMemberMoveStatusAsync(setup.Move.OperationId))!.Phase);
+        var native = MoveObservation(setup);
+        var projection = MoveProjection(native);
+        await catalog.RecordNamespaceMemberMoveObservationAsync(native);
+        Assert.AreEqual("Observed", (await catalog.ReadNamespaceMemberMoveStatusAsync(setup.Move.OperationId))!.Phase);
+        await catalog.RecordNamespaceMemberMoveProjectionAsync(projection);
+        Assert.AreEqual("Projected", (await catalog.ReadNamespaceMemberMoveStatusAsync(setup.Move.OperationId))!.Phase);
+        await catalog.CompleteNamespaceMemberMoveAsync(MoveCompletion(native, projection));
+        var completed = await catalog.ReadNamespaceMemberMoveStatusAsync(setup.Move.OperationId);
+        Assert.IsNotNull(completed);
+        Assert.AreEqual("Completed", completed.Phase);
+        Assert.IsTrue(completed.CurrentNameCommitted);
+        Assert.IsNull(await catalog.ReadPendingNamespaceMemberMoveAsync(setup.Move.RootId));
+    }
+
+    [TestMethod]
     public async Task SingleItemDirectoryProjectionCannotReleaseTheSubtreeFence()
     {
         using var fixture = new Fixture();
