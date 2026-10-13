@@ -15,7 +15,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     [TestMethod]
     [DoNotParallelize]
     [TestCategory("NativeCloudFiles")]
-    public async Task NativeReplacementValidationRetainsBackupBindingAndIdentityDuringOrdinaryFileWrites()
+    public async Task NativeReplacementValidationRetainsBackupBindingAndIdentityAcrossPlaceholderAndOrdinaryStarts()
     {
         if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
             Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
@@ -63,7 +63,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 byte[] expectedOld = attempt == 0 ? oldBytes : [9, 8, 7, 6, 5, 4];
                 if (attempt == 1)
                 {
-                    // Latest unsent in-place edits must be backed up even after Windows made the file ordinary.
+                    // A create-mode overwrite can make the file ordinary; its latest unsent bytes still need protection.
                     await File.WriteAllBytesAsync(file.FullPath, expectedOld, deadline.Token);
                     Assert.IsFalse((await file.InspectAsync(deadline.Token)).IsPlaceholder);
                 }
@@ -105,13 +105,14 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         Assert.AreEqual(content.Sha256, Convert.ToHexString(await SHA256.HashDataAsync(target, CancellationToken.None)));
                         RequireObject(await metadata.InspectAsync(CancellationToken.None), roleOnly);
                     }
-                    var ordinary = await file.InspectAsync(CancellationToken.None);
-                    Assert.IsFalse(ordinary.IsPlaceholder, "This regression must cover the Windows loss of placeholder state after overwrite.");
-                    Assert.AreEqual(original.Baseline.LocalObject.LocalFileId, ordinary.LocalBinding!.LocalFileId);
+                    var written = await file.InspectAsync(CancellationToken.None);
+                    Assert.IsTrue(written.IsPlaceholder, "Opening the retained object without create-mode replacement must preserve its placeholder state.");
+                    Assert.AreEqual(initial.LocalBinding, written.LocalBinding);
+                    CollectionAssert.AreEqual(initial.PlaceholderIdentity.ToArray(), written.PlaceholderIdentity.ToArray());
                     await role.RunNormalUserOperationAsync(async () =>
                     {
                         await Assert.ThrowsAsync<UnauthorizedAccessException>(() => File.ReadAllBytesAsync(file.FullPath, deadline.Token));
-                        AssertBirthAliasDenied(Path.Combine(directory, $"ordinary-replacement-{attempt}.link"), file.FullPath, expectedError: 5);
+                        AssertBirthAliasDenied(Path.Combine(directory, $"written-replacement-{attempt}.link"), file.FullPath);
                     });
                     // All data handles are closed before the mature public same-object conversion scope.
                     var converted = await MirrorPulseWindowsNamespacePermissionLease.RunProtectedAsync(file, router, original.Baseline.LocalObject,
@@ -134,7 +135,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 AssertBirthAliasDenied(Path.Combine(directory, $"converted-replacement-{attempt}.link"), file.FullPath);
             }
             Assert.AreEqual(0, source.Reads);
-            TestContext.WriteLine("ReplacementValidation: placeholderAndOrdinaryStart=True; latestUnsentBackup=True; publicExclusiveTightening=True; durableOriginalBackup=True; sameOriginalObject=True; ordinaryOverwriteObserved=True; roleOnlyContentDenied=True; ordinaryAliasDenied=True; publicSameObjectReconversion=True; originalIdentityRetained=True; binaryExact=True; dirty=True; noSourceAccess=True; productOperation=False; hostIntegrated=False.");
+            TestContext.WriteLine("ReplacementValidation: placeholderAndOrdinaryStart=True; latestUnsentBackup=True; publicExclusiveTightening=True; durableOriginalBackup=True; sameOriginalObject=True; openWritePreservesPlaceholder=True; ordinaryStartRecovered=True; roleOnlyContentDenied=True; aliasDenied=True; publicSameObjectReconversion=True; originalIdentityRetained=True; binaryExact=True; dirty=True; noSourceAccess=True; productOperation=False; hostIntegrated=False.");
 
             void RequireObject(MirrorPulseNamespacePermissionObject facts, string dacl)
             {
