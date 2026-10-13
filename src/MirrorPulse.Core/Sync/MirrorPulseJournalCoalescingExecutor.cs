@@ -12,18 +12,33 @@ public sealed class MirrorPulseJournalCoalescingExecutor(MirrorPulseProductCatal
     private readonly MirrorPulseMutationExecutor _executor = new(catalog);
 
     /// <param name="openContent">Opens the same retained native object and final content proof; it must reject a replacement.</param>
+    public ValueTask<IReadOnlyList<MirrorPulseMutationRecord>> ExecuteAsync(Guid planId,
+        Func<MirrorPulseCoalescingContent, CancellationToken, ValueTask<Stream>> openContent,
+        CancellationToken cancellationToken = default) =>
+        ExecuteAsync(planId, openContent, (_, _) => ValueTask.CompletedTask, cancellationToken);
+
+    /// <summary>Retains remote acceptance until the Host completes each effect's durable local projection.</summary>
+    /// <remarks>
+    /// Completion receives the actual accepted mutation before its effect ledger acknowledgement.
+    /// Failure retains RemoteAccepted and prevents later effects. Reconciliation retries completion
+    /// without redispatching an accepted remote write. Original official journal IDs remain separate;
+    /// this callback and acknowledged effect history do not authorize acknowledging those IDs.
+    /// </remarks>
     public async ValueTask<IReadOnlyList<MirrorPulseMutationRecord>> ExecuteAsync(Guid planId,
         Func<MirrorPulseCoalescingContent, CancellationToken, ValueTask<Stream>> openContent,
+        Func<MirrorPulseMutationRecord, CancellationToken, ValueTask> completeEffect,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(openContent);
+        ArgumentNullException.ThrowIfNull(completeEffect);
         MirrorPulseJournalCoalescingPlan plan = await catalog.ReadJournalCoalescingPlanAsync(planId, cancellationToken).ConfigureAwait(false);
         return await catalog.CoalescingScheduler.RunAsync(plan.InstanceId,
-            token => ExecuteCoreAsync(planId, openContent, token), cancellationToken).ConfigureAwait(false);
+            token => ExecuteCoreAsync(planId, openContent, completeEffect, token), cancellationToken).ConfigureAwait(false);
     }
 
     private async ValueTask<IReadOnlyList<MirrorPulseMutationRecord>> ExecuteCoreAsync(Guid planId,
         Func<MirrorPulseCoalescingContent, CancellationToken, ValueTask<Stream>> openContent,
+        Func<MirrorPulseMutationRecord, CancellationToken, ValueTask> completeEffect,
         CancellationToken cancellationToken)
     {
         MirrorPulseJournalCoalescingExecution execution = await catalog.ReadJournalCoalescingExecutionAsync(planId, cancellationToken).ConfigureAwait(false)
@@ -32,12 +47,16 @@ public sealed class MirrorPulseJournalCoalescingExecutor(MirrorPulseProductCatal
         foreach (MirrorPulseCoalescingStep step in execution.Steps)
         {
             MirrorPulseMutationRecord record = await catalog.PrepareJournalCoalescingMutationAsync(planId, step.Ordinal, cancellationToken).ConfigureAwait(false);
-            ValueTask Complete(string? revision, CancellationToken token)
+            async ValueTask Complete(string? revision, CancellationToken token)
             {
                 token.ThrowIfCancellationRequested();
                 if (step.Kind is MirrorPulseCoalescingStepKind.Upload or MirrorPulseCoalescingStepKind.Move && string.IsNullOrEmpty(revision))
                     throw new InvalidDataException("A completed remote effect requires an accepted revision.");
-                return ValueTask.CompletedTask;
+                var accepted = await catalog.ReadMutationAsync(step.OperationId, token).ConfigureAwait(false)
+                    ?? throw new InvalidDataException("The accepted coalesced effect is missing.");
+                if (accepted.State != MirrorPulseMutationState.RemoteAccepted || accepted.Intent != record.Intent || accepted.AcceptedRevision != revision)
+                    throw new InvalidDataException("Local completion requires the unchanged accepted coalesced effect.");
+                await completeEffect(accepted, token).ConfigureAwait(false);
             }
             if (record.State == MirrorPulseMutationState.Prepared)
             {

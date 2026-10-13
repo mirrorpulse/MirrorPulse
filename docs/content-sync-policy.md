@@ -124,6 +124,14 @@ accepted revision as its conditional baseline. An unknown result is reconciled
 by readback without resending the mutation. Verification-only effects issue Stat
 requests and never write remote metadata or content.
 
+The Host completion overload receives each actual `RemoteAccepted` effect before
+the effect ledger advances to `Acknowledged`. It can retain content acceptance,
+confirm the original local object and finish durable projection at this boundary.
+A failed or canceled completion retains acceptance and blocks the next effect;
+recovery retries local completion without repeating the accepted remote write.
+The remote-effects-only overload does not prove local projection. Neither an
+effect acknowledgement nor this callback settles original official journal IDs.
+
 Derived intents have a separate origin. Their `Acknowledged` state records only
 completion of that remote effect; it does not acknowledge the original journal.
 Generic journal projection recovery cannot treat a missing derived ID in the

@@ -17,7 +17,7 @@ using Fixture = MirrorPulse.Core.Tests.MirrorPulseJournalCoalescingExecutionTest
 namespace MirrorPulse.Core.Tests;
 
 [TestClass]
-public sealed class MirrorPulseJournalCoalescingExecutorTests
+public sealed partial class MirrorPulseJournalCoalescingExecutorTests
 {
     private static readonly byte[] FinalBytes = [1, 2, 3, 4];
     private static readonly string[] MoveAndUpload = ["Move", "Upload"];
