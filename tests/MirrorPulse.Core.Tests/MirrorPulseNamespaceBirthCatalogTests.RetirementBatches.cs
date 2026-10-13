@@ -11,6 +11,22 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
     private static readonly JsonSerializerOptions RetirementBatchJsonOptions = new() { Converters = { new RetirementBatchRootIdConverter() } };
 
     [TestMethod]
+    public async Task MalformedRetirementBatchFenceCannotAdmitANewBirth()
+    {
+        using var fixture = new Fixture();
+        MoveFixture setup;
+        await using (var first = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths))
+        {
+            setup = await PrepareMovableMemberAsync(first);
+            await first.PrepareNamespaceRetirementBatchAsync(Guid.NewGuid(), setup.Member.MemberId);
+        }
+        await ExecuteSqlAsync(fixture.Paths, "UPDATE namespace_member_retirement_batches SET operation_id='invalid';");
+        await using var reopened = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(() => reopened.PrepareNamespaceBirthAsync(
+            Birth(setup.Parent, setup.ParentProof) with { RelativePath = "Docs/blocked-by-damaged-fence.txt" }));
+    }
+
+    [TestMethod]
     public async Task SubtreeRetirementResumesLeafFirstAndReleasesFenceOnlyAfterEveryReceipt()
     {
         using var fixture = new Fixture();

@@ -82,8 +82,8 @@ recovery before starting uploads. Pending or incomplete reconciliation returns
 exit 11 and keeps the root fenced; a completed receipt returns 0, and a cancelled
 historical intent returns 10. Legacy records without original public evidence
 remain fenced and return an unsupported error. Historical receipts do not revert
-a later Label. Callback authorization and creating a new root rename from the CLI
-remain pending capabilities.
+a later Label. The CLI can prepare a root Label change; native callback
+authorization and execution of that preparation remain pending capabilities.
 
 ## Automation examples
 

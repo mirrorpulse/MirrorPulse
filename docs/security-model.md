@@ -585,8 +585,22 @@ conversion; a missing legacy identity is not inferred from the current path.
 Historical replay also performs fresh native checks; it
 does not refresh immutable provenance. This path changes no ACL, converts no
 object and recalls no content. The first registration location is historical.
-Relocation, retirement and shared Host admission/CLI integration remain separate
-work; metadata handles alone do not establish a namespace actor or tree readiness.
+Controlled file moves and leaf/subtree retirement use the shared Host actor,
+instance scheduler and typed CLI control requests. Subtree retirement seals the
+current member graph and establishes a root fence in one catalog transaction.
+Each leaf retains a before-native start, the original public item ID when known,
+native deletion and membership settlement. Execution checks the current parent
+and child binding, owner and protected DACL before calling public CfSharp deletion.
+An empty-directory delete cannot recursively remove an unregistered child.
+
+Recovery reuses the sealed member operation IDs and original starts. A missing
+target without a start, a substituted object, or an unsettled original public
+tombstone retains the fence. A completed batch requires all member receipts;
+historical replay cannot delete a later object at a reused path. The native
+restart fixture is required in x64, ARM64 and ordinary-user namespace gates.
+Directory movement, replacement saves, import and full installed Host tree
+readiness remain pending. Metadata handles and catalog membership alone do not
+establish tree readiness or remote acceptance.
 
 ## Remaining work
 

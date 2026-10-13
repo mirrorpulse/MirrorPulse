@@ -198,9 +198,9 @@ public sealed partial class MirrorPulseProductCatalog
         query.Parameters.AddWithValue("$completed", (int)MirrorPulseNamespaceRetirementBatchPhase.Completed);
         query.Parameters.AddWithValue("$root", rootId.ToString());
         object? value = await query.ExecuteScalarAsync(token).ConfigureAwait(false);
-        return value is string id && Guid.TryParseExact(id, "D", out Guid operation)
-            ? await ReadNamespaceRetirementBatchCoreAsync(operation, transaction, token).ConfigureAwait(false)
-            : null;
+        if (value is null) return null;
+        return await ReadNamespaceRetirementBatchCoreAsync(ParseNamespaceMemberId(value), transaction, token).ConfigureAwait(false)
+            ?? throw new InvalidDataException("The retirement batch fence lost its receipt.");
     }
 
     private async Task<List<MirrorPulseNamespaceRetirementBatch>> ReadPendingNamespaceRetirementBatchesCoreAsync(
