@@ -5,7 +5,7 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 
 public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
 {
-    /// <summary>Retains a file relocation after fresh inspection, without issuing a native move.</summary>
+    /// <summary>Retains a member relocation after fresh inspection, without issuing a native move.</summary>
     /// <remarks>
     /// The caller drains previous instance work before admission. Reusing an operation ID returns
     /// its original admission only when the requested member, parent and name agree; this replay
@@ -32,7 +32,7 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
             var member = await _catalog.ReadNamespaceMemberAsync(memberId, token).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The source member is not registered.");
             if (member.IsDirectory)
-                throw new NotSupportedException("Directory preparation requires public subtree proof and product subtree settlement.");
+                return await PrepareDirectoryMoveAdmittedAsync(operationId, member, targetParentMemberId, targetName, token).ConfigureAwait(false);
             var location = await _catalog.ReadNamespaceMemberLocationAsync(memberId, token).ConfigureAwait(false);
             var retainedIdentity = await _catalog.ReadNamespaceMemberIdentityAsync(memberId, token).ConfigureAwait(false);
             var sourceParent = await _catalog.ReadNamespaceMemberAsync(location.ParentMemberId!.Value, token).ConfigureAwait(false)

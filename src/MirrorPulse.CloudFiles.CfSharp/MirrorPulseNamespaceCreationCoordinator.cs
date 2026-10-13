@@ -65,6 +65,21 @@ public sealed class MirrorPulseNamespaceCreationCoordinator(CloudFileSystem file
         await execution.RunNamespaceOperationAsync(async () =>
         {
             await using var parentGuard = await MirrorPulseWindowsNamespacePermissionLease.OpenAsync(parent, router, token).ConfigureAwait(false);
+            if (retainedBirth is null && parentMember.Origin == MirrorPulseNamespaceMemberOrigin.ProtectedBirth &&
+                location.CurrentPositionOperationId is not null)
+            {
+                var epoch = await catalog.ReadLatestNamespaceBirthProtectionAsync(parentMember.OriginId, token).ConfigureAwait(false)
+                    ?? throw new InvalidDataException("The placed parent lost its retained protection epoch.");
+                if (epoch.Placement?.PositionOperationId != location.CurrentPositionOperationId)
+                {
+                    // A first birth path cannot authorize creating below a relocated parent.
+                    // Reverify its actual object and parent without writing ACLs or old facts.
+                    _ = await MirrorPulseNamespaceBirthProtectionVerifier.RecordRegisteredAsync(catalog, Guid.NewGuid(),
+                        parentMember.MemberId, parent, parent.Parent
+                            ?? throw new InvalidDataException("A placed parent requires its actual ancestor."), router, actor, token).ConfigureAwait(false);
+                    proof = await MirrorPulseNamespaceProtectionProofReader.ReadMemberAsync(catalog, parentMember, token).ConfigureAwait(false);
+                }
+            }
             var birth = retainedBirth ?? new MirrorPulseNamespaceBirthIntent(proof.BornParent is null ? 1 : 2, operationId,
                 parentMember.RootId.Value, proof.BornParent is null ? parentMember.OriginId : Guid.Empty, proof.PermissionOperationId,
                 parentMember.LocalObject, path, isDirectory, MirrorPulseNamespaceBirthOrigin.ControlledCreation,

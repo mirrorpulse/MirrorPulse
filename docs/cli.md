@@ -56,7 +56,7 @@ The default output is concise human-readable text. Automation should use `--json
 | `mp namespace member create PARENT_ID NAME [--directory] [--operation-id GUID]` | Create an empty local file or directory under a registered protected directory. | retain `operationId` for retry; this does not prove remote acceptance |
 | `mp namespace member prepare-move MEMBER_ID PARENT_ID NAME [--operation-id GUID]` | Prepare a protected member move. | the source name remains fenced until the move receipt is complete |
 | `mp namespace member tree MEMBER_ID` | Read the validated current registered subtree. | read-only; depth and current product paths are returned |
-| `mp namespace member move OPERATION_ID` | Execute or retry an admitted protected file move. | directory execution is not yet supported |
+| `mp namespace member move OPERATION_ID` | Execute or retry an admitted protected file or directory move. | directories require the original public proof and a sealed registered subtree; all descendant positions settle together |
 | `mp namespace member move-status OPERATION_ID` | Read durable move progress. | reports preparation, native observation, projection, and name settlement |
 | `mp namespace member prepare-retire MEMBER_ID [--recursive] [--operation-id GUID]` | Prepare a protected deletion. | without `--recursive`, registered descendants are rejected; managed roots are always protected |
 | `mp namespace member retire OPERATION_ID [--recursive]` | Execute or retry an admitted protected deletion. | use `--recursive` for a sealed subtree batch; native deletion and membership settlement have separate receipts |
@@ -97,6 +97,13 @@ supports leaves and sealed subtrees. A subtree retains its root fence until ever
 member is settled, deletes children before parents, and resumes with the same
 operation ID and `--recursive`. It does not bypass a member's protection checks.
 Imports, replacement saves and full installed strict-tree startup remain pending.
+
+Controlled directory movement uses CfSharp's public preparation, move and
+reconciliation APIs. Every actual descendant must have retained membership,
+identity, binding and protection; an unregistered local object blocks preparation.
+Recovery uses the original public proof and operation ID. A successful native move
+or official projection alone keeps the product fence held until fresh inspection
+and atomic settlement of every member. Movement never acknowledges a source upload.
 
 ```powershell
 # Read a stable machine-readable status.

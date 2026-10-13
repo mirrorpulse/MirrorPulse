@@ -13,7 +13,8 @@ internal enum MirrorPulseNamespaceMemberMoveCheckpoint { AfterNativeMove, AfterN
 /// The actor serializes these operations. The caller must also quiesce other root work before
 /// admission. Parent leases retain both ancestor chains across movement; the child metadata
 /// lease is released before CfSharp moves it. Immutable first observations never authorize a
-/// retry. Directory moves require the separate subtree settlement boundary, which is pending.
+/// retry. Directory moves settle every sealed descendant in one product transaction after public
+/// CfSharp reconciliation and fresh inspection of the complete actual subtree.
 /// </remarks>
 [SupportedOSPlatform("windows10.0.26100")]
 public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
@@ -61,7 +62,7 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
         var member = await _catalog.ReadNamespaceMemberAsync(intent.MemberId, token).ConfigureAwait(false)
             ?? throw new FileNotFoundException("The admitted move member is missing.");
         if (member.IsDirectory)
-            throw new NotSupportedException("Directory movement requires public subtree recovery and product subtree settlement.");
+            return await ExecuteDirectoryMoveAdmittedAsync(intent, token).ConfigureAwait(false);
         var childProof = await ReadProofAsync(member.MemberId, intent.ProtectionId, intent, token).ConfigureAwait(false);
         var sourceProof = await ReadProofAsync(intent.Source.ParentMemberId, intent.Source.ParentProtectionId, intent, token).ConfigureAwait(false);
         var targetProof = await ReadProofAsync(intent.Target.ParentMemberId, intent.Target.ParentProtectionId, intent, token).ConfigureAwait(false);
@@ -212,7 +213,7 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
         MirrorPulseNamespaceMemberMoveInspection.RequireParent(facts, snapshot, proof, endpoint, intent);
         var member = await _catalog.ReadNamespaceMemberAsync(endpoint.ParentMemberId, token).ConfigureAwait(false)
             ?? throw new FileNotFoundException("The actual move parent lost its member registration.");
-        if (member.Origin == MirrorPulseNamespaceMemberOrigin.CapturedOriginal)
+        if (proof.CurrentIdentity is null && member.Origin == MirrorPulseNamespaceMemberOrigin.CapturedOriginal)
         {
             var identity = await _catalog.ReadNamespacePermissionLocalIdentityAsync(member.OriginId, token).ConfigureAwait(false);
             if (identity is not null && (!snapshot.IsPlaceholder || snapshot.ItemId != identity.ItemId || snapshot.RemoteId != identity.RemoteId))
