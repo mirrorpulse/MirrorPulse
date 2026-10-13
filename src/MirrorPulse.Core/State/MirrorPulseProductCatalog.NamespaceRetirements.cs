@@ -35,7 +35,7 @@ public sealed partial class MirrorPulseProductCatalog
                 ?? throw new FileNotFoundException("The namespace member is not registered.");
             if (member.RootId != intent.RootId || member.LocalObject != intent.LocalObject || member.IsDirectory != intent.IsDirectory || member.OwnerSid != intent.OwnerSid)
                 throw new InvalidOperationException("Retirement must retain the registered member binding and owner.");
-            if (member.ParentMemberId is null) throw new InvalidOperationException("A managed root cannot be retired.");
+            await RequireNamespaceRetirableMemberAsync(member, transaction, cancellationToken).ConfigureAwait(false);
             var location = await ReadNamespaceMemberLocationCoreAsync(member, transaction, cancellationToken).ConfigureAwait(false);
             await RequireNamespaceMemberNameAsync(member, transaction, cancellationToken).ConfigureAwait(false);
             if (location.RelativePath != intent.RelativePath) throw new InvalidOperationException("Retirement requires the member's latest committed location.");
@@ -178,6 +178,16 @@ public sealed partial class MirrorPulseProductCatalog
     {
         await using SqliteCommand query = _connection.CreateCommand(); query.Transaction = transaction; query.CommandText = "WITH descendants(member_id) AS (SELECT member_id FROM namespace_member_names WHERE parent_member_id=$member UNION ALL SELECT n.member_id FROM namespace_member_names n JOIN descendants d ON n.parent_member_id=d.member_id) SELECT member_id FROM descendants LIMIT 1;"; query.Parameters.AddWithValue("$member", memberId.ToString("D"));
         if (await query.ExecuteScalarAsync(token).ConfigureAwait(false) is not null) throw new InvalidOperationException("A directory with registered descendants must be retired leaf-first.");
+    }
+
+    private async Task RequireNamespaceRetirableMemberAsync(MirrorPulseNamespaceMemberRegistration member,
+        SqliteTransaction transaction, CancellationToken token)
+    {
+        var location = await ReadNamespaceMemberLocationCoreAsync(member, transaction, token).ConfigureAwait(false);
+        var parent = location.ParentMemberId is { } parentId
+            ? await ReadNamespaceMemberCoreAsync(parentId, transaction, token).ConfigureAwait(false) : null;
+        if (member.RootId is null || parent?.RootId != member.RootId)
+            throw new InvalidOperationException("A managed root or sync-root anchor cannot be retired.");
     }
 
     private async Task<bool> ReadCompletedNamespaceRetirementForMemberCoreAsync(Guid memberId,
