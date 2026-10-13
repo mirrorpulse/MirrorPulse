@@ -103,6 +103,8 @@ public sealed partial class MirrorPulseProductCatalog
         if (pending?.OperationId != operationId) throw new InvalidOperationException("Only the retained pending move can execute.");
         await ValidateNamespaceMemberMoveReferencesAsync(intent, true, transaction, token).ConfigureAwait(false);
         await RequireNamespaceMoveTargetAvailableAsync(intent, transaction, token).ConfigureAwait(false);
+        if (intent.DirectoryMoveEvidence is not null)
+            await RequireCurrentNamespaceDirectoryMoveSnapshotAsync(intent, transaction, token).ConfigureAwait(false);
         return intent;
     }
 
@@ -175,6 +177,11 @@ public sealed partial class MirrorPulseProductCatalog
                 UNIQUE(parent_member_id,child_name_key)
             );
             CREATE TABLE IF NOT EXISTS namespace_member_move_starts (
+                operation_id TEXT NOT NULL PRIMARY KEY REFERENCES namespace_member_moves(operation_id),
+                payload BLOB NOT NULL,
+                fingerprint BLOB NOT NULL CHECK(length(fingerprint)=32)
+            );
+            CREATE TABLE IF NOT EXISTS namespace_directory_move_snapshots (
                 operation_id TEXT NOT NULL PRIMARY KEY REFERENCES namespace_member_moves(operation_id),
                 payload BLOB NOT NULL,
                 fingerprint BLOB NOT NULL CHECK(length(fingerprint)=32)

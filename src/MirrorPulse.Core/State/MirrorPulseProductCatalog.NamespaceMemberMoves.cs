@@ -77,6 +77,8 @@ public sealed partial class MirrorPulseProductCatalog
             insert.Parameters.AddWithValue("$payload", payload);
             insert.Parameters.AddWithValue("$fingerprint", SHA256.HashData(payload));
             await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            if (intent.DirectoryMoveEvidence is not null)
+                await SealNamespaceDirectoryMoveCoreAsync(intent, transaction, cancellationToken).ConfigureAwait(false);
             transaction.Commit();
             return intent;
         }

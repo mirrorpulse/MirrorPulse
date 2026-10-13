@@ -598,6 +598,15 @@ target without a start, a substituted object, or an unsettled original public
 tombstone retains the fence. A completed batch requires all member receipts;
 historical replay cannot delete a later object at a reused path. The native
 restart fixture is required in x64, ARM64 and ordinary-user namespace gates.
+Directory move admission also seals the current product subtree in the same
+transaction as its intent, destination reservation and root fence. The snapshot
+retains each member's binding, parent, path, protection and accepted identity
+epochs, and completed relocation predecessor, associated with a fingerprint of
+the opaque public CfSharp evidence. Pending descendant births prevent admission.
+Reading historical facts cannot refresh those epochs or reconstruct a missing
+legacy snapshot. This admission does not move a directory or settle descendant
+positions; execution still rejects directory moves until subtree settlement is
+implemented and verified.
 Directory movement, replacement saves, import and full installed Host tree
 readiness remain pending. Metadata handles and catalog membership alone do not
 establish tree readiness or remote acceptance.
