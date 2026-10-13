@@ -76,6 +76,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         File.Delete(inputPath);
                         await using var input = await role.RunNormalUserOperationAsync(() => inputs.OpenLeaseAsync(request.Operation, content, deadline.Token));
                         plans[request.Operation] = await coordinator.PrepareImportAsync(request.Operation, parentId, request.Name, input, deadline.Token);
+                        Assert.AreEqual("Prepared", (await catalog.ReadNamespaceImportStatusAsync(request.Operation, deadline.Token)).Phase);
                         Assert.AreEqual(plans[request.Operation], await coordinator.PrepareImportAsync(request.Operation, parentId, request.Name, input, deadline.Token));
                         await Assert.ThrowsAsync<InvalidOperationException>(() => coordinator.PrepareImportAsync(request.Operation,
                             parentId, "different.bin", input, deadline.Token).AsTask());
@@ -93,11 +94,13 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         {
                             var interrupted = new MirrorPulseNamespaceCreationCoordinator(fileSystem, state, catalog, router, role, actor)
                             {
-                                Checkpoint = (checkpoint, durable) =>
+                                Checkpoint = async (checkpoint, durable) =>
                                 {
                                     Assert.IsFalse(durable.CanBeCanceled);
+                                    var progress = await catalog.ReadNamespaceImportStatusAsync(request.Operation, durable);
+                                    Assert.IsFalse(progress.Registered); Assert.IsTrue(progress.OriginalBindingRecorded && progress.RequiresRecovery);
+                                    Assert.AreEqual(checkpoint == MirrorPulseNamespaceCreationCheckpoint.AfterContentRecorded, progress.ContentRecorded);
                                     if (checkpoint == interruption) throw new IOException("Injected controlled import interruption.");
-                                    return ValueTask.CompletedTask;
                                 }
                             };
                             var failure = await Assert.ThrowsExactlyAsync<IOException>(() => interrupted.ExecuteImportAsync(request.Operation, input, deadline.Token).AsTask());
@@ -125,6 +128,9 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         var conversion = await catalog.ReadNamespaceBirthConversionAsync(request.Operation, deadline.Token);
                         Assert.IsNotNull(conversion); Assert.AreEqual(conversion.LocalObject, completion.Verification.LocalObject);
                         var snapshot = await file.InspectAsync(deadline.Token);
+                        var progress = await catalog.ReadNamespaceImportStatusAsync(request.Operation, deadline.Token);
+                        Assert.AreEqual("Registered", progress.Phase);
+                        Assert.IsTrue(progress.Converted && progress.Protected && progress.Registered); Assert.IsFalse(progress.RequiresRecovery);
                         Assert.IsTrue(snapshot.IsPlaceholder); Assert.AreEqual(CloudSynchronizationState.NotInSync, snapshot.SynchronizationState);
                         CollectionAssert.AreEqual(request.Bytes, await File.ReadAllBytesAsync(file.FullPath, deadline.Token));
                         if (owner == 2)

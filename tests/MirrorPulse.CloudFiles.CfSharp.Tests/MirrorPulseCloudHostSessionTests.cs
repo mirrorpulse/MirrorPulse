@@ -5,6 +5,7 @@ using MirrorPulse.Core.CloudFiles;
 using MirrorPulse.Core.Configuration;
 using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.Host;
+using MirrorPulse.Core.State;
 
 namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 

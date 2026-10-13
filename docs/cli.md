@@ -90,6 +90,10 @@ authorization and execution of that preparation remain pending capabilities.
 
 ## Automation examples
 
+Import status uses one short Host catalog snapshot, so a large native copy does not
+hold the status request behind the namespace actor. These are historical facts,
+not current filesystem authority or remote acceptance.
+
 Controlled creation requires a Host that already owns the parent's registered
 protected namespace. It supports empty files, directories and children of born
 directories. The Host retains the birth intent, identity, start and first native

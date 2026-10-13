@@ -302,26 +302,8 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             CancellationToken cancellationToken)
         {
             RequireImportBoundary();
-            if (operationId == Guid.Empty) throw new ArgumentException("An import operation ID is required.", nameof(operationId));
-            return _namespaceActor!.RunAsync(async token =>
-            {
-                var birth = await catalog!.ReadNamespaceBirthAsync(operationId, token).ConfigureAwait(false)
-                    ?? throw new FileNotFoundException("The original import admission is missing.");
-                var plan = await catalog.ReadNamespaceBirthPlanAsync(operationId, token).ConfigureAwait(false)
-                    ?? throw new FileNotFoundException("The original import plan is missing.");
-                if (birth.Origin != MirrorPulseNamespaceBirthOrigin.Import || birth.IsDirectory || plan.Content is null)
-                    throw new InvalidOperationException("Status requires an original file import plan.");
-                bool started = await catalog.ReadNamespaceBirthStartAsync(operationId, token).ConfigureAwait(false) is not null;
-                bool binding = await catalog.ReadNamespaceBirthConversionAsync(operationId, token).ConfigureAwait(false) is not null;
-                bool content = await catalog.ReadNamespaceBirthContentCompletionAsync(operationId, token).ConfigureAwait(false) is not null;
-                bool observed = await catalog.ReadNamespaceBirthObservationAsync(operationId, token).ConfigureAwait(false) is not null;
-                bool protection = await catalog.ReadLatestNamespaceBirthProtectionAsync(operationId, token).ConfigureAwait(false) is not null;
-                bool registered = await catalog.ReadNamespaceMemberAsync(operationId, token).ConfigureAwait(false) is not null;
-                string phase = registered ? "Registered" : protection ? "Protected" : observed ? "Converted" : content ? "ContentRecorded" :
-                    binding ? "OriginalBindingRecorded" : started ? "RecoveryRequired" : "Prepared";
-                return new MirrorPulseNamespaceImportStatus(operationId, birth.RelativePath, phase, plan.Content.Length, plan.Content.Sha256,
-                    started, binding, content, observed, protection, registered, started && !registered);
-            }, cancellationToken);
+            // Large imports retain the actor while copying. Historical status must remain queryable then.
+            return new(catalog!.ReadNamespaceImportStatusAsync(operationId, cancellationToken));
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
