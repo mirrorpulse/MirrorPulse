@@ -208,6 +208,8 @@ public sealed partial class MirrorPulseProductCatalog
             CREATE UNIQUE INDEX IF NOT EXISTS ux_namespace_position_previous
                 ON namespace_member_positions(member_id,previous_operation_id)
                 WHERE previous_operation_id IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS ix_namespace_position_operation
+                ON namespace_member_positions(operation_id,member_id);
             CREATE TABLE IF NOT EXISTS namespace_directory_move_completions (
                 operation_id TEXT NOT NULL PRIMARY KEY REFERENCES namespace_member_move_completions(operation_id),
                 payload BLOB NOT NULL,
