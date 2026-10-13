@@ -95,7 +95,9 @@ public sealed partial class MirrorPulseProductCatalog
         try
         {
             ThrowIfDisposed();
-            return await ReadLatestNamespaceBirthProtectionCoreAsync(birthOperationId, null, cancellationToken).ConfigureAwait(false);
+            using SqliteTransaction transaction = _connection.BeginTransaction(deferred: true);
+            var protection = await ReadLatestNamespaceBirthProtectionCoreAsync(birthOperationId, transaction, cancellationToken).ConfigureAwait(false);
+            transaction.Commit(); return protection;
         }
         finally { _gate.Release(); }
     }

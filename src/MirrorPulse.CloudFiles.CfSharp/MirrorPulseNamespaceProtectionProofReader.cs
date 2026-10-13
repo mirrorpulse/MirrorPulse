@@ -44,24 +44,24 @@ internal static class MirrorPulseNamespaceProtectionProofReader
     internal static async Task<MirrorPulseNamespaceProtectionProof> ReadMemberAsync(MirrorPulseProductCatalog catalog,
         MirrorPulseNamespaceMemberRegistration member, CancellationToken token)
     {
+        var snapshot = await catalog.ReadNamespaceMemberProtectionSnapshotAsync(member.MemberId, token).ConfigureAwait(false);
+        if (snapshot is not null)
+        {
+            var context = snapshot.Context;
+            if (context.Member != member)
+                throw new InvalidDataException("Current protection cannot adopt different member provenance.");
+            return new(member.RootId, context.Location.RelativePath, member.IsDirectory, member.OwnerSid,
+                context.Protection.RoleSid, context.Verification, snapshot.ExpectedDacl, snapshot.PermissionOperationId,
+                snapshot.BornParent, snapshot.Observation)
+            { CurrentIdentity = snapshot.Identity };
+        }
+        // Registration validates an unpublished candidate using its separate original proofs.
         MirrorPulseNamespaceProtectionProof proof = await (member.Origin switch
         {
             MirrorPulseNamespaceMemberOrigin.CapturedOriginal => ReadOriginalAsync(catalog, member.OriginId, token),
             MirrorPulseNamespaceMemberOrigin.ProtectedBirth => ReadBirthAsync(catalog, member.OriginId, token),
             _ => throw new ArgumentException("The member requires one supported provenance origin.", nameof(member)),
         }).ConfigureAwait(false);
-        var registered = await catalog.ReadNamespaceMemberAsync(member.MemberId, token).ConfigureAwait(false);
-        // Native registration also uses this reader before the member has been published.
-        if (registered is null) return proof;
-        if (registered != member)
-            throw new InvalidDataException("Current protection cannot adopt different member provenance.");
-        var epoch = await catalog.ReadNamespaceMemberProtectionEpochAsync(member.MemberId, token).ConfigureAwait(false);
-        if (epoch.ProtectionId != proof.ProtectionId || epoch.RoleSid != proof.RoleSid || epoch.VerifiedAt != proof.Verification.ObservedAt)
-            throw new InvalidDataException("Current protection must follow the member's retained permission references.");
-        var location = await catalog.ReadNamespaceMemberLocationAsync(member.MemberId, token).ConfigureAwait(false);
-        // A completed product move selects the current position. Neither an official path
-        // observation nor a pending native move may rewrite the historical ACL or birth.
-        var identity = await catalog.ReadNamespaceMemberIdentityAsync(member.MemberId, token).ConfigureAwait(false);
-        return proof with { RelativePath = location.RelativePath, CurrentIdentity = identity };
+        return proof;
     }
 }

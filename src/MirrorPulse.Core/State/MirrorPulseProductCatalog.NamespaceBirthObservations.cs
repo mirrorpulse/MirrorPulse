@@ -80,7 +80,13 @@ public sealed partial class MirrorPulseProductCatalog
     {
         if (operationId == Guid.Empty) throw new ArgumentException("A birth operation is required.", nameof(operationId));
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try { ThrowIfDisposed(); return await ReadNamespaceBirthObservationCoreAsync(operationId, null, cancellationToken).ConfigureAwait(false); }
+        try
+        {
+            ThrowIfDisposed();
+            using SqliteTransaction transaction = _connection.BeginTransaction(deferred: true);
+            var observation = await ReadNamespaceBirthObservationCoreAsync(operationId, transaction, cancellationToken).ConfigureAwait(false);
+            transaction.Commit(); return observation;
+        }
         finally { _gate.Release(); }
     }
 
