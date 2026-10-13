@@ -234,13 +234,15 @@ public sealed partial class MirrorPulseProductCatalog
             }
             var entries = new List<MirrorPulseNamespaceMemberTreeEntry>();
             var visited = new HashSet<Guid>();
-            var queue = new Queue<(MirrorPulseNamespaceMemberRegistration Member, int Depth)>();
-            queue.Enqueue((root, 0));
+            var queue = new Queue<(MirrorPulseNamespaceMemberRegistration Member, int Depth, Guid? ExpectedParent)>();
+            queue.Enqueue((root, 0, null));
             while (queue.Count != 0)
             {
-                var (current, depth) = queue.Dequeue();
+                var (current, depth, expectedParent) = queue.Dequeue();
                 if (!visited.Add(current.MemberId)) throw new InvalidDataException("The current namespace member tree contains a cycle.");
                 var location = await ReadNamespaceMemberLocationCoreAsync(current, transaction, cancellationToken).ConfigureAwait(false);
+                if (expectedParent is not null && location.ParentMemberId != expectedParent)
+                    throw new InvalidDataException("The current namespace member tree does not follow its committed parent locations.");
                 await RequireNamespaceMemberNameAsync(current, transaction, cancellationToken).ConfigureAwait(false);
                 entries.Add(new(current.MemberId, location.ParentMemberId, location.RelativePath,
                     current.IsDirectory, current.LocalObject, depth));
@@ -251,8 +253,7 @@ public sealed partial class MirrorPulseProductCatalog
                     {
                         var child = await ReadNamespaceMemberCoreAsync(childId, transaction, cancellationToken).ConfigureAwait(false)
                             ?? throw new InvalidDataException("The current namespace member tree lost a child.");
-                        if (child.ParentMemberId != current.MemberId) throw new InvalidDataException("The current namespace member parent index is inconsistent.");
-                        queue.Enqueue((child, depth + 1));
+                        queue.Enqueue((child, depth + 1, current.MemberId));
                     }
             }
             transaction.Commit();
