@@ -29,16 +29,17 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
         var entries = new List<MirrorPulseNamespaceDirectoryMoveEntry>(tree.Count);
         foreach (var item in tree)
         {
-            var member = await _catalog.ReadNamespaceMemberAsync(item.MemberId, token).ConfigureAwait(false)
+            var snapshot = await _catalog.ReadNamespaceMemberProtectionSnapshotAsync(item.MemberId, token).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The directory subtree lost a registered member.");
-            var protection = await MirrorPulseNamespaceProtectionProofReader.ReadMemberAsync(_catalog, member, token).ConfigureAwait(false);
-            var location = await _catalog.ReadNamespaceMemberLocationAsync(member.MemberId, token).ConfigureAwait(false);
-            var identity = await _catalog.ReadNamespaceMemberIdentityAsync(member.MemberId, token).ConfigureAwait(false);
-            if (item.RelativePath != location.RelativePath || item.ParentMemberId != location.ParentMemberId)
+            var member = snapshot.Context.Member;
+            var protection = snapshot.Context.Protection;
+            var location = snapshot.Context.Location;
+            if (item.RelativePath != location.RelativePath || item.ParentMemberId != location.ParentMemberId ||
+                item.LocalObject != member.LocalObject || item.IsDirectory != member.IsDirectory)
                 throw new InvalidDataException("The current directory subtree changed during admission.");
             entries.Add(new(member.MemberId, item.ParentMemberId, item.RelativePath, member.IsDirectory, member.LocalObject,
-                member.OwnerSid, protection.ProtectionId, protection.Verification.ObservedAt, location.CompletedMoveOperationId,
-                identity, item.Depth)
+                member.OwnerSid, protection.ProtectionId, protection.VerifiedAt, location.CompletedMoveOperationId,
+                snapshot.Identity, item.Depth)
             { PreviousPositionOperationId = location.PositionOperationId });
         }
         return entries.AsReadOnly();
@@ -54,16 +55,7 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
             foreach (var entry in entries)
             {
                 token.ThrowIfCancellationRequested();
-                var member = await _catalog.ReadNamespaceMemberAsync(entry.MemberId, token).ConfigureAwait(false)
-                    ?? throw new FileNotFoundException("The sealed directory member is missing.");
-                var proof = await ReadProofAsync(entry.MemberId, entry.ProtectionId, intent, token).ConfigureAwait(false);
-                var identity = await _catalog.ReadNamespaceMemberIdentityAsync(entry.MemberId, token).ConfigureAwait(false);
-                var location = await _catalog.ReadNamespaceMemberLocationAsync(entry.MemberId, token).ConfigureAwait(false);
-                if (member.LocalObject != entry.LocalObject || member.OwnerSid != entry.OwnerSid || member.IsDirectory != entry.IsDirectory ||
-                    proof.Verification.ObservedAt != entry.ProtectionVerifiedAt || identity != entry.Identity ||
-                    location.ParentMemberId != entry.ParentMemberId || location.RelativePath != entry.RelativePath ||
-                    location.CompletedMoveOperationId != entry.PreviousMoveOperationId || location.PositionOperationId != entry.PreviousPositionOperationId)
-                    throw new InvalidDataException("Directory execution cannot replace the sealed member, protection, identity or source position.");
+                var proof = await ReadDirectoryProtectionAsync(entry, intent, token).ConfigureAwait(false);
                 string path = DirectoryMoveMemberPath(entry, intent, atTarget);
                 CloudItem item = entry.IsDirectory ? _fileSystem.GetDirectory(path) : _fileSystem.GetFile(path);
                 var lease = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(item, _router, token).ConfigureAwait(false);
@@ -140,13 +132,29 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
     {
         foreach (var item in objects.Objects)
         {
-            var current = await ReadProofAsync(item.Entry.MemberId, item.Entry.ProtectionId, intent, token).ConfigureAwait(false);
-            if (current != item.Proof || item.Entry.Identity != await _catalog.ReadNamespaceMemberIdentityAsync(item.Entry.MemberId, token).ConfigureAwait(false))
+            var current = await ReadDirectoryProtectionAsync(item.Entry, intent, token).ConfigureAwait(false);
+            if (current != item.Proof)
                 throw new InvalidOperationException("Directory member protection or identity changed during native inspection.");
             RequireDirectoryMoveObject(item.Entry, DirectoryMoveMemberPath(item.Entry, intent, atTarget),
                 await item.Lease.InspectAsync(token).ConfigureAwait(false), await item.Item.InspectAsync(token).ConfigureAwait(false), current, intent);
         }
         await RequireExactLocalDirectoryTreeAsync(objects.Objects.Select(item => item.Entry).ToArray(), intent, atTarget, token).ConfigureAwait(false);
+    }
+
+    private async Task<MirrorPulseNamespaceProtectionProof> ReadDirectoryProtectionAsync(MirrorPulseNamespaceDirectoryMoveEntry entry,
+        MirrorPulseNamespaceMemberMoveIntent intent, CancellationToken token)
+    {
+        var snapshot = await _catalog.ReadNamespaceMemberProtectionSnapshotAsync(entry.MemberId, token).ConfigureAwait(false)
+            ?? throw new FileNotFoundException("The sealed directory member is missing.");
+        var member = snapshot.Context.Member;
+        var location = snapshot.Context.Location;
+        var proof = RequireAdmittedProof(snapshot, entry.ProtectionId, intent);
+        if (member.LocalObject != entry.LocalObject || member.OwnerSid != entry.OwnerSid || member.IsDirectory != entry.IsDirectory ||
+            proof.Verification.ObservedAt != entry.ProtectionVerifiedAt || snapshot.Identity != entry.Identity ||
+            location.ParentMemberId != entry.ParentMemberId || location.RelativePath != entry.RelativePath ||
+            location.CompletedMoveOperationId != entry.PreviousMoveOperationId || location.PositionOperationId != entry.PreviousPositionOperationId)
+            throw new InvalidDataException("Directory execution cannot replace the sealed member, protection, identity or source position.");
+        return proof;
     }
 
     private static void RequireDirectoryMoveProof(CloudDirectoryMoveProof proof, MirrorPulseNamespaceMemberMoveIntent intent)

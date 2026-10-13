@@ -50,10 +50,7 @@ internal static class MirrorPulseNamespaceProtectionProofReader
             var context = snapshot.Context;
             if (context.Member != member)
                 throw new InvalidDataException("Current protection cannot adopt different member provenance.");
-            return new(member.RootId, context.Location.RelativePath, member.IsDirectory, member.OwnerSid,
-                context.Protection.RoleSid, context.Verification, snapshot.ExpectedDacl, snapshot.PermissionOperationId,
-                snapshot.BornParent, snapshot.Observation)
-            { CurrentIdentity = snapshot.Identity };
+            return FromSnapshot(snapshot);
         }
         // Registration validates an unpublished candidate using its separate original proofs.
         MirrorPulseNamespaceProtectionProof proof = await (member.Origin switch
@@ -63,5 +60,15 @@ internal static class MirrorPulseNamespaceProtectionProofReader
             _ => throw new ArgumentException("The member requires one supported provenance origin.", nameof(member)),
         }).ConfigureAwait(false);
         return proof;
+    }
+
+    internal static MirrorPulseNamespaceProtectionProof FromSnapshot(MirrorPulseNamespaceMemberProtectionSnapshot snapshot)
+    {
+        var context = snapshot.Context;
+        var member = context.Member;
+        return new(member.RootId, context.Location.RelativePath, member.IsDirectory, member.OwnerSid,
+            context.Protection.RoleSid, context.Verification, snapshot.ExpectedDacl, snapshot.PermissionOperationId,
+            snapshot.BornParent, snapshot.Observation)
+        { CurrentIdentity = snapshot.Identity };
     }
 }

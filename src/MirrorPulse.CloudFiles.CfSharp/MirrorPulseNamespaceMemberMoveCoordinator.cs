@@ -162,9 +162,15 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
     private async Task<MirrorPulseNamespaceProtectionProof> ReadProofAsync(Guid memberId, Guid protectionId,
         MirrorPulseNamespaceMemberMoveIntent intent, CancellationToken token)
     {
-        var member = await _catalog.ReadNamespaceMemberAsync(memberId, token).ConfigureAwait(false)
+        var snapshot = await _catalog.ReadNamespaceMemberProtectionSnapshotAsync(memberId, token).ConfigureAwait(false)
             ?? throw new FileNotFoundException("A move member lost its retained provenance.");
-        var proof = await MirrorPulseNamespaceProtectionProofReader.ReadMemberAsync(_catalog, member, token).ConfigureAwait(false);
+        return RequireAdmittedProof(snapshot, protectionId, intent);
+    }
+
+    private static MirrorPulseNamespaceProtectionProof RequireAdmittedProof(MirrorPulseNamespaceMemberProtectionSnapshot snapshot,
+        Guid protectionId, MirrorPulseNamespaceMemberMoveIntent intent)
+    {
+        var proof = MirrorPulseNamespaceProtectionProofReader.FromSnapshot(snapshot);
         if (proof.ProtectionId != protectionId || proof.RoleSid != intent.RoleSid || proof.OwnerSid != intent.OwnerSid || proof.RootId != intent.RootId)
             throw new InvalidOperationException("Move execution requires the current admitted protection epochs and role.");
         return proof;
