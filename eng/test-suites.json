@@ -67,7 +67,8 @@
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeControlledDirectoryMovementSettlesEveryMemberAndRecoversAcrossOwners",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeImportContentRecoversOriginalBindingAndPreservesLaterEditsAcrossOwners",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeControlledImportPreparesWithoutCreationAndReplaysWithoutSourceAcrossRestart",
-    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeReplacementValidationRetainsBackupBindingAndIdentityAcrossPlaceholderAndOrdinaryStarts"
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeReplacementValidationRetainsBackupBindingAndIdentityAcrossPlaceholderAndOrdinaryStarts",
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeReplacementContentWriterRetainsFirstBackupAndDirtyCopyAcrossBothObjectStarts"
   ],
   "required": {
     "namespace": [
@@ -97,6 +98,7 @@
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeImportContentRecoversOriginalBindingAndPreservesLaterEditsAcrossOwners",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeControlledImportPreparesWithoutCreationAndReplaysWithoutSourceAcrossRestart",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeReplacementValidationRetainsBackupBindingAndIdentityAcrossPlaceholderAndOrdinaryStarts",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeReplacementContentWriterRetainsFirstBackupAndDirtyCopyAcrossBothObjectStarts",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseNamespaceExecutionSessionTests.NamespaceBirthUsesCurrentUserOwnerWithoutChangingTheNormalSourceToken"
     ],
     "native": [
@@ -146,7 +148,8 @@
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeControlledDirectoryMovementSettlesEveryMemberAndRecoversAcrossOwners",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeImportContentRecoversOriginalBindingAndPreservesLaterEditsAcrossOwners",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeControlledImportPreparesWithoutCreationAndReplaysWithoutSourceAcrossRestart",
-      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeReplacementValidationRetainsBackupBindingAndIdentityAcrossPlaceholderAndOrdinaryStarts"
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeReplacementValidationRetainsBackupBindingAndIdentityAcrossPlaceholderAndOrdinaryStarts",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeReplacementContentWriterRetainsFirstBackupAndDirtyCopyAcrossBothObjectStarts"
     ],
     "official": [
       "MirrorPulse.Core.Tests.FtpWorkerProcessTests.SignedFtpReleaseReadsAndConditionallyUploadsThroughHostAndCfSharp",

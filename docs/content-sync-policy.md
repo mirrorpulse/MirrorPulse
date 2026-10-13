@@ -165,6 +165,20 @@ The backup records single-link protection and the role-only descriptor observed
 on the original object. Later bytes cannot replace this first backup receipt.
 Historical status reads use a short catalog transaction and do not wait on the
 namespace actor. Damaged execution chains keep dispatch and recovery closed.
-These facts do not establish new-content completion, restored native protection,
-remote acceptance or journal acknowledgement; production save integration remains
-pending.
+The replacement content writer revalidates that first private backup before any
+data write, commits the write-start intent, and copies onto an open original
+object without create-mode replacement. It flushes and hashes the actual complete
+new bytes, separately rechecks binding, owner, role-only access and public identity,
+and retains the actual content and synchronization receipt. Changed content must
+remain dirty. Already identical resident bytes can retain their existing native
+state only when the first verified backup equals the admitted input. A previous
+copy receipt returns history and
+does not authorize overwriting subsequent edits. An interrupted copy can resume
+only while the admitted original object remains exclusively protected.
+
+The native caller retains the original parent and object guards. Private inputs
+are opened as the normal user before instance scheduling and actor acquisition;
+old content must already be resident at this writer boundary to avoid source
+recall under those locks. Full save preparation, role recovery, restored protection,
+durable projection and root reservation release still require integration. Local
+copy success is neither remote acceptance nor official journal acknowledgement.

@@ -20,7 +20,10 @@ public sealed record MirrorPulseNamespaceReplacementWriteStart(int Version, Guid
 public sealed record MirrorPulseNamespaceReplacementExecution(MirrorPulseNamespaceReplacementIntent Intent,
     MirrorPulseNamespaceReplacementStart? Start, MirrorPulseNamespaceReplacementCancellation? Cancellation,
     MirrorPulseNamespaceReplacementAction? Action, MirrorPulseNamespaceReplacementBackup? Backup,
-    MirrorPulseNamespaceReplacementWriteStart? WriteStart);
+    MirrorPulseNamespaceReplacementWriteStart? WriteStart)
+{
+    public MirrorPulseNamespaceReplacementContentCompletion? ContentCompletion { get; init; }
+}
 
 public sealed partial class MirrorPulseProductCatalog
 {
@@ -97,8 +100,11 @@ public sealed partial class MirrorPulseProductCatalog
             }
             byte[] payload = NamespaceReplacementPayload(value);
             await using var insert = _connection.CreateCommand(); insert.Transaction = transaction;
-            insert.CommandText = "INSERT INTO namespace_replacement_execution_facts(operation_id,kind,action_id,payload,fingerprint) VALUES($id,$kind,$action,$payload,$fingerprint);";
-            insert.Parameters.AddWithValue("$id", operationId.ToString("D")); insert.Parameters.AddWithValue("$kind", kind);
+            insert.CommandText = kind == 4 ?
+                "INSERT INTO namespace_replacement_content_completions(operation_id,action_id,payload,fingerprint) VALUES($id,$action,$payload,$fingerprint);" :
+                "INSERT INTO namespace_replacement_execution_facts(operation_id,kind,action_id,payload,fingerprint) VALUES($id,$kind,$action,$payload,$fingerprint);";
+            insert.Parameters.AddWithValue("$id", operationId.ToString("D"));
+            if (kind != 4) insert.Parameters.AddWithValue("$kind", kind);
             insert.Parameters.AddWithValue("$action", actionId.ToString("D")); insert.Parameters.AddWithValue("$payload", payload);
             insert.Parameters.AddWithValue("$fingerprint", SHA256.HashData(payload));
             await insert.ExecuteNonQueryAsync(token).ConfigureAwait(false); transaction.Commit(); return value;
@@ -116,26 +122,33 @@ public sealed partial class MirrorPulseProductCatalog
         var action = await ReadNamespaceReplacementFactCoreAsync<MirrorPulseNamespaceReplacementAction>(id, 1, ValidateReplacementAction, transaction, token).ConfigureAwait(false);
         var backup = await ReadNamespaceReplacementFactCoreAsync<MirrorPulseNamespaceReplacementBackup>(id, 2, ValidateReplacementBackup, transaction, token).ConfigureAwait(false);
         var write = await ReadNamespaceReplacementFactCoreAsync<MirrorPulseNamespaceReplacementWriteStart>(id, 3, ValidateReplacementWriteStart, transaction, token).ConfigureAwait(false);
+        var completion = await ReadNamespaceReplacementFactCoreAsync<MirrorPulseNamespaceReplacementContentCompletion>(id, 4, ValidateReplacementContentCompletion, transaction, token).ConfigureAwait(false);
         try
         {
             if (start is not null && start.StartedAt < intent.PreparedAt || cancellation is not null &&
-                (cancellation.CancelledAt < intent.PreparedAt || start is not null || action is not null || backup is not null || write is not null))
+                (cancellation.CancelledAt < intent.PreparedAt || start is not null || action is not null || backup is not null || write is not null || completion is not null))
                 throw new InvalidOperationException("The replacement execution contradicts its original admission or cancellation.");
             if (action is not null) RequireReplacementActionReferences(action, intent, start ?? throw new InvalidOperationException("The replacement action lost its start."));
             if (backup is not null) RequireReplacementBackupReferences(backup, action ?? throw new InvalidOperationException("The backup lost its original action."));
             if (write is not null) RequireReplacementWriteStartReferences(write, backup ?? throw new InvalidOperationException("The write intent lost its old-content backup."));
+            if (completion is not null) RequireReplacementContentCompletionReferences(completion, intent,
+                action ?? throw new InvalidOperationException("The completed copy lost its original action."),
+                write ?? throw new InvalidOperationException("The completed copy lost its before-write intent."),
+                backup ?? throw new InvalidOperationException("The completed copy lost its original old-content backup."));
         }
         catch (Exception error) when (error is InvalidOperationException or ArgumentException)
         { throw new InvalidDataException("The original replacement execution chain is inconsistent.", error); }
-        return new(intent, start, cancellation, action, backup, write);
+        return new(intent, start, cancellation, action, backup, write) { ContentCompletion = completion };
     }
 
     private async Task<T?> ReadNamespaceReplacementFactCoreAsync<T>(Guid id, int kind, Action<T> validate,
         SqliteTransaction transaction, CancellationToken token) where T : class
     {
         await using var query = _connection.CreateCommand(); query.Transaction = transaction;
-        query.CommandText = "SELECT action_id,payload,fingerprint FROM namespace_replacement_execution_facts WHERE operation_id=$id AND kind=$kind;";
-        query.Parameters.AddWithValue("$id", id.ToString("D")); query.Parameters.AddWithValue("$kind", kind);
+        query.CommandText = kind == 4 ? "SELECT action_id,payload,fingerprint FROM namespace_replacement_content_completions WHERE operation_id=$id;" :
+            "SELECT action_id,payload,fingerprint FROM namespace_replacement_execution_facts WHERE operation_id=$id AND kind=$kind;";
+        query.Parameters.AddWithValue("$id", id.ToString("D"));
+        if (kind != 4) query.Parameters.AddWithValue("$kind", kind);
         await using var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
         if (!await reader.ReadAsync(token).ConfigureAwait(false)) return null;
         var value = ReadNamespaceReplacementPayload<T>((byte[])reader[1], (byte[])reader[2], validate);
@@ -144,6 +157,7 @@ public sealed partial class MirrorPulseProductCatalog
             MirrorPulseNamespaceReplacementAction action when kind == 1 => (action.OperationId, action.ActionId),
             MirrorPulseNamespaceReplacementBackup backup when kind == 2 => (backup.OperationId, backup.ActionId),
             MirrorPulseNamespaceReplacementWriteStart start when kind == 3 => (start.OperationId, start.ActionId),
+            MirrorPulseNamespaceReplacementContentCompletion completion when kind == 4 => (completion.OperationId, completion.ActionId),
             _ => throw new InvalidDataException("The replacement fact type is inconsistent.")
         };
         if (identity.OperationId != id || reader.GetString(0) != identity.ActionId.ToString("D"))
