@@ -1,12 +1,15 @@
 using System.Runtime.Versioning;
 using System.Security.AccessControl;
 using CfSharp;
+using MirrorPulse.Core.Caching;
 using MirrorPulse.Core.State;
 using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.CloudFiles.CfSharp;
 
-/// <summary>Creates an empty local member under a currently protected registered directory.</summary>
+internal enum MirrorPulseNamespaceCreationCheckpoint { AfterOriginalBinding, AfterContentRecorded }
+
+/// <summary>Creates or imports a local member under a currently protected registered directory.</summary>
 /// <remarks>
 /// The caller drains earlier instance work and retains root and ancestor guards. Source work
 /// stays outside this boundary. Birth, identity, start and first binding are retained separately;
@@ -18,21 +21,88 @@ public sealed class MirrorPulseNamespaceCreationCoordinator(CloudFileSystem file
     MirrorPulseProductCatalog catalog, MirrorPulseRootRouter router, MirrorPulseNamespaceExecutionSession execution,
     MirrorPulseNamespaceActor actor)
 {
-    public ValueTask<MirrorPulseNamespaceMemberRegistration> CreateAsync(Guid operationId, Guid parentMemberId,
+    internal Func<MirrorPulseNamespaceCreationCheckpoint, CancellationToken, ValueTask>? Checkpoint { get; init; }
+
+    public async ValueTask<MirrorPulseNamespaceMemberRegistration> CreateAsync(Guid operationId, Guid parentMemberId,
         string name, bool isDirectory, CancellationToken cancellationToken = default)
+    {
+        ValidateChildRequest(operationId, parentMemberId, name);
+        var result = await actor.RunAsync(token => CreateAdmittedAsync(operationId, parentMemberId, name, isDirectory,
+            MirrorPulseNamespaceBirthOrigin.ControlledCreation, null, null, false, token), cancellationToken).ConfigureAwait(false);
+        return result.Member ?? throw new InvalidDataException("Creation did not complete membership registration.");
+    }
+
+    /// <summary>Retains import admission and content intent without creating a native object.</summary>
+    /// <remarks>Open and verify the private input before acquiring either the instance scheduler or actor.</remarks>
+    public async ValueTask<MirrorPulseNamespaceBirthPlan> PrepareImportAsync(Guid operationId, Guid parentMemberId,
+        string name, MirrorPulseLocalImportInputLease input, CancellationToken cancellationToken = default)
+    {
+        ValidateChildRequest(operationId, parentMemberId, name);
+        ArgumentNullException.ThrowIfNull(input);
+        if (input.OperationId != operationId) throw new ArgumentException("The input lease belongs to another import.", nameof(input));
+        var result = await actor.RunAsync(token => CreateAdmittedAsync(operationId, parentMemberId, name, false,
+            MirrorPulseNamespaceBirthOrigin.Import, input.Content, input, true, token), cancellationToken).ConfigureAwait(false);
+        return result.Plan;
+    }
+
+    /// <summary>Executes the original import; completed replay returns history without touching current bytes.</summary>
+    /// <remarks>The input may be omitted only after the original content completion was retained.</remarks>
+    public ValueTask<MirrorPulseNamespaceMemberRegistration> ExecuteImportAsync(Guid operationId,
+        MirrorPulseLocalImportInputLease? input, CancellationToken cancellationToken = default)
+    {
+        if (operationId == Guid.Empty) throw new ArgumentException("An import operation ID is required.", nameof(operationId));
+        return actor.RunAsync(async token =>
+        {
+            var birth = await catalog.ReadNamespaceBirthAsync(operationId, token).ConfigureAwait(false)
+                ?? throw new FileNotFoundException("The original import admission is missing.");
+            var plan = await catalog.ReadNamespaceBirthPlanAsync(operationId, token).ConfigureAwait(false)
+                ?? throw new FileNotFoundException("The original import plan is missing.");
+            if (birth.Origin != MirrorPulseNamespaceBirthOrigin.Import || birth.IsDirectory || plan.Content is null)
+                throw new InvalidOperationException("Execution requires an admitted file import with its original content plan.");
+            var replay = await catalog.ReadNamespaceMemberAsync(operationId, token).ConfigureAwait(false);
+            if (replay is not null)
+            {
+                RequireReplay(replay, birth, replay.ParentMemberId ?? Guid.Empty);
+                return replay;
+            }
+            if (await catalog.ReadNamespaceBirthContentCompletionAsync(operationId, token).ConfigureAwait(false) is null &&
+                (input is null || input.OperationId != operationId || input.Content != plan.Content))
+                throw new InvalidOperationException("Uncopied imports require their verified private input lease.");
+            var parent = await catalog.ReadNamespaceMemberByBindingAsync(birth.ParentLocalObject, token).ConfigureAwait(false)
+                ?? throw new FileNotFoundException("The original import parent member is missing.");
+            string name = birth.RelativePath[(birth.RelativePath.LastIndexOf('/') + 1)..];
+            var result = await CreateAdmittedAsync(operationId, parent.MemberId, name, false,
+                MirrorPulseNamespaceBirthOrigin.Import, plan.Content, input, false, token).ConfigureAwait(false);
+            return result.Member ?? throw new InvalidDataException("Import did not complete membership registration.");
+        }, cancellationToken);
+    }
+
+    private static void ValidateChildRequest(Guid operationId, Guid parentMemberId, string name)
     {
         if (operationId == Guid.Empty || parentMemberId == Guid.Empty)
             throw new ArgumentException("Operation and parent member IDs are required.");
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         if (name.Contains('/') || name.Contains('\\'))
             throw new ArgumentException("Creation requires one direct child name.", nameof(name));
-        return actor.RunAsync(token => CreateAdmittedAsync(operationId, parentMemberId, name, isDirectory, token), cancellationToken);
     }
 
-    private async ValueTask<MirrorPulseNamespaceMemberRegistration> CreateAdmittedAsync(Guid operationId, Guid parentMemberId,
-        string name, bool isDirectory, CancellationToken token)
+    private async ValueTask<(MirrorPulseNamespaceBirthPlan Plan, MirrorPulseNamespaceMemberRegistration? Member)> CreateAdmittedAsync(
+        Guid operationId, Guid parentMemberId, string name, bool isDirectory, MirrorPulseNamespaceBirthOrigin origin,
+        MirrorPulseNamespaceImportContent? content, MirrorPulseLocalImportInputLease? input, bool prepareOnly, CancellationToken token)
     {
         actor.AssertAccess();
+        var retainedBirth = await catalog.ReadNamespaceBirthAsync(operationId, token).ConfigureAwait(false);
+        var retainedPlan = await catalog.ReadNamespaceBirthPlanAsync(operationId, token).ConfigureAwait(false);
+        if (retainedBirth is not null && (retainedBirth.Origin != origin || retainedBirth.IsDirectory != isDirectory ||
+            retainedBirth.RelativePath[(retainedBirth.RelativePath.LastIndexOf('/') + 1)..] != name) ||
+            retainedPlan is not null && retainedPlan.Content != content)
+            throw new InvalidOperationException("The operation ID already identifies a different creation or import.");
+        var replay = await catalog.ReadNamespaceMemberAsync(operationId, token).ConfigureAwait(false);
+        if (replay is not null)
+        {
+            RequireReplay(replay, retainedBirth, parentMemberId);
+            return (retainedPlan ?? throw new InvalidDataException("Completed creation lost its original plan."), replay);
+        }
         var parentMember = await catalog.ReadNamespaceMemberAsync(parentMemberId, token).ConfigureAwait(false)
             ?? throw new FileNotFoundException("The creation parent is not registered.");
         if (!parentMember.IsDirectory || parentMember.RootId is null)
@@ -42,26 +112,17 @@ public sealed class MirrorPulseNamespaceCreationCoordinator(CloudFileSystem file
         // CfSharp performs public child-name validation before any durable product work.
         CloudItem item = isDirectory ? parent.GetDirectory(name) : parent.GetFile(name);
         string path = item.RelativePath.Replace('\\', '/');
-        var retainedBirth = await catalog.ReadNamespaceBirthAsync(operationId, token).ConfigureAwait(false);
         if (retainedBirth is not null && (retainedBirth.RelativePath != path || retainedBirth.IsDirectory != isDirectory ||
-            retainedBirth.RootId != parentMember.RootId || retainedBirth.Origin != MirrorPulseNamespaceBirthOrigin.ControlledCreation ||
+            retainedBirth.RootId != parentMember.RootId || retainedBirth.Origin != origin ||
             (retainedBirth.BornParent?.BirthOperationId ?? retainedBirth.ParentEvidenceId) != parentMember.OriginId))
             throw new InvalidOperationException("The operation ID already identifies a different creation.");
-        var replay = await catalog.ReadNamespaceMemberAsync(operationId, token).ConfigureAwait(false);
-        if (replay is not null)
-        {
-            if (retainedBirth is null || replay.Origin != MirrorPulseNamespaceMemberOrigin.ProtectedBirth ||
-                replay.OriginId != operationId || replay.ParentMemberId != parentMemberId)
-                throw new InvalidDataException("The creation replay lost its original member provenance.");
-            return replay;
-        }
         var proof = await MirrorPulseNamespaceProtectionProofReader.ReadMemberAsync(catalog, parentMember, token).ConfigureAwait(false);
         if (proof.RoleSid != execution.RoleSid.Value || proof.OwnerSid != execution.OwnerSid.Value ||
             proof.RelativePath != location.RelativePath)
             throw new InvalidOperationException("Creation requires the current parent role and its proved location.");
         if ((await catalog.ReadNamespaceRecoveryRootsAsync(token).ConfigureAwait(false)).Contains(parentMember.RootId.Value))
             throw new InvalidOperationException("The creation root has pending namespace recovery.");
-        MirrorPulseNamespaceMemberRegistration result = null!;
+        (MirrorPulseNamespaceBirthPlan Plan, MirrorPulseNamespaceMemberRegistration? Member) result = default;
         await execution.RunNamespaceOperationAsync(async () =>
         {
             await using var parentGuard = await MirrorPulseWindowsNamespacePermissionLease.OpenAsync(parent, router, token).ConfigureAwait(false);
@@ -82,7 +143,7 @@ public sealed class MirrorPulseNamespaceCreationCoordinator(CloudFileSystem file
             }
             var birth = retainedBirth ?? new MirrorPulseNamespaceBirthIntent(proof.BornParent is null ? 1 : 2, operationId,
                 parentMember.RootId.Value, proof.BornParent is null ? parentMember.OriginId : Guid.Empty, proof.PermissionOperationId,
-                parentMember.LocalObject, path, isDirectory, MirrorPulseNamespaceBirthOrigin.ControlledCreation,
+                parentMember.LocalObject, path, isDirectory, origin,
                 execution.RoleSid.Value, DateTimeOffset.UtcNow)
             { BornParent = proof.BornParent };
             var before = await MirrorPulseNamespaceBirthProtectionVerifier.InspectRetainedParentAsync(
@@ -91,14 +152,17 @@ public sealed class MirrorPulseNamespaceCreationCoordinator(CloudFileSystem file
                 throw new IOException("The creation destination is occupied.");
             if (retainedBirth is null)
                 birth = await catalog.PrepareNamespaceBirthAsync(birth, token).ConfigureAwait(false);
-            var plan = await catalog.ReadNamespaceBirthPlanAsync(operationId, token).ConfigureAwait(false);
+            var plan = retainedPlan;
             if (plan is null)
             {
                 var route = router.ResolvePath(path);
                 var identity = router.CreateFileIdentity(route.InstanceId, route.RootKey, "local:" + operationId.ToString("N"));
-                plan = await catalog.PrepareNamespaceBirthPlanAsync(new(1, operationId, identity.ItemId, identity.RemoteId,
-                    null, DateTimeOffset.UtcNow), token).ConfigureAwait(false);
+                plan = await catalog.PrepareNamespaceBirthPlanAsync(new(content is null ? 1 : 2, operationId, identity.ItemId, identity.RemoteId,
+                    null, DateTimeOffset.UtcNow)
+                { Content = content }, token).ConfigureAwait(false);
             }
+            result = (plan, null);
+            if (prepareOnly) return;
             _ = await MirrorPulseNamespaceBirthIdentityProjection.PrepareAsync(catalog, state.OpenStore, operationId, item, token).ConfigureAwait(false);
             var start = await catalog.ReadNamespaceBirthStartAsync(operationId, token).ConfigureAwait(false);
             var conversion = await catalog.ReadNamespaceBirthConversionAsync(operationId, token).ConfigureAwait(false);
@@ -121,15 +185,22 @@ public sealed class MirrorPulseNamespaceCreationCoordinator(CloudFileSystem file
                 throw new InvalidOperationException("A started creation without its first native binding requires explicit recovery; it cannot be repeated.");
 
             CancellationToken durable = CancellationToken.None;
+            if (plan.Content is not null)
+                await CheckpointAsync(MirrorPulseNamespaceCreationCheckpoint.AfterOriginalBinding, durable).ConfigureAwait(false);
             if (await catalog.ReadNamespaceBirthObservationAsync(operationId, durable).ConfigureAwait(false) is null)
             {
                 if (isDirectory)
                     await ConvertDirectoryAsync(item, conversion, plan, durable).ConfigureAwait(false);
                 else
                 {
+                    if (plan.Content is not null)
+                    {
+                        _ = await new MirrorPulseNamespaceImportContentWriter(catalog, router, execution, actor)
+                            .CopyAsync(operationId, (CloudFile)item, parent, input, durable).ConfigureAwait(false);
+                        await CheckpointAsync(MirrorPulseNamespaceCreationCheckpoint.AfterContentRecorded, durable).ConfigureAwait(false);
+                    }
                     var recovery = new MirrorPulseNamespaceBirthRecoveryCoordinator(catalog, router, execution);
-                    var action = await catalog.ReadLatestNamespaceBirthRecoveryActionAsync(operationId, durable).ConfigureAwait(false);
-                    action = await recovery.PrepareStagedFileAsync(action?.RecoveryId ?? Guid.NewGuid(), operationId,
+                    var action = await recovery.PrepareStagedFileAsync(Guid.NewGuid(), operationId,
                         (CloudFile)item, parent, durable).ConfigureAwait(false);
                     var recovered = await recovery.ExecuteStagedFileAsync(action.RecoveryId, (CloudFile)item, parent, durable).ConfigureAwait(false);
                     if (recovered.Verification is null)
@@ -148,9 +219,21 @@ public sealed class MirrorPulseNamespaceCreationCoordinator(CloudFileSystem file
                 observed.LocalObject, isDirectory, observed.OwnerSid, DateTimeOffset.UtcNow)
             { FirstParentPositionOperationId = location.CurrentPositionOperationId };
             actor.AssertAccess();
-            result = await MirrorPulseNamespaceMemberRegistrar.RegisterAsync(catalog, member, item, parent, router, actor, durable).ConfigureAwait(false);
+            result = (plan, await MirrorPulseNamespaceMemberRegistrar.RegisterAsync(catalog, member, item, parent, router, actor, durable).ConfigureAwait(false));
         }).ConfigureAwait(false);
         return result;
+    }
+
+    private ValueTask CheckpointAsync(MirrorPulseNamespaceCreationCheckpoint checkpoint, CancellationToken token) =>
+        Checkpoint?.Invoke(checkpoint, token) ?? ValueTask.CompletedTask;
+
+    private static void RequireReplay(MirrorPulseNamespaceMemberRegistration replay, MirrorPulseNamespaceBirthIntent? birth,
+        Guid parentMemberId)
+    {
+        if (birth is null || replay.Origin != MirrorPulseNamespaceMemberOrigin.ProtectedBirth || replay.OriginId != birth.OperationId ||
+            replay.MemberId != birth.OperationId || replay.ParentMemberId != parentMemberId || replay.IsDirectory != birth.IsDirectory ||
+            replay.RootId != birth.RootId || replay.RelativePath != birth.RelativePath)
+            throw new InvalidDataException("Creation replay lost its original member provenance.");
     }
 
     private void CreateOrdinaryItem(CloudItem item, bool isDirectory)
