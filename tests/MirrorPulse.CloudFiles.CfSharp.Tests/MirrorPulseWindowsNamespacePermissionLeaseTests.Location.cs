@@ -1,6 +1,7 @@
 using System.Security.AccessControl;
 using CfSharp;
 using MirrorPulse.CloudFiles.CfSharp;
+using MirrorPulse.Core.Configuration;
 using MirrorPulse.Core.State;
 using MirrorPulse.Core.Sync;
 
@@ -12,7 +13,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         MirrorPulseProductCatalog catalog, MirrorPulseRootRouter router, MirrorPulseNamespaceExecutionSession role,
         MirrorPulseNamespaceActor actor, MirrorPulseNamespaceMemberRegistration member,
         MirrorPulseNamespaceMemberRegistration destinationParent, CloudLocalChangeFeed feed,
-        Guid[] retainedJournalIds, Guid directoryItemId, CancellationToken token)
+        Guid[] retainedJournalIds, Guid directoryItemId, MirrorPulseStoragePaths paths, CancellationToken token)
     {
         CloudFile original = fileSystem.GetFile(member.RelativePath);
         CloudFile target = fileSystem.GetFile(destinationParent.RelativePath + "/member-location-probe.bin");
@@ -81,6 +82,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             var start = await catalog.ReadNamespaceMemberMoveStartAsync(intent.OperationId, token);
             Assert.IsNotNull(start); firstStart ??= start; Assert.AreEqual(firstStart, start);
             Assert.IsNull(await catalog.ReadNamespaceMemberMoveCompletionAsync(intent.OperationId, token));
+            Assert.IsNull(await catalog.ReadNamespaceMemberPositionAsync(member.MemberId, intent.OperationId, token),
+                "Native movement or projection alone cannot commit the product position.");
             Assert.AreEqual(intent, await catalog.ReadPendingNamespaceMemberMoveAsync(intent.RootId, token));
             Assert.IsTrue((await catalog.ReadNamespaceRecoveryRootsAsync(token)).Contains(intent.RootId));
             Assert.AreEqual(member, await catalog.ReadNamespaceMemberChildAsync(member.ParentMemberId!.Value, "born.bin", token));
@@ -100,6 +103,14 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         }
 
         var completion = await coordinator.ExecuteAsync(intent.OperationId, token);
+        var firstPosition = await catalog.ReadNamespaceMemberPositionAsync(member.MemberId, intent.OperationId, token);
+        Assert.IsNotNull(firstPosition);
+        Assert.AreEqual(completion.VerifiedAt, firstPosition.VerifiedAt);
+        Assert.AreEqual(completion.RelativePath, firstPosition.RelativePath);
+        Assert.AreEqual(destinationParent.MemberId, firstPosition.ParentMemberId);
+        Assert.AreEqual(intent.OperationId, firstPosition.CompletedMoveOperationId);
+        Assert.IsNull(firstPosition.PreviousPositionOperationId);
+        Assert.IsFalse(firstPosition.LegacyAnchor);
         Assert.AreEqual(completion, await coordinator.ExecuteAsync(intent.OperationId, token));
         Assert.AreEqual(firstStart, await catalog.ReadNamespaceMemberMoveStartAsync(intent.OperationId, token));
         Assert.AreEqual(firstNative, await catalog.ReadNamespaceMemberMoveObservationAsync(intent.OperationId, token));
@@ -123,6 +134,16 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         var forward = await coordinator.PrepareAsync(Guid.NewGuid(), member.MemberId, destinationParent.MemberId, "member-location-probe.bin", token);
         Assert.AreEqual(back.OperationId, forward.PreviousMoveOperationId);
         await coordinator.ExecuteAsync(forward.OperationId, token);
+        var finalPosition = await catalog.ReadNamespaceMemberPositionAsync(member.MemberId, forward.OperationId, token);
+        Assert.IsNotNull(finalPosition);
+        Assert.AreEqual(back.OperationId, finalPosition.PreviousPositionOperationId);
+        Assert.AreEqual(forward.OperationId, finalPosition.CompletedMoveOperationId);
+        await using (var reopened = await MirrorPulseProductCatalog.OpenAsync(paths, token))
+        {
+            Assert.AreEqual(firstPosition, await reopened.ReadNamespaceMemberPositionAsync(member.MemberId, intent.OperationId, token));
+            Assert.AreEqual(finalPosition, await reopened.ReadNamespaceMemberPositionAsync(member.MemberId, forward.OperationId, token));
+            Assert.AreEqual(forward.OperationId, (await reopened.ReadNamespaceMemberLocationAsync(member.MemberId, token)).CurrentPositionOperationId);
+        }
         Assert.AreEqual(new(member.MemberId, destinationParent.MemberId, target.RelativePath.Replace('\\', '/'), forward.OperationId),
             await catalog.ReadNamespaceMemberLocationAsync(member.MemberId, token));
         Assert.AreEqual(member, await catalog.ReadNamespaceMemberAsync(member.MemberId, token));
@@ -132,6 +153,6 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() => File.Delete(target.FullPath), token));
         CollectionAssert.IsSubsetOf(retainedJournalIds,
             (await WaitForBirthJournalAsync(feed, intent.ItemId, directoryItemId, token)).Select(change => change.OperationId).ToArray());
-        TestContext.WriteLine("ControlledMemberLocation: sharedAdmission=True; officialItemIdLookup=True; publicMoveTo=True; nativeBindingAndBytes=True; originalRegistrationUnchanged=True; journalIdsRetained=True; pendingMemberMoveFencesPoll=True; pendingMemberMoveDefersJournal=True; productionMoveCoordinator=True; productionMovePreparation=True; nativeMemberInspection=True; preparationReplay=True; changedDescriptorRejectedBeforeStart=True; nativeObservationProjectionInterruptionsRecovered=True; immutableStartAndFacts=True; currentNameCommitted=True; completedReplay=True; repeatedMoves=True; historicalReplayDoesNotRewind=True; hostIntegrated=False.");
+        TestContext.WriteLine("ControlledMemberLocation: sharedAdmission=True; officialItemIdLookup=True; publicMoveTo=True; nativeBindingAndBytes=True; originalRegistrationUnchanged=True; journalIdsRetained=True; pendingMemberMoveFencesPoll=True; pendingMemberMoveDefersJournal=True; productionMoveCoordinator=True; productionMovePreparation=True; nativeMemberInspection=True; preparationReplay=True; changedDescriptorRejectedBeforeStart=True; nativeObservationProjectionInterruptionsRecovered=True; immutableStartAndFacts=True; currentNameCommitted=True; completedReplay=True; repeatedMoves=True; historicalReplayDoesNotRewind=True; positionFactsRequireCompletion=True; positionHistoryRetained=True; productCatalogReopened=True; hostIntegrated=False.");
     }
 }

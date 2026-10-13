@@ -376,7 +376,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 if (owner == 3)
                 {
                     await VerifyNativeMemberLocationAfterPublicMoveAsync(fileSystem, state, catalog, router, nextRole, namespaceActor,
-                        members[births[0].Birth.OperationId], members[births[1].Birth.OperationId], feed, journalIds, births[1].Plan.ItemId, timeout.Token);
+                        members[births[0].Birth.OperationId], members[births[1].Birth.OperationId], feed, journalIds, births[1].Plan.ItemId, paths, timeout.Token);
                     var retirementMember = members[nestedBirths[^1].Birth.OperationId];
                     var retirement = new MirrorPulseNamespaceRetirementCoordinator(fileSystem, catalog, router, nextRole, namespaceActor);
                     var retirementPrepared = await retirement.PrepareAsync(Guid.NewGuid(), retirementMember.MemberId, timeout.Token);
