@@ -25,6 +25,8 @@ public sealed record MirrorPulseNamespaceReplacementExecution(MirrorPulseNamespa
     public MirrorPulseNamespaceReplacementContentCompletion? ContentCompletion { get; init; }
     public MirrorPulseNamespaceReplacementRestoration? Restoration { get; init; }
     public MirrorPulseNamespaceReplacementRestorationResult? RestorationResult { get; init; }
+    public IReadOnlyList<MirrorPulseNamespaceReplacementRoleAction> RoleActions { get; init; } = [];
+    public MirrorPulseNamespaceReplacementRoleHandoff? RoleHandoff { get; init; }
 }
 
 public sealed partial class MirrorPulseProductCatalog
@@ -141,6 +143,8 @@ public sealed partial class MirrorPulseProductCatalog
         catch (Exception error) when (error is InvalidOperationException or ArgumentException)
         { throw new InvalidDataException("The original replacement execution chain is inconsistent.", error); }
         var execution = new MirrorPulseNamespaceReplacementExecution(intent, start, cancellation, action, backup, write) { ContentCompletion = completion };
+        var roles = await ReadReplacementRoleChainCoreAsync(intent, action, transaction, token).ConfigureAwait(false);
+        execution = execution with { RoleActions = roles.Actions, RoleHandoff = roles.Handoff };
         var restoration = await ReadReplacementRestorationHeadCoreAsync(execution, transaction, token).ConfigureAwait(false);
         return execution with { Restoration = restoration.Attempt, RestorationResult = restoration.Result };
     }

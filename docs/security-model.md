@@ -665,6 +665,15 @@ edits. They describe the original observation and grant no current native
 authority. An undrained predecessor cannot be superseded, and a superseded attempt
 cannot acquire a new late result. Missing or damaged history requires recovery.
 
+The catalog separately retains current-role recovery actions and metadata handoff
+observations. Each action references the immutable first action, its immediate
+predecessor and the exact older action that owns the expected descriptor. The
+complete bounded chain is validated on read; an interrupted handoff does not
+require rewriting first backup or copy facts. Role admission retains the actual
+closed parent proof and does not invent an earlier parent rotation. These records
+are evidence for later execution; they do not establish that an old process has
+stopped or authorize a native operation by themselves.
+
 This component does not release root reservations, mark a tree ready, accept
 remote content or acknowledge journal records. Current-role recovery is separate
 from persisted role handoff and full Host/CLI completion. Disposable native

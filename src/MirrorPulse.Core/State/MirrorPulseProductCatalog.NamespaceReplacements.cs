@@ -176,7 +176,9 @@ public sealed partial class MirrorPulseProductCatalog
             UNION ALL SELECT 1 FROM journal_coalescing_members WHERE operation_id=$id
             UNION ALL SELECT 1 FROM journal_coalescing_steps WHERE operation_id=$id
             UNION ALL SELECT 1 FROM namespace_replacements WHERE operation_id=$id
-            UNION ALL SELECT 1 FROM namespace_replacement_restorations WHERE restoration_id=$id LIMIT 1;
+            UNION ALL SELECT 1 FROM namespace_replacement_restorations WHERE restoration_id=$id
+            UNION ALL SELECT 1 FROM namespace_replacement_role_actions WHERE recovery_id=$id
+            UNION ALL SELECT 1 FROM namespace_replacement_execution_facts WHERE action_id=$id LIMIT 1;
             """;
         ownership.Parameters.AddWithValue("$id", id.ToString("D"));
         if (await ownership.ExecuteScalarAsync(token).ConfigureAwait(false) is not null)
