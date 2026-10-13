@@ -110,6 +110,17 @@ cannot write a DACL or open file content. Callers must persist original evidence
 and hold product application admission before conversion or permission application. The Host does
 not yet enable strict protection through this component.
 
+The product catalog's `ReadNamespaceMemberProtectionLineageAsync` reads retained
+protection against committed current parent locations in one transaction. A
+completed file or entire-directory receipt links the retained object and its
+protection epoch to the new location without rewriting first membership, birth
+or permission capture. Later permission epochs need an explicit completed
+placement reference. Fenced roots, retired members, restored parent permissions
+and inconsistent current roles are rejected. These are product recovery facts;
+the execution coordinator must still inspect the actual child and parent through
+CfSharp public guards. This catalog boundary does not enable installed strict
+protection or directory move execution in the Host.
+
 The native component probe checks competing writes and hardlinks inside the
 scope, real descriptor application, cancellation and callback failure, and
 official-store reopen. It also checks cold-file metadata without hydration and
