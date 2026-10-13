@@ -327,6 +327,40 @@ public sealed class MirrorPulseCliHostOperations : IMirrorPulseCliHostOperations
                     result = retirementReceipt;
                     human = $"Member retirement {retirementReceipt.Phase} · {retirementReceipt.OperationId:D} · {retirementReceipt.RelativePath}";
                     break;
+                case ("namespace", "member") when command.Path.Count > 2 &&
+                    command.Path[2].Equals("prepare-import", StringComparison.OrdinalIgnoreCase):
+                    if (command.Arguments.Count is not (3 or 5) || !Guid.TryParse(command.Arguments[0], out Guid importParent) ||
+                        importParent == Guid.Empty || string.IsNullOrWhiteSpace(command.Arguments[1]) ||
+                        command.Arguments[1] is "." or ".." || command.Arguments[1].Contains('/') || command.Arguments[1].Contains('\\') ||
+                        string.IsNullOrWhiteSpace(command.Arguments[2]))
+                        throw new ArgumentException("namespace member prepare-import requires a parent ID, one child name and a source file path.");
+                    Guid importOperation = Guid.NewGuid();
+                    if (command.Arguments.Count == 5 && (!command.Arguments[3].Equals("--operation-id", StringComparison.OrdinalIgnoreCase) ||
+                        !Guid.TryParse(command.Arguments[4], out importOperation) || importOperation == Guid.Empty))
+                        throw new ArgumentException("Import preparation accepts --operation-id GUID once.");
+                    var import = await _client.PrepareNamespaceImportAsync(importOperation, importParent, command.Arguments[1],
+                        Path.GetFullPath(command.Arguments[2]), cancellationToken).ConfigureAwait(false);
+                    result = import;
+                    human = $"Local import prepared · {import.OperationId:D} · {import.Name} · {import.Length} bytes";
+                    break;
+                case ("namespace", "member") when command.Path.Count > 2 &&
+                    (command.Path[2].Equals("import", StringComparison.OrdinalIgnoreCase) || command.Path[2].Equals("import-status", StringComparison.OrdinalIgnoreCase)):
+                    if (command.Arguments.Count != 1 || !Guid.TryParse(command.Arguments[0], out Guid importId) || importId == Guid.Empty)
+                        throw new ArgumentException("Import execution and status require one non-empty operation ID.");
+                    if (command.Path[2].Equals("import-status", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var status = await _client.GetNamespaceImportStatusAsync(importId, cancellationToken).ConfigureAwait(false);
+                        result = status;
+                        human = $"Local import {status.Phase} · {status.OperationId:D} · {status.RelativePath}";
+                        exitCode = status.RequiresRecovery ? MirrorPulseControlExitCodes.Pending : MirrorPulseControlExitCodes.Success;
+                    }
+                    else
+                    {
+                        var imported = await _client.ExecuteNamespaceImportAsync(importId, cancellationToken).ConfigureAwait(false);
+                        result = imported;
+                        human = $"Local file imported · {imported.OperationId:D} · {imported.RelativePath}";
+                    }
+                    break;
                 case ("namespace", "birth") when command.Path.Count > 2 &&
                     command.Path[2].Equals("recover", StringComparison.OrdinalIgnoreCase):
                     if (command.Arguments.Count != 1 || !Guid.TryParse(command.Arguments[0], out Guid birthRecoveryId) || birthRecoveryId == Guid.Empty)

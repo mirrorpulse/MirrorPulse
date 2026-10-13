@@ -479,6 +479,12 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
             MirrorPulseControlCommands.NamespaceMemberPrepareMove, PrepareNamespaceMemberMoveAsync);
         dispatcher.Register<NamespaceMemberCreateArguments, MirrorPulseControlNamespaceMemberCreation>(
             MirrorPulseControlCommands.NamespaceMemberCreate, CreateNamespaceMemberAsync);
+        dispatcher.Register<NamespaceMemberPrepareImportArguments, MirrorPulseControlNamespaceImportPreparation>(
+            MirrorPulseControlCommands.NamespaceMemberPrepareImport, PrepareNamespaceImportAsync);
+        dispatcher.Register<NamespaceMemberImportArguments, MirrorPulseControlNamespaceMemberCreation>(
+            MirrorPulseControlCommands.NamespaceMemberImport, ExecuteNamespaceImportAsync);
+        dispatcher.Register<NamespaceMemberImportStatusArguments, MirrorPulseControlNamespaceImportStatus>(
+            MirrorPulseControlCommands.NamespaceMemberImportStatus, ReadNamespaceImportStatusAsync);
         dispatcher.Register<NamespaceMemberPrepareRetirementArguments, MirrorPulseControlNamespaceMemberRetirementPreparation>(
             MirrorPulseControlCommands.NamespaceMemberPrepareRetirement, PrepareNamespaceMemberRetirementAsync);
         dispatcher.Register<NamespaceMemberRetirementArguments, MirrorPulseControlNamespaceMemberRetirementResult>(
@@ -521,6 +527,30 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
         var member = await _session.CreateNamespaceMemberAsync(arguments.OperationId, arguments.ParentMemberId,
             arguments.Name, arguments.IsDirectory, cancellationToken).ConfigureAwait(false);
         return new(arguments.OperationId, member.MemberId, member.ParentMemberId!.Value, member.RelativePath, member.IsDirectory, true);
+    }
+
+    private async ValueTask<MirrorPulseControlNamespaceImportPreparation> PrepareNamespaceImportAsync(
+        NamespaceMemberPrepareImportArguments arguments, CancellationToken cancellationToken)
+    {
+        var plan = await _session.PrepareNamespaceImportAsync(arguments.OperationId, arguments.ParentMemberId,
+            arguments.Name, arguments.SourcePath, cancellationToken).ConfigureAwait(false);
+        var content = plan.Content ?? throw new InvalidDataException("The prepared import has no content intent.");
+        return new(plan.OperationId, arguments.ParentMemberId, arguments.Name, content.Length, content.Sha256, plan.PreparedAt);
+    }
+
+    private async ValueTask<MirrorPulseControlNamespaceMemberCreation> ExecuteNamespaceImportAsync(
+        NamespaceMemberImportArguments arguments, CancellationToken cancellationToken)
+    {
+        var member = await _session.ExecuteNamespaceImportAsync(arguments.OperationId, cancellationToken).ConfigureAwait(false);
+        return new(arguments.OperationId, member.MemberId, member.ParentMemberId!.Value, member.RelativePath, member.IsDirectory, true);
+    }
+
+    private async ValueTask<MirrorPulseControlNamespaceImportStatus> ReadNamespaceImportStatusAsync(
+        NamespaceMemberImportStatusArguments arguments, CancellationToken cancellationToken)
+    {
+        var status = await _session.ReadNamespaceImportStatusAsync(arguments.OperationId, cancellationToken).ConfigureAwait(false);
+        return new(status.OperationId, status.RelativePath, status.Phase, status.Length, status.Sha256, status.Started,
+            status.OriginalBindingRecorded, status.ContentRecorded, status.Converted, status.Protected, status.Registered, status.RequiresRecovery);
     }
 
     private async ValueTask<MirrorPulseControlNamespaceMemberInspection> InspectNamespaceMemberAsync(

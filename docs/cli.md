@@ -54,6 +54,9 @@ The default output is concise human-readable text. Automation should use `--json
 | `mp root recover OPERATION_ID` | Retry the original managed root rename proof through the Host. | operation ID from `root list`; `--json` includes separate native and durable projection facts |
 | `mp root prepare-rename ROOT_ID LABEL` | Prepare a Label-only managed root rename. | preserves the source directory and returns an operation ID for recovery |
 | `mp namespace member create PARENT_ID NAME [--directory] [--operation-id GUID]` | Create an empty local file or directory under a registered protected directory. | retain `operationId` for retry; this does not prove remote acceptance |
+| `mp namespace member prepare-import PARENT_ID NAME SOURCE_PATH [--operation-id GUID]` | Capture a private input and retain an immutable file import plan without creating the destination. | `SOURCE_PATH` is resolved by the CLI; keep `operationId` |
+| `mp namespace member import OPERATION_ID` | Execute or resume the original import without reopening the source file. | completed replay preserves newer local bytes; no remote acceptance claim |
+| `mp namespace member import-status OPERATION_ID` | Read retained binding, content, conversion, protection and membership phases. | `--json`; incomplete started operations report the pending exit code |
 | `mp namespace member prepare-move MEMBER_ID PARENT_ID NAME [--operation-id GUID]` | Prepare a protected member move. | the source name remains fenced until the move receipt is complete |
 | `mp namespace member tree MEMBER_ID` | Read the validated current registered subtree. | read-only; depth and current product paths are returned |
 | `mp namespace member move OPERATION_ID` | Execute or retry an admitted protected file or directory move. | directories require the original public proof and a sealed registered subtree; all descendant positions settle together |

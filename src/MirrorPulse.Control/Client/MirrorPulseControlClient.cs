@@ -247,6 +247,21 @@ public sealed class MirrorPulseControlClient
         SendAsync<NamespaceMemberCreateArguments, MirrorPulseControlNamespaceMemberCreation>(
             MirrorPulseControlCommands.NamespaceMemberCreate, new(operationId, parentMemberId, name, isDirectory), cancellationToken);
 
+    public Task<MirrorPulseControlNamespaceImportPreparation> PrepareNamespaceImportAsync(Guid operationId, Guid parentMemberId,
+        string name, string sourcePath, CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceMemberPrepareImportArguments, MirrorPulseControlNamespaceImportPreparation>(
+            MirrorPulseControlCommands.NamespaceMemberPrepareImport, new(operationId, parentMemberId, name, sourcePath), cancellationToken);
+
+    public Task<MirrorPulseControlNamespaceMemberCreation> ExecuteNamespaceImportAsync(Guid operationId,
+        CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceMemberImportArguments, MirrorPulseControlNamespaceMemberCreation>(
+            MirrorPulseControlCommands.NamespaceMemberImport, new(operationId), cancellationToken);
+
+    public Task<MirrorPulseControlNamespaceImportStatus> GetNamespaceImportStatusAsync(Guid operationId,
+        CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceMemberImportStatusArguments, MirrorPulseControlNamespaceImportStatus>(
+            MirrorPulseControlCommands.NamespaceMemberImportStatus, new(operationId), cancellationToken);
+
     public Task<MirrorPulseControlNamespaceMemberInspection> InspectNamespaceMemberAsync(string relativePath, bool isDirectory = false,
         CancellationToken cancellationToken = default) =>
         SendAsync<NamespaceMemberInspectArguments, MirrorPulseControlNamespaceMemberInspection>(

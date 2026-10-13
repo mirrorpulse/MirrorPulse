@@ -106,6 +106,21 @@ public sealed record NamespaceMemberCreateArguments(Guid OperationId, Guid Paren
 public sealed record MirrorPulseControlNamespaceMemberCreation(Guid OperationId, Guid MemberId,
     Guid ParentMemberId, string RelativePath, bool IsDirectory, bool Registered);
 
+public sealed record NamespaceMemberPrepareImportArguments(Guid OperationId, Guid ParentMemberId,
+    string Name, string SourcePath) : IMirrorPulseControlArguments;
+
+public sealed record NamespaceMemberImportArguments(Guid OperationId) : IMirrorPulseControlArguments;
+
+public sealed record NamespaceMemberImportStatusArguments(Guid OperationId) : IMirrorPulseControlArguments;
+
+public sealed record MirrorPulseControlNamespaceImportPreparation(Guid OperationId, Guid ParentMemberId,
+    string Name, long Length, string Sha256, DateTimeOffset PreparedAt);
+
+/// <summary>Historical local facts; these fields do not assert remote acceptance or current native authority.</summary>
+public sealed record MirrorPulseControlNamespaceImportStatus(Guid OperationId, string RelativePath, string Phase,
+    long Length, string Sha256, bool Started, bool OriginalBindingRecorded, bool ContentRecorded,
+    bool Converted, bool Protected, bool Registered, bool RequiresRecovery);
+
 public sealed record NamespaceMemberInspectArguments(string RelativePath, bool IsDirectory = false) : IMirrorPulseControlArguments;
 
 public sealed record NamespaceMemberTreeArguments(Guid MemberId) : IMirrorPulseControlArguments;

@@ -248,7 +248,23 @@ The caller's cancellation cannot discard persistence after native creation.
 Historical member replay performs no native write or source acknowledgement.
 A started birth without its original binding requires explicit recovery, and an
 occupied destination is never overwritten. This boundary supports empty local
-creation; it does not implement imports, deletion or replacement saves.
+creation. Import reuses the same birth, conversion, observation, protection and
+member registration state machine with a separate immutable content plan.
+
+`mp namespace member prepare-import` captures the source as the normal user,
+outside both the instance scheduler and namespace actor. This permits a source
+placeholder to hydrate through the same instance without acquiring a recursive
+lock. A verified private input lease denies write/delete sharing. Preparation
+reserves the original child name and records its length and SHA256 without native
+creation. `mp namespace member import OPERATION_ID` requires that original plan;
+it records the first ordinary binding before copying, flushes the complete input,
+reads back the original object's digest and independently checks binding, owner,
+ACL, link count and direct parent before retaining content completion. Public
+CfSharp conversion and protected handoff follow that proof. Interrupted work keeps
+the private input. Membership completion precedes input reclamation, and completed
+replay needs neither the original source nor the private input and never rewrites
+newer bytes. `import-status` reports retained phases rather than fresh authority,
+remote acceptance or journal acknowledgement. Replacement saves remain separate work.
 
 An unregistered birth fences ordinary journal dispatch, rescan and remote polling
 or application for its managed root, including cursor-only batches. The catalog
@@ -299,7 +315,7 @@ recovery action through the same Host contract. It reports the drained public
 CfSharp receipt and independently retained verification, returning exit code 11
 while verification is pending. It does not create a new file, record its first
 birth observation, promote membership, release its name, or acknowledge source
-operations. Those creation and import workflows remain separate work.
+operations. Creation and import use their separate controlled command flows.
 
 Schema 27 adds immutable birth intents for controlled creation, import and remote
 population under a protected parent. Admission requires that parent's latest
@@ -621,8 +637,8 @@ the latest committed placement. Permission relocation uses the same evidence
 resolver. Missing records, incomplete moves, foreign member receipts and cyclic
 references cannot authorize a new move or permission epoch. Legacy endpoints
 retain their original paths without inventing historical parent movements.
-Directory movement, replacement saves, import and full installed Host tree
-readiness remain pending. Metadata handles and catalog membership alone do not
+Directory movement and import have controlled execution boundaries; replacement
+saves and full installed Host tree readiness remain pending. Metadata handles and catalog membership alone do not
 establish tree readiness or remote acceptance.
 
 ## Remaining work

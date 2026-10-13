@@ -1,6 +1,7 @@
 using System.Runtime.Versioning;
 using System.Text;
 using CfSharp;
+using MirrorPulse.Core.Caching;
 using MirrorPulse.Core.CloudFiles;
 using MirrorPulse.Core.Configuration;
 using MirrorPulse.Core.Conflicts;
@@ -21,6 +22,21 @@ public interface IMirrorPulseCloudRuntime : IAsyncDisposable
         string name, bool isDirectory, CancellationToken cancellationToken) =>
         ValueTask.FromException<MirrorPulseNamespaceMemberRegistration>(
             new NotSupportedException("This Cloud Files runtime does not create controlled local members."));
+
+    [SupportedOSPlatform("windows10.0.26100")]
+    ValueTask<MirrorPulseNamespaceBirthPlan> PrepareNamespaceImportAsync(Guid operationId, Guid parentMemberId,
+        string name, string sourcePath, CancellationToken cancellationToken) => ValueTask.FromException<MirrorPulseNamespaceBirthPlan>(
+            new NotSupportedException("This Cloud Files runtime does not prepare controlled imports."));
+
+    [SupportedOSPlatform("windows10.0.26100")]
+    ValueTask<MirrorPulseNamespaceMemberRegistration> ExecuteNamespaceImportAsync(Guid operationId,
+        CancellationToken cancellationToken) => ValueTask.FromException<MirrorPulseNamespaceMemberRegistration>(
+            new NotSupportedException("This Cloud Files runtime does not execute controlled imports."));
+
+    [SupportedOSPlatform("windows10.0.26100")]
+    ValueTask<MirrorPulseNamespaceImportStatus> ReadNamespaceImportStatusAsync(Guid operationId,
+        CancellationToken cancellationToken) => ValueTask.FromException<MirrorPulseNamespaceImportStatus>(
+            new NotSupportedException("This Cloud Files runtime does not read import status."));
 
     [SupportedOSPlatform("windows10.0.26100")]
     ValueTask<MirrorPulseNamespaceMemberInspection> InspectNamespaceMemberAsync(string relativePath,
@@ -232,6 +248,87 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             var coordinator = new MirrorPulseNamespaceCreationCoordinator(fileSystem, state, catalog, router, _namespaceExecution, _namespaceActor);
             return await _scheduler.RunAsync(registration.InstanceId,
                 token => coordinator.CreateAsync(operationId, parentMemberId, name, isDirectory, token), cancellationToken).ConfigureAwait(false);
+        }
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        public async ValueTask<MirrorPulseNamespaceBirthPlan> PrepareNamespaceImportAsync(Guid operationId, Guid parentMemberId,
+            string name, string sourcePath, CancellationToken cancellationToken)
+        {
+            RequireImportBoundary();
+            if (operationId == Guid.Empty || parentMemberId == Guid.Empty)
+                throw new ArgumentException("Operation and parent member IDs are required.");
+            var parent = await catalog!.ReadNamespaceMemberAsync(parentMemberId, cancellationToken).ConfigureAwait(false)
+                ?? throw new FileNotFoundException("The import parent is not registered.");
+            var registration = router!.Registrations.Single(root => root.RootId == parent.RootId);
+            var inputs = new MirrorPulseLocalImportStagingStore(new(syncRootPath, dataRootPath));
+            // A source may hydrate through this same instance. Capture and verify before either lock.
+            var content = await _namespaceExecution!.RunNormalUserOperationAsync(
+                () => inputs.StageAsync(operationId, sourcePath, cancellationToken)).ConfigureAwait(false);
+            await using var input = await _namespaceExecution.RunNormalUserOperationAsync(
+                () => inputs.OpenLeaseAsync(operationId, content, cancellationToken)).ConfigureAwait(false);
+            var coordinator = new MirrorPulseNamespaceCreationCoordinator(fileSystem, state, catalog, router, _namespaceExecution, _namespaceActor!);
+            return await _scheduler.RunAsync(registration.InstanceId,
+                token => coordinator.PrepareImportAsync(operationId, parentMemberId, name, input, token), cancellationToken).ConfigureAwait(false);
+        }
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        public async ValueTask<MirrorPulseNamespaceMemberRegistration> ExecuteNamespaceImportAsync(Guid operationId,
+            CancellationToken cancellationToken)
+        {
+            RequireImportBoundary();
+            var status = await ReadNamespaceImportStatusAsync(operationId, cancellationToken).ConfigureAwait(false);
+            var birth = (await catalog!.ReadNamespaceBirthAsync(operationId, cancellationToken).ConfigureAwait(false))!;
+            var registration = router!.Registrations.Single(root => root.RootId == birth.RootId);
+            var inputs = new MirrorPulseLocalImportStagingStore(new(syncRootPath, dataRootPath));
+            var coordinator = new MirrorPulseNamespaceCreationCoordinator(fileSystem, state, catalog, router, _namespaceExecution!, _namespaceActor!);
+            MirrorPulseNamespaceMemberRegistration result;
+            if (!status.ContentRecorded && !status.Registered)
+            {
+                await using var input = await _namespaceExecution!.RunNormalUserOperationAsync(
+                    () => inputs.OpenLeaseAsync(operationId, new(status.Length, status.Sha256), cancellationToken)).ConfigureAwait(false);
+                result = await _scheduler.RunAsync(registration.InstanceId,
+                    token => coordinator.ExecuteImportAsync(operationId, input, token), cancellationToken).ConfigureAwait(false);
+            }
+            else
+                result = await _scheduler.RunAsync(registration.InstanceId,
+                    token => coordinator.ExecuteImportAsync(operationId, null, token), cancellationToken).ConfigureAwait(false);
+            // Membership is durable before reclaiming input; closing its lease precedes deletion.
+            await _namespaceExecution!.RunNormalUserOperationAsync(() => { inputs.RemoveCompleted(operationId); return Task.CompletedTask; }).ConfigureAwait(false);
+            return result;
+        }
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        public ValueTask<MirrorPulseNamespaceImportStatus> ReadNamespaceImportStatusAsync(Guid operationId,
+            CancellationToken cancellationToken)
+        {
+            RequireImportBoundary();
+            if (operationId == Guid.Empty) throw new ArgumentException("An import operation ID is required.", nameof(operationId));
+            return _namespaceActor!.RunAsync(async token =>
+            {
+                var birth = await catalog!.ReadNamespaceBirthAsync(operationId, token).ConfigureAwait(false)
+                    ?? throw new FileNotFoundException("The original import admission is missing.");
+                var plan = await catalog.ReadNamespaceBirthPlanAsync(operationId, token).ConfigureAwait(false)
+                    ?? throw new FileNotFoundException("The original import plan is missing.");
+                if (birth.Origin != MirrorPulseNamespaceBirthOrigin.Import || birth.IsDirectory || plan.Content is null)
+                    throw new InvalidOperationException("Status requires an original file import plan.");
+                bool started = await catalog.ReadNamespaceBirthStartAsync(operationId, token).ConfigureAwait(false) is not null;
+                bool binding = await catalog.ReadNamespaceBirthConversionAsync(operationId, token).ConfigureAwait(false) is not null;
+                bool content = await catalog.ReadNamespaceBirthContentCompletionAsync(operationId, token).ConfigureAwait(false) is not null;
+                bool observed = await catalog.ReadNamespaceBirthObservationAsync(operationId, token).ConfigureAwait(false) is not null;
+                bool protection = await catalog.ReadLatestNamespaceBirthProtectionAsync(operationId, token).ConfigureAwait(false) is not null;
+                bool registered = await catalog.ReadNamespaceMemberAsync(operationId, token).ConfigureAwait(false) is not null;
+                string phase = registered ? "Registered" : protection ? "Protected" : observed ? "Converted" : content ? "ContentRecorded" :
+                    binding ? "OriginalBindingRecorded" : started ? "RecoveryRequired" : "Prepared";
+                return new MirrorPulseNamespaceImportStatus(operationId, birth.RelativePath, phase, plan.Content.Length, plan.Content.Sha256,
+                    started, binding, content, observed, protection, registered, started && !registered);
+            }, cancellationToken);
+        }
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        private void RequireImportBoundary()
+        {
+            if (router is null || catalog is null || _namespaceExecution is null || _namespaceActor is null)
+                throw new NotSupportedException("Controlled imports require the Host namespace boundary.");
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
@@ -697,6 +794,30 @@ public sealed class MirrorPulseCloudHostSession : IAsyncDisposable
         if (!_started || _runtime is null)
             throw new InvalidOperationException("The Cloud Files Host session has not started.");
         return _runtime.CreateNamespaceMemberAsync(operationId, parentMemberId, name, isDirectory, cancellationToken);
+    }
+
+    [SupportedOSPlatform("windows10.0.26100")]
+    public ValueTask<MirrorPulseNamespaceBirthPlan> PrepareNamespaceImportAsync(Guid operationId, Guid parentMemberId,
+        string name, string sourcePath, CancellationToken cancellationToken = default)
+    {
+        if (!_started || _runtime is null) throw new InvalidOperationException("The Cloud Files Host session has not started.");
+        return _runtime.PrepareNamespaceImportAsync(operationId, parentMemberId, name, sourcePath, cancellationToken);
+    }
+
+    [SupportedOSPlatform("windows10.0.26100")]
+    public ValueTask<MirrorPulseNamespaceMemberRegistration> ExecuteNamespaceImportAsync(Guid operationId,
+        CancellationToken cancellationToken = default)
+    {
+        if (!_started || _runtime is null) throw new InvalidOperationException("The Cloud Files Host session has not started.");
+        return _runtime.ExecuteNamespaceImportAsync(operationId, cancellationToken);
+    }
+
+    [SupportedOSPlatform("windows10.0.26100")]
+    public ValueTask<MirrorPulseNamespaceImportStatus> ReadNamespaceImportStatusAsync(Guid operationId,
+        CancellationToken cancellationToken = default)
+    {
+        if (!_started || _runtime is null) throw new InvalidOperationException("The Cloud Files Host session has not started.");
+        return _runtime.ReadNamespaceImportStatusAsync(operationId, cancellationToken);
     }
 
     [SupportedOSPlatform("windows10.0.26100")]

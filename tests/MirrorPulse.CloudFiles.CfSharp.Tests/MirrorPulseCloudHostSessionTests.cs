@@ -13,6 +13,32 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 public sealed class MirrorPulseCloudHostSessionTests
 {
     [TestMethod]
+    [SupportedOSPlatform("windows10.0.26100")]
+    public async Task ImportCommandsRequireStartedOwnerAndForwardTheOriginalOperation()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "MirrorPulse-tests", Guid.NewGuid().ToString("N"));
+        var paths = new MirrorPulseStoragePaths(Path.Combine(root, "sync"), Path.Combine(root, "data"));
+        var factory = new RecordingRuntimeFactory();
+        await using var session = new MirrorPulseCloudHostSession(paths,
+            new(new RecordingShellRegistry(), new RecordingCloudRegistry()), factory,
+            new(new RecordingOwnerLock()), "S-1-5-21-123", "MirrorPulse");
+        Guid operation = Guid.NewGuid(), parent = Guid.NewGuid();
+        string source = Path.Combine(root, "input.bin");
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => session.PrepareNamespaceImportAsync(operation, parent, "import.bin", source).AsTask());
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => session.ExecuteNamespaceImportAsync(operation).AsTask());
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => session.ReadNamespaceImportStatusAsync(operation).AsTask());
+        await session.StartAsync();
+        var plan = await session.PrepareNamespaceImportAsync(operation, parent, "import.bin", source);
+        var runtime = factory.Runtimes.Single();
+        Assert.AreEqual(operation, plan.OperationId); Assert.AreEqual(source, runtime.ImportSource);
+        Assert.AreEqual(parent, runtime.ImportParent); Assert.AreEqual("import.bin", runtime.ImportName);
+        Assert.AreEqual(operation, (await session.ExecuteNamespaceImportAsync(operation)).MemberId);
+        Assert.IsTrue((await session.ReadNamespaceImportStatusAsync(operation)).Registered);
+        using var cancelled = new CancellationTokenSource(); cancelled.Cancel();
+        await Assert.ThrowsExactlyAsync<OperationCanceledException>(() => session.ReadNamespaceImportStatusAsync(operation, cancelled.Token).AsTask());
+    }
+
+    [TestMethod]
     public async Task RootRecoveryRequiresStartedOwnerAndForwardsOriginalOperation()
     {
         string root = Path.Combine(Path.GetTempPath(), "MirrorPulse-tests", Guid.NewGuid().ToString("N"));
@@ -251,6 +277,39 @@ public sealed class MirrorPulseCloudHostSessionTests
 
     private sealed class RecordingRuntime(bool failStart) : IMirrorPulseCloudRuntime
     {
+        public string? ImportSource { get; private set; }
+        public string? ImportName { get; private set; }
+        public Guid ImportParent { get; private set; }
+        private Guid _importOperation;
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        public ValueTask<MirrorPulse.Core.State.MirrorPulseNamespaceBirthPlan> PrepareNamespaceImportAsync(Guid operationId, Guid parentMemberId,
+            string name, string sourcePath, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            _importOperation = operationId; ImportParent = parentMemberId; ImportName = name; ImportSource = sourcePath;
+            return ValueTask.FromResult(new MirrorPulse.Core.State.MirrorPulseNamespaceBirthPlan(2, operationId, Guid.NewGuid(), "local:test", null, DateTimeOffset.UtcNow)
+            { Content = new(0, new string('A', 64)) });
+        }
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        public ValueTask<MirrorPulse.Core.State.MirrorPulseNamespaceMemberRegistration> ExecuteNamespaceImportAsync(Guid operationId,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested(); Assert.AreEqual(_importOperation, operationId);
+            return ValueTask.FromResult(new MirrorPulse.Core.State.MirrorPulseNamespaceMemberRegistration(1, operationId, ImportParent,
+                MirrorPulse.Core.State.MirrorPulseNamespaceMemberOrigin.ProtectedBirth, operationId, Guid.NewGuid(), RootId.New(), "Docs/import.bin",
+                new(1, Guid.NewGuid(), Guid.NewGuid()), false, "S-1-5-21-123", DateTimeOffset.UtcNow));
+        }
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        public ValueTask<MirrorPulseNamespaceImportStatus> ReadNamespaceImportStatusAsync(Guid operationId, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested(); Assert.AreEqual(_importOperation, operationId);
+            return ValueTask.FromResult(new MirrorPulseNamespaceImportStatus(operationId, "Docs/import.bin", "Registered", 0, new string('A', 64),
+                true, true, true, true, true, true, false));
+        }
+
         public Guid? RecoveredOperation { get; private set; }
 
         public ValueTask<MirrorPulseManagedRootRenameRecovery> RecoverManagedRootRenameAsync(
