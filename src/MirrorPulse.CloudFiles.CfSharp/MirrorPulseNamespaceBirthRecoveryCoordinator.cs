@@ -80,6 +80,9 @@ public sealed class MirrorPulseNamespaceBirthRecoveryCoordinator
     {
         var action = await _catalog.ValidateNamespaceBirthRecoveryExecutionAsync(recoveryId, cancellationToken).ConfigureAwait(false);
         var context = await ReadContextAsync(action.BirthOperationId, file, parent, cancellationToken).ConfigureAwait(false);
+        if (context.Plan.Content is not null &&
+            await _catalog.ReadNamespaceBirthContentCompletionAsync(action.BirthOperationId, cancellationToken).ConfigureAwait(false) is null)
+            throw new InvalidOperationException("Imported content must be completely copied on the original object before conversion or permission handoff.");
         await using var parentGuard = await MirrorPulseWindowsNamespacePermissionLease.OpenAsync(parent, _router, cancellationToken).ConfigureAwait(false);
         var before = await MirrorPulseNamespaceBirthProtectionVerifier.InspectRetainedParentAsync(
             context.Birth, parent, context.Parent, parentGuard, cancellationToken).ConfigureAwait(false);

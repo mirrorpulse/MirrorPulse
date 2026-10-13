@@ -237,7 +237,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         }
         await using var connection = Connection(fixture.Paths); await connection.OpenAsync();
         await using var query = connection.CreateCommand(); query.CommandText = "PRAGMA user_version;";
-        Assert.AreEqual(40L, await query.ExecuteScalarAsync());
+        Assert.AreEqual(41L, await query.ExecuteScalarAsync());
     }
 
     [TestMethod]

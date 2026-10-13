@@ -166,6 +166,14 @@ public sealed partial class MirrorPulseProductCatalog
             observation.OwnerSid != conversion.OwnerSid || observation.IsDirectory != conversion.IsDirectory ||
             observation.ObservedAt < conversion.PreparedAt))
             throw new InvalidOperationException("The placeholder must retain the actual object prepared before conversion.");
+        if (plan.Content is not null)
+        {
+            var content = await ReadNamespaceBirthContentCompletionCoreAsync(observation.OperationId, transaction, token).ConfigureAwait(false)
+                ?? throw new InvalidOperationException("A content-bearing import requires its original completed local copy before birth observation.");
+            if (content.Verification.LocalObject != observation.LocalObject || content.Verification.OwnerSid != observation.OwnerSid ||
+                content.Verification.ObservedAt > observation.ObservedAt)
+                throw new InvalidOperationException("The imported birth must follow completed content on the same original object.");
+        }
         await using SqliteCommand another = _connection.CreateCommand();
         another.Transaction = transaction;
         another.CommandText = """

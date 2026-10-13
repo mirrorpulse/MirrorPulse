@@ -91,20 +91,27 @@ public sealed partial class MirrorPulseProductCatalog
         {
             ThrowIfDisposed();
             using SqliteTransaction transaction = _connection.BeginTransaction();
-            var action = await ReadNamespaceBirthRecoveryActionCoreAsync(recoveryId, transaction, cancellationToken).ConfigureAwait(false)
-                ?? throw new FileNotFoundException("The original recovery action is missing.");
-            var latest = await ReadLatestNamespaceBirthRecoveryActionCoreAsync(action.BirthOperationId, transaction, cancellationToken).ConfigureAwait(false);
-            var birth = await ReadNamespaceBirthCoreAsync(action.BirthOperationId, transaction, cancellationToken).ConfigureAwait(false)
-                ?? throw new InvalidDataException("The original birth disappeared during admission.");
-            if (latest?.RecoveryId != recoveryId ||
-                await ReadNamespaceBirthObservationCoreAsync(birth.OperationId, transaction, cancellationToken).ConfigureAwait(false) is not null)
-                throw new InvalidOperationException("Staged execution requires the latest action before first birth observation.");
-            _ = await ValidateNamespaceBirthLineageAsync(birth, null, true, RecoveryParentClaim(action), transaction, cancellationToken).ConfigureAwait(false);
-            await RequireNamespaceBirthReservationAsync(birth, transaction, cancellationToken).ConfigureAwait(false);
+            var action = await RequireNamespaceBirthRecoveryExecutionCoreAsync(recoveryId, transaction, cancellationToken).ConfigureAwait(false);
             transaction.Commit();
             return action;
         }
         finally { _gate.Release(); }
+    }
+
+    private async Task<MirrorPulseNamespaceBirthRecoveryAction> RequireNamespaceBirthRecoveryExecutionCoreAsync(Guid recoveryId,
+        SqliteTransaction transaction, CancellationToken cancellationToken)
+    {
+        var action = await ReadNamespaceBirthRecoveryActionCoreAsync(recoveryId, transaction, cancellationToken).ConfigureAwait(false)
+            ?? throw new FileNotFoundException("The original recovery action is missing.");
+        var latest = await ReadLatestNamespaceBirthRecoveryActionCoreAsync(action.BirthOperationId, transaction, cancellationToken).ConfigureAwait(false);
+        var birth = await ReadNamespaceBirthCoreAsync(action.BirthOperationId, transaction, cancellationToken).ConfigureAwait(false)
+            ?? throw new InvalidDataException("The original birth disappeared during admission.");
+        if (latest?.RecoveryId != recoveryId ||
+            await ReadNamespaceBirthObservationCoreAsync(birth.OperationId, transaction, cancellationToken).ConfigureAwait(false) is not null)
+            throw new InvalidOperationException("Staged execution requires the latest action before first birth observation.");
+        _ = await ValidateNamespaceBirthLineageAsync(birth, null, true, RecoveryParentClaim(action), transaction, cancellationToken).ConfigureAwait(false);
+        await RequireNamespaceBirthReservationAsync(birth, transaction, cancellationToken).ConfigureAwait(false);
+        return action;
     }
 
     public async Task<MirrorPulseNamespaceBirthRecoveryAction?> ReadLatestNamespaceBirthRecoveryActionAsync(Guid birthOperationId,

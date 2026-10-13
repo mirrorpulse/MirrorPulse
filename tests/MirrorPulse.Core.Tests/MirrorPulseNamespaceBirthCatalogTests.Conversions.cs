@@ -246,11 +246,11 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
     {
         using var fixture = new Fixture();
         await using (var first = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths)) { }
-        await ExecuteSqlAsync(fixture.Paths, "PRAGMA user_version=41;");
+        await ExecuteSqlAsync(fixture.Paths, "PRAGMA user_version=42;");
         await Assert.ThrowsExactlyAsync<InvalidDataException>(() => MirrorPulseProductCatalog.OpenAsync(fixture.Paths));
         await using var connection = Connection(fixture.Paths); await connection.OpenAsync();
         await using var query = connection.CreateCommand(); query.CommandText = "PRAGMA user_version;";
-        Assert.AreEqual(41L, await query.ExecuteScalarAsync());
+        Assert.AreEqual(42L, await query.ExecuteScalarAsync());
     }
 
     private static MirrorPulseNamespaceBirthConversionPreparation Conversion(MirrorPulseNamespaceBirthIntent birth,
