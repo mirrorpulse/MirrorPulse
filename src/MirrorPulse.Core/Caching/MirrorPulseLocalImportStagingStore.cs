@@ -85,6 +85,11 @@ public sealed class MirrorPulseLocalImportStagingStore
         catch { await input.DisposeAsync().ConfigureAwait(false); throw; }
     }
 
+    /// <summary>Opens an operation-bound private input for the Host's local namespace executor.</summary>
+    public async Task<MirrorPulseLocalImportInputLease> OpenLeaseAsync(Guid operationId, MirrorPulseNamespaceImportContent content,
+        CancellationToken cancellationToken = default) =>
+        new(operationId, content, await OpenVerifiedAsync(operationId, content, cancellationToken).ConfigureAwait(false));
+
     /// <summary>Removes only this operation's private input after the Host has completed the product operation.</summary>
     /// <remarks>Never call for an incomplete native operation; its input is needed for recovery.</remarks>
     public void RemoveCompleted(Guid operationId) => File.Delete(InputPath(operationId));
@@ -94,4 +99,17 @@ public sealed class MirrorPulseLocalImportStagingStore
         if (operationId == Guid.Empty) throw new ArgumentException("A stable import operation ID is required.", nameof(operationId));
         return Path.Combine(_directory, operationId.ToString("N") + ".bin");
     }
+}
+
+/// <summary>A verified private input kept against writers and deletion until the Host finishes copying.</summary>
+/// <remarks>Only the staging store creates this lease. It does not authorize a native target write.</remarks>
+public sealed class MirrorPulseLocalImportInputLease : IAsyncDisposable
+{
+    internal MirrorPulseLocalImportInputLease(Guid operationId, MirrorPulseNamespaceImportContent content, FileStream data)
+    { OperationId = operationId; Content = content; Data = data; }
+
+    public Guid OperationId { get; }
+    public MirrorPulseNamespaceImportContent Content { get; }
+    public FileStream Data { get; }
+    public ValueTask DisposeAsync() => Data.DisposeAsync();
 }

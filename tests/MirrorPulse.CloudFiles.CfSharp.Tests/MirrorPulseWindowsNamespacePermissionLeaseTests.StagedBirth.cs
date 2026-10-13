@@ -14,7 +14,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     private static async Task<NativeStagedBirth> StageNativeAbandonedBirthAsync(CloudFileSystem fileSystem,
         MirrorPulseCfSharpStateSession state, MirrorPulseProductCatalog catalog, MirrorPulseRootRouter router,
         MirrorPulseNamespaceExecutionSession role, InstanceId instanceId, MirrorPulseNamespacePermissionPreparation parent,
-        byte[] payload, CancellationToken token)
+        byte[] payload, CancellationToken token, MirrorPulseNamespaceImportContent? importContent = null, Guid? operationId = null)
     {
         NativeStagedBirth? staged = null;
         await role.RunNamespaceOperationAsync(async () =>
@@ -22,11 +22,14 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             CloudDirectory directory = fileSystem.GetDirectory("Docs");
             await using var parentGuard = await MirrorPulseWindowsNamespacePermissionLease.OpenAsync(directory, router, token);
             Assert.AreEqual(parent.Baseline.LocalObject, (await parentGuard.InspectAsync(token)).LocalObject);
-            var birth = new MirrorPulseNamespaceBirthIntent(1, Guid.NewGuid(), parent.Baseline.RootId!.Value,
+            var birth = new MirrorPulseNamespaceBirthIntent(1, operationId ?? Guid.NewGuid(), parent.Baseline.RootId!.Value,
                 parent.Baseline.EvidenceId, parent.Intent.OperationId, parent.Baseline.LocalObject,
-                "Docs/staged.bin", false, MirrorPulseNamespaceBirthOrigin.ControlledCreation, role.RoleSid.Value, DateTimeOffset.UtcNow);
+                "Docs/staged.bin", false, importContent is null ? MirrorPulseNamespaceBirthOrigin.ControlledCreation : MirrorPulseNamespaceBirthOrigin.Import,
+                role.RoleSid.Value, DateTimeOffset.UtcNow);
             CloudPlaceholderIdentity identity = router.CreateFileIdentity(instanceId, "docs", "local:" + birth.OperationId.ToString("N"));
-            var plan = new MirrorPulseNamespaceBirthPlan(1, birth.OperationId, identity.ItemId, identity.RemoteId, null, DateTimeOffset.UtcNow);
+            var plan = new MirrorPulseNamespaceBirthPlan(importContent is null ? 1 : 2, birth.OperationId, identity.ItemId, identity.RemoteId,
+                null, DateTimeOffset.UtcNow)
+            { Content = importContent };
             CloudFile child = fileSystem.GetFile(birth.RelativePath);
             await catalog.PrepareNamespaceBirthAsync(birth, token);
             await catalog.PrepareNamespaceBirthPlanAsync(plan, token);

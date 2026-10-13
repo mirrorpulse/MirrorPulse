@@ -59,6 +59,24 @@ public sealed class MirrorPulseLocalImportStagingStoreTests
     }
 
     [TestMethod]
+    public async Task TypedInputLeaseBindsItsOperationAndDigestToTheReadOnlyPrivateFile()
+    {
+        using var fixture = new Fixture();
+        await File.WriteAllBytesAsync(fixture.Source, [5, 8, 13]);
+        Guid operationId = Guid.NewGuid();
+        var store = new MirrorPulseLocalImportStagingStore(fixture.Paths);
+        var content = await store.StageAsync(operationId, fixture.Source);
+        File.Delete(fixture.Source);
+        await using var input = await store.OpenLeaseAsync(operationId, content);
+        Assert.AreEqual(operationId, input.OperationId);
+        Assert.AreEqual(content, input.Content);
+        Assert.IsFalse(input.Data.CanWrite);
+        Assert.AreEqual(0L, input.Data.Position);
+        Assert.AreEqual(5, input.Data.ReadByte());
+        await Assert.ThrowsAsync<IOException>(() => File.WriteAllBytesAsync(fixture.Input(operationId), [1]));
+    }
+
+    [TestMethod]
     [DataRow(true)]
     [DataRow(false)]
     public async Task ChangedLengthOrDigestRejectsInputBeforeItCanBeCopied(bool changeLength)
