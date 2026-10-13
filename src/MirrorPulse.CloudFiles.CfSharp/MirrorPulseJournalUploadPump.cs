@@ -152,12 +152,17 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
         return new([], 0, false);
     }
 
-    private async ValueTask ProjectRescanAsync(CancellationToken cancellationToken)
+    private async ValueTask ProjectRescanAsync(Guid generation, CancellationToken cancellationToken)
     {
+        IReadOnlyList<MirrorPulseRootRescanRequest> captured = await _catalog.ReadCapturedRootRescanRequestsAsync(generation, cancellationToken).ConfigureAwait(false);
         HashSet<RootId> pendingRoots = (await _catalog.ReadNamespaceDispatchFencedRootsAsync(cancellationToken).ConfigureAwait(false)).ToHashSet();
         foreach (RootRegistration root in _router.Registrations.Where(root => root.State == RootRegistrationState.Active &&
             _mayDispatch(root.InstanceId) && !pendingRoots.Contains(root.RootId)))
-            await _catalog.CompleteRootRescanAsync(root.RootId, cancellationToken).ConfigureAwait(false);
+        {
+            MirrorPulseRootRescanRequest? request = captured.SingleOrDefault(candidate => candidate.RootId == root.RootId);
+            if (request is not null)
+                await _catalog.CompleteRootRescanAsync(root.RootId, request.Generation, cancellationToken).ConfigureAwait(false);
+        }
         IReadOnlyList<RootId> deferred = await _catalog.ReadDeferredRescanRootsAsync(cancellationToken).ConfigureAwait(false);
         foreach (var roots in _router.Registrations.GroupBy(root => root.InstanceId))
             await _catalog.SaveInstanceRuntimeStateAsync(new(roots.Key, _mayDispatch(roots.Key) ? "Connected" : "Offline",

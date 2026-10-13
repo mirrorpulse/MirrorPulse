@@ -101,7 +101,7 @@ before or after each of these real persistence boundaries:
 | Product catalog | Product catalog command write | Old/new durable command state |
 | Pending remote batch | Host catalog opaque replay intent and candidate snapshot | No record before save, identical batch/snapshot after save |
 | Conflict copy | Flushed staging/hash/manifest save | Original untouched; incomplete intent before commit, verified copy after manifest commit |
-| Full rescan | Product scan generation/phase commit | Stable pending generation across process exit, with no copied Cloud Files journal |
+| Full rescan | Product scan generation/phase and captured root request commit | Stable pending generation across process exit; old scan completion preserves newer root requests, with no copied Cloud Files journal |
 
 All 28 combinations execute in the managed suite. The probe requires a fixture
 marker. It does not register a sync root, open user files, or install packages.

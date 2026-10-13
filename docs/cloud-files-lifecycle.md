@@ -66,18 +66,22 @@ journal. Restart repeats public discovery and uses stable mutation intents to
 avoid repeated remote writes. Permissions, cancellation and incomplete discovery
 leave the scan pending without authorizing deletion. A projection failure after
 official acknowledgement also retains the generation until recovery succeeds.
+Each deferred root request has its own durable generation. Entering discovery
+captures those requests in a fingerprinted product snapshot, including an
+explicit empty snapshot. Projection completes only the captured generation of
+an active, dispatchable, unfenced root. Requests made during discovery or
+acknowledgement survive the older scan; newly added and offline roots retain
+their obligations. Restart repeats discovery and captures current requests
+before acknowledgement. Migrated legacy markers become new administrative
+requests, without evidence that an earlier scan covered them.
 Rescan shares the per-instance scheduler with remote polling and streamed apply.
-Native conversion and update use CfSharp coordination. The current preview.2
-path requires a positive operation USN before final content verification and
-conditional in-sync confirmation. A missing or rejected precondition leaves
-`RemoteAccepted` and the scan generation pending. This boundary currently blocks
-complete native full-rescan acceptance.
-
-A disposable experiment validated exclusive protected references, complete
-content/identity verification and same-handle confirmation. The planned managed
-CfSharp operation will own that native boundary and official state recovery;
-MirrorPulse retains its anti-corruption layer and remote acceptance ledger.
-Production integration awaits that public API. See
+Native conversion, content confirmation and official state projection use
+CfSharp `0.1.0-preview.5` public APIs behind the anti-corruption layer. The actual
+registered policy must be `None`, as specified by the
+[content-only policy](content-sync-policy.md). A rejected native precondition or
+unfinished projection leaves `RemoteAccepted` and the scan generation pending.
+The historical independent experiment validates mechanisms; final product
+acceptance still requires the original native and installed reports. See
 [protected content confirmation](protected-content-confirmation.md) for evidence,
 ordinary-file identity requirements, and remaining cancellation/recovery gates.
 

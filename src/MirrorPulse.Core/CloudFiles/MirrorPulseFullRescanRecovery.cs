@@ -5,7 +5,7 @@ namespace MirrorPulse.Core.CloudFiles;
 /// <summary>Retains a scan generation across discovery, official acknowledgement and product projection gaps.</summary>
 public sealed class MirrorPulseFullRescanRecovery(MirrorPulseProductCatalog catalog,
     Func<CancellationToken, ValueTask<int>> rescan, Func<CancellationToken, ValueTask> acknowledge,
-    Func<CancellationToken, ValueTask> project)
+    Func<Guid, CancellationToken, ValueTask> project)
 {
     public async ValueTask<MirrorPulseFullRescanResult> RunAsync(MirrorPulseLocalChangeSignal signal, CancellationToken cancellationToken = default)
     {
@@ -23,7 +23,7 @@ public sealed class MirrorPulseFullRescanRecovery(MirrorPulseProductCatalog cata
         // Repeat discovery after restart, including a previous ack, because local files may
         // have changed. The mutation ledger prevents repeated remote side effects.
         MirrorPulseFullRescanResult result = await coordinator.HandleAsync(new(true), cancellationToken).ConfigureAwait(false);
-        await project(cancellationToken).ConfigureAwait(false);
+        await project(checkpoint.Generation, cancellationToken).ConfigureAwait(false);
         await catalog.CompleteFullRescanAsync(checkpoint.Generation, cancellationToken).ConfigureAwait(false);
         return result;
     }

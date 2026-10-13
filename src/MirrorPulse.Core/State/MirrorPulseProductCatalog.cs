@@ -98,12 +98,13 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                 }
             }
 
+            long currentVersion;
             await using (SqliteCommand version = connection.CreateCommand())
             {
                 version.CommandText = "PRAGMA user_version;";
-                long currentVersion = (long)(await version.ExecuteScalarAsync(cancellationToken)
+                currentVersion = (long)(await version.ExecuteScalarAsync(cancellationToken)
                     .ConfigureAwait(false) ?? 0L);
-                if (currentVersion > 47)
+                if (currentVersion > 48)
                 {
                     throw new InvalidDataException("The MP product catalog schema is newer than this Host supports.");
                 }
@@ -426,7 +427,8 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                 await EnsureNamespaceReplacementContentSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
                 await EnsureNamespaceReplacementRestorationSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
                 await EnsureNamespaceReplacementRoleSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
-                version.CommandText = "PRAGMA user_version=47;";
+                await EnsureRootRescanGenerationSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
+                version.CommandText = "PRAGMA user_version=48;";
                 await version.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
 

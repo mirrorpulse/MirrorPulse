@@ -133,7 +133,7 @@ public sealed class MirrorPulseFullRescanPolicyTests
             try
             {
                 var interrupted = new MirrorPulseFullRescanRecovery(catalog, policy.ReconcileAsync,
-                    feed.AcknowledgeFullRescanAsync, _ => ValueTask.CompletedTask);
+                    feed.AcknowledgeFullRescanAsync, (_, _) => ValueTask.CompletedTask);
                 bool permissionFailed = false;
                 try { await interrupted.RunAsync(new(true), timeout.Token); }
                 catch (UnauthorizedAccessException) { permissionFailed = true; }
@@ -148,7 +148,7 @@ public sealed class MirrorPulseFullRescanPolicyTests
             policy = new(fileSystem, feed, state, new(paths.SyncRootPath, [first, enabledSecond]), catalog, transport, transport,
                 _ => true, transport, transport, transport);
             var ackGap = new MirrorPulseFullRescanRecovery(catalog, policy.ReconcileAsync, feed.AcknowledgeFullRescanAsync,
-                _ => throw new IOException("Projection failed after native rescan acknowledgement."));
+                (_, _) => throw new IOException("Projection failed after native rescan acknowledgement."));
             await Assert.ThrowsExactlyAsync<IOException>(() => RetryRetainedConfirmationAsync(() => ackGap.RunAsync(new(false), timeout.Token).AsTask()));
             Assert.AreEqual(MirrorPulseFullRescanPhase.Acknowledging, (await catalog.ReadFullRescanAsync(timeout.Token))!.Phase);
             Assert.AreEqual(1, transport.Uploads[active]);
@@ -168,7 +168,12 @@ public sealed class MirrorPulseFullRescanPolicyTests
             policy = new(restarted, restartedFeed, restartedState, new(paths.SyncRootPath, [first, enabledSecond]), reopenedCatalog,
                 transport, transport, _ => true, transport, transport, transport);
             var recovered = new MirrorPulseFullRescanRecovery(reopenedCatalog, policy.ReconcileAsync, restartedFeed.AcknowledgeFullRescanAsync,
-                async token => await reopenedCatalog.CompleteRootRescanAsync(second.RootId, token));
+                async (generation, token) =>
+                {
+                    MirrorPulseRootRescanRequest request = (await reopenedCatalog.ReadCapturedRootRescanRequestsAsync(generation, token)).Single();
+                    Assert.AreEqual(second.RootId, request.RootId);
+                    Assert.IsTrue(await reopenedCatalog.CompleteRootRescanAsync(request.RootId, request.Generation, token));
+                });
             Assert.IsTrue((await recovered.RunAsync(new(false), timeout.Token)).WasRequired);
             Assert.IsNull(await reopenedCatalog.ReadFullRescanAsync(timeout.Token));
             Assert.IsEmpty(await reopenedCatalog.ReadDeferredRescanRootsAsync(timeout.Token));
