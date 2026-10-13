@@ -66,7 +66,8 @@
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeRegisteredBornProtectionUsesMovedParentAndRotatedRoleAcrossRestart",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeControlledDirectoryMovementSettlesEveryMemberAndRecoversAcrossOwners",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeImportContentRecoversOriginalBindingAndPreservesLaterEditsAcrossOwners",
-    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeControlledImportPreparesWithoutCreationAndReplaysWithoutSourceAcrossRestart"
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeControlledImportPreparesWithoutCreationAndReplaysWithoutSourceAcrossRestart",
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeReplacementValidationRetainsBackupBindingAndIdentityDuringOrdinaryFileWrites"
   ],
   "required": {
     "namespace": [
@@ -95,6 +96,7 @@
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeControlledDirectoryMovementSettlesEveryMemberAndRecoversAcrossOwners",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeImportContentRecoversOriginalBindingAndPreservesLaterEditsAcrossOwners",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeControlledImportPreparesWithoutCreationAndReplaysWithoutSourceAcrossRestart",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeReplacementValidationRetainsBackupBindingAndIdentityDuringOrdinaryFileWrites",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseNamespaceExecutionSessionTests.NamespaceBirthUsesCurrentUserOwnerWithoutChangingTheNormalSourceToken"
     ],
     "native": [
@@ -143,7 +145,8 @@
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeRegisteredBornProtectionUsesMovedParentAndRotatedRoleAcrossRestart",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeControlledDirectoryMovementSettlesEveryMemberAndRecoversAcrossOwners",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeImportContentRecoversOriginalBindingAndPreservesLaterEditsAcrossOwners",
-      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeControlledImportPreparesWithoutCreationAndReplaysWithoutSourceAcrossRestart"
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeControlledImportPreparesWithoutCreationAndReplaysWithoutSourceAcrossRestart",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeReplacementValidationRetainsBackupBindingAndIdentityDuringOrdinaryFileWrites"
     ],
     "official": [
       "MirrorPulse.Core.Tests.FtpWorkerProcessTests.SignedFtpReleaseReadsAndConditionallyUploadsThroughHostAndCfSharp",
