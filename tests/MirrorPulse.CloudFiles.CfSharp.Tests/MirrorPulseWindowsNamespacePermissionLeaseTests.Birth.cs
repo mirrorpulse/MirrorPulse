@@ -42,6 +42,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         var birthProtections = new List<MirrorPulseNamespaceBirthProtection>();
         var nestedBirths = new List<NativeNestedBirth>();
         var members = new Dictionary<Guid, MirrorPulseNamespaceMemberRegistration>();
+        NativeMemberPositionHistory? positionHistory = null;
         NativeStagedBirth? stagedBirth = null;
         Guid[] journalIds = [];
         Guid[] nestedJournalIds = [];
@@ -375,8 +376,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 Assert.AreEqual(originalFileExpectedRemoteId, retainedOriginalIdentity.RemoteId);
                 if (owner == 3)
                 {
-                    await VerifyNativeMemberLocationAfterPublicMoveAsync(fileSystem, state, catalog, router, nextRole, namespaceActor,
-                        members[births[0].Birth.OperationId], members[births[1].Birth.OperationId], feed, journalIds, births[1].Plan.ItemId, paths, timeout.Token);
+                    positionHistory = await VerifyNativeMemberLocationAfterPublicMoveAsync(fileSystem, state, catalog, router, nextRole, namespaceActor,
+                        members[births[0].Birth.OperationId], members[births[1].Birth.OperationId], feed, journalIds, births[1].Plan.ItemId, timeout.Token);
                     var retirementMember = members[nestedBirths[^1].Birth.OperationId];
                     var retirement = new MirrorPulseNamespaceRetirementCoordinator(fileSystem, catalog, router, nextRole, namespaceActor);
                     var retirementPrepared = await retirement.PrepareAsync(Guid.NewGuid(), retirementMember.MemberId, timeout.Token);
@@ -397,6 +398,16 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 }
                 TestContext.WriteLine($"ControlledBirth: owner={owner}; architecture={RuntimeInformation.ProcessArchitecture}; roleOnlyOrdinaryBirth=True; ordinaryBindingDurableBeforeConversion=True; sameObjectConversion=True; fileModeOpen=True; aliasesDenied=True; originalsRetained=True; nativeBirthUnrecorded={owner == 0}; officialJournalIds={journalIds.Length}; sourceReads={source.Reads}; parentAclClosed=True; elevatedCaller={new WindowsPrincipal(caller).IsInRole(WindowsBuiltInRole.Administrator)}; hostIntegrated=False.");
             }
+            // All previous Catalog owners and Cloud Files sessions have released their leases.
+            Assert.IsNotNull(positionHistory);
+            await using var reopened = await MirrorPulseProductCatalog.OpenAsync(paths, timeout.Token);
+            Assert.AreEqual(positionHistory.First, await reopened.ReadNamespaceMemberPositionAsync(positionHistory.MemberId,
+                positionHistory.First.OperationId, timeout.Token));
+            Assert.AreEqual(positionHistory.Last, await reopened.ReadNamespaceMemberPositionAsync(positionHistory.MemberId,
+                positionHistory.Last.OperationId, timeout.Token));
+            Assert.AreEqual(positionHistory.Last.OperationId,
+                (await reopened.ReadNamespaceMemberLocationAsync(positionHistory.MemberId, timeout.Token)).CurrentPositionOperationId);
+            TestContext.WriteLine("ControlledMemberPositionReopen: previousOwnersDisposed=True; immutableFirstAndLast=True; currentHeadRetained=True; hostIntegrated=False.");
         }
         finally
         {

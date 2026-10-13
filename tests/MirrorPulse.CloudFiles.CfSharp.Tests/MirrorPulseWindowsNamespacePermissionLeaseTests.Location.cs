@@ -1,7 +1,6 @@
 using System.Security.AccessControl;
 using CfSharp;
 using MirrorPulse.CloudFiles.CfSharp;
-using MirrorPulse.Core.Configuration;
 using MirrorPulse.Core.State;
 using MirrorPulse.Core.Sync;
 
@@ -9,11 +8,14 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 
 public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
 {
-    private async Task VerifyNativeMemberLocationAfterPublicMoveAsync(CloudFileSystem fileSystem, MirrorPulseCfSharpStateSession state,
+    private sealed record NativeMemberPositionHistory(Guid MemberId, MirrorPulseNamespaceMemberPosition First,
+        MirrorPulseNamespaceMemberPosition Last);
+
+    private async Task<NativeMemberPositionHistory> VerifyNativeMemberLocationAfterPublicMoveAsync(CloudFileSystem fileSystem, MirrorPulseCfSharpStateSession state,
         MirrorPulseProductCatalog catalog, MirrorPulseRootRouter router, MirrorPulseNamespaceExecutionSession role,
         MirrorPulseNamespaceActor actor, MirrorPulseNamespaceMemberRegistration member,
         MirrorPulseNamespaceMemberRegistration destinationParent, CloudLocalChangeFeed feed,
-        Guid[] retainedJournalIds, Guid directoryItemId, MirrorPulseStoragePaths paths, CancellationToken token)
+        Guid[] retainedJournalIds, Guid directoryItemId, CancellationToken token)
     {
         CloudFile original = fileSystem.GetFile(member.RelativePath);
         CloudFile target = fileSystem.GetFile(destinationParent.RelativePath + "/member-location-probe.bin");
@@ -138,12 +140,6 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         Assert.IsNotNull(finalPosition);
         Assert.AreEqual(back.OperationId, finalPosition.PreviousPositionOperationId);
         Assert.AreEqual(forward.OperationId, finalPosition.CompletedMoveOperationId);
-        await using (var reopened = await MirrorPulseProductCatalog.OpenAsync(paths, token))
-        {
-            Assert.AreEqual(firstPosition, await reopened.ReadNamespaceMemberPositionAsync(member.MemberId, intent.OperationId, token));
-            Assert.AreEqual(finalPosition, await reopened.ReadNamespaceMemberPositionAsync(member.MemberId, forward.OperationId, token));
-            Assert.AreEqual(forward.OperationId, (await reopened.ReadNamespaceMemberLocationAsync(member.MemberId, token)).CurrentPositionOperationId);
-        }
         Assert.AreEqual(new(member.MemberId, destinationParent.MemberId, target.RelativePath.Replace('\\', '/'), forward.OperationId),
             await catalog.ReadNamespaceMemberLocationAsync(member.MemberId, token));
         Assert.AreEqual(member, await catalog.ReadNamespaceMemberAsync(member.MemberId, token));
@@ -153,6 +149,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() => File.Delete(target.FullPath), token));
         CollectionAssert.IsSubsetOf(retainedJournalIds,
             (await WaitForBirthJournalAsync(feed, intent.ItemId, directoryItemId, token)).Select(change => change.OperationId).ToArray());
-        TestContext.WriteLine("ControlledMemberLocation: sharedAdmission=True; officialItemIdLookup=True; publicMoveTo=True; nativeBindingAndBytes=True; originalRegistrationUnchanged=True; journalIdsRetained=True; pendingMemberMoveFencesPoll=True; pendingMemberMoveDefersJournal=True; productionMoveCoordinator=True; productionMovePreparation=True; nativeMemberInspection=True; preparationReplay=True; changedDescriptorRejectedBeforeStart=True; nativeObservationProjectionInterruptionsRecovered=True; immutableStartAndFacts=True; currentNameCommitted=True; completedReplay=True; repeatedMoves=True; historicalReplayDoesNotRewind=True; positionFactsRequireCompletion=True; positionHistoryRetained=True; productCatalogReopened=True; hostIntegrated=False.");
+        TestContext.WriteLine("ControlledMemberLocation: sharedAdmission=True; officialItemIdLookup=True; publicMoveTo=True; nativeBindingAndBytes=True; originalRegistrationUnchanged=True; journalIdsRetained=True; pendingMemberMoveFencesPoll=True; pendingMemberMoveDefersJournal=True; productionMoveCoordinator=True; productionMovePreparation=True; nativeMemberInspection=True; preparationReplay=True; changedDescriptorRejectedBeforeStart=True; nativeObservationProjectionInterruptionsRecovered=True; immutableStartAndFacts=True; currentNameCommitted=True; completedReplay=True; repeatedMoves=True; historicalReplayDoesNotRewind=True; positionFactsRequireCompletion=True; positionHistoryRetained=True; hostIntegrated=False.");
+        return new(member.MemberId, firstPosition, finalPosition);
     }
 }
