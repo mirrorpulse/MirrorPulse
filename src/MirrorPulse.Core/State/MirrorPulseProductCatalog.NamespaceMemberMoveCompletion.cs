@@ -45,48 +45,7 @@ public sealed partial class MirrorPulseProductCatalog
             var member = await ReadNamespaceMemberCoreAsync(intent.MemberId, transaction, cancellationToken).ConfigureAwait(false)
                 ?? throw new InvalidDataException("The move member disappeared before position settlement.");
             var previousPosition = await PrepareNamespaceMemberPositionSuccessorAsync(member, transaction, cancellationToken).ConfigureAwait(false);
-            await using (SqliteCommand current = _connection.CreateCommand())
-            {
-                current.Transaction = transaction;
-                current.CommandText = "SELECT parent_member_id,child_name_key FROM namespace_member_names WHERE member_id=$member;";
-                current.Parameters.AddWithValue("$member", intent.MemberId.ToString("D"));
-                await using SqliteDataReader reader = await current.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-                if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ||
-                    reader.GetString(0) != intent.Source.ParentMemberId.ToString("D") ||
-                    reader.GetString(1) != NamespaceMemberNameKey(intent.Source.RelativePath))
-                    throw new InvalidDataException("The source member no longer owns its admitted current name.");
-            }
-
-            await using (SqliteCommand update = _connection.CreateCommand())
-            {
-                update.Transaction = transaction;
-                update.CommandText = "UPDATE namespace_member_names SET parent_member_id=$parent,child_name_key=$name WHERE member_id=$member;";
-                update.Parameters.AddWithValue("$parent", intent.Target.ParentMemberId.ToString("D"));
-                update.Parameters.AddWithValue("$name", NamespaceMemberNameKey(intent.Target.RelativePath));
-                update.Parameters.AddWithValue("$member", intent.MemberId.ToString("D"));
-                if (await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
-                    throw new InvalidDataException("The source member name disappeared before handover.");
-            }
-
-            byte[] payload = JsonSerializer.SerializeToUtf8Bytes(completion, TopologyJsonOptions);
-            if (payload.Length > NamespaceMemberMoveFactLimit)
-                throw new ArgumentException("Move completion must be bounded.", nameof(completion));
-            await using (SqliteCommand insert = _connection.CreateCommand())
-            {
-                insert.Transaction = transaction;
-                insert.CommandText = """
-                    INSERT INTO namespace_member_move_completions(operation_id,member_id,payload,fingerprint)
-                    VALUES($operation,$member,$payload,$fingerprint);
-                    DELETE FROM namespace_member_move_pending WHERE root_id=$root AND operation_id=$operation;
-                    DELETE FROM namespace_member_move_reservations WHERE operation_id=$operation;
-                    """;
-                insert.Parameters.AddWithValue("$operation", completion.OperationId.ToString("D"));
-                insert.Parameters.AddWithValue("$member", intent.MemberId.ToString("D"));
-                insert.Parameters.AddWithValue("$root", intent.RootId.ToString());
-                insert.Parameters.AddWithValue("$payload", payload);
-                insert.Parameters.AddWithValue("$fingerprint", SHA256.HashData(payload));
-                await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-            }
+            await CommitNamespaceMemberMoveRootAsync(intent, completion, transaction, cancellationToken).ConfigureAwait(false);
             await InsertNamespaceMemberPositionCoreAsync(new(1, intent.OperationId, intent.MemberId,
                 previousPosition.OperationId, intent.Target.ParentMemberId, intent.Target.RelativePath,
                 intent.OperationId, completion.VerifiedAt, previousPosition.LegacyAnchor), transaction, cancellationToken).ConfigureAwait(false);
@@ -94,6 +53,53 @@ public sealed partial class MirrorPulseProductCatalog
             return completion;
         }
         finally { _gate.Release(); }
+    }
+
+    private async Task CommitNamespaceMemberMoveRootAsync(MirrorPulseNamespaceMemberMoveIntent intent,
+        MirrorPulseNamespaceMemberMoveCompletion completion, SqliteTransaction transaction, CancellationToken cancellationToken)
+    {
+        await using (SqliteCommand current = _connection.CreateCommand())
+        {
+            current.Transaction = transaction;
+            current.CommandText = "SELECT parent_member_id,child_name_key FROM namespace_member_names WHERE member_id=$member;";
+            current.Parameters.AddWithValue("$member", intent.MemberId.ToString("D"));
+            await using SqliteDataReader reader = await current.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ||
+                reader.GetString(0) != intent.Source.ParentMemberId.ToString("D") ||
+                reader.GetString(1) != NamespaceMemberNameKey(intent.Source.RelativePath))
+                throw new InvalidDataException("The source member no longer owns its admitted current name.");
+        }
+
+        await using (SqliteCommand update = _connection.CreateCommand())
+        {
+            update.Transaction = transaction;
+            update.CommandText = "UPDATE namespace_member_names SET parent_member_id=$parent,child_name_key=$name WHERE member_id=$member;";
+            update.Parameters.AddWithValue("$parent", intent.Target.ParentMemberId.ToString("D"));
+            update.Parameters.AddWithValue("$name", NamespaceMemberNameKey(intent.Target.RelativePath));
+            update.Parameters.AddWithValue("$member", intent.MemberId.ToString("D"));
+            if (await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
+                throw new InvalidDataException("The source member name disappeared before handover.");
+        }
+
+        byte[] payload = JsonSerializer.SerializeToUtf8Bytes(completion, TopologyJsonOptions);
+        if (payload.Length > NamespaceMemberMoveFactLimit)
+            throw new ArgumentException("Move completion must be bounded.", nameof(completion));
+        await using (SqliteCommand insert = _connection.CreateCommand())
+        {
+            insert.Transaction = transaction;
+            insert.CommandText = """
+                    INSERT INTO namespace_member_move_completions(operation_id,member_id,payload,fingerprint)
+                    VALUES($operation,$member,$payload,$fingerprint);
+                    DELETE FROM namespace_member_move_pending WHERE root_id=$root AND operation_id=$operation;
+                    DELETE FROM namespace_member_move_reservations WHERE operation_id=$operation;
+                    """;
+            insert.Parameters.AddWithValue("$operation", completion.OperationId.ToString("D"));
+            insert.Parameters.AddWithValue("$member", intent.MemberId.ToString("D"));
+            insert.Parameters.AddWithValue("$root", intent.RootId.ToString());
+            insert.Parameters.AddWithValue("$payload", payload);
+            insert.Parameters.AddWithValue("$fingerprint", SHA256.HashData(payload));
+            await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
     }
 
     public async Task<MirrorPulseNamespaceMemberMoveCompletion?> ReadNamespaceMemberMoveCompletionAsync(
@@ -134,7 +140,11 @@ public sealed partial class MirrorPulseProductCatalog
         try
         {
             if (completion.IsDirectory)
-                throw new InvalidOperationException("A directory cannot be settled by a single-item receipt.");
+            {
+                var subtree = await ReadNamespaceDirectoryMoveCompletionCoreAsync(operationId, transaction, token).ConfigureAwait(false)
+                    ?? throw new InvalidDataException("A directory completion requires its complete subtree settlement.");
+                if (subtree.Root != completion) throw new InvalidDataException("The directory root and subtree receipts disagree.");
+            }
             await ValidateNamespaceMemberMoveCompletionReferencesAsync(completion, transaction, token).ConfigureAwait(false);
         }
         catch (Exception error) when (error is InvalidOperationException or FileNotFoundException)

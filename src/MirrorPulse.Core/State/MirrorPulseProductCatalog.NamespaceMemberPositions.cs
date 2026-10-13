@@ -118,6 +118,19 @@ public sealed partial class MirrorPulseProductCatalog
             ?? throw new InvalidDataException("The position lost its affecting move intent.");
         var row = await ReadNamespaceMemberMoveCompletionRowAsync(position.OperationId, transaction, token).ConfigureAwait(false)
             ?? throw new InvalidDataException("The position lost its completed affecting move.");
+        if (row.Completion.IsDirectory)
+        {
+            var subtree = await ReadNamespaceDirectoryMoveCompletionCoreAsync(position.OperationId, transaction, token).ConfigureAwait(false)
+                ?? throw new InvalidDataException("The affecting directory move lost its complete subtree settlement.");
+            var retained = _namespaceHistoryReads.GetOrCreateValue(transaction).DirectoryCompletions[position.OperationId];
+            if (!retained.MemberIndexes.TryGetValue(member.MemberId, out int index) ||
+                member.MemberId != position.MemberId || member.RegisteredAt >= position.VerifiedAt ||
+                member.LocalObject != retained.Snapshot.Entries[index].LocalObject || member.OwnerSid != move.OwnerSid ||
+                member.RootId != move.RootId || move.PreparedAt >= position.VerifiedAt ||
+                position != DirectoryMovePosition(subtree, retained.Snapshot.Entries[index], index))
+                throw new InvalidDataException("An ancestor position must follow this member's exact complete subtree settlement.");
+            return;
+        }
         if (member.MemberId != position.MemberId || member.RegisteredAt >= position.VerifiedAt ||
             move.MemberId != member.MemberId || row.MemberId != member.MemberId || move.LocalObject != member.LocalObject ||
             move.OwnerSid != member.OwnerSid || move.RootId != member.RootId || position.CompletedMoveOperationId != move.OperationId ||

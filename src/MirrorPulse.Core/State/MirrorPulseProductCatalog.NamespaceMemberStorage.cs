@@ -97,7 +97,13 @@ public sealed partial class MirrorPulseProductCatalog
         SqliteTransaction transaction, CancellationToken token)
     {
         var location = await ReadNamespaceMemberLocationCoreAsync(member, transaction, token).ConfigureAwait(false);
-        return location.ParentMemberId == parentMemberId && NamespaceMemberNameKey(location.RelativePath) == nameKey;
+        var parent = await ReadNamespaceMemberRowAsync(parentMemberId, transaction, token).ConfigureAwait(false)
+            ?? throw new InvalidDataException("The current name lost its direct parent's registered object.");
+        var parentLocation = await ReadNamespaceMemberLocationCoreAsync(parent, transaction, token).ConfigureAwait(false);
+        int separator = location.RelativePath.LastIndexOf('/');
+        string parentPath = separator < 0 ? string.Empty : location.RelativePath[..separator];
+        return location.ParentMemberId == parentMemberId && NamespaceMemberNameKey(location.RelativePath) == nameKey &&
+            parentPath == parentLocation.RelativePath;
     }
 
     private async Task RequireNamespaceMemberPendingNameAsync(MirrorPulseNamespaceMemberRegistration member,
