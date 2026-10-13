@@ -33,7 +33,7 @@ public sealed class MirrorPulseNamespaceReplacementContentWriter(MirrorPulseProd
         var retained = await catalog.ReadNamespaceReplacementExecutionAsync(operationId, cancellationToken).ConfigureAwait(false)
             ?? throw new FileNotFoundException("The original replacement admission is missing.");
         if (retained.ContentCompletion is not null) return retained.ContentCompletion;
-        var action = retained.Action ?? throw new InvalidOperationException("Replacement copying requires its before-write permission action.");
+        var action = RequireCurrentAction(retained);
         var intent = retained.Intent;
         if (action.RoleSid != execution.RoleSid.Value || action.OwnerSid != execution.OwnerSid.Value ||
             !MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(
@@ -44,7 +44,7 @@ public sealed class MirrorPulseNamespaceReplacementContentWriter(MirrorPulseProd
             identity is null || identity.ItemId != intent.Original.Identity.ItemId || identity.RemoteId != intent.Original.Identity.RemoteId)
             throw new InvalidOperationException("Copying requires the original file, public identity and current namespace role's exact policy.");
         var parentProof = await ReadCurrentParentAsync(catalog, intent, cancellationToken).ConfigureAwait(false);
-        if (parentProof.Context.Protection.RoleSid != action.RoleSid || !parentProof.Context.Member.IsDirectory ||
+        if (!parentProof.Context.Member.IsDirectory ||
             parent.RelativePath.Replace('\\', '/') != parentProof.Context.Location.RelativePath)
             throw new InvalidDataException("The original parent protection or current role changed before replacement copying.");
         await using var parentGuard = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(parent, router, cancellationToken).ConfigureAwait(false);
@@ -88,6 +88,16 @@ public sealed class MirrorPulseNamespaceReplacementContentWriter(MirrorPulseProd
         return parent;
     }
 
+    internal static MirrorPulseNamespaceReplacementAction RequireCurrentAction(MirrorPulseNamespaceReplacementExecution facts)
+    {
+        var first = facts.Action ?? throw new InvalidOperationException("Replacement requires its immutable first permission action.");
+        if (facts.RoleActions.Count == 0) return first;
+        var current = facts.RoleActions[^1];
+        if (facts.RoleHandoff?.RecoveryId != current.RecoveryId)
+            throw new InvalidOperationException("Replacement requires the current role's independently recorded original-object handoff.");
+        return current.Action;
+    }
+
     /// <summary>Byte persistence boundary; the native caller separately retains and freshly checks original object and parent guards.</summary>
     internal static async Task<MirrorPulseNamespaceReplacementContentCompletion> CopyRetainedAsync(MirrorPulseProductCatalog catalog,
         MirrorPulseLocalReplacementBackupStore backups, Guid operationId, FileStream? target, MirrorPulseLocalImportInputLease? input,
@@ -98,7 +108,9 @@ public sealed class MirrorPulseNamespaceReplacementContentWriter(MirrorPulseProd
         var retained = await catalog.ReadNamespaceReplacementExecutionAsync(operationId, cancellationToken).ConfigureAwait(false)
             ?? throw new FileNotFoundException("The original replacement admission is missing.");
         if (retained.ContentCompletion is not null) return retained.ContentCompletion;
-        var action = retained.Action ?? throw new InvalidOperationException("Copying requires the original before-write action.");
+        var action = RequireCurrentAction(retained);
+        Guid firstActionId = retained.Action!.ActionId;
+        Guid? authorityId = retained.RoleActions.Count == 0 ? null : action.ActionId;
         if (target is null || !target.CanRead || !target.CanWrite || !target.CanSeek || input is null ||
             input.OperationId != operationId || input.Content != retained.Intent.Content)
             throw new InvalidOperationException("Replacement copying requires its retained read-write object and verified original input lease.");
@@ -109,16 +121,17 @@ public sealed class MirrorPulseNamespaceReplacementContentWriter(MirrorPulseProd
         {
             var oldContent = await backups.StageRetainedAsync(operationId, target, cancellationToken).ConfigureAwait(false);
             var observed = await inspect(cancellationToken).ConfigureAwait(false); RequireRoleOnly(observed);
-            backup = await catalog.RecordNamespaceReplacementBackupAsync(new(1, operationId, action.ActionId, oldContent,
+            backup = await catalog.RecordNamespaceReplacementBackupAsync(new(authorityId is null ? 1 : 2, operationId, firstActionId, oldContent,
                 new(observed.Object.LocalObject, observed.Object.OwnerSid, observed.Object.Dacl, observed.Object.ObservedAt),
-                observed.Object.LinkCount!.Value), CancellationToken.None).ConfigureAwait(false);
+                observed.Object.LinkCount!.Value)
+            { AuthorityRecoveryId = authorityId }, CancellationToken.None).ConfigureAwait(false);
         }
         // Retain and independently verify the first old backup even after an interrupted write.
         await using var oldBytes = await backups.OpenLeaseAsync(operationId, backup.Content, cancellationToken).ConfigureAwait(false);
         CancellationToken durable = CancellationToken.None;
         await CheckpointAsync(MirrorPulseNamespaceReplacementContentCheckpoint.AfterBackupRecorded).ConfigureAwait(false);
         if (retained.WriteStart is null)
-            _ = await catalog.RecordNamespaceReplacementWriteStartAsync(new(1, operationId, action.ActionId, DateTimeOffset.UtcNow), durable).ConfigureAwait(false);
+            _ = await catalog.RecordNamespaceReplacementWriteStartAsync(new(1, operationId, firstActionId, DateTimeOffset.UtcNow), durable).ConfigureAwait(false);
         await CheckpointAsync(MirrorPulseNamespaceReplacementContentCheckpoint.AfterWriteStarted).ConfigureAwait(false);
         RequireRoleOnly(await inspect(durable).ConfigureAwait(false));
         bool alreadyContainsInput = false;
@@ -140,9 +153,10 @@ public sealed class MirrorPulseNamespaceReplacementContentWriter(MirrorPulseProd
         var final = await inspect(durable).ConfigureAwait(false); RequireRoleOnly(final);
         if (final.IsInSync && backup.Content != retained.Intent.Content)
             throw new InvalidDataException("Changed local content must remain dirty before remote acceptance.");
-        var completion = await catalog.RecordNamespaceReplacementContentCompletionAsync(new(1, operationId, action.ActionId,
+        var completion = await catalog.RecordNamespaceReplacementContentCompletionAsync(new(authorityId is null ? 1 : 2, operationId, firstActionId,
             retained.Intent.Content, new(final.Object.LocalObject, final.Object.OwnerSid, final.Object.Dacl, final.Object.ObservedAt),
-            final.Object.LinkCount!.Value, final.IsPlaceholder, final.IsInSync, final.PlaceholderIdentity), durable).ConfigureAwait(false);
+            final.Object.LinkCount!.Value, final.IsPlaceholder, final.IsInSync, final.PlaceholderIdentity)
+        { AuthorityRecoveryId = authorityId }, durable).ConfigureAwait(false);
         await CheckpointAsync(MirrorPulseNamespaceReplacementContentCheckpoint.AfterContentRecorded).ConfigureAwait(false);
         return completion;
 

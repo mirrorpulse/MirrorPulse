@@ -38,9 +38,9 @@ public sealed partial class MirrorPulseProductCatalog
                 transaction.Commit(); return replay.Value.Value;
             }
             await RequireReplacementIdAvailableCoreAsync(restoration.RestorationId, transaction, cancellationToken).ConfigureAwait(false);
-            RequireReplacementRestorationReferences(restoration, execution);
+            RequireReplacementRestorationReferences(restoration, execution, requireCurrent: true);
             if (restoration.PreviousRestorationId != execution.Restoration?.RestorationId ||
-                execution.RestorationResult is { ProductVerified: true } || execution.RestorationResult is { Drained: false } ||
+                execution.RestorationResult is { ProductVerified: true } && execution.Restoration?.ActionId == restoration.ActionId || execution.RestorationResult is { Drained: false } ||
                 execution.Restoration is { } previous && restoration.PreparedAt < previous.PreparedAt ||
                 execution.RestorationResult is { } result && restoration.PreparedAt < result.RecordedAt)
                 throw new InvalidOperationException("A new restoration must retain its latest predecessor and cannot supersede verified or undrained work.");
@@ -91,6 +91,7 @@ public sealed partial class MirrorPulseProductCatalog
             }
             if (execution.Restoration?.RestorationId != result.RestorationId)
                 throw new InvalidOperationException("A superseded restoration cannot acquire a new late result.");
+            _ = RequireReplacementRestorationAuthority(restoration.Value, execution, result.RecordedAt, requireCurrent: true);
             await RequireNamespaceReplacementPendingCoreAsync(execution.Intent, transaction, cancellationToken).ConfigureAwait(false);
             byte[] payload = NamespaceReplacementPayload(result);
             await using var insert = _connection.CreateCommand(); insert.Transaction = transaction;
@@ -143,7 +144,8 @@ public sealed partial class MirrorPulseProductCatalog
                     ?? throw new InvalidOperationException("A restoration lost its predecessor.");
                 var priorResult = await ReadReplacementRestorationResultCoreAsync(previous, transaction, token).ConfigureAwait(false);
                 if (predecessor.Sequence >= current.Sequence || current.Value.PreparedAt < predecessor.Value.PreparedAt ||
-                    priorResult is { ProductVerified: true } or { Drained: false } || priorResult is not null && current.Value.PreparedAt < priorResult.RecordedAt)
+                    priorResult is { ProductVerified: true } && predecessor.Value.ActionId == current.Value.ActionId ||
+                    priorResult is { Drained: false } || priorResult is not null && current.Value.PreparedAt < priorResult.RecordedAt)
                     throw new InvalidOperationException("The restoration predecessor order is inconsistent.");
                 current = predecessor;
             }
@@ -185,12 +187,13 @@ public sealed partial class MirrorPulseProductCatalog
         return value;
     }
 
-    private static void RequireReplacementRestorationReferences(MirrorPulseNamespaceReplacementRestoration restoration, MirrorPulseNamespaceReplacementExecution execution)
+    private static void RequireReplacementRestorationReferences(MirrorPulseNamespaceReplacementRestoration restoration, MirrorPulseNamespaceReplacementExecution execution,
+        bool requireCurrent = false)
     {
-        if (execution.ContentCompletion is not { } copied || execution.Action is not { } action ||
-            restoration.OperationId != execution.Intent.OperationId || restoration.ActionId != action.ActionId ||
+        var action = RequireReplacementRestorationAuthority(restoration, execution, restoration.PreparedAt, requireCurrent);
+        if (execution.ContentCompletion is not { } copied || restoration.OperationId != execution.Intent.OperationId ||
             restoration.Parent.Context.Member.MemberId != execution.Intent.Original.Context.Location.ParentMemberId ||
-            restoration.Parent.Context.Member.RootId != execution.Intent.RootId || restoration.Parent.Context.Protection.RoleSid != action.RoleSid ||
+            restoration.Parent.Context.Member.RootId != execution.Intent.RootId || action.LocalObject != execution.Action!.LocalObject ||
             restoration.PreparedAt < copied.Verification.ObservedAt)
             throw new InvalidOperationException("Restoration requires copied content, its original action and the admitted current managed parent.");
     }
@@ -198,7 +201,7 @@ public sealed partial class MirrorPulseProductCatalog
     private static void RequireReplacementRestorationResultReferences(MirrorPulseNamespaceReplacementRestorationResult result,
         MirrorPulseNamespaceReplacementRestoration restoration, MirrorPulseNamespaceReplacementExecution execution)
     {
-        var action = execution.Action ?? throw new InvalidOperationException("The native result lost its original replacement action.");
+        var action = RequireReplacementRestorationAuthority(restoration, execution, result.RecordedAt, requireCurrent: false);
         if (result.OperationId != restoration.OperationId || result.RestorationId != restoration.RestorationId ||
             result.ExpectedObject != action.LocalObject || result.RecordedAt < restoration.PreparedAt)
             throw new InvalidOperationException("The actual native result requires its before-scope intent and original requested binding.");
@@ -217,6 +220,13 @@ public sealed partial class MirrorPulseProductCatalog
             result.PlaceholderIdentity != execution.Intent.OriginalPlaceholderIdentity ||
             result.IsInSync == true && execution.Backup!.Content != execution.Intent.Content)
             throw new InvalidOperationException("Product restoration verification requires the completed public scope, drained projection and separate original-object and parent protection observations.");
+    }
+
+    private static MirrorPulseNamespaceReplacementAction RequireReplacementRestorationAuthority(MirrorPulseNamespaceReplacementRestoration restoration,
+        MirrorPulseNamespaceReplacementExecution execution, DateTimeOffset observedAt, bool requireCurrent)
+    {
+        var first = execution.Action ?? throw new InvalidOperationException("The native restoration lost its first permission action.");
+        return RequireReplacementCopyAuthority(execution, restoration.ActionId == first.ActionId ? null : restoration.ActionId, observedAt, requireCurrent);
     }
 
     private static void ValidateReplacementRestoration(MirrorPulseNamespaceReplacementRestoration restoration)

@@ -681,9 +681,18 @@ validate the original handoff even after another role is admitted. Version 1
 payloads and fingerprints remain unchanged. A later role cannot replace the first
 backup or copy receipt, and missing handoff history keeps recovery fenced.
 
+The production role recovery component persists the new action before using the
+shared owner metadata handoff. The action preserves the original binding and
+identity and derives the current role's closed policy. Copying and restoration
+use that action only after its independent handoff observation is retained. An
+earlier verified scope remains historical when a new role restores access; the
+new scope retains it as a predecessor and separately verifies current protection.
+The actual parent must remain closed, without requiring an invented prior parent
+rotation. A retained copy receipt never authorizes recopying later local edits.
+
 This component does not release root reservations, mark a tree ready, accept
-remote content or acknowledge journal records. Current-role recovery is separate
-from persisted role handoff and full Host/CLI completion. Disposable native
+remote content or acknowledge journal records. Full Host/CLI completion remains
+separate from role handoff, byte copying and access restoration. Disposable native
 acceptance must exercise the production component and interruption boundaries.
 
 ## Remaining work

@@ -28,24 +28,26 @@ public sealed class MirrorPulseNamespaceReplacementAccessRestorer(MirrorPulsePro
         actor.AssertAccess(); ArgumentNullException.ThrowIfNull(file); ArgumentNullException.ThrowIfNull(parent);
         var facts = await catalog.ReadNamespaceReplacementExecutionAsync(operationId, cancellationToken).ConfigureAwait(false)
             ?? throw new FileNotFoundException("The original replacement admission is missing.");
-        if (facts.RestorationResult is { ProductVerified: true } historical) return historical;
-        var action = facts.Action ?? throw new InvalidOperationException("Replacement access restoration requires the first permission action.");
+        var action = MirrorPulseNamespaceReplacementContentWriter.RequireCurrentAction(facts);
+        if (facts.RestorationResult is { ProductVerified: true } historical && facts.Restoration?.ActionId == action.ActionId &&
+            action.RoleSid == execution.RoleSid.Value) return historical;
         if (facts.Cancellation is not null || facts.ContentCompletion is null || execution.RoleSid.Value != action.RoleSid || execution.OwnerSid.Value != action.OwnerSid ||
             !MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(MirrorPulseNamespacePermissionPolicy.CreateOrdinaryFileBirthDacl(execution), action.RoleOnlyDacl) ||
             file.RelativePath.Replace('\\', '/') != facts.Intent.Original.Context.Location.RelativePath ||
             file.Parent is null || !string.Equals(file.Parent.FullPath, parent.FullPath, StringComparison.OrdinalIgnoreCase) ||
-            action.RestoreDacl != facts.Intent.Original.ExpectedDacl ||
+            !MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(
+                MirrorPulseNamespacePermissionPolicy.CreateProtectedDacl(execution, isDirectory: false), action.RestoreDacl) ||
             !CloudPlaceholderIdentity.TryDecode(Convert.FromBase64String(facts.Intent.OriginalPlaceholderIdentity), out var identity) ||
             identity is null || identity.ItemId != facts.Intent.Original.Identity.ItemId || identity.RemoteId != facts.Intent.Original.Identity.RemoteId)
             throw new InvalidOperationException("Restoration requires copied content, the original identity and a proven current-role action.");
         var parentProof = await MirrorPulseNamespaceReplacementContentWriter.ReadCurrentParentAsync(catalog, facts.Intent, cancellationToken).ConfigureAwait(false);
-        if (parentProof.Context.Protection.RoleSid != action.RoleSid || parent.RelativePath.Replace('\\', '/') != parentProof.Context.Location.RelativePath)
+        if (parent.RelativePath.Replace('\\', '/') != parentProof.Context.Location.RelativePath)
             throw new InvalidDataException("Restoration lost the current protected parent or namespace role.");
-        await using var parentGuard = await MirrorPulseWindowsNamespacePermissionLease.OpenAsync(parent, router, cancellationToken).ConfigureAwait(false);
+        await using var parentGuard = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(parent, router, cancellationToken).ConfigureAwait(false);
         RequireParent(await parentGuard.InspectAsync(cancellationToken).ConfigureAwait(false));
         var before = await InspectAsync(cancellationToken).ConfigureAwait(false); RequireOriginal(before.Object, before.Snapshot, restored: false);
         var attempt = facts.Restoration;
-        if (attempt is null || facts.RestorationResult is not null)
+        if (attempt is null || facts.RestorationResult is not null || attempt.ActionId != action.ActionId)
         {
             attempt = await catalog.PrepareNamespaceReplacementRestorationAsync(new(1, operationId, Guid.NewGuid(),
                 facts.Restoration?.RestorationId, action.ActionId, parentProof, DateTimeOffset.UtcNow), cancellationToken).ConfigureAwait(false);
