@@ -257,6 +257,11 @@ public sealed class MirrorPulseControlClient
         SendAsync<NamespaceMemberPrepareMoveArguments, MirrorPulseControlNamespaceMemberMovePreparation>(
             MirrorPulseControlCommands.NamespaceMemberPrepareMove, new(operationId, memberId, targetParentMemberId, targetName), cancellationToken);
 
+    public Task<IReadOnlyList<MirrorPulseControlNamespaceMemberTreeEntry>> GetNamespaceMemberTreeAsync(Guid memberId,
+        CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceMemberTreeArguments, IReadOnlyList<MirrorPulseControlNamespaceMemberTreeEntry>>(
+            MirrorPulseControlCommands.NamespaceMemberTree, new(memberId), cancellationToken);
+
     public Task<MirrorPulseControlNamespaceMemberMoveResult> ExecuteNamespaceMemberMoveAsync(Guid operationId,
         CancellationToken cancellationToken = default) =>
         SendAsync<NamespaceMemberMoveArguments, MirrorPulseControlNamespaceMemberMoveResult>(

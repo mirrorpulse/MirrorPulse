@@ -19,6 +19,10 @@ public sealed record MirrorPulseNamespaceMemberRegistration(int Version, Guid Me
     RootId? RootId, string RelativePath, MirrorPulseLocalFileBinding LocalObject,
     bool IsDirectory, string OwnerSid, DateTimeOffset RegisteredAt);
 
+/// <summary>A current member in a validated product namespace subtree.</summary>
+public sealed record MirrorPulseNamespaceMemberTreeEntry(Guid MemberId, Guid? ParentMemberId,
+    string RelativePath, bool IsDirectory, MirrorPulseLocalFileBinding LocalObject, int Depth);
+
 public sealed partial class MirrorPulseProductCatalog
 {
     /// <summary>Registers verified provenance and atomically transfers a born object's name reservation.</summary>
@@ -198,6 +202,61 @@ public sealed partial class MirrorPulseProductCatalog
                 throw new InvalidDataException("The occupied child index is inconsistent with its current managed parent.");
             transaction.Commit();
             return member;
+        }
+        finally { _gate.Release(); }
+    }
+
+    /// <summary>Reads the current registered subtree without native access or membership mutation.</summary>
+    public async Task<IReadOnlyList<MirrorPulseNamespaceMemberTreeEntry>> ReadNamespaceMemberTreeAsync(Guid memberId,
+        CancellationToken cancellationToken = default)
+    {
+        if (memberId == Guid.Empty) throw new ArgumentException("A member ID is required.", nameof(memberId));
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            using SqliteTransaction transaction = _connection.BeginTransaction(deferred: true);
+            var root = await ReadNamespaceMemberCoreAsync(memberId, transaction, cancellationToken).ConfigureAwait(false)
+                ?? throw new FileNotFoundException("The namespace member is not registered.");
+            var children = new Dictionary<Guid, List<Guid>>();
+            await using (SqliteCommand query = _connection.CreateCommand())
+            {
+                query.Transaction = transaction;
+                query.CommandText = "SELECT member_id,parent_member_id FROM namespace_member_names ORDER BY parent_member_id,member_id;";
+                await using SqliteDataReader reader = await query.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+                while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                {
+                    Guid child = ParseNamespaceMemberId(reader.GetString(0));
+                    Guid parent = ParseNamespaceMemberId(reader.GetString(1));
+                    if (!children.TryGetValue(parent, out var list)) children[parent] = list = [];
+                    list.Add(child);
+                }
+            }
+            var entries = new List<MirrorPulseNamespaceMemberTreeEntry>();
+            var visited = new HashSet<Guid>();
+            var queue = new Queue<(MirrorPulseNamespaceMemberRegistration Member, int Depth)>();
+            queue.Enqueue((root, 0));
+            while (queue.Count != 0)
+            {
+                var (current, depth) = queue.Dequeue();
+                if (!visited.Add(current.MemberId)) throw new InvalidDataException("The current namespace member tree contains a cycle.");
+                var location = await ReadNamespaceMemberLocationCoreAsync(current, transaction, cancellationToken).ConfigureAwait(false);
+                await RequireNamespaceMemberNameAsync(current, transaction, cancellationToken).ConfigureAwait(false);
+                entries.Add(new(current.MemberId, location.ParentMemberId, location.RelativePath,
+                    current.IsDirectory, current.LocalObject, depth));
+                if (!current.IsDirectory && children.ContainsKey(current.MemberId))
+                    throw new InvalidDataException("A non-directory member owns registered children.");
+                if (children.TryGetValue(current.MemberId, out var childIds))
+                    foreach (Guid childId in childIds)
+                    {
+                        var child = await ReadNamespaceMemberCoreAsync(childId, transaction, cancellationToken).ConfigureAwait(false)
+                            ?? throw new InvalidDataException("The current namespace member tree lost a child.");
+                        if (child.ParentMemberId != current.MemberId) throw new InvalidDataException("The current namespace member parent index is inconsistent.");
+                        queue.Enqueue((child, depth + 1));
+                    }
+            }
+            transaction.Commit();
+            return entries.AsReadOnly();
         }
         finally { _gate.Release(); }
     }

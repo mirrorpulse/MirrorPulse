@@ -29,6 +29,11 @@ public interface IMirrorPulseCloudRuntime : IAsyncDisposable
             new NotSupportedException("This Cloud Files runtime does not inspect namespace membership."));
 
     [SupportedOSPlatform("windows10.0.26100")]
+    ValueTask<IReadOnlyList<MirrorPulseNamespaceMemberTreeEntry>> ReadNamespaceMemberTreeAsync(Guid memberId,
+        CancellationToken cancellationToken) => ValueTask.FromException<IReadOnlyList<MirrorPulseNamespaceMemberTreeEntry>>(
+            new NotSupportedException("This Cloud Files runtime does not read namespace trees."));
+
+    [SupportedOSPlatform("windows10.0.26100")]
     ValueTask<MirrorPulseNamespaceMemberMoveIntent> PrepareNamespaceMemberMoveAsync(Guid operationId, Guid memberId,
         Guid targetParentMemberId, string targetName, CancellationToken cancellationToken) =>
         ValueTask.FromException<MirrorPulseNamespaceMemberMoveIntent>(
@@ -222,6 +227,14 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                 throw new NotSupportedException("Membership inspection requires the Host namespace boundary.");
             return new MirrorPulseNamespaceMemberInspector(fileSystem, catalog, router, _namespaceExecution, _namespaceActor)
                 .InspectAsync(relativePath, isDirectory, cancellationToken);
+        }
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        public async ValueTask<IReadOnlyList<MirrorPulseNamespaceMemberTreeEntry>> ReadNamespaceMemberTreeAsync(Guid memberId,
+            CancellationToken cancellationToken)
+        {
+            if (catalog is null) throw new NotSupportedException("Namespace tree reads require the Host catalog.");
+            return await catalog.ReadNamespaceMemberTreeAsync(memberId, cancellationToken).ConfigureAwait(false);
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
@@ -641,6 +654,15 @@ public sealed class MirrorPulseCloudHostSession : IAsyncDisposable
         if (!_started || _runtime is null)
             throw new InvalidOperationException("The Cloud Files Host session has not started.");
         return _runtime.InspectNamespaceMemberAsync(relativePath, isDirectory, cancellationToken);
+    }
+
+    [SupportedOSPlatform("windows10.0.26100")]
+    public ValueTask<IReadOnlyList<MirrorPulseNamespaceMemberTreeEntry>> ReadNamespaceMemberTreeAsync(Guid memberId,
+        CancellationToken cancellationToken = default)
+    {
+        if (!_started || _runtime is null)
+            throw new InvalidOperationException("The Cloud Files Host session has not started.");
+        return _runtime.ReadNamespaceMemberTreeAsync(memberId, cancellationToken);
     }
 
     [SupportedOSPlatform("windows10.0.26100")]

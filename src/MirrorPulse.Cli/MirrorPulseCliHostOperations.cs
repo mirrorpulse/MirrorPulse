@@ -240,6 +240,14 @@ public sealed class MirrorPulseCliHostOperations : IMirrorPulseCliHostOperations
                     human = $"Member {inspection.MemberId:D} · {inspection.RelativePath} · parent {inspection.ActualParentMemberId:D}";
                     break;
                 case ("namespace", "member") when command.Path.Count > 2 &&
+                    command.Path[2].Equals("tree", StringComparison.OrdinalIgnoreCase):
+                    if (command.Arguments.Count != 1 || !Guid.TryParse(command.Arguments[0], out Guid treeMember) || treeMember == Guid.Empty)
+                        throw new ArgumentException("namespace member tree requires one non-empty member ID.");
+                    var tree = await _client.GetNamespaceMemberTreeAsync(treeMember, cancellationToken).ConfigureAwait(false);
+                    result = tree;
+                    human = $"Member subtree {tree.Count} entr{(tree.Count == 1 ? "y" : "ies")}";
+                    break;
+                case ("namespace", "member") when command.Path.Count > 2 &&
                     command.Path[2].Equals("prepare-move", StringComparison.OrdinalIgnoreCase):
                     if (command.Arguments.Count is not (3 or 5) ||
                         !Guid.TryParse(command.Arguments[0], out Guid sourceMember) || sourceMember == Guid.Empty ||

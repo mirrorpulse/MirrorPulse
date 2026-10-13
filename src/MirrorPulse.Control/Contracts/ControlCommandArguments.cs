@@ -108,11 +108,16 @@ public sealed record MirrorPulseControlNamespaceMemberCreation(Guid OperationId,
 
 public sealed record NamespaceMemberInspectArguments(string RelativePath, bool IsDirectory = false) : IMirrorPulseControlArguments;
 
+public sealed record NamespaceMemberTreeArguments(Guid MemberId) : IMirrorPulseControlArguments;
+
 public sealed record NamespaceMemberPrepareMoveArguments(Guid OperationId, Guid MemberId,
     Guid TargetParentMemberId, string TargetName) : IMirrorPulseControlArguments;
 
 public sealed record MirrorPulseControlNamespaceMemberInspection(Guid MemberId, Guid? ActualParentMemberId,
     string? RootId, string RelativePath, bool IsDirectory, Guid? NativeItemId, DateTimeOffset ObservedAt);
+
+public sealed record MirrorPulseControlNamespaceMemberTreeEntry(Guid MemberId, Guid? ParentMemberId,
+    string RelativePath, bool IsDirectory, int Depth);
 
 public sealed record MirrorPulseControlNamespaceMemberMovePreparation(Guid OperationId, Guid MemberId,
     Guid TargetParentMemberId, string SourceRelativePath, string TargetRelativePath, DateTimeOffset PreparedAt);

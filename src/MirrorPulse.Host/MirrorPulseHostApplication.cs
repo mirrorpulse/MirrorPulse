@@ -473,6 +473,8 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
             MirrorPulseControlCommands.RootPrepareRename, PrepareRootRenameAsync);
         dispatcher.Register<NamespaceMemberInspectArguments, MirrorPulseControlNamespaceMemberInspection>(
             MirrorPulseControlCommands.NamespaceMemberInspect, InspectNamespaceMemberAsync);
+        dispatcher.Register<NamespaceMemberTreeArguments, IReadOnlyList<MirrorPulseControlNamespaceMemberTreeEntry>>(
+            MirrorPulseControlCommands.NamespaceMemberTree, ReadNamespaceMemberTreeAsync);
         dispatcher.Register<NamespaceMemberPrepareMoveArguments, MirrorPulseControlNamespaceMemberMovePreparation>(
             MirrorPulseControlCommands.NamespaceMemberPrepareMove, PrepareNamespaceMemberMoveAsync);
         dispatcher.Register<NamespaceMemberCreateArguments, MirrorPulseControlNamespaceMemberCreation>(
@@ -528,6 +530,15 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
         var member = await _session.InspectNamespaceMemberAsync(arguments.RelativePath, arguments.IsDirectory, cancellationToken).ConfigureAwait(false);
         return new(member.MemberId, member.ActualParentMemberId, member.RootId?.ToString(), member.RelativePath,
             member.IsDirectory, member.NativeItemId, member.ObservedAt);
+    }
+
+    private async ValueTask<IReadOnlyList<MirrorPulseControlNamespaceMemberTreeEntry>> ReadNamespaceMemberTreeAsync(
+        NamespaceMemberTreeArguments arguments, CancellationToken cancellationToken)
+    {
+        if (arguments.MemberId == Guid.Empty) throw new ArgumentException("A member ID is required.", nameof(arguments));
+        var tree = await _session.ReadNamespaceMemberTreeAsync(arguments.MemberId, cancellationToken).ConfigureAwait(false);
+        return tree.Select(entry => new MirrorPulseControlNamespaceMemberTreeEntry(entry.MemberId,
+            entry.ParentMemberId, entry.RelativePath, entry.IsDirectory, entry.Depth)).ToArray();
     }
 
     private async ValueTask<MirrorPulseControlNamespaceMemberRetirementPreparation> PrepareNamespaceMemberRetirementAsync(

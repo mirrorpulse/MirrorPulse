@@ -45,6 +45,25 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
     }
 
     [TestMethod]
+    public async Task NamespaceTreeReadReturnsCurrentMembersAndDepthWithoutMutation()
+    {
+        using var fixture = new Fixture();
+        await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        var setup = await PrepareMovableMemberAsync(catalog, directory: true);
+        var nested = await AddBornAsync(catalog, NestedBirth(setup.Born, "nested", false));
+        var nestedMember = BornMember(nested, setup.Member);
+        await catalog.RegisterNamespaceMemberAsync(nestedMember);
+
+        var tree = await catalog.ReadNamespaceMemberTreeAsync(setup.Member.MemberId);
+        Assert.HasCount(2, tree);
+        Assert.AreEqual(new MirrorPulseNamespaceMemberTreeEntry(setup.Member.MemberId, setup.Member.ParentMemberId,
+            setup.Member.RelativePath, true, setup.Member.LocalObject, 0), tree[0]);
+        Assert.AreEqual(new MirrorPulseNamespaceMemberTreeEntry(nestedMember.MemberId, nestedMember.ParentMemberId,
+            nestedMember.RelativePath, false, nestedMember.LocalObject, 1), tree[1]);
+        Assert.AreEqual(nestedMember, await catalog.ReadNamespaceMemberChildAsync(setup.Member.MemberId, "nested"));
+    }
+
+    [TestMethod]
     public async Task PendingRetirementFencesTheRootUntilMembershipSettlement()
     {
         using var fixture = new Fixture();

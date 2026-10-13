@@ -66,6 +66,19 @@ public sealed class MirrorPulseCliNamespaceMoveTests
     }
 
     [TestMethod]
+    public void NamespaceMemberTreeParsesAStableMemberId()
+    {
+        Guid memberId = Guid.NewGuid();
+        var parsed = MirrorPulse.Cli.MirrorPulseCliCommandLine.Parse(
+            ["namespace", "member", "tree", memberId.ToString("D")]);
+
+        Assert.IsTrue(parsed.Succeeded);
+        Assert.IsNotNull(parsed.Command);
+        Assert.AreEqual("namespace member tree", string.Join(' ', parsed.Command!.Path));
+        Assert.AreEqual(memberId.ToString("D"), string.Join(' ', parsed.Command.Arguments));
+    }
+
+    [TestMethod]
     public void StagedBirthRecoveryParsesAnActionIdAndRejectsAMoveVerb()
     {
         Guid recoveryId = Guid.NewGuid();

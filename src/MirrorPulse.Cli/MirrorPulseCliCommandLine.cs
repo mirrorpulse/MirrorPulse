@@ -137,7 +137,7 @@ public static class MirrorPulseCliCommandLine
                 commandArguments.Count == 0)
             {
                 bool allowed = commandPath[1].Equals("member", StringComparison.OrdinalIgnoreCase)
-                    ? token.Equals("inspect", StringComparison.OrdinalIgnoreCase) || token.Equals("prepare-move", StringComparison.OrdinalIgnoreCase) || token.Equals("move", StringComparison.OrdinalIgnoreCase) || token.Equals("move-status", StringComparison.OrdinalIgnoreCase) || token.Equals("create", StringComparison.OrdinalIgnoreCase) || token.Equals("prepare-retire", StringComparison.OrdinalIgnoreCase) || token.Equals("retire", StringComparison.OrdinalIgnoreCase) || token.Equals("retirement-status", StringComparison.OrdinalIgnoreCase)
+                    ? token.Equals("inspect", StringComparison.OrdinalIgnoreCase) || token.Equals("tree", StringComparison.OrdinalIgnoreCase) || token.Equals("prepare-move", StringComparison.OrdinalIgnoreCase) || token.Equals("move", StringComparison.OrdinalIgnoreCase) || token.Equals("move-status", StringComparison.OrdinalIgnoreCase) || token.Equals("create", StringComparison.OrdinalIgnoreCase) || token.Equals("prepare-retire", StringComparison.OrdinalIgnoreCase) || token.Equals("retire", StringComparison.OrdinalIgnoreCase) || token.Equals("retirement-status", StringComparison.OrdinalIgnoreCase)
                     : token.Equals("recover", StringComparison.OrdinalIgnoreCase);
                 if (!allowed)
                     return Failure($"Unknown subcommand '{token}' for 'namespace {commandPath[1]}'.", options);
@@ -214,6 +214,8 @@ public static class MirrorPulseCliHelp
           root recover OPERATION_ID      Retry an original managed root rename proof.
           namespace member inspect RELATIVE_PATH [--directory]
                                          Look up a registered native member and its parent.
+          namespace member tree MEMBER_ID
+                                         Read the validated current member subtree.
           namespace member prepare-move MEMBER_ID PARENT_ID NAME [--operation-id GUID]
                                          Prepare a file move within its managed root.
           namespace member move OPERATION_ID
