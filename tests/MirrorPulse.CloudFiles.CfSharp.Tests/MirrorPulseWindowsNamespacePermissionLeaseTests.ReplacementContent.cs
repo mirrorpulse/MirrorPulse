@@ -99,13 +99,37 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 await using (var backup = await backups.OpenLeaseAsync(operationId, copied.Backup.Content, deadline.Token))
                     Assert.AreEqual(copied.Backup.Content.Sha256, Convert.ToHexString(await SHA256.HashDataAsync(backup.Data, deadline.Token)));
                 await Assert.ThrowsAsync<UnauthorizedAccessException>(() => File.ReadAllBytesAsync(file.FullPath, deadline.Token));
-                await role.RunNamespaceOperationAsync(async () =>
+                int interruptAfterScope = attempt == 0 ? 1 : 0;
+                var restorer = new MirrorPulseNamespaceReplacementAccessRestorer(catalog, router, role, actor)
                 {
-                    var restored = await MirrorPulseWindowsNamespacePermissionLease.RunProtectedAsync(file, router, member.LocalObject, identity,
-                        async (lease, stop) => { RequireObject(await lease.InspectAsync(stop), action.RoleOnlyDacl); await lease.ApplyDaclAsync(action.RestoreDacl, stop); }, deadline.Token);
-                    Assert.AreEqual(CloudProtectedLocalOperationOutcome.Completed, restored.Outcome);
-                    Assert.IsTrue(restored.CallbackCompleted && restored.Drained && restored.NativeIdentityPrepared && restored.DurableProjectionCommitted);
-                });
+                    Checkpoint = (point, _) =>
+                    {
+                        if (point == MirrorPulseNamespaceReplacementRestorationCheckpoint.AfterScope && Interlocked.Exchange(ref interruptAfterScope, 0) == 1)
+                            throw new IOException("Interrupted after the drained public scope and before its product result.");
+                        return ValueTask.CompletedTask;
+                    }
+                };
+                await actor.RunAsync(async token =>
+                {
+                    await role.RunNamespaceOperationAsync(async () =>
+                    {
+                        if (attempt == 0)
+                        {
+                            await Assert.ThrowsExactlyAsync<IOException>(() => restorer.RestoreAsync(operationId, file, parent, token));
+                            Assert.IsNull((await catalog.ReadNamespaceReplacementExecutionAsync(operationId, token))!.RestorationResult);
+                        }
+                        var restored = await restorer.RestoreAsync(operationId, file, parent, token);
+                        Assert.AreEqual("Completed", restored.NativeOutcome);
+                        Assert.IsTrue(restored.CallbackCompleted && restored.Drained && restored.NativeIdentityPrepared && restored.DurableProjectionCommitted);
+                        Assert.IsTrue(restored.AccessDescriptorApplied && restored.AccessDescriptorReadBack && restored.ProductVerified);
+                        Assert.AreEqual(member.LocalObject, restored.Verification!.LocalObject);
+                        Assert.IsTrue(MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(action.RestoreDacl, restored.Verification.Dacl));
+                    });
+                    return true;
+                }, deadline.Token);
+                var restoredExecution = (await catalog.ReadNamespaceReplacementExecutionAsync(operationId, deadline.Token))!;
+                Assert.AreEqual(copied.Action, restoredExecution.Action); Assert.AreEqual(copied.Backup, restoredExecution.Backup);
+                Assert.AreEqual(copied.ContentCompletion, restoredExecution.ContentCompletion);
                 CollectionAssert.AreEqual(newBytes, await File.ReadAllBytesAsync(file.FullPath, deadline.Token));
                 var after = await file.InspectAsync(deadline.Token);
                 Assert.AreEqual(originalNative.LocalBinding, after.LocalBinding);
@@ -113,11 +137,12 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 CollectionAssert.AreEqual(originalNative.PlaceholderIdentity.ToArray(), after.PlaceholderIdentity.ToArray());
                 byte[] laterEdit = [7, 7, 0]; await File.WriteAllBytesAsync(file.FullPath, laterEdit, deadline.Token);
                 Assert.AreEqual(copied.ContentCompletion, await actor.RunAsync(async token => await writer.CopyAsync(operationId, file, parent, null, token), deadline.Token));
+                Assert.AreEqual(restoredExecution.RestorationResult, await actor.RunAsync(async token => await restorer.RestoreAsync(operationId, file, parent, token), deadline.Token));
                 CollectionAssert.AreEqual(laterEdit, await File.ReadAllBytesAsync(file.FullPath, deadline.Token));
                 Assert.AreEqual(member, await catalog.ReadNamespaceMemberAsync(member.MemberId, deadline.Token));
                 CollectionAssert.AreEqual(new[] { root.RootId }, (await catalog.ReadNamespaceRecoveryRootsAsync(deadline.Token)).ToArray());
                 Assert.IsNull(await catalog.ReadMutationAsync(operationId, deadline.Token)); Assert.AreEqual(0, source.Reads);
-                TestContext.WriteLine($"ReplacementContent: ordinaryStart={attempt == 1}; emptyInput={attempt >= 2}; unchangedEmpty={attempt == 3}; admittedOriginal=True; firstBackup=True; durableWriteStart=True; actualBinary=True; sameBinding=True; publicIdentity=True; changedContentDirty=True; replayPreservesLaterEdit=True; rootStillRequiresCompletion=True; noSourceAccess=True; productionCopy=True; productionExecutor=False; hostIntegrated=False.");
+                TestContext.WriteLine($"ReplacementContent: ordinaryStart={attempt == 1}; emptyInput={attempt >= 2}; unchangedEmpty={attempt == 3}; admittedOriginal=True; firstBackup=True; durableWriteStart=True; actualBinary=True; sameBinding=True; publicIdentity=True; changedContentDirty=True; replayPreservesLaterEdit=True; rootStillRequiresCompletion=True; noSourceAccess=True; productionCopy=True; productionAccessRestoration=True; interruptedAfterScope={attempt == 0}; sameRoleRecovery=True; productionExecutor=False; hostIntegrated=False.");
 
                 void RequireObject(MirrorPulseNamespacePermissionObject facts, string dacl)
                 {

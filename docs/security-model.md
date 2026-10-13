@@ -637,9 +637,38 @@ the latest committed placement. Permission relocation uses the same evidence
 resolver. Missing records, incomplete moves, foreign member receipts and cyclic
 references cannot authorize a new move or permission epoch. Legacy endpoints
 retain their original paths without inventing historical parent movements.
-Directory movement and import have controlled execution boundaries; replacement
-saves and full installed Host tree readiness remain pending. Metadata handles and catalog membership alone do not
+Directory movement, import and replacement content have controlled execution
+boundaries; the complete replacement Host/CLI workflow and full installed Host
+tree readiness remain pending. Metadata handles and catalog membership alone do not
 establish tree readiness or remote acceptance.
+
+## Replacement access restoration
+
+The product catalog retains the original member admission, first permission
+action, independently verified old-content backup, before-write intent and copied
+content receipt. Restoration attempts form an immutable predecessor chain. Each
+attempt retains the committed current parent, including completed member moves,
+and precedes the native scope. Catalog migrations preserve older facts without
+inventing native restoration evidence.
+
+The integration uses CfSharp's public same-object local conversion and access
+descriptor APIs. It records the actual outcome, stage, conversion, projection,
+callback, access readback and drain fields. `NativeAppliedProjectionPending`
+remains distinct from a failed native operation. A successful callback alone
+cannot establish product protection: independent observations must match the
+original object, public identity, owner, single-link state and current parent.
+Changed content remains unaccepted.
+
+A drained native result is persisted independently of client cancellation.
+Historical verified results return without copying input or replacing later
+edits. They describe the original observation and grant no current native
+authority. An undrained predecessor cannot be superseded, and a superseded attempt
+cannot acquire a new late result. Missing or damaged history requires recovery.
+
+This component does not release root reservations, mark a tree ready, accept
+remote content or acknowledge journal records. Current-role recovery is separate
+from persisted role handoff and full Host/CLI completion. Disposable native
+acceptance must exercise the production component and interruption boundaries.
 
 ## Remaining work
 
