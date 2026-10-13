@@ -74,10 +74,18 @@ public sealed partial class MirrorPulseProductCatalog
                 throw new InvalidOperationException("Born membership cannot substitute another stable direct parent.");
             if (current)
             {
-                if (protection.Placement is null)
+                var registered = await ReadNamespaceMemberRowAsync(member.MemberId, transaction, token).ConfigureAwait(false);
+                if (registered is null)
                     _ = await ValidateNamespaceBirthLineageAsync(birth, protection, true, transaction, token).ConfigureAwait(false);
                 else
+                {
+                    if (registered != member)
+                        throw new InvalidDataException("Current protection cannot substitute different registered provenance.");
+                    // First birth references prove history. An already registered member uses
+                    // its committed current parent graph, including a parent's later placement
+                    // verification, without changing this child's first proof or binding.
                     _ = await ReadNamespaceMemberProtectionLineageCoreAsync(member.MemberId, transaction, token, requireUnfenced: false).ConfigureAwait(false);
+                }
             }
             proof = new(protection.ProtectionId, protection.RoleSid, protection.Verification.ObservedAt);
         }
