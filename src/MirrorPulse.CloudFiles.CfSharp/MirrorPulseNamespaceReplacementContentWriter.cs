@@ -43,8 +43,7 @@ public sealed class MirrorPulseNamespaceReplacementContentWriter(MirrorPulseProd
             !CloudPlaceholderIdentity.TryDecode(Convert.FromBase64String(intent.OriginalPlaceholderIdentity), out var identity) ||
             identity is null || identity.ItemId != intent.Original.Identity.ItemId || identity.RemoteId != intent.Original.Identity.RemoteId)
             throw new InvalidOperationException("Copying requires the original file, public identity and current namespace role's exact policy.");
-        var parentProof = await catalog.ReadNamespaceMemberProtectionSnapshotAsync(intent.Original.Context.Member.ParentMemberId!.Value,
-            cancellationToken).ConfigureAwait(false) ?? throw new FileNotFoundException("The admitted original parent protection is missing.");
+        var parentProof = await ReadCurrentParentAsync(catalog, intent, cancellationToken).ConfigureAwait(false);
         if (parentProof.Context.Protection.RoleSid != action.RoleSid || !parentProof.Context.Member.IsDirectory ||
             parent.RelativePath.Replace('\\', '/') != parentProof.Context.Location.RelativePath)
             throw new InvalidDataException("The original parent protection or current role changed before replacement copying.");
@@ -73,6 +72,20 @@ public sealed class MirrorPulseNamespaceReplacementContentWriter(MirrorPulseProd
             return new(observed, native.IsPlaceholder, native.SynchronizationState == CloudSynchronizationState.InSync,
                 native.IsPlaceholder ? Convert.ToBase64String(native.PlaceholderIdentity.Span) : null);
         }
+    }
+
+    internal static async Task<MirrorPulseNamespaceMemberProtectionSnapshot> ReadCurrentParentAsync(MirrorPulseProductCatalog catalog,
+        MirrorPulseNamespaceReplacementIntent intent, CancellationToken cancellationToken)
+    {
+        // Registration retains the first parent. Only the committed product location selects
+        // the currently guarded parent after a completed same-root member or ancestor move.
+        Guid parentId = intent.Original.Context.Location.ParentMemberId
+            ?? throw new InvalidDataException("The admitted existing file has no current managed parent.");
+        var parent = await catalog.ReadNamespaceMemberProtectionSnapshotAsync(parentId, cancellationToken).ConfigureAwait(false)
+            ?? throw new FileNotFoundException("The admitted current parent protection is missing.");
+        if (!parent.Context.Member.IsDirectory || parent.Context.Member.RootId != intent.RootId)
+            throw new InvalidDataException("The current replacement parent is outside the admitted managed root.");
+        return parent;
     }
 
     /// <summary>Byte persistence boundary; the native caller separately retains and freshly checks original object and parent guards.</summary>
