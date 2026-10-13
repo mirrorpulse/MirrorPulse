@@ -57,6 +57,7 @@ public sealed partial class MirrorPulseProductCatalog
                 roots.Add(retirement.Intent.RootId);
             foreach (var batch in await ReadPendingNamespaceRetirementBatchesCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
                 roots.Add(batch.RootId);
+            await AddNamespaceReplacementRootFencesAsync(roots, transaction, cancellationToken).ConfigureAwait(false);
             if (includeUnregisteredBirths)
                 await AddUnregisteredBirthRootFencesAsync(roots, transaction, cancellationToken).ConfigureAwait(false);
             transaction.Commit();

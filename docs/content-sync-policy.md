@@ -144,3 +144,17 @@ namespace confirmation, identity projection and acknowledgement of every
 original ID still require integration and their failure matrix. The content
 opener must check the retained native object and reject a replacement; the Worker
 upload transport checks the length and SHA-256 of bytes actually sent.
+
+## Controlled local replacement admission
+
+The Host catalog retains the existing member's coherent protection, placement,
+original object binding and public placeholder identity with the staged input's
+length and SHA-256. Admission rechecks the current product snapshot in one
+transaction and reserves that root for recovery. Other roots remain independent.
+The operation ID cannot reuse a birth, Worker request or other product operation.
+
+A start record must precede permission tightening or content changes. Only an
+admission with no start can be canceled and release its root reservation. Neither
+record changes membership, writes content, accepts an upload or acknowledges an
+official journal entry. Production replacement execution and its recovery facts
+remain to be integrated.
