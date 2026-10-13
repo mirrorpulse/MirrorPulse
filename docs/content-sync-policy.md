@@ -156,5 +156,15 @@ The operation ID cannot reuse a birth, Worker request or other product operation
 A start record must precede permission tightening or content changes. Only an
 admission with no start can be canceled and release its root reservation. Neither
 record changes membership, writes content, accepts an upload or acknowledges an
-official journal entry. Production replacement execution and its recovery facts
-remain to be integrated.
+official journal entry.
+
+The catalog also retains the before-write permission action, the first flushed
+and independently verified old-content backup, and a separate write-start intent.
+They must refer to the admitted original object, owner and role in that order.
+The backup records single-link protection and the role-only descriptor observed
+on the original object. Later bytes cannot replace this first backup receipt.
+Historical status reads use a short catalog transaction and do not wait on the
+namespace actor. Damaged execution chains keep dispatch and recovery closed.
+These facts do not establish new-content completion, restored native protection,
+remote acceptance or journal acknowledgement; production save integration remains
+pending.

@@ -312,6 +312,7 @@ public sealed partial class MirrorPulseProductCatalog
         if (intent.RootId != root || intent.MemberId != member || await ReadNamespaceReplacementStageCoreAsync<MirrorPulseNamespaceReplacementCancellation>(id.Value,
             true, transaction, token).ConfigureAwait(false) is not null)
             throw new InvalidDataException("The pending replacement ownership is inconsistent.");
+        _ = await ReadNamespaceReplacementExecutionCoreAsync(id.Value, transaction, token).ConfigureAwait(false);
         return intent;
     }
 
