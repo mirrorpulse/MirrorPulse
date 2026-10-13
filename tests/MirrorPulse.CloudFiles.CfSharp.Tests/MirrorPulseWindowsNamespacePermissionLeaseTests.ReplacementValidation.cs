@@ -32,6 +32,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         var source = new ProtectedPermissionNoSourceProvider();
         var originals = new List<MirrorPulseNamespacePermissionPreparation>();
         var inputs = new MirrorPulseLocalImportStagingStore(paths);
+        var backups = new MirrorPulseLocalReplacementBackupStore(paths);
         byte[] oldBytes = [1, 2, 3, 4, 5]; byte[] replacement = new byte[2_097_409]; new Random(53).NextBytes(replacement);
         Guid operation = Guid.NewGuid();
         try
@@ -67,7 +68,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     await File.WriteAllBytesAsync(file.FullPath, expectedOld, deadline.Token);
                     Assert.IsFalse((await file.InspectAsync(deadline.Token)).IsPlaceholder);
                 }
-                string backupPath = Path.Combine(paths.DataRootPath, $"replacement-backup-{attempt}.bin");
+                Guid backupOperation = Guid.NewGuid();
+                var expectedBackup = new MirrorPulseNamespaceImportContent(expectedOld.LongLength, Convert.ToHexString(SHA256.HashData(expectedOld)));
                 await role.RunNamespaceOperationAsync(async () =>
                 {
                     var tightened = await MirrorPulseWindowsNamespacePermissionLease.RunProtectedAsync(file, router, original.Baseline.LocalObject,
@@ -89,14 +91,10 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan))
                     {
                         RequireObject(await metadata.InspectAsync(deadline.Token), roleOnly);
-                        await using (var backup = new FileStream(backupPath, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None,
-                            64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan))
-                        {
-                            await target.CopyToAsync(backup, deadline.Token); await backup.FlushAsync(deadline.Token); backup.Flush(true);
-                            backup.Position = 0;
-                            Assert.AreEqual(expectedOld.LongLength, backup.Length);
-                            Assert.AreEqual(Convert.ToHexString(SHA256.HashData(expectedOld)), Convert.ToHexString(await SHA256.HashDataAsync(backup, deadline.Token)));
-                        }
+                        Assert.AreEqual(expectedBackup, await backups.StageRetainedAsync(backupOperation, target, deadline.Token));
+                        await using var backup = await backups.OpenLeaseAsync(backupOperation, expectedBackup, deadline.Token);
+                        Assert.AreEqual(expectedOld.LongLength, backup.Data.Length);
+                        Assert.AreEqual(expectedBackup.Sha256, Convert.ToHexString(await SHA256.HashDataAsync(backup.Data, deadline.Token)));
                         // The backup is durable before changing the same original object's bytes.
                         target.SetLength(0); input.Data.Position = 0;
                         await input.Data.CopyToAsync(target, CancellationToken.None); await target.FlushAsync(CancellationToken.None); target.Flush(true);
@@ -131,11 +129,16 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 Assert.AreEqual(initial.LocalBinding, final.LocalBinding);
                 CollectionAssert.AreEqual(initial.PlaceholderIdentity.ToArray(), final.PlaceholderIdentity.ToArray());
                 CollectionAssert.AreEqual(replacement, await File.ReadAllBytesAsync(file.FullPath, deadline.Token));
-                CollectionAssert.AreEqual(expectedOld, await File.ReadAllBytesAsync(backupPath, deadline.Token));
+                await role.RunNormalUserOperationAsync(async () =>
+                {
+                    await using var backup = await new MirrorPulseLocalReplacementBackupStore(paths).OpenLeaseAsync(backupOperation, expectedBackup, deadline.Token);
+                    using var received = new MemoryStream(); await backup.Data.CopyToAsync(received, deadline.Token);
+                    CollectionAssert.AreEqual(expectedOld, received.ToArray());
+                });
                 AssertBirthAliasDenied(Path.Combine(directory, $"converted-replacement-{attempt}.link"), file.FullPath);
             }
             Assert.AreEqual(0, source.Reads);
-            TestContext.WriteLine("ReplacementValidation: placeholderAndOrdinaryStart=True; latestUnsentBackup=True; publicExclusiveTightening=True; durableOriginalBackup=True; sameOriginalObject=True; openWritePreservesPlaceholder=True; ordinaryStartRecovered=True; roleOnlyContentDenied=True; aliasDenied=True; publicSameObjectReconversion=True; originalIdentityRetained=True; binaryExact=True; dirty=True; noSourceAccess=True; productOperation=False; hostIntegrated=False.");
+            TestContext.WriteLine("ReplacementValidation: placeholderAndOrdinaryStart=True; latestUnsentBackup=True; publicExclusiveTightening=True; durableOriginalBackup=True; sharedPrivateBackupStore=True; sameOriginalObject=True; openWritePreservesPlaceholder=True; ordinaryStartRecovered=True; roleOnlyContentDenied=True; aliasDenied=True; publicSameObjectReconversion=True; originalIdentityRetained=True; binaryExact=True; dirty=True; noSourceAccess=True; productOperation=False; hostIntegrated=False.");
 
             void RequireObject(MirrorPulseNamespacePermissionObject facts, string dacl)
             {
