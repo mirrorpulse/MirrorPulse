@@ -85,16 +85,27 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
     private async Task RequireExactLocalDirectoryTreeAsync(IReadOnlyList<MirrorPulseNamespaceDirectoryMoveEntry> entries,
         MirrorPulseNamespaceMemberMoveIntent intent, bool atTarget, CancellationToken token)
     {
-        string rootPath = atTarget ? intent.Target.RelativePath : intent.Source.RelativePath;
-        var expected = entries.Skip(1).Select(entry => DirectoryMoveMemberPath(entry, intent, atTarget)).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        int found = 0;
-        var options = CloudDirectoryEnumerationOptions.CreateBuilder().WithRecursion(true).Build();
-        await foreach (var item in _fileSystem.GetDirectory(rootPath).EnumerateLocalChildrenAsync(options, token).ConfigureAwait(false))
+        var children = entries.ToLookup(entry => entry.ParentMemberId);
+        int total = 0;
+        // Public recursive enumeration deliberately skips directory reparse points, including
+        // Cloud Files placeholders. Compose its direct-child API over the sealed product
+        // directories instead of treating the library's recursion as a complete managed tree.
+        foreach (var directory in entries.Where(entry => entry.IsDirectory))
         {
-            if (!expected.Remove(item.RelativePath.Replace('\\', '/')) || ++found >= entries.Count)
-                throw new InvalidDataException("An unregistered or repeated local object prevents controlled directory movement.");
+            var expected = children[directory.MemberId].Select(entry => DirectoryMoveMemberPath(entry, intent, atTarget))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            int count = expected.Count, found = 0;
+            CloudDirectory local = _fileSystem.GetDirectory(DirectoryMoveMemberPath(directory, intent, atTarget));
+            await foreach (var item in local.EnumerateLocalChildrenAsync(CloudDirectoryEnumerationOptions.Default, token).ConfigureAwait(false))
+            {
+                if (!expected.Remove(item.RelativePath.Replace('\\', '/')) || ++found > count)
+                    throw new InvalidDataException("An unregistered or repeated local object prevents controlled directory movement.");
+            }
+            if (expected.Count != 0 || found != count)
+                throw new InvalidDataException($"A protected directory has an incomplete registered child set: expected {count}, observed {found}.");
+            total += found;
         }
-        if (expected.Count != 0 || found != entries.Count - 1)
+        if (total != entries.Count - 1)
             throw new InvalidDataException("The actual local directory does not contain the complete registered subtree.");
     }
 
