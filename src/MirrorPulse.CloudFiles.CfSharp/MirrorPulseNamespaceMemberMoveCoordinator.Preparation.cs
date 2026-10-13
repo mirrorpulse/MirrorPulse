@@ -39,11 +39,13 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
                 ?? throw new FileNotFoundException("The committed source parent is not registered.");
             var targetParent = await _catalog.ReadNamespaceMemberAsync(targetParentMemberId, token).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The target parent is not registered.");
+            var sourceParentLocation = await _catalog.ReadNamespaceMemberLocationAsync(sourceParent.MemberId, token).ConfigureAwait(false);
+            var targetParentLocation = await _catalog.ReadNamespaceMemberLocationAsync(targetParent.MemberId, token).ConfigureAwait(false);
             if (!targetParent.IsDirectory || targetParent.RootId != member.RootId || targetParent.OwnerSid != member.OwnerSid)
                 throw new ArgumentException("The target parent must be a protected directory in the same managed root.", nameof(targetParentMemberId));
             CloudFile source = _fileSystem.GetFile(location.RelativePath);
             CloudDirectory sourceDirectory = source.Parent ?? throw new InvalidDataException("A member requires a direct source parent.");
-            CloudDirectory targetDirectory = _fileSystem.GetDirectory(targetParent.RelativePath);
+            CloudDirectory targetDirectory = _fileSystem.GetDirectory(targetParentLocation.RelativePath);
             // Reuse CfSharp's public name validation before retaining any product intent.
             CloudFile target = targetDirectory.GetFile(targetName);
             var childProof = await MirrorPulseNamespaceProtectionProofReader.ReadMemberAsync(_catalog, member, token).ConfigureAwait(false);
@@ -62,10 +64,16 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
                 var identity = CloudPlaceholderIdentity.Decode(snapshot.PlaceholderIdentity.Span);
                 var intent = new MirrorPulseNamespaceMemberMoveIntent(1, operationId, memberId, childProof.ProtectionId,
                     member.RootId!.Value, member.LocalObject, identity.ItemId, identity.RemoteId, member.OwnerSid, _execution.RoleSid.Value,
-                    new(sourceParent.MemberId, sourceParent.LocalObject, sourceProof.ProtectionId, source.RelativePath.Replace('\\', '/')),
-                    new(targetParent.MemberId, targetParent.LocalObject, targetProof.ProtectionId, target.RelativePath.Replace('\\', '/')),
+                    new(sourceParent.MemberId, sourceParent.LocalObject, sourceProof.ProtectionId, source.RelativePath.Replace('\\', '/'))
+                    { ParentPositionOperationId = sourceParentLocation.CurrentPositionOperationId },
+                    new(targetParent.MemberId, targetParent.LocalObject, targetProof.ProtectionId, target.RelativePath.Replace('\\', '/'))
+                    { ParentPositionOperationId = targetParentLocation.CurrentPositionOperationId },
                     DateTimeOffset.UtcNow)
-                { PreviousMoveOperationId = location.CompletedMoveOperationId, IdentityAcceptanceOperationId = retainedIdentity.AcceptanceOperationId };
+                {
+                    PreviousMoveOperationId = location.CompletedMoveOperationId,
+                    IdentityAcceptanceOperationId = retainedIdentity.AcceptanceOperationId,
+                    SourcePositionOperationId = location.PositionOperationId
+                };
                 RequireCaller(intent);
                 MirrorPulseNamespaceMemberMoveInspection.RequireChild(facts, snapshot, childProof, intent.Source.RelativePath, intent);
                 var sourceBefore = await InspectParentAsync(sourceDirectory, sourceLease, sourceProof, intent.Source, intent, token).ConfigureAwait(false);

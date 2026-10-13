@@ -25,7 +25,10 @@ public sealed partial class MirrorPulseProductCatalog
             intent.Source.RelativePath.LastIndexOf('/') <= 0 || intent.Target.RelativePath.LastIndexOf('/') <= 0 || intent.Source.RelativePath == intent.Target.RelativePath)
             throw new ArgumentException("A controlled move requires distinct child paths and complete retained identities.", nameof(intent));
         if (intent.PreviousMoveOperationId == Guid.Empty || intent.PreviousMoveOperationId == intent.OperationId ||
-            intent.IdentityAcceptanceOperationId == Guid.Empty)
+            intent.IdentityAcceptanceOperationId == Guid.Empty || intent.SourcePositionOperationId == Guid.Empty ||
+            intent.SourcePositionOperationId == intent.OperationId || intent.Source.ParentPositionOperationId == Guid.Empty ||
+            intent.Target.ParentPositionOperationId == Guid.Empty || intent.Source.ParentPositionOperationId == intent.OperationId ||
+            intent.Target.ParentPositionOperationId == intent.OperationId)
             throw new ArgumentException("A relocation predecessor must identify a distinct completed move.", nameof(intent));
         if (intent.DirectoryMoveEvidence is { } encoded)
         {
@@ -53,24 +56,33 @@ public sealed partial class MirrorPulseProductCatalog
             source.LocalObject != intent.Source.ParentLocalObject || target.LocalObject != intent.Target.ParentLocalObject ||
             source.OwnerSid != intent.OwnerSid || target.OwnerSid != intent.OwnerSid || intent.PreparedAt < member.RegisteredAt ||
             intent.PreparedAt < source.RegisteredAt || intent.PreparedAt < target.RegisteredAt ||
-            ParentMovePath(intent.Source.RelativePath) != source.RelativePath || ParentMovePath(intent.Target.RelativePath) != target.RelativePath ||
             target.MemberId == member.MemberId || member.IsDirectory != (intent.DirectoryMoveEvidence is not null))
             throw new InvalidOperationException("Move admission must preserve its original member and direct parents within one managed root.");
         await RequireNamespaceMoveIdentityAsync(intent, member, current, transaction, token).ConfigureAwait(false);
+        await RequireNamespaceMoveParentPositionAsync(source, intent.Source, intent.PreparedAt, current, transaction, token).ConfigureAwait(false);
+        await RequireNamespaceMoveParentPositionAsync(target, intent.Target, intent.PreparedAt, current, transaction, token).ConfigureAwait(false);
         await RequireNamespaceMemberMoveSourceAsync(intent, member, transaction, token).ConfigureAwait(false);
         if (current)
         {
             var location = await ReadNamespaceMemberLocationCoreAsync(member, transaction, token).ConfigureAwait(false);
-            if (location.CompletedMoveOperationId != intent.PreviousMoveOperationId || location.ParentMemberId != source.MemberId ||
+            if (location.CompletedMoveOperationId != intent.PreviousMoveOperationId ||
+                location.CurrentPositionOperationId != (intent.SourcePositionOperationId ?? intent.PreviousMoveOperationId) || location.ParentMemberId != source.MemberId ||
                 location.RelativePath != intent.Source.RelativePath)
                 throw new InvalidOperationException("Move admission must start at the member's latest committed location.");
         }
-        var ancestor = target;
-        while (ancestor.ParentMemberId is { } ancestorId)
+        if (current)
         {
-            if (ancestorId == member.MemberId) throw new InvalidOperationException("A directory cannot move into its own descendant.");
-            ancestor = await ReadNamespaceMemberRowAsync(ancestorId, transaction, token).ConfigureAwait(false)
-                ?? throw new InvalidDataException("The target parent lost its retained lineage.");
+            var ancestor = target;
+            var visited = new HashSet<Guid>();
+            while (true)
+            {
+                if (!visited.Add(ancestor.MemberId)) throw new InvalidDataException("The target's committed parent lineage contains a cycle.");
+                var ancestorLocation = await ReadNamespaceMemberLocationCoreAsync(ancestor, transaction, token).ConfigureAwait(false);
+                if (ancestorLocation.ParentMemberId is not { } ancestorId) break;
+                if (ancestorId == member.MemberId) throw new InvalidOperationException("A directory cannot move into its own descendant.");
+                ancestor = await ReadNamespaceMemberRowAsync(ancestorId, transaction, token).ConfigureAwait(false)
+                    ?? throw new InvalidDataException("The target parent lost its committed lineage.");
+            }
         }
         foreach (var pair in new[] { (Member: member, Protection: intent.ProtectionId),
             (Member: source, Protection: intent.Source.ParentProtectionId), (Member: target, Protection: intent.Target.ParentProtectionId) })

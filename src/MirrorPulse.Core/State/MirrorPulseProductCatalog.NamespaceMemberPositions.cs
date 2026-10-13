@@ -123,7 +123,7 @@ public sealed partial class MirrorPulseProductCatalog
             move.OwnerSid != member.OwnerSid || move.RootId != member.RootId || position.CompletedMoveOperationId != move.OperationId ||
             move.Target.ParentMemberId != position.ParentMemberId || row.Completion.RelativePath != position.RelativePath ||
             row.Completion.VerifiedAt != position.VerifiedAt || move.PreparedAt >= position.VerifiedAt ||
-            position.PreviousPositionOperationId != move.PreviousMoveOperationId)
+            position.PreviousPositionOperationId != (move.SourcePositionOperationId ?? move.PreviousMoveOperationId))
             throw new InvalidDataException("The position must follow this member's exact completed relocation.");
         // The position loop verifies every predecessor once. Validate this operation's
         // references without recursively walking the same relocation ancestry again.

@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Data.Sqlite;
 
 namespace MirrorPulse.Core.State;
@@ -8,7 +9,11 @@ namespace MirrorPulse.Core.State;
 public sealed record MirrorPulseNamespaceDirectoryMoveEntry(Guid MemberId, Guid? ParentMemberId,
     string RelativePath, bool IsDirectory, MirrorPulseLocalFileBinding LocalObject, string OwnerSid,
     Guid ProtectionId, DateTimeOffset ProtectionVerifiedAt, Guid? PreviousMoveOperationId,
-    MirrorPulseNamespaceMemberIdentity Identity, int Depth);
+    MirrorPulseNamespaceMemberIdentity Identity, int Depth)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? PreviousPositionOperationId { get; init; }
+}
 
 /// <summary>An immutable product admission snapshot associated with opaque public CfSharp evidence.</summary>
 /// <remarks>
@@ -70,7 +75,8 @@ public sealed partial class MirrorPulseProductCatalog
             var identity = await ReadNamespaceMemberIdentityCoreAsync(member, transaction, token).ConfigureAwait(false);
             var entry = new MirrorPulseNamespaceDirectoryMoveEntry(member.MemberId, item.ParentMemberId, item.RelativePath, member.IsDirectory,
                 member.LocalObject, member.OwnerSid, proof.ProtectionId, proof.VerifiedAt,
-                location.CompletedMoveOperationId, identity, item.Depth);
+                location.CompletedMoveOperationId, identity, item.Depth)
+            { PreviousPositionOperationId = location.PositionOperationId };
             await RequireNamespaceDirectoryMoveEntryHistoryAsync(entry, member, intent, transaction, token).ConfigureAwait(false);
             entries.Add(entry);
         }
@@ -131,7 +137,14 @@ public sealed partial class MirrorPulseProductCatalog
         MirrorPulseNamespaceMemberRegistration member, MirrorPulseNamespaceMemberMoveIntent intent,
         SqliteTransaction transaction, CancellationToken token)
     {
-        if (entry.PreviousMoveOperationId is { } previousId)
+        if (entry.PreviousPositionOperationId is { } positionId)
+        {
+            var evidence = await ReadNamespaceMemberPositionEvidenceCoreAsync(member, positionId, intent.PreparedAt, transaction, token).ConfigureAwait(false);
+            if (evidence.RelativePath != entry.RelativePath || evidence.ParentMemberId != entry.ParentMemberId ||
+                evidence.CompletedMoveOperationId != entry.PreviousMoveOperationId)
+                throw new InvalidDataException("The sealed member lost its exact completed position and direct move head.");
+        }
+        else if (entry.PreviousMoveOperationId is { } previousId)
         {
             var previous = await ReadNamespaceMemberMoveCoreAsync(previousId, transaction, token).ConfigureAwait(false)
                 ?? throw new InvalidDataException("The sealed member lost its previous relocation.");
@@ -178,8 +191,10 @@ public sealed partial class MirrorPulseProductCatalog
                 ?? throw new InvalidDataException("The sealed directory member disappeared.");
             var protection = await ReadNamespaceMemberProofAsync(member, true, transaction, token).ConfigureAwait(false);
             var identity = await ReadNamespaceMemberIdentityCoreAsync(member, transaction, token).ConfigureAwait(false);
+            var location = await ReadNamespaceMemberLocationCoreAsync(member, transaction, token).ConfigureAwait(false);
             if (protection.ProtectionId != entry.ProtectionId || protection.VerifiedAt != entry.ProtectionVerifiedAt ||
-                protection.RoleSid != intent.RoleSid || identity != entry.Identity)
+                protection.RoleSid != intent.RoleSid || identity != entry.Identity ||
+                location.CurrentPositionOperationId != (entry.PreviousPositionOperationId ?? entry.PreviousMoveOperationId))
                 throw new InvalidOperationException("Directory execution requires every member's sealed protection and identity epochs.");
         }
     }
@@ -197,7 +212,8 @@ public sealed partial class MirrorPulseProductCatalog
             if (entry is null || entry.Identity is null || entry.MemberId == Guid.Empty || entry.ParentMemberId is null ||
                 entry.ParentMemberId == Guid.Empty || entry.ProtectionId == Guid.Empty || entry.ProtectionVerifiedAt == default ||
                 entry.ProtectionVerifiedAt > intent.PreparedAt || entry.PreviousMoveOperationId == Guid.Empty ||
-                entry.PreviousMoveOperationId == intent.OperationId || entry.Identity.MemberId != entry.MemberId ||
+                entry.PreviousMoveOperationId == intent.OperationId || entry.PreviousPositionOperationId == Guid.Empty ||
+                entry.PreviousPositionOperationId == intent.OperationId || entry.Identity.MemberId != entry.MemberId ||
                 entry.Identity.AcceptanceOperationId == Guid.Empty || entry.Identity.ItemId == Guid.Empty ||
                 entry.Identity.OriginalItemId == Guid.Empty || entry.OwnerSid != intent.OwnerSid || entry.Depth < 0 ||
                 !members.TryAdd(entry.MemberId, entry))
@@ -211,7 +227,9 @@ public sealed partial class MirrorPulseProductCatalog
         if (!members.TryGetValue(intent.MemberId, out var root) || !root.IsDirectory || root.Depth != 0 ||
             root.RelativePath != intent.Source.RelativePath || root.ParentMemberId != intent.Source.ParentMemberId ||
             root.LocalObject != intent.LocalObject || root.ProtectionId != intent.ProtectionId ||
-            root.PreviousMoveOperationId != intent.PreviousMoveOperationId || members.ContainsKey(root.ParentMemberId!.Value) ||
+            root.PreviousMoveOperationId != intent.PreviousMoveOperationId ||
+            (root.PreviousPositionOperationId ?? root.PreviousMoveOperationId) != (intent.SourcePositionOperationId ?? intent.PreviousMoveOperationId) ||
+            members.ContainsKey(root.ParentMemberId!.Value) ||
             members.ContainsKey(intent.Target.ParentMemberId) || root.Identity.AcceptanceOperationId != intent.IdentityAcceptanceOperationId ||
             root.Identity.ItemId is not null && (root.Identity.ItemId != intent.ItemId || root.Identity.RemoteId != intent.RemoteId))
             throw new ArgumentException("The sealed subtree must start at the original source and move outside itself.");

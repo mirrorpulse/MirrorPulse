@@ -114,6 +114,25 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task RequireNamespaceMemberMoveSourceAsync(MirrorPulseNamespaceMemberMoveIntent intent,
         MirrorPulseNamespaceMemberRegistration member, SqliteTransaction transaction, CancellationToken token)
     {
+        if (intent.SourcePositionOperationId is { } positionId && positionId != intent.PreviousMoveOperationId)
+        {
+            var source = await ReadNamespaceMemberPositionEvidenceCoreAsync(member, positionId, intent.PreparedAt, transaction, token).ConfigureAwait(false);
+            if (source.ParentMemberId != intent.Source.ParentMemberId || source.RelativePath != intent.Source.RelativePath ||
+                source.CompletedMoveOperationId != intent.PreviousMoveOperationId)
+                throw new InvalidOperationException("The source must follow the same member's completed position and direct move history.");
+            if (intent.PreviousMoveOperationId is { } retainedMoveId)
+            {
+                var retainedMove = await ReadNamespaceMemberMoveCoreAsync(retainedMoveId, transaction, token).ConfigureAwait(false)
+                    ?? throw new InvalidDataException("The source position lost its direct move predecessor.");
+                var retainedCompletion = await ReadNamespaceMemberMoveCompletionCoreAsync(retainedMoveId, transaction, token).ConfigureAwait(false)
+                    ?? throw new InvalidDataException("The source position lost its completed direct relocation.");
+                if (retainedMove.MemberId != member.MemberId || retainedMove.LocalObject != member.LocalObject ||
+                    retainedMove.RootId != member.RootId || retainedCompletion.VerifiedAt > source.VerifiedAt)
+                    throw new InvalidOperationException("The source placement must retain the member's earlier direct relocation.");
+                await RequireNamespaceMoveIdentitySuccessorAsync(retainedMove, intent, retainedCompletion.VerifiedAt, transaction, token).ConfigureAwait(false);
+            }
+            return;
+        }
         if (intent.PreviousMoveOperationId is not { } previousId)
         {
             if (intent.Source.ParentMemberId != member.ParentMemberId || intent.Source.RelativePath != member.RelativePath)

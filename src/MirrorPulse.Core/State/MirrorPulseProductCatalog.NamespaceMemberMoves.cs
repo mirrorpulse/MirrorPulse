@@ -8,7 +8,12 @@ namespace MirrorPulse.Core.State;
 
 /// <summary>A retained native parent and protection epoch, with a before-move child path.</summary>
 public sealed record MirrorPulseNamespaceMoveEndpoint(Guid ParentMemberId, MirrorPulseLocalFileBinding ParentLocalObject,
-    Guid ParentProtectionId, string RelativePath);
+    Guid ParentProtectionId, string RelativePath)
+{
+    /// <summary>The completed placement of this parent when the endpoint was admitted.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? ParentPositionOperationId { get; init; }
+}
 
 /// <summary>Product admission retained before a controlled member relocation.</summary>
 /// <remarks>
@@ -31,6 +36,10 @@ public sealed record MirrorPulseNamespaceMemberMoveIntent(int Version, Guid Oper
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Guid? IdentityAcceptanceOperationId { get; init; }
+
+    /// <summary>The source placement when an ancestor move superseded this member's direct move destination.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? SourcePositionOperationId { get; init; }
 }
 
 /// <summary>A durable before-native start; it is not evidence that the move occurred.</summary>

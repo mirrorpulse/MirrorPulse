@@ -614,6 +614,13 @@ a damaged position does not fall back to a guessed path. Legacy completions
 retain their original bytes. The first later move can explicitly anchor to the
 old completion without fabricating earlier position records. These facts retain
 current placement separately from original membership and direct move history.
+Move admission can retain a separate source position reference and the completed
+position of each direct parent. Those references preserve the same member,
+complete native binding, owner and chronology; current admission must also match
+the latest committed placement. Permission relocation uses the same evidence
+resolver. Missing records, incomplete moves, foreign member receipts and cyclic
+references cannot authorize a new move or permission epoch. Legacy endpoints
+retain their original paths without inventing historical parent movements.
 Directory movement, replacement saves, import and full installed Host tree
 readiness remain pending. Metadata handles and catalog membership alone do not
 establish tree readiness or remote acceptance.
