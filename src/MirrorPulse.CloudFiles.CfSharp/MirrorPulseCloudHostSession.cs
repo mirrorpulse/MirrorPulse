@@ -66,6 +66,21 @@ public interface IMirrorPulseCloudRuntime : IAsyncDisposable
             new NotSupportedException("This Cloud Files runtime does not read controlled retirement receipts."));
 
     [SupportedOSPlatform("windows10.0.26100")]
+    ValueTask<MirrorPulseNamespaceRetirementBatch> PrepareNamespaceRetirementBatchAsync(Guid operationId, Guid memberId,
+        CancellationToken cancellationToken) => ValueTask.FromException<MirrorPulseNamespaceRetirementBatch>(
+            new NotSupportedException("This Cloud Files runtime does not prepare subtree retirements."));
+
+    [SupportedOSPlatform("windows10.0.26100")]
+    ValueTask<MirrorPulseNamespaceRetirementBatch> ExecuteNamespaceRetirementBatchAsync(Guid operationId,
+        CancellationToken cancellationToken) => ValueTask.FromException<MirrorPulseNamespaceRetirementBatch>(
+            new NotSupportedException("This Cloud Files runtime does not execute subtree retirements."));
+
+    [SupportedOSPlatform("windows10.0.26100")]
+    ValueTask<MirrorPulseNamespaceRetirementBatch> ReadNamespaceRetirementBatchAsync(Guid operationId,
+        CancellationToken cancellationToken) => ValueTask.FromException<MirrorPulseNamespaceRetirementBatch>(
+            new NotSupportedException("This Cloud Files runtime does not read subtree retirement receipts."));
+
+    [SupportedOSPlatform("windows10.0.26100")]
     ValueTask<MirrorPulseNamespaceBirthRecoveryResult> ExecuteNamespaceBirthRecoveryAsync(
         Guid recoveryId, CancellationToken cancellationToken) =>
         ValueTask.FromException<MirrorPulseNamespaceBirthRecoveryResult>(
@@ -312,6 +327,43 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             if (catalog is null) throw new NotSupportedException("Retirement receipts require the Host catalog.");
             return await catalog.ReadNamespaceRetirementAsync(operationId, cancellationToken).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The retirement operation is not registered.");
+        }
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        public async ValueTask<MirrorPulseNamespaceRetirementBatch> PrepareNamespaceRetirementBatchAsync(Guid operationId,
+            Guid memberId, CancellationToken cancellationToken)
+        {
+            if (router is null || catalog is null || _namespaceExecution is null || _namespaceActor is null)
+                throw new NotSupportedException("Subtree retirement requires the Host namespace boundary.");
+            var member = await catalog.ReadNamespaceMemberAsync(memberId, cancellationToken).ConfigureAwait(false)
+                ?? throw new FileNotFoundException("The retirement member is not registered.");
+            var registration = router.Registrations.Single(root => root.RootId == member.RootId);
+            var coordinator = new MirrorPulseNamespaceRetirementCoordinator(fileSystem, catalog, router, _namespaceExecution, _namespaceActor);
+            return await _scheduler.RunAsync(registration.InstanceId,
+                token => coordinator.PrepareBatchAsync(operationId, memberId, token), cancellationToken).ConfigureAwait(false);
+        }
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        public async ValueTask<MirrorPulseNamespaceRetirementBatch> ExecuteNamespaceRetirementBatchAsync(Guid operationId,
+            CancellationToken cancellationToken)
+        {
+            if (router is null || catalog is null || _namespaceExecution is null || _namespaceActor is null)
+                throw new NotSupportedException("Subtree retirement requires the Host namespace boundary.");
+            var batch = await catalog.ReadNamespaceRetirementBatchAsync(operationId, cancellationToken).ConfigureAwait(false)
+                ?? throw new FileNotFoundException("The retirement batch is not registered.");
+            var registration = router.Registrations.Single(root => root.RootId == batch.RootId);
+            var coordinator = new MirrorPulseNamespaceRetirementCoordinator(fileSystem, catalog, router, _namespaceExecution, _namespaceActor);
+            return await _scheduler.RunAsync(registration.InstanceId,
+                token => coordinator.ExecuteBatchAsync(operationId, token), cancellationToken).ConfigureAwait(false);
+        }
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        public async ValueTask<MirrorPulseNamespaceRetirementBatch> ReadNamespaceRetirementBatchAsync(Guid operationId,
+            CancellationToken cancellationToken)
+        {
+            if (catalog is null) throw new NotSupportedException("Subtree receipts require the Host catalog.");
+            return await catalog.ReadNamespaceRetirementBatchAsync(operationId, cancellationToken).ConfigureAwait(false)
+                ?? throw new FileNotFoundException("The retirement batch is not registered.");
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
@@ -714,6 +766,30 @@ public sealed class MirrorPulseCloudHostSession : IAsyncDisposable
     {
         if (!_started || _runtime is null) throw new InvalidOperationException("The Cloud Files Host session has not started.");
         return _runtime.ReadNamespaceMemberRetirementAsync(operationId, cancellationToken);
+    }
+
+    [SupportedOSPlatform("windows10.0.26100")]
+    public ValueTask<MirrorPulseNamespaceRetirementBatch> PrepareNamespaceRetirementBatchAsync(Guid operationId, Guid memberId,
+        CancellationToken cancellationToken = default)
+    {
+        if (!_started || _runtime is null) throw new InvalidOperationException("The Cloud Files Host session has not started.");
+        return _runtime.PrepareNamespaceRetirementBatchAsync(operationId, memberId, cancellationToken);
+    }
+
+    [SupportedOSPlatform("windows10.0.26100")]
+    public ValueTask<MirrorPulseNamespaceRetirementBatch> ExecuteNamespaceRetirementBatchAsync(Guid operationId,
+        CancellationToken cancellationToken = default)
+    {
+        if (!_started || _runtime is null) throw new InvalidOperationException("The Cloud Files Host session has not started.");
+        return _runtime.ExecuteNamespaceRetirementBatchAsync(operationId, cancellationToken);
+    }
+
+    [SupportedOSPlatform("windows10.0.26100")]
+    public ValueTask<MirrorPulseNamespaceRetirementBatch> ReadNamespaceRetirementBatchAsync(Guid operationId,
+        CancellationToken cancellationToken = default)
+    {
+        if (!_started || _runtime is null) throw new InvalidOperationException("The Cloud Files Host session has not started.");
+        return _runtime.ReadNamespaceRetirementBatchAsync(operationId, cancellationToken);
     }
 
     [SupportedOSPlatform("windows10.0.26100")]

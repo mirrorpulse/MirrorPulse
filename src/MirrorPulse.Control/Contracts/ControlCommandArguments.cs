@@ -94,11 +94,11 @@ public sealed record NamespaceMemberMoveArguments(Guid OperationId) : IMirrorPul
 
 public sealed record NamespaceMemberMoveStatusArguments(Guid OperationId) : IMirrorPulseControlArguments;
 
-public sealed record NamespaceMemberRetirementArguments(Guid OperationId) : IMirrorPulseControlArguments;
+public sealed record NamespaceMemberRetirementArguments(Guid OperationId, bool Recursive = false) : IMirrorPulseControlArguments;
 
-public sealed record NamespaceMemberRetirementStatusArguments(Guid OperationId) : IMirrorPulseControlArguments;
+public sealed record NamespaceMemberRetirementStatusArguments(Guid OperationId, bool Recursive = false) : IMirrorPulseControlArguments;
 
-public sealed record NamespaceMemberPrepareRetirementArguments(Guid OperationId, Guid MemberId) : IMirrorPulseControlArguments;
+public sealed record NamespaceMemberPrepareRetirementArguments(Guid OperationId, Guid MemberId, bool Recursive = false) : IMirrorPulseControlArguments;
 
 public sealed record NamespaceMemberCreateArguments(Guid OperationId, Guid ParentMemberId,
     string Name, bool IsDirectory = false) : IMirrorPulseControlArguments;
@@ -133,10 +133,11 @@ public sealed record MirrorPulseControlNamespaceMemberMoveStatus(Guid OperationI
     bool NativeObserved, bool OfficialProjectionRecorded, bool CurrentNameCommitted);
 
 public sealed record MirrorPulseControlNamespaceMemberRetirementPreparation(Guid OperationId, Guid MemberId,
-    string RelativePath, bool IsDirectory, DateTimeOffset PreparedAt);
+    string RelativePath, bool IsDirectory, DateTimeOffset PreparedAt, bool Recursive = false, int MemberCount = 1);
 
 public sealed record MirrorPulseControlNamespaceMemberRetirementResult(Guid OperationId, Guid MemberId,
-    string RelativePath, bool IsDirectory, string Phase, bool NativeDeleted, bool MembershipSettled);
+    string RelativePath, bool IsDirectory, string Phase, bool NativeDeleted, bool MembershipSettled,
+    bool Recursive = false, int MemberCount = 1);
 
 public sealed record MirrorPulseControlNamespaceBirthRecoveryResult(Guid RecoveryId, string Outcome,
     bool CallbackCompleted, bool Drained, bool NativeIdentityPrepared, bool DurableProjectionCommitted, bool VerificationRecorded);

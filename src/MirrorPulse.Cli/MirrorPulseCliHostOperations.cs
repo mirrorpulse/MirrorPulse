@@ -305,29 +305,25 @@ public sealed class MirrorPulseCliHostOperations : IMirrorPulseCliHostOperations
                     break;
                 case ("namespace", "member") when command.Path.Count > 2 &&
                     command.Path[2].Equals("prepare-retire", StringComparison.OrdinalIgnoreCase):
-                    if (command.Arguments.Count is < 1 or > 3 || !Guid.TryParse(command.Arguments[0], out Guid retireMember) || retireMember == Guid.Empty)
-                        throw new ArgumentException("namespace member prepare-retire requires a member ID and optional --operation-id GUID.");
-                    Guid retireOperation = Guid.NewGuid();
-                    if (command.Arguments.Count > 1 && (!command.Arguments[1].Equals("--operation-id", StringComparison.OrdinalIgnoreCase) ||
-                        command.Arguments.Count != 3 || !Guid.TryParse(command.Arguments[2], out retireOperation) || retireOperation == Guid.Empty))
-                        throw new ArgumentException("--operation-id requires a non-empty GUID.");
-                    var retirementPreparation = await _client.PrepareNamespaceMemberRetirementAsync(retireOperation, retireMember, cancellationToken).ConfigureAwait(false);
+                    var retireOptions = ParseRetirementOptions(command.Arguments, preparation: true);
+                    var retirementPreparation = await _client.PrepareNamespaceMemberRetirementAsync(retireOptions.OperationId,
+                        retireOptions.Id, retireOptions.Recursive, cancellationToken).ConfigureAwait(false);
                     result = retirementPreparation;
                     human = $"Member retirement prepared · {retirementPreparation.OperationId:D} · {retirementPreparation.RelativePath}";
                     break;
                 case ("namespace", "member") when command.Path.Count > 2 &&
                     command.Path[2].Equals("retire", StringComparison.OrdinalIgnoreCase):
-                    if (command.Arguments.Count != 1 || !Guid.TryParse(command.Arguments[0], out Guid retireExecution) || retireExecution == Guid.Empty)
-                        throw new ArgumentException("namespace member retire requires one non-empty operation ID.");
-                    var retirement = await _client.ExecuteNamespaceMemberRetirementAsync(retireExecution, cancellationToken).ConfigureAwait(false);
+                    var retireExecution = ParseRetirementOptions(command.Arguments, preparation: false);
+                    var retirement = await _client.ExecuteNamespaceMemberRetirementAsync(retireExecution.Id,
+                        retireExecution.Recursive, cancellationToken).ConfigureAwait(false);
                     result = retirement;
                     human = $"Member retirement {retirement.Phase} · {retirement.OperationId:D} · {retirement.RelativePath}";
                     break;
                 case ("namespace", "member") when command.Path.Count > 2 &&
                     command.Path[2].Equals("retirement-status", StringComparison.OrdinalIgnoreCase):
-                    if (command.Arguments.Count != 1 || !Guid.TryParse(command.Arguments[0], out Guid retirementStatus) || retirementStatus == Guid.Empty)
-                        throw new ArgumentException("namespace member retirement-status requires one non-empty operation ID.");
-                    var retirementReceipt = await _client.GetNamespaceMemberRetirementAsync(retirementStatus, cancellationToken).ConfigureAwait(false);
+                    var retirementStatus = ParseRetirementOptions(command.Arguments, preparation: false);
+                    var retirementReceipt = await _client.GetNamespaceMemberRetirementAsync(retirementStatus.Id,
+                        retirementStatus.Recursive, cancellationToken).ConfigureAwait(false);
                     result = retirementReceipt;
                     human = $"Member retirement {retirementReceipt.Phase} · {retirementReceipt.OperationId:D} · {retirementReceipt.RelativePath}";
                     break;
@@ -637,6 +633,22 @@ public sealed class MirrorPulseCliHostOperations : IMirrorPulseCliHostOperations
         }
 
         return map;
+    }
+
+    private static (Guid Id, Guid OperationId, bool Recursive) ParseRetirementOptions(IReadOnlyList<string> arguments, bool preparation)
+    {
+        if (arguments.Count == 0 || !Guid.TryParse(arguments[0], out Guid id) || id == Guid.Empty)
+            throw new ArgumentException("Retirement requires one non-empty member or operation ID.");
+        Guid operationId = Guid.NewGuid();
+        bool recursive = false, operationSpecified = false;
+        for (int index = 1; index < arguments.Count; index++)
+        {
+            if (arguments[index].Equals("--recursive", StringComparison.OrdinalIgnoreCase) && !recursive) recursive = true;
+            else if (preparation && arguments[index].Equals("--operation-id", StringComparison.OrdinalIgnoreCase) && !operationSpecified &&
+                ++index < arguments.Count && Guid.TryParse(arguments[index], out operationId) && operationId != Guid.Empty) operationSpecified = true;
+            else throw new ArgumentException("Retirement accepts --recursive once and preparation also accepts --operation-id GUID once.");
+        }
+        return (id, operationId, recursive);
     }
 
     private async Task<MirrorPulseHostStatus> StartAsync(CancellationToken cancellationToken)

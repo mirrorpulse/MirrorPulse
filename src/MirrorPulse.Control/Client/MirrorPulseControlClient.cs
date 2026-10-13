@@ -274,18 +274,30 @@ public sealed class MirrorPulseControlClient
 
     public Task<MirrorPulseControlNamespaceMemberRetirementPreparation> PrepareNamespaceMemberRetirementAsync(Guid operationId,
         Guid memberId, CancellationToken cancellationToken = default) =>
+        PrepareNamespaceMemberRetirementAsync(operationId, memberId, false, cancellationToken);
+
+    public Task<MirrorPulseControlNamespaceMemberRetirementPreparation> PrepareNamespaceMemberRetirementAsync(Guid operationId,
+        Guid memberId, bool recursive, CancellationToken cancellationToken = default) =>
         SendAsync<NamespaceMemberPrepareRetirementArguments, MirrorPulseControlNamespaceMemberRetirementPreparation>(
-            MirrorPulseControlCommands.NamespaceMemberPrepareRetirement, new(operationId, memberId), cancellationToken);
+            MirrorPulseControlCommands.NamespaceMemberPrepareRetirement, new(operationId, memberId, recursive), cancellationToken);
 
     public Task<MirrorPulseControlNamespaceMemberRetirementResult> ExecuteNamespaceMemberRetirementAsync(Guid operationId,
         CancellationToken cancellationToken = default) =>
+        ExecuteNamespaceMemberRetirementAsync(operationId, false, cancellationToken);
+
+    public Task<MirrorPulseControlNamespaceMemberRetirementResult> ExecuteNamespaceMemberRetirementAsync(Guid operationId,
+        bool recursive, CancellationToken cancellationToken = default) =>
         SendAsync<NamespaceMemberRetirementArguments, MirrorPulseControlNamespaceMemberRetirementResult>(
-            MirrorPulseControlCommands.NamespaceMemberRetirement, new(operationId), cancellationToken);
+            MirrorPulseControlCommands.NamespaceMemberRetirement, new(operationId, recursive), cancellationToken);
 
     public Task<MirrorPulseControlNamespaceMemberRetirementResult> GetNamespaceMemberRetirementAsync(Guid operationId,
         CancellationToken cancellationToken = default) =>
+        GetNamespaceMemberRetirementAsync(operationId, false, cancellationToken);
+
+    public Task<MirrorPulseControlNamespaceMemberRetirementResult> GetNamespaceMemberRetirementAsync(Guid operationId,
+        bool recursive, CancellationToken cancellationToken = default) =>
         SendAsync<NamespaceMemberRetirementStatusArguments, MirrorPulseControlNamespaceMemberRetirementResult>(
-            MirrorPulseControlCommands.NamespaceMemberRetirementStatus, new(operationId), cancellationToken);
+            MirrorPulseControlCommands.NamespaceMemberRetirementStatus, new(operationId, recursive), cancellationToken);
 
     public Task<MirrorPulseControlNamespaceBirthRecoveryResult> ExecuteNamespaceBirthRecoveryAsync(Guid recoveryId,
         CancellationToken cancellationToken = default) =>

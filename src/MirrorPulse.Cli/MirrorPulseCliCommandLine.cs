@@ -224,11 +224,11 @@ public static class MirrorPulseCliHelp
                                          Read the durable move progress.
           namespace member create PARENT_ID NAME [--directory] [--operation-id GUID]
                                          Create an empty local file or directory under a protected member.
-          namespace member prepare-retire MEMBER_ID [--operation-id GUID]
-                                         Prepare a protected leaf deletion.
-          namespace member retire OPERATION_ID
-                                         Execute or retry a protected leaf deletion.
-          namespace member retirement-status OPERATION_ID
+          namespace member prepare-retire MEMBER_ID [--recursive] [--operation-id GUID]
+                                         Prepare a protected leaf or subtree deletion.
+          namespace member retire OPERATION_ID [--recursive]
+                                         Execute or retry an admitted protected deletion.
+          namespace member retirement-status OPERATION_ID [--recursive]
                                          Read a protected deletion receipt.
           namespace birth recover RECOVERY_ID
                                          Retry an already retained staged-file recovery.

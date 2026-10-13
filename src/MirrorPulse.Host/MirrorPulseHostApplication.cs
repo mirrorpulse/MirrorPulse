@@ -546,6 +546,12 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
     {
         if (arguments.OperationId == Guid.Empty || arguments.MemberId == Guid.Empty)
             throw new ArgumentException("Operation and member IDs are required.", nameof(arguments));
+        if (arguments.Recursive)
+        {
+            var batch = await _session.PrepareNamespaceRetirementBatchAsync(arguments.OperationId, arguments.MemberId, cancellationToken).ConfigureAwait(false);
+            var root = batch.Entries.Single(entry => entry.MemberId == batch.MemberId);
+            return new(batch.OperationId, batch.MemberId, root.RelativePath, root.IsDirectory, batch.PreparedAt, true, batch.Entries.Count);
+        }
         var retirement = await _session.PrepareNamespaceMemberRetirementAsync(arguments.OperationId, arguments.MemberId, cancellationToken).ConfigureAwait(false);
         return new(retirement.OperationId, retirement.Intent.MemberId, retirement.Intent.RelativePath,
             retirement.Intent.IsDirectory, retirement.Intent.PreparedAt);
@@ -555,6 +561,8 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
         NamespaceMemberRetirementArguments arguments, CancellationToken cancellationToken)
     {
         if (arguments.OperationId == Guid.Empty) throw new ArgumentException("A retirement operation ID is required.", nameof(arguments));
+        if (arguments.Recursive)
+            return MapRetirementBatch(await _session.ExecuteNamespaceRetirementBatchAsync(arguments.OperationId, cancellationToken).ConfigureAwait(false));
         var retirement = await _session.ExecuteNamespaceMemberRetirementAsync(arguments.OperationId, cancellationToken).ConfigureAwait(false);
         return new(retirement.OperationId, retirement.Intent.MemberId, retirement.Intent.RelativePath,
             retirement.Intent.IsDirectory, retirement.Phase.ToString(), retirement.NativeDeletedAt is not null,
@@ -565,10 +573,20 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
         NamespaceMemberRetirementStatusArguments arguments, CancellationToken cancellationToken)
     {
         if (arguments.OperationId == Guid.Empty) throw new ArgumentException("A retirement operation ID is required.", nameof(arguments));
+        if (arguments.Recursive)
+            return MapRetirementBatch(await _session.ReadNamespaceRetirementBatchAsync(arguments.OperationId, cancellationToken).ConfigureAwait(false));
         var retirement = await _session.ReadNamespaceMemberRetirementAsync(arguments.OperationId, cancellationToken).ConfigureAwait(false);
         return new(retirement.OperationId, retirement.Intent.MemberId, retirement.Intent.RelativePath,
             retirement.Intent.IsDirectory, retirement.Phase.ToString(), retirement.NativeDeletedAt is not null,
             retirement.Phase == MirrorPulseNamespaceRetirementPhase.Completed);
+    }
+
+    private static MirrorPulseControlNamespaceMemberRetirementResult MapRetirementBatch(MirrorPulseNamespaceRetirementBatch batch)
+    {
+        var root = batch.Entries.Single(entry => entry.MemberId == batch.MemberId);
+        bool completed = batch.Phase == MirrorPulseNamespaceRetirementBatchPhase.Completed;
+        return new(batch.OperationId, batch.MemberId, root.RelativePath, root.IsDirectory, batch.Phase.ToString(),
+            completed, completed, true, batch.Entries.Count);
     }
 
     private async ValueTask<MirrorPulseControlNamespaceMemberMovePreparation> PrepareNamespaceMemberMoveAsync(
