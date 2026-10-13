@@ -62,7 +62,8 @@
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeControlledBirthRetainsIdentityBytesAndOfficialJournalAcrossRestart",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeConfirmedUploadIdentityRemainsMovableAcrossRestart",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeControlledCreationRegistersEmptyFilesDirectoriesAndNestedMembersAcrossRestart",
-      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeControlledSubtreeRetirementRecoversNativeAndMembershipBoundariesAcrossRestart"
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeControlledSubtreeRetirementRecoversNativeAndMembershipBoundariesAcrossRestart",
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeRegisteredBornProtectionUsesMovedParentAndRotatedRoleAcrossRestart"
   ],
   "required": {
     "namespace": [
@@ -87,6 +88,7 @@
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeConfirmedUploadIdentityRemainsMovableAcrossRestart",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeControlledCreationRegistersEmptyFilesDirectoriesAndNestedMembersAcrossRestart",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeControlledSubtreeRetirementRecoversNativeAndMembershipBoundariesAcrossRestart",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeRegisteredBornProtectionUsesMovedParentAndRotatedRoleAcrossRestart",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseNamespaceExecutionSessionTests.NamespaceBirthUsesCurrentUserOwnerWithoutChangingTheNormalSourceToken"
     ],
     "native": [
@@ -131,7 +133,8 @@
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeControlledBirthRetainsIdentityBytesAndOfficialJournalAcrossRestart",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeConfirmedUploadIdentityRemainsMovableAcrossRestart",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeControlledCreationRegistersEmptyFilesDirectoriesAndNestedMembersAcrossRestart",
-      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeControlledSubtreeRetirementRecoversNativeAndMembershipBoundariesAcrossRestart"
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeControlledSubtreeRetirementRecoversNativeAndMembershipBoundariesAcrossRestart",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeRegisteredBornProtectionUsesMovedParentAndRotatedRoleAcrossRestart"
     ],
     "official": [
       "MirrorPulse.Core.Tests.FtpWorkerProcessTests.SignedFtpReleaseReadsAndConditionallyUploadsThroughHostAndCfSharp",

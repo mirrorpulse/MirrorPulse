@@ -12,7 +12,7 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 /// hydrates content, accepts uploads, releases reservations or declares a tree ready.
 /// </remarks>
 [SupportedOSPlatform("windows10.0.26100")]
-public static class MirrorPulseNamespaceBirthProtectionVerifier
+public static partial class MirrorPulseNamespaceBirthProtectionVerifier
 {
     public static async Task<MirrorPulseNamespaceBirthProtection> RecordAsync(MirrorPulseProductCatalog catalog,
         Guid protectionId, Guid birthOperationId, CloudItem item, CloudDirectory parent,

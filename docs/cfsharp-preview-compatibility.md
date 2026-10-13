@@ -128,8 +128,17 @@ validation follows earlier parent and predecessor epochs without adopting curren
 names or roles; current admission checks the latest committed placement and parent
 lineage. A later completed move can retain the same epoch through its complete
 member receipt. Legacy payloads omit the new placement field. Fresh native
-verification and role application for these located epochs remain separate
-execution work; recording catalog facts alone does not perform an ACL write.
+verification uses `MirrorPulseNamespaceBirthProtectionVerifier.RecordRegisteredAsync`:
+under the shared namespace actor and actual parent's role, it checks both current
+public identities, retained native bindings, owner, type, actual paths and fresh
+inherited descriptors. It rechecks those facts before recording a located epoch.
+An exact replay retains its original observation time. Role application is a
+separate protected operation; verification performs no ACL write, conversion,
+hydration or journal acknowledgement. The dedicated native regression requires
+production creation, a move to a different parent, role rotation, rejected wrong
+parents and descriptors, and replay across two official-store owners. This
+component still requires native acceptance and Host activation before product
+delivery.
 
 The native component probe checks competing writes and hardlinks inside the
 scope, real descriptor application, cancellation and callback failure, and
