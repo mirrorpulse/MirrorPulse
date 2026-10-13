@@ -56,6 +56,35 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
     }
 
     [TestMethod]
+    public async Task NamespaceTreeReadFollowsACompletedMoveToAnotherParent()
+    {
+        using var fixture = new Fixture();
+        await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        var setup = await PrepareMovableMemberAsync(catalog);
+        var targetBirth = await AddBornAsync(catalog, Birth(setup.Parent, setup.ParentProof) with
+        {
+            IsDirectory = true, RelativePath = "Docs/target"
+        });
+        var targetMember = BornMember(targetBirth, setup.ParentMember);
+        await catalog.RegisterNamespaceMemberAsync(targetMember);
+        var move = setup.Move with
+        {
+            OperationId = Guid.NewGuid(),
+            Target = new(targetMember.MemberId, targetMember.LocalObject, targetBirth.Protection.ProtectionId,
+                "Docs/target/moved.txt"),
+            PreparedAt = targetMember.RegisteredAt.AddSeconds(1)
+        };
+        await CompleteMoveChainStepAsync(catalog, move);
+
+        var tree = await catalog.ReadNamespaceMemberTreeAsync(targetMember.MemberId);
+        Assert.HasCount(2, tree);
+        Assert.AreEqual(targetMember.MemberId, tree[0].MemberId);
+        Assert.AreEqual(move.MemberId, tree[1].MemberId);
+        Assert.AreEqual(1, tree[1].Depth);
+        Assert.AreEqual(move.Target.RelativePath, tree[1].RelativePath);
+    }
+
+    [TestMethod]
     public async Task SingleItemDirectoryProjectionCannotReleaseTheSubtreeFence()
     {
         using var fixture = new Fixture();
