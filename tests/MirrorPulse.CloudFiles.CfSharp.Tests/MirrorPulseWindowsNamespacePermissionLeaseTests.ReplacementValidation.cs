@@ -138,8 +138,51 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 });
                 AssertBirthAliasDenied(Path.Combine(directory, $"converted-replacement-{attempt}.link"), file.FullPath);
             }
+            for (int start = 0; start < 2; start++)
+            {
+                if (start == 1) await File.WriteAllBytesAsync(file.FullPath, replacement, deadline.Token);
+                var beforeHandoff = await file.InspectAsync(deadline.Token);
+                Assert.AreEqual(start == 0, beforeHandoff.IsPlaceholder);
+                await Assert.ThrowsExactlyAsync<UnauthorizedAccessException>(() => MirrorPulseWindowsNamespacePermissionLease.ApplyOwnedFileRoleHandoffAsync(
+                    file, router, original.Baseline.LocalObject, caller.User!.Value, [restored], role, false, identity, deadline.Token));
+                await role.RunNamespaceOperationAsync(async () =>
+                {
+                    await Assert.ThrowsExactlyAsync<InvalidDataException>(() => MirrorPulseWindowsNamespacePermissionLease.ApplyOwnedFileRoleHandoffAsync(
+                        file, router, original.Baseline.LocalObject with { LocalFileId = Guid.NewGuid() }, caller.User!.Value, [restored], role, false, identity, deadline.Token));
+                    var tightened = await MirrorPulseWindowsNamespacePermissionLease.ApplyOwnedFileRoleHandoffAsync(file, router,
+                        original.Baseline.LocalObject, caller.User!.Value, [restored], role, false, identity, deadline.Token);
+                    RequireObject(tightened, roleOnly);
+                });
+                await Assert.ThrowsAsync<UnauthorizedAccessException>(() => File.ReadAllBytesAsync(file.FullPath, deadline.Token));
+                AssertBirthAliasDenied(Path.Combine(directory, $"before-handoff-{start}.link"), file.FullPath, expectedError: 5);
+                await using var nextRole = new MirrorPulseNamespaceExecutionSession();
+                string nextRoleOnly = MirrorPulseNamespacePermissionPolicy.CreateOrdinaryFileBirthDacl(nextRole);
+                await nextRole.RunNamespaceOperationAsync(async () =>
+                {
+                    var handed = await MirrorPulseWindowsNamespacePermissionLease.ApplyOwnedFileRoleHandoffAsync(file, router,
+                        original.Baseline.LocalObject, caller.User!.Value, [roleOnly], nextRole, false, identity, deadline.Token);
+                    RequireObject(handed, nextRoleOnly);
+                    Assert.AreEqual(beforeHandoff.IsPlaceholder, (await file.InspectAsync(deadline.Token)).IsPlaceholder);
+                    var replay = await MirrorPulseWindowsNamespacePermissionLease.ApplyOwnedFileRoleHandoffAsync(file, router,
+                        original.Baseline.LocalObject, caller.User!.Value, [roleOnly], nextRole, false, identity, deadline.Token);
+                    RequireObject(replay, nextRoleOnly);
+                    await nextRole.RunNormalUserOperationAsync(async () =>
+                    {
+                        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => File.ReadAllBytesAsync(file.FullPath, deadline.Token));
+                        AssertBirthAliasDenied(Path.Combine(directory, $"after-handoff-{start}.link"), file.FullPath, expectedError: 5);
+                    });
+                    var converted = await MirrorPulseWindowsNamespacePermissionLease.RunProtectedAsync(file, router, original.Baseline.LocalObject, identity,
+                        async (lease, stop) => { RequireObject(await lease.InspectAsync(stop), nextRoleOnly); await lease.ApplyDaclAsync(restored, stop); }, deadline.Token);
+                    Assert.AreEqual(CloudProtectedLocalOperationOutcome.Completed, converted.Outcome);
+                    Assert.IsTrue(converted.Drained && converted.NativeIdentityPrepared && converted.DurableProjectionCommitted);
+                });
+                var afterHandoff = await file.InspectAsync(deadline.Token);
+                Assert.AreEqual(initial.LocalBinding, afterHandoff.LocalBinding); Assert.IsTrue(afterHandoff.IsPlaceholder);
+                CollectionAssert.AreEqual(initial.PlaceholderIdentity.ToArray(), afterHandoff.PlaceholderIdentity.ToArray());
+                CollectionAssert.AreEqual(replacement, await File.ReadAllBytesAsync(file.FullPath, deadline.Token));
+            }
             Assert.AreEqual(0, source.Reads);
-            TestContext.WriteLine("ReplacementValidation: placeholderAndOrdinaryStart=True; latestUnsentBackup=True; publicExclusiveTightening=True; durableOriginalBackup=True; sharedPrivateBackupStore=True; sameOriginalObject=True; openWritePreservesPlaceholder=True; ordinaryStartRecovered=True; roleOnlyContentDenied=True; aliasDenied=True; publicSameObjectReconversion=True; originalIdentityRetained=True; binaryExact=True; dirty=True; noSourceAccess=True; productOperation=False; hostIntegrated=False.");
+            TestContext.WriteLine("ReplacementValidation: placeholderAndOrdinaryStart=True; latestUnsentBackup=True; publicExclusiveTightening=True; durableOriginalBackup=True; sharedPrivateBackupStore=True; sameOriginalObject=True; openWritePreservesPlaceholder=True; ordinaryStartRecovered=True; roleOnlyContentDenied=True; aliasDenied=True; publicSameObjectReconversion=True; originalIdentityRetained=True; binaryExact=True; dirty=True; sharedOwnerHandoff=True; handoffOrdinaryAndPlaceholder=True; newRoleOnlyClosed=True; handoffReplay=True; wrongBindingRejected=True; normalCallerRejected=True; noSourceAccess=True; productOperation=False; hostIntegrated=False.");
 
             void RequireObject(MirrorPulseNamespacePermissionObject facts, string dacl)
             {
