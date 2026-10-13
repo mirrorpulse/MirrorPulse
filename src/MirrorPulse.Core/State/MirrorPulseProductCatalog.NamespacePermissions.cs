@@ -14,7 +14,7 @@ public sealed record MirrorPulseNamespacePermissionBaseline(Guid EvidenceId, Roo
     MirrorPulseLocalFileBinding LocalObject, string RelativePath, bool IsDirectory,
     string OwnerSid, string OriginalDacl, DateTimeOffset CapturedAt);
 
-public enum MirrorPulseNamespacePermissionChangeKind { Protect, RotateRole, Restore }
+public enum MirrorPulseNamespacePermissionChangeKind { Protect, RotateRole, Restore, ReplacementProjection }
 public enum MirrorPulseNamespacePermissionPhase { Prepared, Applied, Verified, RecoveryRequired }
 public enum MirrorPulseNamespacePermissionRecoveryReason
 {
@@ -30,6 +30,10 @@ public sealed record MirrorPulseNamespacePermissionIntent(Guid OperationId, Guid
     /// <summary>The completed product relocation at which this later permission change was admitted.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public MirrorPulseNamespacePermissionRelocation? Relocation { get; init; }
+
+    /// <summary>References the retained before-scope action instead of claiming a new native preparation.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public MirrorPulseNamespaceReplacementPermissionReference? ReplacementProjection { get; init; }
 }
 
 /// <summary>Retains a permission epoch's registered member and completed move without changing its original capture.</summary>
@@ -86,6 +90,8 @@ public sealed partial class MirrorPulseProductCatalog
             ArgumentNullException.ThrowIfNull(intent);
             ValidatePermissionBaseline(baseline);
             ValidatePermissionIntent(intent);
+            if (intent.ReplacementProjection is not null)
+                throw new InvalidOperationException("Replacement projection is recorded only by the replacement completion transaction.");
             if (baseline.EvidenceId != intent.EvidenceId || baseline.LocalObject != intent.LocalObject ||
                 intent.PreparedAt < baseline.CapturedAt)
                 throw new ArgumentException("The permission intent does not refer to its original object evidence.");
@@ -270,7 +276,10 @@ public sealed partial class MirrorPulseProductCatalog
         query.CommandText = PermissionChangeQuery + " WHERE c.evidence_id=$id ORDER BY c.rowid DESC LIMIT 1;";
         query.Parameters.AddWithValue("$id", evidenceId.ToString("D"));
         await using SqliteDataReader reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
-        return await reader.ReadAsync(token).ConfigureAwait(false) ? ReadPermissionChange(reader) : null;
+        var change = await reader.ReadAsync(token).ConfigureAwait(false) ? ReadPermissionChange(reader) : null;
+        await reader.DisposeAsync().ConfigureAwait(false);
+        if (change is not null) await ValidateReplacementPermissionProjectionAsync(change, transaction, token).ConfigureAwait(false);
+        return change;
     }
 
     /// <summary>Retains an application fact; a later independent read is still required.</summary>
@@ -395,7 +404,10 @@ public sealed partial class MirrorPulseProductCatalog
         query.CommandText = PermissionChangeQuery + " WHERE c.operation_id=$id;";
         query.Parameters.AddWithValue("$id", operationId.ToString("D"));
         await using SqliteDataReader reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
-        return await reader.ReadAsync(token).ConfigureAwait(false) ? ReadPermissionChange(reader) : null;
+        var change = await reader.ReadAsync(token).ConfigureAwait(false) ? ReadPermissionChange(reader) : null;
+        await reader.DisposeAsync().ConfigureAwait(false);
+        if (change is not null) await ValidateReplacementPermissionProjectionAsync(change, transaction, token).ConfigureAwait(false);
+        return change;
     }
 
     private async Task<IReadOnlyList<MirrorPulseNamespacePermissionChange>> ReadPermissionChangesCoreAsync(Guid? evidenceId,
@@ -409,6 +421,8 @@ public sealed partial class MirrorPulseProductCatalog
         await using SqliteDataReader reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
         var changes = new List<MirrorPulseNamespacePermissionChange>();
         while (await reader.ReadAsync(token).ConfigureAwait(false)) changes.Add(ReadPermissionChange(reader));
+        await reader.DisposeAsync().ConfigureAwait(false);
+        foreach (var change in changes) await ValidateReplacementPermissionProjectionAsync(change, transaction, token).ConfigureAwait(false);
         return changes.AsReadOnly();
     }
 
@@ -487,6 +501,11 @@ public sealed partial class MirrorPulseProductCatalog
         if (intent.Relocation is { } relocation && (relocation.MemberId == Guid.Empty || relocation.CompletedMoveOperationId == Guid.Empty ||
             intent.RootId is null))
             throw new ArgumentException("Relocated permission changes require a registered member and completed move.");
+        if ((intent.Kind == MirrorPulseNamespacePermissionChangeKind.ReplacementProjection) != (intent.ReplacementProjection is not null))
+            throw new ArgumentException("Replacement projection requires an explicit retained scope reference.");
+        if (intent.ReplacementProjection is { } projection && (projection.OperationId == Guid.Empty || projection.ActionId == Guid.Empty ||
+            projection.RestorationId == Guid.Empty || projection.OperationId == intent.OperationId || projection.ActionId == intent.OperationId ||
+            projection.RestorationId == intent.OperationId)) throw new ArgumentException("The replacement scope reference is invalid.");
     }
 
     private static void ValidatePermissionBinding(MirrorPulseLocalFileBinding binding)

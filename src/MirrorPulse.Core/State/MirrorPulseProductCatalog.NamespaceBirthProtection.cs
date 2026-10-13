@@ -37,53 +37,60 @@ public sealed partial class MirrorPulseProductCatalog
         {
             ThrowIfDisposed();
             using SqliteTransaction transaction = _connection.BeginTransaction();
-            var replay = await ReadNamespaceBirthProtectionCoreAsync(protection.ProtectionId, transaction, cancellationToken).ConfigureAwait(false);
-            if (replay is not null)
-            {
-                if (replay != protection) throw new InvalidOperationException("A birth protection epoch is immutable.");
-                transaction.Commit();
-                return replay;
-            }
-            var birth = await ValidateNamespaceBirthProtectionReferencesAsync(protection, transaction, cancellationToken).ConfigureAwait(false);
-            var latest = await ReadLatestNamespaceBirthProtectionCoreAsync(protection.BirthOperationId, transaction, cancellationToken).ConfigureAwait(false);
-            if (protection.PreviousProtectionId != latest?.ProtectionId ||
-                latest is not null && protection.Verification.ObservedAt < latest.Verification.ObservedAt)
-                throw new InvalidOperationException("Birth protection must extend the latest retained epoch.");
-            if (latest is null) await RequireNamespaceBirthReservationAsync(birth, transaction, cancellationToken).ConfigureAwait(false);
-            if (protection.Placement is null)
-                _ = await ValidateNamespaceBirthLineageAsync(birth, protection, true, transaction, cancellationToken).ConfigureAwait(false);
-            else
-            {
-                if (latest is null || protection.Verification.ObservedAt <= latest.Verification.ObservedAt)
-                    throw new InvalidOperationException("Located birth protection requires an earlier retained protection epoch.");
-                await RequireNamespaceMoveRootUnfencedAsync(birth.RootId, null, transaction, cancellationToken).ConfigureAwait(false);
-                await ValidateNamespaceLocatedBirthCurrentAsync(protection, transaction, cancellationToken, admission: true).ConfigureAwait(false);
-                var lineage = await ReadNamespaceMemberProtectionLineageCoreAsync(protection.Placement.ParentMemberId, transaction, cancellationToken).ConfigureAwait(false);
-                if (lineage[0].Protection.RoleSid != protection.RoleSid)
-                    throw new InvalidOperationException("Located birth protection requires the current parent lineage's role.");
-            }
-            byte[] payload = JsonSerializer.SerializeToUtf8Bytes(protection, TopologyJsonOptions);
-            if (payload.Length > 131_072) throw new ArgumentException("Birth protection must be bounded.", nameof(protection));
-            await using SqliteCommand insert = _connection.CreateCommand();
-            insert.Transaction = transaction;
-            insert.CommandText = """
-                INSERT INTO namespace_birth_protections(protection_id,birth_operation_id,previous_protection_id,
-                    parent_permission_operation_id,parent_birth_operation_id,parent_birth_protection_id,payload,fingerprint)
-                VALUES($id,$birth,$previous,$parent,$born,$epoch,$payload,$fingerprint);
-                """;
-            insert.Parameters.AddWithValue("$id", protection.ProtectionId.ToString("D"));
-            insert.Parameters.AddWithValue("$birth", protection.BirthOperationId.ToString("D"));
-            insert.Parameters.AddWithValue("$previous", (object?)protection.PreviousProtectionId?.ToString("D") ?? DBNull.Value);
-            insert.Parameters.AddWithValue("$parent", protection.BornParent is null ? protection.ParentPermissionOperationId.ToString("D") : DBNull.Value);
-            insert.Parameters.AddWithValue("$born", (object?)protection.BornParent?.BirthOperationId.ToString("D") ?? DBNull.Value);
-            insert.Parameters.AddWithValue("$epoch", (object?)protection.BornParent?.ProtectionId.ToString("D") ?? DBNull.Value);
-            insert.Parameters.AddWithValue("$payload", payload);
-            insert.Parameters.AddWithValue("$fingerprint", SHA256.HashData(payload));
-            await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            await RecordNamespaceBirthProtectionCoreAsync(protection, transaction, cancellationToken).ConfigureAwait(false);
             transaction.Commit();
             return protection;
         }
         finally { _gate.Release(); }
+    }
+
+    private async Task<MirrorPulseNamespaceBirthProtection> RecordNamespaceBirthProtectionCoreAsync(
+        MirrorPulseNamespaceBirthProtection protection, SqliteTransaction transaction, CancellationToken cancellationToken, Guid? allowedReplacement = null)
+    {
+        var replay = await ReadNamespaceBirthProtectionCoreAsync(protection.ProtectionId, transaction, cancellationToken).ConfigureAwait(false);
+        if (replay is not null)
+        {
+            if (replay != protection) throw new InvalidOperationException("A birth protection epoch is immutable.");
+
+            return replay;
+        }
+        var birth = await ValidateNamespaceBirthProtectionReferencesAsync(protection, transaction, cancellationToken).ConfigureAwait(false);
+        var latest = await ReadLatestNamespaceBirthProtectionCoreAsync(protection.BirthOperationId, transaction, cancellationToken).ConfigureAwait(false);
+        if (protection.PreviousProtectionId != latest?.ProtectionId ||
+            latest is not null && protection.Verification.ObservedAt < latest.Verification.ObservedAt)
+            throw new InvalidOperationException("Birth protection must extend the latest retained epoch.");
+        if (latest is null) await RequireNamespaceBirthReservationAsync(birth, transaction, cancellationToken).ConfigureAwait(false);
+        if (protection.Placement is null)
+            _ = await ValidateNamespaceBirthLineageAsync(birth, protection, true, transaction, cancellationToken).ConfigureAwait(false);
+        else
+        {
+            if (latest is null || protection.Verification.ObservedAt <= latest.Verification.ObservedAt)
+                throw new InvalidOperationException("Located birth protection requires an earlier retained protection epoch.");
+            await RequireNamespaceMoveRootUnfencedAsync(birth.RootId, null, transaction, cancellationToken, allowedReplacement: allowedReplacement).ConfigureAwait(false);
+            await ValidateNamespaceLocatedBirthCurrentAsync(protection, transaction, cancellationToken, admission: true).ConfigureAwait(false);
+            var lineage = await ReadNamespaceMemberProtectionLineageCoreAsync(protection.Placement.ParentMemberId, transaction, cancellationToken, requireUnfenced: allowedReplacement is null).ConfigureAwait(false);
+            if (lineage[0].Protection.RoleSid != protection.RoleSid)
+                throw new InvalidOperationException("Located birth protection requires the current parent lineage's role.");
+        }
+        byte[] payload = JsonSerializer.SerializeToUtf8Bytes(protection, TopologyJsonOptions);
+        if (payload.Length > 131_072) throw new ArgumentException("Birth protection must be bounded.", nameof(protection));
+        await using SqliteCommand insert = _connection.CreateCommand();
+        insert.Transaction = transaction;
+        insert.CommandText = """
+                INSERT INTO namespace_birth_protections(protection_id,birth_operation_id,previous_protection_id,
+                    parent_permission_operation_id,parent_birth_operation_id,parent_birth_protection_id,payload,fingerprint)
+                VALUES($id,$birth,$previous,$parent,$born,$epoch,$payload,$fingerprint);
+                """;
+        insert.Parameters.AddWithValue("$id", protection.ProtectionId.ToString("D"));
+        insert.Parameters.AddWithValue("$birth", protection.BirthOperationId.ToString("D"));
+        insert.Parameters.AddWithValue("$previous", (object?)protection.PreviousProtectionId?.ToString("D") ?? DBNull.Value);
+        insert.Parameters.AddWithValue("$parent", protection.BornParent is null ? protection.ParentPermissionOperationId.ToString("D") : DBNull.Value);
+        insert.Parameters.AddWithValue("$born", (object?)protection.BornParent?.BirthOperationId.ToString("D") ?? DBNull.Value);
+        insert.Parameters.AddWithValue("$epoch", (object?)protection.BornParent?.ProtectionId.ToString("D") ?? DBNull.Value);
+        insert.Parameters.AddWithValue("$payload", payload);
+        insert.Parameters.AddWithValue("$fingerprint", SHA256.HashData(payload));
+        await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        return protection;
     }
 
     /// <summary>Reads the latest historical epoch, not a fresh native protection check.</summary>

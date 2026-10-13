@@ -208,7 +208,45 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 Assert.AreEqual(member, await catalog.ReadNamespaceMemberAsync(member.MemberId, deadline.Token));
                 CollectionAssert.AreEqual(new[] { root.RootId }, (await catalog.ReadNamespaceRecoveryRootsAsync(deadline.Token)).ToArray());
                 Assert.IsNull(await catalog.ReadMutationAsync(operationId, deadline.Token)); Assert.AreEqual(0, source.Reads);
-                TestContext.WriteLine($"ReplacementContent: ordinaryStart={attempt == 1}; emptyInput={attempt >= 2}; unchangedEmpty={attempt == 3}; admittedOriginal=True; firstBackup=True; durableWriteStart=True; actualBinary=True; sameBinding=True; publicIdentity=True; changedContentDirty=True; replayPreservesLaterEdit=True; rootStillRequiresCompletion=True; noSourceAccess=True; productionCopy=True; productionAccessRestoration=True; interruptedAfterScope={attempt == 0}; sameRoleRecovery={attempt != 1}; newRoleCopyRecovery={attempt == 1}; originalBackupRetained=True; metadataHandoffInterruption={attempt == 1}; verifiedOldScopeNewRolePreservesLaterEdit={attempt == 0}; productionExecutor=False; hostIntegrated=False.");
+                if (attempt == 2)
+                {
+                    Assert.IsFalse((await file.InspectAsync(deadline.Token)).IsPlaceholder);
+                    await actor.RunAsync(async token =>
+                    {
+                        await activeRole.RunNamespaceOperationAsync(async () =>
+                        {
+                            var refreshed = await restorer.RestoreForCompletionAsync(operationId, file, parent, token);
+                            Assert.IsTrue(refreshed.ProductVerified && refreshed.Drained);
+                            Assert.AreNotEqual(restoredExecution.Restoration!.RestorationId, refreshed.RestorationId);
+                            var current = (await catalog.ReadNamespaceReplacementExecutionAsync(operationId, token))!;
+                            Assert.IsTrue(current.Restoration!.RevalidateForCompletion);
+                            Assert.AreEqual(copied.Backup, current.Backup); Assert.AreEqual(copied.ContentCompletion, current.ContentCompletion);
+                            await using var parentGuard = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(parent, router, token);
+                            await using var objectGuard = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(file, router, token);
+                            // This short guard prevents another ordinary save during the product
+                            // observation/commit boundary; fully resident bytes need no source recall.
+                            await using var dataGuard = new FileStream(file.FullPath, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, FileOptions.Asynchronous);
+                            var child = await objectGuard.InspectAsync(token); var parentNow = await parentGuard.InspectAsync(token);
+                            var snapshot = await file.InspectAsync(token);
+                            var parentProof = (await catalog.ReadNamespaceMemberProtectionSnapshotAsync(original.Context.Location.ParentMemberId!.Value, token))!;
+                            var completion = await catalog.CompleteNamespaceReplacementAsync(new(1, operationId, member.MemberId, current.Restoration.ActionId,
+                                refreshed.RestorationId, Guid.NewGuid(), Guid.Empty, parentProof,
+                                new(child.LocalObject, child.OwnerSid, child.Dacl, child.ObservedAt),
+                                new(parentNow.LocalObject, parentNow.OwnerSid, parentNow.Dacl, parentNow.ObservedAt),
+                                child.LinkCount ?? throw new InvalidDataException("Completion requires an observed original link count."),
+                                snapshot.IsPlaceholder, snapshot.SynchronizationState == CloudSynchronizationState.InSync,
+                                Convert.ToBase64String(snapshot.PlaceholderIdentity.Span), DateTimeOffset.UtcNow), token);
+                            Assert.AreEqual(completion, await catalog.ReadNamespaceReplacementCompletionAsync(operationId, token));
+                            Assert.AreEqual(completion.ProtectionId, (await catalog.ReadNamespaceMemberProtectionEpochAsync(member.MemberId, token)).ProtectionId);
+                            Assert.AreEqual(completion.RescanGeneration, (await catalog.ReadRootRescanRequestsAsync(token)).Single().Generation);
+                            Assert.IsEmpty(await catalog.ReadNamespaceRecoveryRootsAsync(token));
+                        });
+                        return true;
+                    }, deadline.Token);
+                    CollectionAssert.AreEqual(laterEdit, await File.ReadAllBytesAsync(file.FullPath, deadline.Token));
+                    Assert.AreEqual(0, source.Reads); Assert.IsNull(await catalog.ReadMutationAsync(operationId, deadline.Token));
+                }
+                TestContext.WriteLine($"ReplacementContent: ordinaryStart={attempt == 1}; emptyInput={attempt >= 2}; unchangedEmpty={attempt == 3}; admittedOriginal=True; firstBackup=True; durableWriteStart=True; actualBinary=True; sameBinding=True; publicIdentity=True; changedContentDirty=True; replayPreservesLaterEdit=True; rootRequiredCompletionBeforeCommit=True; durableCompletion={attempt == 2}; latestOrdinaryEditReconverted={attempt == 2}; completionQueuesRescan={attempt == 2}; noSourceAccess=True; productionCopy=True; productionAccessRestoration=True; interruptedAfterScope={attempt == 0}; sameRoleRecovery={attempt != 1}; newRoleCopyRecovery={attempt == 1}; originalBackupRetained=True; metadataHandoffInterruption={attempt == 1}; verifiedOldScopeNewRolePreservesLaterEdit={attempt == 0}; productionExecutor=False; hostIntegrated=False.");
 
                 void RequireObject(MirrorPulseNamespacePermissionObject facts, string dacl)
                 {

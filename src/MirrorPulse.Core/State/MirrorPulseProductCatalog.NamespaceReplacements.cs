@@ -300,7 +300,7 @@ public sealed partial class MirrorPulseProductCatalog
         if (id is null)
         {
             await using var missing = _connection.CreateCommand(); missing.Transaction = transaction;
-            missing.CommandText = "SELECT 1 FROM namespace_replacements p WHERE root_id=$root AND NOT EXISTS(SELECT 1 FROM namespace_replacement_cancellations c WHERE c.operation_id=p.operation_id) LIMIT 1;";
+            missing.CommandText = "SELECT 1 FROM namespace_replacements p WHERE root_id=$root AND NOT EXISTS(SELECT 1 FROM namespace_replacement_cancellations c WHERE c.operation_id=p.operation_id) AND NOT EXISTS(SELECT 1 FROM namespace_replacement_completions c WHERE c.operation_id=p.operation_id) LIMIT 1;";
             missing.Parameters.AddWithValue("$root", root.ToString());
             if (await missing.ExecuteScalarAsync(token).ConfigureAwait(false) is not null)
                 throw new InvalidDataException("An unresolved replacement lost its root fence.");
@@ -309,7 +309,7 @@ public sealed partial class MirrorPulseProductCatalog
         await using (var unresolved = _connection.CreateCommand())
         {
             unresolved.Transaction = transaction;
-            unresolved.CommandText = "SELECT operation_id FROM namespace_replacements p WHERE root_id=$root AND NOT EXISTS(SELECT 1 FROM namespace_replacement_cancellations c WHERE c.operation_id=p.operation_id);";
+            unresolved.CommandText = "SELECT operation_id FROM namespace_replacements p WHERE root_id=$root AND NOT EXISTS(SELECT 1 FROM namespace_replacement_cancellations c WHERE c.operation_id=p.operation_id) AND NOT EXISTS(SELECT 1 FROM namespace_replacement_completions c WHERE c.operation_id=p.operation_id);";
             unresolved.Parameters.AddWithValue("$root", root.ToString());
             await using var reader = await unresolved.ExecuteReaderAsync(token).ConfigureAwait(false);
             if (!await reader.ReadAsync(token).ConfigureAwait(false) || reader.GetString(0) != id.Value.ToString("D") || await reader.ReadAsync(token).ConfigureAwait(false))
@@ -339,7 +339,19 @@ public sealed partial class MirrorPulseProductCatalog
             }
         }
         foreach (var root in candidates)
+        {
+            var completed = new List<Guid>();
+            await using (var query = _connection.CreateCommand())
+            {
+                query.Transaction = transaction;
+                query.CommandText = "SELECT c.operation_id FROM namespace_replacement_completions c JOIN namespace_replacements r USING(operation_id) WHERE r.root_id=$root;";
+                query.Parameters.AddWithValue("$root", root.ToString());
+                await using var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
+                while (await reader.ReadAsync(token).ConfigureAwait(false)) completed.Add(ParseNamespaceMemberId(reader.GetString(0)));
+            }
+            foreach (Guid id in completed) await ReadReplacementCompletionCoreAsync(id, transaction, token).ConfigureAwait(false);
             if (await ReadPendingNamespaceReplacementCoreAsync(root, transaction, token).ConfigureAwait(false) is not null) roots.Add(root);
+        }
     }
 
     private static async Task EnsureNamespaceReplacementSchemaAsync(SqliteConnection connection, CancellationToken token)

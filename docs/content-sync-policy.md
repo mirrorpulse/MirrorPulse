@@ -182,3 +182,29 @@ old content must already be resident at this writer boundary to avoid source
 recall under those locks. Full save preparation, role recovery, restored protection,
 durable projection and root reservation release still require integration. Local
 copy success is neither remote acceptance nor official journal acknowledgement.
+
+## Controlled replacement completion
+
+The catalog completes replacement only after the latest public restoration
+scope reports verified, drained protection and fresh observations still identify
+the original single-link placeholder and its actual protected parent. The parent
+must have the current action's role; an old observation cannot stand in for a
+later parent protection or placement epoch.
+
+One short transaction retains the completion, appends current protection to the
+existing original-permission or born-protection ledger, creates a fresh root
+rescan request and releases only this operation's reservation. Original members
+use an explicit replacement projection referencing the retained before-scope
+action and actual restoration result. It does not claim a newly prepared native
+permission operation. Birth provenance, original descriptors, the first backup
+and copied-content receipt remain unchanged. Damaged completion or protection
+references prevent an unfenced root result. Historical replay returns the first
+completion and preserves subsequent requests and recovery ownership.
+
+Completion preparation can explicitly revalidate metadata when an ordinary save
+has removed placeholder state since the earlier verified scope. This uses the
+public CfSharp conversion and access scope on the same object, preserves later
+bytes, records its own before-scope intent and leaves historical status replay
+read-only. It never recopies the staged input or confirms later edits as accepted
+content. The shared save executor, Host/CLI integration and whole-tree readiness
+still require their separate product acceptance.

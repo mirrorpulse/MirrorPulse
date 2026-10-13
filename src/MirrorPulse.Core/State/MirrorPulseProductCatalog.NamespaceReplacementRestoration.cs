@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text.Json.Serialization;
 using Microsoft.Data.Sqlite;
 
 namespace MirrorPulse.Core.State;
@@ -6,7 +7,12 @@ namespace MirrorPulse.Core.State;
 /// <summary>An immutable before-scope restoration attempt for copied content on the original member.</summary>
 /// <remarks>The Host owns scheduler and actor admission. Superseding an interrupted owner grants no authority to overlap a live native scope.</remarks>
 public sealed record MirrorPulseNamespaceReplacementRestoration(int Version, Guid OperationId, Guid RestorationId,
-    Guid? PreviousRestorationId, Guid ActionId, MirrorPulseNamespaceMemberProtectionSnapshot Parent, DateTimeOffset PreparedAt);
+    Guid? PreviousRestorationId, Guid ActionId, MirrorPulseNamespaceMemberProtectionSnapshot Parent, DateTimeOffset PreparedAt)
+{
+    /// <summary>Explicit before-scope revalidation for completion; historical status replay remains read-only.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool RevalidateForCompletion { get; init; }
+}
 
 /// <summary>The actual public scope result and a separate product protection observation.</summary>
 /// <remarks>Native success and product verification are distinct. Neither releases a root, accepts content or acknowledges journal IDs.</remarks>
@@ -40,10 +46,13 @@ public sealed partial class MirrorPulseProductCatalog
             await RequireReplacementIdAvailableCoreAsync(restoration.RestorationId, transaction, cancellationToken).ConfigureAwait(false);
             RequireReplacementRestorationReferences(restoration, execution, requireCurrent: true);
             if (restoration.PreviousRestorationId != execution.Restoration?.RestorationId ||
-                execution.RestorationResult is { ProductVerified: true } && execution.Restoration?.ActionId == restoration.ActionId || execution.RestorationResult is { Drained: false } ||
+                execution.RestorationResult is { ProductVerified: true } && execution.Restoration?.ActionId == restoration.ActionId && !restoration.RevalidateForCompletion || execution.RestorationResult is { Drained: false } ||
                 execution.Restoration is { } previous && restoration.PreparedAt < previous.PreparedAt ||
                 execution.RestorationResult is { } result && restoration.PreparedAt < result.RecordedAt)
                 throw new InvalidOperationException("A new restoration must retain its latest predecessor and cannot supersede verified or undrained work.");
+            if (restoration.RevalidateForCompletion && (execution.RestorationResult is not { ProductVerified: true, Drained: true } ||
+                execution.Restoration?.ActionId != restoration.ActionId))
+                throw new InvalidOperationException("Completion revalidation must follow a drained verified scope under the same retained action.");
             await RequireNamespaceReplacementPendingCoreAsync(execution.Intent, transaction, cancellationToken).ConfigureAwait(false);
             await RequireNamespaceMoveRootUnfencedAsync(execution.Intent.RootId, null, transaction, cancellationToken,
                 allowedReplacement: restoration.OperationId).ConfigureAwait(false);
@@ -144,7 +153,8 @@ public sealed partial class MirrorPulseProductCatalog
                     ?? throw new InvalidOperationException("A restoration lost its predecessor.");
                 var priorResult = await ReadReplacementRestorationResultCoreAsync(previous, transaction, token).ConfigureAwait(false);
                 if (predecessor.Sequence >= current.Sequence || current.Value.PreparedAt < predecessor.Value.PreparedAt ||
-                    priorResult is { ProductVerified: true } && predecessor.Value.ActionId == current.Value.ActionId ||
+                    current.Value.RevalidateForCompletion && (priorResult is not { ProductVerified: true, Drained: true } || predecessor.Value.ActionId != current.Value.ActionId) ||
+                    priorResult is { ProductVerified: true } && predecessor.Value.ActionId == current.Value.ActionId && !current.Value.RevalidateForCompletion ||
                     priorResult is { Drained: false } || priorResult is not null && current.Value.PreparedAt < priorResult.RecordedAt)
                     throw new InvalidOperationException("The restoration predecessor order is inconsistent.");
                 current = predecessor;
@@ -237,6 +247,7 @@ public sealed partial class MirrorPulseProductCatalog
         ArgumentNullException.ThrowIfNull(restoration.Parent.Context.Protection); ArgumentNullException.ThrowIfNull(restoration.Parent.Context.Location);
         if (restoration.Version != 1 || restoration.OperationId == Guid.Empty || restoration.RestorationId == Guid.Empty || restoration.ActionId == Guid.Empty ||
             restoration.RestorationId == restoration.OperationId || restoration.RestorationId == restoration.ActionId || restoration.PreviousRestorationId == Guid.Empty ||
+            restoration.RevalidateForCompletion && restoration.PreviousRestorationId is null ||
             restoration.PreviousRestorationId == restoration.RestorationId || restoration.PreparedAt == default || !restoration.Parent.Context.Member.IsDirectory ||
             NamespaceReplacementPayload(restoration).Length > 262_144)
             throw new ArgumentException("Restoration requires its distinct IDs, coherent managed parent and before-scope time.", nameof(restoration));

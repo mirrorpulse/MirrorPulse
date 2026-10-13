@@ -24,13 +24,22 @@ public sealed class MirrorPulseNamespaceReplacementAccessRestorer(MirrorPulsePro
 
     public async Task<MirrorPulseNamespaceReplacementRestorationResult> RestoreAsync(Guid operationId, CloudFile file,
         CloudDirectory parent, CancellationToken cancellationToken = default)
+        => await RestoreCoreAsync(operationId, file, parent, revalidateForCompletion: false, cancellationToken).ConfigureAwait(false);
+
+    /// <summary>Revalidates current metadata for completion without recopying input or accepting later ordinary edits.</summary>
+    public async Task<MirrorPulseNamespaceReplacementRestorationResult> RestoreForCompletionAsync(Guid operationId, CloudFile file,
+        CloudDirectory parent, CancellationToken cancellationToken = default)
+        => await RestoreCoreAsync(operationId, file, parent, revalidateForCompletion: true, cancellationToken).ConfigureAwait(false);
+
+    private async Task<MirrorPulseNamespaceReplacementRestorationResult> RestoreCoreAsync(Guid operationId, CloudFile file,
+        CloudDirectory parent, bool revalidateForCompletion, CancellationToken cancellationToken)
     {
         actor.AssertAccess(); ArgumentNullException.ThrowIfNull(file); ArgumentNullException.ThrowIfNull(parent);
         var facts = await catalog.ReadNamespaceReplacementExecutionAsync(operationId, cancellationToken).ConfigureAwait(false)
             ?? throw new FileNotFoundException("The original replacement admission is missing.");
         var action = MirrorPulseNamespaceReplacementContentWriter.RequireCurrentAction(facts);
         if (facts.RestorationResult is { ProductVerified: true } historical && facts.Restoration?.ActionId == action.ActionId &&
-            action.RoleSid == execution.RoleSid.Value) return historical;
+            action.RoleSid == execution.RoleSid.Value && !revalidateForCompletion) return historical;
         if (facts.Cancellation is not null || facts.ContentCompletion is null || execution.RoleSid.Value != action.RoleSid || execution.OwnerSid.Value != action.OwnerSid ||
             !MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(MirrorPulseNamespacePermissionPolicy.CreateOrdinaryFileBirthDacl(execution), action.RoleOnlyDacl) ||
             file.RelativePath.Replace('\\', '/') != facts.Intent.Original.Context.Location.RelativePath ||
@@ -50,7 +59,10 @@ public sealed class MirrorPulseNamespaceReplacementAccessRestorer(MirrorPulsePro
         if (attempt is null || facts.RestorationResult is not null || attempt.ActionId != action.ActionId)
         {
             attempt = await catalog.PrepareNamespaceReplacementRestorationAsync(new(1, operationId, Guid.NewGuid(),
-                facts.Restoration?.RestorationId, action.ActionId, parentProof, DateTimeOffset.UtcNow), cancellationToken).ConfigureAwait(false);
+                facts.Restoration?.RestorationId, action.ActionId, parentProof, DateTimeOffset.UtcNow)
+            {
+                RevalidateForCompletion = revalidateForCompletion && facts.RestorationResult is { ProductVerified: true } && facts.Restoration?.ActionId == action.ActionId
+            }, cancellationToken).ConfigureAwait(false);
         }
         await AtAsync(MirrorPulseNamespaceReplacementRestorationCheckpoint.BeforeScope, cancellationToken).ConfigureAwait(false);
         var receipt = await MirrorPulseWindowsNamespacePermissionLease.RunProtectedAsync(file, router, action.LocalObject, identity,

@@ -105,6 +105,7 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinator
                             ExpectedDacl = verified.Verification!.Dacl,
                             TargetDacl = targetDacl(current.Baseline.IsDirectory),
                             PreparedAt = DateTimeOffset.UtcNow,
+                            ReplacementProjection = null,
                         };
                         current = new(current.Baseline, rotation);
                         planned.Add(current);
