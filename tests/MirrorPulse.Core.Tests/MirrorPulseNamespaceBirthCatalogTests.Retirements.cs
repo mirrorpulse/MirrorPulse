@@ -17,6 +17,9 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             var prepared = await first.PrepareNamespaceRetirementAsync(intent);
             Assert.AreEqual(prepared, await first.PrepareNamespaceRetirementAsync(intent));
             await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => first.CompleteNamespaceRetirementAsync(intent.OperationId, DateTimeOffset.UtcNow));
+            await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => first.RecordNamespaceRetirementNativeDeletedAsync(intent.OperationId, intent.PreparedAt));
+            var start = await first.RecordNamespaceRetirementStartAsync(intent.OperationId, intent.PreparedAt);
+            Assert.AreEqual(start, await first.RecordNamespaceRetirementStartAsync(intent.OperationId, intent.PreparedAt.AddSeconds(1)));
             var native = await first.RecordNamespaceRetirementNativeDeletedAsync(intent.OperationId, intent.PreparedAt.AddSeconds(1));
             Assert.AreEqual(native, await first.RecordNamespaceRetirementNativeDeletedAsync(intent.OperationId, native.NativeDeletedAt!.Value));
             Assert.AreEqual(setup.Member, await first.ReadNamespaceMemberChildAsync(setup.ParentMember.MemberId, "new.txt"));
@@ -98,6 +101,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         CollectionAssert.Contains((await catalog.ReadNamespaceRecoveryRootsAsync()).ToArray(), intent.RootId);
         await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => catalog.PrepareNamespaceBirthAsync(
             Birth(setup.Parent, setup.ParentProof) with { RelativePath = "Docs/blocked.txt" }));
+        await catalog.RecordNamespaceRetirementStartAsync(intent.OperationId, intent.PreparedAt);
         var native = await catalog.RecordNamespaceRetirementNativeDeletedAsync(intent.OperationId, intent.PreparedAt.AddSeconds(1));
         await catalog.CompleteNamespaceRetirementAsync(intent.OperationId, native.NativeDeletedAt!.Value.AddSeconds(1));
         CollectionAssert.DoesNotContain((await catalog.ReadNamespaceRecoveryRootsAsync()).ToArray(), intent.RootId);

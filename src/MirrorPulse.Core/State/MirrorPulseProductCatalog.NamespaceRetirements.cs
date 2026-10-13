@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Data.Sqlite;
 using MirrorPulse.Core.Contracts;
 
@@ -10,12 +11,22 @@ public enum MirrorPulseNamespaceRetirementPhase { Prepared, NativeDeleted, Compl
 /// <summary>Immutable admission to remove one registered non-root member through the Host.</summary>
 public sealed record MirrorPulseNamespaceRetirementIntent(int Version, Guid OperationId, Guid MemberId,
     RootId RootId, MirrorPulseLocalFileBinding LocalObject, string RelativePath, bool IsDirectory,
-    string OwnerSid, string RoleSid, DateTimeOffset PreparedAt);
+    string OwnerSid, string RoleSid, DateTimeOffset PreparedAt)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? BatchOperationId { get; init; }
+}
 
 /// <summary>Durable native and membership settlement facts for a controlled deletion.</summary>
 public sealed record MirrorPulseNamespaceRetirement(Guid OperationId, MirrorPulseNamespaceRetirementIntent Intent,
     MirrorPulseNamespaceRetirementPhase Phase, DateTimeOffset? NativeDeletedAt = null,
-    DateTimeOffset? CompletedAt = null, string? RecoveryReason = null);
+    DateTimeOffset? CompletedAt = null, string? RecoveryReason = null)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DateTimeOffset? StartedAt { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? StartedItemId { get; init; }
+}
 
 public sealed partial class MirrorPulseProductCatalog
 {
@@ -39,7 +50,9 @@ public sealed partial class MirrorPulseProductCatalog
             var location = await ReadNamespaceMemberLocationCoreAsync(member, transaction, cancellationToken).ConfigureAwait(false);
             await RequireNamespaceMemberNameAsync(member, transaction, cancellationToken).ConfigureAwait(false);
             if (location.RelativePath != intent.RelativePath) throw new InvalidOperationException("Retirement requires the member's latest committed location.");
-            await RequireNamespaceMoveRootUnfencedAsync(intent.RootId, null, transaction, cancellationToken).ConfigureAwait(false);
+            await RequireNamespaceRetirementBatchEntryAsync(intent, transaction, cancellationToken).ConfigureAwait(false);
+            await RequireNamespaceMoveRootUnfencedAsync(intent.RootId, null, transaction, cancellationToken,
+                allowedBatch: intent.BatchOperationId).ConfigureAwait(false);
             await RequireNoRegisteredDescendantsAsync(intent.MemberId, transaction, cancellationToken).ConfigureAwait(false);
             var retirement = new MirrorPulseNamespaceRetirement(intent.OperationId, intent, MirrorPulseNamespaceRetirementPhase.Prepared);
             byte[] payload = JsonSerializer.SerializeToUtf8Bytes(retirement, TopologyJsonOptions);
@@ -81,7 +94,9 @@ public sealed partial class MirrorPulseProductCatalog
             if (location.RelativePath != retirement.Intent.RelativePath || member.LocalObject != retirement.Intent.LocalObject ||
                 member.RootId != retirement.Intent.RootId || member.OwnerSid != retirement.Intent.OwnerSid || member.IsDirectory != retirement.Intent.IsDirectory)
                 throw new InvalidDataException("The retirement no longer identifies its committed protected member.");
-            await RequireNamespaceMoveRootUnfencedAsync(retirement.Intent.RootId, null, transaction, cancellationToken, operationId).ConfigureAwait(false);
+            await RequireNamespaceRetirementBatchEntryAsync(retirement.Intent, transaction, cancellationToken).ConfigureAwait(false);
+            await RequireNamespaceMoveRootUnfencedAsync(retirement.Intent.RootId, null, transaction, cancellationToken,
+                operationId, retirement.Intent.BatchOperationId).ConfigureAwait(false);
             await RequireNoRegisteredDescendantsAsync(member.MemberId, transaction, cancellationToken).ConfigureAwait(false);
             transaction.Commit(); return retirement;
         }
@@ -112,6 +127,27 @@ public sealed partial class MirrorPulseProductCatalog
         return TransitionNamespaceRetirementAsync(operationId, MirrorPulseNamespaceRetirementPhase.NativeDeleted, deletedAt, cancellationToken);
     }
 
+    /// <summary>Retains the before-native boundary after the Host verifies the original object.</summary>
+    public async Task<MirrorPulseNamespaceRetirement> RecordNamespaceRetirementStartAsync(Guid operationId,
+        DateTimeOffset startedAt, Guid? officialItemId = null, CancellationToken cancellationToken = default)
+    {
+        if (operationId == Guid.Empty || startedAt == default || officialItemId == Guid.Empty) throw new ArgumentException("The retirement start is incomplete.");
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed(); using SqliteTransaction transaction = _connection.BeginTransaction();
+            var current = await ReadNamespaceRetirementCoreAsync(operationId, transaction, cancellationToken).ConfigureAwait(false)
+                ?? throw new FileNotFoundException("The retirement operation is missing.");
+            if (current.StartedAt is not null) { transaction.Commit(); return current; }
+            if (current.Phase != MirrorPulseNamespaceRetirementPhase.Prepared || startedAt < current.Intent.PreparedAt)
+                throw new InvalidOperationException("A native retirement start must follow its original admission.");
+            var started = current with { StartedAt = startedAt, StartedItemId = officialItemId };
+            await WriteNamespaceRetirementCoreAsync(started, transaction, cancellationToken).ConfigureAwait(false);
+            transaction.Commit(); return started;
+        }
+        finally { _gate.Release(); }
+    }
+
     private async Task<MirrorPulseNamespaceRetirement> TransitionNamespaceRetirementAsync(Guid operationId,
         MirrorPulseNamespaceRetirementPhase phase, DateTimeOffset at, CancellationToken token)
     {
@@ -124,6 +160,8 @@ public sealed partial class MirrorPulseProductCatalog
             if (current.Phase == phase) { transaction.Commit(); return current; }
             if (current.Phase != MirrorPulseNamespaceRetirementPhase.Prepared || phase != MirrorPulseNamespaceRetirementPhase.NativeDeleted)
                 throw new InvalidOperationException("The retirement phase cannot advance from its retained state.");
+            if (current.StartedAt is null || at < current.StartedAt)
+                throw new InvalidOperationException("Native deletion requires its retained before-native start.");
             var next = current with { Phase = phase, NativeDeletedAt = at };
             await WriteNamespaceRetirementCoreAsync(next, transaction, token).ConfigureAwait(false); transaction.Commit(); return next;
         }
@@ -160,6 +198,9 @@ public sealed partial class MirrorPulseProductCatalog
         if (payload.Length > 131_072 || fingerprint.Length != 32 || !CryptographicOperations.FixedTimeEquals(SHA256.HashData(payload), fingerprint)) throw new InvalidDataException("The namespace retirement fingerprint is invalid.");
         var retirement = JsonSerializer.Deserialize<MirrorPulseNamespaceRetirement>(payload, TopologyJsonOptions) ?? throw new InvalidDataException("The namespace retirement is empty.");
         ValidateNamespaceRetirementIntent(retirement.Intent);
+        if (retirement.StartedAt < retirement.Intent.PreparedAt || retirement.NativeDeletedAt < retirement.StartedAt ||
+            retirement.CompletedAt < retirement.NativeDeletedAt)
+            throw new InvalidDataException("The retirement receipt chronology is inconsistent.");
         if (retirement.OperationId != operationId || retirement.Intent.OperationId != operationId || reader.GetString(0) != operationId.ToString("D") ||
             reader.GetString(4) != retirement.Intent.MemberId.ToString("D") || reader.GetInt32(3) != (int)retirement.Phase || !Enum.IsDefined(retirement.Phase) ||
             !JsonSerializer.SerializeToUtf8Bytes(retirement, TopologyJsonOptions).AsSpan().SequenceEqual(payload)) throw new InvalidDataException("The namespace retirement index is inconsistent.");
@@ -203,6 +244,6 @@ public sealed partial class MirrorPulseProductCatalog
     private static void ValidateNamespaceRetirementIntent(MirrorPulseNamespaceRetirementIntent intent)
     {
         ValidatePermissionBinding(intent.LocalObject); ValidatePermissionRelativePath(intent.RelativePath); ValidatePermissionSid(intent.OwnerSid, role: false); ValidatePermissionSid(intent.RoleSid, role: true);
-        if (intent.Version != 1 || intent.OperationId == Guid.Empty || intent.MemberId == Guid.Empty || intent.RootId.Value == Guid.Empty || intent.PreparedAt == default || intent.RelativePath.Length == 0 || intent.RelativePath.Contains("..", StringComparison.Ordinal)) throw new ArgumentException("The namespace retirement intent is incomplete.", nameof(intent));
+        if (intent.Version != 1 || intent.OperationId == Guid.Empty || intent.MemberId == Guid.Empty || intent.RootId.Value == Guid.Empty || intent.PreparedAt == default || intent.RelativePath.Length == 0 || intent.RelativePath.Contains("..", StringComparison.Ordinal) || intent.BatchOperationId == Guid.Empty) throw new ArgumentException("The namespace retirement intent is incomplete.", nameof(intent));
     }
 }

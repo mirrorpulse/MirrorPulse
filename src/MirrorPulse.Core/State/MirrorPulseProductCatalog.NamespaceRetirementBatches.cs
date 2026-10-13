@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using MirrorPulse.Core.Contracts;
@@ -14,7 +15,16 @@ public sealed record MirrorPulseNamespaceRetirementBatchEntry(Guid MemberId, Gui
 /// <summary>A durable subtree snapshot and root fence; it is not native deletion evidence.</summary>
 public sealed record MirrorPulseNamespaceRetirementBatch(int Version, Guid OperationId, Guid MemberId,
     RootId RootId, IReadOnlyList<MirrorPulseNamespaceRetirementBatchEntry> Entries,
-    DateTimeOffset PreparedAt, MirrorPulseNamespaceRetirementBatchPhase Phase = MirrorPulseNamespaceRetirementBatchPhase.Prepared);
+    DateTimeOffset PreparedAt, MirrorPulseNamespaceRetirementBatchPhase Phase = MirrorPulseNamespaceRetirementBatchPhase.Prepared)
+{
+    /// <summary>Returns the stable operation ID for one leaf step of this sealed batch.</summary>
+    public Guid MemberOperationId(Guid memberId)
+    {
+        if (!Entries.Any(entry => entry.MemberId == memberId)) throw new ArgumentException("The member is outside this retirement batch.", nameof(memberId));
+        byte[] key = Encoding.UTF8.GetBytes($"MirrorPulse/retirement-batch/v1/{OperationId:D}/{memberId:D}");
+        return new Guid(SHA256.HashData(key).AsSpan(0, 16));
+    }
+}
 
 public sealed partial class MirrorPulseProductCatalog
 {
@@ -31,7 +41,6 @@ public sealed partial class MirrorPulseProductCatalog
             if (member.RootId is not { } rootId)
                 throw new InvalidOperationException("A managed root or sync-root anchor cannot be retired as a subtree.");
             await RequireNamespaceRetirableMemberAsync(member, transaction, cancellationToken).ConfigureAwait(false);
-            await RequireNamespaceMoveRootUnfencedAsync(rootId, null, transaction, cancellationToken, allowedBatch: operationId).ConfigureAwait(false);
             var replay = await ReadNamespaceRetirementBatchCoreAsync(operationId, transaction, cancellationToken).ConfigureAwait(false);
             if (replay is not null)
             {
@@ -39,6 +48,7 @@ public sealed partial class MirrorPulseProductCatalog
                     throw new InvalidOperationException("A retirement batch operation is immutable.");
                 transaction.Commit(); return replay;
             }
+            await RequireNamespaceMoveRootUnfencedAsync(rootId, null, transaction, cancellationToken).ConfigureAwait(false);
             if (await ReadPendingNamespaceRetirementBatchCoreAsync(rootId, transaction, cancellationToken).ConfigureAwait(false) is not null)
                 throw new InvalidOperationException("Another controlled subtree retirement already fences this root.");
             // Capture membership and establish the fence in one write transaction. A second
@@ -81,6 +91,61 @@ public sealed partial class MirrorPulseProductCatalog
         try { ThrowIfDisposed(); return await ReadNamespaceRetirementBatchCoreAsync(operationId, null, cancellationToken).ConfigureAwait(false); }
         finally { _gate.Release(); }
     }
+
+    /// <summary>Releases the batch fence only after every sealed member has its own completed deletion receipt.</summary>
+    public async Task<MirrorPulseNamespaceRetirementBatch> CompleteNamespaceRetirementBatchAsync(Guid operationId,
+        CancellationToken cancellationToken = default)
+    {
+        if (operationId == Guid.Empty) throw new ArgumentException("A retirement batch is required.", nameof(operationId));
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed(); using SqliteTransaction transaction = _connection.BeginTransaction();
+            var batch = await ReadNamespaceRetirementBatchCoreAsync(operationId, transaction, cancellationToken).ConfigureAwait(false)
+                ?? throw new FileNotFoundException("The retirement batch is missing.");
+            if (batch.Phase == MirrorPulseNamespaceRetirementBatchPhase.Completed) { transaction.Commit(); return batch; }
+            if (batch.Phase != MirrorPulseNamespaceRetirementBatchPhase.Prepared)
+                throw new InvalidOperationException("The retirement batch requires explicit recovery.");
+            foreach (var entry in batch.Entries)
+            {
+                var receipt = await ReadNamespaceRetirementCoreAsync(batch.MemberOperationId(entry.MemberId), transaction, cancellationToken).ConfigureAwait(false);
+                if (receipt is null || receipt.Phase != MirrorPulseNamespaceRetirementPhase.Completed || !RetirementMatchesBatchEntry(receipt.Intent, batch, entry))
+                    throw new InvalidOperationException("The retirement batch has an unsettled member.");
+                await using SqliteCommand name = _connection.CreateCommand(); name.Transaction = transaction;
+                name.CommandText = "SELECT 1 FROM namespace_member_names WHERE member_id=$member;";
+                name.Parameters.AddWithValue("$member", entry.MemberId.ToString("D"));
+                if (await name.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null)
+                    throw new InvalidDataException("A completed subtree retirement still owns a member name.");
+            }
+            var completed = batch with { Phase = MirrorPulseNamespaceRetirementBatchPhase.Completed };
+            byte[] payload = JsonSerializer.SerializeToUtf8Bytes(completed, TopologyJsonOptions);
+            await using SqliteCommand update = _connection.CreateCommand(); update.Transaction = transaction;
+            update.CommandText = "UPDATE namespace_member_retirement_batches SET payload=$payload,fingerprint=$hash,phase=$phase WHERE operation_id=$id;";
+            update.Parameters.AddWithValue("$payload", payload); update.Parameters.AddWithValue("$hash", SHA256.HashData(payload));
+            update.Parameters.AddWithValue("$phase", (int)completed.Phase); update.Parameters.AddWithValue("$id", operationId.ToString("D"));
+            if (await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
+                throw new InvalidDataException("The retirement batch disappeared during completion.");
+            transaction.Commit(); return completed;
+        }
+        finally { _gate.Release(); }
+    }
+
+    private async Task RequireNamespaceRetirementBatchEntryAsync(MirrorPulseNamespaceRetirementIntent intent,
+        SqliteTransaction transaction, CancellationToken token)
+    {
+        if (intent.BatchOperationId is not { } operationId) return;
+        var batch = await ReadNamespaceRetirementBatchCoreAsync(operationId, transaction, token).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("The retirement batch is missing.");
+        var entry = batch.Entries.SingleOrDefault(entry => entry.MemberId == intent.MemberId);
+        if (batch.Phase != MirrorPulseNamespaceRetirementBatchPhase.Prepared || entry is null || !RetirementMatchesBatchEntry(intent, batch, entry))
+            throw new InvalidOperationException("The retirement must follow its sealed batch member and object binding.");
+    }
+
+    private static bool RetirementMatchesBatchEntry(MirrorPulseNamespaceRetirementIntent intent,
+        MirrorPulseNamespaceRetirementBatch batch, MirrorPulseNamespaceRetirementBatchEntry entry) =>
+        intent.BatchOperationId == batch.OperationId && intent.OperationId == batch.MemberOperationId(entry.MemberId) &&
+        intent.MemberId == entry.MemberId && intent.RootId == batch.RootId && intent.LocalObject == entry.LocalObject &&
+        intent.OwnerSid == entry.OwnerSid && intent.RelativePath == entry.RelativePath && intent.IsDirectory == entry.IsDirectory && intent.PreparedAt >= batch.PreparedAt;
 
     private async Task<MirrorPulseNamespaceRetirementBatch?> ReadNamespaceRetirementBatchCoreAsync(Guid operationId,
         SqliteTransaction? transaction, CancellationToken token)
