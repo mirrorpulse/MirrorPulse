@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.ExceptionServices;
 using System.Runtime.Versioning;
 using CfSharp;
 using MirrorPulse.CfSharp.CrashProbe;
@@ -11,6 +12,7 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 
 [SupportedOSPlatform("windows10.0.19041")]
 [TestClass]
+[DoNotParallelize]
 public sealed class DurabilityFaultFixtureTests
 {
     public static IEnumerable<object[]> Cases()
@@ -31,6 +33,7 @@ public sealed class DurabilityFaultFixtureTests
         Directory.CreateDirectory(root);
         await File.WriteAllTextAsync(Path.Combine(root, ".mp-fault-fixture"), "test-only");
         var paths = new MirrorPulseStoragePaths(Path.Combine(root, "sync"), Path.Combine(root, "data"));
+        Exception? primaryFailure = null;
         try
         {
             var start = new ProcessStartInfo("dotnet")
@@ -44,9 +47,13 @@ public sealed class DurabilityFaultFixtureTests
                 start.ArgumentList.Add(argument);
             using Process process = Process.Start(start) ?? throw new InvalidOperationException("The fault probe did not start.");
             using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-            Task<string> output = process.StandardOutput.ReadToEndAsync(deadline.Token);
-            Task<string> error = process.StandardError.ReadToEndAsync(deadline.Token);
+            // Drain the owned process after termination as well. Cancelling these readers at
+            // the deadline discards the very diagnostics needed to explain its timeout.
+            Task<string> output = process.StandardOutput.ReadToEndAsync();
+            Task<string> error = process.StandardError.ReadToEndAsync();
+            bool timedOut = false;
             try { await process.WaitForExitAsync(deadline.Token); }
+            catch (OperationCanceledException) when (deadline.IsCancellationRequested) { timedOut = true; }
             finally
             {
                 if (!process.HasExited)
@@ -56,8 +63,10 @@ public sealed class DurabilityFaultFixtureTests
                 }
             }
 
+            string diagnostics = $"{await output}\n{await error}";
+            Assert.IsFalse(timedOut, $"The owned {boundary}/{timing}/{mode} probe exceeded its original 30-second deadline.\n{diagnostics}");
             Assert.AreEqual(mode == FaultMode.Exit ? DurabilityFaultProbe.ExitFaultCode : DurabilityFaultProbe.ExceptionFaultCode,
-                process.ExitCode, $"{await output}\n{await error}");
+                process.ExitCode, diagnostics);
             string expected = timing == FaultTiming.Before ? "before" : "after";
             switch (boundary)
             {
@@ -143,9 +152,30 @@ public sealed class DurabilityFaultFixtureTests
                     break;
             }
         }
-        finally
+        catch (Exception failure) { primaryFailure = failure; }
+        try { await DeleteOwnedFixtureAsync(root); }
+        catch (Exception cleanupFailure) when (primaryFailure is not null)
         {
-            Directory.Delete(root, recursive: true);
+            throw new AggregateException("The probe failed and its owned fixture could not be removed.", primaryFailure, cleanupFailure);
+        }
+        if (primaryFailure is not null) ExceptionDispatchInfo.Capture(primaryFailure).Throw();
+    }
+
+    private static async Task DeleteOwnedFixtureAsync(string root)
+    {
+        var directory = new DirectoryInfo(Path.GetFullPath(root));
+        string expectedParent = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "MirrorPulse-fault-tests"));
+        if (!string.Equals(directory.Parent?.FullName, expectedParent, StringComparison.OrdinalIgnoreCase) ||
+            !Guid.TryParseExact(directory.Name, "N", out _) || directory.LinkTarget is not null ||
+            !File.Exists(Path.Combine(directory.FullName, ".mp-fault-fixture")))
+            throw new InvalidOperationException("Cleanup requires the exact owned temporary fault fixture.");
+        // Windows may briefly retain mapped SQLite handles after abrupt process exit.
+        // This bound affects cleanup only; every fault assertion and deadline stays intact.
+        var elapsed = Stopwatch.StartNew();
+        while (true)
+        {
+            try { directory.Delete(recursive: true); return; }
+            catch (IOException) when (elapsed.Elapsed < TimeSpan.FromSeconds(2)) { await Task.Delay(100); }
         }
     }
 }
