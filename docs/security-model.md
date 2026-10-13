@@ -674,6 +674,13 @@ closed parent proof and does not invent an earlier parent rotation. These record
 are evidence for later execution; they do not establish that an old process has
 stopped or authorize a native operation by themselves.
 
+Version 2 backup and copy receipts retain the first action ID and separately
+reference the recovery action that authorized their actual observation. New facts
+require the current action and its recorded metadata handoff; historical reads
+validate the original handoff even after another role is admitted. Version 1
+payloads and fingerprints remain unchanged. A later role cannot replace the first
+backup or copy receipt, and missing handoff history keeps recovery fenced.
+
 This component does not release root reservations, mark a tree ready, accept
 remote content or acknowledge journal records. Current-role recovery is separate
 from persisted role handoff and full Host/CLI completion. Disposable native

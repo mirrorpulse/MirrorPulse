@@ -34,7 +34,10 @@ public sealed partial class MirrorPulseProductCatalog
             }
             if (execution.RestorationResult is { Drained: false } || execution.RoleActions.Count >= 4096 ||
                 execution.RestorationResult is { } result && action.Action.PreparedAt < result.RecordedAt ||
-                execution.RoleHandoff is { } handoff && action.Action.PreparedAt < handoff.Verification.ObservedAt)
+                execution.RoleHandoff is { } handoff && action.Action.PreparedAt < handoff.Verification.ObservedAt ||
+                execution.Backup is { } backup && action.Action.PreparedAt < backup.Verification.ObservedAt ||
+                execution.ContentCompletion is { } copy && action.Action.PreparedAt < copy.Verification.ObservedAt ||
+                execution.WriteStart is { } write && action.Action.PreparedAt < write.StartedAt)
                 throw new InvalidOperationException("Role recovery cannot supersede undrained native work or exceed its retained bound.");
             var known = execution.RoleActions.ToDictionary(value => value.RecoveryId, value => value.Action);
             if (execution.Action is { } first) known.Add(first.ActionId, first);
@@ -89,7 +92,8 @@ public sealed partial class MirrorPulseProductCatalog
         finally { _gate.Release(); }
     }
 
-    private async Task<(IReadOnlyList<MirrorPulseNamespaceReplacementRoleAction> Actions, MirrorPulseNamespaceReplacementRoleHandoff? Handoff)>
+    private async Task<(IReadOnlyList<MirrorPulseNamespaceReplacementRoleAction> Actions, MirrorPulseNamespaceReplacementRoleHandoff? Handoff,
+        IReadOnlyList<MirrorPulseNamespaceReplacementRoleHandoff> History)>
         ReadReplacementRoleChainCoreAsync(MirrorPulseNamespaceReplacementIntent intent, MirrorPulseNamespaceReplacementAction? first,
             SqliteTransaction transaction, CancellationToken token)
     {
@@ -131,6 +135,7 @@ public sealed partial class MirrorPulseProductCatalog
             }
         }
         if (observations.Count > 4096) throw new InvalidDataException("The retained handoff observations exceed their bound.");
+        var history = observations.Values.ToArray();
         for (int index = 0; index < actions.Count; index++)
         {
             var action = actions[index];
@@ -146,7 +151,8 @@ public sealed partial class MirrorPulseProductCatalog
         }
         if (observations.Count != 0) throw new InvalidDataException("A role observation lost its original before-handoff action.");
         var head = actions.Count == 0 ? null : await ReadReplacementRoleHandoffCoreAsync(actions[^1].RecoveryId, transaction, token).ConfigureAwait(false);
-        return (actions.Count == 0 ? Array.Empty<MirrorPulseNamespaceReplacementRoleAction>() : actions.AsReadOnly(), head);
+        return (actions.Count == 0 ? Array.Empty<MirrorPulseNamespaceReplacementRoleAction>() : actions.AsReadOnly(), head,
+            history.Length == 0 ? Array.Empty<MirrorPulseNamespaceReplacementRoleHandoff>() : Array.AsReadOnly(history));
     }
 
     private async Task<MirrorPulseNamespaceReplacementRoleHandoff?> ReadReplacementRoleHandoffCoreAsync(Guid id, SqliteTransaction transaction, CancellationToken token)

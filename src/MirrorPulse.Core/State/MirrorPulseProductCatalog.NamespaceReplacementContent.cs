@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using Microsoft.Data.Sqlite;
 
 namespace MirrorPulse.Core.State;
@@ -6,7 +7,11 @@ namespace MirrorPulse.Core.State;
 /// <remarks>This is historical copy evidence, not current content, restored protection, remote acceptance or journal acknowledgement.</remarks>
 public sealed record MirrorPulseNamespaceReplacementContentCompletion(int Version, Guid OperationId, Guid ActionId,
     MirrorPulseNamespaceImportContent Content, MirrorPulseNamespacePermissionVerification Verification,
-    uint LinkCount, bool IsPlaceholder, bool IsInSync, string? PlaceholderIdentity);
+    uint LinkCount, bool IsPlaceholder, bool IsInSync, string? PlaceholderIdentity)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? AuthorityRecoveryId { get; init; }
+}
 
 public sealed partial class MirrorPulseProductCatalog
 {
@@ -15,17 +20,17 @@ public sealed partial class MirrorPulseProductCatalog
     {
         ArgumentNullException.ThrowIfNull(completion);
         return RecordNamespaceReplacementFactAsync(completion, completion.OperationId, 4, completion.ActionId, ValidateReplacementContentCompletion,
-            execution => RequireReplacementContentCompletionReferences(completion, execution.Intent,
-                execution.Action ?? throw new InvalidOperationException("The content receipt requires its original action."),
-                execution.WriteStart ?? throw new InvalidOperationException("The content receipt requires its before-write intent."),
-                execution.Backup ?? throw new InvalidOperationException("The content receipt requires its original old-content backup.")), cancellationToken);
+            execution => RequireReplacementContentCompletionReferences(completion, execution, requireCurrent: true), cancellationToken);
     }
 
     private static void RequireReplacementContentCompletionReferences(MirrorPulseNamespaceReplacementContentCompletion completion,
-        MirrorPulseNamespaceReplacementIntent intent, MirrorPulseNamespaceReplacementAction action, MirrorPulseNamespaceReplacementWriteStart write,
-        MirrorPulseNamespaceReplacementBackup backup)
+        MirrorPulseNamespaceReplacementExecution execution, bool requireCurrent)
     {
-        if (completion.OperationId != intent.OperationId || completion.ActionId != action.ActionId || completion.ActionId != write.ActionId ||
+        var intent = execution.Intent;
+        var action = RequireReplacementCopyAuthority(execution, completion.AuthorityRecoveryId, completion.Verification.ObservedAt, requireCurrent);
+        var write = execution.WriteStart ?? throw new InvalidOperationException("The content receipt requires its before-write intent.");
+        var backup = execution.Backup ?? throw new InvalidOperationException("The content receipt requires its original old-content backup.");
+        if (completion.OperationId != intent.OperationId || completion.ActionId != execution.Action!.ActionId || completion.ActionId != write.ActionId ||
             completion.Content != intent.Content || completion.Verification.LocalObject != action.LocalObject ||
             completion.Verification.OwnerSid != action.OwnerSid || !MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(
                 action.RoleOnlyDacl, completion.Verification.Dacl) || completion.Verification.ObservedAt < write.StartedAt ||
@@ -37,7 +42,7 @@ public sealed partial class MirrorPulseProductCatalog
     private static void ValidateReplacementContentCompletion(MirrorPulseNamespaceReplacementContentCompletion completion)
     {
         ArgumentNullException.ThrowIfNull(completion); ArgumentNullException.ThrowIfNull(completion.Content); ArgumentNullException.ThrowIfNull(completion.Verification);
-        ValidateReplacementFactIdentity(completion.Version, completion.OperationId, completion.ActionId); ValidateReplacementContent(completion.Content);
+        ValidateReplacementCopyIdentity(completion.Version, completion.OperationId, completion.ActionId, completion.AuthorityRecoveryId); ValidateReplacementContent(completion.Content);
         ValidatePermissionBinding(completion.Verification.LocalObject); ValidatePermissionSid(completion.Verification.OwnerSid, role: false);
         ValidatePermissionDacl(completion.Verification.Dacl);
         if (completion.LinkCount != 1 || completion.IsInSync && !completion.IsPlaceholder || completion.Verification.ObservedAt == default ||

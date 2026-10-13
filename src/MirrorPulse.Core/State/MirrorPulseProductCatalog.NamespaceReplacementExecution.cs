@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text.Json.Serialization;
 using Microsoft.Data.Sqlite;
 
 namespace MirrorPulse.Core.State;
@@ -11,7 +12,11 @@ public sealed record MirrorPulseNamespaceReplacementAction(int Version, Guid Ope
 /// <summary>First flushed and independently reread old-content backup under exclusive original-object protection.</summary>
 /// <remarks>The Host retains the actual original handle and backup lease. This receipt cannot prove current bytes.</remarks>
 public sealed record MirrorPulseNamespaceReplacementBackup(int Version, Guid OperationId, Guid ActionId,
-    MirrorPulseNamespaceImportContent Content, MirrorPulseNamespacePermissionVerification Verification, uint LinkCount);
+    MirrorPulseNamespaceImportContent Content, MirrorPulseNamespacePermissionVerification Verification, uint LinkCount)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? AuthorityRecoveryId { get; init; }
+}
 
 /// <summary>Durable intent committed after the old backup receipt and before changing the original object's bytes.</summary>
 public sealed record MirrorPulseNamespaceReplacementWriteStart(int Version, Guid OperationId, Guid ActionId, DateTimeOffset StartedAt);
@@ -27,6 +32,7 @@ public sealed record MirrorPulseNamespaceReplacementExecution(MirrorPulseNamespa
     public MirrorPulseNamespaceReplacementRestorationResult? RestorationResult { get; init; }
     public IReadOnlyList<MirrorPulseNamespaceReplacementRoleAction> RoleActions { get; init; } = [];
     public MirrorPulseNamespaceReplacementRoleHandoff? RoleHandoff { get; init; }
+    public IReadOnlyList<MirrorPulseNamespaceReplacementRoleHandoff> RoleHandoffHistory { get; init; } = [];
 }
 
 public sealed partial class MirrorPulseProductCatalog
@@ -48,8 +54,7 @@ public sealed partial class MirrorPulseProductCatalog
     {
         ArgumentNullException.ThrowIfNull(backup);
         return RecordNamespaceReplacementFactAsync(backup, backup.OperationId, 2, backup.ActionId, ValidateReplacementBackup,
-            execution => RequireReplacementBackupReferences(backup, execution.Action ??
-                throw new InvalidOperationException("The original replacement action must precede its old-content backup.")), cancellationToken);
+            execution => RequireReplacementBackupReferences(backup, execution, requireCurrent: true), cancellationToken);
     }
 
     public Task<MirrorPulseNamespaceReplacementWriteStart> RecordNamespaceReplacementWriteStartAsync(
@@ -127,24 +132,21 @@ public sealed partial class MirrorPulseProductCatalog
         var backup = await ReadNamespaceReplacementFactCoreAsync<MirrorPulseNamespaceReplacementBackup>(id, 2, ValidateReplacementBackup, transaction, token).ConfigureAwait(false);
         var write = await ReadNamespaceReplacementFactCoreAsync<MirrorPulseNamespaceReplacementWriteStart>(id, 3, ValidateReplacementWriteStart, transaction, token).ConfigureAwait(false);
         var completion = await ReadNamespaceReplacementFactCoreAsync<MirrorPulseNamespaceReplacementContentCompletion>(id, 4, ValidateReplacementContentCompletion, transaction, token).ConfigureAwait(false);
+        var execution = new MirrorPulseNamespaceReplacementExecution(intent, start, cancellation, action, backup, write) { ContentCompletion = completion };
+        var roles = await ReadReplacementRoleChainCoreAsync(intent, action, transaction, token).ConfigureAwait(false);
+        execution = execution with { RoleActions = roles.Actions, RoleHandoff = roles.Handoff, RoleHandoffHistory = roles.History };
         try
         {
             if (start is not null && start.StartedAt < intent.PreparedAt || cancellation is not null &&
                 (cancellation.CancelledAt < intent.PreparedAt || start is not null || action is not null || backup is not null || write is not null || completion is not null))
                 throw new InvalidOperationException("The replacement execution contradicts its original admission or cancellation.");
             if (action is not null) RequireReplacementActionReferences(action, intent, start ?? throw new InvalidOperationException("The replacement action lost its start."));
-            if (backup is not null) RequireReplacementBackupReferences(backup, action ?? throw new InvalidOperationException("The backup lost its original action."));
+            if (backup is not null) RequireReplacementBackupReferences(backup, execution, requireCurrent: false);
             if (write is not null) RequireReplacementWriteStartReferences(write, backup ?? throw new InvalidOperationException("The write intent lost its old-content backup."));
-            if (completion is not null) RequireReplacementContentCompletionReferences(completion, intent,
-                action ?? throw new InvalidOperationException("The completed copy lost its original action."),
-                write ?? throw new InvalidOperationException("The completed copy lost its before-write intent."),
-                backup ?? throw new InvalidOperationException("The completed copy lost its original old-content backup."));
+            if (completion is not null) RequireReplacementContentCompletionReferences(completion, execution, requireCurrent: false);
         }
         catch (Exception error) when (error is InvalidOperationException or ArgumentException)
         { throw new InvalidDataException("The original replacement execution chain is inconsistent.", error); }
-        var execution = new MirrorPulseNamespaceReplacementExecution(intent, start, cancellation, action, backup, write) { ContentCompletion = completion };
-        var roles = await ReadReplacementRoleChainCoreAsync(intent, action, transaction, token).ConfigureAwait(false);
-        execution = execution with { RoleActions = roles.Actions, RoleHandoff = roles.Handoff };
         var restoration = await ReadReplacementRestorationHeadCoreAsync(execution, transaction, token).ConfigureAwait(false);
         return execution with { Restoration = restoration.Attempt, RestorationResult = restoration.Result };
     }
@@ -183,9 +185,10 @@ public sealed partial class MirrorPulseProductCatalog
             throw new InvalidOperationException("Replacement permission intent requires the admitted original object, owner, role and restore descriptor.");
     }
 
-    private static void RequireReplacementBackupReferences(MirrorPulseNamespaceReplacementBackup backup, MirrorPulseNamespaceReplacementAction action)
+    private static void RequireReplacementBackupReferences(MirrorPulseNamespaceReplacementBackup backup, MirrorPulseNamespaceReplacementExecution execution, bool requireCurrent)
     {
-        if (backup.OperationId != action.OperationId || backup.ActionId != action.ActionId ||
+        var action = RequireReplacementCopyAuthority(execution, backup.AuthorityRecoveryId, backup.Verification.ObservedAt, requireCurrent);
+        if (backup.OperationId != action.OperationId || backup.ActionId != execution.Action!.ActionId ||
             backup.Verification.LocalObject != action.LocalObject || backup.Verification.OwnerSid != action.OwnerSid ||
             !MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(action.RoleOnlyDacl, backup.Verification.Dacl) ||
             backup.Verification.ObservedAt < action.PreparedAt)
@@ -210,7 +213,7 @@ public sealed partial class MirrorPulseProductCatalog
     private static void ValidateReplacementBackup(MirrorPulseNamespaceReplacementBackup backup)
     {
         ArgumentNullException.ThrowIfNull(backup); ArgumentNullException.ThrowIfNull(backup.Content); ArgumentNullException.ThrowIfNull(backup.Verification);
-        ValidateReplacementFactIdentity(backup.Version, backup.OperationId, backup.ActionId); ValidateReplacementContent(backup.Content);
+        ValidateReplacementCopyIdentity(backup.Version, backup.OperationId, backup.ActionId, backup.AuthorityRecoveryId); ValidateReplacementContent(backup.Content);
         ValidatePermissionBinding(backup.Verification.LocalObject); ValidatePermissionSid(backup.Verification.OwnerSid, role: false);
         ValidatePermissionDacl(backup.Verification.Dacl);
         if (backup.LinkCount != 1 || backup.Verification.ObservedAt == default || NamespaceReplacementPayload(backup).Length > 262_144)
