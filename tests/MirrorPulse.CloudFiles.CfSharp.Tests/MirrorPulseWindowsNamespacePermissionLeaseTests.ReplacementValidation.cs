@@ -110,7 +110,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     await role.RunNormalUserOperationAsync(async () =>
                     {
                         await Assert.ThrowsAsync<UnauthorizedAccessException>(() => File.ReadAllBytesAsync(file.FullPath, deadline.Token));
-                        AssertBirthAliasDenied(Path.Combine(directory, $"written-replacement-{attempt}.link"), file.FullPath);
+                        // The role-only descriptor rejects this ordinary caller even while the object is a placeholder.
+                        AssertBirthAliasDenied(Path.Combine(directory, $"written-replacement-{attempt}.link"), file.FullPath, expectedError: 5);
                     });
                     // All data handles are closed before the mature public same-object conversion scope.
                     var converted = await MirrorPulseWindowsNamespacePermissionLease.RunProtectedAsync(file, router, original.Baseline.LocalObject,
