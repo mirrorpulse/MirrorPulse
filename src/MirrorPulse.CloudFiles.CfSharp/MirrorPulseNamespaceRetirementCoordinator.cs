@@ -6,6 +6,8 @@ using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.CloudFiles.CfSharp;
 
+internal enum MirrorPulseNamespaceRetirementCheckpoint { AfterNativeDeletion, AfterNativeReceipt }
+
 /// <summary>Executes one protected leaf deletion and settles its durable member name.</summary>
 /// <remarks>
 /// The caller supplies a shared actor and the Host's execution role. Ordinary filesystem
@@ -18,6 +20,8 @@ public sealed class MirrorPulseNamespaceRetirementCoordinator(CloudFileSystem fi
     MirrorPulseProductCatalog catalog, MirrorPulseRootRouter router,
     MirrorPulseNamespaceExecutionSession execution, MirrorPulseNamespaceActor actor)
 {
+    internal Func<MirrorPulseNamespaceRetirementCheckpoint, ValueTask>? Checkpoint { get; init; }
+
     public ValueTask<MirrorPulseNamespaceRetirement> PrepareAsync(Guid operationId, Guid memberId,
         CancellationToken cancellationToken = default) => actor.RunAsync(token => PrepareAdmittedAsync(operationId, memberId, token), cancellationToken);
 
@@ -130,6 +134,7 @@ public sealed class MirrorPulseNamespaceRetirementCoordinator(CloudFileSystem fi
                     current = await catalog.RecordNamespaceRetirementStartAsync(current.OperationId, DateTimeOffset.UtcNow,
                         snapshot.ItemId, token).ConfigureAwait(false);
                 await item.DeleteAsync(token).ConfigureAwait(false);
+                if (Checkpoint is not null) await Checkpoint(MirrorPulseNamespaceRetirementCheckpoint.AfterNativeDeletion).ConfigureAwait(false);
             }
             var deleted = await item.InspectAsync(CancellationToken.None).ConfigureAwait(false);
             if (deleted.Exists)
@@ -138,6 +143,7 @@ public sealed class MirrorPulseNamespaceRetirementCoordinator(CloudFileSystem fi
                 throw new InvalidDataException("Native deletion has not settled the original public CfSharp item tombstone.");
             if (current.Phase == MirrorPulseNamespaceRetirementPhase.Prepared)
                 _ = await catalog.RecordNamespaceRetirementNativeDeletedAsync(current.OperationId, DateTimeOffset.UtcNow, CancellationToken.None).ConfigureAwait(false);
+            if (Checkpoint is not null) await Checkpoint(MirrorPulseNamespaceRetirementCheckpoint.AfterNativeReceipt).ConfigureAwait(false);
             MirrorPulseNamespaceBirthProtectionVerifier.RequireUnchangedParent(parentFacts,
                 await parentLease.InspectAsync(CancellationToken.None).ConfigureAwait(false));
             _ = await catalog.CompleteNamespaceRetirementAsync(current.OperationId, DateTimeOffset.UtcNow, CancellationToken.None).ConfigureAwait(false);
