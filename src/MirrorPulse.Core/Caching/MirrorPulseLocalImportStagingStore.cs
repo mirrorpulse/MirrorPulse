@@ -15,27 +15,41 @@ public sealed class MirrorPulseLocalImportStagingStore
     private readonly string _directory;
 
     public MirrorPulseLocalImportStagingStore(MirrorPulseStoragePaths paths)
-    {
-        ArgumentNullException.ThrowIfNull(paths);
-        _directory = Path.Combine(paths.DataRootPath, "state", "import-inputs");
-    }
+        : this(Path.Combine((paths ?? throw new ArgumentNullException(nameof(paths))).DataRootPath, "state", "import-inputs")) { }
+
+    internal MirrorPulseLocalImportStagingStore(string directory) => _directory = directory;
 
     /// <summary>Copies and flushes input once; an operation ID can never replace different staged bytes.</summary>
     public async Task<MirrorPulseNamespaceImportContent> StageAsync(Guid operationId, string sourcePath,
         CancellationToken cancellationToken = default)
     {
-        string target = InputPath(operationId);
+        _ = InputPath(operationId);
         ArgumentException.ThrowIfNullOrWhiteSpace(sourcePath);
         if (!Path.IsPathFullyQualified(sourcePath))
             throw new ArgumentException("Import input requires a caller-resolved absolute path.", nameof(sourcePath));
         cancellationToken.ThrowIfCancellationRequested();
         Directory.CreateDirectory(_directory);
+        await using var source = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read,
+            64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        return await StageRetainedAsync(operationId, source, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Reuses immutable private staging for a caller-owned, seekable local file handle.</summary>
+    /// <remarks>The Host retains the source object and excludes concurrent writers. This method neither opens a source path nor closes the supplied handle.</remarks>
+    internal async Task<MirrorPulseNamespaceImportContent> StageRetainedAsync(Guid operationId, FileStream source,
+        CancellationToken cancellationToken = default)
+    {
+        string target = InputPath(operationId);
+        ArgumentNullException.ThrowIfNull(source);
+        if (!source.CanRead || !source.CanSeek) throw new ArgumentException("A retained readable local file is required.", nameof(source));
+        cancellationToken.ThrowIfCancellationRequested();
+        Directory.CreateDirectory(_directory);
         string temporary = target + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        long originalPosition = source.Position;
         try
         {
+            source.Position = 0;
             MirrorPulseNamespaceImportContent content;
-            await using (var source = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read,
-                64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan))
             await using (var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None,
                 64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan))
             {
@@ -60,7 +74,7 @@ public sealed class MirrorPulseLocalImportStagingStore
             }
             return content;
         }
-        finally { File.Delete(temporary); }
+        finally { source.Position = originalPosition; File.Delete(temporary); }
     }
 
     /// <summary>Revalidates retained input and holds it against writers and deletion through local copying.</summary>
