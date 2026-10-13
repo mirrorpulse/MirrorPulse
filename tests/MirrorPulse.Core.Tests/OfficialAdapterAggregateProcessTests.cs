@@ -14,6 +14,7 @@ using MirrorPulse.Core.State;
 namespace MirrorPulse.Core.Tests;
 
 [TestClass]
+[DoNotParallelize] // Process and CF runtime startup must not compete with other official fixtures' cold launches.
 public sealed class OfficialAdapterAggregateProcessTests
 {
     [TestMethod]
