@@ -21,12 +21,23 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task<MirrorPulseNamespaceMemberMoveIntent?> ReadNamespaceMemberMoveCoreAsync(Guid operationId,
         SqliteTransaction transaction, CancellationToken token, bool validateRelocationChain = true)
     {
-        var intent = await ReadNamespaceMemberMoveRowAsync(operationId, transaction, token).ConfigureAwait(false);
+        token.ThrowIfCancellationRequested();
+        var reads = _namespaceHistoryReads.GetOrCreateValue(transaction);
+        bool retained = reads.Moves.TryGetValue(operationId, out var intent);
+        intent ??= await ReadNamespaceMemberMoveRowAsync(operationId, transaction, token).ConfigureAwait(false);
         if (intent is null) return null;
         try
         {
-            await ValidateNamespaceMemberMoveReferencesAsync(intent, false, transaction, token).ConfigureAwait(false);
-            if (validateRelocationChain) _ = await ValidateNamespaceMemberMoveChainAsync(intent, transaction, token).ConfigureAwait(false);
+            if (!retained)
+            {
+                await ValidateNamespaceMemberMoveReferencesAsync(intent, false, transaction, token).ConfigureAwait(false);
+                reads.Moves.Add(operationId, intent);
+            }
+            if (validateRelocationChain && !reads.MoveChains.Contains(operationId))
+            {
+                _ = await ValidateNamespaceMemberMoveChainAsync(intent, transaction, token).ConfigureAwait(false);
+                reads.MoveChains.Add(operationId);
+            }
         }
         catch (Exception error) when (error is InvalidOperationException or FileNotFoundException)
         { throw new InvalidDataException("The move intent lost its original member, protection or predecessor references.", error); }

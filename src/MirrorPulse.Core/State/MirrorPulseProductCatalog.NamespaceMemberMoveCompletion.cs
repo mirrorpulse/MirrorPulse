@@ -116,6 +116,14 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task<MirrorPulseNamespaceMemberMoveCompletion?> ReadNamespaceMemberMoveCompletionCoreAsync(
         Guid operationId, SqliteTransaction transaction, CancellationToken token, bool validateRelocationChain = true)
     {
+        token.ThrowIfCancellationRequested();
+        var reads = _namespaceHistoryReads.GetOrCreateValue(transaction);
+        if (reads.Completions.TryGetValue(operationId, out var retained))
+        {
+            if (validateRelocationChain)
+                _ = await ReadNamespaceMemberMoveCoreAsync(operationId, transaction, token).ConfigureAwait(false);
+            return retained;
+        }
         var row = await ReadNamespaceMemberMoveCompletionRowAsync(operationId, transaction, token).ConfigureAwait(false);
         if (row is null) return null;
         var completion = row.Value.Completion;
@@ -131,6 +139,7 @@ public sealed partial class MirrorPulseProductCatalog
         }
         catch (Exception error) when (error is InvalidOperationException or FileNotFoundException)
         { throw new InvalidDataException("The move completion lost its original native or official projection evidence.", error); }
+        reads.Completions.Add(operationId, completion);
         return completion;
     }
 
