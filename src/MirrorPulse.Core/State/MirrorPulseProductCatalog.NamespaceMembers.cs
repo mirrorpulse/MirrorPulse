@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Data.Sqlite;
 using MirrorPulse.Core.Contracts;
 
@@ -17,7 +18,12 @@ public enum MirrorPulseNamespaceMemberOrigin { CapturedOriginal, ProtectedBirth 
 public sealed record MirrorPulseNamespaceMemberRegistration(int Version, Guid MemberId,
     Guid? ParentMemberId, MirrorPulseNamespaceMemberOrigin Origin, Guid OriginId, Guid ProtectionId,
     RootId? RootId, string RelativePath, MirrorPulseLocalFileBinding LocalObject,
-    bool IsDirectory, string OwnerSid, DateTimeOffset RegisteredAt);
+    bool IsDirectory, string OwnerSid, DateTimeOffset RegisteredAt)
+{
+    /// <summary>The completed position of this stable parent before the child's first birth admission.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? FirstParentPositionOperationId { get; init; }
+}
 
 /// <summary>A current member in a validated product namespace subtree.</summary>
 public sealed record MirrorPulseNamespaceMemberTreeEntry(Guid MemberId, Guid? ParentMemberId,
@@ -54,18 +60,22 @@ public sealed partial class MirrorPulseProductCatalog
             var current = await ReadNamespaceMemberProofAsync(member, true, transaction, cancellationToken).ConfigureAwait(false);
             if (current.ProtectionId != member.ProtectionId)
                 throw new InvalidOperationException("New membership requires the latest protection epoch.");
-            var child = member;
-            while (child.ParentMemberId is { } parentId)
+            if (member.ParentMemberId is { } parentId)
             {
                 var parent = await ReadNamespaceMemberRowAsync(parentId, transaction, cancellationToken).ConfigureAwait(false)
                     ?? throw new FileNotFoundException("The direct parent is not a registered member.");
-                RequireNamespaceMemberRelationship(child, parent);
-                _ = await ReadNamespaceMemberProofAsync(parent, false, transaction, cancellationToken).ConfigureAwait(false);
-                var parentProof = await ReadNamespaceMemberProofAsync(parent, true, transaction, cancellationToken).ConfigureAwait(false);
-                if (parentProof.RoleSid != proof.RoleSid || member.RegisteredAt < parentProof.VerifiedAt)
-                    throw new InvalidOperationException("Membership requires current protection throughout its parent lineage.");
-                await RequireNamespaceMemberNameAsync(parent, transaction, cancellationToken).ConfigureAwait(false);
-                child = parent;
+                await RequireNamespaceMemberRelationshipAsync(member, parent, transaction, cancellationToken).ConfigureAwait(false);
+                var lineage = await ReadNamespaceMemberProtectionLineageCoreAsync(parentId, transaction, cancellationToken,
+                    requireUnfenced: false).ConfigureAwait(false);
+                int separator = member.RelativePath.LastIndexOf('/');
+                string parentPath = separator < 0 ? string.Empty : member.RelativePath[..separator];
+                if (lineage[0].Location.RelativePath != parentPath ||
+                    lineage[0].Location.CurrentPositionOperationId != member.FirstParentPositionOperationId)
+                    throw new InvalidOperationException("New membership requires its direct parent's exact latest completed position.");
+                foreach (var context in lineage)
+                    if (context.Protection.RoleSid != proof.RoleSid || member.RegisteredAt < context.Protection.VerifiedAt ||
+                        context.PositionVerification is { } position && member.RegisteredAt < position.ObservedAt)
+                        throw new InvalidOperationException("Membership requires current protection throughout its actual parent lineage.");
             }
             MirrorPulseNamespaceBirthIntent? birth = null;
             if (member.Origin == MirrorPulseNamespaceMemberOrigin.ProtectedBirth)
@@ -277,13 +287,16 @@ public sealed partial class MirrorPulseProductCatalog
         try
         {
             var child = first;
+            var visited = new HashSet<Guid>();
             while (true)
             {
+                if (!visited.Add(child.MemberId))
+                    throw new InvalidDataException("The historical member lineage contains a cycle.");
                 _ = await ReadNamespaceMemberProofAsync(child, false, transaction, token).ConfigureAwait(false);
                 if (child.ParentMemberId is not { } parentId) break;
                 var parent = await ReadNamespaceMemberRowAsync(parentId, transaction, token).ConfigureAwait(false)
                     ?? throw new FileNotFoundException("The historical parent member is missing.");
-                RequireNamespaceMemberRelationship(child, parent);
+                await RequireNamespaceMemberRelationshipAsync(child, parent, transaction, token).ConfigureAwait(false);
                 child = parent;
             }
         }
@@ -313,10 +326,15 @@ public sealed partial class MirrorPulseProductCatalog
         ValidatePermissionBinding(member.LocalObject);
         ValidatePermissionSid(member.OwnerSid, role: false);
         ValidatePermissionRelativePath(member.RelativePath);
-        if (member.Version != 1 || member.MemberId == Guid.Empty || member.OriginId == Guid.Empty || member.ProtectionId == Guid.Empty ||
+        if (member.Version is not (1 or 2) || member.MemberId == Guid.Empty || member.OriginId == Guid.Empty || member.ProtectionId == Guid.Empty ||
             !Enum.IsDefined(member.Origin) || member.ParentMemberId == Guid.Empty || member.ParentMemberId == member.MemberId ||
             member.RegisteredAt == default || member.RootId?.Value == Guid.Empty)
             throw new ArgumentException("Membership requires bounded original provenance and a distinct direct parent.", nameof(member));
+        if (member.Version == 1 && member.FirstParentPositionOperationId is not null ||
+            member.Version == 2 && (member.FirstParentPositionOperationId is null || member.FirstParentPositionOperationId == Guid.Empty))
+            throw new ArgumentException("Located first-parent provenance requires a separate version and completed position.", nameof(member));
+        if (member.Version == 2 && (member.Origin != MirrorPulseNamespaceMemberOrigin.ProtectedBirth || member.ParentMemberId is null))
+            throw new ArgumentException("Only a born member may retain a separate first-parent position.", nameof(member));
         if (member.ParentMemberId is null
             ? member.Origin != MirrorPulseNamespaceMemberOrigin.CapturedOriginal || member.RootId is not null ||
                 member.RelativePath.Length != 0 || !member.IsDirectory || member.LocalObject.LocalFileId != member.LocalObject.SyncRootFileId
@@ -324,12 +342,21 @@ public sealed partial class MirrorPulseProductCatalog
             throw new ArgumentException("Only the original sync-root anchor may omit a direct member parent.", nameof(member));
     }
 
-    private static void RequireNamespaceMemberRelationship(MirrorPulseNamespaceMemberRegistration child,
-        MirrorPulseNamespaceMemberRegistration parent)
+    private async Task RequireNamespaceMemberRelationshipAsync(MirrorPulseNamespaceMemberRegistration child,
+        MirrorPulseNamespaceMemberRegistration parent, SqliteTransaction transaction, CancellationToken token)
     {
         int separator = child.RelativePath.LastIndexOf('/');
         string path = separator < 0 ? string.Empty : child.RelativePath[..separator];
-        if (child.ParentMemberId != parent.MemberId || !parent.IsDirectory || parent.RelativePath != path ||
+        string retainedParentPath = parent.RelativePath;
+        if (child.FirstParentPositionOperationId is { } positionId)
+        {
+            var birth = await ReadNamespaceBirthCoreAsync(child.OriginId, transaction, token).ConfigureAwait(false)
+                ?? throw new FileNotFoundException("The first-parent placement lost its original birth admission.");
+            var position = await ReadNamespaceMemberPositionEvidenceCoreAsync(parent, positionId, birth.PreparedAt,
+                transaction, token).ConfigureAwait(false);
+            retainedParentPath = position.RelativePath;
+        }
+        if (child.ParentMemberId != parent.MemberId || !parent.IsDirectory || retainedParentPath != path ||
             parent.LocalObject.VolumeSerialNumber != child.LocalObject.VolumeSerialNumber ||
             parent.LocalObject.SyncRootFileId != child.LocalObject.SyncRootFileId || parent.OwnerSid != child.OwnerSid ||
             child.RegisteredAt < parent.RegisteredAt ||

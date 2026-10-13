@@ -140,6 +140,16 @@ parents and descriptors, and replay across two official-store owners. This
 component still requires native acceptance and Host activation before product
 delivery.
 
+Member registration version 2 retains the stable parent's completed position
+before the child's first birth admission. Historical reads validate that exact
+member's position and original birth chronology; they never substitute the
+parent's current path. New registration separately requires the parent's latest
+committed location and the complete current protection lineage. A later subtree
+move advances the child's current location without changing this first-parent
+reference. Version 1 payloads omit the optional field and remain unchanged. This
+catalog capability requires separate native creation and directory-move
+integration; it grants no filesystem authority or content acceptance.
+
 The native component probe checks competing writes and hardlinks inside the
 scope, real descriptor application, cancellation and callback failure, and
 official-store reopen. It also checks cold-file metadata without hydration and
