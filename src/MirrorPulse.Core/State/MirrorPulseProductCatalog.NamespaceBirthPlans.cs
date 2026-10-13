@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Data.Sqlite;
 
 namespace MirrorPulse.Core.State;
@@ -7,7 +8,15 @@ namespace MirrorPulse.Core.State;
 /// <summary>The logical placeholder identity selected before any native birth attempt.</summary>
 /// <remarks>The Host validates its encoding through CfSharp. This plan contains no native binding or acceptance proof.</remarks>
 public sealed record MirrorPulseNamespaceBirthPlan(int Version, Guid OperationId, Guid ItemId,
-    string RemoteId, string? RemoteRevision, DateTimeOffset PreparedAt);
+    string RemoteId, string? RemoteRevision, DateTimeOffset PreparedAt)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public MirrorPulseNamespaceImportContent? Content { get; init; }
+}
+
+/// <summary>Immutable staged import bytes; this is neither a native binding nor source acceptance.</summary>
+/// <remarks>The Host resolves staging by operation ID, never by an Adapter-supplied path.</remarks>
+public sealed record MirrorPulseNamespaceImportContent(long Length, string Sha256);
 
 /// <summary>An immutable start intent committed before a native birth attempt.</summary>
 /// <remarks>
@@ -236,11 +245,15 @@ public sealed partial class MirrorPulseProductCatalog
 
     private static void ValidateNamespaceBirthPlan(MirrorPulseNamespaceBirthPlan plan)
     {
-        if (plan.Version != 1 || plan.OperationId == Guid.Empty || plan.ItemId == Guid.Empty ||
+        if (!(plan.Version == 1 && plan.Content is null || plan.Version == 2 && plan.Content is not null) ||
+            plan.OperationId == Guid.Empty || plan.ItemId == Guid.Empty ||
             string.IsNullOrWhiteSpace(plan.RemoteId) || plan.RemoteId.Length > 4096 ||
             plan.RemoteRevision is not null && (string.IsNullOrWhiteSpace(plan.RemoteRevision) || plan.RemoteRevision.Length > 4096) ||
             plan.PreparedAt == default)
             throw new ArgumentException("The birth identity plan is incomplete or unsupported.", nameof(plan));
+        if (plan.Content is { } content && (content.Length < 0 || content.Sha256 is not { Length: 64 } ||
+            content.Sha256.Any(character => !char.IsAsciiHexDigitUpper(character))))
+            throw new ArgumentException("Import staging requires an exact length and uppercase SHA256 digest.", nameof(plan));
     }
 
     private static void ValidateNamespaceBirthPlanReference(MirrorPulseNamespaceBirthPlan plan, MirrorPulseNamespaceBirthIntent birth)
@@ -248,6 +261,8 @@ public sealed partial class MirrorPulseProductCatalog
         if (plan.OperationId != birth.OperationId || plan.PreparedAt < birth.PreparedAt ||
             birth.Origin != MirrorPulseNamespaceBirthOrigin.RemotePopulation && plan.RemoteRevision is not null)
             throw new InvalidOperationException("The birth identity plan must follow its original admission without inventing remote acceptance.");
+        if (plan.Content is not null && (birth.Origin != MirrorPulseNamespaceBirthOrigin.Import || birth.IsDirectory))
+            throw new InvalidOperationException("A content-bearing birth plan requires an admitted file import.");
     }
 
     private static void ValidateNamespaceBirthStart(MirrorPulseNamespaceBirthStart start)
