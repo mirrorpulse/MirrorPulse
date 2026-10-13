@@ -63,7 +63,8 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         var setup = await PrepareMovableMemberAsync(catalog);
         var targetBirth = await AddBornAsync(catalog, Birth(setup.Parent, setup.ParentProof) with
         {
-            IsDirectory = true, RelativePath = "Docs/target"
+            IsDirectory = true,
+            RelativePath = "Docs/target"
         });
         var targetMember = BornMember(targetBirth, setup.ParentMember);
         await catalog.RegisterNamespaceMemberAsync(targetMember);

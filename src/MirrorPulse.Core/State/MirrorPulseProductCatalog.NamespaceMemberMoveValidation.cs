@@ -128,7 +128,7 @@ public sealed partial class MirrorPulseProductCatalog
     }
 
     private async Task RequireNamespaceMoveRootUnfencedAsync(RootId rootId, Guid? allowedMove,
-        SqliteTransaction transaction, CancellationToken token, Guid? allowedRetirement = null)
+        SqliteTransaction transaction, CancellationToken token, Guid? allowedRetirement = null, Guid? allowedBatch = null)
     {
         var pending = await ReadPendingNamespaceMemberMoveCoreAsync(rootId, transaction, token).ConfigureAwait(false);
         if (pending is not null && pending.OperationId != allowedMove)
@@ -138,5 +138,8 @@ public sealed partial class MirrorPulseProductCatalog
         foreach (var retirement in await ReadPendingNamespaceRetirementsCoreAsync(transaction, token).ConfigureAwait(false))
             if (retirement.Intent.RootId == rootId && retirement.OperationId != allowedRetirement)
                 throw new InvalidOperationException("An unresolved controlled retirement has fenced this managed root.");
+        var batch = await ReadPendingNamespaceRetirementBatchCoreAsync(rootId, transaction, token).ConfigureAwait(false);
+        if (batch is not null && batch.OperationId != allowedBatch)
+            throw new InvalidOperationException("An unresolved controlled subtree retirement has fenced this managed root.");
     }
 }

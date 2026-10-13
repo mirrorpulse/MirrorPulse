@@ -1,0 +1,144 @@
+using System.Security.Cryptography;
+using System.Text.Json;
+using Microsoft.Data.Sqlite;
+using MirrorPulse.Core.Contracts;
+
+namespace MirrorPulse.Core.State;
+
+public enum MirrorPulseNamespaceRetirementBatchPhase { Prepared, Completed, RecoveryRequired }
+
+/// <summary>One immutable current member captured for a future leaf-first subtree retirement.</summary>
+public sealed record MirrorPulseNamespaceRetirementBatchEntry(Guid MemberId, Guid? ParentMemberId,
+    string RelativePath, bool IsDirectory, MirrorPulseLocalFileBinding LocalObject, string OwnerSid, int Depth);
+
+/// <summary>A durable subtree snapshot and root fence; it is not native deletion evidence.</summary>
+public sealed record MirrorPulseNamespaceRetirementBatch(int Version, Guid OperationId, Guid MemberId,
+    RootId RootId, IReadOnlyList<MirrorPulseNamespaceRetirementBatchEntry> Entries,
+    DateTimeOffset PreparedAt, MirrorPulseNamespaceRetirementBatchPhase Phase = MirrorPulseNamespaceRetirementBatchPhase.Prepared);
+
+public sealed partial class MirrorPulseProductCatalog
+{
+    public async Task<MirrorPulseNamespaceRetirementBatch> PrepareNamespaceRetirementBatchAsync(Guid operationId,
+        Guid memberId, CancellationToken cancellationToken = default)
+    {
+        if (operationId == Guid.Empty || memberId == Guid.Empty) throw new ArgumentException("A retirement batch requires operation and member IDs.");
+        var snapshot = await ReadNamespaceMemberTreeAsync(memberId, cancellationToken).ConfigureAwait(false);
+        if (snapshot.Count == 0) throw new InvalidDataException("The retirement subtree is empty.");
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed(); using SqliteTransaction transaction = _connection.BeginTransaction();
+            var member = await ReadNamespaceMemberCoreAsync(memberId, transaction, cancellationToken).ConfigureAwait(false)
+                ?? throw new FileNotFoundException("The namespace member is not registered.");
+            if (member.ParentMemberId is null || member.RootId is not { } rootId)
+                throw new InvalidOperationException("A managed root or sync-root anchor cannot be retired as a subtree.");
+            await RequireNamespaceMoveRootUnfencedAsync(rootId, null, transaction, cancellationToken, allowedBatch: operationId).ConfigureAwait(false);
+            var replay = await ReadNamespaceRetirementBatchCoreAsync(operationId, transaction, cancellationToken).ConfigureAwait(false);
+            if (replay is not null)
+            {
+                bool sameSnapshot = replay.Entries.Count == snapshot.Count && replay.Entries.Zip(snapshot).All(pair =>
+                    pair.First.MemberId == pair.Second.MemberId && pair.First.ParentMemberId == pair.Second.ParentMemberId &&
+                    pair.First.RelativePath == pair.Second.RelativePath && pair.First.IsDirectory == pair.Second.IsDirectory &&
+                    pair.First.LocalObject == pair.Second.LocalObject && pair.First.Depth == pair.Second.Depth);
+                if (replay.MemberId != memberId || replay.RootId != rootId || !sameSnapshot)
+                    throw new InvalidOperationException("A retirement batch operation is immutable.");
+                transaction.Commit(); return replay;
+            }
+            if (await ReadPendingNamespaceRetirementBatchCoreAsync(rootId, transaction, cancellationToken).ConfigureAwait(false) is not null)
+                throw new InvalidOperationException("Another controlled subtree retirement already fences this root.");
+            var currentMembers = new Dictionary<Guid, MirrorPulseNamespaceMemberRegistration>();
+            foreach (var expected in snapshot)
+            {
+                var current = await ReadNamespaceMemberCoreAsync(expected.MemberId, transaction, cancellationToken).ConfigureAwait(false)
+                    ?? throw new InvalidDataException("The retirement subtree lost a registered member.");
+                var location = await ReadNamespaceMemberLocationCoreAsync(current, transaction, cancellationToken).ConfigureAwait(false);
+                await RequireNamespaceMemberNameAsync(current, transaction, cancellationToken).ConfigureAwait(false);
+                if (current.RootId != rootId || current.IsDirectory != expected.IsDirectory || current.LocalObject != expected.LocalObject ||
+                    location.ParentMemberId != expected.ParentMemberId || location.RelativePath != expected.RelativePath)
+                    throw new InvalidDataException("The retirement subtree changed during admission.");
+                currentMembers.Add(current.MemberId, current);
+            }
+            var batch = new MirrorPulseNamespaceRetirementBatch(1, operationId, memberId, rootId,
+                snapshot.Select(entry => new MirrorPulseNamespaceRetirementBatchEntry(entry.MemberId, entry.ParentMemberId,
+                    entry.RelativePath, entry.IsDirectory, entry.LocalObject, currentMembers[entry.MemberId].OwnerSid, entry.Depth)).ToArray(),
+                DateTimeOffset.UtcNow);
+            byte[] payload = JsonSerializer.SerializeToUtf8Bytes(batch, TopologyJsonOptions);
+            if (payload.Length > 4 * 1024 * 1024) throw new ArgumentException("The retirement subtree is too large.", nameof(memberId));
+            await using SqliteCommand insert = _connection.CreateCommand(); insert.Transaction = transaction;
+            insert.CommandText = "INSERT INTO namespace_member_retirement_batches(operation_id,member_id,root_id,payload,fingerprint,phase) VALUES($id,$member,$root,$payload,$fingerprint,$phase);";
+            insert.Parameters.AddWithValue("$id", operationId.ToString("D")); insert.Parameters.AddWithValue("$member", memberId.ToString("D"));
+            insert.Parameters.AddWithValue("$root", rootId.ToString()); insert.Parameters.AddWithValue("$payload", payload);
+            insert.Parameters.AddWithValue("$fingerprint", SHA256.HashData(payload)); insert.Parameters.AddWithValue("$phase", (int)batch.Phase);
+            await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false); transaction.Commit(); return batch;
+
+        }
+        finally { _gate.Release(); }
+    }
+
+    public async Task<MirrorPulseNamespaceRetirementBatch?> ReadNamespaceRetirementBatchAsync(Guid operationId,
+        CancellationToken cancellationToken = default)
+    {
+        if (operationId == Guid.Empty) throw new ArgumentException("A retirement batch is required.", nameof(operationId));
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try { ThrowIfDisposed(); return await ReadNamespaceRetirementBatchCoreAsync(operationId, null, cancellationToken).ConfigureAwait(false); }
+        finally { _gate.Release(); }
+    }
+
+    private async Task<MirrorPulseNamespaceRetirementBatch?> ReadNamespaceRetirementBatchCoreAsync(Guid operationId,
+        SqliteTransaction? transaction, CancellationToken token)
+    {
+        await using SqliteCommand query = _connection.CreateCommand(); query.Transaction = transaction;
+        query.CommandText = "SELECT operation_id,member_id,root_id,payload,fingerprint,phase FROM namespace_member_retirement_batches WHERE operation_id=$id;";
+        query.Parameters.AddWithValue("$id", operationId.ToString("D"));
+        await using SqliteDataReader reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
+        if (!await reader.ReadAsync(token).ConfigureAwait(false)) return null;
+        byte[] payload = (byte[])reader[3], fingerprint = (byte[])reader[4];
+        if (payload.Length > 4 * 1024 * 1024 || fingerprint.Length != 32 || !CryptographicOperations.FixedTimeEquals(SHA256.HashData(payload), fingerprint))
+            throw new InvalidDataException("The retirement batch fingerprint is invalid.");
+        var batch = JsonSerializer.Deserialize<MirrorPulseNamespaceRetirementBatch>(payload, TopologyJsonOptions)
+            ?? throw new InvalidDataException("The retirement batch is empty.");
+        if (batch.Version != 1 || batch.OperationId != operationId || batch.MemberId == Guid.Empty || batch.RootId.Value == Guid.Empty ||
+            batch.Entries.Count == 0 || batch.Entries.Count > 65_536 || batch.PreparedAt == default || !Enum.IsDefined(batch.Phase) || reader.GetString(0) != operationId.ToString("D") ||
+            reader.GetString(1) != batch.MemberId.ToString("D") || reader.GetString(2) != batch.RootId.ToString() ||
+            reader.GetInt32(5) != (int)batch.Phase || !JsonSerializer.SerializeToUtf8Bytes(batch, TopologyJsonOptions).AsSpan().SequenceEqual(payload))
+            throw new InvalidDataException("The retirement batch index is inconsistent.");
+        foreach (var entry in batch.Entries)
+        {
+            ValidatePermissionBinding(entry.LocalObject);
+            ValidatePermissionSid(entry.OwnerSid, role: false);
+            ValidatePermissionRelativePath(entry.RelativePath);
+            if (entry.MemberId == Guid.Empty || entry.ParentMemberId == Guid.Empty || entry.Depth < 0 ||
+                (entry.ParentMemberId is null && entry.Depth != 0))
+                throw new InvalidDataException("The retirement batch contains an invalid member entry.");
+        }
+        return batch;
+    }
+
+    private async Task<MirrorPulseNamespaceRetirementBatch?> ReadPendingNamespaceRetirementBatchCoreAsync(RootId rootId,
+        SqliteTransaction transaction, CancellationToken token)
+    {
+        await using SqliteCommand query = _connection.CreateCommand(); query.Transaction = transaction;
+        query.CommandText = "SELECT operation_id FROM namespace_member_retirement_batches WHERE root_id=$root AND phase<>2 LIMIT 1;";
+        query.Parameters.AddWithValue("$root", rootId.ToString());
+        object? value = await query.ExecuteScalarAsync(token).ConfigureAwait(false);
+        return value is string id && Guid.TryParseExact(id, "D", out Guid operation)
+            ? await ReadNamespaceRetirementBatchCoreAsync(operation, transaction, token).ConfigureAwait(false)
+            : null;
+    }
+
+    private async Task<List<MirrorPulseNamespaceRetirementBatch>> ReadPendingNamespaceRetirementBatchesCoreAsync(
+        SqliteTransaction transaction, CancellationToken token)
+    {
+        var result = new List<MirrorPulseNamespaceRetirementBatch>();
+        await using SqliteCommand query = _connection.CreateCommand(); query.Transaction = transaction;
+        query.CommandText = "SELECT operation_id FROM namespace_member_retirement_batches WHERE phase<>2 ORDER BY operation_id;";
+        await using SqliteDataReader reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
+        while (await reader.ReadAsync(token).ConfigureAwait(false))
+        {
+            if (!Guid.TryParseExact(reader.GetString(0), "D", out Guid operation)) throw new InvalidDataException("The retirement batch operation index is invalid.");
+            result.Add(await ReadNamespaceRetirementBatchCoreAsync(operation, transaction, token).ConfigureAwait(false)
+                ?? throw new InvalidDataException("The retirement batch disappeared."));
+        }
+        return result;
+    }
+}

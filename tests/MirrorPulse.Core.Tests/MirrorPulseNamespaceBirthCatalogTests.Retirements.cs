@@ -64,6 +64,30 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
     }
 
     [TestMethod]
+    public async Task RetirementBatchSealsTheSubtreeAndFencesTheRootBeforeNativeWork()
+    {
+        using var fixture = new Fixture();
+        await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        var setup = await PrepareMovableMemberAsync(catalog, directory: true);
+        var nested = await AddBornAsync(catalog, NestedBirth(setup.Born, "nested", false));
+        await catalog.RegisterNamespaceMemberAsync(BornMember(nested, setup.Member));
+        Guid operationId = Guid.NewGuid();
+
+        var batch = await catalog.PrepareNamespaceRetirementBatchAsync(operationId, setup.Member.MemberId);
+        Assert.AreEqual(MirrorPulseNamespaceRetirementBatchPhase.Prepared, batch.Phase);
+        Assert.HasCount(2, batch.Entries);
+        var replay = await catalog.PrepareNamespaceRetirementBatchAsync(operationId, setup.Member.MemberId);
+        Assert.AreEqual(batch.OperationId, replay.OperationId);
+        CollectionAssert.AreEqual(batch.Entries.ToArray(), replay.Entries.ToArray());
+        var stored = await catalog.ReadNamespaceRetirementBatchAsync(operationId);
+        Assert.IsNotNull(stored);
+        CollectionAssert.AreEqual(batch.Entries.ToArray(), stored.Entries.ToArray());
+        CollectionAssert.Contains((await catalog.ReadNamespaceRecoveryRootsAsync()).ToArray(), batch.RootId);
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => catalog.PrepareNamespaceBirthAsync(
+            Birth(setup.Parent, setup.ParentProof) with { RelativePath = "Docs/blocked-by-batch.txt" }));
+    }
+
+    [TestMethod]
     public async Task PendingRetirementFencesTheRootUntilMembershipSettlement()
     {
         using var fixture = new Fixture();
