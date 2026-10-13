@@ -46,6 +46,13 @@ public sealed partial class MirrorPulseProductCatalog
         }
         else
         {
+            if (!current)
+            {
+                var retained = await ReadNamespaceBirthProtectionRowAsync(protectionId ?? member.ProtectionId, transaction, token).ConfigureAwait(false)
+                    ?? throw new FileNotFoundException("The member's verified birth protection is missing.");
+                if ((retainedAt ?? member.RegisteredAt) < retained.Protection.Verification.ObservedAt)
+                    throw new InvalidOperationException("Membership cannot predate its retained protection verification.");
+            }
             var birth = await ReadNamespaceBirthCoreAsync(member.OriginId, transaction, token).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The original member birth is missing.");
             var observation = await ReadNamespaceBirthObservationCoreAsync(member.OriginId, transaction, token).ConfigureAwait(false)
@@ -65,7 +72,13 @@ public sealed partial class MirrorPulseProductCatalog
             if (parent.Origin != (birth.BornParent is null ? MirrorPulseNamespaceMemberOrigin.CapturedOriginal : MirrorPulseNamespaceMemberOrigin.ProtectedBirth) ||
                 parent.OriginId != NamespaceBirthParentId(birth) || parent.LocalObject != birth.ParentLocalObject)
                 throw new InvalidOperationException("Born membership cannot substitute another stable direct parent.");
-            if (current) _ = await ValidateNamespaceBirthLineageAsync(birth, protection, true, transaction, token).ConfigureAwait(false);
+            if (current)
+            {
+                if (protection.Placement is null)
+                    _ = await ValidateNamespaceBirthLineageAsync(birth, protection, true, transaction, token).ConfigureAwait(false);
+                else
+                    _ = await ReadNamespaceMemberProtectionLineageCoreAsync(member.MemberId, transaction, token, requireUnfenced: false).ConfigureAwait(false);
+            }
             proof = new(protection.ProtectionId, protection.RoleSid, protection.Verification.ObservedAt);
         }
         if (!current && (retainedAt ?? member.RegisteredAt) < proof.VerifiedAt)

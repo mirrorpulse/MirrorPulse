@@ -18,6 +18,10 @@ public sealed record MirrorPulseNamespaceBirthProtection(int Version, Guid Prote
 {
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public MirrorPulseNamespaceBornParent? BornParent { get; init; }
+
+    /// <summary>A later registered-object epoch at an independently retained current parent and position.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public MirrorPulseNamespaceBirthProtectionPlacement? Placement { get; init; }
 }
 
 public sealed partial class MirrorPulseProductCatalog
@@ -46,7 +50,18 @@ public sealed partial class MirrorPulseProductCatalog
                 latest is not null && protection.Verification.ObservedAt < latest.Verification.ObservedAt)
                 throw new InvalidOperationException("Birth protection must extend the latest retained epoch.");
             if (latest is null) await RequireNamespaceBirthReservationAsync(birth, transaction, cancellationToken).ConfigureAwait(false);
-            _ = await ValidateNamespaceBirthLineageAsync(birth, protection, true, transaction, cancellationToken).ConfigureAwait(false);
+            if (protection.Placement is null)
+                _ = await ValidateNamespaceBirthLineageAsync(birth, protection, true, transaction, cancellationToken).ConfigureAwait(false);
+            else
+            {
+                if (latest is null || protection.Verification.ObservedAt <= latest.Verification.ObservedAt)
+                    throw new InvalidOperationException("Located birth protection requires an earlier retained protection epoch.");
+                await RequireNamespaceMoveRootUnfencedAsync(birth.RootId, null, transaction, cancellationToken).ConfigureAwait(false);
+                await ValidateNamespaceLocatedBirthCurrentAsync(protection, transaction, cancellationToken, admission: true).ConfigureAwait(false);
+                var lineage = await ReadNamespaceMemberProtectionLineageCoreAsync(protection.Placement.ParentMemberId, transaction, cancellationToken).ConfigureAwait(false);
+                if (lineage[0].Protection.RoleSid != protection.RoleSid)
+                    throw new InvalidOperationException("Located birth protection requires the current parent lineage's role.");
+            }
             byte[] payload = JsonSerializer.SerializeToUtf8Bytes(protection, TopologyJsonOptions);
             if (payload.Length > 131_072) throw new ArgumentException("Birth protection must be bounded.", nameof(protection));
             await using SqliteCommand insert = _connection.CreateCommand();
@@ -174,6 +189,8 @@ public sealed partial class MirrorPulseProductCatalog
         var birth = await ReadNamespaceBirthRowAsync(protection.BirthOperationId, transaction, token).ConfigureAwait(false)
             ?? throw new InvalidDataException("The original birth admission is missing.");
         _ = await ValidateNamespaceBirthLineageAsync(birth, protection, false, transaction, token).ConfigureAwait(false);
+        if (protection.Placement is not null)
+            await ValidateNamespaceLocatedBirthHistoryAsync([protection], transaction, token).ConfigureAwait(false);
         return birth;
     }
 
@@ -184,12 +201,16 @@ public sealed partial class MirrorPulseProductCatalog
         ValidatePermissionSid(protection.Verification.OwnerSid, role: false);
         ValidatePermissionSid(protection.RoleSid, role: true);
         ValidatePermissionDacl(protection.Verification.Dacl);
-        if (!(protection.Version == 1 && protection.BornParent is null && protection.ParentPermissionOperationId != Guid.Empty ||
-            protection.Version == 2 && protection.ParentPermissionOperationId == Guid.Empty && protection.BornParent is { BirthOperationId: var parent, ProtectionId: var epoch } &&
-            parent != Guid.Empty && epoch != Guid.Empty && parent != protection.BirthOperationId && epoch != protection.ProtectionId) ||
+        if (!(protection.Version == 1 && protection.Placement is null && protection.BornParent is null && protection.ParentPermissionOperationId != Guid.Empty ||
+            protection.Version == 2 && protection.Placement is null && protection.ParentPermissionOperationId == Guid.Empty && protection.BornParent is { BirthOperationId: var parent, ProtectionId: var epoch } &&
+            parent != Guid.Empty && epoch != Guid.Empty && parent != protection.BirthOperationId && epoch != protection.ProtectionId ||
+            protection.Version == 3 && protection.Placement is not null && protection.PreviousProtectionId is not null &&
+            (protection.BornParent is null ? protection.ParentPermissionOperationId != Guid.Empty :
+                protection.ParentPermissionOperationId == Guid.Empty && protection.BornParent.BirthOperationId != Guid.Empty && protection.BornParent.ProtectionId != Guid.Empty)) ||
             protection.ProtectionId == Guid.Empty || protection.BirthOperationId == Guid.Empty || protection.PreviousProtectionId == Guid.Empty ||
             protection.PreviousProtectionId == protection.ProtectionId || protection.Verification.ObservedAt == default ||
             !protection.IsPlaceholder || protection.LinkCount != 1)
             throw new ArgumentException("Birth protection requires an original, single-link placeholder and complete verification.", nameof(protection));
+        if (protection.Placement is { } placement) ValidateNamespaceBirthProtectionPlacement(placement);
     }
 }

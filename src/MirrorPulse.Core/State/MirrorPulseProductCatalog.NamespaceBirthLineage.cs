@@ -24,12 +24,14 @@ public sealed partial class MirrorPulseProductCatalog
 
     private async Task<NamespaceBirthParent> ValidateNamespaceBirthLineageAsync(MirrorPulseNamespaceBirthIntent birth,
         MirrorPulseNamespaceBirthProtection? protection, bool requireCurrentParent, NamespaceBirthParentClaim? directParentClaim,
-        SqliteTransaction? transaction, CancellationToken token)
+        SqliteTransaction? transaction, CancellationToken token, List<MirrorPulseNamespaceBirthProtection>? locatedParents = null)
     {
         var pending = new Stack<(MirrorPulseNamespaceBirthIntent Birth, MirrorPulseNamespaceBirthProtection? Protection, bool Current, bool CheckPrevious, NamespaceBirthParentClaim? Claim)>();
         var visited = new HashSet<(Guid Birth, Guid Protection, bool Current, bool CheckPrevious)>();
         pending.Push((birth, protection, requireCurrentParent, false, directParentClaim));
         NamespaceBirthParent? first = null;
+        var located = locatedParents ?? new List<MirrorPulseNamespaceBirthProtection>();
+        var currentLocated = new HashSet<Guid>();
         while (pending.TryPop(out var node))
         {
             token.ThrowIfCancellationRequested();
@@ -38,7 +40,7 @@ public sealed partial class MirrorPulseProductCatalog
             first ??= parent;
             int separator = node.Birth.RelativePath.LastIndexOf('/');
             string parentPath = separator < 0 ? string.Empty : node.Birth.RelativePath[..separator];
-            string role = node.Claim?.RoleSid ?? node.Protection?.RoleSid ?? node.Birth.RoleSid;
+            string role = node.Claim?.RoleSid ?? (node.Protection?.Placement is not null ? node.Birth.RoleSid : node.Protection?.RoleSid) ?? node.Birth.RoleSid;
             DateTimeOffset observedAt = node.Claim?.ClaimedAt ?? node.Protection?.Verification.ObservedAt ?? node.Birth.PreparedAt;
             if (!parent.IsDirectory || parent.LocalObject != node.Birth.ParentLocalObject || parent.RelativePath != parentPath ||
                 parent.RoleSid != role || observedAt < parent.VerifiedAt ||
@@ -87,7 +89,22 @@ public sealed partial class MirrorPulseProductCatalog
                 }
             }
             if (parent.Birth is { } parentBirth)
-                pending.Push((parentBirth, parent.Protection, node.Current, true, null));
+            {
+                if (parent.Protection?.Placement is not null)
+                {
+                    located.Add(parent.Protection);
+                    if (node.Current) currentLocated.Add(parent.Protection.ProtectionId);
+                }
+                pending.Push((parentBirth, parent.Protection, node.Current && parent.Protection?.Placement is null, true, null));
+            }
+        }
+        if (locatedParents is null && located.Count != 0)
+            await ValidateNamespaceLocatedBirthHistoryAsync(located, transaction, token).ConfigureAwait(false);
+        if (currentLocated.Count != 0)
+        {
+            if (transaction is null) throw new InvalidOperationException("Current located birth lineage requires an owned transaction.");
+            foreach (var epoch in located.Where(epoch => currentLocated.Contains(epoch.ProtectionId)).DistinctBy(epoch => epoch.ProtectionId))
+                _ = await ReadNamespaceMemberProtectionLineageCoreAsync(epoch.Placement!.MemberId, transaction, token, requireUnfenced: false).ConfigureAwait(false);
         }
         return first ?? throw new InvalidDataException("The direct parent is missing.");
     }
@@ -97,6 +114,9 @@ public sealed partial class MirrorPulseProductCatalog
         SqliteTransaction? transaction, CancellationToken token)
     {
         var born = claim is not null ? claim.BornParent : protection is not null ? protection.BornParent : birth.BornParent;
+        if (protection?.Placement is not null && (protection.BornParent != birth.BornParent ||
+            protection.ParentPermissionOperationId != birth.ParentPermissionOperationId))
+            throw new InvalidOperationException("Located protection must retain the first birth's immutable parent references.");
         if ((protection is not null || claim is not null) &&
             (born?.BirthOperationId != birth.BornParent?.BirthOperationId || (born is null) != (birth.BornParent is null)))
             throw new InvalidOperationException("Protection or recovery cannot substitute another stable direct parent.");
@@ -122,7 +142,7 @@ public sealed partial class MirrorPulseProductCatalog
             parentProtection.Protection.Verification.LocalObject != parentObservation.LocalObject ||
             parentProtection.Protection.Verification.OwnerSid != parentObservation.OwnerSid)
             throw new InvalidOperationException("The parent protection epoch belongs to another native object.");
-        return new(parentBirth.RootId, parentBirth.RelativePath, parentBirth.IsDirectory, parentObservation.LocalObject,
+        return new(parentBirth.RootId, parentProtection.Protection.Placement?.RelativePath ?? parentBirth.RelativePath, parentBirth.IsDirectory, parentObservation.LocalObject,
             parentObservation.OwnerSid, parentProtection.Protection.RoleSid, parentProtection.Protection.Verification.ObservedAt,
             null, null, parentBirth, parentProtection.Protection);
     }

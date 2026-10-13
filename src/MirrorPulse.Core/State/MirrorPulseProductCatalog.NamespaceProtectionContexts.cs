@@ -26,36 +26,49 @@ public sealed partial class MirrorPulseProductCatalog
         {
             ThrowIfDisposed();
             using SqliteTransaction transaction = _connection.BeginTransaction(deferred: true);
-            var lineage = new List<MirrorPulseNamespaceMemberProtectionContext>();
-            var visited = new HashSet<Guid>();
-            var member = await ReadNamespaceMemberCoreAsync(memberId, transaction, cancellationToken).ConfigureAwait(false)
-                ?? throw new FileNotFoundException("The namespace member is not registered.");
-            if (member.RootId is { } rootId)
-                await RequireNamespaceMoveRootUnfencedAsync(rootId, null, transaction, cancellationToken).ConfigureAwait(false);
-            while (true)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (!visited.Add(member.MemberId)) throw new InvalidDataException("The current protection lineage contains a cycle.");
-                if (await ReadCompletedNamespaceRetirementForMemberCoreAsync(member.MemberId, transaction, cancellationToken).ConfigureAwait(false))
-                    throw new FileNotFoundException("The current protection lineage contains a retired member.");
-                var location = await ReadNamespaceMemberLocationCoreAsync(member, transaction, cancellationToken).ConfigureAwait(false);
-                await RequireNamespaceMemberNameAsync(member, transaction, cancellationToken).ConfigureAwait(false);
-                var retained = await ReadNamespaceMemberContextProtectionAsync(member, transaction, cancellationToken).ConfigureAwait(false);
-                var position = await ValidateNamespaceContextPositionAsync(member, location, retained.Proof, retained.Verification,
-                    retained.EpochPositionId, transaction, cancellationToken).ConfigureAwait(false);
-                var context = new MirrorPulseNamespaceMemberProtectionContext(member, location,
-                    new(member.MemberId, retained.Proof.ProtectionId, retained.Proof.RoleSid, retained.Proof.VerifiedAt),
-                    retained.Verification, position);
-                if (lineage.Count != 0) RequireNamespaceCurrentProtectionParent(lineage[^1], context);
-                lineage.Add(context);
-                if (location.ParentMemberId is not { } parentId) break;
-                member = await ReadNamespaceMemberCoreAsync(parentId, transaction, cancellationToken).ConfigureAwait(false)
-                    ?? throw new FileNotFoundException("The actual protected parent is not registered.");
-            }
+            var lineage = await ReadNamespaceMemberProtectionLineageCoreAsync(memberId, transaction, cancellationToken).ConfigureAwait(false);
             transaction.Commit();
-            return lineage.AsReadOnly();
+            return lineage;
         }
         finally { _gate.Release(); }
+    }
+
+    private async Task<IReadOnlyList<MirrorPulseNamespaceMemberProtectionContext>> ReadNamespaceMemberProtectionLineageCoreAsync(
+        Guid memberId, SqliteTransaction transaction, CancellationToken cancellationToken, bool requireUnfenced = true)
+    {
+        var lineage = new List<MirrorPulseNamespaceMemberProtectionContext>();
+        var visited = new HashSet<Guid>();
+        var member = await ReadNamespaceMemberCoreAsync(memberId, transaction, cancellationToken).ConfigureAwait(false)
+            ?? throw new FileNotFoundException("The namespace member is not registered.");
+        if (requireUnfenced && member.RootId is { } rootId)
+            await RequireNamespaceMoveRootUnfencedAsync(rootId, null, transaction, cancellationToken).ConfigureAwait(false);
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!visited.Add(member.MemberId)) throw new InvalidDataException("The current protection lineage contains a cycle.");
+            if (await ReadCompletedNamespaceRetirementForMemberCoreAsync(member.MemberId, transaction, cancellationToken).ConfigureAwait(false))
+                throw new FileNotFoundException("The current protection lineage contains a retired member.");
+            var location = await ReadNamespaceMemberLocationCoreAsync(member, transaction, cancellationToken).ConfigureAwait(false);
+            await RequireNamespaceMemberNameAsync(member, transaction, cancellationToken).ConfigureAwait(false);
+            var retained = await ReadNamespaceMemberContextProtectionAsync(member, transaction, cancellationToken).ConfigureAwait(false);
+            if (member.Origin == MirrorPulseNamespaceMemberOrigin.ProtectedBirth)
+            {
+                var epoch = await ReadNamespaceBirthProtectionRowAsync(retained.Proof.ProtectionId, transaction, cancellationToken).ConfigureAwait(false);
+                if (epoch?.Protection.Placement is not null)
+                    await ValidateNamespaceLocatedBirthCurrentAsync(epoch.Value.Protection, transaction, cancellationToken).ConfigureAwait(false);
+            }
+            var position = await ValidateNamespaceContextPositionAsync(member, location, retained.Proof, retained.Verification,
+                retained.EpochPositionId, transaction, cancellationToken).ConfigureAwait(false);
+            var context = new MirrorPulseNamespaceMemberProtectionContext(member, location,
+                new(member.MemberId, retained.Proof.ProtectionId, retained.Proof.RoleSid, retained.Proof.VerifiedAt),
+                retained.Verification, position);
+            if (lineage.Count != 0) RequireNamespaceCurrentProtectionParent(lineage[^1], context);
+            lineage.Add(context);
+            if (location.ParentMemberId is not { } parentId) break;
+            member = await ReadNamespaceMemberCoreAsync(parentId, transaction, cancellationToken).ConfigureAwait(false)
+                ?? throw new FileNotFoundException("The actual protected parent is not registered.");
+        }
+        return lineage.AsReadOnly();
     }
 
     // Historical birth lineage proves origin. Current parent roles are checked separately
@@ -87,6 +100,7 @@ public sealed partial class MirrorPulseProductCatalog
                 ?? throw new FileNotFoundException("The current birth protection is missing.");
             protectionId = protection.ProtectionId;
             verification = protection.Verification;
+            epochPositionId = protection.Placement?.PositionOperationId;
         }
         var proof = await ReadNamespaceMemberProofAsync(member, current: false, transaction, token,
             protectionId, verification.ObservedAt).ConfigureAwait(false);

@@ -121,6 +121,16 @@ the execution coordinator must still inspect the actual child and parent through
 CfSharp public guards. This catalog boundary does not enable installed strict
 protection or directory move execution in the Host.
 
+Born protection version 3 retains a separate registered member placement and
+actual parent protection reference. It extends an earlier epoch while preserving
+the first birth, native binding, owner and original parent references. Historical
+validation follows earlier parent and predecessor epochs without adopting current
+names or roles; current admission checks the latest committed placement and parent
+lineage. A later completed move can retain the same epoch through its complete
+member receipt. Legacy payloads omit the new placement field. Fresh native
+verification and role application for these located epochs remain separate
+execution work; recording catalog facts alone does not perform an ACL write.
+
 The native component probe checks competing writes and hardlinks inside the
 scope, real descriptor application, cancellation and callback failure, and
 official-store reopen. It also checks cold-file metadata without hydration and
