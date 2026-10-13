@@ -28,7 +28,10 @@ internal static class MirrorPulseNamespaceMemberMoveInspection
         RequireObject(facts, snapshot, proof, endpoint.RelativePath[..endpoint.RelativePath.LastIndexOf('/')], intent);
         if (!facts.IsDirectory || facts.LocalObject != endpoint.ParentLocalObject || proof.ProtectionId != endpoint.ParentProtectionId)
             throw new InvalidDataException("Move execution requires the actual admitted direct parent.");
-        if (proof.Observation is { } original)
+        if (proof.CurrentIdentity is { } current)
+            MirrorPulseNamespaceBirthProtectionVerifier.RequireRegisteredPublicIdentity(snapshot, current,
+                proof.Observation is not null);
+        else if (proof.Observation is { } original)
         {
             if (!snapshot.IsPlaceholder || snapshot.PlaceholderIdentity.IsEmpty)
                 throw new InvalidDataException("The actual born parent lost its original public identity.");

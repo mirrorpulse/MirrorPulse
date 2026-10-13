@@ -72,13 +72,17 @@ public static partial class MirrorPulseNamespaceBirthProtectionVerifier
             before.RelativePath != retainedParent.RelativePath || before.Dacl != retainedParent.Verification.Dacl || before.LinkCount != 1 ||
             !MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(retainedParent.ExpectedDacl, before.Dacl))
             throw new InvalidDataException("The actual direct parent does not retain its verified binding, owner and protection.");
-        if (retainedParent.Observation is { } parentObservation)
+        if (retainedParent.CurrentIdentity is not null || retainedParent.Observation is not null)
         {
             var parentSnapshot = await parent.InspectAsync(token).ConfigureAwait(false);
-            if (!parentSnapshot.Exists || !parentSnapshot.IsPlaceholder || parentSnapshot.IsTombstone ||
+            if (!parentSnapshot.Exists || parentSnapshot.IsTombstone ||
                 parentSnapshot.Kind != CloudItemKind.Directory || parentSnapshot.LocalBinding is not { } parentBinding ||
-                before.LocalObject != new MirrorPulseLocalFileBinding(parentBinding.VolumeSerialNumber, parentBinding.SyncRootFileId, parentBinding.LocalFileId) ||
-                parentSnapshot.ItemId != parentObservation.ItemId || parentSnapshot.RemoteId != parentObservation.RemoteId)
+                before.LocalObject != new MirrorPulseLocalFileBinding(parentBinding.VolumeSerialNumber, parentBinding.SyncRootFileId, parentBinding.LocalFileId))
+                throw new InvalidDataException("The retained direct parent lost its actual public native directory binding.");
+            if (retainedParent.CurrentIdentity is { } identity)
+                RequireRegisteredPublicIdentity(parentSnapshot, identity, retainedParent.Observation is not null);
+            else if (retainedParent.Observation is { } parentObservation &&
+                (!parentSnapshot.IsPlaceholder || parentSnapshot.ItemId != parentObservation.ItemId || parentSnapshot.RemoteId != parentObservation.RemoteId))
                 throw new InvalidDataException("The born parent no longer retains its original public Cloud Files identity.");
         }
         return before;
@@ -94,13 +98,17 @@ public static partial class MirrorPulseNamespaceBirthProtectionVerifier
     internal static async Task<MirrorPulseNamespaceProtectionProof> ReadRetainedParentAsync(MirrorPulseProductCatalog catalog,
         MirrorPulseNamespaceBirthIntent birth, CancellationToken token)
     {
+        MirrorPulseNamespaceProtectionProof proof;
         if (birth.BornParent is { } bornParent)
         {
-            var proof = await MirrorPulseNamespaceProtectionProofReader.ReadBirthAsync(catalog, bornParent.BirthOperationId, token).ConfigureAwait(false);
+            proof = await MirrorPulseNamespaceProtectionProofReader.ReadBirthAsync(catalog, bornParent.BirthOperationId, token).ConfigureAwait(false);
             if (!proof.IsDirectory || proof.Verification.LocalObject != birth.ParentLocalObject)
                 throw new InvalidDataException("The retained born parent is not the admitted native directory.");
-            return proof;
         }
-        return await MirrorPulseNamespaceProtectionProofReader.ReadOriginalAsync(catalog, birth.ParentEvidenceId, token).ConfigureAwait(false);
+        else
+            proof = await MirrorPulseNamespaceProtectionProofReader.ReadOriginalAsync(catalog, birth.ParentEvidenceId, token).ConfigureAwait(false);
+        var registered = await catalog.ReadNamespaceMemberByBindingAsync(proof.Verification.LocalObject, token).ConfigureAwait(false);
+        return registered is null ? proof :
+            await MirrorPulseNamespaceProtectionProofReader.ReadMemberAsync(catalog, registered, token).ConfigureAwait(false);
     }
 }

@@ -8,6 +8,7 @@ internal sealed record MirrorPulseNamespaceProtectionProof(RootId? RootId, strin
     Guid PermissionOperationId, MirrorPulseNamespaceBornParent? BornParent, MirrorPulseNamespaceBirthObservation? Observation)
 {
     public Guid ProtectionId => BornParent?.ProtectionId ?? PermissionOperationId;
+    public MirrorPulseNamespaceMemberIdentity? CurrentIdentity { get; init; }
 }
 
 /// <summary>Resolves current product protection without substituting it for fresh native inspection.</summary>
@@ -35,7 +36,7 @@ internal static class MirrorPulseNamespaceProtectionProofReader
             ?? throw new FileNotFoundException("The original native birth observation is missing.");
         var protection = await catalog.ReadLatestNamespaceBirthProtectionAsync(birthId, token).ConfigureAwait(false)
             ?? throw new InvalidOperationException("The born object requires verified protection.");
-        return new(birth.RootId, birth.RelativePath, birth.IsDirectory, original.OwnerSid, protection.RoleSid,
+        return new(birth.RootId, protection.Placement?.RelativePath ?? birth.RelativePath, birth.IsDirectory, original.OwnerSid, protection.RoleSid,
             protection.Verification, protection.Verification.Dacl, Guid.Empty,
             new(birth.OperationId, protection.ProtectionId), original);
     }
@@ -60,6 +61,7 @@ internal static class MirrorPulseNamespaceProtectionProofReader
         var location = await catalog.ReadNamespaceMemberLocationAsync(member.MemberId, token).ConfigureAwait(false);
         // A completed product move selects the current position. Neither an official path
         // observation nor a pending native move may rewrite the historical ACL or birth.
-        return proof with { RelativePath = location.RelativePath };
+        var identity = await catalog.ReadNamespaceMemberIdentityAsync(member.MemberId, token).ConfigureAwait(false);
+        return proof with { RelativePath = location.RelativePath, CurrentIdentity = identity };
     }
 }

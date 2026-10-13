@@ -77,26 +77,34 @@ public static class MirrorPulseNamespaceMemberRegistrar
     {
         var facts = await lease.InspectAsync(token).ConfigureAwait(false);
         var snapshot = await item.InspectAsync(token).ConfigureAwait(false);
+        var registered = await catalog.ReadNamespaceMemberAsync(member.MemberId, token).ConfigureAwait(false);
+        if (registered is not null && registered != member)
+            throw new InvalidDataException("Native registration lost its immutable member provenance.");
+        string path = registered is null ? member.RelativePath :
+            (await catalog.ReadNamespaceMemberLocationAsync(member.MemberId, token).ConfigureAwait(false)).RelativePath;
         if (!snapshot.Exists || snapshot.IsTombstone || snapshot.LocalBinding is not { } binding ||
             facts.LocalObject != new MirrorPulseLocalFileBinding(binding.VolumeSerialNumber, binding.SyncRootFileId, binding.LocalFileId) ||
             facts.LocalObject != member.LocalObject || facts.LocalObject != proof.Verification.LocalObject ||
             facts.OwnerSid != member.OwnerSid || facts.OwnerSid != proof.OwnerSid || facts.OwnerSid != proof.Verification.OwnerSid ||
-            facts.RootId != member.RootId || facts.RootId != proof.RootId || facts.RelativePath != member.RelativePath || facts.RelativePath != proof.RelativePath ||
+            facts.RootId != member.RootId || facts.RootId != proof.RootId || facts.RelativePath != path || facts.RelativePath != proof.RelativePath ||
             facts.IsDirectory != member.IsDirectory || facts.IsDirectory != proof.IsDirectory ||
             (snapshot.Kind == CloudItemKind.Directory) != member.IsDirectory || facts.LinkCount != 1 || facts.Dacl != proof.Verification.Dacl ||
             !MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(proof.ExpectedDacl, facts.Dacl))
             throw new InvalidDataException("Native member registration requires the original object and its exact current protected location and descriptor.");
-        if (proof.Observation is { } observation)
+        if (proof.CurrentIdentity is { } identity)
+            MirrorPulseNamespaceBirthProtectionVerifier.RequireRegisteredPublicIdentity(snapshot, identity,
+                member.Origin == MirrorPulseNamespaceMemberOrigin.ProtectedBirth);
+        else if (proof.Observation is { } observation)
         {
             if (!snapshot.IsPlaceholder || snapshot.ItemId != observation.ItemId || snapshot.RemoteId != observation.RemoteId)
                 throw new InvalidDataException("The born member lost its original public Cloud Files identity.");
         }
         else
         {
-            var identity = await catalog.ReadNamespacePermissionLocalIdentityAsync(member.OriginId, token).ConfigureAwait(false);
-            if (!member.IsDirectory && identity is null)
+            var originalIdentity = await catalog.ReadNamespacePermissionLocalIdentityAsync(member.OriginId, token).ConfigureAwait(false);
+            if (!member.IsDirectory && originalIdentity is null)
                 throw new InvalidDataException("The original file member has no retained pre-conversion public identity.");
-            if (identity is not null && (!snapshot.IsPlaceholder || snapshot.ItemId != identity.ItemId || snapshot.RemoteId != identity.RemoteId))
+            if (originalIdentity is not null && (!snapshot.IsPlaceholder || snapshot.ItemId != originalIdentity.ItemId || snapshot.RemoteId != originalIdentity.RemoteId))
                 throw new InvalidDataException("The original member lost its retained public Cloud Files identity.");
         }
         return facts;

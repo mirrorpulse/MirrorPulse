@@ -128,9 +128,10 @@ public sealed class MirrorPulseNamespaceCreationCoordinator(CloudFileSystem file
             protection = await MirrorPulseNamespaceBirthProtectionVerifier.RecordAsync(catalog, protection?.ProtectionId ?? Guid.NewGuid(),
                 operationId, item, parent, router, durable).ConfigureAwait(false);
             MirrorPulseNamespaceBirthProtectionVerifier.RequireUnchangedParent(before, await parentGuard.InspectAsync(durable).ConfigureAwait(false));
-            var member = new MirrorPulseNamespaceMemberRegistration(1, operationId, parentMemberId,
+            var member = new MirrorPulseNamespaceMemberRegistration(location.CurrentPositionOperationId is null ? 1 : 2, operationId, parentMemberId,
                 MirrorPulseNamespaceMemberOrigin.ProtectedBirth, operationId, protection.ProtectionId, birth.RootId, path,
-                observed.LocalObject, isDirectory, observed.OwnerSid, DateTimeOffset.UtcNow);
+                observed.LocalObject, isDirectory, observed.OwnerSid, DateTimeOffset.UtcNow)
+            { FirstParentPositionOperationId = location.CurrentPositionOperationId };
             actor.AssertAccess();
             result = await MirrorPulseNamespaceMemberRegistrar.RegisterAsync(catalog, member, item, parent, router, actor, durable).ConfigureAwait(false);
         }).ConfigureAwait(false);

@@ -150,6 +150,14 @@ reference. Version 1 payloads omit the optional field and remain unchanged. This
 catalog capability requires separate native creation and directory-move
 integration; it grants no filesystem authority or content acceptance.
 
+Controlled creation carries that retained parent-position reference into its
+first membership. Native registration inspects an already registered parent's
+current proved location while preserving its immutable first membership. Current
+protection readers retain a confirmed accepted public identity separately from
+the first birth or original identity. Fresh parent inspection checks that current
+identity through CfSharp's public identity decoder; it does not rewrite provenance.
+Native directory relocation and installed Host activation remain separate gates.
+
 The native component probe checks competing writes and hardlinks inside the
 scope, real descriptor application, cancellation and callback failure, and
 official-store reopen. It also checks cold-file metadata without hydration and

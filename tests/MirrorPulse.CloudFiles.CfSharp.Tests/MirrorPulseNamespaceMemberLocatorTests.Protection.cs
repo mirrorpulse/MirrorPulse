@@ -41,9 +41,33 @@ public sealed partial class MirrorPulseNamespaceMemberLocatorTests
         Assert.AreEqual(fixture.Member, await fixture.Catalog.ReadNamespaceMemberAsync(fixture.Member.MemberId));
         var historical = born ? await MirrorPulseNamespaceProtectionProofReader.ReadBirthAsync(fixture.Catalog, fixture.Member.OriginId, CancellationToken.None) :
             await MirrorPulseNamespaceProtectionProofReader.ReadOriginalAsync(fixture.Catalog, fixture.Member.OriginId, CancellationToken.None);
-        Assert.AreEqual(original, historical);
+        Assert.AreEqual(original with { CurrentIdentity = null }, historical);
+        Assert.IsNull(historical.CurrentIdentity);
+        Assert.AreEqual(await fixture.Catalog.ReadNamespaceMemberIdentityAsync(fixture.Member.MemberId), current.CurrentIdentity);
         await Assert.ThrowsExactlyAsync<InvalidDataException>(() => MirrorPulseNamespaceProtectionProofReader.ReadMemberAsync(fixture.Catalog,
             fixture.Member with { RelativePath = move.Target.RelativePath }, CancellationToken.None));
+        Assert.IsFalse(Directory.Exists(fixture.Paths.SyncRootPath));
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task CurrentProtectionRetainsAcceptedIdentitySeparatelyFromFirstProvenanceAcrossOwners(bool born)
+    {
+        await using var fixture = await Fixture.OpenAsync(born);
+        var original = await MirrorPulseNamespaceProtectionProofReader.ReadMemberAsync(fixture.Catalog, fixture.Member, CancellationToken.None);
+        var birth = born ? await fixture.Catalog.ReadNamespaceBirthAsync(fixture.Member.OriginId) : null;
+        var accepted = await RetainAcceptedIdentityAsync(fixture);
+        await fixture.RestartAsync();
+        var current = await MirrorPulseNamespaceProtectionProofReader.ReadMemberAsync(fixture.Catalog, fixture.Member, CancellationToken.None);
+        var identity = await fixture.Catalog.ReadNamespaceMemberIdentityAsync(fixture.Member.MemberId);
+        Assert.AreEqual(original with { CurrentIdentity = identity }, current);
+        Assert.AreEqual(accepted.AcceptedItemId, current.CurrentIdentity!.ItemId);
+        Assert.AreEqual(accepted.RemoteId, current.CurrentIdentity.RemoteId);
+        Assert.AreEqual(original.CurrentIdentity!.OriginalItemId, current.CurrentIdentity.OriginalItemId);
+        Assert.AreEqual(original.CurrentIdentity.OriginalRemoteId, current.CurrentIdentity.OriginalRemoteId);
+        Assert.AreEqual(fixture.Member, await fixture.Catalog.ReadNamespaceMemberAsync(fixture.Member.MemberId));
+        if (born) Assert.AreEqual(birth, await fixture.Catalog.ReadNamespaceBirthAsync(fixture.Member.OriginId));
         Assert.IsFalse(Directory.Exists(fixture.Paths.SyncRootPath));
     }
 }

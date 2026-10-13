@@ -113,7 +113,7 @@ public static partial class MirrorPulseNamespaceBirthProtectionVerifier
             throw new InvalidDataException("The actual registered object lost its binding, owner, current path or type.");
     }
 
-    private static void RequireRegisteredPublicIdentity(CloudItemSnapshot snapshot,
+    internal static void RequireRegisteredPublicIdentity(CloudItemSnapshot snapshot,
         MirrorPulseNamespaceMemberIdentity identity, bool requirePlaceholder)
     {
         if (requirePlaceholder && (!snapshot.IsPlaceholder || snapshot.PlaceholderIdentity.IsEmpty || identity.ItemId is null || identity.RemoteId is null))

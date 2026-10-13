@@ -34,7 +34,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         var source = new ProtectedPermissionNoSourceProvider();
         var originals = new List<MirrorPulseNamespacePermissionPreparation>();
         var originalMembers = new Dictionary<Guid, MirrorPulseNamespaceMemberRegistration>();
-        MirrorPulseNamespaceMemberRegistration childMember = null!, targetMember = null!;
+        MirrorPulseNamespaceMemberRegistration childMember = null!, targetMember = null!, laterMember = null!;
         MirrorPulseNamespaceBirthIntent firstBirth = null!;
         MirrorPulseNamespaceBirthObservation firstObservation = null!;
         MirrorPulseNamespaceBirthProtection finalEpoch = null!;
@@ -96,6 +96,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                             _ = await MirrorPulseNamespaceBirthProtectionVerifier.RecordRegisteredAsync(catalog, Guid.NewGuid(), parent.MemberId,
                                 fileSystem.GetDirectory(parent.RelativePath), fileSystem.GetDirectory("Docs"), router, actor, deadline.Token);
                     }, deadline.Token);
+                    var currentCreation = new MirrorPulseNamespaceCreationCoordinator(fileSystem, state, catalog, router, currentRole, actor);
+                    laterMember = await currentCreation.CreateAsync(Guid.NewGuid(), targetMember.MemberId, "after-rotation.bin", false, deadline.Token);
                 }
                 var actual = await catalog.ReadNamespaceMemberLocationAsync(childMember.MemberId, deadline.Token);
                 Assert.AreEqual(targetMember.MemberId, actual.ParentMemberId);
@@ -154,12 +156,16 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 Assert.AreEqual(firstBirth, await catalog.ReadNamespaceBirthAsync(childMember.OriginId, deadline.Token));
                 Assert.AreEqual(firstObservation, await catalog.ReadNamespaceBirthObservationAsync(childMember.OriginId, deadline.Token));
                 Assert.AreEqual(childMember, await catalog.ReadNamespaceMemberAsync(childMember.MemberId, deadline.Token));
+                Assert.AreEqual(laterMember, await catalog.ReadNamespaceMemberAsync(laterMember.MemberId, deadline.Token));
+                Assert.AreEqual(laterMember, await catalog.ReadNamespaceMemberChildAsync(targetMember.MemberId, "after-rotation.bin", deadline.Token));
+                Assert.AreEqual(currentRole.RoleSid.Value,
+                    (await catalog.ReadNamespaceMemberProtectionEpochAsync(laterMember.MemberId, deadline.Token)).RoleSid);
                 Assert.AreEqual(finalEpoch.ProtectionId, (await catalog.ReadNamespaceMemberProtectionEpochAsync(childMember.MemberId, deadline.Token)).ProtectionId);
                 Assert.AreEqual(0L, new FileInfo(child.FullPath).Length);
                 await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() => File.Delete(child.FullPath), deadline.Token));
             }
             Assert.AreEqual(0, source.Reads);
-            TestContext.WriteLine("RegisteredBornProtection: currentParent=True; rotatedRole=True; publicIdentity=True; nativeBindingAndDescriptor=True; wrongParentAndDescriptorRejected=True; actorAndRoleRequired=True; firstBirthAndMembershipUnchanged=True; immutableReplay=True; twoOwners=True; noSourceAccess=True; hostIntegrated=False.");
+            TestContext.WriteLine("RegisteredBornProtection: currentParent=True; rotatedRole=True; subsequentCreationUnderLocatedEpoch=True; publicIdentity=True; nativeBindingAndDescriptor=True; wrongParentAndDescriptorRejected=True; actorAndRoleRequired=True; firstBirthAndMembershipUnchanged=True; immutableReplay=True; twoOwners=True; noSourceAccess=True; hostIntegrated=False.");
         }
         catch (Exception error) { TestContext.WriteLine("RegisteredBornProtectionFailure: " + error); throw; }
         finally
