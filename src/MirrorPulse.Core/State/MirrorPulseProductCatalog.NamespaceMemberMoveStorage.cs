@@ -186,6 +186,17 @@ public sealed partial class MirrorPulseProductCatalog
                 payload BLOB NOT NULL,
                 fingerprint BLOB NOT NULL CHECK(length(fingerprint)=32)
             );
+            CREATE TABLE IF NOT EXISTS namespace_member_positions (
+                member_id TEXT NOT NULL REFERENCES namespace_members(member_id),
+                operation_id TEXT NOT NULL REFERENCES namespace_member_move_completions(operation_id),
+                previous_operation_id TEXT NULL,
+                payload BLOB NOT NULL,
+                fingerprint BLOB NOT NULL CHECK(length(fingerprint)=32),
+                PRIMARY KEY(member_id,operation_id)
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_namespace_position_previous
+                ON namespace_member_positions(member_id,previous_operation_id)
+                WHERE previous_operation_id IS NOT NULL;
             """;
         await schema.ExecuteNonQueryAsync(token).ConfigureAwait(false);
         transaction.Commit();

@@ -5,7 +5,13 @@ namespace MirrorPulse.Core.State;
 /// <summary>The product's committed namespace position, not a fresh native observation.</summary>
 /// <remarks>Original membership and ACL provenance remain immutable. Pending native movement does not advance this position.</remarks>
 public sealed record MirrorPulseNamespaceMemberLocation(Guid MemberId, Guid? ParentMemberId, string RelativePath,
-    Guid? CompletedMoveOperationId);
+    Guid? CompletedMoveOperationId)
+{
+    /// <summary>The completed operation that last changed this position, including an ancestor move.</summary>
+    public Guid? PositionOperationId { get; init; }
+
+    public Guid? CurrentPositionOperationId => PositionOperationId ?? CompletedMoveOperationId;
+}
 
 public sealed partial class MirrorPulseProductCatalog
 {
@@ -31,6 +37,18 @@ public sealed partial class MirrorPulseProductCatalog
     }
 
     private async Task<MirrorPulseNamespaceMemberLocation> ReadNamespaceMemberLocationCoreAsync(
+        MirrorPulseNamespaceMemberRegistration member, SqliteTransaction transaction, CancellationToken token)
+    {
+        var direct = await ReadNamespaceMemberDirectMoveLocationCoreAsync(member, transaction, token).ConfigureAwait(false);
+        var position = await ReadLatestNamespaceMemberPositionCoreAsync(member, transaction, token).ConfigureAwait(false);
+        if (position is null) return direct;
+        if (position.CompletedMoveOperationId != direct.CompletedMoveOperationId)
+            throw new InvalidDataException("The current position has lost the member's completed direct relocation head.");
+        return new(member.MemberId, position.ParentMemberId, position.RelativePath, position.CompletedMoveOperationId)
+        { PositionOperationId = position.OperationId == position.CompletedMoveOperationId ? null : position.OperationId };
+    }
+
+    private async Task<MirrorPulseNamespaceMemberLocation> ReadNamespaceMemberDirectMoveLocationCoreAsync(
         MirrorPulseNamespaceMemberRegistration member, SqliteTransaction transaction, CancellationToken token)
     {
         Guid? head = null;

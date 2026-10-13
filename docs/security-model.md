@@ -607,6 +607,13 @@ Reading historical facts cannot refresh those epochs or reconstruct a missing
 legacy snapshot. This admission does not move a directory or settle descendant
 positions; execution still rejects directory moves until subtree settlement is
 implemented and verified.
+New file move completions retain a separate immutable member position fact in
+the same transaction as name handover and fence release. Reads verify one
+continuous predecessor chain and the exact completed native/public move facts;
+a damaged position does not fall back to a guessed path. Legacy completions
+retain their original bytes. The first later move can explicitly anchor to the
+old completion without fabricating earlier position records. These facts retain
+current placement separately from original membership and direct move history.
 Directory movement, replacement saves, import and full installed Host tree
 readiness remain pending. Metadata handles and catalog membership alone do not
 establish tree readiness or remote acceptance.

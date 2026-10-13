@@ -42,6 +42,9 @@ public sealed partial class MirrorPulseProductCatalog
             if (completion.IsDirectory)
                 throw new InvalidOperationException("A single-item receipt cannot settle a directory move or release its subtree fence.");
             await ValidateNamespaceMemberMoveCompletionReferencesAsync(completion, transaction, cancellationToken).ConfigureAwait(false);
+            var member = await ReadNamespaceMemberCoreAsync(intent.MemberId, transaction, cancellationToken).ConfigureAwait(false)
+                ?? throw new InvalidDataException("The move member disappeared before position settlement.");
+            var previousPosition = await PrepareNamespaceMemberPositionSuccessorAsync(member, transaction, cancellationToken).ConfigureAwait(false);
             await using (SqliteCommand current = _connection.CreateCommand())
             {
                 current.Transaction = transaction;
@@ -84,6 +87,9 @@ public sealed partial class MirrorPulseProductCatalog
                 insert.Parameters.AddWithValue("$fingerprint", SHA256.HashData(payload));
                 await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
+            await InsertNamespaceMemberPositionCoreAsync(new(1, intent.OperationId, intent.MemberId,
+                previousPosition.OperationId, intent.Target.ParentMemberId, intent.Target.RelativePath,
+                intent.OperationId, completion.VerifiedAt, previousPosition.LegacyAnchor), transaction, cancellationToken).ConfigureAwait(false);
             transaction.Commit();
             return completion;
         }
