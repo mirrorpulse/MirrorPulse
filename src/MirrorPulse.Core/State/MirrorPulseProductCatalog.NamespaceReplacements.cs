@@ -43,26 +43,9 @@ public sealed partial class MirrorPulseProductCatalog
                 if (!SameNamespaceReplacementPayload(retained, intent)) throw new InvalidOperationException("The original replacement admission is immutable.");
                 transaction.Commit(); return retained;
             }
-            await using (var ownership = _connection.CreateCommand())
-            {
-                ownership.Transaction = transaction;
-                ownership.CommandText = """
-                    SELECT 1 FROM namespace_birth_intents WHERE operation_id=$id
-                    UNION ALL SELECT 1 FROM namespace_member_moves WHERE operation_id=$id
-                    UNION ALL SELECT 1 FROM namespace_member_retirements WHERE operation_id=$id
-                    UNION ALL SELECT 1 FROM namespace_member_retirement_batches WHERE operation_id=$id
-                    UNION ALL SELECT 1 FROM namespace_permission_changes WHERE operation_id=$id
-                    UNION ALL SELECT 1 FROM managed_root_rename_history WHERE operation_id=$id
-                    UNION ALL SELECT 1 FROM mutation_intents WHERE operation_id=$id
-                    UNION ALL SELECT 1 FROM worker_requests WHERE operation_id=$id
-                    UNION ALL SELECT 1 FROM journal_coalescing_plans WHERE plan_id=$id
-                    UNION ALL SELECT 1 FROM journal_coalescing_members WHERE operation_id=$id
-                    UNION ALL SELECT 1 FROM journal_coalescing_steps WHERE operation_id=$id LIMIT 1;
-                    """;
-                ownership.Parameters.AddWithValue("$id", intent.OperationId.ToString("D"));
-                if (intent.OperationId == intent.MemberId || await ownership.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null)
-                    throw new InvalidOperationException("Replacement cannot reuse another operation's ownership or private input key.");
-            }
+            if (intent.OperationId == intent.MemberId)
+                throw new InvalidOperationException("Replacement cannot reuse a member's identity.");
+            await RequireReplacementIdAvailableCoreAsync(intent.OperationId, transaction, cancellationToken).ConfigureAwait(false);
             await RequireNamespaceMoveRootUnfencedAsync(intent.RootId, null, transaction, cancellationToken).ConfigureAwait(false);
             var births = new HashSet<RootId>();
             await AddUnregisteredBirthRootFencesAsync(births, transaction, cancellationToken).ConfigureAwait(false);
@@ -176,6 +159,29 @@ public sealed partial class MirrorPulseProductCatalog
     private static bool SameNamespaceReplacementPayload<T>(T left, T right) => NamespaceReplacementPayload(left).AsSpan().SequenceEqual(NamespaceReplacementPayload(right));
     private static void RequireNamespaceReplacementId(Guid id)
     { if (id == Guid.Empty) throw new ArgumentException("A stable replacement operation ID is required."); }
+
+    private async Task RequireReplacementIdAvailableCoreAsync(Guid id, SqliteTransaction transaction, CancellationToken token)
+    {
+        await using var ownership = _connection.CreateCommand(); ownership.Transaction = transaction;
+        ownership.CommandText = """
+            SELECT 1 FROM namespace_birth_intents WHERE operation_id=$id
+            UNION ALL SELECT 1 FROM namespace_member_moves WHERE operation_id=$id
+            UNION ALL SELECT 1 FROM namespace_member_retirements WHERE operation_id=$id
+            UNION ALL SELECT 1 FROM namespace_member_retirement_batches WHERE operation_id=$id
+            UNION ALL SELECT 1 FROM namespace_permission_changes WHERE operation_id=$id
+            UNION ALL SELECT 1 FROM managed_root_rename_history WHERE operation_id=$id
+            UNION ALL SELECT 1 FROM mutation_intents WHERE operation_id=$id
+            UNION ALL SELECT 1 FROM worker_requests WHERE operation_id=$id
+            UNION ALL SELECT 1 FROM journal_coalescing_plans WHERE plan_id=$id
+            UNION ALL SELECT 1 FROM journal_coalescing_members WHERE operation_id=$id
+            UNION ALL SELECT 1 FROM journal_coalescing_steps WHERE operation_id=$id
+            UNION ALL SELECT 1 FROM namespace_replacements WHERE operation_id=$id
+            UNION ALL SELECT 1 FROM namespace_replacement_restorations WHERE restoration_id=$id LIMIT 1;
+            """;
+        ownership.Parameters.AddWithValue("$id", id.ToString("D"));
+        if (await ownership.ExecuteScalarAsync(token).ConfigureAwait(false) is not null)
+            throw new InvalidOperationException("Replacement cannot reuse another operation's ownership or private input key.");
+    }
 
     private static void ValidateNamespaceReplacement(MirrorPulseNamespaceReplacementIntent intent)
     {

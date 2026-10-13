@@ -23,6 +23,8 @@ public sealed record MirrorPulseNamespaceReplacementExecution(MirrorPulseNamespa
     MirrorPulseNamespaceReplacementWriteStart? WriteStart)
 {
     public MirrorPulseNamespaceReplacementContentCompletion? ContentCompletion { get; init; }
+    public MirrorPulseNamespaceReplacementRestoration? Restoration { get; init; }
+    public MirrorPulseNamespaceReplacementRestorationResult? RestorationResult { get; init; }
 }
 
 public sealed partial class MirrorPulseProductCatalog
@@ -138,7 +140,9 @@ public sealed partial class MirrorPulseProductCatalog
         }
         catch (Exception error) when (error is InvalidOperationException or ArgumentException)
         { throw new InvalidDataException("The original replacement execution chain is inconsistent.", error); }
-        return new(intent, start, cancellation, action, backup, write) { ContentCompletion = completion };
+        var execution = new MirrorPulseNamespaceReplacementExecution(intent, start, cancellation, action, backup, write) { ContentCompletion = completion };
+        var restoration = await ReadReplacementRestorationHeadCoreAsync(execution, transaction, token).ConfigureAwait(false);
+        return execution with { Restoration = restoration.Attempt, RestorationResult = restoration.Result };
     }
 
     private async Task<T?> ReadNamespaceReplacementFactCoreAsync<T>(Guid id, int kind, Action<T> validate,
