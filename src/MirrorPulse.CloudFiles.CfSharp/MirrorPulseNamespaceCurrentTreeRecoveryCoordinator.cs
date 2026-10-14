@@ -19,6 +19,8 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
     {
         if (operationId == Guid.Empty) throw new ArgumentException("An initialization operation ID is required.", nameof(operationId));
         var retained = await catalog.ReadNamespaceInitializationAsync(operationId, cancellationToken).ConfigureAwait(false);
+        if (retained?.RequestedInventoryKind is { } requested && requested != MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory)
+            throw new InvalidOperationException("The pending initializer requires original-inventory recovery.");
         if (await catalog.ReadNamespaceInitializationCompletionAsync(operationId, cancellationToken).ConfigureAwait(false) is { } historical)
         {
             if (historical.InventoryKind != MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory)
@@ -30,7 +32,8 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
         if (retained is null)
         {
             var roots = await MirrorPulseNamespaceInitializationCoordinator.SelectOriginalRootsAsync(catalog, registrations, true, cancellationToken).ConfigureAwait(false);
-            retained = await catalog.PrepareNamespaceInitializationAsync(new(1, operationId, roots, DateTimeOffset.UtcNow), cancellationToken).ConfigureAwait(false);
+            retained = await catalog.PrepareNamespaceInitializationAsync(new(1, operationId, roots, DateTimeOffset.UtcNow)
+            { RequestedInventoryKind = MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory }, cancellationToken).ConfigureAwait(false);
         }
         if (!retained.Roots.Select(root => root.RootId).ToHashSet().SetEquals(registrations.Select(root => root.RootId)))
             throw new InvalidDataException("The current initialization root layout changed after admission.");

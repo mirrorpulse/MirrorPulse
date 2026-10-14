@@ -23,6 +23,8 @@ public sealed partial class MirrorPulseProductCatalog
             ThrowIfDisposed(); using SqliteTransaction transaction = _connection.BeginTransaction();
             var intent = await ReadNamespaceInitializationCoreAsync(operationId, transaction, cancellationToken).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The original initialization admission is missing.");
+            if (intent.RequestedInventoryKind is { } requested && requested != MirrorPulseNamespaceInitializationInventoryKind.OriginalInventory)
+                throw new InvalidOperationException("The pending initializer requires current-inventory recovery.");
             var completed = await ReadNamespaceInitializationCompletionCoreAsync(operationId, transaction, cancellationToken).ConfigureAwait(false);
             if (completed is not null)
             {

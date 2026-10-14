@@ -147,6 +147,14 @@ These application work leases do not replace CfSharp's complete native callback
 and official projection lifetime; automatic strict startup must drain that
 library lifecycle before permission recovery changes the live tree.
 
+New initialization admissions retain their requested original or current
+inventory route before native work. Pending discovery verifies ownership indexes
+and excludes historical completions, allowing startup to retain the original
+operation ID. A caller cannot change that route or complete it through the other
+inventory path. Schema 53 preserves older admission payloads and leaves their
+missing route unclassified; migration does not guess a route from current paths
+or treat a historical completion as live Host admission.
+
 Startup rebuilds missing remote conflict projections from CfSharp's decoded
 conflict queries. A mutation with a confirmed remote result and an absent
 official journal operation repairs its product projection before marking the

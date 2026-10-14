@@ -11,7 +11,12 @@ public sealed record MirrorPulseNamespaceInitializationRoot(RootId RootId, Guid 
 
 /// <summary>Immutable initialization admission; this is neither permission evidence nor tree readiness.</summary>
 public sealed record MirrorPulseNamespaceInitializationIntent(int Version, Guid OperationId,
-    IReadOnlyList<MirrorPulseNamespaceInitializationRoot> Roots, DateTimeOffset PreparedAt);
+    IReadOnlyList<MirrorPulseNamespaceInitializationRoot> Roots, DateTimeOffset PreparedAt)
+{
+    /// <summary>The chosen recovery route; absent legacy values remain unclassified.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public MirrorPulseNamespaceInitializationInventoryKind? RequestedInventoryKind { get; init; }
+}
 
 public enum MirrorPulseNamespaceInitializationInventoryKind { OriginalInventory, CurrentInventory }
 
@@ -180,7 +185,8 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task RequireNamespaceInitializationTerminalAsync(MirrorPulseNamespaceInitializationIntent intent,
         MirrorPulseNamespaceInitializationCompletion completion, SqliteTransaction transaction, CancellationToken token)
     {
-        if (completion.CompletedAt < intent.PreparedAt) throw new InvalidDataException("Initialization completion predates admission.");
+        if (completion.CompletedAt < intent.PreparedAt || intent.RequestedInventoryKind is { } requested && requested != completion.InventoryKind)
+            throw new InvalidDataException("Initialization completion disagrees with its admission chronology or requested inventory kind.");
         await using SqliteCommand query = _connection.CreateCommand(); query.Transaction = transaction;
         query.CommandText = "SELECT COUNT(*) FROM namespace_initialization_roots WHERE operation_id=$id;";
         query.Parameters.AddWithValue("$id", intent.OperationId.ToString("D"));
@@ -189,12 +195,14 @@ public sealed partial class MirrorPulseProductCatalog
     }
 
     private static bool SameNamespaceInitialization(MirrorPulseNamespaceInitializationIntent left, MirrorPulseNamespaceInitializationIntent right) =>
-        left.Version == right.Version && left.OperationId == right.OperationId && left.PreparedAt == right.PreparedAt && left.Roots.SequenceEqual(right.Roots);
+        left.Version == right.Version && left.OperationId == right.OperationId && left.PreparedAt == right.PreparedAt &&
+        left.RequestedInventoryKind == right.RequestedInventoryKind && left.Roots.SequenceEqual(right.Roots);
 
     private static void ValidateNamespaceInitialization(MirrorPulseNamespaceInitializationIntent intent)
     {
         ArgumentNullException.ThrowIfNull(intent);
         if (intent.Version != 1 || intent.OperationId == Guid.Empty || intent.PreparedAt == default || intent.Roots is null ||
+            intent.RequestedInventoryKind is { } requested && !Enum.IsDefined(requested) ||
             intent.Roots.Count is < 1 or > 4096 || intent.Roots.Any(root => root is null || root.RootId.Value == Guid.Empty || root.ManifestId == Guid.Empty) ||
             intent.Roots.Select(root => root.RootId).Distinct().Count() != intent.Roots.Count ||
             intent.Roots.Select(root => root.ManifestId).Distinct().Count() != intent.Roots.Count)

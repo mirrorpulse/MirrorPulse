@@ -306,7 +306,8 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             try
             {
                 ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
-                await using var admission = await BeginInitializationWorkRecoveryAsync(operationId, cancellationToken).ConfigureAwait(false);
+                await using var admission = await BeginInitializationWorkRecoveryAsync(operationId,
+                    MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory, cancellationToken).ConfigureAwait(false);
                 var result = await new MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(fileSystem, catalog!, router!, _namespaceExecution!,
                     _namespaceActor!, _scheduler, _permissions!).RecoverAsync(operationId, cancellationToken).ConfigureAwait(false);
                 if (!result.IsHistoricalReplay)
@@ -330,7 +331,8 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             try
             {
                 ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
-                await using var admission = await BeginInitializationWorkRecoveryAsync(operationId, cancellationToken).ConfigureAwait(false);
+                await using var admission = await BeginInitializationWorkRecoveryAsync(operationId,
+                    MirrorPulseNamespaceInitializationInventoryKind.OriginalInventory, cancellationToken).ConfigureAwait(false);
                 var result = await new MirrorPulseNamespaceInitializationCoordinator(fileSystem, catalog!, router!, _namespaceExecution!,
                     _namespaceActor!, _scheduler, _permissions!).InitializeAsync(operationId, cancellationToken).ConfigureAwait(false);
                 if (!result.IsHistoricalReplay)
@@ -345,8 +347,11 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         }
 
         private async ValueTask<MirrorPulseNamespaceWorkAdmission.RecoveryLease?> BeginInitializationWorkRecoveryAsync(Guid operationId,
-            CancellationToken token)
+            MirrorPulseNamespaceInitializationInventoryKind inventoryKind, CancellationToken token)
         {
+            var retained = await catalog!.ReadNamespaceInitializationAsync(operationId, token).ConfigureAwait(false);
+            if (retained?.RequestedInventoryKind is { } requested && requested != inventoryKind)
+                throw new InvalidOperationException("The retained initialization requires its originally selected recovery route.");
             if (namespaceWork is null || await catalog!.ReadNamespaceInitializationCompletionAsync(operationId, token).ConfigureAwait(false) is not null)
                 return null;
             return await namespaceWork.BeginRecoveryAsync(router!.Registrations.Select(root => root.RootId), token).ConfigureAwait(false);

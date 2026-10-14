@@ -113,6 +113,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     Assert.AreEqual(completion, await runtime.RecoverNamespaceCurrentTreeAsync(operation, timeout.Token));
                     Assert.AreEqual(bornBytes + " after completion", await File.ReadAllTextAsync(bornPath, timeout.Token));
                     await Assert.ThrowsExactlyAsync<InvalidOperationException>(async () => await runtime.InitializeNamespaceProtectionAsync(operation, timeout.Token));
+                    Assert.IsTrue(admission.IsAdmitted(registration.RootId));
                     Assert.AreEqual(bornBytes + " after completion", await File.ReadAllTextAsync(bornPath, timeout.Token));
                     await Assert.ThrowsAsync<IOException>(() => Task.Run(() => Directory.Move(paths.SyncRootPath, paths.SyncRootPath + ".moved"), timeout.Token));
                     await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() => File.Delete(movedPath), timeout.Token));

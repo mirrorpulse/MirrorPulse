@@ -646,7 +646,8 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
     private static MirrorPulseControlNamespaceInitialization ToControlInitialization(MirrorPulseNamespaceInitializationStatus status) =>
         new(status.Intent.OperationId, status.Completion is null ? "Pending" : "Completed",
             status.Intent.Roots.Select(root => root.RootId.Value).ToArray(), status.Completion?.MemberCount,
-            status.Intent.PreparedAt, status.Completion?.CompletedAt, InventoryKind: status.Completion?.InventoryKind.ToString());
+            status.Intent.PreparedAt, status.Completion?.CompletedAt,
+            InventoryKind: (status.Completion?.InventoryKind ?? status.Intent.RequestedInventoryKind)?.ToString());
 
     private async ValueTask<MirrorPulseControlNamespaceReplacementCompletion> ExecuteNamespaceReplacementAsync(
         NamespaceMemberReplaceArguments arguments, CancellationToken cancellationToken)

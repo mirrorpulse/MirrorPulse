@@ -304,7 +304,7 @@ public sealed partial class MirrorPulseNamespacePermissionTreeCatalogTests
         await connection.OpenAsync();
         await using var command = connection.CreateCommand();
         command.CommandText = "PRAGMA user_version;";
-        Assert.AreEqual(52L, await command.ExecuteScalarAsync());
+        Assert.AreEqual(53L, await command.ExecuteScalarAsync());
     }
 
     [TestMethod]

@@ -82,6 +82,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 if (owner == 0)
                 {
                     firstMembers = members.ToArray(); firstCompletion = completion;
+                    await Assert.ThrowsExactlyAsync<InvalidOperationException>(async () => await runtime.RecoverNamespaceCurrentTreeAsync(operation, timeout.Token));
+                    Assert.IsTrue(admission.IsAdmitted(registration.RootId));
                     await File.WriteAllTextAsync(note, latest, timeout.Token);
                     using var acceptedWork = admission.Enter([registration.RootId]);
                     var recovering = runtime.RecoverNamespaceCurrentTreeAsync(Guid.NewGuid(), timeout.Token).AsTask();

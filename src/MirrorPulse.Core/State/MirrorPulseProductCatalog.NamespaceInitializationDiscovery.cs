@@ -4,6 +4,41 @@ namespace MirrorPulse.Core.State;
 
 public sealed partial class MirrorPulseProductCatalog
 {
+    /// <summary>Reads all bounded pending initializers and their retained route without adopting historical readiness.</summary>
+    /// <remarks>Legacy admissions remain unclassified. All initialization indexes are verified before discovery.</remarks>
+    public async Task<IReadOnlyList<MirrorPulseNamespaceInitializationStatus>> ReadPendingNamespaceInitializationsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed(); using var transaction = _connection.BeginTransaction(deferred: true);
+            await AddNamespaceInitializationRootFencesAsync([], transaction, cancellationToken).ConfigureAwait(false);
+            var operations = new List<Guid>();
+            await using (var query = _connection.CreateCommand())
+            {
+                query.Transaction = transaction;
+                query.CommandText = """
+                    SELECT i.operation_id FROM namespace_initialization_intents i
+                    WHERE NOT EXISTS(SELECT 1 FROM namespace_initialization_completions c WHERE c.operation_id=i.operation_id)
+                    ORDER BY i.operation_id COLLATE BINARY LIMIT 4097;
+                    """;
+                await using var reader = await query.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+                while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false)) operations.Add(ParseNamespaceMemberId(reader.GetString(0)));
+            }
+            if (operations.Count > 4096) throw new InvalidDataException("The pending initialization inventory exceeds its root ownership bound.");
+            var result = new List<MirrorPulseNamespaceInitializationStatus>(operations.Count);
+            foreach (Guid operation in operations)
+            {
+                var status = await ReadNamespaceInitializationStatusCoreAsync(operation, transaction, cancellationToken).ConfigureAwait(false);
+                if (status.Completion is not null) throw new InvalidDataException("A completed operation appeared in pending initialization discovery.");
+                result.Add(status);
+            }
+            transaction.Commit(); return result.AsReadOnly();
+        }
+        finally { _gate.Release(); }
+    }
+
     /// <summary>Finds retained initialization attempts without requiring a caller to know their operation IDs.</summary>
     /// <remarks>Pages include historical completions. They do not authorize current native operations.</remarks>
     public async Task<IReadOnlyList<MirrorPulseNamespaceInitializationStatus>> ReadNamespaceInitializationsAsync(
