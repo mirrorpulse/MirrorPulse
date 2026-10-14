@@ -29,18 +29,19 @@ public sealed class MirrorPulseNamespaceRemoteCreationCoordinator(CloudFileSyste
             throw new ArgumentException("Remote creation requires a file or directory specification.", nameof(specification));
         var parentMember = await catalog.ReadNamespaceMemberAsync(parentMemberId, token).ConfigureAwait(false)
             ?? throw new FileNotFoundException("The source population parent is not registered.");
-        if (!parentMember.IsDirectory || parentMember.RootId is null)
-            throw new InvalidOperationException("Source population requires a registered directory below an Adapter root.");
+        if (!parentMember.IsDirectory || parentMember.RootId is null && parentMember.ParentMemberId is not null)
+            throw new InvalidOperationException("Source population requires a registered managed directory or the sync-root anchor.");
         var location = await catalog.ReadNamespaceMemberLocationAsync(parentMemberId, token).ConfigureAwait(false);
         var parent = fileSystem.GetDirectory(location.RelativePath);
         CloudItem item = directory ? parent.GetDirectory(specification.Name) : parent.GetFile(specification.Name);
         string path = item.RelativePath.Replace('\\', '/');
         var route = router.Resolve(path, specification.Identity.Encode());
-        if (router.GetRegistration(route.InstanceId, route.RootKey).RootId != parentMember.RootId)
+        var rootId = router.GetRegistration(route.InstanceId, route.RootKey).RootId;
+        if (parentMember.RootId is { } parentRoot ? rootId != parentRoot : !directory || route.RelativePath.Length != 0)
             throw new InvalidDataException("The source identity belongs to another managed root.");
         var retained = await catalog.ReadNamespaceBirthAsync(operationId, token).ConfigureAwait(false);
         var plan = await catalog.ReadNamespaceBirthPlanAsync(operationId, token).ConfigureAwait(false);
-        if (retained is not null && (retained.Origin != MirrorPulseNamespaceBirthOrigin.RemotePopulation || retained.RootId != parentMember.RootId ||
+        if (retained is not null && (retained.Origin != MirrorPulseNamespaceBirthOrigin.RemotePopulation || retained.RootId != rootId ||
             retained.RelativePath != path || retained.IsDirectory != directory || retained.ParentLocalObject != parentMember.LocalObject) ||
             plan is not null && (plan.ItemId != specification.Identity.ItemId || plan.RemoteId != specification.Identity.RemoteId ||
                 plan.RemoteRevision != specification.Identity.RemoteRevision || plan.Content is not null))
@@ -55,7 +56,7 @@ public sealed class MirrorPulseNamespaceRemoteCreationCoordinator(CloudFileSyste
         var proof = await MirrorPulseNamespaceProtectionProofReader.ReadMemberAsync(catalog, parentMember, token).ConfigureAwait(false);
         if (proof.RoleSid != execution.RoleSid.Value || proof.OwnerSid != execution.OwnerSid.Value || proof.RelativePath != location.RelativePath)
             throw new InvalidOperationException("Source publication requires current-role parent protection at its committed position.");
-        if ((await catalog.ReadNamespaceRecoveryRootsAsync(token).ConfigureAwait(false)).Contains(parentMember.RootId.Value))
+        if ((await catalog.ReadNamespaceRecoveryRootsAsync(token).ConfigureAwait(false)).Contains(rootId))
             throw new InvalidOperationException("The source publication root has unresolved namespace recovery.");
         MirrorPulseNamespaceMemberRegistration result = null!;
         await execution.RunNamespaceOperationAsync(async () =>
@@ -75,7 +76,7 @@ public sealed class MirrorPulseNamespaceRemoteCreationCoordinator(CloudFileSyste
                 }
             }
             var birth = retained ?? new MirrorPulseNamespaceBirthIntent(proof.BornParent is null ? 1 : 2, operationId,
-                parentMember.RootId.Value, proof.BornParent is null ? parentMember.OriginId : Guid.Empty, proof.PermissionOperationId,
+                rootId, proof.BornParent is null ? parentMember.OriginId : Guid.Empty, proof.PermissionOperationId,
                 parentMember.LocalObject, path, directory, MirrorPulseNamespaceBirthOrigin.RemotePopulation, execution.RoleSid.Value, DateTimeOffset.UtcNow)
             { BornParent = proof.BornParent };
             var before = await MirrorPulseNamespaceBirthProtectionVerifier.InspectRetainedParentAsync(birth, parent, proof, guard, token).ConfigureAwait(false);

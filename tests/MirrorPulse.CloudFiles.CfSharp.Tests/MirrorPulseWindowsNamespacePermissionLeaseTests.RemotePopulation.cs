@@ -81,7 +81,25 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             Assert.AreEqual(published, replay); Assert.AreEqual(observed, await catalog.ReadNamespaceBirthObservationAsync(operation, timeout.Token));
             Assert.AreEqual(1, provider.Creations); Assert.AreEqual(1, worker.Calls.Count(call => call == "directory"));
             Assert.AreEqual(0, worker.Calls.Count(call => call == "range-open"));
-            TestContext.WriteLine("RegisteredSourcePopulation: normalExternalEnumeration=True; sourceNormalUser=True; productionRemoteBirthCoordinator=True; beforeNativeIntentPlanStart=True; maturePublicCreationAndSqlite=True; actualFirstBinding=True; inheritedProtectionVerified=True; membershipBeforePageReturn=True; reservationReleasedWithMembership=True; replayPreservesFirstObservation=True; noFakeOriginal=True; hydration=False; defaultHostStartup=False.");
+            var addedRoot = AdapterRootRegistrationMapper.Map(registration.AdapterId, registration.InstanceId,
+                new AdapterRootDefinition("more", "More", "More", false), RootRegistrationState.Active, identityScope: RootIdentityScope.InstanceRoot);
+            router.ReplaceRegistrations([registration, addedRoot]);
+            var rootSpec = router.CreateRootPage().Children.Single(spec => spec.Name == "More");
+            var bornRoot = await creator.CreateAsync(Guid.NewGuid(), initialized.Completion.AnchorMemberId, rootSpec, timeout.Token);
+            Assert.AreEqual(addedRoot.RootId, bornRoot.RootId); Assert.AreEqual(MirrorPulseNamespaceMemberOrigin.ProtectedBirth, bornRoot.Origin);
+            Assert.AreEqual(initialized.Completion.AnchorMemberId, bornRoot.ParentMemberId);
+            Assert.IsEmpty(await catalog.ReadNamespacePermissionTreesAsync(addedRoot.RootId, cancellationToken: timeout.Token));
+            var nestedIdentity = router.CreateFileIdentity(addedRoot.InstanceId, addedRoot.UniquenessKey, "nested", "v1");
+            var nested = await creator.CreateAsync(Guid.NewGuid(), bornRoot.MemberId,
+                CloudFilePlaceholderSpec.CreateBuilder("nested.bin", nestedIdentity, 4).WithInSyncState(true)
+                    .WithInitialAvailability(CloudAvailabilityTarget.OnlineOnly).Build(), timeout.Token);
+            Assert.AreEqual(addedRoot.RootId, nested.RootId); Assert.AreEqual(bornRoot.MemberId, nested.ParentMemberId);
+            Assert.HasCount(5, await catalog.ReadNamespaceMemberTreeAsync(initialized.Completion.AnchorMemberId, timeout.Token));
+            Assert.IsEmpty(await catalog.ReadNamespaceDispatchFencedRootsAsync(timeout.Token));
+            await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() => Directory.Delete(Path.Combine(paths.SyncRootPath, "More"), true), timeout.Token));
+            Assert.IsTrue(Directory.Exists(Path.Combine(paths.SyncRootPath, "More")));
+            Assert.IsTrue(File.Exists(Path.Combine(paths.SyncRootPath, "More", "nested.bin")));
+            TestContext.WriteLine("RegisteredSourcePopulation: normalExternalEnumeration=True; sourceNormalUser=True; productionRemoteBirthCoordinator=True; beforeNativeIntentPlanStart=True; maturePublicCreationAndSqlite=True; actualFirstBinding=True; inheritedProtectionVerified=True; membershipBeforePageReturn=True; reservationReleasedWithMembership=True; replayPreservesFirstObservation=True; newTopRootProtectedBirth=True; newRootNoOriginalCapture=True; nestedBirthUsesActualNewRoot=True; noFakeOriginal=True; hydration=False; defaultHostStartup=False.");
         }
         finally
         {
