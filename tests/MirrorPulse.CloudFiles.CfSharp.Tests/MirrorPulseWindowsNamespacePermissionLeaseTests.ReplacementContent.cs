@@ -246,7 +246,18 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     CollectionAssert.AreEqual(laterEdit, await File.ReadAllBytesAsync(file.FullPath, deadline.Token));
                     Assert.AreEqual(0, source.Reads); Assert.IsNull(await catalog.ReadMutationAsync(operationId, deadline.Token));
                 }
-                TestContext.WriteLine($"ReplacementContent: ordinaryStart={attempt == 1}; emptyInput={attempt >= 2}; unchangedEmpty={attempt == 3}; admittedOriginal=True; firstBackup=True; durableWriteStart=True; actualBinary=True; sameBinding=True; publicIdentity=True; changedContentDirty=True; replayPreservesLaterEdit=True; rootRequiredCompletionBeforeCommit=True; durableCompletion={attempt == 2}; latestOrdinaryEditReconverted={attempt == 2}; completionQueuesRescan={attempt == 2}; noSourceAccess=True; productionCopy=True; productionAccessRestoration=True; interruptedAfterScope={attempt == 0}; sameRoleRecovery={attempt != 1}; newRoleCopyRecovery={attempt == 1}; originalBackupRetained=True; metadataHandoffInterruption={attempt == 1}; verifiedOldScopeNewRolePreservesLaterEdit={attempt == 0}; productionExecutor=False; hostIntegrated=False.");
+                if (attempt == 3)
+                {
+                    await using var scheduler = new MirrorPulseInstanceScheduler();
+                    var executor = new MirrorPulseNamespaceReplacementExecutor(fileSystem, catalog, router, activeRole, actor, scheduler, inputs, backups);
+                    var completion = await executor.ExecuteAsync(operationId, deadline.Token);
+                    Assert.AreEqual(completion, await executor.ExecuteAsync(operationId, deadline.Token));
+                    CollectionAssert.AreEqual(laterEdit, await File.ReadAllBytesAsync(file.FullPath, deadline.Token));
+                    Assert.IsEmpty(await catalog.ReadNamespaceRecoveryRootsAsync(deadline.Token));
+                    Assert.AreEqual(completion.RescanGeneration, (await catalog.ReadRootRescanRequestsAsync(deadline.Token)).Single().Generation);
+                    Assert.AreEqual(0, source.Reads); Assert.IsNull(await catalog.ReadMutationAsync(operationId, deadline.Token));
+                }
+                TestContext.WriteLine($"ReplacementContent: ordinaryStart={attempt == 1}; emptyInput={attempt >= 2}; unchangedEmpty={attempt == 3}; admittedOriginal=True; firstBackup=True; durableWriteStart=True; actualBinary=True; sameBinding=True; publicIdentity=True; changedContentDirty=True; replayPreservesLaterEdit=True; rootRequiredCompletionBeforeCommit=True; durableCompletion={attempt >= 2}; latestOrdinaryEditReconverted={attempt >= 2}; completionQueuesRescan={attempt >= 2}; noSourceAccess=True; productionCopy=True; productionAccessRestoration=True; interruptedAfterScope={attempt == 0}; sameRoleRecovery={attempt != 1}; newRoleCopyRecovery={attempt == 1}; originalBackupRetained=True; metadataHandoffInterruption={attempt == 1}; verifiedOldScopeNewRolePreservesLaterEdit={attempt == 0}; productionExecutor={attempt == 3}; hostIntegrated=False.");
 
                 void RequireObject(MirrorPulseNamespacePermissionObject facts, string dacl)
                 {

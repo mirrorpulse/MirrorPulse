@@ -206,5 +206,9 @@ has removed placeholder state since the earlier verified scope. This uses the
 public CfSharp conversion and access scope on the same object, preserves later
 bytes, records its own before-scope intent and leaves historical status replay
 read-only. It never recopies the staged input or confirms later edits as accepted
-content. The shared save executor, Host/CLI integration and whole-tree readiness
-still require their separate product acceptance.
+content. The shared executor opens private input as the normal user before
+instance scheduling, then composes protection, copying, restoration and the
+completion transaction under the Host's namespace actor. A completed operation
+returns its historical receipt before opening inputs or acquiring the actor.
+Cold target materialization precedes execution. Host/CLI integration and
+whole-tree readiness still require their separate product acceptance.
