@@ -7,7 +7,7 @@ using MirrorPulse.Core.State;
 namespace MirrorPulse.Core.Tests;
 
 [TestClass]
-public sealed class MirrorPulseNamespacePermissionCatalogTests
+public sealed partial class MirrorPulseNamespacePermissionCatalogTests
 {
     private const string Owner = "S-1-5-21-100-200-300-1001";
     private const string FirstRole = "S-1-5-5-123-456";

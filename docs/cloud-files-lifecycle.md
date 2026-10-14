@@ -6,6 +6,15 @@ instance routing, user policy, and a separate product catalog.
 
 ## Startup and shutdown today
 
+The owned sync-root protection coordinator locates original permission evidence
+by the complete native binding. It completes a retained permission attempt
+before rotating to the current Host namespace role, independently reads back
+the root descriptor, and retains the root and ancestor handles until disposal.
+It changes no ancestor ACL. A missing original binding with existing anchor
+history requires recovery instead of a new capture. This boundary is available
+to startup composition; default whole-tree initialization and readiness are
+still pending and cannot be inferred from anchor verification alone.
+
 Startup rebuilds missing remote conflict projections from CfSharp's decoded
 conflict queries. A mutation with a confirmed remote result and an absent
 official journal operation repairs its product projection before marking the

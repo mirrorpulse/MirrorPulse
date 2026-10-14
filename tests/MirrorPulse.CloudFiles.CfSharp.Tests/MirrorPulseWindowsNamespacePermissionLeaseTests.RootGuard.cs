@@ -4,6 +4,7 @@ using CfSharp;
 using MirrorPulse.CloudFiles.CfSharp;
 using MirrorPulse.Core.Configuration;
 using MirrorPulse.Core.State;
+using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 
@@ -37,25 +38,17 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             await using var role = new MirrorPulseNamespaceExecutionSession();
             // Retain only the root and its ancestors throughout the operation. Holding every
             // descendant name would also block the Host's own controlled rename and delete.
-            await using var guard = await MirrorPulseWindowsNamespacePermissionLease.OpenAsync(fileSystem.Root, router, timeout.Token);
+            await using var actor = new MirrorPulseNamespaceActor();
+            var anchor = new MirrorPulseNamespaceAnchorProtectionCoordinator(fileSystem, catalog, router, role, actor, coordinator);
+            await using var guard = await anchor.ProtectAsync(timeout.Token);
             var observed = await guard.InspectAsync(timeout.Token);
             Assert.IsNull(observed.RootId);
             Assert.AreEqual(string.Empty, observed.RelativePath);
             Assert.AreEqual(caller.User!.Value, observed.OwnerSid);
-            var original = new MirrorPulseNamespacePermissionBaseline(Guid.NewGuid(), null, observed.LocalObject,
-                string.Empty, true, observed.OwnerSid, observed.Dacl, observed.ObservedAt);
-            var protection = new MirrorPulseNamespacePermissionIntent(Guid.NewGuid(), original.EvidenceId, original.LocalObject,
-                null, string.Empty, MirrorPulseNamespacePermissionChangeKind.Protect, role.RoleSid.Value, original.OriginalDacl,
-                MirrorPulseNamespacePermissionPolicy.CreateProtectedDacl(role, isDirectory: true), DateTimeOffset.UtcNow);
-            await catalog.PrepareNamespacePermissionChangeAsync(original, protection, timeout.Token);
-            await role.RunNamespaceOperationAsync(async () =>
-            {
-                var applied = await coordinator.ApplyProtectedAsync(protection.OperationId, fileSystem.Root, router,
-                    cancellationToken: timeout.Token);
-                Assert.AreEqual(MirrorPulseNamespacePermissionOutcome.Verified, applied.Permission!.Outcome);
-                Assert.AreEqual(CloudProtectedLocalOperationOutcome.Completed, applied.Receipt!.Outcome);
-                Assert.IsTrue(applied.Receipt.Drained);
-            });
+            var original = guard.Original;
+            Assert.AreEqual(MirrorPulseNamespacePermissionOutcome.Verified, guard.Result.Permission!.Outcome);
+            Assert.AreEqual(CloudProtectedLocalOperationOutcome.Completed, guard.Result.Receipt!.Outcome);
+            Assert.IsTrue(guard.Result.Receipt.Drained);
             foreach (string target in new[] { paths.SyncRootPath, directory })
             {
                 await Assert.ThrowsAsync<IOException>(() => Task.Run(() => Directory.Move(target, target + ".moved"), timeout.Token));
@@ -80,11 +73,25 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             var current = await guard.InspectAsync(timeout.Token);
             Assert.AreEqual(original.LocalObject, current.LocalObject);
             Assert.AreEqual(original.OwnerSid, current.OwnerSid);
+            await using var successor = new MirrorPulseNamespaceExecutionSession();
+            var successorAnchor = new MirrorPulseNamespaceAnchorProtectionCoordinator(fileSystem, catalog, router, successor, actor, coordinator);
+            await using var rotated = await successorAnchor.ProtectAsync(timeout.Token);
+            Assert.AreEqual(original, rotated.Original);
+            Assert.AreEqual(MirrorPulseNamespacePermissionChangeKind.RotateRole, rotated.Change.Intent.Kind);
+            Assert.AreEqual(successor.RoleSid.Value, rotated.Change.Intent.RoleSid);
+            Assert.AreEqual(MirrorPulseNamespacePermissionOutcome.Verified, rotated.Result.Permission!.Outcome);
+            await using (var replay = await successorAnchor.ProtectAsync(timeout.Token))
+            {
+                Assert.AreEqual(rotated.Change, replay.Change);
+                Assert.AreEqual(MirrorPulseNamespacePermissionOutcome.AlreadyVerified, replay.Result.Permission!.Outcome);
+                Assert.IsFalse(replay.Result.Receipt!.AccessDescriptorApplied);
+            }
+            current = await rotated.InspectAsync(timeout.Token);
             var restoration = new MirrorPulseNamespacePermissionIntent(Guid.NewGuid(), original.EvidenceId, original.LocalObject,
-                null, string.Empty, MirrorPulseNamespacePermissionChangeKind.Restore, role.RoleSid.Value, current.Dacl,
+                null, string.Empty, MirrorPulseNamespacePermissionChangeKind.Restore, successor.RoleSid.Value, current.Dacl,
                 original.OriginalDacl, DateTimeOffset.UtcNow);
             await catalog.PrepareNamespacePermissionChangeAsync(original, restoration, timeout.Token);
-            await role.RunNamespaceOperationAsync(async () =>
+            await successor.RunNamespaceOperationAsync(async () =>
             {
                 var restored = await coordinator.ApplyProtectedAsync(restoration.OperationId, fileSystem.Root, router,
                     cancellationToken: timeout.Token);
@@ -93,7 +100,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             });
             Assert.IsTrue(MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(original.OriginalDacl,
                 (await guard.InspectAsync(timeout.Token)).Dacl));
-            TestContext.WriteLine($"SyncRootGuard: rootAndAncestorsRetained=True; ancestorAclWrites=0; ordinaryCreationDenied=True; controlledChildCreateRenameDelete=True; originalRootBindingAndOwner=True; originalDaclRestored=True; elevatedCaller={new WindowsPrincipal(caller).IsInRole(WindowsBuiltInRole.Administrator)}; hostIntegrated=False.");
+            TestContext.WriteLine($"SyncRootGuard: productionAnchorCoordinator=True; fullBindingOriginalLookup=True; currentRoleRotation=True; immutableOriginal=True; replayWithoutAclWrite=True; rootAndAncestorsRetained=True; ancestorAclWrites=0; ordinaryCreationDenied=True; controlledChildCreateRenameDelete=True; originalRootBindingAndOwner=True; originalDaclRestored=True; elevatedCaller={new WindowsPrincipal(caller).IsInRole(WindowsBuiltInRole.Administrator)}; hostIntegrated=False.");
         }
         finally
         {
