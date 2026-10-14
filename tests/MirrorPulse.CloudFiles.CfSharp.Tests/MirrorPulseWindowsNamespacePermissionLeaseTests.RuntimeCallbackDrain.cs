@@ -77,6 +77,11 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 Assert.IsFalse(admission.IsAdmitted(registration.RootId));
                 Assert.IsFalse(File.Exists(Path.Combine(paths.SyncRootPath, "Docs", "must-not-exist.txt")));
                 CollectionAssert.AreEqual(CallbackDrainExpectedChildren, (await consumer.WaitAsync(timeout.Token)).Names);
+                var published = await catalog.ReadNamespaceMemberChildAsync(root.MemberId, "cold.bin", timeout.Token);
+                Assert.IsNotNull(published); Assert.AreEqual(MirrorPulseNamespaceMemberOrigin.ProtectedBirth, published.Origin);
+                var originalBirth = await catalog.ReadNamespaceBirthObservationAsync(published.OriginId, timeout.Token);
+                Assert.IsNotNull(originalBirth); Assert.AreEqual(published.LocalObject, originalBirth.LocalObject);
+                Assert.IsEmpty(await catalog.ReadNamespaceDispatchFencedRootsAsync(timeout.Token));
                 var reopenedState = new MirrorPulseCfSharpStateSession(paths);
                 await using var reopened = new MirrorPulseCloudFileSystemBuilder(paths).WithStateStore(reopenedState)
                     .WithContentProvider(MirrorPulseDemandProvider.CreateWithoutAdapters(paths.SyncRootPath)).Build();
@@ -90,7 +95,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 var native = await reopened.GetFile("Docs/cold.bin").InspectAsync(timeout.Token);
                 Assert.AreEqual(identity, CloudPlaceholderIdentity.Decode(native.PlaceholderIdentity.Span));
                 Assert.AreEqual(0, worker.Calls.Count(call => call == "range-open"));
-                TestContext.WriteLine("RuntimeShutdownDrain: actualRuntime=True; initializedOriginalTree=True; normalExternalConsumer=True; nativeBeforeOfficialCommit=True; shutdownClosesWork=True; newCreationRejected=True; anchorRetainedDuringCompleteLibraryDrain=True; committedBeforeStoreDisposed=True; originalPublicIdentitySurvivesReopen=True; hydration=False; defaultHostStartup=False; sourceBirthRegistration=False.");
+                TestContext.WriteLine("RuntimeShutdownDrain: actualRuntime=True; initializedOriginalTree=True; normalExternalConsumer=True; nativeBeforeOfficialCommit=True; shutdownClosesWork=True; newCreationRejected=True; anchorRetainedDuringCompleteLibraryDrain=True; committedBeforeStoreDisposed=True; originalPublicIdentitySurvivesReopen=True; hydration=False; defaultHostStartup=False; sourceBirthRegistration=True; membershipCommittedBeforeLibraryDisposal=True.");
             }
             finally
             {

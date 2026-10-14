@@ -35,6 +35,7 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
     private readonly IMirrorPulseDirectoryPageSource? _directoryPages;
     private readonly MirrorPulseRootRouter? _rootRouter;
     private readonly MirrorPulseNamespaceWorkAdmission? _namespaceWork;
+    internal MirrorPulseNamespaceDirectoryPublisher? NamespacePublisher { get; set; }
 
     public MirrorPulseDemandProvider(
         IEnumerable<InstanceId> activeInstances,
@@ -156,7 +157,14 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
 
         MirrorPulsePlaceholderBatchPlan plan = MirrorPulsePlaceholderBatchCoordinator.Plan(instanceId, page.Entries,
             rootKey is null ? null : _rootRouter!.GetRegistration(instanceId, rootKey));
-        return new CloudProviderDirectoryPage(plan.Placeholders, next);
+        var result = new CloudProviderDirectoryPage(plan.Placeholders, next);
+        if (NamespacePublisher is { } publisher)
+        {
+            if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
+                throw new PlatformNotSupportedException("Protected source population requires Windows 11 24H2 or later.");
+            return await publisher.PublishAsync(normalizedPath, directoryIdentity, result, cancellationToken).ConfigureAwait(false);
+        }
+        return result;
     }
 
     private static ReadOnlyMemory<byte> DecodeContinuation(string? continuationToken)

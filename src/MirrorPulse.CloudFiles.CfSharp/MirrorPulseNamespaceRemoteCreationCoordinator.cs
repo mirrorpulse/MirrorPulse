@@ -20,7 +20,7 @@ public sealed class MirrorPulseNamespaceRemoteCreationCoordinator(CloudFileSyste
         return actor.RunAsync(token => CreateUnderActorAsync(operationId, parentMemberId, specification, token), cancellationToken);
     }
 
-    private async ValueTask<MirrorPulseNamespaceMemberRegistration> CreateUnderActorAsync(Guid operationId, Guid parentMemberId,
+    internal async ValueTask<MirrorPulseNamespaceMemberRegistration> CreateUnderActorAsync(Guid operationId, Guid parentMemberId,
         CloudPlaceholderSpec specification, CancellationToken token)
     {
         actor.AssertAccess();
@@ -61,6 +61,19 @@ public sealed class MirrorPulseNamespaceRemoteCreationCoordinator(CloudFileSyste
         await execution.RunNamespaceOperationAsync(async () =>
         {
             await using var guard = await MirrorPulseWindowsNamespacePermissionLease.OpenAsync(parent, router, token).ConfigureAwait(false);
+            if (retained is null && parentMember.Origin == MirrorPulseNamespaceMemberOrigin.ProtectedBirth &&
+                location.CurrentPositionOperationId is not null)
+            {
+                var epoch = await catalog.ReadLatestNamespaceBirthProtectionAsync(parentMember.OriginId, token).ConfigureAwait(false)
+                    ?? throw new InvalidDataException("The placed source parent lost its protection epoch.");
+                if (epoch.Placement?.PositionOperationId != location.CurrentPositionOperationId)
+                {
+                    _ = await MirrorPulseNamespaceBirthProtectionVerifier.RecordRegisteredAsync(catalog, Guid.NewGuid(),
+                        parentMemberId, parent, parent.Parent ?? throw new InvalidDataException("A placed parent requires its ancestor."),
+                        router, actor, token).ConfigureAwait(false);
+                    proof = await MirrorPulseNamespaceProtectionProofReader.ReadMemberAsync(catalog, parentMember, token).ConfigureAwait(false);
+                }
+            }
             var birth = retained ?? new MirrorPulseNamespaceBirthIntent(proof.BornParent is null ? 1 : 2, operationId,
                 parentMember.RootId.Value, proof.BornParent is null ? parentMember.OriginId : Guid.Empty, proof.PermissionOperationId,
                 parentMember.LocalObject, path, directory, MirrorPulseNamespaceBirthOrigin.RemotePopulation, execution.RoleSid.Value, DateTimeOffset.UtcNow)

@@ -790,6 +790,13 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
 
         private async Task StartLibraryAsync(CancellationToken cancellationToken)
         {
+            if (namespaceWork is not null && provider is MirrorPulseDemandProvider demand)
+            {
+                if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
+                    throw new PlatformNotSupportedException("Protected source population requires Windows 11 24H2 or later.");
+                RequireImportBoundary();
+                demand.NamespacePublisher = new(() => fileSystem, catalog!, router!, _namespaceExecution!, _namespaceActor!);
+            }
             if (_namespaceExecution is not null)
             {
                 if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
@@ -960,7 +967,18 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                 {
                     try
                     {
-                        try { await fileSystem.DisposeAsync().ConfigureAwait(false); }
+                        try
+                        {
+                            // A public placeholder creation may still need this live library
+                            // for its first binding and protected membership registration.
+                            try
+                            {
+                                if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100) &&
+                                    provider is MirrorPulseDemandProvider { NamespacePublisher: { } publication })
+                                    await publication.CloseAndDrainAsync().ConfigureAwait(false);
+                            }
+                            finally { await fileSystem.DisposeAsync().ConfigureAwait(false); }
+                        }
                         finally { if (workDrained is not null) await workDrained.ConfigureAwait(false); }
                     }
                     finally
