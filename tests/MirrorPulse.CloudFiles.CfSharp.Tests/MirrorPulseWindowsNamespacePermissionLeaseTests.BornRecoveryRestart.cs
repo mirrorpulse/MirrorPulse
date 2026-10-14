@@ -74,6 +74,10 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     var creation = new MirrorPulseNamespaceCreationCoordinator(fileSystem, state, catalog, router, execution, actor);
                     parent = await creation.CreateAsync(Guid.NewGuid(), root.MemberId, "right", true, timeout.Token);
                     child = await creation.CreateAsync(Guid.NewGuid(), parent.MemberId, "note.txt", false, timeout.Token);
+                    var retired = await creation.CreateAsync(Guid.NewGuid(), parent.MemberId, "removed.txt", false, timeout.Token);
+                    var retirement = new MirrorPulseNamespaceRetirementCoordinator(fileSystem, catalog, router, execution, actor);
+                    var deletion = await retirement.PrepareAsync(Guid.NewGuid(), retired.MemberId, timeout.Token);
+                    Assert.AreEqual(MirrorPulseNamespaceRetirementPhase.Completed, (await retirement.ExecuteAsync(deletion.OperationId, timeout.Token)).Phase);
                     firstBirth = await catalog.ReadNamespaceBirthAsync(child.OriginId, timeout.Token);
                     firstObservation = await catalog.ReadNamespaceBirthObservationAsync(child.OriginId, timeout.Token);
                     firstProtection = await catalog.ReadLatestNamespaceBirthProtectionAsync(child.OriginId, timeout.Token);
@@ -144,10 +148,15 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         Assert.AreEqual(firstBirth, await catalog.ReadNamespaceBirthAsync(child.OriginId, timeout.Token));
                         Assert.AreEqual(firstObservation, await catalog.ReadNamespaceBirthObservationAsync(child.OriginId, timeout.Token));
                         Assert.AreEqual(child, await catalog.ReadNamespaceMemberAsync(child.MemberId, timeout.Token));
+                        var audit = await new MirrorPulseNamespaceCurrentTreeAuditCoordinator(fileSystem, catalog, router, execution, actor, permissions)
+                            .AuditAsync(root.ParentMemberId!.Value, anchor, timeout.Token);
+                        Assert.HasCount(4, audit.Inventory.Members); Assert.HasCount(1, audit.Inventory.RetiredMembers);
+                        Assert.AreEqual("Docs/right/removed.txt", audit.Inventory.RetiredMembers[0].Intent.RelativePath);
+                        Assert.IsFalse(File.Exists(fileSystem.GetFile("Docs/right/removed.txt").FullPath));
                         Assert.IsNull((await catalog.ReadNamespaceInitializationStatusAsync(initialization, timeout.Token)).Completion);
                         CollectionAssert.AreEqual(new[] { registration.RootId }, (await catalog.ReadNamespaceDispatchFencedRootsAsync(timeout.Token)).ToArray());
                         Assert.AreEqual(0, source.Reads);
-                        TestContext.WriteLine("BornRecoveryRestart: threeActualRoleOwners=True; previousSessionsDisposed=True; nativeDrainBeforeProjectionInterrupted=True; durableImmutableSuccessor=True; directoryOwnedAclRestored=True; atomicCompletionResponseLost=True; historicalReplayHasNoNativeScope=True; latestOrdinaryBytesAndFirstFactsRetained=True; sourceReads=0; rootStillFenced=True; treeReady=False; defaultHostStartup=False.");
+                        TestContext.WriteLine("BornRecoveryRestart: threeActualRoleOwners=True; previousSessionsDisposed=True; nativeDrainBeforeProjectionInterrupted=True; durableImmutableSuccessor=True; directoryOwnedAclRestored=True; atomicCompletionResponseLost=True; historicalReplayHasNoNativeScope=True; latestOrdinaryBytesAndFirstFactsRetained=True; completeCurrentNativeAudit=True; retiredBirthExcludedFromLiveTree=True; sourceReads=0; rootStillFenced=True; treeReady=False; defaultHostStartup=False.");
                     }
                 }
             }

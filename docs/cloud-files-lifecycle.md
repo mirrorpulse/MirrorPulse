@@ -77,6 +77,22 @@ Default whole-tree startup and Host/CLI recovery orchestration remain required.
 Default automatic startup, dynamic moved/born graph recovery and newly added
 roots below an already protected anchor still require their full integration.
 
+Current-tree auditing reads the complete live membership, completed retirements,
+current placements, identities, protection and dispatch fences in one product
+transaction. Missing names, disconnected members and damaged retirement receipts
+cannot disappear from that inventory. The first capture remains historical;
+completed moves and born members are audited at their current locations.
+
+The native audit shares the Host's actor, execution role and permission admission,
+retains the actual anchor guard, and uses the existing member inspector for each
+object and its current direct parent. It then enumerates all actual local roots
+and descendants, rejecting missing or unexpected entries, binding changes,
+aliases, descriptor changes and public identity mismatches. It reads no source
+content and changes no permissions or membership. A final catalog comparison
+rejects concurrent changes to the retained graph or its fences. This receipt is
+a fresh observation; Host admission and initialization fence completion remain
+separate responsibilities, and later ordinary edits are not frozen by an audit.
+
 Startup rebuilds missing remote conflict projections from CfSharp's decoded
 conflict queries. A mutation with a confirmed remote result and an absent
 official journal operation repairs its product projection before marking the

@@ -71,6 +71,43 @@ public static class MirrorPulseNamespaceMemberRegistrar
             throw new UnauthorizedAccessException("Native member registration requires the original owner and current namespace role.");
     }
 
+    // Audit committed locations and their current direct parents without replaying registration
+    // against immutable first-parent facts. The mature object and identity inspector is shared.
+    internal static async Task InspectCurrentAsync(MirrorPulseProductCatalog catalog,
+        MirrorPulseNamespaceMemberProtectionSnapshot current, MirrorPulseNamespaceMemberProtectionSnapshot? currentParent,
+        CloudItem item, CloudDirectory? parent, MirrorPulseRootRouter router, MirrorPulseNamespaceActor namespaceActor,
+        CancellationToken token)
+    {
+        namespaceActor.AssertAccess();
+        var proof = MirrorPulseNamespaceProtectionProofReader.FromSnapshot(current);
+        RequireCaller(proof);
+        if (current != await catalog.ReadNamespaceMemberProtectionSnapshotAsync(current.Context.Member.MemberId, token).ConfigureAwait(false))
+            throw new InvalidDataException("The current audit lost its coherent member snapshot.");
+        if (current.Context.Location.ParentMemberId is { } parentId)
+        {
+            if (currentParent is null || parent is null || currentParent.Context.Member.MemberId != parentId ||
+                !currentParent.Context.Member.IsDirectory || currentParent.Context.Protection.RoleSid != proof.RoleSid ||
+                item.Parent is null || !string.Equals(item.Parent.FullPath, parent.FullPath, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("The current audit requires the actual committed direct parent.");
+            var parentProof = MirrorPulseNamespaceProtectionProofReader.FromSnapshot(currentParent); RequireCaller(parentProof);
+            await using var parentLease = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(parent, router, token).ConfigureAwait(false);
+            var before = await InspectAsync(catalog, currentParent.Context.Member, parentProof, parent, parentLease, token).ConfigureAwait(false);
+            await using var lease = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(item, router, token).ConfigureAwait(false);
+            _ = await InspectAsync(catalog, current.Context.Member, proof, item, lease, token).ConfigureAwait(false);
+            MirrorPulseNamespaceBirthProtectionVerifier.RequireUnchangedParent(before, await parentLease.InspectAsync(token).ConfigureAwait(false));
+            await RequireUnchangedProofAsync(catalog, currentParent.Context.Member, parentProof, token).ConfigureAwait(false);
+        }
+        else
+        {
+            if (currentParent is not null || parent is not null || !router.IsSyncRoot(item.FullPath))
+                throw new InvalidDataException("Only the actual sync-root anchor has no current parent.");
+            await using var lease = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(item, router, token).ConfigureAwait(false);
+            _ = await InspectAsync(catalog, current.Context.Member, proof, item, lease, token).ConfigureAwait(false);
+        }
+        await RequireUnchangedProofAsync(catalog, current.Context.Member, proof, token).ConfigureAwait(false);
+        namespaceActor.AssertAccess();
+    }
+
     private static async Task<MirrorPulseNamespacePermissionObject> InspectAsync(MirrorPulseProductCatalog catalog,
         MirrorPulseNamespaceMemberRegistration member, MirrorPulseNamespaceProtectionProof proof, CloudItem item,
         MirrorPulseWindowsNamespacePermissionLease lease, CancellationToken token)

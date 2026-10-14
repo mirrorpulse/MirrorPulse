@@ -148,10 +148,30 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     Assert.AreEqual(firstBirth, await catalog.ReadNamespaceBirthAsync(child.OriginId, timeout.Token));
                     Assert.AreEqual(firstObservation, await catalog.ReadNamespaceBirthObservationAsync(child.OriginId, timeout.Token));
                     Assert.AreEqual(child, await catalog.ReadNamespaceMemberAsync(child.MemberId, timeout.Token));
+                    // Restore the current public identity after the later ordinary save, then audit
+                    // the entire live graph using the moved direct parent rather than first placement.
+                    var latestRecovery = await writing.RecoverAsync(initialization, Guid.NewGuid(), child.MemberId, timeout.Token);
+                    AssertCompletedRegisteredProtectionScope(latestRecovery.Receipt!);
+                    var auditing = new MirrorPulseNamespaceCurrentTreeAuditCoordinator(fileSystem, catalog, router, execution, actor, permissions);
+                    var audit = await auditing.AuditAsync(rootMember.ParentMemberId!.Value, anchor, timeout.Token);
+                    Assert.HasCount(5, audit.Inventory.Members); Assert.AreEqual(execution.RoleSid.Value, audit.RoleSid);
+                    Assert.AreEqual("Docs/right/moved.bin", audit.Inventory.Members.Single(member => member.Context.Member.MemberId == child.MemberId).Context.Location.RelativePath);
+                    string unexpected = Path.Combine(fileSystem.GetDirectory("Docs/right").FullPath, "unregistered");
+                    await RunNativeMemberAdmissionAsync(actor, execution, () => { Directory.CreateDirectory(unexpected); return Task.CompletedTask; }, timeout.Token);
+                    try
+                    {
+                        await Assert.ThrowsExactlyAsync<InvalidDataException>(async () => await auditing.AuditAsync(rootMember.ParentMemberId.Value, anchor, timeout.Token));
+                    }
+                    finally
+                    {
+                        await RunNativeMemberAdmissionAsync(actor, execution, () => { Directory.Delete(unexpected); return Task.CompletedTask; }, timeout.Token);
+                    }
+                    Assert.AreEqual(audit.Inventory.Fingerprint, (await auditing.AuditAsync(rootMember.ParentMemberId.Value, anchor, timeout.Token)).Inventory.Fingerprint);
+                    Assert.AreEqual(latest + " edited later", await File.ReadAllTextAsync(path, timeout.Token));
                     Assert.IsNull((await catalog.ReadNamespaceInitializationStatusAsync(initialization, timeout.Token)).Completion);
                     CollectionAssert.AreEqual(new[] { registration.RootId }, (await catalog.ReadNamespaceDispatchFencedRootsAsync(timeout.Token)).ToArray());
                     Assert.AreEqual(0, source.Reads);
-                    TestContext.WriteLine("BornReadbackRecovery: productionCoordinator=True; oldRoleDisposed=True; movedActualBornParent=True; parentFirstRecovery=True; fileAndDirectoryReadback=True; firstBirthObservationAndMembershipRetained=True; immutableEpochReplay=True; sourceReads=0; aclWritesInReadback=0; registeredBornBeforeWriteAction=True; ownedOlderDescriptorRestored=True; busyRetainsAction=True; publicSameObjectScopeDrained=True; latestOrdinaryBytesRetained=True; atomicV3ProjectionAndCompletion=True; historicalCompletionPreservesLaterEdits=True; rootStillFenced=True; treeReady=False; defaultHostStartup=False.");
+                    TestContext.WriteLine("BornReadbackRecovery: productionCoordinator=True; oldRoleDisposed=True; movedActualBornParent=True; parentFirstRecovery=True; fileAndDirectoryReadback=True; firstBirthObservationAndMembershipRetained=True; immutableEpochReplay=True; sourceReads=0; aclWritesInReadback=0; registeredBornBeforeWriteAction=True; ownedOlderDescriptorRestored=True; busyRetainsAction=True; publicSameObjectScopeDrained=True; latestOrdinaryBytesRetained=True; atomicV3ProjectionAndCompletion=True; historicalCompletionPreservesLaterEdits=True; completeCurrentGraphNativeAudit=True; unexpectedActualEntryRejected=True; rootStillFenced=True; treeReady=False; defaultHostStartup=False.");
                 }
             }
         }
