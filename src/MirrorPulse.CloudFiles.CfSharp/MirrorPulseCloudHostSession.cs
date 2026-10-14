@@ -14,6 +14,11 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 public interface IMirrorPulseCloudRuntime : IAsyncDisposable
 {
     [SupportedOSPlatform("windows10.0.26100")]
+    ValueTask<MirrorPulseProtectedNamespacePermissionResult> RecoverNamespaceOriginalMemberAsync(Guid initializationOperationId, Guid memberId,
+        CancellationToken cancellationToken) => ValueTask.FromException<MirrorPulseProtectedNamespacePermissionResult>(
+            new NotSupportedException("This runtime does not recover registered original members."));
+
+    [SupportedOSPlatform("windows10.0.26100")]
     ValueTask<MirrorPulseNamespaceInitializationCompletion> InitializeNamespaceProtectionAsync(Guid operationId,
         CancellationToken cancellationToken) => ValueTask.FromException<MirrorPulseNamespaceInitializationCompletion>(
             new NotSupportedException("This runtime does not initialize original namespace protection."));
@@ -298,6 +303,22 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             CancellationToken cancellationToken) => catalog is null ? ValueTask.FromException<MirrorPulseNamespaceInitializationStatus>(
                 new NotSupportedException("Initialization status requires the Host catalog.")) :
                 new(catalog.ReadNamespaceInitializationStatusAsync(operationId, cancellationToken));
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        public async ValueTask<MirrorPulseProtectedNamespacePermissionResult> RecoverNamespaceOriginalMemberAsync(Guid initializationOperationId,
+            Guid memberId, CancellationToken cancellationToken)
+        {
+            RequireImportBoundary();
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
+            await _initializationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
+                return await new MirrorPulseNamespaceOriginalMemberRecoveryCoordinator(fileSystem, catalog!, router!, _namespaceExecution!,
+                    _namespaceActor!, _scheduler, _permissions!).RecoverAsync(initializationOperationId, memberId, cancellationToken).ConfigureAwait(false);
+            }
+            finally { _initializationGate.Release(); }
+        }
 
         public ValueTask<IReadOnlyList<MirrorPulseNamespacePermissionTree>> ReadNamespacePermissionTreesAsync(RootId rootId,
             Guid? afterManifestId, int limit, CancellationToken cancellationToken) =>

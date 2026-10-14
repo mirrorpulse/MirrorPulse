@@ -40,6 +40,15 @@ roles differ after interruption. This read requires the pending root owner and
 does not relax ordinary current-role authorization or fabricate native checks.
 The default startup recovery executor and final current-tree admission remain
 required before this catalog boundary can enable source dispatch.
+
+The Runtime can recover an individual registered original under a pending
+initialization owner. It checks the actual current object and direct parent,
+replays unfinished permission work and persists a new role rotation at the
+completed current placement before applying it through CfSharp's protected
+scope. First capture and membership stay unchanged. Accepted current identities
+are read from the existing confirmed correlation rather than overwritten with
+the first local identity. Individual recovery leaves initialization fences in
+place; it is not the default startup executor or current-tree readiness.
 Default automatic startup, dynamic moved/born graph recovery and newly added
 roots below an already protected anchor still require their full integration.
 
