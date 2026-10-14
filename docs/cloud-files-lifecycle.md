@@ -56,6 +56,16 @@ records the existing V3 located epoch, retaining first birth, observation,
 membership and committed movement. This boundary reads native metadata only;
 ordinary files requiring conversion or a new ACL need the separate before-write
 recovery path. Its verified epoch does not release initialization fences.
+
+Registered-born writes have their own immutable before-write actions. They
+retain the pending initializer, current member, placement, identity, parent
+epoch and descriptor target without replacing first birth observations. Their
+pending ownership also blocks ordinary controlled mutations in that root;
+the admitted initializer can recover dependent parents. A drained completion
+projects the existing V3 protection and releases only its action reservation in
+one product transaction. Initialization remains fenced until full-tree audit.
+Product catalog schema 51 creates empty action tables for older catalogs and
+does not invent native writes, verification or readiness during migration.
 Default automatic startup, dynamic moved/born graph recovery and newly added
 roots below an already protected anchor still require their full integration.
 

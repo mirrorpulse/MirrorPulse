@@ -140,8 +140,12 @@ public sealed partial class MirrorPulseProductCatalog
     }
 
     private async Task RequireNamespaceMoveRootUnfencedAsync(RootId rootId, Guid? allowedMove,
-        SqliteTransaction transaction, CancellationToken token, Guid? allowedRetirement = null, Guid? allowedBatch = null, Guid? allowedReplacement = null)
+        SqliteTransaction transaction, CancellationToken token, Guid? allowedRetirement = null, Guid? allowedBatch = null, Guid? allowedReplacement = null,
+        Guid? allowedBornRecoveryInitialization = null)
     {
+        foreach (var born in await ReadPendingBornMemberRecoveryActionsCoreAsync(transaction, token).ConfigureAwait(false))
+            if (born.Child.Member.RootId == rootId && born.InitializationOperationId != allowedBornRecoveryInitialization)
+                throw new InvalidOperationException("The root has unfinished born member recovery requiring its admitted initializer.");
         var pending = await ReadPendingNamespaceMemberMoveCoreAsync(rootId, transaction, token).ConfigureAwait(false);
         if (pending is not null && pending.OperationId != allowedMove)
             throw new InvalidOperationException("An unresolved controlled move has fenced this managed root.");
