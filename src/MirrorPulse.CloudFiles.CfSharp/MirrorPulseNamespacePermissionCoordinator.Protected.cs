@@ -81,6 +81,15 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinator
         MirrorPulseNamespacePermissionObject observed = await lease.InspectAsync(cancellationToken).ConfigureAwait(false);
         MirrorPulseNamespacePermissionRecoveryReason? mismatch = MatchApplicationObservation(baseline, change, observed);
         if (mismatch is not null) return await FenceAsync(change, mismatch.Value).ConfigureAwait(false);
+        var identityFailure = await PrepareRetainedLocalIdentityAsync(change, baseline, lease, initialLocalIdentity, cancellationToken).ConfigureAwait(false);
+        if (identityFailure is not null) return identityFailure;
+        return await ApplyAdmittedAsync(change, baseline, lease, cancellationToken).ConfigureAwait(false);
+    }
+
+    internal async Task<MirrorPulseNamespacePermissionResult?> PrepareRetainedLocalIdentityAsync(MirrorPulseNamespacePermissionChange change,
+        MirrorPulseNamespacePermissionBaseline baseline, IMirrorPulseProtectedNamespacePermissionLease lease,
+        CloudPlaceholderIdentity? initialLocalIdentity, CancellationToken cancellationToken)
+    {
         if (!baseline.IsDirectory)
         {
             MirrorPulseNamespacePermissionLocalIdentity? retained = await _catalog.ReadNamespacePermissionLocalIdentityAsync(
@@ -94,9 +103,13 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinator
                     return await FenceAsync(change, MirrorPulseNamespacePermissionRecoveryReason.Interrupted).ConfigureAwait(false);
             }
             MirrorPulseProtectedLocalIdentityObservation local = await lease.InspectLocalIdentityAsync(cancellationToken).ConfigureAwait(false);
-            if (!MatchesRetainedIdentity(local, retained))
+            var registered = await _catalog.ReadNamespaceMemberByBindingAsync(baseline.LocalObject, cancellationToken).ConfigureAwait(false);
+            var current = registered is null ? null : await _catalog.ReadNamespaceMemberIdentityAsync(registered.MemberId, cancellationToken).ConfigureAwait(false);
+            if (registered is not null && (registered.Origin != MirrorPulseNamespaceMemberOrigin.CapturedOriginal || registered.OriginId != baseline.EvidenceId))
+                throw new InvalidDataException("Original permission preparation cannot adopt another member's identity.");
+            if (!MatchesRetainedIdentity(local, retained, current))
                 return await FenceAsync(change, MirrorPulseNamespacePermissionRecoveryReason.ObjectChanged).ConfigureAwait(false);
-            CloudPlaceholderIdentity identity = SelectLocalIdentity(local, retained, initialLocalIdentity);
+            CloudPlaceholderIdentity identity = SelectLocalIdentity(local, retained, current, initialLocalIdentity);
             if (retained is null)
                 await _catalog.PrepareNamespacePermissionLocalIdentityAsync(new(1, baseline.EvidenceId, change.Intent.OperationId,
                     baseline.LocalObject, identity.ItemId, identity.RemoteId, DateTimeOffset.UtcNow), cancellationToken).ConfigureAwait(false);
@@ -106,23 +119,25 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinator
             if (!local.IsPlaceholder || local.PlaceholderIdentity!.RemoteRevision is null)
                 await lease.PrepareLocalIdentityAsync(identity, cancellationToken).ConfigureAwait(false);
         }
-        return await ApplyAdmittedAsync(change, baseline, lease, cancellationToken).ConfigureAwait(false);
+        return null;
     }
 
     private static bool MatchesRetainedIdentity(MirrorPulseProtectedLocalIdentityObservation local,
-        MirrorPulseNamespacePermissionLocalIdentity? retained)
+        MirrorPulseNamespacePermissionLocalIdentity? retained, MirrorPulseNamespaceMemberIdentity? current)
     {
         if ((local.ItemId is null) != (local.RemoteId is null) || local.ItemId == Guid.Empty ||
             local.RemoteId is not null && string.IsNullOrWhiteSpace(local.RemoteId)) return false;
         if (local.IsPlaceholder && (local.PlaceholderIdentity is null || local.PlaceholderIdentity.ItemId != local.ItemId ||
             local.PlaceholderIdentity.RemoteId != local.RemoteId)) return false;
-        return retained is null || local.ItemId is null || local.ItemId == retained.ItemId && local.RemoteId == retained.RemoteId;
+        return local.ItemId is null || (current?.ItemId is { } item ? local.ItemId == item && local.RemoteId == current.RemoteId :
+            retained is null || local.ItemId == retained.ItemId && local.RemoteId == retained.RemoteId);
     }
 
     private static CloudPlaceholderIdentity SelectLocalIdentity(MirrorPulseProtectedLocalIdentityObservation local,
-        MirrorPulseNamespacePermissionLocalIdentity? retained, CloudPlaceholderIdentity? candidate)
+        MirrorPulseNamespacePermissionLocalIdentity? retained, MirrorPulseNamespaceMemberIdentity? current, CloudPlaceholderIdentity? candidate)
     {
-        CloudPlaceholderIdentity selected = retained is not null ? new(retained.ItemId, retained.RemoteId) :
+        CloudPlaceholderIdentity selected = current?.ItemId is { } item ? new(item, current.RemoteId!) :
+            retained is not null ? new(retained.ItemId, retained.RemoteId) :
             local.ItemId is { } known ? new(known, local.RemoteId!) :
             candidate ?? throw new InvalidOperationException("An unknown original requires a Host-selected local identity before conversion.");
         if (selected.RemoteRevision is not null)
