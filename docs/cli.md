@@ -57,6 +57,12 @@ The default output is concise human-readable text. Automation should use `--json
 | `mp namespace member prepare-import PARENT_ID NAME SOURCE_PATH [--operation-id GUID]` | Capture a private input and retain an immutable file import plan without creating the destination. | `SOURCE_PATH` is resolved by the CLI; keep `operationId` |
 | `mp namespace member import OPERATION_ID` | Execute or resume the original import without reopening the source file. | completed replay preserves newer local bytes; no remote acceptance claim |
 | `mp namespace member import-status OPERATION_ID` | Read retained binding, content, conversion, protection and membership phases. | `--json`; incomplete started operations report the pending exit code |
+| `mp namespace member prepare-replace MEMBER_ID SOURCE_PATH [--operation-id GUID]` | Materialize an enabled target, retain private input and atomically prepare replacement authority. | offline targets and inputs inside MirrorPulse must already be resident; keep `operationId` |
+| `mp namespace member replace OPERATION_ID` | Execute the retained local replacement and protect the same original object. | creates the first backup before writing; completion requests a rescan rather than claiming remote acceptance |
+| `mp namespace member replace-recover OPERATION_ID` | Resume the same replacement execution. | completed replay preserves subsequent local edits |
+| `mp namespace member replacement-status OPERATION_ID` | Read replacement preparation, backup, write, content, restoration and completion phases. | incomplete started operations return exit `11` |
+| `mp namespace protection captures ROOT_ID [--after MANIFEST_ID]` | Read up to 256 historical original captures for a stable root. | continue after the last returned manifest ID; includes open and cancelled captures |
+| `mp namespace protection recover-tree MANIFEST_ID` | Restore and audit one sealed original tree under shared Host scheduling. | changed membership requires recovery; verified original inventory does not establish whole-product readiness |
 | `mp namespace member prepare-move MEMBER_ID PARENT_ID NAME [--operation-id GUID]` | Prepare a protected member move. | the source name remains fenced until the move receipt is complete |
 | `mp namespace member tree MEMBER_ID` | Read the validated current registered subtree. | read-only; depth and current product paths are returned |
 | `mp namespace member move OPERATION_ID` | Execute or retry an admitted protected file or directory move. | directories require the original public proof and a sealed registered subtree; all descendant positions settle together |
@@ -103,7 +109,8 @@ requires explicit recovery and is never repeated by path. Controlled deletion
 supports leaves and sealed subtrees. A subtree retains its root fence until every
 member is settled, deletes children before parents, and resumes with the same
 operation ID and `--recursive`. It does not bypass a member's protection checks.
-Imports, replacement saves and full installed strict-tree startup remain pending.
+Import and replacement entry points share the Host's operation state machines.
+Full installed strict-tree startup remains pending.
 
 Controlled directory movement uses CfSharp's public preparation, move and
 reconciliation APIs. Every actual descendant must have retained membership,

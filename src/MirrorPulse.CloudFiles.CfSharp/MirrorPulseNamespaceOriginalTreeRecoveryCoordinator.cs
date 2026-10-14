@@ -41,8 +41,8 @@ public sealed class MirrorPulseNamespaceOriginalTreeRecoveryCoordinator(CloudFil
                 await using var lease = await MirrorPulseWindowsNamespacePermissionTreeLease.OpenAsync(
                     fileSystem.GetDirectory(current.DirectoryName), router, stop).ConfigureAwait(false);
                 result = await permissions.RestoreTreeAsync(manifestId, lease, execution,
-                    baseline => baseline.IsDirectory ? null : new CloudPlaceholderIdentity(baseline.EvidenceId,
-                        "mirrorpulse-local/" + baseline.EvidenceId.ToString("D")), stop).ConfigureAwait(false);
+                    baseline => baseline.IsDirectory ? null : router.CreateFileIdentity(current.InstanceId, current.UniquenessKey,
+                        "local/" + baseline.EvidenceId.ToString("D")), stop).ConfigureAwait(false);
             }).ConfigureAwait(false);
             return result;
         }, token), cancellationToken).ConfigureAwait(false);

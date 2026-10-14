@@ -229,3 +229,11 @@ by the required external-consumer population and hydration acceptance case.
 Worker RPC and lazy source bodies retain their normal-user transport boundary.
 This startup context does not apply permissions, establish tree readiness or
 enable pending synchronization work.
+
+Initial tree capture retains current-user, single-link original objects in
+parent-before-child pages before applying permissions. A fresh complete local
+inventory is checked after permission work drains and again before sealing.
+Interrupted prefixes preserve their original binding, owner, descriptor and
+role. Registered members use their existing provenance rather than entering a
+new original capture. Capture performs no hydration, content read or ACL write;
+the subsequent native application and complete live audit remain separate.
