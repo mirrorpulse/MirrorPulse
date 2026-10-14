@@ -311,6 +311,25 @@ consistency policy and remain a documented limitation.
 
 ## Recovery evidence and remaining gates
 
+When a runtime has a namespace work-admission owner, initialization first closes
+and drains every configured root, then persists its selected recovery route.
+It stops the old upload pump and awaits public CfSharp disposal before opening a
+fresh `CloudFileSystem` and official SQLite store session at the same registered
+path. This drains the native transfer and projection tail that can remain after
+the demand provider has returned. The prior anchor guard remains held throughout
+the transition. Library-dependent rename, conflict and upload services are
+rebuilt against the new owner; status reads and control operations using those
+services are serialized with the transition. Failed or cancelled recovery retains
+its admission and keeps the roots closed. Historical completion replay does not
+replace a library owner or reopen a root.
+
+Controlled creation, import, replacement, movement and retirement retain root
+work leases through their actual execution and input cleanup. They acquire their
+lease before capturing a library-dependent coordinator, so a resumed operation
+cannot accidentally use a disposed store. Full default Host bootstrap, pending
+namespace-operation recovery and independent root failure recovery remain
+separate integration work.
+
 An opt-in Windows test uses an external consumer process to enumerate a
 partial directory and read an online-only placeholder, then reopens the same
 CfSharp database and reads again. Another test exits a separate process with
@@ -318,7 +337,7 @@ an open SQLite transaction and verifies committed journal, partial batch,
 conflict, echo, and checkpoint data survive while the unfinished write does
 not. It also performs a SQLite integrity check.
 
-CfSharp `0.1.0-preview.2` provides the remote conflict and keep-local APIs
+CfSharp `0.1.0-preview.5` provides the remote conflict and keep-local APIs
 used here. The ARM64 CLI integration gate installs a signed Local Adapter,
 reads a Cloud Files range, queues and drains an offline upload, applies a
 remote batch, then verifies conflict and cursor state across Host restarts.

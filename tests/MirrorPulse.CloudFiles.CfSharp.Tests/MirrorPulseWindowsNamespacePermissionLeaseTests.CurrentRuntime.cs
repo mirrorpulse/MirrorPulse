@@ -68,6 +68,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 {
                     initial = await runtime.InitializeNamespaceProtectionAsync(Guid.NewGuid(), timeout.Token);
                     Assert.IsTrue(admission.IsAdmitted(registration.RootId));
+                    _ = await runtime.ReadStatusAsync([registration.InstanceId], timeout.Token);
                     var tree = await catalog.ReadNamespaceMemberTreeAsync(initial.AnchorMemberId, timeout.Token);
                     var root = tree.Single(item => item.RelativePath == "Docs");
                     moved = (await catalog.ReadNamespaceMemberAsync(tree.Single(item => item.RelativePath == "Docs/note.txt").MemberId, timeout.Token))!;
@@ -117,6 +118,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     Assert.AreNotEqual(initial!.RoleSid, completion.RoleSid); Assert.AreEqual(execution.RoleSid.Value, completion.RoleSid);
                     Assert.AreEqual(5, completion.MemberCount); Assert.IsEmpty(await catalog.ReadNamespaceDispatchFencedRootsAsync(timeout.Token));
                     Assert.IsTrue(admission.IsAdmitted(registration.RootId));
+                    _ = await runtime.ReadStatusAsync([registration.InstanceId], timeout.Token);
                     var inventory = await catalog.ReadNamespaceCurrentTreeSnapshotAsync(completion.AnchorMemberId, timeout.Token);
                     Assert.HasCount(5, inventory.Members); Assert.HasCount(1, inventory.RetiredMembers);
                     Assert.AreEqual(retired!.MemberId, inventory.RetiredMembers[0].Intent.MemberId);

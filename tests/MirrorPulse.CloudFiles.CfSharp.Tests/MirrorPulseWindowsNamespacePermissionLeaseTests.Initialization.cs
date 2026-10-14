@@ -71,6 +71,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 }
                 var completion = await runtime.InitializeNamespaceProtectionAsync(operation, timeout.Token);
                 Assert.IsTrue(admission.IsAdmitted(registration.RootId));
+                _ = await runtime.ReadStatusAsync([registration.InstanceId], timeout.Token);
                 var status = await runtime.ReadNamespaceInitializationStatusAsync(operation, timeout.Token);
                 Assert.AreEqual(completion, status.Completion); Assert.AreEqual(4, completion.MemberCount);
                 Assert.AreEqual(execution.RoleSid.Value, completion.RoleSid);
