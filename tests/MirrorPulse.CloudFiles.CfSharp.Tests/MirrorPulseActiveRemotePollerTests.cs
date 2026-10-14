@@ -13,7 +13,7 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 
 [SupportedOSPlatform("windows10.0.16299")]
 [TestClass]
-public sealed class MirrorPulseActiveRemotePollerTests
+public sealed partial class MirrorPulseActiveRemotePollerTests
 {
     [TestMethod]
     public async Task PollerUsesCurrentLabelAndAvailabilityWithoutChangingObjectIdentity()

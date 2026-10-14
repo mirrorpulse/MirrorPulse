@@ -69,8 +69,34 @@ public sealed class MirrorPulseDirectoryJournalTests
             await feed.DisposeAsync();
             CloudLocalChangeFeed replayFeed = fileSystem.CreateLocalChangeFeed();
             var completion = new MirrorPulseJournalUploadCompletion(replayFeed, state, new BackoffPolicy(TimeSpan.FromMilliseconds(50), TimeSpan.FromSeconds(1)));
+            await using var admission = new MirrorPulseNamespaceWorkAdmission([registration.RootId]);
+            await replayFeed.StartAsync(timeout.Token);
+            var closedSource = new MirrorPulseJournalUploadSource(replayFeed, router, catalog, _ => true, completion, admission);
+            var deferred = await closedSource.ReadPendingAsync(timeout.Token);
+            Assert.IsEmpty(deferred.ReadyCommands);
+            foreach (Guid operation in operations)
+            {
+                Assert.IsNull(await catalog.ReadMutationAsync(operation, timeout.Token));
+                await using var pending = await state.OpenStore.BeginTransactionAsync(timeout.Token);
+                Assert.IsNotNull(await pending.Operations.GetAsync(operation, timeout.Token));
+                await pending.RollbackAsync(timeout.Token);
+            }
+            // This unprotected provider fixture audits actual native namespace before opening
+            // its test work gate; it does not declare production strict-tree readiness.
+            await using (var recovery = await admission.BeginRecoveryAsync([registration.RootId], timeout.Token))
+            {
+                foreach (string path in new[] { "Docs", "Docs/empty", "Docs/parent", "Docs/parent/nested" })
+                {
+                    var actual = await fileSystem.GetDirectory(path).InspectAsync(timeout.Token);
+                    Assert.IsTrue(actual.Exists); Assert.AreEqual(CloudItemKind.Directory, actual.Kind); Assert.IsNotNull(actual.LocalBinding);
+                }
+                recovery.CompleteAfterFreshAudit();
+            }
+            // The pump owns and starts a fresh feed; the planning probe relinquishes its owner.
+            await replayFeed.DisposeAsync(); replayFeed = fileSystem.CreateLocalChangeFeed();
+            completion = new(replayFeed, state, new BackoffPolicy(TimeSpan.FromMilliseconds(50), TimeSpan.FromSeconds(1)));
             await using var pump = new MirrorPulseJournalUploadPump(replayFeed, router, catalog, remote, remote, state,
-                paths.SyncRootPath, paths.DataRootPath, _ => true, completion, mutations: remote, directories: remote, fileSystem: fileSystem);
+                paths.SyncRootPath, paths.DataRootPath, _ => true, completion, mutations: remote, directories: remote, fileSystem: fileSystem, namespaceWork: admission);
             await pump.StartAsync(timeout.Token);
             while (true)
             {
@@ -80,6 +106,8 @@ public sealed class MirrorPulseDirectoryJournalTests
             }
             Assert.AreEqual(3, remote.Creates);
             Assert.IsTrue(pump.Health.Healthy);
+            await using var drained = await admission.BeginRecoveryAsync([registration.RootId], timeout.Token);
+            Assert.IsFalse(admission.IsAdmitted(registration.RootId));
         }
         finally
         {

@@ -39,15 +39,25 @@ public sealed class MirrorPulseNamespaceWorkAdmission : IAsyncDisposable
     /// <summary>Retains ordinary work through all awaited operations and lazy-body disposal.</summary>
     public WorkLease Enter(IEnumerable<RootId> roots)
     {
+        if (!TryEnter(roots, out var lease))
+            throw new InvalidOperationException("The root requires fresh Host namespace recovery before accepting ordinary work.");
+        return lease!;
+    }
+
+    /// <summary>Atomically defers closed roots without reserving work in another selected root.</summary>
+    public bool TryEnter(IEnumerable<RootId> roots, out WorkLease? lease)
+    {
         RootId[] requested = Normalize(roots, allowEmpty: false);
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_closing, this);
+            lease = null;
+            if (requested.Any(root => !_roots.ContainsKey(root))) return false;
             var states = requested.Select(RequireRoot).ToArray();
             if (states.Any(state => !state.Ready || state.RecoveryOwner is not null))
-                throw new InvalidOperationException("The root requires fresh Host namespace recovery before accepting ordinary work.");
+                return false;
             foreach (var state in states) state.Active++;
-            _operations++; return new(this, requested);
+            _operations++; lease = new(this, requested); return true;
         }
     }
 

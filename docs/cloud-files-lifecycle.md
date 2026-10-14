@@ -136,6 +136,17 @@ and waits for those existing reads; a failed or canceled range cannot release
 the root while its consumer body remains open. Worker calls and lazy source
 disposal continue to use the captured normal user transport.
 
+Journal planning, excluded-metadata acknowledgment, dispatch, full rescan and
+remote polling can share the same root admission owner. Closed roots retain
+pending journal operations; a full rescan records their deferred requirement
+while continuing admitted roots. Polling retains admission across remote apply
+and durable snapshot projection. Remote batch application retains every affected
+root, including both sides of moves, and runs local application under the shared
+namespace actor and role. Source access remains on its normal-user transport.
+These application work leases do not replace CfSharp's complete native callback
+and official projection lifetime; automatic strict startup must drain that
+library lifecycle before permission recovery changes the live tree.
+
 Startup rebuilds missing remote conflict projections from CfSharp's decoded
 conflict queries. A mutation with a confirmed remote result and an absent
 official journal operation repairs its product projection before marking the

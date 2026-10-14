@@ -43,6 +43,7 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
     private readonly MirrorPulseInstanceScheduler _scheduler;
     private readonly bool _ownsScheduler;
     private readonly MirrorPulseNamespaceContentConfirmation _contentConfirmation;
+    private readonly MirrorPulseNamespaceWorkAdmission? _namespaceWork;
 
     public MirrorPulseJournalPumpHealth Health => _runner.Health;
 
@@ -65,7 +66,8 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
         CloudFileSystem? fileSystem = null,
         MirrorPulseInstanceScheduler? scheduler = null,
         MirrorPulseNamespaceActor? namespaceActor = null,
-        MirrorPulseNamespaceExecutionSession? namespaceExecution = null)
+        MirrorPulseNamespaceExecutionSession? namespaceExecution = null,
+        MirrorPulseNamespaceWorkAdmission? namespaceWork = null)
     {
         _feed = feed ?? throw new ArgumentNullException(nameof(feed));
         _router = router ?? throw new ArgumentNullException(nameof(router));
@@ -80,9 +82,10 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
         _ownsScheduler = scheduler is null;
         _scheduler = scheduler ?? new MirrorPulseInstanceScheduler();
         _contentConfirmation = new(catalog, router, namespaceActor, namespaceExecution);
+        _namespaceWork = namespaceWork;
         if (fileSystem is not null)
             _rescan = new(catalog, new MirrorPulseFullRescanPolicy(fileSystem, feed, state, router, catalog,
-                uploads, stats, mayDispatch, mutations, ranges, directories, conflicts, notifications, _scheduler, namespaceActor, namespaceExecution).ReconcileAsync,
+                uploads, stats, mayDispatch, mutations, ranges, directories, conflicts, notifications, _scheduler, namespaceActor, namespaceExecution, namespaceWork).ReconcileAsync,
                 feed.AcknowledgeFullRescanAsync, ProjectRescanAsync);
         _conflicts = conflicts;
         _notifications = notifications;
@@ -92,7 +95,7 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
         _syncRootPath = Path.GetFullPath(syncRootPath);
         _log = new LocalRollingLogWriter(Path.Combine(dataRootPath, "logs"));
         _completion = completion ?? throw new ArgumentNullException(nameof(completion));
-        _source = new MirrorPulseJournalUploadSource(feed, router, catalog, mayDispatch, _completion);
+        _source = new MirrorPulseJournalUploadSource(feed, router, catalog, mayDispatch, _completion, namespaceWork);
     }
 
     public async ValueTask StartAsync(CancellationToken cancellationToken = default)
@@ -173,8 +176,14 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
         await _catalog.SaveInstanceRuntimeStateAsync(new(record.Intent.InstanceId, "Connected", false, DateTimeOffset.UtcNow),
             cancellationToken).ConfigureAwait(false);
 
-    private ValueTask<bool> DispatchAsync(MirrorPulseWorkerChangeCommand command, CancellationToken cancellationToken) =>
-        _scheduler.RunAsync(command.InstanceId, token => DispatchCoreAsync(command, token), cancellationToken);
+    private async ValueTask<bool> DispatchAsync(MirrorPulseWorkerChangeCommand command, CancellationToken cancellationToken)
+    {
+        RootRegistration root = _router.GetRegistration(command.InstanceId, command.RootKey);
+        MirrorPulseNamespaceWorkAdmission.WorkLease? admission = null;
+        if (_namespaceWork is not null && !_namespaceWork.TryEnter([root.RootId], out admission)) return false;
+        using (admission)
+            return await _scheduler.RunAsync(command.InstanceId, token => DispatchCoreAsync(command, token), cancellationToken).ConfigureAwait(false);
+    }
 
     private async ValueTask<bool> DispatchCoreAsync(
         MirrorPulseWorkerChangeCommand command,

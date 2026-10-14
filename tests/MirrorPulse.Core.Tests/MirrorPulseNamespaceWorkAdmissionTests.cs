@@ -50,6 +50,8 @@ public sealed class MirrorPulseNamespaceWorkAdmissionTests
         RootId first = RootId.New(), second = RootId.New();
         await using var admission = new MirrorPulseNamespaceWorkAdmission([first, second]); await OpenAsync(admission, first, second);
         var recovery = await admission.BeginRecoveryAsync([second]);
+        Assert.IsFalse(admission.TryEnter([first, second], out var blocked)); Assert.IsNull(blocked);
+        Assert.IsFalse(admission.TryEnter([RootId.New()], out var unknown)); Assert.IsNull(unknown);
         Assert.ThrowsExactly<InvalidOperationException>(() => admission.Enter([first, second]));
         await Assert.ThrowsExactlyAsync<InvalidOperationException>(async () => await admission.BeginRecoveryAsync([first, second]));
         Assert.IsTrue(admission.IsAdmitted(first));

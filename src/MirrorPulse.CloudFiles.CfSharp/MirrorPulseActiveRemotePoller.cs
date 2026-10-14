@@ -32,6 +32,7 @@ public sealed class MirrorPulseActiveRemotePoller : IAsyncDisposable
     private readonly ConcurrentDictionary<InstanceId, IReadOnlyDictionary<string, SnapshotEntry>> _snapshots = new();
     private readonly MirrorPulseInstanceScheduler _scheduler;
     private readonly bool _ownsScheduler;
+    private readonly MirrorPulseNamespaceWorkAdmission? _namespaceWork;
     private readonly CancellationTokenSource _shutdown = new();
     private Task? _loop;
 
@@ -47,7 +48,8 @@ public sealed class MirrorPulseActiveRemotePoller : IAsyncDisposable
         IMirrorPulseRemotePollPendingStore? pendingStore = null,
         MirrorPulseInstanceScheduler? scheduler = null,
         Func<RootRegistration, CancellationToken, ValueTask<bool>>? mayPoll = null,
-        Func<IReadOnlyList<RootRegistration>>? currentRoots = null)
+        Func<IReadOnlyList<RootRegistration>>? currentRoots = null,
+        MirrorPulseNamespaceWorkAdmission? namespaceWork = null)
     {
         _source = source ?? throw new ArgumentNullException(nameof(source));
         ArgumentNullException.ThrowIfNull(instances);
@@ -75,6 +77,7 @@ public sealed class MirrorPulseActiveRemotePoller : IAsyncDisposable
         _currentRoots = currentRoots;
         _ownsScheduler = scheduler is null;
         _scheduler = scheduler ?? new MirrorPulseInstanceScheduler();
+        _namespaceWork = namespaceWork;
         if (pendingStore is not null && snapshotStore is null)
             throw new ArgumentException("Pending batches require a durable snapshot store.", nameof(snapshotStore));
     }
@@ -106,6 +109,9 @@ public sealed class MirrorPulseActiveRemotePoller : IAsyncDisposable
 
         RootRegistration root = roots[0];
         if (_mayPoll is not null && !await _mayPoll(root, cancellationToken).ConfigureAwait(false)) return false;
+        MirrorPulseNamespaceWorkAdmission.WorkLease? admission = null;
+        if (_namespaceWork is not null && !_namespaceWork.TryEnter([root.RootId], out admission)) return false;
+        using var retainedAdmission = admission;
 
         MirrorPulsePendingRemotePoll? pending = _pendingStore is null ? null :
             await _pendingStore.LoadAsync(instanceId, cancellationToken).ConfigureAwait(false);

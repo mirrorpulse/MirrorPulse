@@ -19,29 +19,46 @@ public sealed class MirrorPulseFullRescanPolicy(CloudFileSystem fileSystem, Clou
     IMirrorPulseWorkerRangeTransport? ranges = null, IMirrorPulseWorkerDirectoryPageSource? directories = null,
     MirrorPulseConflictCenter? conflicts = null, MirrorPulseConflictNotificationBridge? notifications = null,
     MirrorPulseInstanceScheduler? scheduler = null, MirrorPulseNamespaceActor? namespaceActor = null,
-    MirrorPulseNamespaceExecutionSession? namespaceExecution = null)
+    MirrorPulseNamespaceExecutionSession? namespaceExecution = null,
+    MirrorPulseNamespaceWorkAdmission? namespaceWork = null)
 {
     private readonly MirrorPulseMutationExecutor _executor = new(catalog);
     private readonly MirrorPulseMutationReadback _readback = new(stats, ranges, directories);
     private readonly MirrorPulseNamespaceContentConfirmation _contentConfirmation = new(catalog, router, namespaceActor, namespaceExecution);
 
-    public ValueTask<int> ReconcileAsync(CancellationToken cancellationToken)
+    public async ValueTask<int> ReconcileAsync(CancellationToken cancellationToken)
     {
-        if (scheduler is null) return ReconcileCoreAsync(cancellationToken);
-        InstanceId[] instances = router.Registrations.Where(root => root.State == RootRegistrationState.Active && mayDispatch(root.InstanceId))
-            .Select(root => root.InstanceId).Distinct().OrderBy(instance => instance.Value).ToArray();
-        ValueTask<int> EnterAsync(int index, CancellationToken token) => index == instances.Length ? ReconcileCoreAsync(token) :
-            scheduler.RunAsync(instances[index], nested => EnterAsync(index + 1, nested), token);
-        return EnterAsync(0, cancellationToken);
+        var leases = new List<MirrorPulseNamespaceWorkAdmission.WorkLease>();
+        var admitted = new HashSet<RootId>();
+        try
+        {
+            var pending = (await catalog.ReadNamespaceDispatchFencedRootsAsync(cancellationToken).ConfigureAwait(false)).ToHashSet();
+            foreach (var root in router.Registrations.Where(root => root.State == RootRegistrationState.Active && mayDispatch(root.InstanceId) && !pending.Contains(root.RootId)))
+            {
+                if (namespaceWork is not null)
+                {
+                    if (!namespaceWork.TryEnter([root.RootId], out var lease)) continue;
+                    leases.Add(lease!);
+                }
+                admitted.Add(root.RootId);
+            }
+            if (scheduler is null) return await ReconcileCoreAsync(admitted, cancellationToken).ConfigureAwait(false);
+            InstanceId[] instances = router.Registrations.Where(root => admitted.Contains(root.RootId))
+                .Select(root => root.InstanceId).Distinct().OrderBy(instance => instance.Value).ToArray();
+            ValueTask<int> EnterAsync(int index, CancellationToken token) => index == instances.Length ? ReconcileCoreAsync(admitted, token) :
+                scheduler.RunAsync(instances[index], nested => EnterAsync(index + 1, nested), token);
+            return await EnterAsync(0, cancellationToken).ConfigureAwait(false);
+        }
+        finally { foreach (var lease in leases) lease.Dispose(); }
     }
 
-    private async ValueTask<int> ReconcileCoreAsync(CancellationToken cancellationToken)
+    private async ValueTask<int> ReconcileCoreAsync(HashSet<RootId> admitted, CancellationToken cancellationToken)
     {
         if (!feed.IsStarted) throw new InvalidOperationException("Full rescan requires the authoritative local change feed.");
         HashSet<RootId> pendingRoots = (await catalog.ReadNamespaceDispatchFencedRootsAsync(cancellationToken).ConfigureAwait(false)).ToHashSet();
         var observations = new Dictionary<string, (CloudItem Item, CloudItemSnapshot Snapshot)>(StringComparer.OrdinalIgnoreCase);
         var enabled = router.Registrations.Where(root => root.State == RootRegistrationState.Active && mayDispatch(root.InstanceId) &&
-            !pendingRoots.Contains(root.RootId)).ToArray();
+            !pendingRoots.Contains(root.RootId) && admitted.Contains(root.RootId)).ToArray();
         // Complete discovery before any missing-path decision. Nonrecursive public enumeration
         // lets each materialized directory failure abort the scan rather than silently skip a subtree.
         foreach (RootRegistration root in enabled)

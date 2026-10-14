@@ -26,6 +26,7 @@ public sealed class MirrorPulseJournalUploadSource
     private readonly MirrorPulseProductCatalog _catalog;
     private readonly Func<InstanceId, bool> _mayDispatch;
     private readonly MirrorPulseJournalUploadCompletion? _completion;
+    private readonly MirrorPulseNamespaceWorkAdmission? _namespaceWork;
     public bool RequiresFullRescan { get; private set; }
     public void ClearFullRescanRequest() => RequiresFullRescan = false;
 
@@ -34,7 +35,8 @@ public sealed class MirrorPulseJournalUploadSource
         MirrorPulseRootRouter router,
         MirrorPulseProductCatalog catalog,
         Func<InstanceId, bool> mayDispatch,
-        MirrorPulseJournalUploadCompletion? completion = null)
+        MirrorPulseJournalUploadCompletion? completion = null,
+        MirrorPulseNamespaceWorkAdmission? namespaceWork = null)
     {
         ArgumentNullException.ThrowIfNull(feed);
         ArgumentNullException.ThrowIfNull(router);
@@ -45,6 +47,7 @@ public sealed class MirrorPulseJournalUploadSource
         _catalog = catalog;
         _mayDispatch = mayDispatch;
         _completion = completion;
+        _namespaceWork = namespaceWork;
     }
 
     public async ValueTask<MirrorPulseJournalUploadBatch> ReadPendingAsync(
@@ -105,21 +108,35 @@ public sealed class MirrorPulseJournalUploadSource
         int deferred = plan.BlockedOperations?.Count ?? 0;
         foreach (MirrorPulseBlockedLocalOperation blocked in plan.BlockedOperations ?? [])
             await _catalog.SaveBlockedLocalOperationAsync(blocked, cancellationToken).ConfigureAwait(false);
-        Guid[] excludedMetadata = (plan.BlockedOperations ?? [])
+        var excludedMetadata = (plan.BlockedOperations ?? [])
             .Where(operation => operation.Reason == MirrorPulseLocalOperationBlockReason.UnsupportedMetadataChange &&
                 !IsNamespaceFenced(operation.RelativePath, pendingRoots))
-            .Select(operation => operation.OperationId).ToArray();
-        if (excludedMetadata.Length != 0)
+            .GroupBy(operation =>
+            {
+                var routed = _router.ResolvePath(operation.RelativePath);
+                return _router.GetRegistration(routed.InstanceId, routed.RootKey).RootId;
+            });
+        foreach (var rootMetadata in excludedMetadata)
         {
+            MirrorPulseNamespaceWorkAdmission.WorkLease? admission = null;
+            if (_namespaceWork is not null && !_namespaceWork.TryEnter([rootMetadata.Key], out admission)) continue;
+            using var retainedAdmission = admission;
             // Retain even unsupported metadata while the root's namespace is unresolved.
             // Durable product results accept the notification's unsupported meaning,
             // not remote metadata. No revision is advanced. Settling these entries
             // also prevents excluded metadata from starving a bounded official batch.
-            await _feed.AcknowledgeAsync(excludedMetadata.Select(operationId =>
-                new CloudLocalChangeAcknowledgement(operationId, null)), cancellationToken).ConfigureAwait(false);
+            await _feed.AcknowledgeAsync(rootMetadata.Select(operation =>
+                new CloudLocalChangeAcknowledgement(operation.OperationId, null)), cancellationToken).ConfigureAwait(false);
         }
         foreach (MirrorPulseWorkerChangeCommand command in plan.Commands.OrderBy(command => command.Sequence))
         {
+            RootRegistration root = _router.GetRegistration(command.InstanceId, command.RootKey);
+            MirrorPulseNamespaceWorkAdmission.WorkLease? admission = null;
+            if (_namespaceWork is not null && !_namespaceWork.TryEnter([root.RootId], out admission))
+            {
+                held.Add(command); deferred++; continue;
+            }
+            using var retainedAdmission = admission;
             byte[] fingerprint = SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(command));
             // Official identity projection may clear a journal's old ItemId reference.
             // The operation, routing, paths, kind, sequence and observation remain fixed;
@@ -146,7 +163,6 @@ public sealed class MirrorPulseJournalUploadSource
                 ? null
                 : await _completion.GetRetryAfterAsync(command.OperationId, cancellationToken)
                     .ConfigureAwait(false);
-            RootRegistration root = _router.GetRegistration(command.InstanceId, command.RootKey);
             if (_mayDispatch(command.InstanceId) && root.State == RootRegistrationState.Active && !pendingRoots.Contains(root.RootId) &&
                 !await _catalog.HasPendingUploadConflictAsync(command.OperationId, cancellationToken)
                     .ConfigureAwait(false) &&

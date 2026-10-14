@@ -724,7 +724,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                 _uploadPump = new MirrorPulseJournalUploadPump(feed, router, catalog, uploads, stats, state,
                     syncRootPath, dataRootPath, mayDispatch, completion, conflicts, notifications, mutations,
                     uploads as IMirrorPulseWorkerRangeTransport, uploads as IMirrorPulseWorkerDirectoryPageSource, fileSystem, _scheduler,
-                    _namespaceActor, _namespaceExecution);
+                    _namespaceActor, _namespaceExecution, namespaceWork);
                 _conflictActions = new MirrorPulseUploadConflictActions(catalog, state, feed,
                     new BackoffPolicy(TimeSpan.FromSeconds(2), TimeSpan.FromMinutes(5)),
                     new MirrorPulseStoragePaths(syncRootPath, dataRootPath), router, mutations);
@@ -786,7 +786,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             await MirrorPulseCloudStatusReader.ReadAsync(state.OpenStore, instanceIds, cancellationToken)
                 .ConfigureAwait(false);
 
-        public ValueTask<CloudRemoteApplyResult> ApplyRemoteBatchAsync(
+        public async ValueTask<CloudRemoteApplyResult> ApplyRemoteBatchAsync(
             InstanceId instanceId,
             CloudRemoteChangeBatch batch,
             MirrorPulseProductCatalog catalog,
@@ -798,7 +798,34 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             var projector = new MirrorPulseRemoteConflictProjector(
                 fileSystem, catalog, center, notifications);
             var coordinator = new MirrorPulseRemoteBatchCoordinator(fileSystem, state, projector);
-            return coordinator.ApplyAsync(instanceId, batch, options, cancellationToken);
+            MirrorPulseNamespaceWorkAdmission.WorkLease? admission = null;
+            if (namespaceWork is not null)
+            {
+                if (router is null) throw new InvalidOperationException("Remote namespace admission requires current root routing.");
+                var affected = batch.Changes.Count == 0 ? router.Registrations.Where(root => root.InstanceId == instanceId).Select(root => root.RootId) :
+                    batch.Changes.SelectMany(change => change.PreviousRelativePath is { } previous ? new[] { change.RelativePath, previous } : [change.RelativePath])
+                        .Select(path =>
+                        {
+                            var route = router.ResolveCurrentPath(path);
+                            if (route.InstanceId != instanceId) throw new InvalidDataException("The remote batch belongs to another Adapter instance.");
+                            return router.GetRegistration(route.InstanceId, route.RootKey).RootId;
+                        });
+                admission = namespaceWork.Enter(affected.Distinct());
+            }
+            using (admission)
+            {
+                if (_namespaceActor is null) return await coordinator.ApplyAsync(instanceId, batch, options, cancellationToken).ConfigureAwait(false);
+                return await _namespaceActor.RunAsync(async token =>
+                {
+                    if (_namespaceExecution is null) return await coordinator.ApplyAsync(instanceId, batch, options, token).ConfigureAwait(false);
+                    if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
+                        throw new PlatformNotSupportedException("Remote namespace execution requires Windows 11 24H2 or later.");
+                    CloudRemoteApplyResult result = null!;
+                    await _namespaceExecution.RunNamespaceOperationAsync(async () =>
+                        result = await coordinator.ApplyAsync(instanceId, batch, options, token).ConfigureAwait(false)).ConfigureAwait(false);
+                    return result;
+                }, cancellationToken).ConfigureAwait(false);
+            }
         }
 
         public ValueTask DisposeAsync()
