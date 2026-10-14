@@ -5,6 +5,8 @@ using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.CloudFiles.CfSharp;
 
+internal enum MirrorPulseNamespaceBornMemberRecoveryCheckpoint { AfterActionPrepared, AfterScopeDrained, AfterProtectionReadback, AfterCompletionRecorded }
+
 public sealed record MirrorPulseNamespaceBornMemberRecoveryResult(Guid ActionId,
     MirrorPulseNamespaceBornMemberRecoveryCompletion? Completion, CloudProtectedLocalOperationResult? Receipt,
     bool IsHistoricalReplay);
@@ -15,6 +17,8 @@ public sealed class MirrorPulseNamespaceBornMemberRecoveryCoordinator(CloudFileS
     MirrorPulseRootRouter router, MirrorPulseNamespaceExecutionSession execution, MirrorPulseNamespaceActor actor,
     MirrorPulseInstanceScheduler scheduler, MirrorPulseNamespacePermissionCoordinator permissions)
 {
+    internal Func<MirrorPulseNamespaceBornMemberRecoveryCheckpoint, CancellationToken, ValueTask>? Checkpoint { get; init; }
+
     public async ValueTask<MirrorPulseNamespaceBornMemberRecoveryResult> RecoverAsync(Guid initializationOperationId,
         Guid actionId, Guid memberId, CancellationToken cancellationToken = default)
     {
@@ -66,6 +70,7 @@ public sealed class MirrorPulseNamespaceBornMemberRecoveryCoordinator(CloudFileS
                     history.Count == 0 ? null : history[^1].ActionId, child, parent, target, DateTimeOffset.UtcNow), stop).ConfigureAwait(false);
                 if (action.Parent != parent || action.TargetDacl != target)
                     throw new InvalidOperationException("The retained action requires a new immutable successor for this parent role.");
+                if (Checkpoint is not null) await Checkpoint(MirrorPulseNamespaceBornMemberRecoveryCheckpoint.AfterActionPrepared, stop).ConfigureAwait(false);
                 var receipt = await permissions.RunAdmittedBornMemberRecoveryAsync(actionId, (current, permissionToken) =>
                     MirrorPulseWindowsNamespacePermissionLease.RunOwnedProtectedAsync(item, router, member.LocalObject, async (lease, scopeToken) =>
                     {
@@ -94,10 +99,13 @@ public sealed class MirrorPulseNamespaceBornMemberRecoveryCoordinator(CloudFileS
                 {
                     result = new(actionId, null, receipt, false); return;
                 }
+                if (Checkpoint is not null) await Checkpoint(MirrorPulseNamespaceBornMemberRecoveryCheckpoint.AfterScopeDrained, stop).ConfigureAwait(false);
                 MirrorPulseNamespaceBirthProtectionVerifier.RequireUnchangedParent(parentBefore, await parentGuard.InspectAsync(stop).ConfigureAwait(false));
                 var observed = await MirrorPulseNamespaceBirthProtectionVerifier.InspectRegisteredAsync(catalog, actionId, memberId, item, parentItem,
                     router, actor, parent, stop).ConfigureAwait(false);
+                if (Checkpoint is not null) await Checkpoint(MirrorPulseNamespaceBornMemberRecoveryCheckpoint.AfterProtectionReadback, stop).ConfigureAwait(false);
                 var completion = await catalog.CompleteNamespaceBornMemberRecoveryAsync(actionId, observed, true, DateTimeOffset.UtcNow, stop).ConfigureAwait(false);
+                if (Checkpoint is not null) await Checkpoint(MirrorPulseNamespaceBornMemberRecoveryCheckpoint.AfterCompletionRecorded, stop).ConfigureAwait(false);
                 result = new(actionId, completion, receipt, false);
             }).ConfigureAwait(false);
             return result;
