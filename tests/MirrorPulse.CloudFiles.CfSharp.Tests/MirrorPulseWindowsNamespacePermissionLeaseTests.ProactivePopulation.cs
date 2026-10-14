@@ -95,7 +95,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
 
     private sealed class ProactivePopulationProvider(MirrorPulseDemandProvider delegated, MirrorPulseRootRouter router,
         Func<CloudFileSystem> fileSystem, MirrorPulseNamespaceExecutionSession execution, MirrorPulseNamespaceActor actor,
-        CloudPlaceholderIdentity identity) : ICloudDemandProvider
+        CloudPlaceholderIdentity identity, Func<CloudPlaceholderSpec, CancellationToken, ValueTask>? publish = null) : ICloudDemandProvider
     {
         public int Creations { get; private set; }
         public ValueTask<Stream> OpenReadAsync(CloudFileFetchRequest request, CancellationToken cancellationToken) => delegated.OpenReadAsync(request, cancellationToken);
@@ -104,6 +104,11 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             var page = await delegated.FetchChildrenAsync(request, cancellationToken);
             if (router.IsSyncRoot(request.NormalizedPath)) return page;
             Assert.HasCount(1, page.Children);
+            if (publish is not null)
+            {
+                await publish(page.Children[0], cancellationToken);
+                Creations++; return new CloudProviderDirectoryPage([]);
+            }
             await actor.RunAsync(async token =>
             {
                 actor.AssertAccess();
