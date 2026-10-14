@@ -26,6 +26,8 @@ public sealed partial class MirrorPulseProductCatalog
             var completed = await ReadNamespaceInitializationCompletionCoreAsync(operationId, transaction, cancellationToken).ConfigureAwait(false);
             if (completed is not null)
             {
+                if (completed.InventoryKind != MirrorPulseNamespaceInitializationInventoryKind.OriginalInventory)
+                    throw new InvalidOperationException("This operation completed a current inventory rather than the original inventory.");
                 await RequireNamespaceInitializationTerminalAsync(intent, completed, transaction, cancellationToken).ConfigureAwait(false);
                 transaction.Commit(); return completed;
             }
@@ -141,6 +143,7 @@ public sealed partial class MirrorPulseProductCatalog
         var result = JsonSerializer.Deserialize<MirrorPulseNamespaceInitializationCompletion>(payload, TopologyJsonOptions)
             ?? throw new InvalidDataException("The initialization completion is missing.");
         if (result.OperationId != operationId || result.AnchorMemberId == Guid.Empty || result.MemberCount < 2 || result.CompletedAt == default ||
+            !Enum.IsDefined(result.InventoryKind) ||
             result.CatalogFingerprint is not { Length: 64 } || !result.CatalogFingerprint.All(char.IsAsciiHexDigitUpper) ||
             !new SecurityIdentifier(result.RoleSid).IsWellKnown(WellKnownSidType.LogonIdsSid))
             throw new InvalidDataException("The initialization completion is inconsistent.");

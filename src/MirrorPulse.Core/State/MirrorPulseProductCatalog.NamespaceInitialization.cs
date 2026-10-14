@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Data.Sqlite;
 using MirrorPulse.Core.Contracts;
 
@@ -12,9 +13,15 @@ public sealed record MirrorPulseNamespaceInitializationRoot(RootId RootId, Guid 
 public sealed record MirrorPulseNamespaceInitializationIntent(int Version, Guid OperationId,
     IReadOnlyList<MirrorPulseNamespaceInitializationRoot> Roots, DateTimeOffset PreparedAt);
 
-/// <summary>A historical original-tree audit receipt. A later Host still needs a fresh current-role audit.</summary>
+public enum MirrorPulseNamespaceInitializationInventoryKind { OriginalInventory, CurrentInventory }
+
+/// <summary>A historical inventory audit receipt. A later Host still needs a fresh current-role audit.</summary>
 public sealed record MirrorPulseNamespaceInitializationCompletion(Guid OperationId, Guid AnchorMemberId,
-    string RoleSid, int MemberCount, string CatalogFingerprint, DateTimeOffset CompletedAt);
+    string RoleSid, int MemberCount, string CatalogFingerprint, DateTimeOffset CompletedAt)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public MirrorPulseNamespaceInitializationInventoryKind InventoryKind { get; init; }
+}
 
 public sealed record MirrorPulseNamespaceInitializationStatus(MirrorPulseNamespaceInitializationIntent Intent,
     MirrorPulseNamespaceInitializationCompletion? Completion);
