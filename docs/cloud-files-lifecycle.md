@@ -118,6 +118,15 @@ explicit Host operation through the versioned Control client. It returns the
 retained operation ID and historical inventory kind; pending requests remain
 queryable through the existing initialization status and discovery commands.
 
+A Host-owned root admission owner can close selected stable roots before recovery
+and drain their already accepted ordinary work. Other roots continue independently.
+Roots start closed in each new owner; fresh initialization or current recovery can
+reopen them only on successful scope exit after native audit and guard transfer.
+Cancellation or incomplete recovery keeps them closed. Historical completion
+does not reopen a new Host owner. This boundary is distinct from durable catalog
+fences and still needs all ordinary source, projection and bootstrap paths to be
+connected before automatic strict startup can use it.
+
 Startup rebuilds missing remote conflict projections from CfSharp's decoded
 conflict queries. A mutation with a confirmed remote result and an absent
 official journal operation repairs its product projection before marking the

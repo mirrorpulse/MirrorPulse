@@ -56,9 +56,10 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 await using var execution = new MirrorPulseNamespaceExecutionSession();
                 await using var actor = new MirrorPulseNamespaceActor();
                 await using var scheduler = new MirrorPulseInstanceScheduler();
+                await using var admission = new MirrorPulseNamespaceWorkAdmission([registration.RootId]);
                 await using var catalog = await MirrorPulseProductCatalog.OpenAsync(paths, timeout.Token);
                 var factory = new CfSharpMirrorPulseCloudRuntimeFactory(router: router, catalog: catalog,
-                    namespaceExecution: execution, namespaceActor: actor, scheduler: scheduler, mayDispatch: _ => true);
+                    namespaceExecution: execution, namespaceActor: actor, scheduler: scheduler, mayDispatch: _ => true, namespaceWork: admission);
                 await using var runtime = factory.Create(paths); await runtime.StartAsync(timeout.Token);
                 Guid operation = Guid.NewGuid();
                 if (owner == 1)
@@ -69,6 +70,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     Assert.IsNull((await runtime.ReadNamespaceInitializationStatusAsync(operation, timeout.Token)).Completion);
                 }
                 var completion = await runtime.InitializeNamespaceProtectionAsync(operation, timeout.Token);
+                Assert.IsTrue(admission.IsAdmitted(registration.RootId));
                 var status = await runtime.ReadNamespaceInitializationStatusAsync(operation, timeout.Token);
                 Assert.AreEqual(completion, status.Completion); Assert.AreEqual(4, completion.MemberCount);
                 Assert.AreEqual(execution.RoleSid.Value, completion.RoleSid);
@@ -81,6 +83,16 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 {
                     firstMembers = members.ToArray(); firstCompletion = completion;
                     await File.WriteAllTextAsync(note, latest, timeout.Token);
+                    using var acceptedWork = admission.Enter([registration.RootId]);
+                    var recovering = runtime.RecoverNamespaceCurrentTreeAsync(Guid.NewGuid(), timeout.Token).AsTask();
+                    using var closeDeadline = CancellationTokenSource.CreateLinkedTokenSource(timeout.Token);
+                    closeDeadline.CancelAfter(TimeSpan.FromSeconds(5));
+                    while (admission.IsAdmitted(registration.RootId)) await Task.Delay(1, closeDeadline.Token);
+                    Assert.IsFalse(recovering.IsCompleted);
+                    Assert.ThrowsExactly<InvalidOperationException>(() => admission.Enter([registration.RootId]));
+                    acceptedWork.Dispose();
+                    Assert.AreEqual(MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory, (await recovering).InventoryKind);
+                    Assert.IsTrue(admission.IsAdmitted(registration.RootId));
                 }
                 else
                 {

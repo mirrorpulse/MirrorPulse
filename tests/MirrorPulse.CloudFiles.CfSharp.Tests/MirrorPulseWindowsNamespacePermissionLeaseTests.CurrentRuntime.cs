@@ -58,13 +58,16 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 await using var execution = new MirrorPulseNamespaceExecutionSession();
                 await using var actor = new MirrorPulseNamespaceActor();
                 await using var scheduler = new MirrorPulseInstanceScheduler();
+                await using var admission = new MirrorPulseNamespaceWorkAdmission([registration.RootId]);
                 await using var catalog = await MirrorPulseProductCatalog.OpenAsync(paths, timeout.Token);
                 var factory = new CfSharpMirrorPulseCloudRuntimeFactory(router: router, catalog: catalog,
-                    namespaceExecution: execution, namespaceActor: actor, scheduler: scheduler, mayDispatch: _ => true);
+                    namespaceExecution: execution, namespaceActor: actor, scheduler: scheduler, mayDispatch: _ => true, namespaceWork: admission);
                 await using var runtime = factory.Create(paths); await runtime.StartAsync(timeout.Token);
+                Assert.IsFalse(admission.IsAdmitted(registration.RootId));
                 if (owner == 0)
                 {
                     initial = await runtime.InitializeNamespaceProtectionAsync(Guid.NewGuid(), timeout.Token);
+                    Assert.IsTrue(admission.IsAdmitted(registration.RootId));
                     var tree = await catalog.ReadNamespaceMemberTreeAsync(initial.AnchorMemberId, timeout.Token);
                     var root = tree.Single(item => item.RelativePath == "Docs");
                     moved = (await catalog.ReadNamespaceMemberAsync(tree.Single(item => item.RelativePath == "Docs/note.txt").MemberId, timeout.Token))!;
@@ -83,15 +86,19 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 }
                 else
                 {
+                    Assert.AreEqual(initial, await runtime.InitializeNamespaceProtectionAsync(initial!.OperationId, timeout.Token));
+                    Assert.IsFalse(admission.IsAdmitted(registration.RootId));
                     Guid operation = Guid.NewGuid();
                     await using (var writer = new FileStream(movedPath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite))
                         await Assert.ThrowsExactlyAsync<IOException>(async () => await runtime.RecoverNamespaceCurrentTreeAsync(operation, timeout.Token));
                     Assert.IsNull((await runtime.ReadNamespaceInitializationStatusAsync(operation, timeout.Token)).Completion);
+                    Assert.IsFalse(admission.IsAdmitted(registration.RootId));
                     CollectionAssert.AreEqual(new[] { registration.RootId }, (await catalog.ReadNamespaceDispatchFencedRootsAsync(timeout.Token)).ToArray());
                     var completion = await runtime.RecoverNamespaceCurrentTreeAsync(operation, timeout.Token);
                     Assert.AreEqual(MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory, completion.InventoryKind);
                     Assert.AreNotEqual(initial!.RoleSid, completion.RoleSid); Assert.AreEqual(execution.RoleSid.Value, completion.RoleSid);
                     Assert.AreEqual(5, completion.MemberCount); Assert.IsEmpty(await catalog.ReadNamespaceDispatchFencedRootsAsync(timeout.Token));
+                    Assert.IsTrue(admission.IsAdmitted(registration.RootId));
                     var inventory = await catalog.ReadNamespaceCurrentTreeSnapshotAsync(completion.AnchorMemberId, timeout.Token);
                     Assert.HasCount(5, inventory.Members); Assert.HasCount(1, inventory.RetiredMembers);
                     Assert.AreEqual(retired!.MemberId, inventory.RetiredMembers[0].Intent.MemberId);
@@ -110,7 +117,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     await Assert.ThrowsAsync<IOException>(() => Task.Run(() => Directory.Move(paths.SyncRootPath, paths.SyncRootPath + ".moved"), timeout.Token));
                     await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() => File.Delete(movedPath), timeout.Token));
                     Assert.IsNull(await catalog.ReadMutationAsync(operation, timeout.Token));
-                    TestContext.WriteLine("CurrentRuntimeRecovery: productionRuntime=True; previousRuntimeDisposed=True; movedOriginalAndBorn=True; retiredOriginalRetained=True; latestOrdinaryBytesPreserved=True; busyKeepsInitializer=True; sameOperationRetry=True; parentFirstRecovery=True; completeNativeCurrentAudit=True; currentReceiptAndOwnedFenceRelease=True; liveAnchorRetained=True; historicalReplayPreservesLaterEdit=True; noRemoteAcceptance=True; defaultHostStartup=False; hostCliIntegrated=False.");
+                    TestContext.WriteLine("CurrentRuntimeRecovery: productionRuntime=True; previousRuntimeDisposed=True; movedOriginalAndBorn=True; retiredOriginalRetained=True; latestOrdinaryBytesPreserved=True; busyKeepsInitializer=True; sameOperationRetry=True; parentFirstRecovery=True; completeNativeCurrentAudit=True; currentReceiptAndOwnedFenceRelease=True; liveAnchorRetained=True; historicalReplayPreservesLaterEdit=True; rootsInitiallyClosed=True; historicalCompletionDoesNotAdmitNewHost=True; busyDoesNotAdmit=True; freshAuditAdmitsOnScopeExit=True; noRemoteAcceptance=True; defaultHostStartup=False; hostCliIntegrated=False.");
                 }
             }
         }

@@ -216,6 +216,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
     private readonly MirrorPulseInstanceScheduler? _scheduler;
     private readonly MirrorPulseNamespaceExecutionSession? _namespaceExecution;
     private readonly MirrorPulseNamespaceActor? _namespaceActor;
+    private readonly MirrorPulseNamespaceWorkAdmission? _namespaceWork;
 
     public CfSharpMirrorPulseCloudRuntimeFactory(
         ICloudDemandProvider? provider = null,
@@ -229,7 +230,8 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         MirrorPulseConflictNotificationBridge? notifications = null,
         MirrorPulseInstanceScheduler? scheduler = null,
         MirrorPulseNamespaceExecutionSession? namespaceExecution = null,
-        MirrorPulseNamespaceActor? namespaceActor = null)
+        MirrorPulseNamespaceActor? namespaceActor = null,
+        MirrorPulseNamespaceWorkAdmission? namespaceWork = null)
     {
         _provider = provider;
         _uploads = uploads;
@@ -243,6 +245,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         _scheduler = scheduler;
         _namespaceExecution = namespaceExecution;
         _namespaceActor = namespaceActor;
+        _namespaceWork = namespaceWork;
     }
 
     public IMirrorPulseCloudRuntime Create(MirrorPulseStoragePaths paths)
@@ -253,7 +256,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             .WithStateStore(state)
             .WithContentProvider(_provider ?? MirrorPulseDemandProvider.CreateWithoutAdapters(paths.SyncRootPath))
             .Build(), state, paths.SyncRootPath, paths.DataRootPath, _uploads, _stats, _mutations, _router, _catalog,
-            _mayDispatch, _conflicts, _notifications, _scheduler, _namespaceExecution, _namespaceActor);
+            _mayDispatch, _conflicts, _notifications, _scheduler, _namespaceExecution, _namespaceActor, _namespaceWork);
     }
 
     private sealed class CfSharpRuntime(
@@ -271,7 +274,8 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         MirrorPulseConflictNotificationBridge? notifications,
         MirrorPulseInstanceScheduler? scheduler,
         MirrorPulseNamespaceExecutionSession? namespaceExecution,
-        MirrorPulseNamespaceActor? namespaceActor)
+        MirrorPulseNamespaceActor? namespaceActor,
+        MirrorPulseNamespaceWorkAdmission? namespaceWork)
         : IMirrorPulseCloudRuntime
     {
         private MirrorPulseJournalUploadPump? _uploadPump;
@@ -302,12 +306,14 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             try
             {
                 ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
+                await using var admission = await BeginInitializationWorkRecoveryAsync(operationId, cancellationToken).ConfigureAwait(false);
                 var result = await new MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(fileSystem, catalog!, router!, _namespaceExecution!,
                     _namespaceActor!, _scheduler, _permissions!).RecoverAsync(operationId, cancellationToken).ConfigureAwait(false);
                 if (!result.IsHistoricalReplay)
                 {
                     var prior = _initializationProtection; _initializationProtection = result;
                     if (prior is not null) await prior.DisposeAsync().ConfigureAwait(false);
+                    admission?.CompleteAfterFreshAudit();
                 }
                 return result.Completion;
             }
@@ -324,16 +330,26 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             try
             {
                 ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
+                await using var admission = await BeginInitializationWorkRecoveryAsync(operationId, cancellationToken).ConfigureAwait(false);
                 var result = await new MirrorPulseNamespaceInitializationCoordinator(fileSystem, catalog!, router!, _namespaceExecution!,
                     _namespaceActor!, _scheduler, _permissions!).InitializeAsync(operationId, cancellationToken).ConfigureAwait(false);
                 if (!result.IsHistoricalReplay)
                 {
                     var prior = _initializationProtection; _initializationProtection = result;
                     if (prior is not null) await prior.DisposeAsync().ConfigureAwait(false);
+                    admission?.CompleteAfterFreshAudit();
                 }
                 return result.Completion;
             }
             finally { _initializationGate.Release(); }
+        }
+
+        private async ValueTask<MirrorPulseNamespaceWorkAdmission.RecoveryLease?> BeginInitializationWorkRecoveryAsync(Guid operationId,
+            CancellationToken token)
+        {
+            if (namespaceWork is null || await catalog!.ReadNamespaceInitializationCompletionAsync(operationId, token).ConfigureAwait(false) is not null)
+                return null;
+            return await namespaceWork.BeginRecoveryAsync(router!.Registrations.Select(root => root.RootId), token).ConfigureAwait(false);
         }
 
         public ValueTask<MirrorPulseNamespaceInitializationStatus> ReadNamespaceInitializationStatusAsync(Guid operationId,
@@ -415,6 +431,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             if (parent.RootId is null) throw new InvalidOperationException("Creation requires an Adapter's managed root.");
             var registration = router.Registrations.Single(root => root.RootId == parent.RootId);
             var coordinator = new MirrorPulseNamespaceCreationCoordinator(fileSystem, state, catalog, router, _namespaceExecution, _namespaceActor);
+            using var admission = namespaceWork?.Enter([registration.RootId]);
             return await _scheduler.RunAsync(registration.InstanceId,
                 token => coordinator.CreateAsync(operationId, parentMemberId, name, isDirectory, token), cancellationToken).ConfigureAwait(false);
         }
@@ -543,6 +560,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                 ?? throw new FileNotFoundException("The source member is not registered.");
             var registration = router.Registrations.Single(root => root.RootId == member.RootId);
             var coordinator = new MirrorPulseNamespaceMemberMoveCoordinator(fileSystem, state, catalog, router, _namespaceExecution, _namespaceActor);
+            using var admission = namespaceWork?.Enter([registration.RootId]);
             return await _scheduler.RunAsync(registration.InstanceId,
                 token => coordinator.PrepareAsync(operationId, memberId, targetParentMemberId, targetName, token), cancellationToken).ConfigureAwait(false);
         }
