@@ -81,7 +81,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         var members = await catalog.ReadNamespacePermissionTreeMembersAsync(manifestId, cancellationToken: timeout.Token);
                         for (int index = 0; index < items.Length; index++)
                         {
-                            var preparation = members.Single(member => member.Preparation.Baseline.RelativePath == items[index].RelativePath).Preparation;
+                            var preparation = members.Single(member => member.Preparation.Baseline.RelativePath == items[index].RelativePath.Replace('\\', '/')).Preparation;
                             originals[index] = preparation.Baseline; protections[index] = preparation.Intent;
                             Assert.AreEqual(fixtureUser.User!.Value, originals[index].OwnerSid);
                             Assert.AreNotEqual(originals[index].OriginalDacl, protections[index].TargetDacl);
