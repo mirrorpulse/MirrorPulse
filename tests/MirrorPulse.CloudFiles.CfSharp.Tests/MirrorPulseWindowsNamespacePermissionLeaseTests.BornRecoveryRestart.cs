@@ -156,7 +156,12 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         Assert.IsNull((await catalog.ReadNamespaceInitializationStatusAsync(initialization, timeout.Token)).Completion);
                         CollectionAssert.AreEqual(new[] { registration.RootId }, (await catalog.ReadNamespaceDispatchFencedRootsAsync(timeout.Token)).ToArray());
                         Assert.AreEqual(0, source.Reads);
-                        TestContext.WriteLine("BornRecoveryRestart: threeActualRoleOwners=True; previousSessionsDisposed=True; nativeDrainBeforeProjectionInterrupted=True; durableImmutableSuccessor=True; directoryOwnedAclRestored=True; atomicCompletionResponseLost=True; historicalReplayHasNoNativeScope=True; latestOrdinaryBytesAndFirstFactsRetained=True; completeCurrentNativeAudit=True; retiredBirthExcludedFromLiveTree=True; sourceReads=0; rootStillFenced=True; treeReady=False; defaultHostStartup=False.");
+                        var completion = await new MirrorPulseNamespaceCurrentTreeAuditCoordinator(fileSystem, catalog, router, execution, actor, permissions)
+                            .CompleteInitializationAsync(initialization, root.ParentMemberId.Value, anchor, timeout.Token);
+                        Assert.AreEqual(MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory, completion.InventoryKind);
+                        Assert.AreEqual(4, completion.MemberCount); Assert.IsEmpty(await catalog.ReadNamespaceDispatchFencedRootsAsync(timeout.Token));
+                        Assert.AreEqual(latestBytes, await File.ReadAllTextAsync(path, timeout.Token));
+                        TestContext.WriteLine("BornRecoveryRestart: threeActualRoleOwners=True; previousSessionsDisposed=True; nativeDrainBeforeProjectionInterrupted=True; durableImmutableSuccessor=True; directoryOwnedAclRestored=True; atomicCompletionResponseLost=True; historicalReplayHasNoNativeScope=True; latestOrdinaryBytesAndFirstFactsRetained=True; completeCurrentNativeAudit=True; retiredBirthExcludedFromLiveTree=True; currentInitializationCompletedInsideSharedAdmission=True; onlyOwnedFenceReleased=True; sourceReads=0; treeReady=False; defaultHostStartup=False.");
                     }
                 }
             }

@@ -171,7 +171,17 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     Assert.IsNull((await catalog.ReadNamespaceInitializationStatusAsync(initialization, timeout.Token)).Completion);
                     CollectionAssert.AreEqual(new[] { registration.RootId }, (await catalog.ReadNamespaceDispatchFencedRootsAsync(timeout.Token)).ToArray());
                     Assert.AreEqual(0, source.Reads);
-                    TestContext.WriteLine("BornReadbackRecovery: productionCoordinator=True; oldRoleDisposed=True; movedActualBornParent=True; parentFirstRecovery=True; fileAndDirectoryReadback=True; firstBirthObservationAndMembershipRetained=True; immutableEpochReplay=True; sourceReads=0; aclWritesInReadback=0; registeredBornBeforeWriteAction=True; ownedOlderDescriptorRestored=True; busyRetainsAction=True; publicSameObjectScopeDrained=True; latestOrdinaryBytesRetained=True; atomicV3ProjectionAndCompletion=True; historicalCompletionPreservesLaterEdits=True; completeCurrentGraphNativeAudit=True; unexpectedActualEntryRejected=True; rootStillFenced=True; treeReady=False; defaultHostStartup=False.");
+                    var completed = await auditing.CompleteInitializationAsync(initialization, rootMember.ParentMemberId.Value, anchor, timeout.Token);
+                    Assert.AreEqual(MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory, completed.InventoryKind);
+                    Assert.IsEmpty(await catalog.ReadNamespaceDispatchFencedRootsAsync(timeout.Token));
+                    Guid newer = Guid.NewGuid();
+                    await catalog.PrepareNamespaceInitializationAsync(new(1, newer, initial!.Roots, DateTimeOffset.UtcNow), timeout.Token);
+                    await File.WriteAllTextAsync(path, latest + " after completion", timeout.Token);
+                    Assert.AreEqual(completed, await auditing.CompleteInitializationAsync(initialization, rootMember.ParentMemberId.Value, anchor, timeout.Token));
+                    Assert.AreEqual(latest + " after completion", await File.ReadAllTextAsync(path, timeout.Token));
+                    CollectionAssert.AreEqual(new[] { registration.RootId }, (await catalog.ReadNamespaceDispatchFencedRootsAsync(timeout.Token)).ToArray());
+                    Assert.AreEqual(0, source.Reads);
+                    TestContext.WriteLine("BornReadbackRecovery: productionCoordinator=True; oldRoleDisposed=True; movedActualBornParent=True; parentFirstRecovery=True; fileAndDirectoryReadback=True; firstBirthObservationAndMembershipRetained=True; immutableEpochReplay=True; sourceReads=0; aclWritesInReadback=0; registeredBornBeforeWriteAction=True; ownedOlderDescriptorRestored=True; busyRetainsAction=True; publicSameObjectScopeDrained=True; latestOrdinaryBytesRetained=True; atomicV3ProjectionAndCompletion=True; historicalCompletionPreservesLaterEdits=True; completeCurrentGraphNativeAudit=True; unexpectedActualEntryRejected=True; currentInitializationCompletedInsideSharedAdmission=True; historicalReplayKeepsNewOwnerFence=True; treeReady=False; defaultHostStartup=False.");
                 }
             }
         }

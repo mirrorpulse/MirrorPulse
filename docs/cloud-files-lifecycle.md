@@ -93,6 +93,17 @@ rejects concurrent changes to the retained graph or its fences. This receipt is
 a fresh observation; Host admission and initialization fence completion remain
 separate responsibilities, and later ordinary edits are not frozen by an audit.
 
+Current-inventory initialization completion can run immediately after that final
+audit inside the same actor, role and permission admission. Its product
+transaction checks the complete supplied inventory again, retains every captured
+original as either live or durably retired, rejects unfinished controlled work,
+and commits the completion receipt together with release of only the admitted
+initializer's root fences. Schema 52 distinguishes this receipt from the original
+inventory receipt; migration preserves old receipt bytes and hashes. Replaying
+a completed request supplies historical facts and leaves a newer initializer's
+fences and later file edits untouched. Automatic startup still requires the
+recovery orchestrator and fresh admission for the current Host lifecycle.
+
 Startup rebuilds missing remote conflict projections from CfSharp's decoded
 conflict queries. A mutation with a confirmed remote result and an absent
 official journal operation repairs its product projection before marking the

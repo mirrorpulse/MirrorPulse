@@ -34,7 +34,11 @@ public sealed class MirrorPulseNamespaceInitializationCoordinator(CloudFileSyste
         if (operationId == Guid.Empty) throw new ArgumentException("An initialization operation ID is required.", nameof(operationId));
         var retained = await catalog.ReadNamespaceInitializationAsync(operationId, cancellationToken).ConfigureAwait(false);
         if (await catalog.ReadNamespaceInitializationCompletionAsync(operationId, cancellationToken).ConfigureAwait(false) is { } completed)
+        {
+            if (completed.InventoryKind != MirrorPulseNamespaceInitializationInventoryKind.OriginalInventory)
+                throw new InvalidOperationException("This operation completed the current inventory rather than the original inventory.");
             return new(completed, null);
+        }
         var registrations = router.Registrations.OrderBy(root => root.RootId.Value).ToArray();
         if (registrations.Length == 0) throw new InvalidOperationException("Original-tree initialization requires configured Adapter roots.");
         if (retained is null)

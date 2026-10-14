@@ -18,7 +18,31 @@ public sealed class MirrorPulseNamespaceCurrentTreeAuditCoordinator(CloudFileSys
     MirrorPulseNamespacePermissionCoordinator permissions)
 {
     public ValueTask<MirrorPulseNamespaceCurrentTreeAudit> AuditAsync(Guid anchorMemberId, MirrorPulseNamespaceAnchorProtection anchorGuard,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) => AuditAdmittedAsync(anchorMemberId, anchorGuard, null, cancellationToken);
+
+    /// <summary>Completes the initializer inside the same shared actor, role and permission admission as its fresh audit.</summary>
+    /// <remarks>A historical receipt does not supply a new native audit or authorize this Host's source dispatch.</remarks>
+    public async ValueTask<MirrorPulseNamespaceInitializationCompletion> CompleteInitializationAsync(Guid operationId, Guid anchorMemberId,
+        MirrorPulseNamespaceAnchorProtection anchorGuard, CancellationToken cancellationToken = default)
+    {
+        if (operationId == Guid.Empty) throw new ArgumentException("An initialization operation ID is required.", nameof(operationId));
+        if (await catalog.ReadNamespaceInitializationCompletionAsync(operationId, cancellationToken).ConfigureAwait(false) is { } historical)
+        {
+            if (historical.InventoryKind != MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory)
+                throw new InvalidOperationException("This operation completed the original inventory rather than the current inventory.");
+            return historical;
+        }
+        MirrorPulseNamespaceInitializationCompletion completion = null!;
+        _ = await AuditAdmittedAsync(anchorMemberId, anchorGuard, async (audit, token) =>
+        {
+            actor.AssertAccess();
+            completion = await catalog.CompleteNamespaceCurrentInitializationAsync(operationId, audit.Inventory, audit.ObservedAt, token).ConfigureAwait(false);
+        }, cancellationToken).ConfigureAwait(false);
+        return completion;
+    }
+
+    private ValueTask<MirrorPulseNamespaceCurrentTreeAudit> AuditAdmittedAsync(Guid anchorMemberId, MirrorPulseNamespaceAnchorProtection anchorGuard,
+        Func<MirrorPulseNamespaceCurrentTreeAudit, CancellationToken, Task>? onAudited, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(anchorGuard);
         return actor.RunAsync(async token =>
@@ -82,7 +106,7 @@ public sealed class MirrorPulseNamespaceCurrentTreeAuditCoordinator(CloudFileSys
                     }
                     MirrorPulseNamespaceBirthProtectionVerifier.RequireUnchangedParent(before, await anchorGuard.InspectAsync(stop).ConfigureAwait(false));
                     actor.AssertAccess(); return new MirrorPulseNamespaceCurrentTreeAudit(inventory, execution.RoleSid.Value, DateTimeOffset.UtcNow);
-                }, token).ConfigureAwait(false);
+                }, token, onAudited).ConfigureAwait(false);
             }).ConfigureAwait(false);
             return result;
         }, cancellationToken);
