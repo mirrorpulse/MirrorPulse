@@ -12,7 +12,7 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 public sealed class MirrorPulseNamespaceReplacementPreparationCoordinator(CloudFileSystem fileSystem, MirrorPulseCfSharpStateSession state,
     MirrorPulseProductCatalog catalog, MirrorPulseRootRouter router, MirrorPulseNamespaceExecutionSession execution,
     MirrorPulseNamespaceActor actor, MirrorPulseInstanceScheduler scheduler, MirrorPulseLocalImportStagingStore inputs,
-    Func<InstanceId, bool> mayDispatch)
+    Func<InstanceId, bool> mayDispatch, MirrorPulseNamespaceWorkAdmission? namespaceWork = null)
 {
     public async ValueTask<MirrorPulseNamespaceReplacementExecution> PrepareAsync(Guid operationId, Guid memberId,
         string sourcePath, CancellationToken cancellationToken = default)
@@ -31,6 +31,7 @@ public sealed class MirrorPulseNamespaceReplacementPreparationCoordinator(CloudF
         if (original.Context.Member.IsDirectory || original.Context.Member.RootId is not { } rootId)
             throw new InvalidOperationException("Replacement requires a registered file below a managed root.");
         var registration = router.Registrations.Single(root => root.RootId == rootId);
+        using var admission = namespaceWork?.Enter([rootId]);
         var file = fileSystem.GetFile(original.Context.Location.RelativePath);
         await execution.RunNormalUserOperationAsync(async () =>
         {

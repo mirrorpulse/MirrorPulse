@@ -88,6 +88,24 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 {
                     Assert.AreEqual(initial, await runtime.InitializeNamespaceProtectionAsync(initial!.OperationId, timeout.Token));
                     Assert.IsFalse(admission.IsAdmitted(registration.RootId));
+                    var closedTree = await catalog.ReadNamespaceMemberTreeAsync(initial.AnchorMemberId, timeout.Token);
+                    Guid rootMember = closedTree.Single(entry => entry.RelativePath == "Docs").MemberId;
+                    await Assert.ThrowsExactlyAsync<InvalidOperationException>(async () => await runtime.CreateNamespaceMemberAsync(
+                        Guid.NewGuid(), rootMember, "closed.txt", false, timeout.Token));
+                    await Assert.ThrowsExactlyAsync<InvalidOperationException>(async () => await runtime.PrepareNamespaceImportAsync(
+                        Guid.NewGuid(), rootMember, "closed-import.txt", movedPath, timeout.Token));
+                    await Assert.ThrowsExactlyAsync<InvalidOperationException>(async () => await runtime.PrepareNamespaceReplacementAsync(
+                        Guid.NewGuid(), moved!.MemberId, movedPath, timeout.Token));
+                    await Assert.ThrowsExactlyAsync<InvalidOperationException>(async () => await runtime.PrepareNamespaceMemberRetirementAsync(
+                        Guid.NewGuid(), moved!.MemberId, timeout.Token));
+                    await Assert.ThrowsExactlyAsync<InvalidOperationException>(async () => await runtime.PrepareNamespaceRetirementBatchAsync(
+                        Guid.NewGuid(), born!.ParentMemberId!.Value, timeout.Token));
+                    await Assert.ThrowsExactlyAsync<InvalidOperationException>(async () => await runtime.PrepareNamespaceMemberMoveAsync(
+                        Guid.NewGuid(), moved!.MemberId, rootMember, "closed-move.txt", timeout.Token));
+                    Assert.IsFalse(File.Exists(Path.Combine(paths.SyncRootPath, "Docs", "closed.txt")));
+                    Assert.IsFalse(File.Exists(Path.Combine(paths.SyncRootPath, "Docs", "closed-import.txt")));
+                    Assert.AreEqual(originalBytes, await File.ReadAllTextAsync(movedPath, timeout.Token));
+                    Assert.IsEmpty(await catalog.ReadPendingNamespaceInitializationsAsync(timeout.Token));
                     Guid operation = Guid.NewGuid();
                     await using (var writer = new FileStream(movedPath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite))
                         await Assert.ThrowsExactlyAsync<IOException>(async () => await runtime.RecoverNamespaceCurrentTreeAsync(operation, timeout.Token));

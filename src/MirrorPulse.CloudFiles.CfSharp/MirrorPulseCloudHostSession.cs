@@ -451,6 +451,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             var parent = await catalog!.ReadNamespaceMemberAsync(parentMemberId, cancellationToken).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The import parent is not registered.");
             var registration = router!.Registrations.Single(root => root.RootId == parent.RootId);
+            using var admission = namespaceWork?.Enter([registration.RootId]);
             var inputs = new MirrorPulseLocalImportStagingStore(new(syncRootPath, dataRootPath));
             // A source may hydrate through this same instance. Capture and verify before either lock.
             var content = await _namespaceExecution!.RunNormalUserOperationAsync(
@@ -470,6 +471,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             var status = await ReadNamespaceImportStatusAsync(operationId, cancellationToken).ConfigureAwait(false);
             var birth = (await catalog!.ReadNamespaceBirthAsync(operationId, cancellationToken).ConfigureAwait(false))!;
             var registration = router!.Registrations.Single(root => root.RootId == birth.RootId);
+            using var admission = namespaceWork?.Enter([registration.RootId]);
             var inputs = new MirrorPulseLocalImportStagingStore(new(syncRootPath, dataRootPath));
             var coordinator = new MirrorPulseNamespaceCreationCoordinator(fileSystem, state, catalog, router, _namespaceExecution!, _namespaceActor!);
             MirrorPulseNamespaceMemberRegistration result;
@@ -511,7 +513,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             RequireImportBoundary();
             var inputs = new MirrorPulseLocalImportStagingStore(new(syncRootPath, dataRootPath));
             var preparation = new MirrorPulseNamespaceReplacementPreparationCoordinator(fileSystem, state, catalog!, router!,
-                _namespaceExecution!, _namespaceActor!, _scheduler, inputs, mayDispatch ?? (_ => false));
+                _namespaceExecution!, _namespaceActor!, _scheduler, inputs, mayDispatch ?? (_ => false), namespaceWork);
             return preparation.PrepareAsync(operationId, memberId, sourcePath, cancellationToken);
         }
 
@@ -520,6 +522,9 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             CancellationToken cancellationToken)
         {
             RequireImportBoundary();
+            var intent = await catalog!.ReadNamespaceReplacementAsync(operationId, cancellationToken).ConfigureAwait(false)
+                ?? throw new FileNotFoundException("The replacement admission is not registered.");
+            using var admission = namespaceWork?.Enter([intent.RootId]);
             var paths = new MirrorPulseStoragePaths(syncRootPath, dataRootPath);
             var inputs = new MirrorPulseLocalImportStagingStore(paths);
             var executor = new MirrorPulseNamespaceReplacementExecutor(fileSystem, catalog!, router!, _namespaceExecution!,
@@ -581,6 +586,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             var intent = await catalog.ReadNamespaceMemberMoveAsync(operationId, cancellationToken).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The move admission is not registered.");
             var registration = router.Registrations.Single(root => root.RootId == intent.RootId);
+            using var admission = namespaceWork?.Enter([registration.RootId]);
             // Drain earlier instance work before entering the namespace actor. Subsequent dispatch
             // rechecks the durable root fence after acquiring this same scheduler.
             return await _scheduler.RunAsync(registration.InstanceId,
@@ -606,6 +612,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                 ?? throw new FileNotFoundException("The retirement member is not registered.");
             var registration = router.Registrations.Single(root => root.RootId == member.RootId);
             var coordinator = new MirrorPulseNamespaceRetirementCoordinator(fileSystem, catalog, router, _namespaceExecution, _namespaceActor);
+            using var admission = namespaceWork?.Enter([registration.RootId]);
             return await _scheduler.RunAsync(registration.InstanceId,
                 token => coordinator.PrepareAsync(operationId, memberId, token), cancellationToken).ConfigureAwait(false);
         }
@@ -620,6 +627,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                 ?? throw new FileNotFoundException("The retirement admission is not registered.");
             var registration = router.Registrations.Single(root => root.RootId == retirement.Intent.RootId);
             var coordinator = new MirrorPulseNamespaceRetirementCoordinator(fileSystem, catalog, router, _namespaceExecution, _namespaceActor);
+            using var admission = namespaceWork?.Enter([registration.RootId]);
             return await _scheduler.RunAsync(registration.InstanceId,
                 token => coordinator.ExecuteAsync(operationId, token), cancellationToken).ConfigureAwait(false);
         }
@@ -643,6 +651,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                 ?? throw new FileNotFoundException("The retirement member is not registered.");
             var registration = router.Registrations.Single(root => root.RootId == member.RootId);
             var coordinator = new MirrorPulseNamespaceRetirementCoordinator(fileSystem, catalog, router, _namespaceExecution, _namespaceActor);
+            using var admission = namespaceWork?.Enter([registration.RootId]);
             return await _scheduler.RunAsync(registration.InstanceId,
                 token => coordinator.PrepareBatchAsync(operationId, memberId, token), cancellationToken).ConfigureAwait(false);
         }
@@ -657,6 +666,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                 ?? throw new FileNotFoundException("The retirement batch is not registered.");
             var registration = router.Registrations.Single(root => root.RootId == batch.RootId);
             var coordinator = new MirrorPulseNamespaceRetirementCoordinator(fileSystem, catalog, router, _namespaceExecution, _namespaceActor);
+            using var admission = namespaceWork?.Enter([registration.RootId]);
             return await _scheduler.RunAsync(registration.InstanceId,
                 token => coordinator.ExecuteBatchAsync(operationId, token), cancellationToken).ConfigureAwait(false);
         }
