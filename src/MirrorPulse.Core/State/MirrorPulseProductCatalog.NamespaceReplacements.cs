@@ -37,38 +37,45 @@ public sealed partial class MirrorPulseProductCatalog
         try
         {
             ThrowIfDisposed(); using var transaction = _connection.BeginTransaction();
-            var retained = await ReadNamespaceReplacementCoreAsync(intent.OperationId, transaction, cancellationToken).ConfigureAwait(false);
-            if (retained is not null)
-            {
-                if (!SameNamespaceReplacementPayload(retained, intent)) throw new InvalidOperationException("The original replacement admission is immutable.");
-                transaction.Commit(); return retained;
-            }
-            if (intent.OperationId == intent.MemberId)
-                throw new InvalidOperationException("Replacement cannot reuse a member's identity.");
-            await RequireReplacementIdAvailableCoreAsync(intent.OperationId, transaction, cancellationToken).ConfigureAwait(false);
-            await RequireNamespaceMoveRootUnfencedAsync(intent.RootId, null, transaction, cancellationToken).ConfigureAwait(false);
-            var births = new HashSet<RootId>();
-            await AddUnregisteredBirthRootFencesAsync(births, transaction, cancellationToken).ConfigureAwait(false);
-            if (births.Contains(intent.RootId)) throw new InvalidOperationException("An unresolved birth must finish before replacement admission.");
-            var current = await ReadNamespaceMemberProtectionSnapshotCoreAsync(intent.MemberId, transaction, cancellationToken).ConfigureAwait(false)
-                ?? throw new FileNotFoundException("The replacement member is not registered.");
-            if (!SameNamespaceReplacementPayload(current, intent.Original))
-                throw new InvalidOperationException("Replacement admission requires this member's unchanged current protection, location and identity.");
-            byte[] payload = NamespaceReplacementPayload(intent);
-            await using var insert = _connection.CreateCommand(); insert.Transaction = transaction;
-            insert.CommandText = """
+            var prepared = await PrepareNamespaceReplacementCoreAsync(intent, transaction, cancellationToken).ConfigureAwait(false);
+            transaction.Commit(); return prepared;
+        }
+        finally { _gate.Release(); }
+    }
+
+    private async Task<MirrorPulseNamespaceReplacementIntent> PrepareNamespaceReplacementCoreAsync(
+        MirrorPulseNamespaceReplacementIntent intent, SqliteTransaction transaction, CancellationToken cancellationToken)
+    {
+        var retained = await ReadNamespaceReplacementCoreAsync(intent.OperationId, transaction, cancellationToken).ConfigureAwait(false);
+        if (retained is not null)
+        {
+            if (!SameNamespaceReplacementPayload(retained, intent)) throw new InvalidOperationException("The original replacement admission is immutable.");
+            return retained;
+        }
+        if (intent.OperationId == intent.MemberId)
+            throw new InvalidOperationException("Replacement cannot reuse a member's identity.");
+        await RequireReplacementIdAvailableCoreAsync(intent.OperationId, transaction, cancellationToken).ConfigureAwait(false);
+        await RequireNamespaceMoveRootUnfencedAsync(intent.RootId, null, transaction, cancellationToken).ConfigureAwait(false);
+        var births = new HashSet<RootId>();
+        await AddUnregisteredBirthRootFencesAsync(births, transaction, cancellationToken).ConfigureAwait(false);
+        if (births.Contains(intent.RootId)) throw new InvalidOperationException("An unresolved birth must finish before replacement admission.");
+        var current = await ReadNamespaceMemberProtectionSnapshotCoreAsync(intent.MemberId, transaction, cancellationToken).ConfigureAwait(false)
+            ?? throw new FileNotFoundException("The replacement member is not registered.");
+        if (!SameNamespaceReplacementPayload(current, intent.Original))
+            throw new InvalidOperationException("Replacement admission requires this member's unchanged current protection, location and identity.");
+        byte[] payload = NamespaceReplacementPayload(intent);
+        await using var insert = _connection.CreateCommand(); insert.Transaction = transaction;
+        insert.CommandText = """
                 INSERT INTO namespace_replacements(operation_id,member_id,root_id,payload,fingerprint)
                 VALUES($id,$member,$root,$payload,$fingerprint);
                 INSERT INTO namespace_replacement_pending(root_id,member_id,operation_id) VALUES($root,$member,$id);
                 """;
-            insert.Parameters.AddWithValue("$id", intent.OperationId.ToString("D"));
-            insert.Parameters.AddWithValue("$member", intent.MemberId.ToString("D"));
-            insert.Parameters.AddWithValue("$root", intent.RootId.ToString());
-            insert.Parameters.AddWithValue("$payload", payload); insert.Parameters.AddWithValue("$fingerprint", SHA256.HashData(payload));
-            await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-            transaction.Commit(); return intent;
-        }
-        finally { _gate.Release(); }
+        insert.Parameters.AddWithValue("$id", intent.OperationId.ToString("D"));
+        insert.Parameters.AddWithValue("$member", intent.MemberId.ToString("D"));
+        insert.Parameters.AddWithValue("$root", intent.RootId.ToString());
+        insert.Parameters.AddWithValue("$payload", payload); insert.Parameters.AddWithValue("$fingerprint", SHA256.HashData(payload));
+        await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        return intent;
     }
 
     /// <summary>Reads original admission without inspecting today's object or refreshing execution authority.</summary>
