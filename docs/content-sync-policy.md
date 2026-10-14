@@ -212,3 +212,13 @@ completion transaction under the Host's namespace actor. A completed operation
 returns its historical receipt before opening inputs or acquiring the actor.
 Cold target materialization precedes execution. Host/CLI integration and
 whole-tree readiness still require their separate product acceptance.
+
+The preparation API stages private input and materializes an enabled cold target
+as the normal user before instance scheduling, namespace actor acquisition or
+root reservation. An offline target or input inside MirrorPulse must already be
+resident. Fresh binding, identity, closed descriptor and parent checks precede
+one transaction that records admission, start and the first permission action.
+A crash cannot expose a newly prepared admission without that first action.
+Historical preparation replay returns original facts without reopening a removed
+source file. Host and CLI use the same executor through the Control contract;
+completed input reclamation runs only after its private lease closes.

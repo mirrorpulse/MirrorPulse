@@ -63,6 +63,34 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 }
                 string inputPath = Path.Combine(directory, "new-input.bin"); await File.WriteAllBytesAsync(inputPath, newBytes, deadline.Token);
                 Guid operationId = Guid.NewGuid(); var inputs = new MirrorPulseLocalImportStagingStore(paths);
+                if (attempt == 3)
+                {
+                    // Reopen through the production runtime with the same live Host identity.
+                    // This exercises its atomic preparation, shared executor and status APIs.
+                    await fileSystem.DisposeAsync();
+                    await using var scheduler = new MirrorPulseInstanceScheduler();
+                    var factory = new CfSharpMirrorPulseCloudRuntimeFactory(router: router, catalog: catalog,
+                        mayDispatch: _ => true, scheduler: scheduler, namespaceExecution: activeRole, namespaceActor: actor);
+                    await using var runtime = factory.Create(paths);
+                    await runtime.StartAsync(deadline.Token);
+                    var prepared = await runtime.PrepareNamespaceReplacementAsync(operationId, member.MemberId, inputPath, deadline.Token);
+                    Assert.IsNotNull(prepared.Action); Assert.IsNotNull(prepared.Start); Assert.IsNull(prepared.Backup);
+                    File.Delete(inputPath);
+                    var completion = await runtime.ExecuteNamespaceReplacementAsync(operationId, deadline.Token);
+                    var status = await runtime.ReadNamespaceReplacementStatusAsync(operationId, deadline.Token);
+                    Assert.IsTrue(status.Completed && status.BackupRecorded && status.ContentRecorded && status.ProtectionRestored);
+                    Assert.IsFalse(status.RequiresRecovery);
+                    CollectionAssert.AreEqual(newBytes, await File.ReadAllBytesAsync(file.FullPath, deadline.Token));
+                    byte[] newer = [4, 0, 9]; await File.WriteAllBytesAsync(file.FullPath, newer, deadline.Token);
+                    Assert.AreEqual(completion, await runtime.ExecuteNamespaceReplacementAsync(operationId, deadline.Token));
+                    Assert.AreEqual(prepared.Intent, (await runtime.PrepareNamespaceReplacementAsync(operationId, member.MemberId, inputPath, deadline.Token)).Intent);
+                    CollectionAssert.AreEqual(newer, await File.ReadAllBytesAsync(file.FullPath, deadline.Token));
+                    Assert.IsEmpty(await catalog.ReadNamespaceRecoveryRootsAsync(deadline.Token));
+                    Assert.AreEqual(completion.RescanGeneration, (await catalog.ReadRootRescanRequestsAsync(deadline.Token)).Single().Generation);
+                    Assert.IsNull(await catalog.ReadMutationAsync(operationId, deadline.Token)); Assert.AreEqual(0, source.Reads);
+                    TestContext.WriteLine("ReplacementRuntime: atomicPreparation=True; privateInputBeforeScheduling=True; sourceRemoved=True; firstBackup=True; completeInitialExecution=True; unchangedEmpty=True; completedReplayPreservesLaterEdit=True; preparationReplayWithoutSource=True; historicalStatus=True; rescanRequested=True; noRemoteAcceptance=True; noSourceAccess=True; productionExecutor=True; hostRuntimeIntegrated=True; hostCliIntegrated=False.");
+                    continue;
+                }
                 var content = await inputs.StageAsync(operationId, inputPath, deadline.Token); File.Delete(inputPath);
                 await using var input = await inputs.OpenLeaseAsync(operationId, content, deadline.Token);
                 var original = (await catalog.ReadNamespaceMemberProtectionSnapshotAsync(member.MemberId, deadline.Token))!;

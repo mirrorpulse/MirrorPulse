@@ -485,6 +485,12 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
             MirrorPulseControlCommands.NamespaceMemberImport, ExecuteNamespaceImportAsync);
         dispatcher.Register<NamespaceMemberImportStatusArguments, MirrorPulseControlNamespaceImportStatus>(
             MirrorPulseControlCommands.NamespaceMemberImportStatus, ReadNamespaceImportStatusAsync);
+        dispatcher.Register<NamespaceMemberPrepareReplaceArguments, MirrorPulseControlNamespaceReplacementPreparation>(
+            MirrorPulseControlCommands.NamespaceMemberPrepareReplace, PrepareNamespaceReplacementAsync);
+        dispatcher.Register<NamespaceMemberReplaceArguments, MirrorPulseControlNamespaceReplacementCompletion>(
+            MirrorPulseControlCommands.NamespaceMemberReplace, ExecuteNamespaceReplacementAsync);
+        dispatcher.Register<NamespaceMemberReplacementStatusArguments, MirrorPulseControlNamespaceReplacementStatus>(
+            MirrorPulseControlCommands.NamespaceMemberReplacementStatus, ReadNamespaceReplacementStatusAsync);
         dispatcher.Register<NamespaceMemberPrepareRetirementArguments, MirrorPulseControlNamespaceMemberRetirementPreparation>(
             MirrorPulseControlCommands.NamespaceMemberPrepareRetirement, PrepareNamespaceMemberRetirementAsync);
         dispatcher.Register<NamespaceMemberRetirementArguments, MirrorPulseControlNamespaceMemberRetirementResult>(
@@ -551,6 +557,31 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
         var status = await _session.ReadNamespaceImportStatusAsync(arguments.OperationId, cancellationToken).ConfigureAwait(false);
         return new(status.OperationId, status.RelativePath, status.Phase, status.Length, status.Sha256, status.Started,
             status.OriginalBindingRecorded, status.ContentRecorded, status.Converted, status.Protected, status.Registered, status.RequiresRecovery);
+    }
+
+    private async ValueTask<MirrorPulseControlNamespaceReplacementPreparation> PrepareNamespaceReplacementAsync(
+        NamespaceMemberPrepareReplaceArguments arguments, CancellationToken cancellationToken)
+    {
+        var prepared = await _session.PrepareNamespaceReplacementAsync(arguments.OperationId, arguments.MemberId, arguments.SourcePath, cancellationToken).ConfigureAwait(false);
+        return new(arguments.OperationId, prepared.Intent.MemberId, prepared.Intent.Original.Context.Location.RelativePath,
+            prepared.Intent.Content.Length, prepared.Intent.Content.Sha256, prepared.Intent.PreparedAt);
+    }
+
+    private async ValueTask<MirrorPulseControlNamespaceReplacementCompletion> ExecuteNamespaceReplacementAsync(
+        NamespaceMemberReplaceArguments arguments, CancellationToken cancellationToken)
+    {
+        var completed = await _session.ExecuteNamespaceReplacementAsync(arguments.OperationId, cancellationToken).ConfigureAwait(false);
+        var status = await _session.ReadNamespaceReplacementStatusAsync(arguments.OperationId, cancellationToken).ConfigureAwait(false);
+        return new(completed.OperationId, completed.MemberId, status.RelativePath, completed.CompletedAt, true);
+    }
+
+    private async ValueTask<MirrorPulseControlNamespaceReplacementStatus> ReadNamespaceReplacementStatusAsync(
+        NamespaceMemberReplacementStatusArguments arguments, CancellationToken cancellationToken)
+    {
+        var status = await _session.ReadNamespaceReplacementStatusAsync(arguments.OperationId, cancellationToken).ConfigureAwait(false);
+        return new(status.OperationId, status.MemberId, status.RelativePath, status.Phase, status.Length, status.Sha256, status.Started,
+            status.ActionRecorded, status.BackupRecorded, status.WriteStarted, status.ContentRecorded, status.ProtectionRestored,
+            status.Completed, status.Cancelled, status.RequiresRecovery);
     }
 
     private async ValueTask<MirrorPulseControlNamespaceMemberInspection> InspectNamespaceMemberAsync(

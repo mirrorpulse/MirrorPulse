@@ -9,6 +9,14 @@ production-release completion claim.
 
 ## CLI and Control
 
+Controlled replacement uses `namespace member prepare-replace MEMBER_ID SOURCE_PATH`
+with an optional `--operation-id GUID`, followed by `replace OPERATION_ID`.
+`replace-recover OPERATION_ID` calls the same Host executor;
+`replacement-status OPERATION_ID` reads historical progress without waiting on
+the namespace actor. The runtime and Control path are connected, with full
+production native and installed CLI acceptance still pending. Local completion
+queues reconciliation and does not report remote acceptance or tree readiness.
+
 | Capability | Status | CLI / Control | Current behavior |
 | --- | --- | --- | --- |
 | Host and sync status | Implemented | host status; status; sync status / host.status, sync.status | Reads the current Host snapshot; large-queue queries still need bounds. |
@@ -48,7 +56,7 @@ show which outcomes are queued rather than completed.
 | Multiple roots per instance | Partial | Worker requests carry RootKey, with explicit demand and upload routing. The background poller still admits only one active root per instance. |
 | Offline edits and upload replay | Partial | ARM64 signed Local CLI regression requires offline queue growth and drain, plus a stopped-Host audit of all retained content intents, including completed uploads, to distinguish read-only hydration from the real queued write. File and directory-create recovery retain accepted intent across restart; sync status exposes blocked reasons. File-chain aggregate execution, recursive move/delete and bounded fair paging still need completion. Local metadata-only changes are outside the content-sync policy. |
 | Move / delete | Partial | Current official Workers implement file/directory mutations. Complete journal, cross-root, recursive and conflict safety is not proven. |
-| Strict tree protection and controlled file operations | Partial | Persistent member creation, file import preparation/execution/status, file and whole-directory movement, and leaf/subtree retirement have Control/CLI entry points. Import uses a verified private input and retains first binding and content completion before public conversion. Directory movement requires the original public CfSharp proof and atomic settlement after fresh inspection of every member. Component and disposable native gates do not establish installed product enforcement; replacement save and strict Host startup/recovery remain pending. |
+| Strict tree protection and controlled file operations | Partial | Persistent member creation, file import and replacement preparation/execution/status, file and whole-directory movement, and leaf/subtree retirement have Control/CLI entry points. Replacement stages input before locks and atomically retains its first authority. Directory movement requires the original public CfSharp proof and atomic settlement after fresh inspection of every member. Component and disposable native gates do not establish installed product enforcement; complete replacement product acceptance and strict Host startup/recovery remain pending. |
 | Remote polling | Partial | Single-root polling retains retry snapshots and replays durable pending batches before observing newer changes. Pending root rename fences observation and replay; multi-root polling and native rename recovery still need completion. |
 | Pin / free space | Unsupported | The availability helper exists, but no complete Control/CLI command is connected. |
 | Explorer identity / icon | Partial | MSIX identity is tested separately from interactive Shell/custom-name acceptance; the registrar still uses a system icon. |

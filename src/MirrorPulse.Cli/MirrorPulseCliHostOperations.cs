@@ -344,6 +344,39 @@ public sealed class MirrorPulseCliHostOperations : IMirrorPulseCliHostOperations
                     human = $"Local import prepared · {import.OperationId:D} · {import.Name} · {import.Length} bytes";
                     break;
                 case ("namespace", "member") when command.Path.Count > 2 &&
+                    command.Path[2].Equals("prepare-replace", StringComparison.OrdinalIgnoreCase):
+                    if (command.Arguments.Count is not (2 or 4) || !Guid.TryParse(command.Arguments[0], out Guid replaceMember) ||
+                        replaceMember == Guid.Empty || string.IsNullOrWhiteSpace(command.Arguments[1]))
+                        throw new ArgumentException("namespace member prepare-replace requires a member ID and source file path.");
+                    Guid replaceOperation = Guid.NewGuid();
+                    if (command.Arguments.Count == 4 && (!command.Arguments[2].Equals("--operation-id", StringComparison.OrdinalIgnoreCase) ||
+                        !Guid.TryParse(command.Arguments[3], out replaceOperation) || replaceOperation == Guid.Empty))
+                        throw new ArgumentException("Replacement preparation accepts --operation-id GUID once.");
+                    var replacement = await _client.PrepareNamespaceReplacementAsync(replaceOperation, replaceMember,
+                        Path.GetFullPath(command.Arguments[1]), cancellationToken).ConfigureAwait(false);
+                    result = replacement;
+                    human = $"Local replacement prepared · {replacement.OperationId:D} · {replacement.RelativePath} · {replacement.Length} bytes";
+                    break;
+                case ("namespace", "member") when command.Path.Count > 2 &&
+                    (command.Path[2].Equals("replace", StringComparison.OrdinalIgnoreCase) || command.Path[2].Equals("replace-recover", StringComparison.OrdinalIgnoreCase) ||
+                     command.Path[2].Equals("replacement-status", StringComparison.OrdinalIgnoreCase)):
+                    if (command.Arguments.Count != 1 || !Guid.TryParse(command.Arguments[0], out Guid replaceId) || replaceId == Guid.Empty)
+                        throw new ArgumentException("Replacement execution, recovery and status require one non-empty operation ID.");
+                    if (command.Path[2].Equals("replacement-status", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var status = await _client.GetNamespaceReplacementStatusAsync(replaceId, cancellationToken).ConfigureAwait(false);
+                        result = status;
+                        human = $"Local replacement {status.Phase} · {status.OperationId:D} · {status.RelativePath}";
+                        exitCode = status.RequiresRecovery ? MirrorPulseControlExitCodes.Pending : MirrorPulseControlExitCodes.Success;
+                    }
+                    else
+                    {
+                        var saved = await _client.ExecuteNamespaceReplacementAsync(replaceId, cancellationToken).ConfigureAwait(false);
+                        result = saved;
+                        human = $"Local replacement completed · {saved.OperationId:D} · {saved.RelativePath} · rescan requested";
+                    }
+                    break;
+                case ("namespace", "member") when command.Path.Count > 2 &&
                     (command.Path[2].Equals("import", StringComparison.OrdinalIgnoreCase) || command.Path[2].Equals("import-status", StringComparison.OrdinalIgnoreCase)):
                     if (command.Arguments.Count != 1 || !Guid.TryParse(command.Arguments[0], out Guid importId) || importId == Guid.Empty)
                         throw new ArgumentException("Import execution and status require one non-empty operation ID.");

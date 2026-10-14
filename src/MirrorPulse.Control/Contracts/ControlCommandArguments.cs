@@ -113,6 +113,20 @@ public sealed record NamespaceMemberImportArguments(Guid OperationId) : IMirrorP
 
 public sealed record NamespaceMemberImportStatusArguments(Guid OperationId) : IMirrorPulseControlArguments;
 
+public sealed record NamespaceMemberPrepareReplaceArguments(Guid OperationId, Guid MemberId, string SourcePath) : IMirrorPulseControlArguments;
+public sealed record NamespaceMemberReplaceArguments(Guid OperationId) : IMirrorPulseControlArguments;
+public sealed record NamespaceMemberReplacementStatusArguments(Guid OperationId) : IMirrorPulseControlArguments;
+
+public sealed record MirrorPulseControlNamespaceReplacementPreparation(Guid OperationId, Guid MemberId, string RelativePath,
+    long Length, string Sha256, DateTimeOffset PreparedAt);
+
+public sealed record MirrorPulseControlNamespaceReplacementCompletion(Guid OperationId, Guid MemberId, string RelativePath,
+    DateTimeOffset CompletedAt, bool RescanRequested);
+
+public sealed record MirrorPulseControlNamespaceReplacementStatus(Guid OperationId, Guid MemberId, string RelativePath, string Phase,
+    long Length, string Sha256, bool Started, bool ActionRecorded, bool BackupRecorded, bool WriteStarted,
+    bool ContentRecorded, bool ProtectionRestored, bool Completed, bool Cancelled, bool RequiresRecovery);
+
 public sealed record MirrorPulseControlNamespaceImportPreparation(Guid OperationId, Guid ParentMemberId,
     string Name, long Length, string Sha256, DateTimeOffset PreparedAt);
 

@@ -13,6 +13,20 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 
 public interface IMirrorPulseCloudRuntime : IAsyncDisposable
 {
+    [SupportedOSPlatform("windows10.0.26100")]
+    ValueTask<MirrorPulseNamespaceReplacementExecution> PrepareNamespaceReplacementAsync(Guid operationId, Guid memberId,
+        string sourcePath, CancellationToken cancellationToken) => ValueTask.FromException<MirrorPulseNamespaceReplacementExecution>(
+            new NotSupportedException("This Cloud Files runtime does not prepare controlled replacements."));
+
+    [SupportedOSPlatform("windows10.0.26100")]
+    ValueTask<MirrorPulseNamespaceReplacementCompletion> ExecuteNamespaceReplacementAsync(Guid operationId,
+        CancellationToken cancellationToken) => ValueTask.FromException<MirrorPulseNamespaceReplacementCompletion>(
+            new NotSupportedException("This Cloud Files runtime does not execute controlled replacements."));
+
+    [SupportedOSPlatform("windows10.0.26100")]
+    ValueTask<MirrorPulseNamespaceReplacementStatus> ReadNamespaceReplacementStatusAsync(Guid operationId,
+        CancellationToken cancellationToken) => ValueTask.FromException<MirrorPulseNamespaceReplacementStatus>(
+            new NotSupportedException("This Cloud Files runtime does not read replacement status."));
     MirrorPulseJournalPumpHealth? JournalHealth => null;
     IReadOnlyList<MirrorPulseManagedRootRenameRestoreResult> RootRenameRecoveryResults => [];
     ValueTask StartAsync(CancellationToken cancellationToken);
@@ -311,6 +325,39 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         {
             if (router is null || catalog is null || _namespaceExecution is null || _namespaceActor is null)
                 throw new NotSupportedException("Controlled imports require the Host namespace boundary.");
+        }
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        public ValueTask<MirrorPulseNamespaceReplacementExecution> PrepareNamespaceReplacementAsync(Guid operationId, Guid memberId,
+            string sourcePath, CancellationToken cancellationToken)
+        {
+            RequireImportBoundary();
+            var inputs = new MirrorPulseLocalImportStagingStore(new(syncRootPath, dataRootPath));
+            var preparation = new MirrorPulseNamespaceReplacementPreparationCoordinator(fileSystem, state, catalog!, router!,
+                _namespaceExecution!, _namespaceActor!, _scheduler, inputs, mayDispatch ?? (_ => false));
+            return preparation.PrepareAsync(operationId, memberId, sourcePath, cancellationToken);
+        }
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        public async ValueTask<MirrorPulseNamespaceReplacementCompletion> ExecuteNamespaceReplacementAsync(Guid operationId,
+            CancellationToken cancellationToken)
+        {
+            RequireImportBoundary();
+            var paths = new MirrorPulseStoragePaths(syncRootPath, dataRootPath);
+            var inputs = new MirrorPulseLocalImportStagingStore(paths);
+            var executor = new MirrorPulseNamespaceReplacementExecutor(fileSystem, catalog!, router!, _namespaceExecution!,
+                _namespaceActor!, _scheduler, inputs, new(paths));
+            var result = await executor.ExecuteAsync(operationId, cancellationToken).ConfigureAwait(false);
+            await _namespaceExecution!.RunNormalUserOperationAsync(() => { inputs.RemoveCompleted(operationId); return Task.CompletedTask; }).ConfigureAwait(false);
+            return result;
+        }
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        public ValueTask<MirrorPulseNamespaceReplacementStatus> ReadNamespaceReplacementStatusAsync(Guid operationId,
+            CancellationToken cancellationToken)
+        {
+            if (catalog is null) throw new NotSupportedException("Replacement status requires the Host catalog.");
+            return new(catalog.ReadNamespaceReplacementStatusAsync(operationId, cancellationToken));
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
@@ -809,6 +856,30 @@ public sealed class MirrorPulseCloudHostSession : IAsyncDisposable
         if (!_started || _runtime is null)
             throw new InvalidOperationException("The Cloud Files Host session has not started.");
         return _runtime.InspectNamespaceMemberAsync(relativePath, isDirectory, cancellationToken);
+    }
+
+    [SupportedOSPlatform("windows10.0.26100")]
+    public ValueTask<MirrorPulseNamespaceReplacementExecution> PrepareNamespaceReplacementAsync(Guid operationId, Guid memberId,
+        string sourcePath, CancellationToken cancellationToken = default)
+    {
+        if (!_started || _runtime is null) throw new InvalidOperationException("The Cloud Files Host session has not started.");
+        return _runtime.PrepareNamespaceReplacementAsync(operationId, memberId, sourcePath, cancellationToken);
+    }
+
+    [SupportedOSPlatform("windows10.0.26100")]
+    public ValueTask<MirrorPulseNamespaceReplacementCompletion> ExecuteNamespaceReplacementAsync(Guid operationId,
+        CancellationToken cancellationToken = default)
+    {
+        if (!_started || _runtime is null) throw new InvalidOperationException("The Cloud Files Host session has not started.");
+        return _runtime.ExecuteNamespaceReplacementAsync(operationId, cancellationToken);
+    }
+
+    [SupportedOSPlatform("windows10.0.26100")]
+    public ValueTask<MirrorPulseNamespaceReplacementStatus> ReadNamespaceReplacementStatusAsync(Guid operationId,
+        CancellationToken cancellationToken = default)
+    {
+        if (!_started || _runtime is null) throw new InvalidOperationException("The Cloud Files Host session has not started.");
+        return _runtime.ReadNamespaceReplacementStatusAsync(operationId, cancellationToken);
     }
 
     [SupportedOSPlatform("windows10.0.26100")]
