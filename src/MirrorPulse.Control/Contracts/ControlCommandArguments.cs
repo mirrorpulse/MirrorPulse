@@ -116,6 +116,12 @@ public sealed record NamespaceMemberImportStatusArguments(Guid OperationId) : IM
 public sealed record NamespaceMemberPrepareReplaceArguments(Guid OperationId, Guid MemberId, string SourcePath) : IMirrorPulseControlArguments;
 public sealed record NamespaceMemberReplaceArguments(Guid OperationId) : IMirrorPulseControlArguments;
 public sealed record NamespaceMemberReplacementStatusArguments(Guid OperationId) : IMirrorPulseControlArguments;
+public sealed record NamespaceProtectionCapturesArguments(Guid RootId, Guid? AfterManifestId = null, int Limit = 256) : IMirrorPulseControlArguments;
+public sealed record NamespaceProtectionRecoverTreeArguments(Guid ManifestId) : IMirrorPulseControlArguments;
+public sealed record MirrorPulseControlPermissionCapture(Guid ManifestId, Guid RootId, string Phase, int CapturedMembers,
+    int ExpectedMembers, DateTimeOffset CreatedAt, DateTimeOffset? SealedAt);
+public sealed record MirrorPulseControlOriginalTreeRecovery(Guid ManifestId, string Outcome, int CompletedMembers,
+    DateTimeOffset ObservedAt, string? RecoveryReason);
 
 public sealed record MirrorPulseControlNamespaceReplacementPreparation(Guid OperationId, Guid MemberId, string RelativePath,
     long Length, string Sha256, DateTimeOffset PreparedAt);

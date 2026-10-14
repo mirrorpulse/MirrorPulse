@@ -491,6 +491,10 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
             MirrorPulseControlCommands.NamespaceMemberReplace, ExecuteNamespaceReplacementAsync);
         dispatcher.Register<NamespaceMemberReplacementStatusArguments, MirrorPulseControlNamespaceReplacementStatus>(
             MirrorPulseControlCommands.NamespaceMemberReplacementStatus, ReadNamespaceReplacementStatusAsync);
+        dispatcher.Register<NamespaceProtectionCapturesArguments, IReadOnlyList<MirrorPulseControlPermissionCapture>>(
+            MirrorPulseControlCommands.NamespaceProtectionCaptures, ReadNamespacePermissionCapturesAsync);
+        dispatcher.Register<NamespaceProtectionRecoverTreeArguments, MirrorPulseControlOriginalTreeRecovery>(
+            MirrorPulseControlCommands.NamespaceProtectionRecoverTree, RecoverNamespaceOriginalTreeAsync);
         dispatcher.Register<NamespaceMemberPrepareRetirementArguments, MirrorPulseControlNamespaceMemberRetirementPreparation>(
             MirrorPulseControlCommands.NamespaceMemberPrepareRetirement, PrepareNamespaceMemberRetirementAsync);
         dispatcher.Register<NamespaceMemberRetirementArguments, MirrorPulseControlNamespaceMemberRetirementResult>(
@@ -565,6 +569,24 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
         var prepared = await _session.PrepareNamespaceReplacementAsync(arguments.OperationId, arguments.MemberId, arguments.SourcePath, cancellationToken).ConfigureAwait(false);
         return new(arguments.OperationId, prepared.Intent.MemberId, prepared.Intent.Original.Context.Location.RelativePath,
             prepared.Intent.Content.Length, prepared.Intent.Content.Sha256, prepared.Intent.PreparedAt);
+    }
+
+    private async ValueTask<IReadOnlyList<MirrorPulseControlPermissionCapture>> ReadNamespacePermissionCapturesAsync(
+        NamespaceProtectionCapturesArguments arguments, CancellationToken cancellationToken)
+    {
+        var captures = await _session.ReadNamespacePermissionTreesAsync(new(arguments.RootId), arguments.AfterManifestId,
+            arguments.Limit, cancellationToken).ConfigureAwait(false);
+        return captures.Select(tree => new MirrorPulseControlPermissionCapture(tree.Definition.ManifestId,
+            tree.Definition.Anchor.Intent.RootId!.Value.Value, tree.Phase.ToString(), tree.CapturedMembers,
+            tree.Definition.ExpectedMembers, tree.Definition.CreatedAt, tree.Seal?.SealedAt)).ToArray();
+    }
+
+    private async ValueTask<MirrorPulseControlOriginalTreeRecovery> RecoverNamespaceOriginalTreeAsync(
+        NamespaceProtectionRecoverTreeArguments arguments, CancellationToken cancellationToken)
+    {
+        var restored = await _session.RecoverNamespaceOriginalTreeAsync(arguments.ManifestId, cancellationToken).ConfigureAwait(false);
+        return new(restored.ManifestId, restored.Outcome.ToString(), restored.CompletedMembers, restored.ObservedAt,
+            restored.RecoveryReason?.ToString());
     }
 
     private async ValueTask<MirrorPulseControlNamespaceReplacementCompletion> ExecuteNamespaceReplacementAsync(

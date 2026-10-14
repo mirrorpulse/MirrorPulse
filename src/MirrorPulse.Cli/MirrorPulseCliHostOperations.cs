@@ -357,6 +357,32 @@ public sealed class MirrorPulseCliHostOperations : IMirrorPulseCliHostOperations
                     result = replacement;
                     human = $"Local replacement prepared · {replacement.OperationId:D} · {replacement.RelativePath} · {replacement.Length} bytes";
                     break;
+                case ("namespace", "protection") when command.Path.Count > 2 &&
+                    command.Path[2].Equals("captures", StringComparison.OrdinalIgnoreCase):
+                    if (command.Arguments.Count is not (1 or 3) || !Guid.TryParse(command.Arguments[0], out Guid captureRoot) || captureRoot == Guid.Empty)
+                        throw new ArgumentException("namespace protection captures requires a stable root ID and optional --after manifest ID.");
+                    Guid? afterCapture = null;
+                    if (command.Arguments.Count == 3)
+                    {
+                        if (!command.Arguments[1].Equals("--after", StringComparison.OrdinalIgnoreCase) ||
+                            !Guid.TryParse(command.Arguments[2], out Guid cursor) || cursor == Guid.Empty)
+                            throw new ArgumentException("Permission capture paging accepts --after MANIFEST_ID once.");
+                        afterCapture = cursor;
+                    }
+                    var captures = await _client.GetNamespacePermissionCapturesAsync(captureRoot, afterCapture, cancellationToken: cancellationToken).ConfigureAwait(false);
+                    result = captures;
+                    human = captures.Count == 0 ? "No retained permission captures in this page." : string.Join(Environment.NewLine,
+                        captures.Select(tree => $"{tree.ManifestId:D} · {tree.Phase} · {tree.CapturedMembers}/{tree.ExpectedMembers}"));
+                    break;
+                case ("namespace", "protection") when command.Path.Count > 2 &&
+                    command.Path[2].Equals("recover-tree", StringComparison.OrdinalIgnoreCase):
+                    if (command.Arguments.Count != 1 || !Guid.TryParse(command.Arguments[0], out Guid manifestId) || manifestId == Guid.Empty)
+                        throw new ArgumentException("namespace protection recover-tree requires one sealed original manifest ID.");
+                    var restoredTree = await _client.RecoverNamespaceOriginalTreeAsync(manifestId, cancellationToken).ConfigureAwait(false);
+                    result = restoredTree;
+                    human = $"Original capture {restoredTree.Outcome} · {restoredTree.ManifestId:D} · {restoredTree.CompletedMembers} members";
+                    exitCode = restoredTree.Outcome == "Verified" ? MirrorPulseControlExitCodes.Success : MirrorPulseControlExitCodes.Pending;
+                    break;
                 case ("namespace", "member") when command.Path.Count > 2 &&
                     (command.Path[2].Equals("replace", StringComparison.OrdinalIgnoreCase) || command.Path[2].Equals("replace-recover", StringComparison.OrdinalIgnoreCase) ||
                      command.Path[2].Equals("replacement-status", StringComparison.OrdinalIgnoreCase)):

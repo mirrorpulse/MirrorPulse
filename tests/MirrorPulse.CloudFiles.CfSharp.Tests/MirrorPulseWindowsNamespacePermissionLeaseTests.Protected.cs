@@ -7,6 +7,7 @@ using MirrorPulse.Core.CloudFiles;
 using MirrorPulse.Core.Configuration;
 using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.State;
+using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 
@@ -191,12 +192,15 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     await using (var treeLease = await MirrorPulseWindowsNamespacePermissionTreeLease.OpenAsync(
                         fileSystem.GetDirectory("Docs"), router, timeout.Token))
                     {
-                        var restored = await coordinator.RestoreTreeAsync(manifestId, treeLease, role, cancellationToken: timeout.Token);
+                        await using var scheduler = new MirrorPulseInstanceScheduler();
+                        await using var actor = new MirrorPulseNamespaceActor();
+                        var recovery = new MirrorPulseNamespaceOriginalTreeRecoveryCoordinator(fileSystem, catalog, router, role, actor, scheduler, coordinator);
+                        var restored = await recovery.RecoverAsync(manifestId, timeout.Token);
                         Assert.AreEqual(MirrorPulseNamespacePermissionTreeOutcome.Verified, restored.Outcome);
                         Assert.AreEqual(3, restored.CompletedMembers);
                         Assert.AreEqual(MirrorPulseNamespacePermissionTreeOutcome.Verified,
-                            (await coordinator.RestoreTreeAsync(manifestId, treeLease, role, cancellationToken: timeout.Token)).Outcome);
-                        TestContext.WriteLine($"ProtectedOwnedTreeRestore: architecture={System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture}; currentOwner=True; newRole=True; originalsUnchanged=True; allRotationIntentsDurableBeforeWrite=True; independentLiveAudit=True; sourceReads={provider.Reads}; hostEnabled=False.");
+                            (await recovery.RecoverAsync(manifestId, timeout.Token)).Outcome);
+                        TestContext.WriteLine($"ProtectedOwnedTreeRestore: architecture={System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture}; currentOwner=True; newRole=True; originalsUnchanged=True; allRotationIntentsDurableBeforeWrite=True; independentLiveAudit=True; productionOriginalTreeRecovery=True; sharedSchedulerAndActor=True; sourceReads={provider.Reads}; hostEnabled=False.");
                     }
                     for (int index = 0; index < items.Length; index++)
                     {

@@ -13,6 +13,15 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 
 public interface IMirrorPulseCloudRuntime : IAsyncDisposable
 {
+    ValueTask<IReadOnlyList<MirrorPulseNamespacePermissionTree>> ReadNamespacePermissionTreesAsync(RootId rootId,
+        Guid? afterManifestId, int limit, CancellationToken cancellationToken) =>
+        ValueTask.FromException<IReadOnlyList<MirrorPulseNamespacePermissionTree>>(new NotSupportedException("This runtime does not discover original permission captures."));
+
+    [SupportedOSPlatform("windows10.0.26100")]
+    ValueTask<MirrorPulseNamespacePermissionTreeResult> RecoverNamespaceOriginalTreeAsync(Guid manifestId,
+        CancellationToken cancellationToken) => ValueTask.FromException<MirrorPulseNamespacePermissionTreeResult>(
+            new NotSupportedException("This runtime does not recover original permission trees."));
+
     [SupportedOSPlatform("windows10.0.26100")]
     ValueTask<MirrorPulseNamespaceReplacementExecution> PrepareNamespaceReplacementAsync(Guid operationId, Guid memberId,
         string sourcePath, CancellationToken cancellationToken) => ValueTask.FromException<MirrorPulseNamespaceReplacementExecution>(
@@ -245,9 +254,25 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         private readonly bool _ownsScheduler = scheduler is null;
         private readonly MirrorPulseNamespaceExecutionSession? _namespaceExecution = namespaceExecution;
         private readonly MirrorPulseNamespaceActor? _namespaceActor = namespaceActor;
+        private readonly MirrorPulseNamespacePermissionCoordinator? _permissions = catalog is null ? null : new(catalog);
         private MirrorPulseManagedRootRenameService? _rootRenames;
         public IReadOnlyList<MirrorPulseManagedRootRenameRestoreResult> RootRenameRecoveryResults { get; private set; } = [];
         public MirrorPulseJournalPumpHealth? JournalHealth => _uploadPump?.Health;
+
+        public ValueTask<IReadOnlyList<MirrorPulseNamespacePermissionTree>> ReadNamespacePermissionTreesAsync(RootId rootId,
+            Guid? afterManifestId, int limit, CancellationToken cancellationToken) =>
+            catalog is null ? ValueTask.FromException<IReadOnlyList<MirrorPulseNamespacePermissionTree>>(
+                new NotSupportedException("Original permission capture discovery requires the Host catalog.")) :
+                new(catalog.ReadNamespacePermissionTreesAsync(rootId, afterManifestId, limit, cancellationToken));
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        public ValueTask<MirrorPulseNamespacePermissionTreeResult> RecoverNamespaceOriginalTreeAsync(Guid manifestId,
+            CancellationToken cancellationToken)
+        {
+            RequireImportBoundary();
+            return new MirrorPulseNamespaceOriginalTreeRecoveryCoordinator(fileSystem, catalog!, router!, _namespaceExecution!,
+                _namespaceActor!, _scheduler, _permissions!).RecoverAsync(manifestId, cancellationToken);
+        }
 
         [SupportedOSPlatform("windows10.0.26100")]
         public async ValueTask<MirrorPulseNamespaceMemberRegistration> CreateNamespaceMemberAsync(Guid operationId,
@@ -637,7 +662,11 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             }
             finally
             {
-                try { await fileSystem.DisposeAsync().ConfigureAwait(false); }
+                try
+                {
+                    try { if (_permissions is not null) await _permissions.DisposeAsync().ConfigureAwait(false); }
+                    finally { await fileSystem.DisposeAsync().ConfigureAwait(false); }
+                }
                 finally
                 {
                     if (_providerDiagnostics is not null)
@@ -864,6 +893,21 @@ public sealed class MirrorPulseCloudHostSession : IAsyncDisposable
     {
         if (!_started || _runtime is null) throw new InvalidOperationException("The Cloud Files Host session has not started.");
         return _runtime.PrepareNamespaceReplacementAsync(operationId, memberId, sourcePath, cancellationToken);
+    }
+
+    public ValueTask<IReadOnlyList<MirrorPulseNamespacePermissionTree>> ReadNamespacePermissionTreesAsync(RootId rootId,
+        Guid? afterManifestId = null, int limit = 256, CancellationToken cancellationToken = default)
+    {
+        if (!_started || _runtime is null) throw new InvalidOperationException("The Cloud Files Host session has not started.");
+        return _runtime.ReadNamespacePermissionTreesAsync(rootId, afterManifestId, limit, cancellationToken);
+    }
+
+    [SupportedOSPlatform("windows10.0.26100")]
+    public ValueTask<MirrorPulseNamespacePermissionTreeResult> RecoverNamespaceOriginalTreeAsync(Guid manifestId,
+        CancellationToken cancellationToken = default)
+    {
+        if (!_started || _runtime is null) throw new InvalidOperationException("The Cloud Files Host session has not started.");
+        return _runtime.RecoverNamespaceOriginalTreeAsync(manifestId, cancellationToken);
     }
 
     [SupportedOSPlatform("windows10.0.26100")]

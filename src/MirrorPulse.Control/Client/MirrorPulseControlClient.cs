@@ -57,6 +57,16 @@ public sealed class MirrorPulseControlException : Exception
 /// </summary>
 public sealed class MirrorPulseControlClient
 {
+    public Task<IReadOnlyList<MirrorPulseControlPermissionCapture>> GetNamespacePermissionCapturesAsync(Guid rootId,
+        Guid? afterManifestId = null, int limit = 256, CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceProtectionCapturesArguments, IReadOnlyList<MirrorPulseControlPermissionCapture>>(
+            MirrorPulseControlCommands.NamespaceProtectionCaptures, new(rootId, afterManifestId, limit), cancellationToken);
+
+    public Task<MirrorPulseControlOriginalTreeRecovery> RecoverNamespaceOriginalTreeAsync(Guid manifestId,
+        CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceProtectionRecoverTreeArguments, MirrorPulseControlOriginalTreeRecovery>(
+            MirrorPulseControlCommands.NamespaceProtectionRecoverTree, new(manifestId), cancellationToken);
+
     private readonly MirrorPulseControlClientOptions _options;
     private readonly string _pipeName;
 

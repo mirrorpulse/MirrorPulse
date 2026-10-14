@@ -133,3 +133,11 @@ servers or complete offline Explorer workflows.
 
 See [official Adapter capabilities](official-adapter-capabilities.md),
 [Cloud Files lifecycle](cloud-files-lifecycle.md) and [CLI reference](cli.md).
+
+`namespace protection captures ROOT_ID [--after MANIFEST_ID]` returns a bounded
+page of historical captures, including open and cancelled inventories.
+`namespace protection recover-tree MANIFEST_ID` restores and audits one sealed
+original inventory under shared Host scheduling and namespace ownership. It
+rejects an open capture and reports changed membership or a renamed anchor as
+recovery required. A verified original inventory does not establish readiness
+for relocated or later-born members, acknowledge uploads or enable a root.
