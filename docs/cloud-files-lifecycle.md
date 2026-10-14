@@ -127,6 +127,15 @@ does not reopen a new Host owner. This boundary is distinct from durable catalog
 fences and still needs all ordinary source, projection and bootstrap paths to be
 connected before automatic strict startup can use it.
 
+The demand provider can share that owner. It checks admission before a directory
+page or a new lazy range body reaches a Worker. Local top-level root pages stay
+available while roots are closed. An accepted range body retains its admission
+until consumer disposal and every active read, including disposal of the actual
+source body, have finished. A concurrent disposal closes new reads immediately
+and waits for those existing reads; a failed or canceled range cannot release
+the root while its consumer body remains open. Worker calls and lazy source
+disposal continue to use the captured normal user transport.
+
 Startup rebuilds missing remote conflict projections from CfSharp's decoded
 conflict queries. A mutation with a confirmed remote result and an absent
 official journal operation repairs its product projection before marking the

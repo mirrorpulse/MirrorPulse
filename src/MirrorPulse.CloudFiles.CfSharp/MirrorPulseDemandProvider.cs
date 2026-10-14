@@ -2,6 +2,7 @@ using System.Runtime.Versioning;
 using CfSharp;
 using MirrorPulse.Core.CloudFiles;
 using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.CloudFiles.CfSharp;
 
@@ -33,6 +34,7 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
     private readonly IMirrorPulseWorkerRangeTransport _transport;
     private readonly IMirrorPulseDirectoryPageSource? _directoryPages;
     private readonly MirrorPulseRootRouter? _rootRouter;
+    private readonly MirrorPulseNamespaceWorkAdmission? _namespaceWork;
 
     public MirrorPulseDemandProvider(
         IEnumerable<InstanceId> activeInstances,
@@ -49,11 +51,13 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
     public MirrorPulseDemandProvider(
         MirrorPulseRootRouter rootRouter,
         IMirrorPulseWorkerRangeTransport transport,
-        IMirrorPulseDirectoryPageSource? directoryPages = null)
+        IMirrorPulseDirectoryPageSource? directoryPages = null,
+        MirrorPulseNamespaceWorkAdmission? namespaceWork = null)
         : this([], transport, directoryPages)
     {
         ArgumentNullException.ThrowIfNull(rootRouter);
         _rootRouter = rootRouter;
+        _namespaceWork = namespaceWork;
     }
 
     /// <summary>Connects a real CfSharp session while the current user has no active Adapters.</summary>
@@ -130,6 +134,7 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
         }
 
         ReadOnlyMemory<byte> cursor = DecodeContinuation(continuationToken);
+        using var admission = _namespaceWork?.Enter([_rootRouter!.GetRegistration(instanceId, rootKey!).RootId]);
         CloudRemoteDirectoryPage page = rootKey is null
             ? await _directoryPages.ReadPageAsync(instanceId, adapterPath, cursor, DirectoryPageSize, cancellationToken).ConfigureAwait(false)
             : await _directoryPages.ReadPageAsync(instanceId, rootKey, adapterPath, cursor, DirectoryPageSize, cancellationToken).ConfigureAwait(false);
@@ -230,14 +235,15 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
             rootKey = routed.RootKey;
         }
 
-        Stream stream = new WorkerRangeStream(
-            _transport,
-            instanceId,
-            adapterPath,
-            encodedIdentity.ToArray(),
-            fileSize,
-            rootKey);
-        return ValueTask.FromResult(stream);
+        byte[] retainedIdentity = encodedIdentity.ToArray();
+        MirrorPulseNamespaceWorkAdmission.WorkLease? admission = null;
+        try
+        {
+            admission = _namespaceWork?.Enter([_rootRouter!.GetRegistration(instanceId, rootKey!).RootId]);
+            Stream stream = new WorkerRangeStream(_transport, instanceId, adapterPath, retainedIdentity, fileSize, rootKey, admission);
+            return ValueTask.FromResult(stream);
+        }
+        catch { admission?.Dispose(); throw; }
     }
 
     private InstanceId ResolveInstance(CloudPlaceholderIdentity identity)
@@ -267,13 +273,18 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
         string normalizedPath,
         byte[] encodedIdentity,
         long fileSize,
-        string? rootKey) : Stream
+        string? rootKey,
+        MirrorPulseNamespaceWorkAdmission.WorkLease? admission) : Stream
     {
         private long _position;
+        private readonly object _lifetime = new();
+        private readonly TaskCompletionSource _drained = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _reads;
+        private bool _closing;
 
-        public override bool CanRead => true;
+        public override bool CanRead => !Volatile.Read(ref _closing);
 
-        public override bool CanSeek => true;
+        public override bool CanSeek => !Volatile.Read(ref _closing);
 
         public override bool CanWrite => false;
 
@@ -284,6 +295,7 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
             get => _position;
             set
             {
+                ObjectDisposedException.ThrowIf(Volatile.Read(ref _closing), this);
                 if (value < 0 || value > fileSize)
                 {
                     throw new ArgumentOutOfRangeException(nameof(value));
@@ -296,6 +308,17 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
         public override async ValueTask<int> ReadAsync(
             Memory<byte> buffer,
             CancellationToken cancellationToken = default)
+        {
+            lock (_lifetime) { ObjectDisposedException.ThrowIf(_closing, this); _reads++; }
+            try { return await ReadCoreAsync(buffer, cancellationToken).ConfigureAwait(false); }
+            finally
+            {
+                lock (_lifetime)
+                    if (--_reads == 0 && _closing) ReleaseAdmission();
+            }
+        }
+
+        private async ValueTask<int> ReadCoreAsync(Memory<byte> buffer, CancellationToken cancellationToken)
         {
             if (buffer.IsEmpty || _position == fileSize)
             {
@@ -359,6 +382,31 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
         public override void SetLength(long value) => throw new NotSupportedException();
 
         public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                lock (_lifetime)
+                {
+                    _closing = true;
+                    if (_reads == 0) ReleaseAdmission();
+                }
+            }
+            base.Dispose(disposing);
+        }
+
+        public override async ValueTask DisposeAsync()
+        {
+            await base.DisposeAsync().ConfigureAwait(false);
+            await _drained.Task.ConfigureAwait(false);
+            GC.SuppressFinalize(this);
+        }
+
+        private void ReleaseAdmission()
+        {
+            admission?.Dispose(); _drained.TrySetResult();
+        }
     }
 
     private const int AdapterWorkerReadRangeLimit = 1024 * 1024;

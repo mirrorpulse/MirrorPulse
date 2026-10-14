@@ -9,6 +9,7 @@ using MirrorPulse.Core.CloudFiles;
 using MirrorPulse.Core.Configuration;
 using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.State;
+using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 
@@ -42,7 +43,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 DirectoryPage = new([new("cold", "v1", "file", "cold.bin", 4, null, null, false)], default, true),
             };
             var source = new MirrorPulseNormalUserWorkerTransport(role, worker, worker, worker, worker, worker);
-            var provider = new MirrorPulseDemandProvider(router, source, new MirrorPulseAdapterDirectoryPageSource(source));
+            await using var sourceAdmission = new MirrorPulseNamespaceWorkAdmission([registration.RootId]);
+            var provider = new MirrorPulseDemandProvider(router, source, new MirrorPulseAdapterDirectoryPageSource(source), sourceAdmission);
             var state = new MirrorPulseCfSharpStateSession(paths);
             await using var fileSystem = new MirrorPulseCloudFileSystemBuilder(paths).WithStateStore(state)
                 .WithContentProvider(provider).Build();
@@ -86,6 +88,19 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     Assert.IsTrue(result.Receipt.Drained);
                 }
             });
+            // This provider fixture initially contains only the two audited directories.
+            // Releasing its source gate is not product current-tree or Host readiness.
+            await role.RunNamespaceOperationAsync(async () =>
+            {
+                var localRoots = new List<CloudItem>();
+                await foreach (var item in fileSystem.Root.EnumerateLocalChildrenAsync(cancellationToken: timeout.Token)) localRoots.Add(item);
+                Assert.HasCount(1, localRoots); Assert.AreEqual(docs.FullPath, localRoots[0].FullPath);
+                var localChildren = new List<CloudItem>();
+                await foreach (var item in docs.EnumerateLocalChildrenAsync(cancellationToken: timeout.Token)) localChildren.Add(item);
+                Assert.IsEmpty(localChildren);
+            });
+            await using (var admitted = await sourceAdmission.BeginRecoveryAsync([registration.RootId], timeout.Token))
+                admitted.CompleteAfterFreshAudit();
             await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
                 File.WriteAllTextAsync(Path.Combine(docs.FullPath, "ordinary.txt"), "not admitted", timeout.Token));
             Assert.AreEqual(0, worker.Calls.Count(call => call == "directory"));
@@ -116,7 +131,9 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 Assert.AreEqual(preparation.Baseline.OwnerSid, observed.OwnerSid);
                 Assert.IsTrue(MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(preparation.Intent.TargetDacl, observed.Dacl));
             }
-            TestContext.WriteLine($"NativeSourceContext: productionStartupBoundary=True; externalOrdinaryConsumer=True; ordinaryEnumeration=True; inheritedDeleteProtection=True; coldHydration=True; lazyRangeDisposedAsNormalUser=True; closedParentDacls=True; rootGuardRetained=True; elevatedCaller={new WindowsPrincipal(caller).IsInRole(WindowsBuiltInRole.Administrator)}; hostStrictIntegrated=False.");
+            await using var sourceDrained = await sourceAdmission.BeginRecoveryAsync([registration.RootId], timeout.Token);
+            Assert.IsFalse(sourceAdmission.IsAdmitted(registration.RootId));
+            TestContext.WriteLine($"NativeSourceContext: productionStartupBoundary=True; externalOrdinaryConsumer=True; ordinaryEnumeration=True; inheritedDeleteProtection=True; coldHydration=True; lazyRangeDisposedAsNormalUser=True; rootAdmissionDrainedAfterLazySource=True; closedParentDacls=True; rootGuardRetained=True; elevatedCaller={new WindowsPrincipal(caller).IsInRole(WindowsBuiltInRole.Administrator)}; hostStrictIntegrated=False.");
         }
         finally
         {
