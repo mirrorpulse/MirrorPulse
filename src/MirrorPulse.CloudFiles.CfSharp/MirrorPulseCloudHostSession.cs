@@ -217,6 +217,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
     private readonly MirrorPulseNamespaceExecutionSession? _namespaceExecution;
     private readonly MirrorPulseNamespaceActor? _namespaceActor;
     private readonly MirrorPulseNamespaceWorkAdmission? _namespaceWork;
+    internal Func<ICloudStateStoreFactory, ICloudStateStoreFactory>? StateStoreDecorator { get; init; }
 
     public CfSharpMirrorPulseCloudRuntimeFactory(
         ICloudDemandProvider? provider = null,
@@ -254,9 +255,9 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         var state = new MirrorPulseCfSharpStateSession(paths);
         var provider = _provider ?? MirrorPulseDemandProvider.CreateWithoutAdapters(paths.SyncRootPath);
         return new CfSharpRuntime(new MirrorPulseCloudFileSystemBuilder(paths)
-            .WithStateStore(state)
+            .WithStateStore(StateStoreDecorator?.Invoke(state) ?? state)
             .WithContentProvider(provider)
-            .Build(), state, provider, paths.SyncRootPath, paths.DataRootPath, _uploads, _stats, _mutations, _router, _catalog,
+            .Build(), state, provider, StateStoreDecorator, paths.SyncRootPath, paths.DataRootPath, _uploads, _stats, _mutations, _router, _catalog,
             _mayDispatch, _conflicts, _notifications, _scheduler, _namespaceExecution, _namespaceActor, _namespaceWork);
     }
 
@@ -264,6 +265,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         CloudFileSystem fileSystem,
         MirrorPulseCfSharpStateSession state,
         ICloudDemandProvider provider,
+        Func<ICloudStateStoreFactory, ICloudStateStoreFactory>? stateStoreDecorator,
         string syncRootPath,
         string dataRootPath,
         IMirrorPulseWorkerUploadTransport? uploads,
@@ -390,7 +392,8 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             token.ThrowIfCancellationRequested();
             var paths = new MirrorPulseStoragePaths(syncRootPath, dataRootPath);
             state = new(paths);
-            fileSystem = new MirrorPulseCloudFileSystemBuilder(paths).WithStateStore(state).WithContentProvider(provider).Build();
+            fileSystem = new MirrorPulseCloudFileSystemBuilder(paths).WithStateStore(stateStoreDecorator?.Invoke(state) ?? state)
+                .WithContentProvider(provider).Build();
             await StartLibraryAsync(token).ConfigureAwait(false);
             await StartLibraryServicesAsync(token).ConfigureAwait(false);
         }
@@ -931,43 +934,42 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         private async Task DisposeCoreAsync()
         {
             Interlocked.Exchange(ref _initializationClosing, 1);
+            await _initializationGate.WaitAsync().ConfigureAwait(false);
             try
             {
-                try
-                {
-                    if (_uploadPump is not null)
-                        await _uploadPump.DisposeAsync().ConfigureAwait(false);
-                }
-                finally
-                {
-                    if (_ownsScheduler) await _scheduler.DisposeAsync().ConfigureAwait(false);
-                }
-            }
-            finally
-            {
+                // Close every live work entry before cancellation. Library disposal can then
+                // release provider bodies while the application drain remains pending.
+                Task? workDrained = namespaceWork?.DisposeAsync().AsTask();
                 try
                 {
                     try
                     {
-                        await _initializationGate.WaitAsync().ConfigureAwait(false);
-                        try
-                        {
-                            try { if (_permissions is not null) await _permissions.DisposeAsync().ConfigureAwait(false); }
-                            finally
-                            {
-                                if (_initializationProtection is not null && OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
-                                    await _initializationProtection.DisposeAsync().ConfigureAwait(false);
-                            }
-                        }
-                        finally { _initializationGate.Release(); _initializationGate.Dispose(); }
+                        if (_uploadPump is not null) await _uploadPump.DisposeAsync().ConfigureAwait(false);
                     }
-                    finally { await fileSystem.DisposeAsync().ConfigureAwait(false); }
+                    finally { if (_ownsScheduler) await _scheduler.DisposeAsync().ConfigureAwait(false); }
                 }
                 finally
                 {
-                    if (_providerDiagnostics is not null)
-                        await _providerDiagnostics.DisposeAsync().ConfigureAwait(false);
+                    try
+                    {
+                        try { await fileSystem.DisposeAsync().ConfigureAwait(false); }
+                        finally { if (workDrained is not null) await workDrained.ConfigureAwait(false); }
+                    }
+                    finally
+                    {
+                        try { if (_permissions is not null) await _permissions.DisposeAsync().ConfigureAwait(false); }
+                        finally
+                        {
+                            if (_initializationProtection is not null && OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
+                                await _initializationProtection.DisposeAsync().ConfigureAwait(false);
+                        }
+                    }
                 }
+            }
+            finally
+            {
+                _initializationGate.Release(); _initializationGate.Dispose();
+                if (_providerDiagnostics is not null) await _providerDiagnostics.DisposeAsync().ConfigureAwait(false);
             }
         }
     }

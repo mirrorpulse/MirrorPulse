@@ -323,6 +323,14 @@ services are serialized with the transition. Failed or cancelled recovery retain
 its admission and keeps the roots closed. Historical completion replay does not
 replace a library owner or reopen a root.
 
+Runtime shutdown serializes with initialization before stopping dependent services.
+It closes the lifetime's work-admission owner, cancels and drains the upload pump,
+then awaits public library disposal and the remaining application work. The anchor
+and permission coordinator are released after both drains, including when an
+earlier shutdown step fails. This preserves the ancestor guard while a population
+callback is still committing its official projection. A shutdown admission owner
+is not reusable by a later Host lifetime.
+
 Controlled creation, import, replacement, movement and retirement retain root
 work leases through their actual execution and input cleanup. They acquire their
 lease before capturing a library-dependent coordinator, so a resumed operation
