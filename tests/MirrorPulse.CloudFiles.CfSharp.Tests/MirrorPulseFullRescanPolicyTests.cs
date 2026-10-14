@@ -78,20 +78,21 @@ public sealed class MirrorPulseFullRescanPolicyTests
                 if (!signal.RequiresFullRescan) await feed.AcknowledgeAsync(signal.Changes.Select(change => change.OperationId), timeout.Token);
             } while (!signal.RequiresFullRescan);
             await using var catalog = await MirrorPulseProductCatalog.OpenAsync(paths, timeout.Token);
-            async Task RetryRetainedConfirmationAsync(Func<Task> operation)
+            async Task RetryRetainedConfirmationAsync(Func<Task> operation, MirrorPulseProductCatalog? currentCatalog = null)
             {
                 for (int attempt = 1; ; attempt++)
                 {
                     try { await operation(); return; }
                     catch (MirrorPulseMutationAmbiguousException) when (attempt < 4)
                     {
-                        MirrorPulseMutationRecord[] retained = (await catalog.ReadIncompleteMutationsAsync(timeout.Token))
+                        MirrorPulseProductCatalog currentOwner = currentCatalog ?? catalog;
+                        MirrorPulseMutationRecord[] retained = (await currentOwner.ReadIncompleteMutationsAsync(timeout.Token))
                             .Where(record => record.State == MirrorPulseMutationState.RemoteAccepted).ToArray();
                         if (retained.Length == 0) throw;
                         foreach (MirrorPulseMutationRecord record in retained)
                         {
-                            Assert.IsNotNull(await catalog.ReadContentAcceptanceProofAsync(record.Intent.OperationId, timeout.Token));
-                            MirrorPulseContentConfirmationReceipt? receipt = await catalog.ReadContentConfirmationReceiptAsync(record.Intent.OperationId, timeout.Token);
+                            Assert.IsNotNull(await currentOwner.ReadContentAcceptanceProofAsync(record.Intent.OperationId, timeout.Token));
+                            MirrorPulseContentConfirmationReceipt? receipt = await currentOwner.ReadContentConfirmationReceiptAsync(record.Intent.OperationId, timeout.Token);
                             if (receipt is null || receipt.Outcome is not (MirrorPulseContentConfirmationOutcome.Busy or
                                 MirrorPulseContentConfirmationOutcome.ProtectionLost or MirrorPulseContentConfirmationOutcome.NativeAppliedProjectionPending)) throw;
                             Assert.IsFalse(receipt.MayAcknowledge);
@@ -182,6 +183,32 @@ public sealed class MirrorPulseFullRescanPolicyTests
             Assert.AreEqual(1, transport.Deletes);
             await File.WriteAllTextAsync(Path.Combine(paths.SyncRootPath, "Docs", "after.txt"), "after rescan", timeout.Token);
             Assert.IsFalse((await restartedFeed.ReadBatchAsync(timeout.Token)).RequiresFullRescan);
+            await using var admission = new MirrorPulseNamespaceWorkAdmission([first.RootId, second.RootId]);
+            // This content-policy fixture has no strict namespace membership. Inspect its
+            // real root bindings before opening test work admission; no Host readiness is claimed.
+            await using (var initialAdmission = await admission.BeginRecoveryAsync([first.RootId, second.RootId], timeout.Token))
+            {
+                foreach (string rootPath in new[] { "Docs", "Offline" })
+                {
+                    var actual = await restarted.GetDirectory(rootPath).InspectAsync(timeout.Token);
+                    Assert.IsTrue(actual.Exists); Assert.AreEqual(CloudItemKind.Directory, actual.Kind); Assert.IsNotNull(actual.LocalBinding);
+                }
+                initialAdmission.CompleteAfterFreshAudit();
+            }
+            await using var heldRoot = await admission.BeginRecoveryAsync([first.RootId], timeout.Token);
+            await File.WriteAllTextAsync(Path.Combine(paths.SyncRootPath, "Docs", "gated.txt"), "closed root bytes", timeout.Token);
+            await File.WriteAllTextAsync(Path.Combine(paths.SyncRootPath, "Offline", "continued.txt"), "admitted root bytes", timeout.Token);
+            var admittedPolicy = new MirrorPulseFullRescanPolicy(restarted, restartedFeed, restartedState,
+                new(paths.SyncRootPath, [first, enabledSecond]), reopenedCatalog, transport, transport,
+                _ => true, transport, transport, transport, namespaceWork: admission);
+            await RetryRetainedConfirmationAsync(() => admittedPolicy.ReconcileAsync(timeout.Token).AsTask(), reopenedCatalog);
+            Assert.AreEqual(1, transport.Uploads[active]); Assert.AreEqual(2, transport.Uploads[offline]);
+            Assert.IsFalse(File.Exists(transport.PathFor(active, "gated.txt")));
+            Assert.AreEqual("admitted root bytes", await File.ReadAllTextAsync(transport.PathFor(offline, "continued.txt"), timeout.Token));
+            Assert.AreEqual("closed root bytes", await File.ReadAllTextAsync(Path.Combine(paths.SyncRootPath, "Docs", "gated.txt"), timeout.Token));
+            CollectionAssert.AreEqual(new[] { first.RootId }, (await reopenedCatalog.ReadDeferredRescanRootsAsync(timeout.Token)).ToArray());
+            Assert.IsFalse(admission.IsAdmitted(first.RootId));
+            TestContext.WriteLine("RescanWorkAdmission: currentNativeBindings=True; closedRootDeferred=True; closedRootBytesPreserved=True; otherRootActuallyUploaded=True; stableRootIds=True; completeOriginalAclAndRestartAssertionsRetained=True; strictHostReady=False.");
         }
         finally
         {
