@@ -120,6 +120,7 @@ public sealed record NamespaceProtectionCapturesArguments(Guid RootId, Guid? Aft
 public sealed record NamespaceProtectionRecoverTreeArguments(Guid ManifestId) : IMirrorPulseControlArguments;
 public sealed record NamespaceProtectionInitializeArguments(Guid OperationId) : IMirrorPulseControlArguments;
 public sealed record NamespaceProtectionInitializationStatusArguments(Guid OperationId) : IMirrorPulseControlArguments;
+public sealed record NamespaceProtectionInitializationsArguments(Guid? AfterOperationId = null, int Limit = 256) : IMirrorPulseControlArguments;
 public sealed record MirrorPulseControlNamespaceInitialization(Guid OperationId, string Phase,
     IReadOnlyList<Guid> RootIds, int? MemberCount, DateTimeOffset PreparedAt, DateTimeOffset? CompletedAt,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? RecoveryCode = null);

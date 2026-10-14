@@ -375,6 +375,21 @@ public sealed class MirrorPulseCliHostOperations : IMirrorPulseCliHostOperations
                         captures.Select(tree => $"{tree.ManifestId:D} · {tree.Phase} · {tree.CapturedMembers}/{tree.ExpectedMembers}"));
                     break;
                 case ("namespace", "protection") when command.Path.Count > 2 &&
+                    command.Path[2].Equals("initializations", StringComparison.OrdinalIgnoreCase):
+                    Guid? afterInitialization = null;
+                    if (command.Arguments.Count != 0)
+                    {
+                        if (command.Arguments.Count != 2 || !command.Arguments[0].Equals("--after", StringComparison.OrdinalIgnoreCase) ||
+                            !Guid.TryParse(command.Arguments[1], out Guid initializationCursor) || initializationCursor == Guid.Empty)
+                            throw new ArgumentException("Initialization discovery accepts --after OPERATION_ID once.");
+                        afterInitialization = initializationCursor;
+                    }
+                    var initializations = await _client.GetNamespaceInitializationsAsync(afterInitialization, cancellationToken: cancellationToken).ConfigureAwait(false);
+                    result = initializations;
+                    human = initializations.Count == 0 ? "No retained initialization attempts in this page." : string.Join(Environment.NewLine,
+                        initializations.Select(attempt => $"{attempt.OperationId:D} · {attempt.Phase} · {attempt.RootIds.Count} roots"));
+                    break;
+                case ("namespace", "protection") when command.Path.Count > 2 &&
                     command.Path[2].Equals("initialize", StringComparison.OrdinalIgnoreCase):
                     Guid initializationId = Guid.NewGuid();
                     if (command.Arguments.Count != 0 && (command.Arguments.Count != 2 ||

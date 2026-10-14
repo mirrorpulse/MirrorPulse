@@ -94,12 +94,8 @@ public sealed partial class MirrorPulseProductCatalog
         try
         {
             ThrowIfDisposed(); using SqliteTransaction transaction = _connection.BeginTransaction(deferred: true);
-            var intent = await ReadNamespaceInitializationCoreAsync(operationId, transaction, cancellationToken).ConfigureAwait(false)
-                ?? throw new FileNotFoundException("The initialization admission is missing.");
-            var completion = await ReadNamespaceInitializationCompletionCoreAsync(operationId, transaction, cancellationToken).ConfigureAwait(false);
-            if (completion is null) await RequireNamespaceInitializationRootsAsync(intent, transaction, cancellationToken).ConfigureAwait(false);
-            else await RequireNamespaceInitializationTerminalAsync(intent, completion, transaction, cancellationToken).ConfigureAwait(false);
-            transaction.Commit(); return new(intent, completion);
+            var status = await ReadNamespaceInitializationStatusCoreAsync(operationId, transaction, cancellationToken).ConfigureAwait(false);
+            transaction.Commit(); return status;
         }
         finally { _gate.Release(); }
     }

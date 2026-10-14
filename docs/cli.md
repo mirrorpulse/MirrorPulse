@@ -65,6 +65,7 @@ The default output is concise human-readable text. Automation should use `--json
 | `mp namespace protection recover-tree MANIFEST_ID` | Restore and audit one sealed original tree under shared Host scheduling. | changed membership requires recovery; verified original inventory does not establish whole-product readiness |
 | `mp namespace protection initialize [--operation-id GUID]` | Initialize the configured existing original root inventories through the Host. | retain the operation ID for retry; missing roots or evolving moved/born inventories require recovery |
 | `mp namespace protection initialization-status OPERATION_ID` | Read durable initialization admission and historical completion. | pending attempts return exit `11`; completion does not authorize a later Host session |
+| `mp namespace protection initializations [--after OPERATION_ID]` | Find up to 256 retained pending and completed initialization attempts. | continue after the last returned operation ID; a successful query returns `0`, including when some attempts are pending |
 | `mp namespace member prepare-move MEMBER_ID PARENT_ID NAME [--operation-id GUID]` | Prepare a protected member move. | the source name remains fenced until the move receipt is complete |
 | `mp namespace member tree MEMBER_ID` | Read the validated current registered subtree. | read-only; depth and current product paths are returned |
 | `mp namespace member move OPERATION_ID` | Execute or retry an admitted protected file or directory move. | directories require the original public proof and a sealed registered subtree; all descendant positions settle together |
@@ -87,6 +88,11 @@ Initialization failures after durable admission return the operation ID with
 pending status and a recovery code. Retrying with `--operation-id` resumes that
 admission. Transport failures also include the generated ID in their error
 message. Supply an explicit ID when the calling process may be interrupted.
+If an interrupted caller loses its ID, use `namespace protection initializations`
+to find the retained admission and retry with that ID. Pages are ordered by the
+canonical operation ID, rather than time, and include historical completions.
+Discovery reads only the Host catalog and does not change permissions, release
+pending fences or establish readiness for the current Host session.
 
 Global options must precede the command. Scalar command options accept `--name value` or `--name=value`; repeatable `--config`, `--root`, and `--enable-installation` options use separate values. Creation and configuration patches use the same Adapter field validation. A patch retains unspecified settings and the Host-managed credential reference. Secret fields and credential references are rejected in ordinary `--config` values. Secrets are accepted through `--secret` during creation. Avoid shell history and log capture. Other credential-input helpers and rotation/removal CLI options are not fully wired into these commands.
 

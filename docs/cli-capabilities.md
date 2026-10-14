@@ -141,3 +141,9 @@ original inventory under shared Host scheduling and namespace ownership. It
 rejects an open capture and reports changed membership or a renamed anchor as
 recovery required. A verified original inventory does not establish readiness
 for relocated or later-born members, acknowledge uploads or enable a root.
+
+`namespace protection initializations [--after OPERATION_ID]` discovers pending
+and historical attempts even if a caller lost its retry handle. Each page is
+bounded to 256 entries in canonical operation ID order. Missing admissions,
+damaged reservations and corrupt completion records fail the query rather than
+silently omitting recovery work. A historical completion is not current readiness.

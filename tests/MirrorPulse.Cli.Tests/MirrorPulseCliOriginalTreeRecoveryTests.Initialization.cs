@@ -7,6 +7,40 @@ namespace MirrorPulse.Cli.Tests;
 public sealed partial class MirrorPulseCliOriginalTreeRecoveryTests
 {
     [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task InitializationDiscoveryFindsRetryHandlesThroughTheHostWithABoundedCursor(bool afterCursor)
+    {
+        Guid cursor = Guid.NewGuid(), pending = Guid.NewGuid(), completed = Guid.NewGuid(), root = Guid.NewGuid(); int calls = 0;
+        var dispatcher = new MirrorPulseControlDispatcher();
+        dispatcher.Register<NamespaceProtectionInitializationsArguments, IReadOnlyList<MirrorPulseControlNamespaceInitialization>>(
+            MirrorPulseControlCommands.NamespaceProtectionInitializations, (arguments, _) =>
+            {
+                Assert.AreEqual(afterCursor ? cursor : (Guid?)null, arguments.AfterOperationId);
+                Assert.AreEqual(256, arguments.Limit); calls++;
+                return ValueTask.FromResult<IReadOnlyList<MirrorPulseControlNamespaceInitialization>>([
+                    new(pending, "Pending", [root], null, DateTimeOffset.UnixEpoch, null),
+                    new(completed, "Completed", [root], 4, DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch.AddSeconds(1))]);
+            });
+        await WithPipeAsync(dispatcher, async operations =>
+        {
+            using var output = new StringWriter(); using var error = new StringWriter();
+            Assert.AreEqual(0, await RunAsync(operations, "initializations", afterCursor ? ["--after", cursor.ToString("D")] : [], output, error));
+            using var json = JsonDocument.Parse(output.ToString()); var data = json.RootElement.GetProperty("data");
+            Assert.AreEqual(pending, data[0].GetProperty("operationId").GetGuid());
+            Assert.AreEqual("Pending", data[0].GetProperty("phase").GetString());
+            Assert.AreEqual(completed, data[1].GetProperty("operationId").GetGuid());
+            Assert.AreEqual("Completed", data[1].GetProperty("phase").GetString());
+            Assert.IsFalse(data[0].TryGetProperty("dacl", out _)); Assert.IsFalse(data[1].TryGetProperty("roleSid", out _));
+            Assert.IsFalse(data[1].TryGetProperty("catalogFingerprint", out _)); Assert.IsFalse(data[1].TryGetProperty("treeReady", out _));
+            foreach (string[] invalid in new string[][] { ["extra"], ["--after"], ["--after", "invalid"],
+                ["--after", Guid.Empty.ToString("D")], ["--unexpected", cursor.ToString("D")], ["--after", cursor.ToString("D"), "extra"] })
+                Assert.AreEqual(2, await RunAsync(operations, "initializations", invalid, TextWriter.Null, TextWriter.Null));
+            Assert.AreEqual(1, calls);
+        });
+    }
+
+    [TestMethod]
     [DataRow(false, "Completed")]
     [DataRow(true, "Completed")]
     [DataRow(false, "Pending")]

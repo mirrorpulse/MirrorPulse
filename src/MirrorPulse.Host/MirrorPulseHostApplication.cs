@@ -499,6 +499,8 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
             MirrorPulseControlCommands.NamespaceProtectionInitialize, InitializeNamespaceProtectionAsync);
         dispatcher.Register<NamespaceProtectionInitializationStatusArguments, MirrorPulseControlNamespaceInitialization>(
             MirrorPulseControlCommands.NamespaceProtectionInitializationStatus, ReadNamespaceInitializationStatusAsync);
+        dispatcher.Register<NamespaceProtectionInitializationsArguments, IReadOnlyList<MirrorPulseControlNamespaceInitialization>>(
+            MirrorPulseControlCommands.NamespaceProtectionInitializations, ReadNamespaceInitializationsAsync);
         dispatcher.Register<NamespaceMemberPrepareRetirementArguments, MirrorPulseControlNamespaceMemberRetirementPreparation>(
             MirrorPulseControlCommands.NamespaceMemberPrepareRetirement, PrepareNamespaceMemberRetirementAsync);
         dispatcher.Register<NamespaceMemberRetirementArguments, MirrorPulseControlNamespaceMemberRetirementResult>(
@@ -612,10 +614,20 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
         NamespaceProtectionInitializationStatusArguments arguments, CancellationToken cancellationToken)
     {
         var status = await _session.ReadNamespaceInitializationStatusAsync(arguments.OperationId, cancellationToken).ConfigureAwait(false);
-        return new(status.Intent.OperationId, status.Completion is null ? "Pending" : "Completed",
+        return ToControlInitialization(status);
+    }
+
+    private async ValueTask<IReadOnlyList<MirrorPulseControlNamespaceInitialization>> ReadNamespaceInitializationsAsync(
+        NamespaceProtectionInitializationsArguments arguments, CancellationToken cancellationToken)
+    {
+        var attempts = await _catalog.ReadNamespaceInitializationsAsync(arguments.AfterOperationId, arguments.Limit, cancellationToken).ConfigureAwait(false);
+        return attempts.Select(ToControlInitialization).ToArray();
+    }
+
+    private static MirrorPulseControlNamespaceInitialization ToControlInitialization(MirrorPulseNamespaceInitializationStatus status) =>
+        new(status.Intent.OperationId, status.Completion is null ? "Pending" : "Completed",
             status.Intent.Roots.Select(root => root.RootId.Value).ToArray(), status.Completion?.MemberCount,
             status.Intent.PreparedAt, status.Completion?.CompletedAt);
-    }
 
     private async ValueTask<MirrorPulseControlNamespaceReplacementCompletion> ExecuteNamespaceReplacementAsync(
         NamespaceMemberReplaceArguments arguments, CancellationToken cancellationToken)
