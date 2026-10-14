@@ -31,44 +31,50 @@ public sealed partial class MirrorPulseProductCatalog
         {
             ThrowIfDisposed();
             using SqliteTransaction transaction = _connection.BeginTransaction(deferred: true);
-            HashSet<RootId> roots = (await ReadManagedRootRenamesCoreAsync(cancellationToken, transaction).ConfigureAwait(false))
-                .Where(intent => intent.IsPending).Select(intent => intent.RootId).ToHashSet();
-            var moveRoots = new List<RootId>();
-            await using (SqliteCommand query = _connection.CreateCommand())
-            {
-                query.Transaction = transaction;
-                query.CommandText = "SELECT root_id FROM namespace_member_move_pending ORDER BY root_id;";
-                await using SqliteDataReader reader = await query.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-                while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
-                {
-                    string stored = reader.GetString(0);
-                    if (!RootId.TryParse(stored, out RootId root) || root.ToString() != stored)
-                        throw new InvalidDataException("The pending move root index is invalid.");
-                    moveRoots.Add(root);
-                }
-            }
-            foreach (RootId root in moveRoots)
-            {
-                _ = await ReadPendingNamespaceMemberMoveCoreAsync(root, transaction, cancellationToken).ConfigureAwait(false)
-                    ?? throw new InvalidDataException("The pending move lost its durable root fence.");
-                roots.Add(root);
-            }
-            foreach (var retirement in await ReadPendingNamespaceRetirementsCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
-                roots.Add(retirement.Intent.RootId);
-            foreach (var batch in await ReadPendingNamespaceRetirementBatchesCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
-                roots.Add(batch.RootId);
-            await AddNamespaceReplacementRootFencesAsync(roots, transaction, cancellationToken).ConfigureAwait(false);
-            await AddNamespaceInitializationRootFencesAsync(roots, transaction, cancellationToken).ConfigureAwait(false);
-            foreach (var action in await ReadPendingBornMemberRecoveryActionsCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
-                roots.Add(action.Child.Member.RootId!.Value);
-            if (includeUnregisteredBirths)
-            {
-                await AddUnregisteredBirthRootFencesAsync(roots, transaction, cancellationToken).ConfigureAwait(false);
-            }
-            transaction.Commit();
-            return Array.AsReadOnly(roots.OrderBy(root => root.Value).ToArray());
+            var roots = await ReadNamespaceRootFencesCoreAsync(includeUnregisteredBirths, transaction, cancellationToken).ConfigureAwait(false);
+            transaction.Commit(); return roots;
         }
         finally { _gate.Release(); }
+    }
+
+    private async Task<IReadOnlyList<RootId>> ReadNamespaceRootFencesCoreAsync(bool includeUnregisteredBirths,
+        SqliteTransaction transaction, CancellationToken cancellationToken)
+    {
+        HashSet<RootId> roots = (await ReadManagedRootRenamesCoreAsync(cancellationToken, transaction).ConfigureAwait(false))
+            .Where(intent => intent.IsPending).Select(intent => intent.RootId).ToHashSet();
+        var moveRoots = new List<RootId>();
+        await using (SqliteCommand query = _connection.CreateCommand())
+        {
+            query.Transaction = transaction;
+            query.CommandText = "SELECT root_id FROM namespace_member_move_pending ORDER BY root_id;";
+            await using SqliteDataReader reader = await query.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                string stored = reader.GetString(0);
+                if (!RootId.TryParse(stored, out RootId root) || root.ToString() != stored)
+                    throw new InvalidDataException("The pending move root index is invalid.");
+                moveRoots.Add(root);
+            }
+        }
+        foreach (RootId root in moveRoots)
+        {
+            _ = await ReadPendingNamespaceMemberMoveCoreAsync(root, transaction, cancellationToken).ConfigureAwait(false)
+                ?? throw new InvalidDataException("The pending move lost its durable root fence.");
+            roots.Add(root);
+        }
+        foreach (var retirement in await ReadPendingNamespaceRetirementsCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
+            roots.Add(retirement.Intent.RootId);
+        foreach (var batch in await ReadPendingNamespaceRetirementBatchesCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
+            roots.Add(batch.RootId);
+        await AddNamespaceReplacementRootFencesAsync(roots, transaction, cancellationToken).ConfigureAwait(false);
+        await AddNamespaceInitializationRootFencesAsync(roots, transaction, cancellationToken).ConfigureAwait(false);
+        foreach (var action in await ReadPendingBornMemberRecoveryActionsCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
+            roots.Add(action.Child.Member.RootId!.Value);
+        if (includeUnregisteredBirths)
+        {
+            await AddUnregisteredBirthRootFencesAsync(roots, transaction, cancellationToken).ConfigureAwait(false);
+        }
+        return Array.AsReadOnly(roots.OrderBy(root => root.Value).ToArray());
     }
 
     private async Task AddUnregisteredBirthRootFencesAsync(HashSet<RootId> roots,
