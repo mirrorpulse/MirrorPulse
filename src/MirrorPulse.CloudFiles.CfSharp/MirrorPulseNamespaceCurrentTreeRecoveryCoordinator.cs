@@ -55,7 +55,8 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
                 if (member.Origin == MirrorPulseNamespaceMemberOrigin.CapturedOriginal)
                 {
                     var restored = await originals.RecoverAsync(operationId, member.MemberId, cancellationToken).ConfigureAwait(false);
-                    if (restored.Permission?.Outcome is not (MirrorPulseNamespacePermissionOutcome.Verified or MirrorPulseNamespacePermissionOutcome.AlreadyVerified))
+                    if (restored.Permission?.Outcome is not (MirrorPulseNamespacePermissionOutcome.Verified or MirrorPulseNamespacePermissionOutcome.AlreadyVerified) ||
+                        restored.Receipt is not { Outcome: CloudProtectedLocalOperationOutcome.Completed, Drained: true })
                         throw new IOException("A registered original requires pending native recovery before the current graph can complete.");
                 }
                 else

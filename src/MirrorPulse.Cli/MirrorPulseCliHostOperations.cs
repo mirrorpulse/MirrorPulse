@@ -390,14 +390,19 @@ public sealed class MirrorPulseCliHostOperations : IMirrorPulseCliHostOperations
                         initializations.Select(attempt => $"{attempt.OperationId:D} · {attempt.Phase} · {attempt.RootIds.Count} roots"));
                     break;
                 case ("namespace", "protection") when command.Path.Count > 2 &&
-                    command.Path[2].Equals("initialize", StringComparison.OrdinalIgnoreCase):
+                    (command.Path[2].Equals("initialize", StringComparison.OrdinalIgnoreCase) || command.Path[2].Equals("recover-current", StringComparison.OrdinalIgnoreCase)):
+                    bool currentInventory = command.Path[2].Equals("recover-current", StringComparison.OrdinalIgnoreCase);
                     Guid initializationId = Guid.NewGuid();
                     if (command.Arguments.Count != 0 && (command.Arguments.Count != 2 ||
                         !command.Arguments[0].Equals("--operation-id", StringComparison.OrdinalIgnoreCase) ||
                         !Guid.TryParse(command.Arguments[1], out initializationId) || initializationId == Guid.Empty))
                         throw new ArgumentException("Namespace initialization accepts --operation-id GUID once.");
                     MirrorPulseControlNamespaceInitialization initialized;
-                    try { initialized = await _client.InitializeNamespaceProtectionAsync(initializationId, cancellationToken).ConfigureAwait(false); }
+                    try
+                    {
+                        initialized = currentInventory ? await _client.RecoverNamespaceCurrentTreeAsync(initializationId, cancellationToken).ConfigureAwait(false)
+                            : await _client.InitializeNamespaceProtectionAsync(initializationId, cancellationToken).ConfigureAwait(false);
+                    }
                     catch (MirrorPulseControlException exception)
                     {
                         var problem = exception.Error;
@@ -406,7 +411,7 @@ public sealed class MirrorPulseCliHostOperations : IMirrorPulseCliHostOperations
                             problem.Retryable, problem.DiagnosticId), exception.RequestId);
                     }
                     result = initialized;
-                    human = $"Original namespace initialization {initialized.Phase} · {initialized.OperationId:D} · " +
+                    human = $"{(currentInventory ? "Current namespace recovery" : "Original namespace initialization")} {initialized.Phase} · {initialized.OperationId:D} · " +
                         (initialized.MemberCount is { } auditedCount ? $"{auditedCount} members" : "member count pending");
                     exitCode = initialized.Phase == "Completed" ? MirrorPulseControlExitCodes.Success : MirrorPulseControlExitCodes.Pending;
                     break;

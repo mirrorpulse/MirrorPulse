@@ -112,8 +112,11 @@ immutable successor. Retired members remain historical and are excluded from
 native traversal. Full current audit and completion run last, and the Runtime
 retains the resulting anchor guard until disposal. A busy scope leaves the same
 initializer queryable and retryable. Partially executed namespace operations,
-new root bootstrap, Host/CLI orchestration and automatic startup still require
-their respective integration boundaries.
+new root bootstrap and automatic startup still require their respective
+integration boundaries. `mp namespace protection recover-current` invokes this
+explicit Host operation through the versioned Control client. It returns the
+retained operation ID and historical inventory kind; pending requests remain
+queryable through the existing initialization status and discovery commands.
 
 Startup rebuilds missing remote conflict projections from CfSharp's decoded
 conflict queries. A mutation with a confirmed remote result and an absent

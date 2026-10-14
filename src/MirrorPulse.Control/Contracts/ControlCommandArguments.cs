@@ -119,11 +119,13 @@ public sealed record NamespaceMemberReplacementStatusArguments(Guid OperationId)
 public sealed record NamespaceProtectionCapturesArguments(Guid RootId, Guid? AfterManifestId = null, int Limit = 256) : IMirrorPulseControlArguments;
 public sealed record NamespaceProtectionRecoverTreeArguments(Guid ManifestId) : IMirrorPulseControlArguments;
 public sealed record NamespaceProtectionInitializeArguments(Guid OperationId) : IMirrorPulseControlArguments;
+public sealed record NamespaceProtectionRecoverCurrentArguments(Guid OperationId) : IMirrorPulseControlArguments;
 public sealed record NamespaceProtectionInitializationStatusArguments(Guid OperationId) : IMirrorPulseControlArguments;
 public sealed record NamespaceProtectionInitializationsArguments(Guid? AfterOperationId = null, int Limit = 256) : IMirrorPulseControlArguments;
 public sealed record MirrorPulseControlNamespaceInitialization(Guid OperationId, string Phase,
     IReadOnlyList<Guid> RootIds, int? MemberCount, DateTimeOffset PreparedAt, DateTimeOffset? CompletedAt,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? RecoveryCode = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? RecoveryCode = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? InventoryKind = null);
 public sealed record MirrorPulseControlPermissionCapture(Guid ManifestId, Guid RootId, string Phase, int CapturedMembers,
     int ExpectedMembers, DateTimeOffset CreatedAt, DateTimeOffset? SealedAt);
 public sealed record MirrorPulseControlOriginalTreeRecovery(Guid ManifestId, string Outcome, int CompletedMembers,

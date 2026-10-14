@@ -497,6 +497,8 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
             MirrorPulseControlCommands.NamespaceProtectionRecoverTree, RecoverNamespaceOriginalTreeAsync);
         dispatcher.Register<NamespaceProtectionInitializeArguments, MirrorPulseControlNamespaceInitialization>(
             MirrorPulseControlCommands.NamespaceProtectionInitialize, InitializeNamespaceProtectionAsync);
+        dispatcher.Register<NamespaceProtectionRecoverCurrentArguments, MirrorPulseControlNamespaceInitialization>(
+            MirrorPulseControlCommands.NamespaceProtectionRecoverCurrent, RecoverNamespaceCurrentTreeAsync);
         dispatcher.Register<NamespaceProtectionInitializationStatusArguments, MirrorPulseControlNamespaceInitialization>(
             MirrorPulseControlCommands.NamespaceProtectionInitializationStatus, ReadNamespaceInitializationStatusAsync);
         dispatcher.Register<NamespaceProtectionInitializationsArguments, IReadOnlyList<MirrorPulseControlNamespaceInitialization>>(
@@ -605,6 +607,8 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
             // CLI generated it, so a recoverable native boundary never hides the retry handle.
             if (await _catalog.ReadNamespaceInitializationAsync(arguments.OperationId, CancellationToken.None).ConfigureAwait(false) is null) throw;
             var pending = await ReadNamespaceInitializationStatusAsync(new(arguments.OperationId), CancellationToken.None).ConfigureAwait(false);
+            if (pending.InventoryKind is not null && pending.InventoryKind != nameof(MirrorPulseNamespaceInitializationInventoryKind.OriginalInventory))
+                throw new ArgumentException("The operation ID completed a different namespace inventory.", nameof(arguments));
             return pending with { RecoveryCode = pending.Phase == "Pending" ? "OriginalInventoryRecoveryRequired" : null };
         }
         return await ReadNamespaceInitializationStatusAsync(new(arguments.OperationId), cancellationToken).ConfigureAwait(false);
@@ -617,6 +621,21 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
         return ToControlInitialization(status);
     }
 
+    private async ValueTask<MirrorPulseControlNamespaceInitialization> RecoverNamespaceCurrentTreeAsync(
+        NamespaceProtectionRecoverCurrentArguments arguments, CancellationToken cancellationToken)
+    {
+        try { _ = await _session.RecoverNamespaceCurrentTreeAsync(arguments.OperationId, cancellationToken).ConfigureAwait(false); }
+        catch (Exception exception) when (exception is IOException or InvalidOperationException)
+        {
+            if (await _catalog.ReadNamespaceInitializationAsync(arguments.OperationId, CancellationToken.None).ConfigureAwait(false) is null) throw;
+            var pending = await ReadNamespaceInitializationStatusAsync(new(arguments.OperationId), CancellationToken.None).ConfigureAwait(false);
+            if (pending.InventoryKind is not null && pending.InventoryKind != nameof(MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory))
+                throw new ArgumentException("The operation ID completed a different namespace inventory.", nameof(arguments));
+            return pending with { RecoveryCode = pending.Phase == "Pending" ? "CurrentInventoryRecoveryRequired" : null };
+        }
+        return await ReadNamespaceInitializationStatusAsync(new(arguments.OperationId), cancellationToken).ConfigureAwait(false);
+    }
+
     private async ValueTask<IReadOnlyList<MirrorPulseControlNamespaceInitialization>> ReadNamespaceInitializationsAsync(
         NamespaceProtectionInitializationsArguments arguments, CancellationToken cancellationToken)
     {
@@ -627,7 +646,7 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
     private static MirrorPulseControlNamespaceInitialization ToControlInitialization(MirrorPulseNamespaceInitializationStatus status) =>
         new(status.Intent.OperationId, status.Completion is null ? "Pending" : "Completed",
             status.Intent.Roots.Select(root => root.RootId.Value).ToArray(), status.Completion?.MemberCount,
-            status.Intent.PreparedAt, status.Completion?.CompletedAt);
+            status.Intent.PreparedAt, status.Completion?.CompletedAt, InventoryKind: status.Completion?.InventoryKind.ToString());
 
     private async ValueTask<MirrorPulseControlNamespaceReplacementCompletion> ExecuteNamespaceReplacementAsync(
         NamespaceMemberReplaceArguments arguments, CancellationToken cancellationToken)

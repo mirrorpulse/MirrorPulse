@@ -65,6 +65,10 @@ public sealed class MirrorPulseControlClient
         CancellationToken cancellationToken = default) => SendAsync<NamespaceProtectionInitializationStatusArguments, MirrorPulseControlNamespaceInitialization>(
             MirrorPulseControlCommands.NamespaceProtectionInitializationStatus, new(operationId), cancellationToken);
 
+    public Task<MirrorPulseControlNamespaceInitialization> RecoverNamespaceCurrentTreeAsync(Guid operationId,
+        CancellationToken cancellationToken = default) => SendAsync<NamespaceProtectionRecoverCurrentArguments, MirrorPulseControlNamespaceInitialization>(
+            MirrorPulseControlCommands.NamespaceProtectionRecoverCurrent, new(operationId), cancellationToken);
+
     public Task<IReadOnlyList<MirrorPulseControlNamespaceInitialization>> GetNamespaceInitializationsAsync(
         Guid? afterOperationId = null, int limit = 256, CancellationToken cancellationToken = default) =>
         SendAsync<NamespaceProtectionInitializationsArguments, IReadOnlyList<MirrorPulseControlNamespaceInitialization>>(
