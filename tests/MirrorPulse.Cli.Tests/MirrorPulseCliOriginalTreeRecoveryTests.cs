@@ -8,7 +8,7 @@ using MirrorPulse.Control.Transport;
 namespace MirrorPulse.Cli.Tests;
 
 [TestClass]
-public sealed class MirrorPulseCliOriginalTreeRecoveryTests
+public sealed partial class MirrorPulseCliOriginalTreeRecoveryTests
 {
     [TestMethod]
     [DataRow("Capturing")]

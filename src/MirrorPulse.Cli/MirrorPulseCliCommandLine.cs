@@ -139,7 +139,8 @@ public static class MirrorPulseCliCommandLine
                 bool allowed = commandPath[1].Equals("member", StringComparison.OrdinalIgnoreCase)
                     ? token.Equals("inspect", StringComparison.OrdinalIgnoreCase) || token.Equals("tree", StringComparison.OrdinalIgnoreCase) || token.Equals("prepare-move", StringComparison.OrdinalIgnoreCase) || token.Equals("move", StringComparison.OrdinalIgnoreCase) || token.Equals("move-status", StringComparison.OrdinalIgnoreCase) || token.Equals("create", StringComparison.OrdinalIgnoreCase) || token.Equals("prepare-import", StringComparison.OrdinalIgnoreCase) || token.Equals("import", StringComparison.OrdinalIgnoreCase) || token.Equals("import-status", StringComparison.OrdinalIgnoreCase) || token.Equals("prepare-replace", StringComparison.OrdinalIgnoreCase) || token.Equals("replace", StringComparison.OrdinalIgnoreCase) || token.Equals("replace-recover", StringComparison.OrdinalIgnoreCase) || token.Equals("replacement-status", StringComparison.OrdinalIgnoreCase) || token.Equals("prepare-retire", StringComparison.OrdinalIgnoreCase) || token.Equals("retire", StringComparison.OrdinalIgnoreCase) || token.Equals("retirement-status", StringComparison.OrdinalIgnoreCase)
                     : commandPath[1].Equals("protection", StringComparison.OrdinalIgnoreCase)
-                        ? token.Equals("captures", StringComparison.OrdinalIgnoreCase) || token.Equals("recover-tree", StringComparison.OrdinalIgnoreCase)
+                        ? token.Equals("captures", StringComparison.OrdinalIgnoreCase) || token.Equals("recover-tree", StringComparison.OrdinalIgnoreCase) ||
+                            token.Equals("initialize", StringComparison.OrdinalIgnoreCase) || token.Equals("initialization-status", StringComparison.OrdinalIgnoreCase)
                         : token.Equals("recover", StringComparison.OrdinalIgnoreCase);
                 if (!allowed)
                     return Failure($"Unknown subcommand '{token}' for 'namespace {commandPath[1]}'.", options);
@@ -236,6 +237,10 @@ public static class MirrorPulseCliHelp
                                          Read a bounded page of retained original captures.
           namespace protection recover-tree MANIFEST_ID
                                          Recover and audit one sealed original inventory.
+          namespace protection initialize [--operation-id GUID]
+                                         Initialize the admitted original root inventories.
+          namespace protection initialization-status OPERATION_ID
+                                         Read initialization admission and completion.
                                          Create an empty local file or directory under a protected member.
           namespace member prepare-retire MEMBER_ID [--recursive] [--operation-id GUID]
                                          Prepare a protected leaf or subtree deletion.

@@ -36,6 +36,8 @@ public static class MirrorPulseControlCommands
     public const string NamespaceMemberReplacementStatus = "namespace.member.replacementStatus";
     public const string NamespaceProtectionCaptures = "namespace.protection.captures";
     public const string NamespaceProtectionRecoverTree = "namespace.protection.recoverTree";
+    public const string NamespaceProtectionInitialize = "namespace.protection.initialize";
+    public const string NamespaceProtectionInitializationStatus = "namespace.protection.initializationStatus";
     public const string NamespaceMemberInspect = "namespace.member.inspect";
     public const string NamespaceMemberTree = "namespace.member.tree";
     public const string NamespaceMemberPrepareMove = "namespace.member.prepareMove";
@@ -86,6 +88,8 @@ public static class MirrorPulseControlCommands
         new(NamespaceMemberReplacementStatus, "namespace", false, false),
         new(NamespaceProtectionCaptures, "namespace", false, false),
         new(NamespaceProtectionRecoverTree, "namespace", true, false),
+        new(NamespaceProtectionInitialize, "namespace", true, false),
+        new(NamespaceProtectionInitializationStatus, "namespace", false, false),
         new(NamespaceMemberInspect, "namespace", false, false),
         new(NamespaceMemberTree, "namespace", false, false),
         new(NamespaceMemberPrepareMove, "namespace", true, false),

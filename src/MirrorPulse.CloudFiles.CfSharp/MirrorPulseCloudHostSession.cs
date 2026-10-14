@@ -13,6 +13,14 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 
 public interface IMirrorPulseCloudRuntime : IAsyncDisposable
 {
+    [SupportedOSPlatform("windows10.0.26100")]
+    ValueTask<MirrorPulseNamespaceInitializationCompletion> InitializeNamespaceProtectionAsync(Guid operationId,
+        CancellationToken cancellationToken) => ValueTask.FromException<MirrorPulseNamespaceInitializationCompletion>(
+            new NotSupportedException("This runtime does not initialize original namespace protection."));
+
+    ValueTask<MirrorPulseNamespaceInitializationStatus> ReadNamespaceInitializationStatusAsync(Guid operationId,
+        CancellationToken cancellationToken) => ValueTask.FromException<MirrorPulseNamespaceInitializationStatus>(
+            new NotSupportedException("This runtime does not read initialization status."));
     ValueTask<IReadOnlyList<MirrorPulseNamespacePermissionTree>> ReadNamespacePermissionTreesAsync(RootId rootId,
         Guid? afterManifestId, int limit, CancellationToken cancellationToken) =>
         ValueTask.FromException<IReadOnlyList<MirrorPulseNamespacePermissionTree>>(new NotSupportedException("This runtime does not discover original permission captures."));
@@ -255,9 +263,41 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         private readonly MirrorPulseNamespaceExecutionSession? _namespaceExecution = namespaceExecution;
         private readonly MirrorPulseNamespaceActor? _namespaceActor = namespaceActor;
         private readonly MirrorPulseNamespacePermissionCoordinator? _permissions = catalog is null ? null : new(catalog);
+        private MirrorPulseNamespaceInitializationResult? _initializationProtection;
+        private readonly SemaphoreSlim _initializationGate = new(1, 1);
+        private int _initializationClosing;
+        private readonly object _disposal = new();
+        private Task? _disposeTask;
         private MirrorPulseManagedRootRenameService? _rootRenames;
         public IReadOnlyList<MirrorPulseManagedRootRenameRestoreResult> RootRenameRecoveryResults { get; private set; } = [];
         public MirrorPulseJournalPumpHealth? JournalHealth => _uploadPump?.Health;
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        public async ValueTask<MirrorPulseNamespaceInitializationCompletion> InitializeNamespaceProtectionAsync(Guid operationId,
+            CancellationToken cancellationToken)
+        {
+            RequireImportBoundary();
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
+            await _initializationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
+                var result = await new MirrorPulseNamespaceInitializationCoordinator(fileSystem, catalog!, router!, _namespaceExecution!,
+                    _namespaceActor!, _scheduler, _permissions!).InitializeAsync(operationId, cancellationToken).ConfigureAwait(false);
+                if (!result.IsHistoricalReplay)
+                {
+                    var prior = _initializationProtection; _initializationProtection = result;
+                    if (prior is not null) await prior.DisposeAsync().ConfigureAwait(false);
+                }
+                return result.Completion;
+            }
+            finally { _initializationGate.Release(); }
+        }
+
+        public ValueTask<MirrorPulseNamespaceInitializationStatus> ReadNamespaceInitializationStatusAsync(Guid operationId,
+            CancellationToken cancellationToken) => catalog is null ? ValueTask.FromException<MirrorPulseNamespaceInitializationStatus>(
+                new NotSupportedException("Initialization status requires the Host catalog.")) :
+                new(catalog.ReadNamespaceInitializationStatusAsync(operationId, cancellationToken));
 
         public ValueTask<IReadOnlyList<MirrorPulseNamespacePermissionTree>> ReadNamespacePermissionTreesAsync(RootId rootId,
             Guid? afterManifestId, int limit, CancellationToken cancellationToken) =>
@@ -653,8 +693,14 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             return coordinator.ApplyAsync(instanceId, batch, options, cancellationToken);
         }
 
-        public async ValueTask DisposeAsync()
+        public ValueTask DisposeAsync()
         {
+            lock (_disposal) return new(_disposeTask ??= DisposeCoreAsync());
+        }
+
+        private async Task DisposeCoreAsync()
+        {
+            Interlocked.Exchange(ref _initializationClosing, 1);
             try
             {
                 try
@@ -671,7 +717,20 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             {
                 try
                 {
-                    try { if (_permissions is not null) await _permissions.DisposeAsync().ConfigureAwait(false); }
+                    try
+                    {
+                        await _initializationGate.WaitAsync().ConfigureAwait(false);
+                        try
+                        {
+                            try { if (_permissions is not null) await _permissions.DisposeAsync().ConfigureAwait(false); }
+                            finally
+                            {
+                                if (_initializationProtection is not null && OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
+                                    await _initializationProtection.DisposeAsync().ConfigureAwait(false);
+                            }
+                        }
+                        finally { _initializationGate.Release(); _initializationGate.Dispose(); }
+                    }
                     finally { await fileSystem.DisposeAsync().ConfigureAwait(false); }
                 }
                 finally
@@ -907,6 +966,21 @@ public sealed class MirrorPulseCloudHostSession : IAsyncDisposable
     {
         if (!_started || _runtime is null) throw new InvalidOperationException("The Cloud Files Host session has not started.");
         return _runtime.ReadNamespacePermissionTreesAsync(rootId, afterManifestId, limit, cancellationToken);
+    }
+
+    [SupportedOSPlatform("windows10.0.26100")]
+    public ValueTask<MirrorPulseNamespaceInitializationCompletion> InitializeNamespaceProtectionAsync(Guid operationId,
+        CancellationToken cancellationToken = default)
+    {
+        if (!_started || _runtime is null) throw new InvalidOperationException("The Cloud Files Host session has not started.");
+        return _runtime.InitializeNamespaceProtectionAsync(operationId, cancellationToken);
+    }
+
+    public ValueTask<MirrorPulseNamespaceInitializationStatus> ReadNamespaceInitializationStatusAsync(Guid operationId,
+        CancellationToken cancellationToken = default)
+    {
+        if (!_started || _runtime is null) throw new InvalidOperationException("The Cloud Files Host session has not started.");
+        return _runtime.ReadNamespaceInitializationStatusAsync(operationId, cancellationToken);
     }
 
     [SupportedOSPlatform("windows10.0.26100")]

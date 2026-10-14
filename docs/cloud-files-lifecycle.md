@@ -23,6 +23,18 @@ restart replay preserves the first member records while independently checking
 current permission epochs. This path does not recapture relocated or born
 members and does not declare the evolving product namespace ready.
 
+`namespace protection initialize` invokes that original-inventory composition
+through the actual Runtime and Host Control contract. Its initialization
+admission fences upload, rescan and remote dispatch before capture or permission
+writes. Existing capture, permission and member records retain their own state
+machines; initialization stores correlation and an audit fingerprint. Final
+native inventory checks precede one transaction that verifies the unchanged
+catalog snapshots, stores historical completion and releases only the owned
+initialization fences. Failure or cancellation retains admission for retry.
+The Runtime retains the live anchor guard and drains initialization on disposal.
+Default automatic startup, dynamic moved/born graph recovery and newly added
+roots below an already protected anchor still require their full integration.
+
 Startup rebuilds missing remote conflict projections from CfSharp's decoded
 conflict queries. A mutation with a confirmed remote result and an absent
 official journal operation repairs its product projection before marking the

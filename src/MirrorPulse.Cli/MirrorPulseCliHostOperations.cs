@@ -375,6 +375,36 @@ public sealed class MirrorPulseCliHostOperations : IMirrorPulseCliHostOperations
                         captures.Select(tree => $"{tree.ManifestId:D} · {tree.Phase} · {tree.CapturedMembers}/{tree.ExpectedMembers}"));
                     break;
                 case ("namespace", "protection") when command.Path.Count > 2 &&
+                    command.Path[2].Equals("initialize", StringComparison.OrdinalIgnoreCase):
+                    Guid initializationId = Guid.NewGuid();
+                    if (command.Arguments.Count != 0 && (command.Arguments.Count != 2 ||
+                        !command.Arguments[0].Equals("--operation-id", StringComparison.OrdinalIgnoreCase) ||
+                        !Guid.TryParse(command.Arguments[1], out initializationId) || initializationId == Guid.Empty))
+                        throw new ArgumentException("Namespace initialization accepts --operation-id GUID once.");
+                    MirrorPulseControlNamespaceInitialization initialized;
+                    try { initialized = await _client.InitializeNamespaceProtectionAsync(initializationId, cancellationToken).ConfigureAwait(false); }
+                    catch (MirrorPulseControlException exception)
+                    {
+                        var problem = exception.Error;
+                        throw new MirrorPulseControlException(new(problem.Code,
+                            $"{problem.Message} Initialization operation: {initializationId:D}.", problem.Category,
+                            problem.Retryable, problem.DiagnosticId), exception.RequestId);
+                    }
+                    result = initialized;
+                    human = $"Original namespace initialization {initialized.Phase} · {initialized.OperationId:D} · " +
+                        (initialized.MemberCount is { } auditedCount ? $"{auditedCount} members" : "member count pending");
+                    exitCode = initialized.Phase == "Completed" ? MirrorPulseControlExitCodes.Success : MirrorPulseControlExitCodes.Pending;
+                    break;
+                case ("namespace", "protection") when command.Path.Count > 2 &&
+                    command.Path[2].Equals("initialization-status", StringComparison.OrdinalIgnoreCase):
+                    if (command.Arguments.Count != 1 || !Guid.TryParse(command.Arguments[0], out Guid initializationStatusId) || initializationStatusId == Guid.Empty)
+                        throw new ArgumentException("Namespace initialization status requires one operation ID.");
+                    var initializationStatus = await _client.GetNamespaceInitializationStatusAsync(initializationStatusId, cancellationToken).ConfigureAwait(false);
+                    result = initializationStatus;
+                    human = $"Original namespace initialization {initializationStatus.Phase} · {initializationStatus.OperationId:D}";
+                    exitCode = initializationStatus.Phase == "Completed" ? MirrorPulseControlExitCodes.Success : MirrorPulseControlExitCodes.Pending;
+                    break;
+                case ("namespace", "protection") when command.Path.Count > 2 &&
                     command.Path[2].Equals("recover-tree", StringComparison.OrdinalIgnoreCase):
                     if (command.Arguments.Count != 1 || !Guid.TryParse(command.Arguments[0], out Guid manifestId) || manifestId == Guid.Empty)
                         throw new ArgumentException("namespace protection recover-tree requires one sealed original manifest ID.");

@@ -495,6 +495,10 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
             MirrorPulseControlCommands.NamespaceProtectionCaptures, ReadNamespacePermissionCapturesAsync);
         dispatcher.Register<NamespaceProtectionRecoverTreeArguments, MirrorPulseControlOriginalTreeRecovery>(
             MirrorPulseControlCommands.NamespaceProtectionRecoverTree, RecoverNamespaceOriginalTreeAsync);
+        dispatcher.Register<NamespaceProtectionInitializeArguments, MirrorPulseControlNamespaceInitialization>(
+            MirrorPulseControlCommands.NamespaceProtectionInitialize, InitializeNamespaceProtectionAsync);
+        dispatcher.Register<NamespaceProtectionInitializationStatusArguments, MirrorPulseControlNamespaceInitialization>(
+            MirrorPulseControlCommands.NamespaceProtectionInitializationStatus, ReadNamespaceInitializationStatusAsync);
         dispatcher.Register<NamespaceMemberPrepareRetirementArguments, MirrorPulseControlNamespaceMemberRetirementPreparation>(
             MirrorPulseControlCommands.NamespaceMemberPrepareRetirement, PrepareNamespaceMemberRetirementAsync);
         dispatcher.Register<NamespaceMemberRetirementArguments, MirrorPulseControlNamespaceMemberRetirementResult>(
@@ -587,6 +591,30 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
         var restored = await _session.RecoverNamespaceOriginalTreeAsync(arguments.ManifestId, cancellationToken).ConfigureAwait(false);
         return new(restored.ManifestId, restored.Outcome.ToString(), restored.CompletedMembers, restored.ObservedAt,
             restored.RecoveryReason?.ToString());
+    }
+
+    private async ValueTask<MirrorPulseControlNamespaceInitialization> InitializeNamespaceProtectionAsync(
+        NamespaceProtectionInitializeArguments arguments, CancellationToken cancellationToken)
+    {
+        try { _ = await _session.InitializeNamespaceProtectionAsync(arguments.OperationId, cancellationToken).ConfigureAwait(false); }
+        catch (Exception exception) when (exception is IOException or InvalidOperationException)
+        {
+            // Admission may already own a durable fence. Return its operation ID even when the
+            // CLI generated it, so a recoverable native boundary never hides the retry handle.
+            if (await _catalog.ReadNamespaceInitializationAsync(arguments.OperationId, CancellationToken.None).ConfigureAwait(false) is null) throw;
+            var pending = await ReadNamespaceInitializationStatusAsync(new(arguments.OperationId), CancellationToken.None).ConfigureAwait(false);
+            return pending with { RecoveryCode = pending.Phase == "Pending" ? "OriginalInventoryRecoveryRequired" : null };
+        }
+        return await ReadNamespaceInitializationStatusAsync(new(arguments.OperationId), cancellationToken).ConfigureAwait(false);
+    }
+
+    private async ValueTask<MirrorPulseControlNamespaceInitialization> ReadNamespaceInitializationStatusAsync(
+        NamespaceProtectionInitializationStatusArguments arguments, CancellationToken cancellationToken)
+    {
+        var status = await _session.ReadNamespaceInitializationStatusAsync(arguments.OperationId, cancellationToken).ConfigureAwait(false);
+        return new(status.Intent.OperationId, status.Completion is null ? "Pending" : "Completed",
+            status.Intent.Roots.Select(root => root.RootId.Value).ToArray(), status.Completion?.MemberCount,
+            status.Intent.PreparedAt, status.Completion?.CompletedAt);
     }
 
     private async ValueTask<MirrorPulseControlNamespaceReplacementCompletion> ExecuteNamespaceReplacementAsync(
