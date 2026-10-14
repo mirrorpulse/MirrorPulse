@@ -49,6 +49,13 @@ scope. First capture and membership stay unchanged. Accepted current identities
 are read from the existing confirmed correlation rather than overwritten with
 the first local identity. Individual recovery leaves initialization fences in
 place; it is not the default startup executor or current-tree readiness.
+
+Registered born members also have a read-back recovery boundary. After their
+actual parent has recovered to the live role, it checks inherited protection and
+records the existing V3 located epoch, retaining first birth, observation,
+membership and committed movement. This boundary reads native metadata only;
+ordinary files requiring conversion or a new ACL need the separate before-write
+recovery path. Its verified epoch does not release initialization fences.
 Default automatic startup, dynamic moved/born graph recovery and newly added
 roots below an already protected anchor still require their full integration.
 
