@@ -94,6 +94,24 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         var epoch = await recovery.VerifyAsync(initialization, Guid.NewGuid(), parent.MemberId, timeout.Token);
                         Assert.AreEqual(execution.RoleSid.Value, epoch.RoleSid); Assert.AreEqual(3, epoch.Version);
                     }
+                    var writing = new MirrorPulseNamespaceBornMemberRecoveryCoordinator(fileSystem, catalog, router, execution, actor, scheduler, permissions);
+                    var oldProtection = (await catalog.ReadLatestNamespaceBirthProtectionAsync(child!.OriginId, timeout.Token))!;
+                    var currentIdentity = await catalog.ReadNamespaceMemberIdentityAsync(child.MemberId, timeout.Token);
+                    var movedItem = fileSystem.GetFile("Docs/right/moved.bin");
+                    await RunNativeMemberAdmissionAsync(actor, execution, async () =>
+                    {
+                        // Reproduce a retained older owned descriptor; this fixture mutation
+                        // is fault injection, not a claim that MP already recorded a new write.
+                        var changed = await MirrorPulseWindowsNamespacePermissionLease.RunProtectedAsync(movedItem, router, child.LocalObject,
+                            new(currentIdentity.ItemId!.Value, currentIdentity.RemoteId!),
+                            async (lease, token) => await lease.ApplyDaclAsync(oldProtection.Verification.Dacl, token), timeout.Token);
+                        AssertCompletedRegisteredProtectionScope(changed);
+                    }, timeout.Token);
+                    Guid roleAction = Guid.NewGuid();
+                    var roleRestored = await writing.RecoverAsync(initialization, roleAction, child.MemberId, timeout.Token);
+                    Assert.IsNotNull(roleRestored.Completion);
+                    Assert.IsTrue(roleRestored.Receipt is { Outcome: CloudProtectedLocalOperationOutcome.Completed, Drained: true });
+                    Assert.AreEqual(execution.RoleSid.Value, (await catalog.ReadLatestNamespaceBirthProtectionAsync(child.OriginId, timeout.Token))!.RoleSid);
                     var recovered = await recovery.VerifyAsync(initialization, childEpoch, child!.MemberId, timeout.Token);
                     Assert.AreEqual(right!.MemberId, recovered.Placement!.ParentMemberId);
                     Assert.AreEqual(execution.RoleSid.Value, recovered.RoleSid);
@@ -105,10 +123,35 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     Assert.AreEqual(firstObservation, await catalog.ReadNamespaceBirthObservationAsync(child.OriginId, timeout.Token));
                     Assert.AreEqual(child, await catalog.ReadNamespaceMemberAsync(child.MemberId, timeout.Token));
                     Assert.AreEqual(0L, new FileInfo(fileSystem.GetFile(snapshot.Context.Location.RelativePath).FullPath).Length);
+                    string path = fileSystem.GetFile(snapshot.Context.Location.RelativePath).FullPath;
+                    const string latest = "latest ordinary born save retained during native recovery";
+                    await File.WriteAllTextAsync(path, latest, timeout.Token);
+                    Guid actionId = Guid.NewGuid();
+                    await using (var writer = new FileStream(path, FileMode.Open, FileAccess.Write, FileShare.ReadWrite))
+                    {
+                        var busy = await writing.RecoverAsync(initialization, actionId, child.MemberId, timeout.Token);
+                        Assert.IsNull(busy.Completion); Assert.AreEqual(CloudProtectedLocalOperationOutcome.Busy, busy.Receipt!.Outcome);
+                    }
+                    var actions = await catalog.ReadNamespaceBornMemberRecoveryActionsAsync(child.MemberId, timeout.Token);
+                    Assert.HasCount(2, actions); Assert.AreEqual(actionId, actions[^1].ActionId); Assert.AreEqual(roleAction, actions[^1].PreviousActionId);
+                    await Assert.ThrowsExactlyAsync<InvalidOperationException>(async () =>
+                        await recovery.VerifyAsync(initialization, Guid.NewGuid(), right.MemberId, timeout.Token));
+                    var restored = await writing.RecoverAsync(initialization, actionId, child.MemberId, timeout.Token);
+                    Assert.IsNotNull(restored.Completion); Assert.IsTrue(restored.Receipt is { Outcome: CloudProtectedLocalOperationOutcome.Completed, Drained: true });
+                    Assert.AreEqual(actionId, (await catalog.ReadNamespaceMemberProtectionSnapshotAsync(child.MemberId, timeout.Token))!.Context.Protection.ProtectionId);
+                    Assert.AreEqual(latest, await File.ReadAllTextAsync(path, timeout.Token));
+                    await File.WriteAllTextAsync(path, latest + " edited later", timeout.Token);
+                    var historical = await writing.RecoverAsync(initialization, actionId, child.MemberId, timeout.Token);
+                    Assert.IsTrue(historical.IsHistoricalReplay); Assert.IsNull(historical.Receipt);
+                    Assert.AreEqual(restored.Completion, historical.Completion);
+                    Assert.AreEqual(latest + " edited later", await File.ReadAllTextAsync(path, timeout.Token));
+                    Assert.AreEqual(firstBirth, await catalog.ReadNamespaceBirthAsync(child.OriginId, timeout.Token));
+                    Assert.AreEqual(firstObservation, await catalog.ReadNamespaceBirthObservationAsync(child.OriginId, timeout.Token));
+                    Assert.AreEqual(child, await catalog.ReadNamespaceMemberAsync(child.MemberId, timeout.Token));
                     Assert.IsNull((await catalog.ReadNamespaceInitializationStatusAsync(initialization, timeout.Token)).Completion);
                     CollectionAssert.AreEqual(new[] { registration.RootId }, (await catalog.ReadNamespaceDispatchFencedRootsAsync(timeout.Token)).ToArray());
                     Assert.AreEqual(0, source.Reads);
-                    TestContext.WriteLine("BornReadbackRecovery: productionCoordinator=True; oldRoleDisposed=True; movedActualBornParent=True; parentFirstRecovery=True; fileAndDirectoryReadback=True; firstBirthObservationAndMembershipRetained=True; immutableEpochReplay=True; sourceReads=0; conversion=False; aclWritesInReadback=0; rootStillFenced=True; treeReady=False; defaultHostStartup=False.");
+                    TestContext.WriteLine("BornReadbackRecovery: productionCoordinator=True; oldRoleDisposed=True; movedActualBornParent=True; parentFirstRecovery=True; fileAndDirectoryReadback=True; firstBirthObservationAndMembershipRetained=True; immutableEpochReplay=True; sourceReads=0; aclWritesInReadback=0; registeredBornBeforeWriteAction=True; ownedOlderDescriptorRestored=True; busyRetainsAction=True; publicSameObjectScopeDrained=True; latestOrdinaryBytesRetained=True; atomicV3ProjectionAndCompletion=True; historicalCompletionPreservesLaterEdits=True; rootStillFenced=True; treeReady=False; defaultHostStartup=False.");
                 }
             }
         }

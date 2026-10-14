@@ -66,6 +66,14 @@ projects the existing V3 protection and releases only its action reservation in
 one product transaction. Initialization remains fenced until full-tree audit.
 Product catalog schema 51 creates empty action tables for older catalogs and
 does not invent native writes, verification or readiness during migration.
+
+The Runtime executes these actions under shared scheduling, namespace role and
+permission application admission. It converts a matching ordinary born file
+through CfSharp's public same-object scope, retains its current identity and
+latest bytes, restores only owned descriptors, then drains before native
+read-back and atomic product projection. A busy scope retains its action for
+retry. Completed replay returns historical facts without touching later edits.
+Default whole-tree startup and Host/CLI recovery orchestration remain required.
 Default automatic startup, dynamic moved/born graph recovery and newly added
 roots below an already protected anchor still require their full integration.
 

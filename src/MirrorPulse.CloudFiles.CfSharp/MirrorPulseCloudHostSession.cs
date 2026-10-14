@@ -14,6 +14,11 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 public interface IMirrorPulseCloudRuntime : IAsyncDisposable
 {
     [SupportedOSPlatform("windows10.0.26100")]
+    ValueTask<MirrorPulseNamespaceBornMemberRecoveryResult> RecoverNamespaceBornMemberAsync(Guid initializationOperationId, Guid actionId,
+        Guid memberId, CancellationToken cancellationToken) => ValueTask.FromException<MirrorPulseNamespaceBornMemberRecoveryResult>(
+            new NotSupportedException("This runtime does not execute registered born recovery."));
+
+    [SupportedOSPlatform("windows10.0.26100")]
     ValueTask<MirrorPulseNamespaceBirthProtection> VerifyNamespaceBornMemberRecoveryAsync(Guid initializationOperationId, Guid protectionId,
         Guid memberId, CancellationToken cancellationToken) => ValueTask.FromException<MirrorPulseNamespaceBirthProtection>(
             new NotSupportedException("This runtime does not verify registered born member recovery."));
@@ -330,6 +335,22 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             catalog is null ? ValueTask.FromException<IReadOnlyList<MirrorPulseNamespacePermissionTree>>(
                 new NotSupportedException("Original permission capture discovery requires the Host catalog.")) :
                 new(catalog.ReadNamespacePermissionTreesAsync(rootId, afterManifestId, limit, cancellationToken));
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        public async ValueTask<MirrorPulseNamespaceBornMemberRecoveryResult> RecoverNamespaceBornMemberAsync(Guid initializationOperationId,
+            Guid actionId, Guid memberId, CancellationToken cancellationToken)
+        {
+            RequireImportBoundary();
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
+            await _initializationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
+                return await new MirrorPulseNamespaceBornMemberRecoveryCoordinator(fileSystem, catalog!, router!, _namespaceExecution!,
+                    _namespaceActor!, _scheduler, _permissions!).RecoverAsync(initializationOperationId, actionId, memberId, cancellationToken).ConfigureAwait(false);
+            }
+            finally { _initializationGate.Release(); }
+        }
 
         [SupportedOSPlatform("windows10.0.26100")]
         public async ValueTask<MirrorPulseNamespaceBirthProtection> VerifyNamespaceBornMemberRecoveryAsync(Guid initializationOperationId,
