@@ -70,6 +70,8 @@ public sealed partial class MirrorPulseNamespacePermissionTreeCatalogTests
             await ExecuteSqlAsync(fixture.Paths, "DROP TRIGGER fail_initialization_release;");
             completed = await catalog.CompleteNamespaceInitializationAsync(intent.OperationId, snapshots, AuditTime(definition));
             Assert.AreEqual(4, completed.MemberCount); Assert.IsEmpty(await catalog.ReadNamespaceDispatchFencedRootsAsync());
+            await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => catalog.ReadNamespaceMemberRecoveryLineageAsync(
+                intent.OperationId, snapshots.Single(snapshot => snapshot.Context.Location.RelativePath == definition.Anchor.Baseline.RelativePath).Context.Member.MemberId));
         }
         await using var reopened = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
         Assert.AreEqual(completed, await reopened.ReadNamespaceInitializationCompletionAsync(intent.OperationId));

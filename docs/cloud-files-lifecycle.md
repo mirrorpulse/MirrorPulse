@@ -32,6 +32,14 @@ native inventory checks precede one transaction that verifies the unchanged
 catalog snapshots, stores historical completion and releases only the owned
 initialization fences. Failure or cancellation retains admission for retry.
 The Runtime retains the live anchor guard and drains initialization on disposal.
+
+Pending initialization also exposes a separate catalog recovery lineage for
+registered members at their committed current positions. It retains moved and
+born provenance and unfinished original permission intents when parent and child
+roles differ after interruption. This read requires the pending root owner and
+does not relax ordinary current-role authorization or fabricate native checks.
+The default startup recovery executor and final current-tree admission remain
+required before this catalog boundary can enable source dispatch.
 Default automatic startup, dynamic moved/born graph recovery and newly added
 roots below an already protected anchor still require their full integration.
 
