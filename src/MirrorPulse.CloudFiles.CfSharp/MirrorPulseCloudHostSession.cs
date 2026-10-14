@@ -362,14 +362,22 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             var registrations = router!.Registrations.OrderBy(root => root.RootId.Value).ToArray();
             if (retained is not null && !retained.Roots.Select(root => root.RootId).ToHashSet().SetEquals(registrations.Select(root => root.RootId)))
                 throw new InvalidDataException("The initialization root layout changed after admission.");
+            IReadOnlyList<MirrorPulseNamespaceInitializationRoot>? plannedRoots = null;
+            if (retained is null)
+            {
+                plannedRoots = await MirrorPulseNamespaceInitializationCoordinator.SelectOriginalRootsAsync(catalog, registrations,
+                    inventoryKind == MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory, token).ConfigureAwait(false);
+                if (inventoryKind == MirrorPulseNamespaceInitializationInventoryKind.OriginalInventory)
+                    await MirrorPulseNamespaceInitializationCoordinator.RequireOriginalGraphAsync(catalog, registrations, plannedRoots, token).ConfigureAwait(false);
+            }
             var admission = await namespaceWork.BeginRecoveryAsync(registrations.Select(root => root.RootId), token).ConfigureAwait(false);
             try
             {
                 if (retained is null)
                 {
-                    var roots = await MirrorPulseNamespaceInitializationCoordinator.SelectOriginalRootsAsync(catalog, registrations,
-                        inventoryKind == MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory, token).ConfigureAwait(false);
-                    await catalog.PrepareNamespaceInitializationAsync(new(1, operationId, roots, DateTimeOffset.UtcNow)
+                    if (inventoryKind == MirrorPulseNamespaceInitializationInventoryKind.OriginalInventory)
+                        await MirrorPulseNamespaceInitializationCoordinator.RequireOriginalGraphAsync(catalog, registrations, plannedRoots!, token).ConfigureAwait(false);
+                    await catalog.PrepareNamespaceInitializationAsync(new(1, operationId, plannedRoots!, DateTimeOffset.UtcNow)
                     { RequestedInventoryKind = inventoryKind }, token).ConfigureAwait(false);
                 }
                 await ReopenLibraryForNamespaceRecoveryAsync(token).ConfigureAwait(false);

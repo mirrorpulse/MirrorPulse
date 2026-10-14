@@ -84,6 +84,13 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     await runtime.ExecuteNamespaceMemberMoveAsync(bornMove.OperationId, timeout.Token);
                     await File.WriteAllTextAsync(movedPath, originalBytes, timeout.Token);
                     await File.WriteAllTextAsync(bornPath, bornBytes, timeout.Token);
+                    Guid wrongOriginal = Guid.NewGuid();
+                    await Assert.ThrowsExactlyAsync<InvalidOperationException>(async () => await runtime.InitializeNamespaceProtectionAsync(wrongOriginal, timeout.Token));
+                    Assert.IsTrue(admission.IsAdmitted(registration.RootId));
+                    Assert.IsNull(await catalog.ReadNamespaceInitializationAsync(wrongOriginal, timeout.Token));
+                    Assert.IsEmpty(await catalog.ReadNamespaceDispatchFencedRootsAsync(timeout.Token));
+                    Assert.AreEqual(originalBytes, await File.ReadAllTextAsync(movedPath, timeout.Token));
+                    Assert.AreEqual(bornBytes, await File.ReadAllTextAsync(bornPath, timeout.Token));
                 }
                 else
                 {

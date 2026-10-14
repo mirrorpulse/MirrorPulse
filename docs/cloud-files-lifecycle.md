@@ -323,6 +323,13 @@ services are serialized with the transition. Failed or cancelled recovery retain
 its admission and keeps the roots closed. Historical completion replay does not
 replace a library owner or reopen a root.
 
+A new original-inventory request checks retained current membership before closing
+live admission or reserving an initializer. A changed root Label, born member,
+completed relocation or retirement requires current-inventory recovery. The check
+is repeated after the work drain before committing the new initializer, covering
+a mutation that finished while recovery was being admitted. Existing pending
+owners retain their original route; this preflight does not settle or replace them.
+
 Runtime shutdown serializes with initialization before stopping dependent services.
 It closes the lifetime's work-admission owner, cancels and drains the upload pump,
 then awaits public library disposal and the remaining application work. The anchor

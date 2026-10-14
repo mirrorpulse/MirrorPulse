@@ -46,6 +46,7 @@ public sealed class MirrorPulseNamespaceInitializationCoordinator(CloudFileSyste
         if (retained is null)
         {
             var roots = await SelectOriginalRootsAsync(catalog, registrations, false, cancellationToken).ConfigureAwait(false);
+            await RequireOriginalGraphAsync(catalog, registrations, roots, cancellationToken).ConfigureAwait(false);
             retained = await catalog.PrepareNamespaceInitializationAsync(new(1, operationId, roots, DateTimeOffset.UtcNow)
             { RequestedInventoryKind = MirrorPulseNamespaceInitializationInventoryKind.OriginalInventory }, cancellationToken).ConfigureAwait(false);
         }
@@ -123,6 +124,31 @@ public sealed class MirrorPulseNamespaceInitializationCoordinator(CloudFileSyste
             roots.Add(new(root.RootId, captures.SingleOrDefault()?.Definition.ManifestId ?? Guid.NewGuid()));
         }
         return roots.AsReadOnly();
+    }
+
+    internal static async Task RequireOriginalGraphAsync(MirrorPulseProductCatalog catalog,
+        IReadOnlyList<RootRegistration> registrations, IReadOnlyList<MirrorPulseNamespaceInitializationRoot> roots, CancellationToken token)
+    {
+        var anchors = new HashSet<Guid>();
+        var selected = roots.Select(root => root.RootId).ToHashSet();
+        foreach (var root in roots)
+        {
+            var capture = await catalog.ReadNamespacePermissionTreeAsync(root.ManifestId, token).ConfigureAwait(false);
+            if (capture is null) continue;
+            if (capture.Definition.Anchor.Baseline.RelativePath != registrations.Single(item => item.RootId == root.RootId).DirectoryName)
+                throw new InvalidOperationException("The root Label changed; use current-inventory recovery instead of original initialization.");
+            var member = await catalog.ReadNamespaceMemberByBindingAsync(capture.Definition.Anchor.Baseline.LocalObject, token).ConfigureAwait(false);
+            if (member is null) continue;
+            Guid anchor = member.ParentMemberId ?? throw new InvalidDataException("The registered Adapter root lost its sync-root anchor.");
+            if (!anchors.Add(anchor)) continue;
+            var current = await catalog.ReadNamespaceCurrentTreeSnapshotAsync(anchor, token).ConfigureAwait(false);
+            if (current.RetiredMembers.Any(item => selected.Contains(item.Intent.RootId)) ||
+                current.Members.Any(item => item.Context.Member.RootId is { } id && selected.Contains(id) &&
+                    (item.Context.Member.Origin != MirrorPulseNamespaceMemberOrigin.CapturedOriginal ||
+                    item.Context.Location.CurrentPositionOperationId is not null ||
+                    item.Context.Location.RelativePath != item.Context.Member.RelativePath)))
+                throw new InvalidOperationException("The namespace has evolved; use current-inventory recovery instead of original initialization.");
+        }
     }
 
     private async Task EnsureExistingRootInventoryAsync(IReadOnlyList<RootRegistration> registrations, CancellationToken token)
