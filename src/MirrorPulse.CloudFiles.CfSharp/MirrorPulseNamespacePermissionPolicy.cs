@@ -1,5 +1,6 @@
 using System.Runtime.Versioning;
 using System.Security.AccessControl;
+using System.Security.Principal;
 
 namespace MirrorPulse.CloudFiles.CfSharp;
 
@@ -16,6 +17,9 @@ public static class MirrorPulseNamespacePermissionPolicy
     /// </remarks>
     public static string CreateProtectedDacl(MirrorPulseNamespaceExecutionSession session, bool isDirectory) =>
         CreateDacl(session, isDirectory, forCreation: false);
+
+    internal static string CreateProtectedDacl(SecurityIdentifier owner, SecurityIdentifier role, bool isDirectory) =>
+        CreateDacl(owner, role, isDirectory, forCreation: false);
 
     /// <summary>Creates the descriptor supplied atomically when a new protected object is created.</summary>
     /// <remarks>Creation and a later permission write have different native auto-inheritance flags.</remarks>
@@ -42,22 +46,27 @@ public static class MirrorPulseNamespacePermissionPolicy
     private static string CreateDacl(MirrorPulseNamespaceExecutionSession session, bool isDirectory, bool forCreation)
     {
         ArgumentNullException.ThrowIfNull(session);
+        return CreateDacl(session.OwnerSid, session.RoleSid, isDirectory, forCreation);
+    }
+
+    private static string CreateDacl(SecurityIdentifier owner, SecurityIdentifier role, bool isDirectory, bool forCreation)
+    {
         FileSystemSecurity security = isDirectory ? new DirectorySecurity() : new FileSecurity();
         security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
         if (isDirectory)
         {
-            security.AddAccessRule(new FileSystemAccessRule(session.OwnerSid, FileSystemRights.ReadAndExecute |
+            security.AddAccessRule(new FileSystemAccessRule(owner, FileSystemRights.ReadAndExecute |
                 FileSystemRights.WriteAttributes | FileSystemRights.WriteExtendedAttributes,
                 InheritanceFlags.ContainerInherit, PropagationFlags.None, AccessControlType.Allow));
-            security.AddAccessRule(new FileSystemAccessRule(session.OwnerSid, FileSystemRights.Read | FileSystemRights.Write,
+            security.AddAccessRule(new FileSystemAccessRule(owner, FileSystemRights.Read | FileSystemRights.Write,
                 InheritanceFlags.ObjectInherit, PropagationFlags.InheritOnly, AccessControlType.Allow));
-            security.AddAccessRule(new FileSystemAccessRule(session.RoleSid, FileSystemRights.FullControl,
+            security.AddAccessRule(new FileSystemAccessRule(role, FileSystemRights.FullControl,
                 InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
         }
         else
         {
-            security.AddAccessRule(new FileSystemAccessRule(session.OwnerSid, FileSystemRights.Read | FileSystemRights.Write, AccessControlType.Allow));
-            security.AddAccessRule(new FileSystemAccessRule(session.RoleSid, FileSystemRights.FullControl, AccessControlType.Allow));
+            security.AddAccessRule(new FileSystemAccessRule(owner, FileSystemRights.Read | FileSystemRights.Write, AccessControlType.Allow));
+            security.AddAccessRule(new FileSystemAccessRule(role, FileSystemRights.FullControl, AccessControlType.Allow));
         }
         // FileSystemSecurity supplies canonical ACE ordering. Windows records auto-inheritance
         // completion even on a protected DACL; retain that expected flag before the native write.

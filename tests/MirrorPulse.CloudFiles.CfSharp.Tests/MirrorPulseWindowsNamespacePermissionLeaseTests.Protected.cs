@@ -69,26 +69,25 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         if (SetProtectedFixtureUserOwner(item, fixtureUser.User!)) normalizedOwners++;
                     }
                     TestContext.WriteLine($"ProtectedOwnedFixtureOwner: currentUserObjects=True; normalizedOwners={normalizedOwners}; beforeOriginalCapture=True; noProductOwnerRelaxation=True.");
-                    for (int index = 0; index < items.Length; index++)
+                    await using (var captureScheduler = new MirrorPulseInstanceScheduler())
+                    await using (var captureActor = new MirrorPulseNamespaceActor())
                     {
-                        await using var capture = await MirrorPulseWindowsNamespacePermissionLease.OpenAsync(items[index], router, timeout.Token);
-                        var observed = await capture.InspectAsync(timeout.Token);
-                        Assert.AreEqual(fixtureUser.User!.Value, observed.OwnerSid);
-                        originals[index] = new(Guid.NewGuid(), observed.RootId, observed.LocalObject, observed.RelativePath,
-                            observed.IsDirectory, observed.OwnerSid, observed.Dacl, observed.ObservedAt);
-                        protections[index] = new(Guid.NewGuid(), originals[index].EvidenceId, observed.LocalObject, observed.RootId,
-                            observed.RelativePath, MirrorPulseNamespacePermissionChangeKind.Protect, role.RoleSid.Value, observed.Dacl,
-                            MirrorPulseNamespacePermissionPolicy.CreateProtectedDacl(role, observed.IsDirectory), DateTimeOffset.UtcNow);
-                        Assert.AreNotEqual(observed.Dacl, protections[index].TargetDacl);
+                        var capture = new MirrorPulseNamespaceInitialTreeCapture(fileSystem, catalog, router, role,
+                            captureActor, captureScheduler, coordinator);
+                        var tree = await capture.CaptureAsync(registration.RootId, manifestId, timeout.Token);
+                        Assert.AreEqual(MirrorPulseNamespacePermissionTreePhase.Sealed, tree.Phase);
+                        Assert.AreEqual(tree, await capture.CaptureAsync(registration.RootId, manifestId, timeout.Token));
+                        Assert.IsEmpty(await catalog.ReadNamespacePermissionChangesAsync(timeout.Token));
+                        var members = await catalog.ReadNamespacePermissionTreeMembersAsync(manifestId, cancellationToken: timeout.Token);
+                        for (int index = 0; index < items.Length; index++)
+                        {
+                            var preparation = members.Single(member => member.Preparation.Baseline.RelativePath == items[index].RelativePath).Preparation;
+                            originals[index] = preparation.Baseline; protections[index] = preparation.Intent;
+                            Assert.AreEqual(fixtureUser.User!.Value, originals[index].OwnerSid);
+                            Assert.AreNotEqual(originals[index].OriginalDacl, protections[index].TargetDacl);
+                        }
+                        TestContext.WriteLine("ProtectedOwnedCapture: productionCapture=True; sharedSchedulerAndActor=True; originalsBeforeAcl=True; completeLocalInventory=True; noContentRead=True; noExecutableChanges=True; immutableSealReplay=True.");
                     }
-                    var anchor = new MirrorPulseNamespacePermissionPreparation(originals[2], protections[2]);
-                    var definition = new MirrorPulseNamespacePermissionTreeDefinition(manifestId, anchor,
-                        items.Length, originals.Min(original => original.CapturedAt));
-                    await catalog.CreateNamespacePermissionTreeAsync(definition, timeout.Token);
-                    await catalog.AppendNamespacePermissionTreeMembersAsync(manifestId,
-                        [new(0, null, anchor), new(1, anchor.Baseline.EvidenceId, new(originals[0], protections[0])),
-                            new(2, anchor.Baseline.EvidenceId, new(originals[1], protections[1]))], timeout.Token);
-                    await catalog.SealNamespacePermissionTreeAsync(manifestId, DateTimeOffset.UtcNow, timeout.Token);
                     CloudItemSnapshot before = await items[0].InspectAsync(timeout.Token);
                     firstBinding = before.LocalBinding;
                     Assert.IsNotNull(firstBinding);
