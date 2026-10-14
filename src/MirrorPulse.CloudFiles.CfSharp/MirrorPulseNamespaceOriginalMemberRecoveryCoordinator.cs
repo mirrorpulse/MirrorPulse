@@ -47,6 +47,7 @@ public sealed class MirrorPulseNamespaceOriginalMemberRecoveryCoordinator(CloudF
                 var before = await guard.InspectAsync(stop).ConfigureAwait(false);
                 RequireOriginalObject(context, before);
                 var latest = context.Permission!;
+                bool currentRoleScopeCompleted = false;
                 if (latest.Phase != MirrorPulseNamespacePermissionPhase.Verified)
                 {
                     result = await permissions.ApplyProtectedAsync(latest.Intent.OperationId, item, router, cancellationToken: stop).ConfigureAwait(false);
@@ -54,6 +55,7 @@ public sealed class MirrorPulseNamespaceOriginalMemberRecoveryCoordinator(CloudF
                     context = (await catalog.ReadNamespaceMemberRecoveryLineageAsync(initializationOperationId, memberId, stop).ConfigureAwait(false))[0];
                     latest = context.Permission!;
                     before = await guard.InspectAsync(stop).ConfigureAwait(false); RequireOriginalObject(context, before);
+                    currentRoleScopeCompleted = latest.Intent.RoleSid == execution.RoleSid.Value;
                 }
                 if (before.Dacl != latest.Verification!.Dacl)
                     throw new InvalidDataException("The original object's current descriptor differs from its retained verified protection.");
@@ -73,9 +75,11 @@ public sealed class MirrorPulseNamespaceOriginalMemberRecoveryCoordinator(CloudF
                     };
                     latest = await catalog.PrepareNamespacePermissionChangeAsync(context.Original!, rotation, stop).ConfigureAwait(false);
                 }
-                if (latest.Intent.RelativePath == context.Location.RelativePath)
+                // Replaying a pending current-role intent already completed and drained
+                // its native scope. Keep that receipt and perform the independent final audit.
+                if (!currentRoleScopeCompleted && latest.Intent.RelativePath == context.Location.RelativePath)
                     result = await permissions.ApplyProtectedAsync(latest.Intent.OperationId, item, router, cancellationToken: stop).ConfigureAwait(false);
-                else
+                else if (!currentRoleScopeCompleted)
                 {
                     // Same-role replay after a completed move does not rewrite an old intent's
                     // path or fabricate a later permission epoch. Audit under a fresh scope.
