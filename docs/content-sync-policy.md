@@ -222,3 +222,10 @@ A crash cannot expose a newly prepared admission without that first action.
 Historical preparation replay returns original facts without reopening a removed
 source file. Host and CLI use the same executor through the Control contract;
 completed input reclamation runs only after its private lease closes.
+
+When the Host supplies its namespace execution session, CfSharp startup runs
+under that retained local identity. The production boundary is also exercised
+by the required external-consumer population and hydration acceptance case.
+Worker RPC and lazy source bodies retain their normal-user transport boundary.
+This startup context does not apply permissions, establish tree readiness or
+enable pending synchronization work.

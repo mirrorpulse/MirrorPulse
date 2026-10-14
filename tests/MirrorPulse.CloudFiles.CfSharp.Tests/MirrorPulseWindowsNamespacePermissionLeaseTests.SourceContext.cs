@@ -46,7 +46,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             var state = new MirrorPulseCfSharpStateSession(paths);
             await using var fileSystem = new MirrorPulseCloudFileSystemBuilder(paths).WithStateStore(state)
                 .WithContentProvider(provider).Build();
-            await role.RunNamespaceOperationAsync(async () => await fileSystem.StartAsync(timeout.Token));
+            await MirrorPulseNamespaceRuntimeStartup.StartAsync(fileSystem, role, timeout.Token);
             Assert.AreEqual(CloudPopulationPolicy.Full, CloudSyncRoot.Open(paths.SyncRootPath).GetInfo().PopulationPolicy);
             await using var feed = fileSystem.CreateLocalChangeFeed();
             await feed.StartAsync(timeout.Token);
@@ -116,7 +116,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 Assert.AreEqual(preparation.Baseline.OwnerSid, observed.OwnerSid);
                 Assert.IsTrue(MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(preparation.Intent.TargetDacl, observed.Dacl));
             }
-            TestContext.WriteLine($"NativeSourceContext: externalOrdinaryConsumer=True; ordinaryEnumeration=True; inheritedDeleteProtection=True; coldHydration=True; lazyRangeDisposedAsNormalUser=True; closedParentDacls=True; rootGuardRetained=True; elevatedCaller={new WindowsPrincipal(caller).IsInRole(WindowsBuiltInRole.Administrator)}; hostStrictIntegrated=False.");
+            TestContext.WriteLine($"NativeSourceContext: productionStartupBoundary=True; externalOrdinaryConsumer=True; ordinaryEnumeration=True; inheritedDeleteProtection=True; coldHydration=True; lazyRangeDisposedAsNormalUser=True; closedParentDacls=True; rootGuardRetained=True; elevatedCaller={new WindowsPrincipal(caller).IsInRole(WindowsBuiltInRole.Administrator)}; hostStrictIntegrated=False.");
         }
         finally
         {

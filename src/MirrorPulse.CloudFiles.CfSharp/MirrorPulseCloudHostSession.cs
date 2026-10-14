@@ -548,7 +548,14 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         public async ValueTask StartAsync(CancellationToken cancellationToken)
         {
             _providerDiagnostics = new(Path.Combine(dataRootPath, "logs", "cloud-files"));
-            await fileSystem.StartAsync(cancellationToken).ConfigureAwait(false);
+            if (_namespaceExecution is not null)
+            {
+                if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
+                    throw new PlatformNotSupportedException("Host namespace execution requires Windows 11 24H2 or later.");
+                await MirrorPulseNamespaceRuntimeStartup.StartAsync(fileSystem, _namespaceExecution, cancellationToken).ConfigureAwait(false);
+            }
+            else
+                await fileSystem.StartAsync(cancellationToken).ConfigureAwait(false);
             if (catalog is not null && router is not null)
             {
                 var coordinator = new MirrorPulseManagedRootRenameCoordinator(fileSystem, catalog, router);
