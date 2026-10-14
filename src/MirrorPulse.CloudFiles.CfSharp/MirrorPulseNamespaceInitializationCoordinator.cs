@@ -6,7 +6,7 @@ using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.CloudFiles.CfSharp;
 
-/// <summary>A completed original-inventory attempt and the live anchor guard retained by its runtime.</summary>
+/// <summary>A completed inventory attempt and the live anchor guard retained by its runtime.</summary>
 /// <remarks>Historical replay carries no new guard or current-tree authorization.</remarks>
 [SupportedOSPlatform("windows10.0.26100")]
 public sealed class MirrorPulseNamespaceInitializationResult(MirrorPulseNamespaceInitializationCompletion completion,
@@ -43,21 +43,8 @@ public sealed class MirrorPulseNamespaceInitializationCoordinator(CloudFileSyste
         if (registrations.Length == 0) throw new InvalidOperationException("Original-tree initialization requires configured Adapter roots.");
         if (retained is null)
         {
-            var roots = new List<MirrorPulseNamespaceInitializationRoot>(registrations.Length);
-            foreach (var root in registrations)
-            {
-                var captures = new List<MirrorPulseNamespacePermissionTree>(); Guid? after = null;
-                while (true)
-                {
-                    var page = await catalog.ReadNamespacePermissionTreesAsync(root.RootId, after, cancellationToken: cancellationToken).ConfigureAwait(false);
-                    if (page.Count == 0) break;
-                    captures.AddRange(page.Where(tree => tree.Phase != MirrorPulseNamespacePermissionTreePhase.Cancelled));
-                    after = page[^1].Definition.ManifestId;
-                }
-                if (captures.Count > 1) throw new InvalidDataException("The root has multiple original captures requiring explicit recovery.");
-                roots.Add(new(root.RootId, captures.SingleOrDefault()?.Definition.ManifestId ?? Guid.NewGuid()));
-            }
-            retained = await catalog.PrepareNamespaceInitializationAsync(new(1, operationId, roots.AsReadOnly(), DateTimeOffset.UtcNow), cancellationToken).ConfigureAwait(false);
+            var roots = await SelectOriginalRootsAsync(catalog, registrations, false, cancellationToken).ConfigureAwait(false);
+            retained = await catalog.PrepareNamespaceInitializationAsync(new(1, operationId, roots, DateTimeOffset.UtcNow), cancellationToken).ConfigureAwait(false);
         }
         if (!retained.Roots.Select(root => root.RootId).ToHashSet().SetEquals(registrations.Select(root => root.RootId)))
             throw new InvalidDataException("The initialized root layout changed after admission.");
@@ -111,6 +98,28 @@ public sealed class MirrorPulseNamespaceInitializationCoordinator(CloudFileSyste
             transferred = true; return new(completion, anchor);
         }
         finally { if (!transferred) await anchor.DisposeAsync().ConfigureAwait(false); }
+    }
+
+    internal static async Task<IReadOnlyList<MirrorPulseNamespaceInitializationRoot>> SelectOriginalRootsAsync(MirrorPulseProductCatalog catalog,
+        IReadOnlyList<RootRegistration> registrations, bool requireSealed, CancellationToken token)
+    {
+        var roots = new List<MirrorPulseNamespaceInitializationRoot>(registrations.Count);
+        foreach (var root in registrations)
+        {
+            var captures = new List<MirrorPulseNamespacePermissionTree>(); Guid? after = null;
+            while (true)
+            {
+                var page = await catalog.ReadNamespacePermissionTreesAsync(root.RootId, after, cancellationToken: token).ConfigureAwait(false);
+                if (page.Count == 0) break;
+                captures.AddRange(page.Where(tree => tree.Phase != MirrorPulseNamespacePermissionTreePhase.Cancelled));
+                after = page[^1].Definition.ManifestId;
+            }
+            if (captures.Count > 1) throw new InvalidDataException("The root has multiple original captures requiring explicit recovery.");
+            if (requireSealed && (captures.Count != 1 || captures[0].Phase != MirrorPulseNamespacePermissionTreePhase.Sealed))
+                throw new InvalidOperationException("Current graph recovery requires the original sealed root captures.");
+            roots.Add(new(root.RootId, captures.SingleOrDefault()?.Definition.ManifestId ?? Guid.NewGuid()));
+        }
+        return roots.AsReadOnly();
     }
 
     private async Task EnsureExistingRootInventoryAsync(IReadOnlyList<RootRegistration> registrations, CancellationToken token)

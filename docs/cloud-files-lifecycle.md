@@ -104,6 +104,17 @@ a completed request supplies historical facts and leaves a newer initializer's
 fences and later file edits untouched. Automatic startup still requires the
 recovery orchestrator and fresh admission for the current Host lifecycle.
 
+The Runtime also exposes explicit recovery of the registered current graph. It
+persists the initializer before native work, recovers the anchor, and processes
+live original and born members in parent order using their existing coordinators.
+A compatible pending born action is resumed; a changed parent role requires an
+immutable successor. Retired members remain historical and are excluded from
+native traversal. Full current audit and completion run last, and the Runtime
+retains the resulting anchor guard until disposal. A busy scope leaves the same
+initializer queryable and retryable. Partially executed namespace operations,
+new root bootstrap, Host/CLI orchestration and automatic startup still require
+their respective integration boundaries.
+
 Startup rebuilds missing remote conflict projections from CfSharp's decoded
 conflict queries. A mutation with a confirmed remote result and an absent
 official journal operation repairs its product projection before marking the

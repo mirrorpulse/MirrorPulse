@@ -14,6 +14,11 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 public interface IMirrorPulseCloudRuntime : IAsyncDisposable
 {
     [SupportedOSPlatform("windows10.0.26100")]
+    ValueTask<MirrorPulseNamespaceInitializationCompletion> RecoverNamespaceCurrentTreeAsync(Guid operationId,
+        CancellationToken cancellationToken) => ValueTask.FromException<MirrorPulseNamespaceInitializationCompletion>(
+            new NotSupportedException("This runtime does not recover the current registered namespace graph."));
+
+    [SupportedOSPlatform("windows10.0.26100")]
     ValueTask<MirrorPulseNamespaceBornMemberRecoveryResult> RecoverNamespaceBornMemberAsync(Guid initializationOperationId, Guid actionId,
         Guid memberId, CancellationToken cancellationToken) => ValueTask.FromException<MirrorPulseNamespaceBornMemberRecoveryResult>(
             new NotSupportedException("This runtime does not execute registered born recovery."));
@@ -286,6 +291,28 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         private MirrorPulseManagedRootRenameService? _rootRenames;
         public IReadOnlyList<MirrorPulseManagedRootRenameRestoreResult> RootRenameRecoveryResults { get; private set; } = [];
         public MirrorPulseJournalPumpHealth? JournalHealth => _uploadPump?.Health;
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        public async ValueTask<MirrorPulseNamespaceInitializationCompletion> RecoverNamespaceCurrentTreeAsync(Guid operationId,
+            CancellationToken cancellationToken)
+        {
+            RequireImportBoundary();
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
+            await _initializationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
+                var result = await new MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(fileSystem, catalog!, router!, _namespaceExecution!,
+                    _namespaceActor!, _scheduler, _permissions!).RecoverAsync(operationId, cancellationToken).ConfigureAwait(false);
+                if (!result.IsHistoricalReplay)
+                {
+                    var prior = _initializationProtection; _initializationProtection = result;
+                    if (prior is not null) await prior.DisposeAsync().ConfigureAwait(false);
+                }
+                return result.Completion;
+            }
+            finally { _initializationGate.Release(); }
+        }
 
         [SupportedOSPlatform("windows10.0.26100")]
         public async ValueTask<MirrorPulseNamespaceInitializationCompletion> InitializeNamespaceProtectionAsync(Guid operationId,
@@ -1037,6 +1064,15 @@ public sealed class MirrorPulseCloudHostSession : IAsyncDisposable
     {
         if (!_started || _runtime is null) throw new InvalidOperationException("The Cloud Files Host session has not started.");
         return _runtime.InitializeNamespaceProtectionAsync(operationId, cancellationToken);
+    }
+
+    [SupportedOSPlatform("windows10.0.26100")]
+    public ValueTask<MirrorPulseNamespaceInitializationCompletion> RecoverNamespaceCurrentTreeAsync(Guid operationId,
+        CancellationToken cancellationToken = default)
+    {
+        if (!_started || _runtime is null)
+            throw new InvalidOperationException("The Cloud Files Host session has not started.");
+        return _runtime.RecoverNamespaceCurrentTreeAsync(operationId, cancellationToken);
     }
 
     public ValueTask<MirrorPulseNamespaceInitializationStatus> ReadNamespaceInitializationStatusAsync(Guid operationId,
