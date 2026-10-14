@@ -15,6 +15,14 @@ history requires recovery instead of a new capture. This boundary is available
 to startup composition; default whole-tree initialization and readiness are
 still pending and cannot be inferred from anchor verification alone.
 
+Initial original-member registration composes the existing native registrar
+under shared instance scheduling and namespace ownership. It verifies the
+immutable capture seal and complete live inventory, registers the protected
+anchor before its descendants, then checks the inventory again. Partial or
+restart replay preserves the first member records while independently checking
+current permission epochs. This path does not recapture relocated or born
+members and does not declare the evolving product namespace ready.
+
 Startup rebuilds missing remote conflict projections from CfSharp's decoded
 conflict queries. A mutation with a confirmed remote result and an absent
 official journal operation repairs its product projection before marking the

@@ -25,6 +25,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         var provider = new ProtectedPermissionNoSourceProvider();
         MirrorPulseNamespacePermissionBaseline[]? originals = null;
         MirrorPulseNamespacePermissionIntent[]? protections = null;
+        MirrorPulseNamespacePermissionBaseline? rootOriginal = null;
+        MirrorPulseNamespaceMemberRegistration[]? firstMembers = null;
         Guid manifestId = Guid.NewGuid();
         MirrorPulseNamespacePermissionLocalIdentity? retainedFileIdentity = null;
         MirrorPulseNamespacePermissionLocalIdentity? retainedColdIdentity = null;
@@ -64,7 +66,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     protections = new MirrorPulseNamespacePermissionIntent[items.Length];
                     int normalizedOwners = 0;
                     using WindowsIdentity fixtureUser = WindowsIdentity.GetCurrent();
-                    foreach (CloudItem item in items)
+                    foreach (CloudItem item in items.Append(fileSystem.Root))
                     {
                         if (SetProtectedFixtureUserOwner(item, fixtureUser.User!)) normalizedOwners++;
                     }
@@ -214,6 +216,20 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         Assert.IsFalse(rotated.Receipt.NativeConverted);
                     }
                 }
+                await using var membershipActor = new MirrorPulseNamespaceActor();
+                await using var membershipScheduler = new MirrorPulseInstanceScheduler();
+                await using var anchorProtection = await new MirrorPulseNamespaceAnchorProtectionCoordinator(fileSystem,
+                    catalog, router, role, membershipActor, coordinator).ProtectAsync(timeout.Token);
+                rootOriginal ??= anchorProtection.Original;
+                Assert.AreEqual(rootOriginal, anchorProtection.Original);
+                var membership = await new MirrorPulseNamespaceOriginalTreeRegistration(fileSystem, catalog, router, role,
+                    membershipActor, membershipScheduler).RegisterAsync(manifestId, anchorProtection, timeout.Token);
+                Assert.HasCount(4, membership);
+                Assert.AreEqual(rootOriginal.EvidenceId, membership[0].MemberId);
+                if (firstMembers is null) firstMembers = membership.ToArray();
+                else CollectionAssert.AreEqual(firstMembers, membership.ToArray());
+                Assert.HasCount(4, await catalog.ReadNamespaceMemberTreeAsync(membership[0].MemberId, timeout.Token));
+                TestContext.WriteLine($"ProtectedOwnedRegistration: owner={owner}; productionRegistration=True; parentFirst=True; actualAnchorRole=True; fullOriginalInventory=True; firstMembershipUnchanged=True; independentFinalInventory=True; sourceReads={provider.Reads}; treeReady=False.");
                 CloudItemSnapshot after = await items[0].InspectAsync(timeout.Token);
                 Assert.AreEqual(firstBinding, after.LocalBinding);
                 Assert.IsTrue(after.IsPlaceholder);
@@ -255,7 +271,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         {
             registry.Unregister(paths.SyncRootPath);
             if (originals is not null)
-                foreach (var original in originals.Where(value => value is not null))
+                foreach (var original in originals.Where(value => value is not null).Concat(rootOriginal is null ? [] : new[] { rootOriginal }))
                 {
                     string path = Path.Combine(paths.SyncRootPath, original.RelativePath.Replace('/', Path.DirectorySeparatorChar));
                     FileSystemSecurity access = original.IsDirectory ? new DirectorySecurity() : new FileSecurity();
