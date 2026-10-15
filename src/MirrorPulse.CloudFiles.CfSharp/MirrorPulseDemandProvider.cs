@@ -36,6 +36,9 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
     private readonly MirrorPulseRootRouter? _rootRouter;
     private readonly MirrorPulseNamespaceWorkAdmission? _namespaceWork;
     internal MirrorPulseNamespaceDirectoryPublisher? NamespacePublisher { get; set; }
+    // Observe the actual boundary before the SDK maps an exception to a native
+    // callback status. Tests use only synthetic fixture data; production has no observer.
+    internal Action<Exception>? NamespacePublicationFailureObservation { get; init; }
 
     public MirrorPulseDemandProvider(
         IEnumerable<InstanceId> activeInstances,
@@ -162,7 +165,12 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
         {
             if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
                 throw new PlatformNotSupportedException("Protected source population requires Windows 11 24H2 or later.");
-            return await publisher.PublishAsync(normalizedPath, directoryIdentity, result, cancellationToken).ConfigureAwait(false);
+            try { return await publisher.PublishAsync(normalizedPath, directoryIdentity, result, cancellationToken).ConfigureAwait(false); }
+            catch (Exception error)
+            {
+                NamespacePublicationFailureObservation?.Invoke(error);
+                throw;
+            }
         }
         return result;
     }

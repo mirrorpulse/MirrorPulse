@@ -48,7 +48,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             var worker = new MirrorPulseNormalUserWorkerTransportTests.IdentityProbeWorker(execution)
             { DirectoryPage = new([new("cold", "v1", "file", "cold.bin", 4, null, null, false)], default, true) };
             var source = new MirrorPulseNormalUserWorkerTransport(execution, worker, worker, worker, worker, worker);
-            var provider = new MirrorPulseDemandProvider(router, source, new MirrorPulseAdapterDirectoryPageSource(source), admission);
+            var provider = new MirrorPulseDemandProvider(router, source, new MirrorPulseAdapterDirectoryPageSource(source), admission)
+            { NamespacePublicationFailureObservation = error => TestContext.WriteLine($"RuntimePublicationFailure: {error}") };
             var factory = new CfSharpMirrorPulseCloudRuntimeFactory(provider: provider, router: router, catalog: catalog,
                 namespaceExecution: execution, namespaceActor: actor, scheduler: scheduler, namespaceWork: admission);
             await using var runtime = factory.Create(paths); await runtime.StartAsync(timeout.Token);
