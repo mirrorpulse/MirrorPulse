@@ -1,3 +1,4 @@
+using System.Security.AccessControl;
 using System.Security.Principal;
 using CfSharp;
 using MirrorPulse.Core.CloudFiles;
@@ -97,7 +98,29 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         finally
         {
             pause.Release.TrySetResult(); registry.Unregister(paths.SyncRootPath);
-            RestoreCurrentRuntimeFixtureForCleanup(directory, paths.SyncRootPath, user.User!); DeleteFixture(directory);
+            RestoreControlledImportDrainFixtureForCleanup(directory, paths.SyncRootPath, user.User!); DeleteFixture(directory);
+        }
+    }
+
+    private static void RestoreControlledImportDrainFixtureForCleanup(string directory, string syncRoot, SecurityIdentifier user)
+    {
+        RestoreRootGuardFixtureForCleanup(directory, syncRoot, user);
+        foreach (string name in new[] { "Import", "Recovery" })
+        {
+            var folder = new DirectoryInfo(Path.Combine(syncRoot, name));
+            if (!folder.Exists) continue;
+            if (folder.LinkTarget is not null) throw new InvalidOperationException("Controlled import cleanup cannot follow a directory link.");
+            var access = new DirectorySecurity();
+            access.SetSecurityDescriptorSddlForm("D:P(A;OICI;FA;;;" + user.Value + ")", AccessControlSections.Access);
+            folder.SetAccessControl(access);
+        }
+        var file = new FileInfo(Path.Combine(syncRoot, "Import", "retained.txt"));
+        if (file.Exists)
+        {
+            if (file.LinkTarget is not null) throw new InvalidOperationException("Controlled import cleanup cannot follow a file link.");
+            var access = new FileSecurity();
+            access.SetSecurityDescriptorSddlForm("D:P(A;;FA;;;" + user.Value + ")", AccessControlSections.Access);
+            file.SetAccessControl(access);
         }
     }
 }
