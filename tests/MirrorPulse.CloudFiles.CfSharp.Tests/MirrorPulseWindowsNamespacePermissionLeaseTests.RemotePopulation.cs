@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Security.Principal;
 using CfSharp;
 using MirrorPulse.CloudFiles.CfSharp;
@@ -41,12 +42,15 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 Assert.Fail("The protected offline root was deleted."); return;
             }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException) { denied = error; }
-            // Windows may report native access denial through the Cloud Files status.
-            // A missing, nonempty or unavailable directory is not protection evidence.
-            int nativeError = denied.HResult & 0xffff;
-            TestContext.WriteLine($"OfflineRootDelete: HRESULT=0x{denied.HResult:X8}; Win32={nativeError}.");
+            // Directory.Delete deliberately maps ERROR_ACCESS_DENIED to a generic
+            // IOException without its native status. Probe the actual Win32 call
+            // separately; a missing, nonempty or unavailable root is not evidence.
+            bool removed = RemoveBirthDirectory(Path.Combine(paths.SyncRootPath, "Offline"));
+            int nativeError = removed ? 0 : Marshal.GetLastPInvokeError();
+            TestContext.WriteLine($"OfflineRootDelete: managedHRESULT=0x{denied.HResult:X8}; nativeRemoved={removed}; Win32={nativeError}.");
+            Assert.IsFalse(removed, "The protected offline root was deleted by the native call.");
             Assert.IsTrue(nativeError is 5 or 32 or 395,
-                $"Expected access denial, a retained sharing guard or Cloud Files access denial; HRESULT=0x{denied.HResult:X8}.");
+                $"Expected access denial, a retained sharing guard or Cloud Files access denial; nativeError={nativeError}.");
             Assert.IsTrue(Directory.Exists(Path.Combine(paths.SyncRootPath, "Offline")));
         }
         try
