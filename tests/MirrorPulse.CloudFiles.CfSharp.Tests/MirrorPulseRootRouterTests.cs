@@ -195,6 +195,26 @@ public sealed class MirrorPulseRootRouterTests
             Path.DirectorySeparatorChar + Path.Combine("outside", "note.txt")));
     }
 
+    [TestMethod]
+    public void CallbackPublicationPathsAreRelativeAndCannotEscapeTheSyncRoot()
+    {
+        string syncRoot = Path.Combine(Path.GetTempPath(), "MirrorPulse-tests", Guid.NewGuid().ToString("N"));
+        var router = new MirrorPulseRootRouter(syncRoot, [CreateRoot(InstanceId.New(), "Documents")]);
+        string relative = Path.Combine("Documents", "nested");
+        string absolute = Path.Combine(syncRoot, relative);
+        string volumeRooted = Path.DirectorySeparatorChar + absolute[Path.GetPathRoot(syncRoot)!.Length..];
+
+        foreach (string callback in new[] { relative, absolute, volumeRooted, "Documents/child/../nested" })
+        {
+            Assert.AreEqual(relative, router.GetRelativePath(callback));
+            Assert.IsFalse(Path.IsPathRooted(router.GetRelativePath(callback)));
+        }
+        Assert.AreEqual(string.Empty, router.GetRelativePath(syncRoot));
+        Assert.ThrowsExactly<InvalidDataException>(() => router.GetRelativePath("../outside"));
+        Assert.ThrowsExactly<InvalidDataException>(() => router.GetRelativePath(syncRoot + "-sibling\\Documents"));
+        Assert.ThrowsExactly<InvalidDataException>(() => router.GetRelativePath(Path.Combine(syncRoot, "..", "outside")));
+    }
+
     private static RootRegistration CreateRoot(InstanceId instanceId, string label) =>
         AdapterRootRegistrationMapper.Map(
             AdapterId.Parse("example.drive"), instanceId,

@@ -53,7 +53,7 @@ internal sealed class MirrorPulseNamespaceDirectoryPublisher(Func<CloudFileSyste
             await execution.RunNamespaceOperationAsync(async () =>
             {
                 var fileSystem = currentFileSystem();
-                var parent = fileSystem.GetDirectory(path);
+                var parent = fileSystem.GetDirectory(router.GetRelativePath(path));
                 var snapshot = await parent.InspectAsync(token).ConfigureAwait(false);
                 if (!snapshot.Exists || snapshot.IsTombstone || snapshot.LocalBinding is not { } binding ||
                     snapshot.PlaceholderIdentity.IsEmpty ||

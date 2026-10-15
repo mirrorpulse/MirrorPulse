@@ -170,7 +170,9 @@ public sealed class MirrorPulseRootRouter
         return (root, separator < 0 ? string.Empty : relative[(separator + 1)..]);
     }
 
-    private string GetRelativePath(string callbackPath)
+    // Native callbacks may be absolute or volume rooted; item APIs require a path
+    // relative to this sync root. Share the same boundary check with routing.
+    internal string GetRelativePath(string callbackPath)
     {
         ArgumentNullException.ThrowIfNull(callbackPath);
         if (callbackPath.Length == 0 || callbackPath is "/" or "\\")
