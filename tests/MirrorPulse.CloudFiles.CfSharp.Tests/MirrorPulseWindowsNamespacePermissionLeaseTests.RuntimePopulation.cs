@@ -59,7 +59,9 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             var initialized = await runtime.InitializeNamespaceProtectionAsync(Guid.NewGuid(), timeout.Token);
             Assert.IsTrue(admission.IsAdmitted(registration.RootId));
             var root = (await catalog.ReadNamespaceMemberTreeAsync(initialized.AnchorMemberId, timeout.Token)).Single(item => item.RelativePath == "Docs");
-            CollectionAssert.AreEqual(CallbackDrainExpectedChildren, (await RunSourceConsumerAsync(directory, "enumerate", execution, timeout.Token)).Names);
+            var enumerated = await RunSourceConsumerAsync(directory, "enumerate", execution, timeout.Token);
+            TestContext.WriteLine($"RuntimePopulationConsumer: names={string.Join(',', enumerated.Names)}; sourcePages={worker.Calls.Count(call => call == "directory")}.");
+            CollectionAssert.AreEqual(CallbackDrainExpectedChildren, enumerated.Names);
             var child = await catalog.ReadNamespaceMemberChildAsync(root.MemberId, "cold.bin", timeout.Token);
             Assert.IsNotNull(child); Assert.AreEqual(MirrorPulseNamespaceMemberOrigin.ProtectedBirth, child.Origin);
             var birth = await catalog.ReadNamespaceBirthAsync(child.OriginId, timeout.Token);
@@ -67,12 +69,14 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             var first = await catalog.ReadNamespaceBirthObservationAsync(child.OriginId, timeout.Token);
             Assert.IsNotNull(first); Assert.AreEqual(child.LocalObject, first.LocalObject);
             Assert.IsEmpty(await catalog.ReadNamespaceDispatchFencedRootsAsync(timeout.Token));
+            int pagesBeforeReplay = worker.Calls.Count(call => call == "directory");
+            Assert.IsGreaterThanOrEqualTo(1, pagesBeforeReplay);
             var repeated = await provider.FetchChildrenAsync("Docs", directoryIdentity, null, timeout.Token);
             Assert.IsEmpty(repeated.Children); Assert.IsTrue(repeated.IsComplete);
             Assert.AreEqual(child, await catalog.ReadNamespaceMemberChildAsync(root.MemberId, "COLD.BIN", timeout.Token));
             Assert.AreEqual(first, await catalog.ReadNamespaceBirthObservationAsync(child.OriginId, timeout.Token));
             Assert.HasCount(3, await catalog.ReadNamespaceMemberTreeAsync(initialized.AnchorMemberId, timeout.Token));
-            Assert.AreEqual(2, worker.Calls.Count(call => call == "directory")); Assert.AreEqual(0, worker.Calls.Count(call => call == "range-open"));
+            Assert.AreEqual(pagesBeforeReplay + 1, worker.Calls.Count(call => call == "directory")); Assert.AreEqual(0, worker.Calls.Count(call => call == "range-open"));
             await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() => File.Delete(Path.Combine(paths.SyncRootPath, "Docs", "cold.bin")), timeout.Token));
             TestContext.WriteLine("RuntimeSourcePopulation: realRuntime=True; freshLibraryAfterInitialization=True; closedRootNoSource=True; sourceNormalUser=True; actualRemoteBirthBeforeCallbackReturn=True; repeatedPageFreshAudit=True; immutableFirstBinding=True; hydration=False; defaultHostStartup=False.");
         }

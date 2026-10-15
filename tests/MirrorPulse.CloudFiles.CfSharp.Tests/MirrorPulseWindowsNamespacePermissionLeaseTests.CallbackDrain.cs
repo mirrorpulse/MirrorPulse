@@ -169,7 +169,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     {
         public async ValueTask<ICloudStateTransaction> BeginTransactionAsync(CancellationToken cancellationToken = default) =>
             new PausingPopulationTransaction(await inner.BeginTransactionAsync(cancellationToken), pause);
-        public async ValueTask DisposeAsync() { await inner.DisposeAsync(); if (pause.Armed) pause.StoreDisposed.TrySetResult(); }
+        public async ValueTask DisposeAsync() { await inner.DisposeAsync(); if (pause.Entered.Task.IsCompleted) pause.StoreDisposed.TrySetResult(); }
     }
     private sealed class PausingPopulationTransaction(ICloudStateTransaction inner, PopulationCommitPause pause) : ICloudStateTransaction
     {

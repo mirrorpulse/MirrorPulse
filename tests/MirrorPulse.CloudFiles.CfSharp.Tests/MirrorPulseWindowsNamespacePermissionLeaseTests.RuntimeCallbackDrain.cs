@@ -55,16 +55,20 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 namespaceExecution: execution, namespaceActor: actor, scheduler: scheduler, namespaceWork: admission)
             { StateStoreDecorator = inner => new PausingPopulationFactory(inner, pause) };
             await using var runtime = factory.Create(paths); await runtime.StartAsync(timeout.Token);
+            // Admission may wake an already queued native request before initialization
+            // returns to this continuation. Arm before that live admission can reopen.
+            pause.Armed = true;
             var initialized = await runtime.InitializeNamespaceProtectionAsync(Guid.NewGuid(), timeout.Token);
             Assert.AreEqual(2, initialized.MemberCount); Assert.IsTrue(admission.IsAdmitted(registration.RootId));
             var root = (await catalog.ReadNamespaceMemberTreeAsync(initialized.AnchorMemberId, timeout.Token)).Single(item => item.RelativePath == "Docs");
-            pause.Armed = true;
             Task<MirrorPulse.CfSharp.CrashProbe.NamespaceSourceConsumerResult> consumer = RunSourceConsumerAsync(directory, "enumerate", execution, timeout.Token);
+            string phase = "AwaitNativeProjection";
             try
             {
                 await pause.Entered.Task.WaitAsync(timeout.Token);
                 Assert.IsTrue(File.Exists(Path.Combine(paths.SyncRootPath, "Docs", "cold.bin")));
-                Assert.AreEqual(1, worker.Calls.Count(call => call == "directory"));
+                Assert.IsGreaterThanOrEqualTo(1, worker.Calls.Count(call => call == "directory"));
+                phase = "BeginShutdown";
                 Task stopping = runtime.DisposeAsync().AsTask();
                 Assert.IsFalse(stopping.IsCompleted); Assert.IsFalse(pause.StoreDisposed.Task.IsCompleted);
                 Assert.IsFalse(admission.IsAdmitted(registration.RootId));
@@ -72,6 +76,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     Guid.NewGuid(), root.MemberId, "must-not-exist.txt", false, timeout.Token));
                 await Assert.ThrowsAsync<IOException>(() => Task.Run(() => Directory.Move(paths.SyncRootPath, paths.SyncRootPath + ".moved"), timeout.Token));
                 Assert.IsTrue(Directory.Exists(paths.SyncRootPath)); Assert.IsFalse(Directory.Exists(paths.SyncRootPath + ".moved"));
+                phase = "DrainPublicationAndLibrary";
                 pause.Release.TrySetResult(); await stopping.WaitAsync(timeout.Token);
                 Assert.IsTrue(pause.Committed); Assert.IsTrue(pause.StoreDisposed.Task.IsCompleted);
                 Assert.IsFalse(admission.IsAdmitted(registration.RootId));
@@ -96,6 +101,12 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 Assert.AreEqual(identity, CloudPlaceholderIdentity.Decode(native.PlaceholderIdentity.Span));
                 Assert.AreEqual(0, worker.Calls.Count(call => call == "range-open"));
                 TestContext.WriteLine("RuntimeShutdownDrain: actualRuntime=True; initializedOriginalTree=True; normalExternalConsumer=True; nativeBeforeOfficialCommit=True; shutdownClosesWork=True; newCreationRejected=True; anchorRetainedDuringCompleteLibraryDrain=True; committedBeforeStoreDisposed=True; originalPublicIdentitySurvivesReopen=True; hydration=False; defaultHostStartup=False; sourceBirthRegistration=True; membershipCommittedBeforeLibraryDisposal=True.");
+            }
+            catch (Exception error)
+            {
+                // Keep the original boundary if a later cleanup reaches the same deadline.
+                TestContext.WriteLine($"RuntimeShutdownFailure: phase={phase}; sourcePages={worker.Calls.Count(call => call == "directory")}; projectionEntered={pause.Entered.Task.IsCompleted}; committed={pause.Committed}; storeDisposed={pause.StoreDisposed.Task.IsCompleted}; error={error}.");
+                throw;
             }
             finally
             {

@@ -98,7 +98,7 @@ internal sealed class MirrorPulseNamespaceDirectoryPublisher(Func<CloudFileSyste
                         router, actor, token).ConfigureAwait(false);
                     var childSnapshot = await child.InspectAsync(token).ConfigureAwait(false);
                     if (childSnapshot.Kind != spec.Kind || childSnapshot.PlaceholderIdentity.IsEmpty ||
-                        CloudPlaceholderIdentity.Decode(childSnapshot.PlaceholderIdentity.Span) != spec.Identity)
+                        !childSnapshot.PlaceholderIdentity.Span.SequenceEqual(spec.Identity.Encode()))
                         throw new InvalidOperationException("An occupied source child requires remote change reconciliation before population.");
                 }
             }).ConfigureAwait(false);
