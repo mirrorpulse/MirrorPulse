@@ -10,14 +10,17 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 public sealed class MirrorPulseDemandAdmissionTests
 {
     [TestMethod]
-    public async Task ClosedRootRejectsDirectoryAndRangeSourceCallsButKeepsTheLocalRootPageAvailable()
+    public async Task ClosedRootRejectsSourceCallsAndReservesRootPublicationForControlledStartup()
     {
         var (router, root) = Router(); await using var admission = new MirrorPulseNamespaceWorkAdmission([root.RootId]);
         var ranges = new Ranges(_ => ValueTask.FromResult<Stream>(new MemoryStream([7, 8])));
         var pages = new Pages(_ => ValueTask.FromResult(new CloudRemoteDirectoryPage([])));
         var provider = new MirrorPulseDemandProvider(router, ranges, pages, admission);
         byte[] identity = router.CreateFileIdentity(root.InstanceId, root.UniquenessKey, "note", "v1").Encode();
-        Assert.HasCount(1, (await provider.FetchChildrenAsync(string.Empty, ReadOnlyMemory<byte>.Empty, null)).Children);
+        var topLevel = await provider.FetchChildrenAsync(string.Empty, ReadOnlyMemory<byte>.Empty, null);
+        Assert.IsEmpty(topLevel.Children); Assert.IsTrue(topLevel.IsComplete);
+        Assert.HasCount(1, router.CreateRootPage().Children);
+        Assert.IsFalse(admission.IsAdmitted(root.RootId));
         await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => provider.FetchChildrenAsync("Docs/note.txt", identity, null).AsTask());
         await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => provider.OpenReadAsync("Docs/note.txt", identity, 2, 0, 2).AsTask());
         Assert.AreEqual(0, pages.Calls); Assert.AreEqual(0, ranges.Calls);
