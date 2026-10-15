@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -19,6 +20,7 @@ namespace MirrorPulse.Core.Tests;
 [TestClass]
 public sealed partial class MirrorPulseJournalCoalescingExecutorTests
 {
+    public TestContext TestContext { get; set; } = null!;
     private static readonly byte[] FinalBytes = [1, 2, 3, 4];
     private static readonly string[] MoveAndUpload = ["Move", "Upload"];
 
@@ -257,8 +259,11 @@ public sealed partial class MirrorPulseJournalCoalescingExecutorTests
     }
 
     [TestMethod]
+    [DoNotParallelize]
     public async Task ProductionSupervisorExecutesMoveAndUploadOverARealPipeWithoutAcknowledgingOriginalJournalRows()
     {
+        var elapsed = Stopwatch.StartNew();
+        void Observe(string phase) => TestContext.WriteLine($"ProductionCoalescingPipe: phase={phase}; elapsedMs={elapsed.ElapsedMilliseconds}.");
         byte[] seed = [8, 9, 10];
         using var fixture = new Fixture(MirrorPulseCoalescedEffect.MoveAndUpdateFile, Convert.ToHexString(SHA256.HashData(seed)));
         var plan = fixture.Plan;
@@ -294,18 +299,24 @@ public sealed partial class MirrorPulseJournalCoalescingExecutorTests
         }
         await using var supervisor = new AdapterInstanceProcessSupervisor(catalog, new WindowsCredentialManagerStore());
         await supervisor.StartAsync(topology);
+        Observe("SupervisorStarted");
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         while ((await catalog.ReadInstanceRuntimeStateAsync(plan.InstanceId, timeout.Token))?.Phase != "Connected") await Task.Delay(25, timeout.Token);
+        Observe("Connected");
         using var content = new MemoryStream(seed);
         Assert.AreEqual(fixture.Revision, await supervisor.UploadAsync(new(plan.InstanceId, "original.txt", null, content, seed.Length, Guid.NewGuid(), RootKey: "files"), timeout.Token));
+        Observe("SeedUploaded");
         await PrepareAsync(catalog, fixture);
+        Observe("PlanPrepared");
         var executor = new MirrorPulseJournalCoalescingExecutor(catalog, supervisor, supervisor, supervisor, new(supervisor, supervisor, supervisor));
         var effects = await executor.ExecuteAsync(plan.PlanId, (proof, token) =>
         {
             Assert.AreEqual(fixture.Content, proof);
+            Observe("OpeningFinalContent");
             token.ThrowIfCancellationRequested();
             return ValueTask.FromResult<Stream>(new MemoryStream(FinalBytes));
         }, timeout.Token);
+        Observe("EffectsCompleted");
         Assert.HasCount(2, effects);
         string? observedBaseline = effects[1].Intent.ExpectedRevision;
         Assert.AreEqual(fixture.Revision, observedBaseline);
@@ -315,6 +326,7 @@ public sealed partial class MirrorPulseJournalCoalescingExecutorTests
         byte[] actual = new byte[4];
         await downloaded.ReadExactlyAsync(actual, timeout.Token);
         CollectionAssert.AreEqual(FinalBytes, actual);
+        Observe("RemoteContentVerified");
         await executor.ExecuteAsync(plan.PlanId, (_, _) => throw new AssertFailedException("Accepted effects must not be resent."), timeout.Token);
         await using var reading = await official.BeginTransactionAsync(timeout.Token);
         foreach (var original in originals)
@@ -327,6 +339,7 @@ public sealed partial class MirrorPulseJournalCoalescingExecutorTests
             CollectionAssert.AreEqual(original.Payload.ToArray(), pending.Payload.ToArray());
         }
         await reading.RollbackAsync(timeout.Token);
+        Observe("OriginalRowsRetained");
     }
 
     private static async Task PrepareAsync(MirrorPulseProductCatalog catalog, Fixture fixture)
