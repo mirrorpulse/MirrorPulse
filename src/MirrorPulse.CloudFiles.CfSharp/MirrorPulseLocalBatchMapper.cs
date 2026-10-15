@@ -10,7 +10,11 @@ public sealed record MirrorPulseLocalBatchPlan(
     IReadOnlyList<MirrorPulseWorkerChangeCommand> Commands,
     IReadOnlyList<Guid> DirectoryMetadataOperationIds,
     bool RequiresFullRescan,
-    IReadOnlyList<MirrorPulseBlockedLocalOperation>? BlockedOperations = null);
+    IReadOnlyList<MirrorPulseBlockedLocalOperation>? BlockedOperations = null)
+{
+    /// <summary>All routable observations, including held namespace and metadata dependencies.</summary>
+    public IReadOnlyList<MirrorPulseWorkerChangeCommand>? CompleteWindow { get; init; }
+}
 
 /// <summary>Copies only public feed observations for product routing policy.</summary>
 public sealed record MirrorPulseLocalChangeObservation(Guid OperationId, long Sequence, CloudLocalChangeKind Kind,
@@ -43,6 +47,8 @@ public static class MirrorPulseLocalBatchMapper
         var commands = new List<MirrorPulseWorkerChangeCommand>();
         var directoryMetadata = new List<Guid>();
         var blocked = new List<MirrorPulseBlockedLocalOperation>();
+        var complete = new List<MirrorPulseWorkerChangeCommand>();
+        bool completeRouting = true;
         foreach (MirrorPulseLocalChangeObservation change in observations)
         {
             MirrorPulseRoutedItem current;
@@ -54,9 +60,14 @@ public static class MirrorPulseLocalBatchMapper
             }
             catch (Exception exception) when (exception is IOException or InvalidDataException or ArgumentException)
             {
+                completeRouting = false;
                 Block(change, null, MirrorPulseLocalOperationBlockReason.UnregisteredPath);
                 continue;
             }
+            MirrorPulseWorkerChangeCommand? command = Enum.IsDefined(change.Kind) ? new(
+                change.OperationId, change.Sequence, current.InstanceId, current.RootKey, ToWorkerKind(change.Kind),
+                current.RelativePath, previous?.RootKey, previous?.RelativePath, change.IsDirectory, change.ItemId, change.ObservedAt) : null;
+            if (command is not null) complete.Add(command); else completeRouting = false;
             // CfSharp filters its proved remote-creation/application echoes. An
             // unfiltered metadata observation cannot prove that a source accepted
             // timestamps or attributes. The product promises content synchronization,
@@ -87,21 +98,11 @@ public static class MirrorPulseLocalBatchMapper
             };
             if (reason is { } value) { Block(change, current.InstanceId, value); continue; }
 
-            commands.Add(new MirrorPulseWorkerChangeCommand(
-                change.OperationId,
-                change.Sequence,
-                current.InstanceId,
-                current.RootKey,
-                ToWorkerKind(change.Kind),
-                current.RelativePath,
-                previous?.RootKey,
-                previous?.RelativePath,
-                change.IsDirectory,
-                change.ItemId,
-                change.ObservedAt));
+            commands.Add(command!);
         }
 
-        return new(commands.AsReadOnly(), directoryMetadata.AsReadOnly(), false, blocked.AsReadOnly());
+        return new(commands.AsReadOnly(), directoryMetadata.AsReadOnly(), false, blocked.AsReadOnly())
+        { CompleteWindow = completeRouting ? complete.AsReadOnly() : null };
 
         void Block(MirrorPulseLocalChangeObservation change, InstanceId? instance, MirrorPulseLocalOperationBlockReason reason) =>
             blocked.Add(new(change.OperationId, instance, change.RelativePath, reason, change.ObservedAt));

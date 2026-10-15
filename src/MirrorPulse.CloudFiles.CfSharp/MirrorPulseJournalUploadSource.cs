@@ -11,7 +11,11 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 public sealed record MirrorPulseJournalUploadBatch(
     IReadOnlyList<MirrorPulseWorkerChangeCommand> ReadyCommands,
     int DeferredCount,
-    bool RequiresFullRescan);
+    bool RequiresFullRescan)
+{
+    public IReadOnlyList<MirrorPulseWorkerChangeCommand>? CompleteWindow { get; init; }
+    public long WindowUpperSequence { get; init; }
+}
 
 /// <summary>
 /// Reads upload intent from CfSharp's durable local journal. The MP catalog records only an
@@ -116,6 +120,7 @@ public sealed class MirrorPulseJournalUploadSource
                 var routed = _router.ResolvePath(operation.RelativePath);
                 return _router.GetRegistration(routed.InstanceId, routed.RootKey).RootId;
             });
+        var acceptedMetadata = new HashSet<Guid>();
         foreach (var rootMetadata in excludedMetadata)
         {
             MirrorPulseNamespaceWorkAdmission.WorkLease? admission = null;
@@ -127,6 +132,7 @@ public sealed class MirrorPulseJournalUploadSource
             // also prevents excluded metadata from starving a bounded official batch.
             await _feed.AcknowledgeAsync(rootMetadata.Select(operation =>
                 new CloudLocalChangeAcknowledgement(operation.OperationId, null)), cancellationToken).ConfigureAwait(false);
+            acceptedMetadata.UnionWith(rootMetadata.Select(operation => operation.OperationId));
         }
         foreach (MirrorPulseWorkerChangeCommand command in plan.Commands.OrderBy(command => command.Sequence))
         {
@@ -182,7 +188,12 @@ public sealed class MirrorPulseJournalUploadSource
             }
         }
 
-        return new(ready.AsReadOnly(), deferred, false);
+        return new(ready.AsReadOnly(), deferred, false)
+        {
+            CompleteWindow = plan.CompleteWindow is { } window ?
+                Array.AsReadOnly(window.Where(command => !acceptedMetadata.Contains(command.OperationId)).ToArray()) : null,
+            WindowUpperSequence = scan.ThroughSequence,
+        };
     }
 
     private bool IsNamespaceFenced(string path, HashSet<RootId> pendingRoots)

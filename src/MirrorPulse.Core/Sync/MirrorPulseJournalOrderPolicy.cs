@@ -27,5 +27,5 @@ public static class MirrorPulseJournalOrderPolicy
     }
 
     private static bool IsChild(string path, string parent) =>
-        path.StartsWith(parent + "/", StringComparison.OrdinalIgnoreCase);
+        parent.Length == 0 ? path.Length != 0 : path.StartsWith(parent + "/", StringComparison.OrdinalIgnoreCase);
 }

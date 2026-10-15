@@ -17,7 +17,7 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 /// conditional upload, so a crash leaves the same operation available after restart.
 /// </summary>
 [SupportedOSPlatform("windows10.0.16299")]
-public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
+public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
 {
     private readonly CloudLocalChangeFeed _feed;
     private readonly MirrorPulseRootRouter _router;
@@ -130,6 +130,9 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
 
     private async ValueTask<MirrorPulseJournalUploadBatch> ReadPendingAsync(CancellationToken cancellationToken)
     {
+        _planningBatch = null;
+        foreach (Guid original in _completedCoalescedOriginals) _runner.ClearRecoveredFault(original);
+        _completedCoalescedOriginals.Clear();
         var recovery = new MirrorPulseMutationProjectionRecovery(_catalog);
         IReadOnlyList<Guid> repaired = await recovery.RepairAsync(async (operationId, token) =>
         {
@@ -146,7 +149,7 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
         MirrorPulseJournalUploadBatch batch = _source.RequiresFullRescan || enabledDeferredRoot ||
             await _catalog.ReadFullRescanAsync(cancellationToken).ConfigureAwait(false) is not null ? new([], 0, true) :
             await _source.ReadPendingAsync(cancellationToken).ConfigureAwait(false);
-        if (!batch.RequiresFullRescan) return batch;
+        if (!batch.RequiresFullRescan) { _planningBatch = batch; return batch; }
         foreach (RootRegistration root in _router.Registrations)
             await _catalog.SaveInstanceRuntimeStateAsync(new(root.InstanceId, "Reconciling", true, null), cancellationToken).ConfigureAwait(false);
         if (_rescan is null) throw new NotSupportedException("The Host requires a full rescan service.");
@@ -193,6 +196,8 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
         if (root.State != RootRegistrationState.Active || !_mayDispatch(command.InstanceId) ||
             (await _catalog.ReadNamespaceDispatchFencedRootsAsync(cancellationToken).ConfigureAwait(false)).Contains(root.RootId))
             return false;
+        if (_completedCoalescedOriginals.Contains(command.OperationId)) return true;
+        if (await TryDispatchCoalescedAsync(command, cancellationToken).ConfigureAwait(false) is { } coalesced) return coalesced;
         if (command.Kind is MirrorPulseWorkerChangeKind.Move or MirrorPulseWorkerChangeKind.Delete ||
             command.IsDirectory && command.Kind == MirrorPulseWorkerChangeKind.Create)
         {
@@ -435,7 +440,8 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
         return false;
     }
 
-    private async ValueTask AcknowledgeAsync(Guid operationId, string? revision, CancellationToken cancellationToken)
+    private async ValueTask AcknowledgeAsync(Guid operationId, string? revision, CancellationToken cancellationToken,
+        bool acknowledgeJournal = true)
     {
         string phase = "ReadIntent";
         try
@@ -477,7 +483,8 @@ public sealed class MirrorPulseJournalUploadPump : IAsyncDisposable
                     throw new MirrorPulseMutationAmbiguousException($"Local journal content confirmation requires recovery ({receipt.Outcome}).");
             }
             phase = "AcknowledgeFeed";
-            await _completion.AcknowledgeSuccessfulUploadAsync(operationId, revision, cancellationToken).ConfigureAwait(false);
+            if (acknowledgeJournal)
+                await _completion.AcknowledgeSuccessfulUploadAsync(operationId, revision, cancellationToken).ConfigureAwait(false);
             phase = "ProjectProduct";
             await ProjectAcceptedAsync(record, cancellationToken).ConfigureAwait(false);
         }

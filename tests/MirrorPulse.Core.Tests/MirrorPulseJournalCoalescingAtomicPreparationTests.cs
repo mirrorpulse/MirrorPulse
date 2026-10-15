@@ -33,7 +33,11 @@ public sealed class MirrorPulseJournalCoalescingAtomicPreparationTests
         Assert.AreEqual(JsonSerializer.Serialize(prepared), JsonSerializer.Serialize(
             await reopened.PrepareJournalCoalescingAndExecutionAsync(fixture.Plan, fixture.Window, fixture.Revision, fixture.Content)));
         foreach (var original in fixture.Window)
+        {
+            Assert.AreEqual(fixture.Plan.PlanId, (await reopened.ReadJournalCoalescingOwnerAsync(original.OperationId))!.PlanId);
             await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => reopened.PrepareMutationAsync(fixture.Intent(original)));
+        }
+        Assert.IsNull(await reopened.ReadJournalCoalescingOwnerAsync(Guid.NewGuid()));
         foreach (var step in prepared.Steps)
             await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => reopened.PrepareMutationAsync(fixture.Intent(fixture.Window[0]) with { OperationId = step.OperationId }));
     }

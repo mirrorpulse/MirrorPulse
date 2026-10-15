@@ -5,6 +5,30 @@ namespace MirrorPulse.Core.State;
 
 public sealed partial class MirrorPulseProductCatalog
 {
+    /// <summary>Finds the immutable owner of an original journal ID through the product index.</summary>
+    public async Task<MirrorPulseJournalCoalescingPlan?> ReadJournalCoalescingOwnerAsync(Guid operationId,
+        CancellationToken cancellationToken = default)
+    {
+        if (operationId == Guid.Empty) throw new ArgumentException("An original operation ID is required.", nameof(operationId));
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed(); using var transaction = _connection.BeginTransaction(deferred: true);
+            await using var query = _connection.CreateCommand(); query.Transaction = transaction;
+            query.CommandText = "SELECT plan_id FROM journal_coalescing_members WHERE operation_id=$operation;";
+            query.Parameters.AddWithValue("$operation", operationId.ToString("D"));
+            if (await query.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not string value)
+            { transaction.Commit(); return null; }
+            if (!Guid.TryParseExact(value, "D", out Guid planId) || planId == Guid.Empty)
+                throw new InvalidDataException("The coalescing owner index is invalid.");
+            var plan = await ReadCoalescingPlanCoreAsync(planId, transaction, cancellationToken).ConfigureAwait(false);
+            if (plan.Members.Count(member => member.OperationId == operationId) != 1)
+                throw new InvalidDataException("The original ID is absent from its indexed coalescing decision.");
+            transaction.Commit(); return plan;
+        }
+        finally { _gate.Release(); }
+    }
+
     public async Task<MirrorPulseJournalCoalescingPlan> ReadJournalCoalescingPlanAsync(Guid planId,
         CancellationToken cancellationToken = default)
     {

@@ -13,7 +13,7 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 
 [SupportedOSPlatform("windows10.0.19041")]
 [TestClass]
-public sealed class MirrorPulseJournalUploadSourceTests
+public sealed partial class MirrorPulseJournalUploadSourceTests
 {
     public TestContext TestContext { get; set; } = null!;
 

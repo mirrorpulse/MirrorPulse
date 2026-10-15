@@ -52,6 +52,9 @@ public sealed class MirrorPulseUploadConflictActions
         {
             throw new InvalidOperationException("The upload conflict has already been resolved.");
         }
+        if (Guid.TryParse(conflict.ChangeId, out Guid originalId) &&
+            await _catalog.ReadJournalCoalescingOwnerAsync(originalId, cancellationToken).ConfigureAwait(false) is not null)
+            throw new NotSupportedException("A coalesced conflict requires its complete group resolution; no original journal ID was acknowledged.");
 
         string? preservedPath = null;
         if (!Enum.IsDefined(action) || action == MirrorPulseConflictAction.Defer)

@@ -15,6 +15,31 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 public sealed class MirrorPulseLocalBatchMapperTests
 {
     [TestMethod]
+    public void CompletePlanningWindowRetainsBlockedRootAndMetadataDependencies()
+    {
+        InstanceId instance = InstanceId.New();
+        var registration = AdapterRootRegistrationMapper.Map(AdapterId.Parse("example.window"), instance,
+            new("docs", "Documents", "Documents", false), RootRegistrationState.Active);
+        var router = new MirrorPulseRootRouter(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")), [registration]);
+        Guid item = Guid.NewGuid(); DateTimeOffset now = DateTimeOffset.UtcNow;
+        MirrorPulseLocalChangeObservation[] observations =
+        [
+            new(Guid.NewGuid(), 1, CloudLocalChangeKind.Delete, Guid.NewGuid(), "Documents", null, true, now),
+            new(Guid.NewGuid(), 2, CloudLocalChangeKind.ContentUpdate, item, "Documents/file.txt", null, false, now),
+            new(Guid.NewGuid(), 3, CloudLocalChangeKind.ContentUpdate, item, "Documents/file.txt", null, false, now),
+            new(Guid.NewGuid(), 4, CloudLocalChangeKind.MetadataUpdate, item, "Documents/file.txt", null, false, now),
+        ];
+        var plan = MirrorPulseLocalBatchMapper.MapObservations(observations, router);
+        Assert.HasCount(2, plan.Commands); Assert.HasCount(4, plan.CompleteWindow!);
+        Assert.IsNull(MirrorPulseJournalCoalescingPlanner.TryPlan(plan.CompleteWindow!, item, 4, new HashSet<Guid>()));
+        Assert.IsTrue(MirrorPulseJournalOrderPolicy.DependsOn(plan.Commands[0], plan.CompleteWindow![0]));
+        var unknown = observations.Append(new(Guid.NewGuid(), 5, CloudLocalChangeKind.Create, Guid.NewGuid(),
+            "Unregistered/file.txt", null, false, now));
+        Assert.IsNull(MirrorPulseLocalBatchMapper.MapObservations(unknown, router).CompleteWindow,
+            "An incomplete routing window must never authorize a coalescing decision.");
+    }
+
+    [TestMethod]
     public async Task UnfilteredMetadataRetainsItsUnsupportedResultWithoutAcknowledgingDirectoriesOrBlockingChildren()
     {
         string fixture = Path.Combine(Path.GetTempPath(), "MirrorPulse-metadata-tests", Guid.NewGuid().ToString("N"));
