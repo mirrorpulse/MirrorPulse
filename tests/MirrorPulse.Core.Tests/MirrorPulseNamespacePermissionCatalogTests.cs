@@ -417,7 +417,7 @@ public sealed partial class MirrorPulseNamespacePermissionCatalogTests
         await connection.OpenAsync();
         await using var command = connection.CreateCommand();
         command.CommandText = "PRAGMA user_version;";
-        Assert.AreEqual(53L, await command.ExecuteScalarAsync());
+        Assert.AreEqual(54L, await command.ExecuteScalarAsync());
         Assert.IsFalse(File.Exists(fixture.Paths.CfSharpStateDatabasePath));
     }
 

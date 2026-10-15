@@ -6,8 +6,14 @@ using MirrorPulse.Core.Contracts;
 
 namespace MirrorPulse.Core.State;
 
-/// <summary>Names an original capture selected before initialization can modify local permissions.</summary>
-public sealed record MirrorPulseNamespaceInitializationRoot(RootId RootId, Guid ManifestId);
+/// <summary>Names retained root provenance selected before initialization can modify local permissions.</summary>
+/// <remarks>A born root has no original manifest; its ManifestId is empty and BornRootMemberId
+/// references its actual registered birth. Version 1 admissions retain their original JSON shape.</remarks>
+public sealed record MirrorPulseNamespaceInitializationRoot(RootId RootId, Guid ManifestId)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? BornRootMemberId { get; init; }
+}
 
 /// <summary>Immutable initialization admission; this is neither permission evidence nor tree readiness.</summary>
 public sealed record MirrorPulseNamespaceInitializationIntent(int Version, Guid OperationId,
@@ -54,6 +60,8 @@ public sealed partial class MirrorPulseProductCatalog
                     await RequireNamespaceInitializationRootsAsync(replay, transaction, cancellationToken).ConfigureAwait(false);
                 transaction.Commit(); return replay;
             }
+            foreach (var root in intent.Roots.Where(root => root.BornRootMemberId is not null))
+                await RequireNamespaceInitializationBornRootAsync(root, intent.PreparedAt, transaction, cancellationToken).ConfigureAwait(false);
             byte[] payload = JsonSerializer.SerializeToUtf8Bytes(intent, TopologyJsonOptions);
             await using (SqliteCommand insert = _connection.CreateCommand())
             {
@@ -66,10 +74,11 @@ public sealed partial class MirrorPulseProductCatalog
             foreach (var root in intent.Roots)
             {
                 await using SqliteCommand reserve = _connection.CreateCommand(); reserve.Transaction = transaction;
-                reserve.CommandText = "INSERT INTO namespace_initialization_roots(root_id,operation_id,manifest_id) VALUES($root,$id,$manifest);";
+                reserve.CommandText = "INSERT INTO namespace_initialization_roots(root_id,operation_id,manifest_id,born_member_id) VALUES($root,$id,$manifest,$born);";
                 reserve.Parameters.AddWithValue("$root", root.RootId.Value.ToString("D"));
                 reserve.Parameters.AddWithValue("$id", intent.OperationId.ToString("D"));
-                reserve.Parameters.AddWithValue("$manifest", root.ManifestId.ToString("D"));
+                reserve.Parameters.AddWithValue("$manifest", root.ManifestId == Guid.Empty ? DBNull.Value : root.ManifestId.ToString("D"));
+                reserve.Parameters.AddWithValue("$born", (object?)root.BornRootMemberId?.ToString("D") ?? DBNull.Value);
                 await reserve.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
             transaction.Commit(); return intent;
@@ -169,14 +178,17 @@ public sealed partial class MirrorPulseProductCatalog
     {
         var actual = new List<MirrorPulseNamespaceInitializationRoot>();
         await using SqliteCommand query = _connection.CreateCommand(); query.Transaction = transaction;
-        query.CommandText = "SELECT root_id,manifest_id FROM namespace_initialization_roots WHERE operation_id=$id ORDER BY root_id;";
+        query.CommandText = "SELECT root_id,manifest_id,born_member_id FROM namespace_initialization_roots WHERE operation_id=$id ORDER BY root_id;";
         query.Parameters.AddWithValue("$id", intent.OperationId.ToString("D"));
         await using var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
         while (await reader.ReadAsync(token).ConfigureAwait(false))
         {
-            if (!RootId.TryParse(reader.GetString(0), out RootId root) || !Guid.TryParseExact(reader.GetString(1), "D", out Guid manifest))
+            if (!RootId.TryParse(reader.GetString(0), out RootId root) ||
+                !reader.IsDBNull(1) && !Guid.TryParseExact(reader.GetString(1), "D", out _) ||
+                !reader.IsDBNull(2) && !Guid.TryParseExact(reader.GetString(2), "D", out _))
                 throw new InvalidDataException("The initialization root reservation is invalid.");
-            actual.Add(new(root, manifest));
+            actual.Add(new(root, reader.IsDBNull(1) ? Guid.Empty : Guid.ParseExact(reader.GetString(1), "D"))
+            { BornRootMemberId = reader.IsDBNull(2) ? null : Guid.ParseExact(reader.GetString(2), "D") });
         }
         if (!actual.SequenceEqual(intent.Roots.OrderBy(root => root.RootId.Value.ToString("D"), StringComparer.Ordinal)))
             throw new InvalidDataException("Initialization lost or changed a root reservation.");
@@ -201,12 +213,15 @@ public sealed partial class MirrorPulseProductCatalog
     private static void ValidateNamespaceInitialization(MirrorPulseNamespaceInitializationIntent intent)
     {
         ArgumentNullException.ThrowIfNull(intent);
-        if (intent.Version != 1 || intent.OperationId == Guid.Empty || intent.PreparedAt == default || intent.Roots is null ||
+        if (intent.Version is not (1 or 2) || intent.OperationId == Guid.Empty || intent.PreparedAt == default || intent.Roots is null ||
             intent.RequestedInventoryKind is { } requested && !Enum.IsDefined(requested) ||
-            intent.Roots.Count is < 1 or > 4096 || intent.Roots.Any(root => root is null || root.RootId.Value == Guid.Empty || root.ManifestId == Guid.Empty) ||
+            intent.Version == 2 && intent.RequestedInventoryKind != MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory ||
+            intent.Roots.Count is < 1 or > 4096 || intent.Roots.Any(root => root is null || root.RootId.Value == Guid.Empty ||
+                (root.BornRootMemberId is { } born ? intent.Version != 2 || born == Guid.Empty || root.ManifestId != Guid.Empty : root.ManifestId == Guid.Empty)) ||
             intent.Roots.Select(root => root.RootId).Distinct().Count() != intent.Roots.Count ||
-            intent.Roots.Select(root => root.ManifestId).Distinct().Count() != intent.Roots.Count)
-            throw new ArgumentException("Initialization requires a bounded set of distinct stable roots and original capture IDs.", nameof(intent));
+            intent.Roots.Where(root => root.BornRootMemberId is null).Select(root => root.ManifestId).Distinct().Count() != intent.Roots.Count(root => root.BornRootMemberId is null) ||
+            intent.Roots.Where(root => root.BornRootMemberId is not null).Select(root => root.BornRootMemberId).Distinct().Count() != intent.Roots.Count(root => root.BornRootMemberId is not null))
+            throw new ArgumentException("Initialization requires distinct stable roots and explicit retained capture or born-root provenance.", nameof(intent));
     }
 
     private static async Task EnsureNamespaceInitializationSchemaAsync(SqliteConnection connection, CancellationToken token)
@@ -219,12 +234,15 @@ public sealed partial class MirrorPulseProductCatalog
             CREATE TABLE IF NOT EXISTS namespace_initialization_roots (
                 root_id TEXT PRIMARY KEY,
                 operation_id TEXT NOT NULL REFERENCES namespace_initialization_intents(operation_id),
-                manifest_id TEXT NOT NULL UNIQUE);
+                manifest_id TEXT UNIQUE, born_member_id TEXT UNIQUE,
+                CHECK ((manifest_id IS NOT NULL AND born_member_id IS NULL) OR
+                    (manifest_id IS NULL AND born_member_id IS NOT NULL)));
             CREATE INDEX IF NOT EXISTS namespace_initialization_owner ON namespace_initialization_roots(operation_id);
             CREATE TABLE IF NOT EXISTS namespace_initialization_completions (
                 operation_id TEXT PRIMARY KEY REFERENCES namespace_initialization_intents(operation_id),
                 payload BLOB NOT NULL, fingerprint BLOB NOT NULL CHECK(length(fingerprint)=32));
             """;
         await command.ExecuteNonQueryAsync(token).ConfigureAwait(false);
+        await MigrateNamespaceInitializationRootSourcesAsync(connection, token).ConfigureAwait(false);
     }
 }

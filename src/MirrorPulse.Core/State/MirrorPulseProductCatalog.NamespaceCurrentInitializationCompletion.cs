@@ -48,12 +48,24 @@ public sealed partial class MirrorPulseProductCatalog
                 // Initialization alone is allowed; no unfinished move, retirement, replacement,
                 // born recovery or unregistered birth may disappear behind that same root ID.
                 await RequireNamespaceMoveRootUnfencedAsync(root.RootId, null, transaction, cancellationToken).ConfigureAwait(false);
+                var rootMember = roots.Single(member => member.Context.Member.RootId == root.RootId).Context.Member;
+                if (root.BornRootMemberId is not null)
+                {
+                    var admitted = await RequireNamespaceInitializationBornRootAsync(root, intent.PreparedAt, transaction, cancellationToken).ConfigureAwait(false);
+                    if (admitted != rootMember || current.Members.Any(member => member.Context.Member.RootId == root.RootId &&
+                        member.Context.Member.Origin != MirrorPulseNamespaceMemberOrigin.ProtectedBirth))
+                        throw new InvalidDataException("The audited born root cannot adopt captured originals or another root member.");
+                    foreach (var retired in current.RetiredMembers.Where(member => member.Intent.RootId == root.RootId))
+                        if ((await ReadNamespaceMemberCoreAsync(retired.Intent.MemberId, transaction, cancellationToken).ConfigureAwait(false))
+                            is not { Origin: MirrorPulseNamespaceMemberOrigin.ProtectedBirth })
+                            throw new InvalidDataException("Retired originals cannot be hidden below a born-root admission.");
+                    continue;
+                }
                 var tree = await ReadPermissionTreeCoreAsync(root.ManifestId, cancellationToken, transaction).ConfigureAwait(false)
                     ?? throw new InvalidDataException("The current initialization lost its original root capture.");
                 if (tree.Phase != MirrorPulseNamespacePermissionTreePhase.Sealed || tree.Definition.Anchor.Baseline.RootId != root.RootId ||
                     await ComputePermissionTreeFingerprintCoreAsync(tree, tree.Seal!.SealedAt, cancellationToken, transaction).ConfigureAwait(false) != tree.Seal.Fingerprint)
                     throw new InvalidDataException("The current initialization requires its unchanged sealed original root capture.");
-                var rootMember = roots.Single(member => member.Context.Member.RootId == root.RootId).Context.Member;
                 if (rootMember.Origin != MirrorPulseNamespaceMemberOrigin.CapturedOriginal || rootMember.OriginId != tree.Definition.Anchor.Baseline.EvidenceId)
                     throw new InvalidDataException("The live root lost its captured original provenance.");
                 var registered = new List<MirrorPulseNamespaceMemberRegistration>();
