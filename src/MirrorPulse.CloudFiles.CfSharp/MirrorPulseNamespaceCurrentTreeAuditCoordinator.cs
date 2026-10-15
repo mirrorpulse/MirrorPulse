@@ -1,5 +1,6 @@
 using System.Runtime.Versioning;
 using CfSharp;
+using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.State;
 using MirrorPulse.Core.Sync;
 
@@ -33,16 +34,20 @@ public sealed class MirrorPulseNamespaceCurrentTreeAuditCoordinator(CloudFileSys
             return historical;
         }
         MirrorPulseNamespaceInitializationCompletion completion = null!;
+        var intent = await catalog.ReadNamespaceInitializationAsync(operationId, cancellationToken).ConfigureAwait(false)
+            ?? throw new FileNotFoundException("Current audit requires its retained initialization admission.");
+        RootId? scope = intent.Version == 4 ? intent.Roots[0].RootId : null;
         _ = await AuditAdmittedAsync(anchorMemberId, anchorGuard, async (audit, token) =>
         {
             actor.AssertAccess();
             completion = await catalog.CompleteNamespaceCurrentInitializationAsync(operationId, audit.Inventory, audit.ObservedAt, token).ConfigureAwait(false);
-        }, cancellationToken).ConfigureAwait(false);
+        }, cancellationToken, scope).ConfigureAwait(false);
         return completion;
     }
 
     private ValueTask<MirrorPulseNamespaceCurrentTreeAudit> AuditAdmittedAsync(Guid anchorMemberId, MirrorPulseNamespaceAnchorProtection anchorGuard,
-        Func<MirrorPulseNamespaceCurrentTreeAudit, CancellationToken, Task>? onAudited, CancellationToken cancellationToken)
+        Func<MirrorPulseNamespaceCurrentTreeAudit, CancellationToken, Task>? onAudited, CancellationToken cancellationToken,
+        RootId? scopeRoot = null)
     {
         ArgumentNullException.ThrowIfNull(anchorGuard);
         return actor.RunAsync(async token =>
@@ -64,15 +69,20 @@ public sealed class MirrorPulseNamespaceCurrentTreeAuditCoordinator(CloudFileSys
                         before.Dacl != anchor.Context.Verification.Dacl || anchorGuard.Original.LocalObject != before.LocalObject)
                         throw new InvalidDataException("The current audit lost its live protected sync-root and ancestor guard.");
                     var roots = inventory.Members.Where(member => member.Context.Location.ParentMemberId == anchorMemberId).ToArray();
-                    var registrations = router.Registrations.ToDictionary(root => root.RootId);
+                    var registrations = router.Registrations.Where(root => scopeRoot is null || root.RootId == scopeRoot)
+                        .ToDictionary(root => root.RootId);
                     if (roots.Length != registrations.Count || roots.Any(member => !member.Context.Member.IsDirectory ||
                         member.Context.Member.RootId is not { } id || !registrations.TryGetValue(id, out var root) ||
                         member.Context.Location.RelativePath != root.DirectoryName))
                         throw new InvalidDataException("The current graph does not match the complete configured root layout.");
                     var actualRootNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    var selectedNames = roots.Select(root => root.Context.Location.RelativePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
                     await foreach (var item in fileSystem.Root.EnumerateLocalChildrenAsync(cancellationToken: stop).ConfigureAwait(false))
+                    {
+                        if (scopeRoot is not null && !selectedNames.Contains(item.RelativePath.Replace('\\', '/'))) continue;
                         if (item.Kind != CloudItemKind.Directory || !actualRootNames.Add(item.RelativePath.Replace('\\', '/')))
                             throw new InvalidDataException("The actual sync-root contains an unexpected first-level entry.");
+                    }
                     if (!actualRootNames.SetEquals(roots.Select(root => root.Context.Location.RelativePath)))
                         throw new InvalidDataException("The actual first-level roots differ from the current graph.");
                     foreach (var member in inventory.Members)
@@ -106,7 +116,7 @@ public sealed class MirrorPulseNamespaceCurrentTreeAuditCoordinator(CloudFileSys
                     }
                     MirrorPulseNamespaceBirthProtectionVerifier.RequireUnchangedParent(before, await anchorGuard.InspectAsync(stop).ConfigureAwait(false));
                     actor.AssertAccess(); return new MirrorPulseNamespaceCurrentTreeAudit(inventory, execution.RoleSid.Value, DateTimeOffset.UtcNow);
-                }, token, onAudited).ConfigureAwait(false);
+                }, token, onAudited, scopeRoot).ConfigureAwait(false);
             }).ConfigureAwait(false);
             return result;
         }, cancellationToken);

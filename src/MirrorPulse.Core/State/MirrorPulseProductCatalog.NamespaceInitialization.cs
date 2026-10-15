@@ -17,7 +17,8 @@ public sealed record MirrorPulseNamespaceInitializationRoot(RootId RootId, Guid 
 
 /// <summary>Immutable initialization admission; this is neither permission evidence nor tree readiness.</summary>
 /// <remarks>Version 3 explicitly admits an empty Adapter inventory with a selected recovery route.
-/// Versions 1 and 2 retain their nonempty root requirements and historical payloads.</remarks>
+/// Versions 1 and 2 retain their nonempty root requirements and historical payloads.
+/// Version 4 explicitly selects one current root.</remarks>
 public sealed record MirrorPulseNamespaceInitializationIntent(int Version, Guid OperationId,
     IReadOnlyList<MirrorPulseNamespaceInitializationRoot> Roots, DateTimeOffset PreparedAt)
 {
@@ -34,6 +35,10 @@ public sealed record MirrorPulseNamespaceInitializationCompletion(Guid Operation
 {
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public MirrorPulseNamespaceInitializationInventoryKind InventoryKind { get; init; }
+
+    /// <summary>The selected root for version 4; null denotes the complete-inventory contract.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RootId? ScopeRoot { get; init; }
 }
 
 public sealed record MirrorPulseNamespaceInitializationStatus(MirrorPulseNamespaceInitializationIntent Intent,
@@ -200,6 +205,7 @@ public sealed partial class MirrorPulseProductCatalog
         MirrorPulseNamespaceInitializationCompletion completion, SqliteTransaction transaction, CancellationToken token)
     {
         if ((intent.Version == 3 ? completion.MemberCount != 1 : completion.MemberCount < 2) ||
+            (intent.Version == 4 ? completion.ScopeRoot != intent.Roots[0].RootId : completion.ScopeRoot is not null) ||
             completion.CompletedAt < intent.PreparedAt || intent.RequestedInventoryKind is { } requested && requested != completion.InventoryKind)
             throw new InvalidDataException("Initialization completion disagrees with its admission chronology or requested inventory kind.");
         await using SqliteCommand query = _connection.CreateCommand(); query.Transaction = transaction;
@@ -216,12 +222,13 @@ public sealed partial class MirrorPulseProductCatalog
     private static void ValidateNamespaceInitialization(MirrorPulseNamespaceInitializationIntent intent)
     {
         ArgumentNullException.ThrowIfNull(intent);
-        if (intent.Version is not (1 or 2 or 3) || intent.OperationId == Guid.Empty || intent.PreparedAt == default || intent.Roots is null ||
+        if (intent.Version is not (1 or 2 or 3 or 4) || intent.OperationId == Guid.Empty || intent.PreparedAt == default || intent.Roots is null ||
             intent.RequestedInventoryKind is { } requested && !Enum.IsDefined(requested) ||
-            intent.Version == 2 && intent.RequestedInventoryKind != MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory ||
+            intent.Version is 2 or 4 && intent.RequestedInventoryKind != MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory ||
+            intent.Version == 4 && intent.Roots.Count != 1 ||
             intent.Version == 3 && (intent.Roots.Count != 0 || intent.RequestedInventoryKind is null) ||
             intent.Version != 3 && intent.Roots.Count == 0 || intent.Roots.Count > 4096 || intent.Roots.Any(root => root is null || root.RootId.Value == Guid.Empty ||
-                (root.BornRootMemberId is { } born ? intent.Version != 2 || born == Guid.Empty || root.ManifestId != Guid.Empty : root.ManifestId == Guid.Empty)) ||
+                (root.BornRootMemberId is { } born ? intent.Version is not (2 or 4) || born == Guid.Empty || root.ManifestId != Guid.Empty : root.ManifestId == Guid.Empty)) ||
             intent.Roots.Select(root => root.RootId).Distinct().Count() != intent.Roots.Count ||
             intent.Roots.Where(root => root.BornRootMemberId is null).Select(root => root.ManifestId).Distinct().Count() != intent.Roots.Count(root => root.BornRootMemberId is null) ||
             intent.Roots.Where(root => root.BornRootMemberId is not null).Select(root => root.BornRootMemberId).Distinct().Count() != intent.Roots.Count(root => root.BornRootMemberId is not null))

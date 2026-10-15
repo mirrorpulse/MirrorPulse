@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Data.Sqlite;
 using MirrorPulse.Core.Contracts;
 
@@ -10,7 +11,12 @@ namespace MirrorPulse.Core.State;
 public sealed record MirrorPulseNamespaceCurrentTreeSnapshot(Guid AnchorMemberId,
     IReadOnlyList<MirrorPulseNamespaceMemberProtectionSnapshot> Members,
     IReadOnlyList<MirrorPulseNamespaceRetirement> RetiredMembers,
-    IReadOnlyList<RootId> FencedRoots, string Fingerprint);
+    IReadOnlyList<RootId> FencedRoots, string Fingerprint)
+{
+    /// <summary>The explicitly selected root; null retains the complete-inventory contract.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RootId? ScopeRoot { get; init; }
+}
 
 public sealed partial class MirrorPulseProductCatalog
 {
@@ -30,8 +36,27 @@ public sealed partial class MirrorPulseProductCatalog
         finally { _gate.Release(); }
     }
 
+    /// <summary>Reads one selected root and its anchor without requiring other roots' current protection.</summary>
+    /// <remarks>Structural membership and name integrity remain global. Protection and dispatch
+    /// fences are correlated only for the selected root; no native audit is performed.</remarks>
+    public async Task<MirrorPulseNamespaceCurrentTreeSnapshot> ReadNamespaceCurrentRootSnapshotAsync(Guid anchorMemberId,
+        RootId rootId, CancellationToken cancellationToken = default)
+    {
+        if (anchorMemberId == Guid.Empty || rootId.Value == Guid.Empty)
+            throw new ArgumentException("A scoped current inventory requires an anchor and a selected root.");
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed(); using var transaction = _connection.BeginTransaction(deferred: true);
+            var result = await ReadNamespaceCurrentTreeSnapshotCoreAsync(anchorMemberId, transaction,
+                cancellationToken, rootId).ConfigureAwait(false);
+            transaction.Commit(); return result;
+        }
+        finally { _gate.Release(); }
+    }
+
     private async Task<MirrorPulseNamespaceCurrentTreeSnapshot> ReadNamespaceCurrentTreeSnapshotCoreAsync(Guid anchorMemberId,
-        SqliteTransaction transaction, CancellationToken cancellationToken)
+        SqliteTransaction transaction, CancellationToken cancellationToken, RootId? scopeRoot = null)
     {
         var memberIds = new List<Guid>();
         await using (var query = _connection.CreateCommand())
@@ -43,10 +68,12 @@ public sealed partial class MirrorPulseProductCatalog
         if (memberIds.Count is < 1 or > 1_000_001) throw new InvalidDataException("The current membership inventory is empty or exceeds its bound.");
         var live = new HashSet<Guid>();
         var retired = new List<MirrorPulseNamespaceRetirement>();
+        var registrations = new Dictionary<Guid, MirrorPulseNamespaceMemberRegistration>();
         foreach (Guid id in memberIds)
         {
             var member = await ReadNamespaceMemberCoreAsync(id, transaction, cancellationToken).ConfigureAwait(false)
                 ?? throw new InvalidDataException("A current inventory member lost its retained provenance.");
+            registrations.Add(id, member);
             Guid? retirementId = null;
             await using (var query = _connection.CreateCommand())
             {
@@ -82,9 +109,19 @@ public sealed partial class MirrorPulseProductCatalog
         }
         if (!names.SetEquals(live.Where(id => id != anchorMemberId)))
             throw new InvalidDataException("The complete name index differs from the live inventory.");
+        if (scopeRoot is { } selected)
+        {
+            var topRoots = graph.Where(entry => entry.ParentMemberId == anchorMemberId)
+                .Select(entry => registrations[entry.MemberId]).Where(member => member.RootId is not null)
+                .GroupBy(member => member.RootId!.Value).ToDictionary(group => group.Key, group => group.Count());
+            if (!topRoots.TryGetValue(selected, out int count) || count != 1)
+                throw new InvalidDataException("A selected root has no unique registered first-level member.");
+            retired = retired.Where(member => member.Intent.RootId == selected).ToList();
+        }
         var snapshots = new List<MirrorPulseNamespaceMemberProtectionSnapshot>(graph.Count);
         foreach (var entry in graph)
         {
+            if (scopeRoot is not null && entry.MemberId != anchorMemberId && registrations[entry.MemberId].RootId != scopeRoot) continue;
             var snapshot = await ReadNamespaceMemberProtectionSnapshotCoreAsync(entry.MemberId, transaction, cancellationToken).ConfigureAwait(false)
                 ?? throw new InvalidDataException("A live inventory member lost its coherent protection and identity.");
             if (snapshot.Context.Location.RelativePath != entry.RelativePath || snapshot.Context.Location.ParentMemberId != entry.ParentMemberId ||
@@ -93,7 +130,9 @@ public sealed partial class MirrorPulseProductCatalog
             snapshots.Add(snapshot);
         }
         var fences = await ReadNamespaceRootFencesCoreAsync(true, transaction, cancellationToken).ConfigureAwait(false);
-        var result = new MirrorPulseNamespaceCurrentTreeSnapshot(anchorMemberId, snapshots.AsReadOnly(), retired.AsReadOnly(), fences, string.Empty);
+        var result = new MirrorPulseNamespaceCurrentTreeSnapshot(anchorMemberId, snapshots.AsReadOnly(), retired.AsReadOnly(),
+            scopeRoot is null ? fences : Array.AsReadOnly(fences.Where(root => root == scopeRoot).ToArray()), string.Empty)
+        { ScopeRoot = scopeRoot };
         byte[] payload = JsonSerializer.SerializeToUtf8Bytes(result, TopologyJsonOptions);
         result = result with { Fingerprint = Convert.ToHexString(SHA256.HashData(payload)) };
         return result;

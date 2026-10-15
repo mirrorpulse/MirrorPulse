@@ -365,6 +365,13 @@ Controlled first-level entry creation validates the complete configured root
 identity for active and disabled roots. Disabled entries can be protected locally;
 source enumeration, hydration and upload routing still reject disabled roots.
 
+Version 4 selects one current root for recovery. Its snapshot and completion name
+that root explicitly, audit every selected member and its shared anchor, and
+release only that operation's root reservation. Other roots retain their own
+protection and recovery state. A scoped receipt cannot complete a whole-tree
+admission. The runtime retains an anchor guard even when a selected root fails,
+and opens that root's work admission only after its fresh native audit succeeds.
+
 An opt-in Windows test uses an external consumer process to enumerate a
 partial directory and read an online-only placeholder, then reopens the same
 CfSharp database and reads again. Another test exits a separate process with

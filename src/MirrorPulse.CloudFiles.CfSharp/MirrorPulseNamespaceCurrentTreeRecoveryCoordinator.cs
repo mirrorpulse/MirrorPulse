@@ -1,5 +1,6 @@
 using System.Runtime.Versioning;
 using CfSharp;
+using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.State;
 using MirrorPulse.Core.Sync;
 
@@ -14,29 +15,42 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
     MirrorPulseRootRouter router, MirrorPulseNamespaceExecutionSession execution, MirrorPulseNamespaceActor actor,
     MirrorPulseInstanceScheduler scheduler, MirrorPulseNamespacePermissionCoordinator permissions)
 {
-    public async ValueTask<MirrorPulseNamespaceInitializationResult> RecoverAsync(Guid operationId,
-        CancellationToken cancellationToken = default)
+    public ValueTask<MirrorPulseNamespaceInitializationResult> RecoverAsync(Guid operationId,
+        CancellationToken cancellationToken = default) => RecoverCoreAsync(operationId, null, cancellationToken);
+
+    internal ValueTask<MirrorPulseNamespaceInitializationResult> RecoverRootAsync(Guid operationId, RootId rootId,
+        CancellationToken cancellationToken) => RecoverCoreAsync(operationId, rootId, cancellationToken);
+
+    private async ValueTask<MirrorPulseNamespaceInitializationResult> RecoverCoreAsync(Guid operationId, RootId? selectedRoot,
+        CancellationToken cancellationToken)
     {
         if (operationId == Guid.Empty) throw new ArgumentException("An initialization operation ID is required.", nameof(operationId));
         var retained = await catalog.ReadNamespaceInitializationAsync(operationId, cancellationToken).ConfigureAwait(false);
         if (retained?.RequestedInventoryKind is { } requested && requested != MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory)
             throw new InvalidOperationException("The pending initializer requires original-inventory recovery.");
+        if (retained is not null && (selectedRoot is { } selected ? retained.Version != 4 || retained.Roots.Count != 1 ||
+            retained.Roots[0].RootId != selected : retained.Version == 4))
+            throw new InvalidOperationException("The retained initializer requires its explicit complete or selected-root recovery route.");
         if (await catalog.ReadNamespaceInitializationCompletionAsync(operationId, cancellationToken).ConfigureAwait(false) is { } historical)
         {
             if (historical.InventoryKind != MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory)
                 throw new InvalidOperationException("This operation completed the original inventory rather than the current inventory.");
             return new(historical, null);
         }
-        var registrations = router.Registrations.OrderBy(root => root.RootId.Value).ToArray();
+        var registrations = router.Registrations.Where(root => selectedRoot is null || root.RootId == selectedRoot.Value)
+            .OrderBy(root => root.RootId.Value).ToArray();
+        if (selectedRoot is not null && registrations.Length != 1)
+            throw new InvalidOperationException("The selected recovery root is not configured.");
         if (retained is null)
         {
             var roots = await MirrorPulseNamespaceCurrentRootSelector.SelectAsync(fileSystem, catalog, registrations, cancellationToken).ConfigureAwait(false);
-            retained = await catalog.PrepareNamespaceInitializationAsync(new(roots.Count == 0 ? 3 : roots.Any(root => root.BornRootMemberId is not null) ? 2 : 1,
+            retained = await catalog.PrepareNamespaceInitializationAsync(new(selectedRoot is not null ? 4 : roots.Count == 0 ? 3 : roots.Any(root => root.BornRootMemberId is not null) ? 2 : 1,
                 operationId, roots, DateTimeOffset.UtcNow)
             { RequestedInventoryKind = MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory }, cancellationToken).ConfigureAwait(false);
         }
         if (!retained.Roots.Select(root => root.RootId).ToHashSet().SetEquals(registrations.Select(root => root.RootId)))
             throw new InvalidDataException("The current initialization root layout changed after admission.");
+        var selectedIds = registrations.Select(root => root.RootId).ToHashSet();
         var anchor = await new MirrorPulseNamespaceAnchorProtectionCoordinator(fileSystem, catalog, router, execution, actor, permissions)
             .ProtectAsync(cancellationToken).ConfigureAwait(false);
         bool transferred = false;
@@ -55,6 +69,7 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
                 cancellationToken.ThrowIfCancellationRequested();
                 var member = await catalog.ReadNamespaceMemberAsync(entry.MemberId, cancellationToken).ConfigureAwait(false)
                     ?? throw new InvalidDataException("A current recovery member lost its original registration.");
+                if (selectedRoot is not null && (member.RootId is not { } root || !selectedIds.Contains(root))) continue;
                 if (member.Origin == MirrorPulseNamespaceMemberOrigin.CapturedOriginal)
                 {
                     var restored = await originals.RecoverAsync(operationId, member.MemberId, cancellationToken).ConfigureAwait(false);

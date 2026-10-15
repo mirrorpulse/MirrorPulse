@@ -14,6 +14,11 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 public interface IMirrorPulseCloudRuntime : IAsyncDisposable
 {
     [SupportedOSPlatform("windows10.0.26100")]
+    ValueTask<MirrorPulseNamespaceInitializationCompletion> RecoverNamespaceRootAsync(Guid operationId, RootId rootId,
+        CancellationToken cancellationToken) => ValueTask.FromException<MirrorPulseNamespaceInitializationCompletion>(
+            new NotSupportedException("This runtime does not recover selected namespace roots."));
+
+    [SupportedOSPlatform("windows10.0.26100")]
     ValueTask<MirrorPulseNamespaceInitializationCompletion> RecoverNamespaceCurrentTreeAsync(Guid operationId,
         CancellationToken cancellationToken) => ValueTask.FromException<MirrorPulseNamespaceInitializationCompletion>(
             new NotSupportedException("This runtime does not recover the current registered namespace graph."));
@@ -297,13 +302,24 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         private readonly object _disposal = new();
         private Task? _disposeTask;
         private MirrorPulseManagedRootRenameService? _rootRenames;
+        private MirrorPulseNamespaceAnchorProtection? _scopedAnchorProtection;
         public IReadOnlyList<MirrorPulseManagedRootRenameRestoreResult> RootRenameRecoveryResults { get; private set; } = [];
         public MirrorPulseJournalPumpHealth? JournalHealth => _uploadPump?.Health;
 
         [SupportedOSPlatform("windows10.0.26100")]
-        public async ValueTask<MirrorPulseNamespaceInitializationCompletion> RecoverNamespaceCurrentTreeAsync(Guid operationId,
-            CancellationToken cancellationToken)
+        public ValueTask<MirrorPulseNamespaceInitializationCompletion> RecoverNamespaceCurrentTreeAsync(Guid operationId,
+            CancellationToken cancellationToken) => RecoverNamespaceCurrentTreeCoreAsync(operationId, null, cancellationToken);
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        public ValueTask<MirrorPulseNamespaceInitializationCompletion> RecoverNamespaceRootAsync(Guid operationId, RootId rootId,
+            CancellationToken cancellationToken) => RecoverNamespaceCurrentTreeCoreAsync(operationId, rootId, cancellationToken);
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        private async ValueTask<MirrorPulseNamespaceInitializationCompletion> RecoverNamespaceCurrentTreeCoreAsync(Guid operationId,
+            RootId? selectedRoot, CancellationToken cancellationToken)
         {
+            if (operationId == Guid.Empty || selectedRoot?.Value == Guid.Empty)
+                throw new ArgumentException("Current recovery requires a nonempty operation and selected root identity.");
             RequireImportBoundary();
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
             await _initializationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -311,9 +327,16 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             {
                 ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
                 await using var admission = await BeginInitializationWorkRecoveryAsync(operationId,
-                    MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory, cancellationToken).ConfigureAwait(false);
-                var result = await new MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(fileSystem, catalog!, router!, _namespaceExecution!,
-                    _namespaceActor!, _scheduler, _permissions!).RecoverAsync(operationId, cancellationToken).ConfigureAwait(false);
+                    MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory, cancellationToken, selectedRoot).ConfigureAwait(false);
+                if (selectedRoot is not null && _scopedAnchorProtection is null &&
+                    await catalog!.ReadNamespaceInitializationCompletionAsync(operationId, cancellationToken).ConfigureAwait(false) is null)
+                    _scopedAnchorProtection = await new MirrorPulseNamespaceAnchorProtectionCoordinator(fileSystem, catalog, router!,
+                        _namespaceExecution!, _namespaceActor!, _permissions!).ProtectAsync(cancellationToken).ConfigureAwait(false);
+                var coordinator = new MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(fileSystem, catalog!, router!, _namespaceExecution!,
+                    _namespaceActor!, _scheduler, _permissions!);
+                var result = selectedRoot is { } root
+                    ? await coordinator.RecoverRootAsync(operationId, root, cancellationToken).ConfigureAwait(false)
+                    : await coordinator.RecoverAsync(operationId, cancellationToken).ConfigureAwait(false);
                 if (!result.IsHistoricalReplay)
                 {
                     var prior = _initializationProtection; _initializationProtection = result;
@@ -352,14 +375,20 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
 
         [SupportedOSPlatform("windows10.0.26100")]
         private async ValueTask<MirrorPulseNamespaceWorkAdmission.RecoveryLease?> BeginInitializationWorkRecoveryAsync(Guid operationId,
-            MirrorPulseNamespaceInitializationInventoryKind inventoryKind, CancellationToken token)
+            MirrorPulseNamespaceInitializationInventoryKind inventoryKind, CancellationToken token, RootId? selectedRoot = null)
         {
             var retained = await catalog!.ReadNamespaceInitializationAsync(operationId, token).ConfigureAwait(false);
             if (retained?.RequestedInventoryKind is { } requested && requested != inventoryKind)
                 throw new InvalidOperationException("The retained initialization requires its originally selected recovery route.");
+            if (retained is not null && (selectedRoot is { } selected ? retained.Version != 4 || retained.Roots.Count != 1 ||
+                retained.Roots[0].RootId != selected : retained.Version == 4))
+                throw new InvalidOperationException("The retained initializer requires its explicit complete or selected-root recovery route.");
             if (namespaceWork is null || await catalog!.ReadNamespaceInitializationCompletionAsync(operationId, token).ConfigureAwait(false) is not null)
                 return null;
-            var registrations = router!.Registrations.OrderBy(root => root.RootId.Value).ToArray();
+            var registrations = router!.Registrations.Where(root => selectedRoot is null || root.RootId == selectedRoot.Value)
+                .OrderBy(root => root.RootId.Value).ToArray();
+            if (selectedRoot is not null && registrations.Length != 1)
+                throw new InvalidOperationException("The selected recovery root is not configured.");
             if (retained is not null && !retained.Roots.Select(root => root.RootId).ToHashSet().SetEquals(registrations.Select(root => root.RootId)))
                 throw new InvalidDataException("The initialization root layout changed after admission.");
             IReadOnlyList<MirrorPulseNamespaceInitializationRoot>? plannedRoots = null;
@@ -381,7 +410,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                         await MirrorPulseNamespaceInitializationCoordinator.RequireOriginalGraphAsync(catalog, registrations, selectedRoots, token).ConfigureAwait(false);
                     else if (!selectedRoots.SequenceEqual(await MirrorPulseNamespaceCurrentRootSelector.SelectAsync(fileSystem, catalog, registrations, token).ConfigureAwait(false)))
                         throw new InvalidDataException("Current root provenance changed while earlier work drained.");
-                    await catalog.PrepareNamespaceInitializationAsync(new(selectedRoots.Count == 0 ? 3 : selectedRoots.Any(root => root.BornRootMemberId is not null) ? 2 : 1,
+                    await catalog.PrepareNamespaceInitializationAsync(new(selectedRoot is not null ? 4 : selectedRoots.Count == 0 ? 3 : selectedRoots.Any(root => root.BornRootMemberId is not null) ? 2 : 1,
                         operationId, selectedRoots, DateTimeOffset.UtcNow)
                     { RequestedInventoryKind = inventoryKind }, token).ConfigureAwait(false);
                 }
@@ -991,8 +1020,16 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                         try { if (_permissions is not null) await _permissions.DisposeAsync().ConfigureAwait(false); }
                         finally
                         {
-                            if (_initializationProtection is not null && OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
-                                await _initializationProtection.DisposeAsync().ConfigureAwait(false);
+                            try
+                            {
+                                if (_initializationProtection is not null && OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
+                                    await _initializationProtection.DisposeAsync().ConfigureAwait(false);
+                            }
+                            finally
+                            {
+                                if (_scopedAnchorProtection is not null && OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
+                                    await _scopedAnchorProtection.DisposeAsync().ConfigureAwait(false);
+                            }
                         }
                     }
                 }
@@ -1246,6 +1283,14 @@ public sealed class MirrorPulseCloudHostSession : IAsyncDisposable
         if (!_started || _runtime is null)
             throw new InvalidOperationException("The Cloud Files Host session has not started.");
         return _runtime.RecoverNamespaceCurrentTreeAsync(operationId, cancellationToken);
+    }
+
+    [SupportedOSPlatform("windows10.0.26100")]
+    public ValueTask<MirrorPulseNamespaceInitializationCompletion> RecoverNamespaceRootAsync(Guid operationId, RootId rootId,
+        CancellationToken cancellationToken = default)
+    {
+        if (!_started || _runtime is null) throw new InvalidOperationException("The Cloud Files Host session has not started.");
+        return _runtime.RecoverNamespaceRootAsync(operationId, rootId, cancellationToken);
     }
 
     public ValueTask<MirrorPulseNamespaceInitializationStatus> ReadNamespaceInitializationStatusAsync(Guid operationId,

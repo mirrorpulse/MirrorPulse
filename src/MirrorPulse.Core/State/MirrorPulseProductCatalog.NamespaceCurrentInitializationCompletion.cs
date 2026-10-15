@@ -30,7 +30,10 @@ public sealed partial class MirrorPulseProductCatalog
                 transaction.Commit(); return replay;
             }
             await RequireNamespaceInitializationRootsAsync(intent, transaction, cancellationToken).ConfigureAwait(false);
-            var current = await ReadNamespaceCurrentTreeSnapshotCoreAsync(auditedInventory.AnchorMemberId, transaction, cancellationToken).ConfigureAwait(false);
+            Contracts.RootId? scope = intent.Version == 4 ? intent.Roots[0].RootId : null;
+            if (auditedInventory.ScopeRoot != scope)
+                throw new InvalidDataException("The audited inventory does not match its explicit complete or selected-root admission.");
+            var current = await ReadNamespaceCurrentTreeSnapshotCoreAsync(auditedInventory.AnchorMemberId, transaction, cancellationToken, scope).ConfigureAwait(false);
             if (!SameNamespaceReplacementPayload(current, auditedInventory) || observedAt < intent.PreparedAt ||
                 current.Members.Any(member => observedAt < member.Context.Protection.VerifiedAt))
                 throw new InvalidDataException("The native-audited current graph, identity, protection or fences changed before completion.");
@@ -95,7 +98,7 @@ public sealed partial class MirrorPulseProductCatalog
                 throw new InvalidOperationException("An unresolved unregistered birth prevents current initialization completion.");
             var completed = new MirrorPulseNamespaceInitializationCompletion(operationId, current.AnchorMemberId, role,
                 current.Members.Count, current.Fingerprint, observedAt)
-            { InventoryKind = MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory };
+            { InventoryKind = MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory, ScopeRoot = scope };
             byte[] payload = JsonSerializer.SerializeToUtf8Bytes(completed, TopologyJsonOptions);
             await using (var insert = _connection.CreateCommand())
             {
