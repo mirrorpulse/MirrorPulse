@@ -32,6 +32,23 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         MirrorPulseNamespaceMemberRegistration bornRoot = null!, nested = null!, offlineRoot = null!;
         MirrorPulseNamespaceBirthObservation rootFirst = null!, nestedFirst = null!;
         string firstRole = string.Empty;
+        async Task AssertOfflineDeletionDeniedAsync()
+        {
+            Exception denied;
+            try
+            {
+                await Task.Run(() => Directory.Delete(Path.Combine(paths.SyncRootPath, "Offline")), timeout.Token);
+                Assert.Fail("The protected offline root was deleted."); return;
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { denied = error; }
+            // Windows may report native access denial through the Cloud Files status.
+            // A missing, nonempty or unavailable directory is not protection evidence.
+            int nativeError = denied.HResult & 0xffff;
+            TestContext.WriteLine($"OfflineRootDelete: HRESULT=0x{denied.HResult:X8}; Win32={nativeError}.");
+            Assert.IsTrue(nativeError is 5 or 32 or 395,
+                $"Expected access denial, a retained sharing guard or Cloud Files access denial; HRESULT=0x{denied.HResult:X8}.");
+            Assert.IsTrue(Directory.Exists(Path.Combine(paths.SyncRootPath, "Offline")));
+        }
         try
         {
             registry.Register(new(paths.SyncRootPath, "0.1.0", Guid.NewGuid(), [1, 2, 3]));
@@ -109,8 +126,12 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 Assert.AreEqual(MirrorPulseNamespaceMemberOrigin.ProtectedBirth, offlineRoot.Origin);
                 Assert.ThrowsExactly<IOException>(() => router.Resolve("Offline", offlineSpec.Identity.Encode()));
                 Assert.AreEqual(1, worker.Calls.Count(call => call == "directory")); Assert.AreEqual(0, worker.Calls.Count(call => call == "range-open"));
-                await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() => Directory.Delete(Path.Combine(paths.SyncRootPath, "Offline")), timeout.Token));
+                await AssertOfflineDeletionDeniedAsync();
                 Assert.IsTrue(Directory.Exists(Path.Combine(paths.SyncRootPath, "Offline")));
+                var offlineBinding = (await fileSystem.GetDirectory("Offline").InspectAsync(timeout.Token)).LocalBinding;
+                Assert.IsNotNull(offlineBinding);
+                Assert.AreEqual(offlineRoot.LocalObject,
+                    new MirrorPulseLocalFileBinding(offlineBinding.VolumeSerialNumber, offlineBinding.SyncRootFileId, offlineBinding.LocalFileId));
                 Assert.HasCount(6, await catalog.ReadNamespaceMemberTreeAsync(initialized.Completion.AnchorMemberId, timeout.Token));
                 Assert.IsEmpty(await catalog.ReadNamespaceDispatchFencedRootsAsync(timeout.Token));
                 await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() => Directory.Delete(Path.Combine(paths.SyncRootPath, "More"), true), timeout.Token));
@@ -154,8 +175,9 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 Assert.AreEqual(offlineRoot.MemberId, actualOffline.MemberId); Assert.AreEqual(anchorMember, actualOffline.ActualParentMemberId);
                 var offlineSpec = router.CreateRootPage().Children.Single(spec => spec.Name == "Offline");
                 Assert.ThrowsExactly<IOException>(() => router.Resolve("Offline", offlineSpec.Identity.Encode()));
-                await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() => Directory.Delete(Path.Combine(paths.SyncRootPath, "Offline")), timeout.Token));
+                await AssertOfflineDeletionDeniedAsync();
                 Assert.IsTrue(Directory.Exists(Path.Combine(paths.SyncRootPath, "Offline")));
+                Assert.AreEqual(offlineRoot.MemberId, (await runtime.InspectNamespaceMemberAsync("Offline", true, timeout.Token)).MemberId);
                 await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() => Directory.Delete(Path.Combine(paths.SyncRootPath, "More"), true), timeout.Token));
                 Assert.IsTrue(File.Exists(Path.Combine(paths.SyncRootPath, "More", "nested.bin")));
             }
