@@ -12,9 +12,12 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 public sealed class MirrorPulseNamespaceInitializationResult(MirrorPulseNamespaceInitializationCompletion completion,
     MirrorPulseNamespaceAnchorProtection? anchor) : IAsyncDisposable
 {
+    private MirrorPulseNamespaceAnchorProtection? _anchor = anchor;
     public MirrorPulseNamespaceInitializationCompletion Completion { get; } = completion;
-    public bool IsHistoricalReplay => anchor is null;
-    public ValueTask DisposeAsync() => anchor?.DisposeAsync() ?? ValueTask.CompletedTask;
+    public bool IsHistoricalReplay { get; } = anchor is null;
+    internal MirrorPulseNamespaceAnchorProtection TransferAnchor() => Interlocked.Exchange(ref _anchor, null)
+        ?? throw new InvalidOperationException("The initialization has no live anchor guard to transfer.");
+    public ValueTask DisposeAsync() => Interlocked.Exchange(ref _anchor, null)?.DisposeAsync() ?? ValueTask.CompletedTask;
 }
 
 /// <summary>Composes original capture, protected recovery, anchor protection, registration and final audit.</summary>

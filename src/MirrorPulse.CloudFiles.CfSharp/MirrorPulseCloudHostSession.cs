@@ -13,6 +13,7 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 
 public interface IMirrorPulseCloudRuntime : IAsyncDisposable
 {
+    IReadOnlyList<MirrorPulseNamespaceStartupRoot> NamespaceStartupResults => [];
     [SupportedOSPlatform("windows10.0.26100")]
     ValueTask<MirrorPulseNamespaceInitializationCompletion> RecoverNamespaceRootAsync(Guid operationId, RootId rootId,
         CancellationToken cancellationToken) => ValueTask.FromException<MirrorPulseNamespaceInitializationCompletion>(
@@ -222,6 +223,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
     private readonly MirrorPulseNamespaceExecutionSession? _namespaceExecution;
     private readonly MirrorPulseNamespaceActor? _namespaceActor;
     private readonly MirrorPulseNamespaceWorkAdmission? _namespaceWork;
+    private readonly bool _initializeNamespaceOnStart;
     internal Func<ICloudStateStoreFactory, ICloudStateStoreFactory>? StateStoreDecorator { get; init; }
 
     public CfSharpMirrorPulseCloudRuntimeFactory(
@@ -237,7 +239,8 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         MirrorPulseInstanceScheduler? scheduler = null,
         MirrorPulseNamespaceExecutionSession? namespaceExecution = null,
         MirrorPulseNamespaceActor? namespaceActor = null,
-        MirrorPulseNamespaceWorkAdmission? namespaceWork = null)
+        MirrorPulseNamespaceWorkAdmission? namespaceWork = null,
+        bool initializeNamespaceOnStart = false)
     {
         _provider = provider;
         _uploads = uploads;
@@ -252,6 +255,9 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         _namespaceExecution = namespaceExecution;
         _namespaceActor = namespaceActor;
         _namespaceWork = namespaceWork;
+        _initializeNamespaceOnStart = initializeNamespaceOnStart;
+        if (initializeNamespaceOnStart && (namespaceWork is null || catalog is null || router is null || namespaceExecution is null || namespaceActor is null))
+            throw new ArgumentException("Automatic namespace startup requires the complete shared Host namespace boundary.");
     }
 
     public IMirrorPulseCloudRuntime Create(MirrorPulseStoragePaths paths)
@@ -263,7 +269,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             .WithStateStore(StateStoreDecorator?.Invoke(state) ?? state)
             .WithContentProvider(provider)
             .Build(), state, provider, StateStoreDecorator, paths.SyncRootPath, paths.DataRootPath, _uploads, _stats, _mutations, _router, _catalog,
-            _mayDispatch, _conflicts, _notifications, _scheduler, _namespaceExecution, _namespaceActor, _namespaceWork);
+            _mayDispatch, _conflicts, _notifications, _scheduler, _namespaceExecution, _namespaceActor, _namespaceWork, _initializeNamespaceOnStart);
     }
 
     private sealed class CfSharpRuntime(
@@ -284,7 +290,8 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         MirrorPulseInstanceScheduler? scheduler,
         MirrorPulseNamespaceExecutionSession? namespaceExecution,
         MirrorPulseNamespaceActor? namespaceActor,
-        MirrorPulseNamespaceWorkAdmission? namespaceWork)
+        MirrorPulseNamespaceWorkAdmission? namespaceWork,
+        bool initializeNamespaceOnStart)
         : IMirrorPulseCloudRuntime
     {
         private MirrorPulseJournalUploadPump? _uploadPump;
@@ -303,6 +310,8 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         private Task? _disposeTask;
         private MirrorPulseManagedRootRenameService? _rootRenames;
         private MirrorPulseNamespaceAnchorProtection? _scopedAnchorProtection;
+        private MirrorPulseNamespaceAnchorProtection? _startupProtection;
+        public IReadOnlyList<MirrorPulseNamespaceStartupRoot> NamespaceStartupResults { get; private set; } = [];
         public IReadOnlyList<MirrorPulseManagedRootRenameRestoreResult> RootRenameRecoveryResults { get; private set; } = [];
         public MirrorPulseJournalPumpHealth? JournalHealth => _uploadPump?.Health;
 
@@ -870,6 +879,19 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             _providerDiagnostics = new(Path.Combine(dataRootPath, "logs", "cloud-files"));
             await StartLibraryAsync(cancellationToken).ConfigureAwait(false);
             await StartLibraryServicesAsync(cancellationToken).ConfigureAwait(false);
+            if (initializeNamespaceOnStart)
+            {
+                if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
+                    throw new PlatformNotSupportedException("Automatic namespace startup requires Windows 11 24H2 or later.");
+                await _initializationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    var started = await new MirrorPulseNamespaceStartupCoordinator(fileSystem, catalog!, router!, _namespaceExecution!,
+                        _namespaceActor!, _scheduler, _permissions!, namespaceWork!).StartAsync(cancellationToken).ConfigureAwait(false);
+                    _startupProtection = started.Guard; NamespaceStartupResults = started.Roots;
+                }
+                finally { _initializationGate.Release(); }
+            }
         }
 
         private async Task StartLibraryAsync(CancellationToken cancellationToken)
@@ -1077,8 +1099,16 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                             }
                             finally
                             {
-                                if (_scopedAnchorProtection is not null && OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
-                                    await _scopedAnchorProtection.DisposeAsync().ConfigureAwait(false);
+                                try
+                                {
+                                    if (_scopedAnchorProtection is not null && OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
+                                        await _scopedAnchorProtection.DisposeAsync().ConfigureAwait(false);
+                                }
+                                finally
+                                {
+                                    if (_startupProtection is not null && OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
+                                        await _startupProtection.DisposeAsync().ConfigureAwait(false);
+                                }
                             }
                         }
                     }
@@ -1150,6 +1180,7 @@ public sealed class MirrorPulseCloudHostSession : IAsyncDisposable
     public MirrorPulseSyncRootDefinition Definition => _definition;
 
     public MirrorPulseShellRegistrationProfile ShellProfile => _profile;
+    public IReadOnlyList<MirrorPulseNamespaceStartupRoot> NamespaceStartupResults => _runtime?.NamespaceStartupResults ?? [];
 
     public static MirrorPulseCloudHostSession CreateDefault(MirrorPulseStoragePaths paths, string displayName)
     {
@@ -1199,7 +1230,9 @@ public sealed class MirrorPulseCloudHostSession : IAsyncDisposable
         IMirrorPulseWorkerMutationTransport? mutations = null,
         MirrorPulseInstanceScheduler? scheduler = null,
         MirrorPulseNamespaceExecutionSession? namespaceExecution = null,
-        MirrorPulseNamespaceActor? namespaceActor = null)
+        MirrorPulseNamespaceActor? namespaceActor = null,
+        MirrorPulseNamespaceWorkAdmission? namespaceWork = null,
+        bool initializeNamespaceOnStart = false)
     {
         ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(uploads);
@@ -1211,7 +1244,7 @@ public sealed class MirrorPulseCloudHostSession : IAsyncDisposable
         string sid = identity.User?.Value ?? throw new InvalidOperationException("The current Windows user has no SID.");
         return new(paths, MirrorPulseSyncRootRegistrationCoordinator.CreateDefault(),
             new CfSharpMirrorPulseCloudRuntimeFactory(provider, uploads, stats, mutations, router, catalog,
-                mayDispatch, conflicts, notifications, scheduler, namespaceExecution, namespaceActor),
+                mayDispatch, conflicts, notifications, scheduler, namespaceExecution, namespaceActor, namespaceWork, initializeNamespaceOnStart),
             MirrorPulseSyncRootOwner.CreateDefault(), sid, instances, registrations);
     }
 
