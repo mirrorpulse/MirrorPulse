@@ -45,8 +45,35 @@ public sealed partial class MirrorPulseProductCatalog
         ArgumentNullException.ThrowIfNull(unstartedIntents);
         MirrorPulseMutationIntent[] intents = unstartedIntents.ToArray();
         MirrorPulseWorkerChangeCommand[] window = completeWindow.ToArray();
+        ValidateCoalescingUnstartedIntents(plan, window, intents);
+        return PrepareJournalCoalescingCoreAsync(plan, intents, cancellationToken);
+    }
+
+    /// <summary>Atomically transfers explicitly supplied never-started intent and prepares every owned remote effect.</summary>
+    public async Task<MirrorPulseJournalCoalescingExecution> PrepareJournalCoalescingAndExecutionWithUnstartedIntentsAsync(
+        MirrorPulseJournalCoalescingPlan plan, IReadOnlyList<MirrorPulseWorkerChangeCommand> completeWindow,
+        IReadOnlyList<MirrorPulseMutationIntent> unstartedIntents, string? expectedRevision,
+        MirrorPulseCoalescingContent? content = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        ArgumentNullException.ThrowIfNull(plan.Members);
+        ArgumentNullException.ThrowIfNull(completeWindow);
+        ArgumentNullException.ThrowIfNull(unstartedIntents);
+        plan = plan with { Members = Array.AsReadOnly(plan.Members.ToArray()) };
+        MirrorPulseWorkerChangeCommand[] window = completeWindow.ToArray();
+        MirrorPulseMutationIntent[] intents = unstartedIntents.ToArray();
+        ValidateCoalescingUnstartedIntents(plan, window, intents);
+        var execution = MirrorPulseJournalCoalescingExecutionPlanner.Create(plan, window, expectedRevision, content);
+        _ = await PrepareJournalCoalescingCoreAsync(plan, intents, cancellationToken, (execution, window)).ConfigureAwait(false);
+        return await ReadJournalCoalescingExecutionAsync(plan.PlanId, cancellationToken).ConfigureAwait(false)
+            ?? throw new InvalidDataException("The committed transferred execution is missing.");
+    }
+
+    private static void ValidateCoalescingUnstartedIntents(MirrorPulseJournalCoalescingPlan plan,
+        MirrorPulseWorkerChangeCommand[] window, MirrorPulseMutationIntent[] intents)
+    {
         if (intents.Length == 0 || intents.Select(intent => intent.OperationId).Distinct().Count() != intents.Length)
-            throw new ArgumentException("At least one distinct original mutation intent is required.", nameof(unstartedIntents));
+            throw new ArgumentException("At least one distinct original mutation intent is required.", nameof(intents));
         if (intents.Select(intent => intent.ExpectedRevision).Distinct(StringComparer.Ordinal).Count() != 1 ||
             intents.Where(intent => intent.UploadBinding is not null).Select(intent => intent.UploadBinding).Distinct().Skip(1).Any() ||
             intents.Any(intent => intent.Kind is MirrorPulseWorkerChangeKind.Create or MirrorPulseWorkerChangeKind.ContentUpdate && intent.UploadBinding is null))
@@ -63,7 +90,6 @@ public sealed partial class MirrorPulseProductCatalog
                 (intent.PreviousRootKey ?? intent.RootKey) != (command.PreviousRootKey ?? command.RootKey))
                 throw new InvalidDataException("An original mutation intent does not match its journal observation.");
         }
-        return PrepareJournalCoalescingCoreAsync(plan, intents, cancellationToken);
     }
 
     private async Task<MirrorPulseJournalCoalescingPlan> PrepareJournalCoalescingCoreAsync(MirrorPulseJournalCoalescingPlan plan,

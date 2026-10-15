@@ -6,7 +6,7 @@ using Fixture = MirrorPulse.Core.Tests.MirrorPulseJournalCoalescingExecutionTest
 namespace MirrorPulse.Core.Tests;
 
 [TestClass]
-public sealed class MirrorPulseJournalCoalescingAtomicPreparationTests
+public sealed partial class MirrorPulseJournalCoalescingAtomicPreparationTests
 {
     [TestMethod]
     [DataRow(MirrorPulseCoalescedEffect.CreateFile)]
