@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Runtime.Versioning;
 using CfSharp;
 using MirrorPulse.Core.Contracts;
@@ -7,7 +8,11 @@ using MirrorPulse.Core.Sync;
 namespace MirrorPulse.CloudFiles.CfSharp;
 
 /// <summary>A safe startup result for one stable root; completion is local and does not assert remote acceptance.</summary>
-public sealed record MirrorPulseNamespaceStartupRoot(RootId RootId, Guid? OperationId, bool Admitted, string? RecoveryCode);
+public sealed record MirrorPulseNamespaceStartupRoot(RootId RootId, Guid? OperationId, bool Admitted, string? RecoveryCode)
+{
+    /// <summary>The actual Win32 exception code, when available; never decoded from a generic managed HRESULT.</summary>
+    public int? NativeErrorCode { get; init; }
+}
 
 /// <summary>Bootstraps the local namespace before Workers and background source polling start.</summary>
 /// <remarks>The caller serializes the complete library lifetime. Roots start closed, retained
@@ -57,10 +62,11 @@ internal sealed class MirrorPulseNamespaceStartupCoordinator(CloudFileSystem fil
                     var prior = guard; guard = result.TransferAnchor();
                     if (prior is not null) await prior.DisposeAsync().ConfigureAwait(false);
                 }
-                catch (Exception error) when (error is IOException or InvalidOperationException)
+                catch (Exception error) when (error is IOException or InvalidOperationException or UnauthorizedAccessException or Win32Exception)
                 {
                     foreach (var root in pending.Intent.Roots)
-                        outcomes[root.RootId] = new(root.RootId, pending.Intent.OperationId, false, "PendingInitializationRecoveryRequired");
+                        outcomes[root.RootId] = new(root.RootId, pending.Intent.OperationId, false, "PendingInitializationRecoveryRequired")
+                        { NativeErrorCode = (error as Win32Exception)?.NativeErrorCode };
                 }
             }
 
@@ -141,9 +147,10 @@ internal sealed class MirrorPulseNamespaceStartupCoordinator(CloudFileSystem fil
                     recovery.CompleteAfterFreshAudit();
                     outcomes[root.RootId] = new(root.RootId, operationId, true, null);
                 }
-                catch (Exception error) when (error is IOException or InvalidOperationException)
+                catch (Exception error) when (error is IOException or InvalidOperationException or UnauthorizedAccessException or Win32Exception)
                 {
-                    outcomes[root.RootId] = new(root.RootId, operationId, false, "NamespaceStartupRecoveryRequired");
+                    outcomes[root.RootId] = new(root.RootId, operationId, false, "NamespaceStartupRecoveryRequired")
+                    { NativeErrorCode = (error as Win32Exception)?.NativeErrorCode };
                 }
             }
             return (guard, outcomes.Values.OrderBy(result => result.RootId.Value).ToArray());
