@@ -29,7 +29,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
         Guid operation = Guid.NewGuid();
         Guid anchorMember = Guid.Empty;
-        MirrorPulseNamespaceMemberRegistration bornRoot = null!, nested = null!;
+        MirrorPulseNamespaceMemberRegistration bornRoot = null!, nested = null!, offlineRoot = null!;
         MirrorPulseNamespaceBirthObservation rootFirst = null!, nestedFirst = null!;
         string firstRole = string.Empty;
         try
@@ -90,7 +90,9 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 Assert.AreEqual(0, worker.Calls.Count(call => call == "range-open"));
                 var addedRoot = AdapterRootRegistrationMapper.Map(registration.AdapterId, registration.InstanceId,
                     new AdapterRootDefinition("more", "More", "More", false), RootRegistrationState.Active, identityScope: RootIdentityScope.InstanceRoot);
-                router.ReplaceRegistrations([registration, addedRoot]);
+                var disabledRoot = AdapterRootRegistrationMapper.Map(registration.AdapterId, registration.InstanceId,
+                    new AdapterRootDefinition("offline", "Offline", "Offline", false), RootRegistrationState.Disabled, identityScope: RootIdentityScope.InstanceRoot);
+                router.ReplaceRegistrations([registration, addedRoot, disabledRoot]);
                 var rootSpec = router.CreateRootPage().Children.Single(spec => spec.Name == "More");
                 bornRoot = await creator.CreateAsync(Guid.NewGuid(), initialized.Completion.AnchorMemberId, rootSpec, timeout.Token);
                 Assert.AreEqual(addedRoot.RootId, bornRoot.RootId); Assert.AreEqual(MirrorPulseNamespaceMemberOrigin.ProtectedBirth, bornRoot.Origin);
@@ -101,7 +103,15 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     CloudFilePlaceholderSpec.CreateBuilder("nested.bin", nestedIdentity, 4).WithInSyncState(true)
                         .WithInitialAvailability(CloudAvailabilityTarget.OnlineOnly).Build(), timeout.Token);
                 Assert.AreEqual(addedRoot.RootId, nested.RootId); Assert.AreEqual(bornRoot.MemberId, nested.ParentMemberId);
-                Assert.HasCount(5, await catalog.ReadNamespaceMemberTreeAsync(initialized.Completion.AnchorMemberId, timeout.Token));
+                var offlineSpec = router.CreateRootPage().Children.Single(spec => spec.Name == "Offline");
+                offlineRoot = await creator.CreateAsync(Guid.NewGuid(), initialized.Completion.AnchorMemberId, offlineSpec, timeout.Token);
+                Assert.AreEqual(disabledRoot.RootId, offlineRoot.RootId); Assert.AreEqual(initialized.Completion.AnchorMemberId, offlineRoot.ParentMemberId);
+                Assert.AreEqual(MirrorPulseNamespaceMemberOrigin.ProtectedBirth, offlineRoot.Origin);
+                Assert.ThrowsExactly<IOException>(() => router.Resolve("Offline", offlineSpec.Identity.Encode()));
+                Assert.AreEqual(1, worker.Calls.Count(call => call == "directory")); Assert.AreEqual(0, worker.Calls.Count(call => call == "range-open"));
+                await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() => Directory.Delete(Path.Combine(paths.SyncRootPath, "Offline")), timeout.Token));
+                Assert.IsTrue(Directory.Exists(Path.Combine(paths.SyncRootPath, "Offline")));
+                Assert.HasCount(6, await catalog.ReadNamespaceMemberTreeAsync(initialized.Completion.AnchorMemberId, timeout.Token));
                 Assert.IsEmpty(await catalog.ReadNamespaceDispatchFencedRootsAsync(timeout.Token));
                 await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() => Directory.Delete(Path.Combine(paths.SyncRootPath, "More"), true), timeout.Token));
                 Assert.IsTrue(Directory.Exists(Path.Combine(paths.SyncRootPath, "More")));
@@ -124,7 +134,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 Guid recoveryId = Guid.NewGuid();
                 var recovered = await runtime.RecoverNamespaceCurrentTreeAsync(recoveryId, timeout.Token);
                 Assert.AreEqual(MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory, recovered.InventoryKind);
-                Assert.AreEqual(anchorMember, recovered.AnchorMemberId); Assert.AreEqual(5, recovered.MemberCount);
+                Assert.AreEqual(anchorMember, recovered.AnchorMemberId); Assert.AreEqual(6, recovered.MemberCount);
                 var admitted = (await catalog.ReadNamespaceInitializationAsync(recoveryId, timeout.Token))!;
                 Assert.AreEqual(2, admitted.Version);
                 var bornReference = admitted.Roots.Single(root => root.RootId == bornRoot.RootId);
@@ -140,10 +150,16 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 Assert.AreEqual(nestedFirst.ItemId, actualChild.NativeItemId);
                 Assert.AreEqual(execution.RoleSid.Value,
                     (await catalog.ReadNamespaceMemberProtectionSnapshotAsync(bornRoot.MemberId, timeout.Token))!.Context.Protection.RoleSid);
+                var actualOffline = await runtime.InspectNamespaceMemberAsync("Offline", true, timeout.Token);
+                Assert.AreEqual(offlineRoot.MemberId, actualOffline.MemberId); Assert.AreEqual(anchorMember, actualOffline.ActualParentMemberId);
+                var offlineSpec = router.CreateRootPage().Children.Single(spec => spec.Name == "Offline");
+                Assert.ThrowsExactly<IOException>(() => router.Resolve("Offline", offlineSpec.Identity.Encode()));
+                await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() => Directory.Delete(Path.Combine(paths.SyncRootPath, "Offline")), timeout.Token));
+                Assert.IsTrue(Directory.Exists(Path.Combine(paths.SyncRootPath, "Offline")));
                 await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() => Directory.Delete(Path.Combine(paths.SyncRootPath, "More"), true), timeout.Token));
                 Assert.IsTrue(File.Exists(Path.Combine(paths.SyncRootPath, "More", "nested.bin")));
             }
-            TestContext.WriteLine("RegisteredSourcePopulation: normalExternalEnumeration=True; sourceNormalUser=True; productionRemoteBirthCoordinator=True; beforeNativeIntentPlanStart=True; maturePublicCreationAndSqlite=True; actualFirstBinding=True; inheritedProtectionVerified=True; membershipBeforePageReturn=True; reservationReleasedWithMembership=True; replayPreservesFirstObservation=True; newTopRootProtectedBirth=True; newRootNoOriginalCapture=True; nestedBirthUsesActualNewRoot=True; freshRuntimeAndRoleRecoveredBornRoot=True; currentAdmissionVersion2=True; nativeBindingAndFirstObservationPreserved=True; noFakeOriginal=True; hydration=False; defaultHostStartup=False.");
+            TestContext.WriteLine("RegisteredSourcePopulation: normalExternalEnumeration=True; sourceNormalUser=True; productionRemoteBirthCoordinator=True; beforeNativeIntentPlanStart=True; maturePublicCreationAndSqlite=True; actualFirstBinding=True; inheritedProtectionVerified=True; membershipBeforePageReturn=True; reservationReleasedWithMembership=True; replayPreservesFirstObservation=True; newTopRootProtectedBirth=True; newRootNoOriginalCapture=True; nestedBirthUsesActualNewRoot=True; freshRuntimeAndRoleRecoveredBornRoot=True; currentAdmissionVersion2=True; nativeBindingAndFirstObservationPreserved=True; disabledRootEntryCreatedWithoutSource=True; disabledRootProtectedAcrossOwners=True; disabledSourceAccessDenied=True; noFakeOriginal=True; hydration=False; defaultHostStartup=False.");
         }
         finally
         {

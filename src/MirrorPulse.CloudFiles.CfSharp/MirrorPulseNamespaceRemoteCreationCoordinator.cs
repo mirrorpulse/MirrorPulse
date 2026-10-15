@@ -35,7 +35,8 @@ public sealed class MirrorPulseNamespaceRemoteCreationCoordinator(CloudFileSyste
         var parent = fileSystem.GetDirectory(location.RelativePath);
         CloudItem item = directory ? parent.GetDirectory(specification.Name) : parent.GetFile(specification.Name);
         string path = item.RelativePath.Replace('\\', '/');
-        var route = router.Resolve(path, specification.Identity.Encode());
+        var route = parentMember.RootId is null ? router.ResolveRootEntry(path, specification.Identity.Encode()) :
+            router.Resolve(path, specification.Identity.Encode());
         var rootId = router.GetRegistration(route.InstanceId, route.RootKey).RootId;
         if (parentMember.RootId is { } parentRoot ? rootId != parentRoot : !directory || route.RelativePath.Length != 0)
             throw new InvalidDataException("The source identity belongs to another managed root.");

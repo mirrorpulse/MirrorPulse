@@ -245,6 +245,25 @@ public sealed class MirrorPulseRootRouterTests
         Assert.ThrowsExactly<InvalidDataException>(() => router.GetRelativePath(Path.Combine(syncRoot, "..", "outside")));
     }
 
+    [TestMethod]
+    public void DisabledRootEntryValidationDoesNotAuthorizeSourceAccessOrAChildIdentity()
+    {
+        string syncRoot = Path.Combine(Path.GetTempPath(), "MirrorPulse-tests", Guid.NewGuid().ToString("N"));
+        var instance = InstanceId.New();
+        var root = AdapterRootRegistrationMapper.Map(AdapterId.Parse("example.offline"), instance,
+            new AdapterRootDefinition("offline", "Offline", "Offline", false), RootRegistrationState.Disabled);
+        var router = new MirrorPulseRootRouter(syncRoot, [root]);
+        var identity = router.CreateRootPage().Children.Single().Identity;
+        var route = router.ResolveRootEntry(Path.Combine(syncRoot, "Offline"), identity.Encode());
+        Assert.AreEqual(instance, route.InstanceId); Assert.AreEqual("offline", route.RootKey); Assert.AreEqual(string.Empty, route.RelativePath);
+        Assert.ThrowsExactly<IOException>(() => router.Resolve("Offline", identity.Encode()));
+        Assert.ThrowsExactly<IOException>(() => router.ResolveUploadPath(instance, "offline", "child.txt"));
+        Assert.ThrowsExactly<InvalidDataException>(() => router.ResolveRootEntry("Offline/child", identity.Encode()));
+        Assert.ThrowsExactly<InvalidDataException>(() => router.ResolveRootEntry("Offline",
+            new CloudPlaceholderIdentity(identity.ItemId, "another-root", identity.RemoteRevision).Encode()));
+        Assert.ThrowsExactly<FileNotFoundException>(() => router.ResolveRootEntry("Unknown", identity.Encode()));
+    }
+
     private static RootRegistration CreateRoot(InstanceId instanceId, string label) =>
         AdapterRootRegistrationMapper.Map(
             AdapterId.Parse("example.drive"), instanceId,

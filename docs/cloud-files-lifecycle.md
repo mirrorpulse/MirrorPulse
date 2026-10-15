@@ -361,6 +361,9 @@ runtime protects and registers the actual sync-root anchor, audits the empty loc
 inventory, and retains its ancestor guard. A later owner performs a fresh current
 audit and role rotation. Empty recovery scopes drain the owner lifetime without
 admitting subsequently registered roots; versions 1 and 2 still require roots.
+Controlled first-level entry creation validates the complete configured root
+identity for active and disabled roots. Disabled entries can be protected locally;
+source enumeration, hydration and upload routing still reject disabled roots.
 
 An opt-in Windows test uses an external consumer process to enumerate a
 partial directory and read an online-only placeholder, then reopens the same

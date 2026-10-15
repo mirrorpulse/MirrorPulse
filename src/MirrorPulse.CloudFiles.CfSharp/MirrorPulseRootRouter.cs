@@ -92,10 +92,19 @@ public sealed class MirrorPulseRootRouter
 
     public bool IsSyncRoot(string callbackPath) => GetRelativePath(callbackPath).Length == 0;
 
-    public MirrorPulseRoutedItem Resolve(string callbackPath, ReadOnlySpan<byte> encodedIdentity)
+    public MirrorPulseRoutedItem Resolve(string callbackPath, ReadOnlySpan<byte> encodedIdentity) =>
+        ResolveIdentity(callbackPath, encodedIdentity, rootEntry: false);
+
+    // Local entry creation does not authorize source access for a disabled root.
+    internal MirrorPulseRoutedItem ResolveRootEntry(string callbackPath, ReadOnlySpan<byte> encodedIdentity) =>
+        ResolveIdentity(callbackPath, encodedIdentity, rootEntry: true);
+
+    private MirrorPulseRoutedItem ResolveIdentity(string callbackPath, ReadOnlySpan<byte> encodedIdentity, bool rootEntry)
     {
         (RootRegistration root, string innerPath) = FindRoot(callbackPath, allowHistoricalName: false);
-        if (root.State == RootRegistrationState.Disabled)
+        if (rootEntry && innerPath.Length != 0)
+            throw new InvalidDataException("Local root entry creation requires a configured first-level directory.");
+        if (!rootEntry && root.State == RootRegistrationState.Disabled)
         {
             throw new IOException("The Adapter instance is offline.");
         }
@@ -107,6 +116,8 @@ public sealed class MirrorPulseRootRouter
         {
             throw new InvalidDataException("The placeholder identity belongs to another Adapter root.");
         }
+        if (rootEntry && !encodedIdentity.SequenceEqual(CreateRootIdentity(root).Encode()))
+            throw new InvalidDataException("Local root entry creation requires its complete configured identity.");
 
         return new(root.InstanceId, root.UniquenessKey, innerPath);
     }
