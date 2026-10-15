@@ -58,6 +58,15 @@ HRESULT without paths, content or exception text.
 Other group decisions remain pending until their complete local operation can be
 applied; rejecting an action does not acknowledge any group member.
 
+The production planner may transfer explicitly supplied original `Prepared`
+intents only when their retained execution evidence is `NeverStarted`. It commits
+the superseding history, original ID ownership, final content and complete effect
+program in one product transaction. A later effect-ID collision or a changed
+baseline or object binding rolls back the entire transfer. Unknown, started,
+accepted and rejected original intents retain their existing execution path.
+The transferred original payloads remain immutable even when later edits change
+the final content hash; a current path cannot replace their historical binding.
+
 The native production-pump regression injects a failure after effect completion
 and before original acknowledgement. It then reopens the library owner and
 requires one remote upload, retained native confirmation, and acknowledgement of

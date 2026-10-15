@@ -26,8 +26,15 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
     public Task NativeProductionPumpResolvesAGroupConflictWithADistinctAuthorizedAttemptAndRecoversItsOriginalAcknowledgements() =>
         RunProductionCoalescingScenarioAsync(resolveConflict: true);
 
+    [TestMethod]
+    [DoNotParallelize]
+    [TestCategory("NativeCloudFiles")]
     [SupportedOSPlatform("windows10.0.26100")]
-    private async Task RunProductionCoalescingScenarioAsync(bool resolveConflict)
+    public Task NativeProductionPumpAtomicallyTransfersNeverStartedIntentAndRecoversAllOriginalAcknowledgements() =>
+        RunProductionCoalescingScenarioAsync(resolveConflict: false, prepareOriginal: true);
+
+    [SupportedOSPlatform("windows10.0.26100")]
+    private async Task RunProductionCoalescingScenarioAsync(bool resolveConflict, bool prepareOriginal = false)
     {
         if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
             Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
@@ -42,6 +49,7 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(65));
         Guid planId = Guid.Empty; Guid[] originals = []; Guid effectId = Guid.Empty;
         Guid? retryCommandId = null;
+        MirrorPulseMutationIntent? transferredOriginal = null;
         try
         {
             registry.Register(new(paths.SyncRootPath, "0.1.0", Guid.NewGuid(), [1, 2, 3]));
@@ -64,6 +72,19 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
                     while (!(window = await source.ReadPendingAsync(timeout.Token)).ReadyCommands.Any(command => command.RelativePath == "coalesced.txt"))
                         await Task.Delay(25, timeout.Token);
                     Guid first = window.ReadyCommands.First(command => command.RelativePath == "coalesced.txt").OperationId;
+                    if (prepareOriginal)
+                    {
+                        var command = window.ReadyCommands.Single(candidate => candidate.OperationId == first);
+                        Assert.AreEqual(MirrorPulseWorkerChangeKind.Create, command.Kind);
+                        var cloudFile = fileSystem.GetFile("Docs/coalesced.txt");
+                        var binding = await new MirrorPulseNamespaceContentConfirmation(catalog, router).CaptureUploadBindingAsync(
+                            cloudFile, await cloudFile.InspectAsync(timeout.Token), timeout.Token);
+                        byte[] initial = await File.ReadAllBytesAsync(file, timeout.Token);
+                        transferredOriginal = new(first, instance, "docs", command.Kind, command.RelativePath, command.PreviousRelativePath,
+                            false, null, initial.Length, Convert.ToHexString(SHA256.HashData(initial)), MirrorPulseMutationOrigin.Journal, binding);
+                        var prepared = await catalog.PrepareMutationAsync(transferredOriginal, timeout.Token);
+                        Assert.AreEqual(MirrorPulseMutationExecutionEvidence.NeverStarted, prepared.ExecutionEvidence);
+                    }
                     await File.WriteAllTextAsync(file, "final coalesced bytes", timeout.Token);
                     while ((window = await source.ReadPendingAsync(timeout.Token)).ReadyCommands.Count(command => command.RelativePath == "coalesced.txt") < 2)
                         await Task.Delay(25, timeout.Token);
@@ -106,6 +127,19 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
                     var execution = (await catalog.ReadJournalCoalescingExecutionAsync(plan.PlanId, timeout.Token))!;
                     Assert.AreEqual(MirrorPulseCoalescedEffect.CreateFile, plan.Effect); Assert.HasCount(1, execution.Steps);
                     var current = await catalog.PrepareJournalCoalescingMutationAsync(plan.PlanId, 0, timeout.Token);
+                    if (prepareOriginal)
+                    {
+                        Assert.IsNotNull(transferredOriginal);
+                        Assert.HasCount(1, execution.OriginalMutations);
+                        Assert.AreEqual(transferredOriginal.OperationId, execution.OriginalMutations[0].OperationId);
+                        var original = (await catalog.ReadMutationAsync(transferredOriginal.OperationId, timeout.Token))!;
+                        Assert.AreEqual(transferredOriginal, original.Intent);
+                        Assert.AreEqual(MirrorPulseMutationState.Superseded, original.State);
+                        Assert.AreEqual(MirrorPulseMutationExecutionEvidence.NeverStarted, original.ExecutionEvidence);
+                        Assert.AreEqual(plan.PlanId, original.SupersededByPlanId);
+                        Assert.AreNotEqual(transferredOriginal.ContentSha256, execution.Content!.Sha256);
+                        Assert.AreEqual(transferredOriginal.UploadBinding!.LocalObject, execution.Content.UploadBinding.LocalObject);
+                    }
                     if (owner == 0)
                     { planId = plan.PlanId; originals = plan.Members.Select(member => member.OperationId).ToArray(); effectId = current.Intent.OperationId; }
                     else { Assert.AreEqual(planId, plan.PlanId); Assert.AreEqual(effectId, current.Intent.OperationId); }
@@ -130,7 +164,8 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
                     await transaction.RollbackAsync(timeout.Token);
                     TestContext.WriteLine($"ProductionCoalescing: owner={owner}; originalCount={originals.Length}; separateEffectId=True; " +
                         "remoteUploads=1; actualNativeConfirmation=True; officialProjection=True; originalIdsRetainedAtCut=True; " +
-                        $"reopenedOwnerDoesNotRedispatch=True; wholeOriginalGroupAcknowledged=True; authorizedGroupRetry={resolveConflict}; strictHostIntegration=False.");
+                        $"reopenedOwnerDoesNotRedispatch=True; wholeOriginalGroupAcknowledged=True; authorizedGroupRetry={resolveConflict}; " +
+                        $"explicitNeverStartedTransfer={prepareOriginal}; strictHostIntegration=False.");
                 }
             }
         }

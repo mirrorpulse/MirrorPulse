@@ -27,22 +27,35 @@ public sealed partial class MirrorPulseJournalUploadPump
             {
                 var window = _planningBatch!.CompleteWindow!;
                 var committed = new HashSet<Guid>();
+                var unstarted = new Dictionary<Guid, MirrorPulseMutationIntent>();
                 foreach (var observation in window.Where(observation => observation.ItemId == command.ItemId))
-                    if (await _catalog.ReadMutationAsync(observation.OperationId, token).ConfigureAwait(false) is not null ||
-                        await _catalog.ReadJournalCoalescingOwnerAsync(observation.OperationId, token).ConfigureAwait(false) is not null)
+                {
+                    var existing = await _catalog.ReadMutationAsync(observation.OperationId, token).ConfigureAwait(false);
+                    if (await _catalog.ReadJournalCoalescingOwnerAsync(observation.OperationId, token).ConfigureAwait(false) is not null)
                         committed.Add(observation.OperationId);
+                    else if (existing is
+                    {
+                        State: MirrorPulseMutationState.Prepared,
+                        ExecutionEvidence: MirrorPulseMutationExecutionEvidence.NeverStarted, Intent.Origin: MirrorPulseMutationOrigin.Journal
+                    })
+                        unstarted.Add(observation.OperationId, existing.Intent);
+                    else if (existing is not null) committed.Add(observation.OperationId);
+                }
                 plan = MirrorPulseJournalCoalescingPlanner.TryPlan(window, command.ItemId!.Value,
                     _planningBatch.WindowUpperSequence, committed);
                 if (plan is null || plan.Members[0].OperationId != command.OperationId) return null;
                 var ready = _planningBatch.ReadyCommands.Select(candidate => candidate.OperationId).ToHashSet();
                 if (plan.Members.Any(member => !ready.Contains(member.OperationId))) return null;
+                var originals = plan.Members.Where(member => unstarted.ContainsKey(member.OperationId))
+                    .Select(member => unstarted[member.OperationId]).ToArray();
                 string localPath = _router.ResolveUploadPath(plan.InstanceId, plan.RootKey, plan.FinalPath);
                 string relative = Path.GetRelativePath(_syncRootPath, localPath).Replace(Path.DirectorySeparatorChar, '/');
-                string? baseline = await MirrorPulseJournalUploadRevisionGuard.ResolveAsync(_state.OpenStore, _stats, command,
+                string? baseline = originals.Length > 0 ? originals[0].ExpectedRevision :
+                    await MirrorPulseJournalUploadRevisionGuard.ResolveAsync(_state.OpenStore, _stats, command,
                     relative, remoteStatPath: plan.OriginalPath,
                     allowTombstone: plan.Effect is MirrorPulseCoalescedEffect.DeleteFile or MirrorPulseCoalescedEffect.VerifyRemoteAbsence,
                     cancellationToken: token).ConfigureAwait(false);
-                if (plan.Effect is MirrorPulseCoalescedEffect.CreateFile or MirrorPulseCoalescedEffect.UpdateFile &&
+                if (originals.Length == 0 && plan.Effect is MirrorPulseCoalescedEffect.CreateFile or MirrorPulseCoalescedEffect.UpdateFile &&
                     MirrorPulseJournalContentPolicy.IsAcceptedObservation(await _fileSystem!.GetFile(relative).InspectAsync(token).ConfigureAwait(false),
                         _router.GetRegistration(plan.InstanceId, plan.RootKey), baseline))
                 {
@@ -54,6 +67,7 @@ public sealed partial class MirrorPulseJournalUploadPump
                     foreach (var member in plan.Members) _completedCoalescedOriginals.Add(member.OperationId);
                     return true;
                 }
+                MirrorPulseCoalescingContent? final = null;
                 if (plan.Effect is MirrorPulseCoalescedEffect.CreateFile or MirrorPulseCoalescedEffect.UpdateFile or MirrorPulseCoalescedEffect.MoveAndUpdateFile)
                 {
                     await using var content = new FileStream(localPath, FileMode.Open, FileAccess.Read, FileShare.Read,
@@ -61,12 +75,14 @@ public sealed partial class MirrorPulseJournalUploadPump
                     var file = _fileSystem!.GetFile(relative);
                     var binding = await _contentConfirmation.CaptureUploadBindingAsync(file,
                         await file.InspectAsync(token).ConfigureAwait(false), token).ConfigureAwait(false);
-                    var final = new MirrorPulseCoalescingContent(content.Length,
+                    final = new MirrorPulseCoalescingContent(content.Length,
                         Convert.ToHexString(await SHA256.HashDataAsync(content, token).ConfigureAwait(false)), binding);
-                    _ = await _catalog.PrepareJournalCoalescingAndExecutionAsync(plan, window, baseline, final, token).ConfigureAwait(false);
                 }
+                if (originals.Length == 0)
+                    _ = await _catalog.PrepareJournalCoalescingAndExecutionAsync(plan, window, baseline, final, token).ConfigureAwait(false);
                 else
-                    _ = await _catalog.PrepareJournalCoalescingAndExecutionAsync(plan, window, baseline, cancellationToken: token).ConfigureAwait(false);
+                    _ = await _catalog.PrepareJournalCoalescingAndExecutionWithUnstartedIntentsAsync(plan, window, originals,
+                        baseline, final, token).ConfigureAwait(false);
             }
             RequireOriginalObservation(plan, command);
             if (_mutations is null || _fileSystem is null)
