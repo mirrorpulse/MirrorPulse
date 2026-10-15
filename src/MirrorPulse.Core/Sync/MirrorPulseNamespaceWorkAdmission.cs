@@ -69,10 +69,12 @@ public sealed class MirrorPulseNamespaceWorkAdmission : IAsyncDisposable
     }
 
     /// <summary>Closes all selected roots atomically, then drains already accepted work.</summary>
-    /// <remarks>Failure or cancellation leaves the roots closed; it never restores stale readiness.</remarks>
+    /// <remarks>Failure or cancellation leaves the roots closed; it never restores stale readiness.
+    /// An empty inventory retains the owner lifecycle while its sync-root anchor is
+    /// recovered. Completing that scope grants no root admission.</remarks>
     public async ValueTask<RecoveryLease> BeginRecoveryAsync(IEnumerable<RootId> roots, CancellationToken cancellationToken = default)
     {
-        RootId[] requested = Normalize(roots, allowEmpty: false); cancellationToken.ThrowIfCancellationRequested();
+        RootId[] requested = Normalize(roots, allowEmpty: true); cancellationToken.ThrowIfCancellationRequested();
         Guid owner = Guid.NewGuid(); Task[] pending;
         lock (_gate)
         {

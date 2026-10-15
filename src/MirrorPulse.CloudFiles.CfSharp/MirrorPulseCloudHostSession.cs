@@ -381,7 +381,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                         await MirrorPulseNamespaceInitializationCoordinator.RequireOriginalGraphAsync(catalog, registrations, selectedRoots, token).ConfigureAwait(false);
                     else if (!selectedRoots.SequenceEqual(await MirrorPulseNamespaceCurrentRootSelector.SelectAsync(fileSystem, catalog, registrations, token).ConfigureAwait(false)))
                         throw new InvalidDataException("Current root provenance changed while earlier work drained.");
-                    await catalog.PrepareNamespaceInitializationAsync(new(selectedRoots.Any(root => root.BornRootMemberId is not null) ? 2 : 1,
+                    await catalog.PrepareNamespaceInitializationAsync(new(selectedRoots.Count == 0 ? 3 : selectedRoots.Any(root => root.BornRootMemberId is not null) ? 2 : 1,
                         operationId, selectedRoots, DateTimeOffset.UtcNow)
                     { RequestedInventoryKind = inventoryKind }, token).ConfigureAwait(false);
                 }

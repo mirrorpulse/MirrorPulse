@@ -16,6 +16,8 @@ public sealed record MirrorPulseNamespaceInitializationRoot(RootId RootId, Guid 
 }
 
 /// <summary>Immutable initialization admission; this is neither permission evidence nor tree readiness.</summary>
+/// <remarks>Version 3 explicitly admits an empty Adapter inventory with a selected recovery route.
+/// Versions 1 and 2 retain their nonempty root requirements and historical payloads.</remarks>
 public sealed record MirrorPulseNamespaceInitializationIntent(int Version, Guid OperationId,
     IReadOnlyList<MirrorPulseNamespaceInitializationRoot> Roots, DateTimeOffset PreparedAt)
 {
@@ -197,7 +199,8 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task RequireNamespaceInitializationTerminalAsync(MirrorPulseNamespaceInitializationIntent intent,
         MirrorPulseNamespaceInitializationCompletion completion, SqliteTransaction transaction, CancellationToken token)
     {
-        if (completion.CompletedAt < intent.PreparedAt || intent.RequestedInventoryKind is { } requested && requested != completion.InventoryKind)
+        if ((intent.Version == 3 ? completion.MemberCount != 1 : completion.MemberCount < 2) ||
+            completion.CompletedAt < intent.PreparedAt || intent.RequestedInventoryKind is { } requested && requested != completion.InventoryKind)
             throw new InvalidDataException("Initialization completion disagrees with its admission chronology or requested inventory kind.");
         await using SqliteCommand query = _connection.CreateCommand(); query.Transaction = transaction;
         query.CommandText = "SELECT COUNT(*) FROM namespace_initialization_roots WHERE operation_id=$id;";
@@ -213,10 +216,11 @@ public sealed partial class MirrorPulseProductCatalog
     private static void ValidateNamespaceInitialization(MirrorPulseNamespaceInitializationIntent intent)
     {
         ArgumentNullException.ThrowIfNull(intent);
-        if (intent.Version is not (1 or 2) || intent.OperationId == Guid.Empty || intent.PreparedAt == default || intent.Roots is null ||
+        if (intent.Version is not (1 or 2 or 3) || intent.OperationId == Guid.Empty || intent.PreparedAt == default || intent.Roots is null ||
             intent.RequestedInventoryKind is { } requested && !Enum.IsDefined(requested) ||
             intent.Version == 2 && intent.RequestedInventoryKind != MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory ||
-            intent.Roots.Count is < 1 or > 4096 || intent.Roots.Any(root => root is null || root.RootId.Value == Guid.Empty ||
+            intent.Version == 3 && (intent.Roots.Count != 0 || intent.RequestedInventoryKind is null) ||
+            intent.Version != 3 && intent.Roots.Count == 0 || intent.Roots.Count > 4096 || intent.Roots.Any(root => root is null || root.RootId.Value == Guid.Empty ||
                 (root.BornRootMemberId is { } born ? intent.Version != 2 || born == Guid.Empty || root.ManifestId != Guid.Empty : root.ManifestId == Guid.Empty)) ||
             intent.Roots.Select(root => root.RootId).Distinct().Count() != intent.Roots.Count ||
             intent.Roots.Where(root => root.BornRootMemberId is null).Select(root => root.ManifestId).Distinct().Count() != intent.Roots.Count(root => root.BornRootMemberId is null) ||

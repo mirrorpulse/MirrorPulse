@@ -101,6 +101,27 @@ public sealed partial class MirrorPulseNamespacePermissionTreeCatalogTests
 
     private static DateTimeOffset AuditTime(MirrorPulseNamespacePermissionTreeDefinition definition) => definition.Anchor.Intent.PreparedAt.AddSeconds(10);
 
+    [TestMethod]
+    public async Task LegacyInitializationCannotAdoptAnAnchorOnlyCompletionEvenWithAValidPayloadHash()
+    {
+        using var fixture = new CatalogFixture(); await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        var (definition, captures) = Tree();
+        var intent = Initialization(definition.Anchor.Intent.RootId!.Value) with { Roots = [new(definition.Anchor.Intent.RootId.Value, definition.ManifestId)] };
+        await catalog.PrepareNamespaceInitializationAsync(intent);
+        var members = await RegisterInitializationOriginalsAsync(catalog, definition, captures);
+        var completed = await catalog.CompleteNamespaceInitializationAsync(intent.OperationId, members, AuditTime(definition));
+        byte[] payload = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(completed with { MemberCount = 1 },
+            System.Text.Json.JsonSerializerOptions.Web);
+        await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        { DataSource = fixture.Paths.ProductCatalogDatabasePath, Pooling = false }.ToString());
+        await connection.OpenAsync(); await using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE namespace_initialization_completions SET payload=$payload,fingerprint=$hash WHERE operation_id=$id;";
+        command.Parameters.AddWithValue("$payload", payload); command.Parameters.AddWithValue("$hash", System.Security.Cryptography.SHA256.HashData(payload));
+        command.Parameters.AddWithValue("$id", intent.OperationId.ToString("D")); Assert.AreEqual(1, await command.ExecuteNonQueryAsync());
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(() => catalog.ReadNamespaceInitializationCompletionAsync(intent.OperationId));
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(() => catalog.ReadPendingNamespaceInitializationsAsync());
+    }
+
     private static async Task<MirrorPulseNamespaceMemberProtectionSnapshot[]> RegisterInitializationOriginalsAsync(MirrorPulseProductCatalog catalog,
         MirrorPulseNamespacePermissionTreeDefinition definition, MirrorPulseNamespacePermissionTreeMember[] captures)
     {

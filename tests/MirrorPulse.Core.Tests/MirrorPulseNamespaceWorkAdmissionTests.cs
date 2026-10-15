@@ -101,6 +101,20 @@ public sealed class MirrorPulseNamespaceWorkAdmissionTests
         Assert.IsFalse(nextHost.IsAdmitted(root)); Assert.IsFalse(nextHost.IsAdmitted(extra));
     }
 
+    [TestMethod]
+    public async Task EmptyRecoveryDrainsTheOwnerWithoutAdmittingALaterRegisteredRoot()
+    {
+        var admission = new MirrorPulseNamespaceWorkAdmission([]);
+        var recovery = await admission.BeginRecoveryAsync([]);
+        RootId added = RootId.New(); admission.Register(added);
+        Assert.IsFalse(admission.IsAdmitted(added));
+        Assert.ThrowsExactly<InvalidOperationException>(() => admission.Enter([added]));
+        var disposal = admission.DisposeAsync().AsTask(); Assert.IsFalse(disposal.IsCompleted);
+        recovery.CompleteAfterFreshAudit(); await recovery.DisposeAsync();
+        await disposal.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.IsFalse(admission.IsAdmitted(added));
+    }
+
     private static async Task OpenAsync(MirrorPulseNamespaceWorkAdmission admission, params RootId[] roots)
     {
         await using var recovery = await admission.BeginRecoveryAsync(roots); recovery.CompleteAfterFreshAudit();

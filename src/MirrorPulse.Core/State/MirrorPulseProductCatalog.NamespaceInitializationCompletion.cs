@@ -14,7 +14,7 @@ public sealed partial class MirrorPulseProductCatalog
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(auditedMembers);
-        if (operationId == Guid.Empty || observedAt == default || auditedMembers.Count is < 2 or > 1_000_001)
+        if (operationId == Guid.Empty || observedAt == default || auditedMembers.Count is < 1 or > 1_000_001)
             throw new ArgumentException("Initialization completion requires an anchor and a bounded native-audited original inventory.");
         var supplied = auditedMembers.ToArray();
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -23,6 +23,8 @@ public sealed partial class MirrorPulseProductCatalog
             ThrowIfDisposed(); using SqliteTransaction transaction = _connection.BeginTransaction();
             var intent = await ReadNamespaceInitializationCoreAsync(operationId, transaction, cancellationToken).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The original initialization admission is missing.");
+            if (intent.Version != 3 && supplied.Length < 2)
+                throw new ArgumentException("A nonempty Adapter inventory requires its anchor and original root members.", nameof(auditedMembers));
             if (intent.RequestedInventoryKind is { } requested && requested != MirrorPulseNamespaceInitializationInventoryKind.OriginalInventory)
                 throw new InvalidOperationException("The pending initializer requires current-inventory recovery.");
             var completed = await ReadNamespaceInitializationCompletionCoreAsync(operationId, transaction, cancellationToken).ConfigureAwait(false);
@@ -47,6 +49,9 @@ public sealed partial class MirrorPulseProductCatalog
                 throw new InvalidDataException("The audited inventory duplicates original provenance.");
             var byOriginal = originals.ToDictionary(member => member.Context.Member.OriginId);
             var expected = new HashSet<Guid> { anchor.Context.Member.MemberId };
+            if (intent.Version == 3 && (await ReadNamespaceMemberTreeCoreAsync(anchor.Context.Member.MemberId,
+                transaction, cancellationToken).ConfigureAwait(false)).Count != 1)
+                throw new InvalidDataException("An empty Adapter inventory cannot hide registered descendants below the sync-root anchor.");
             foreach (var root in intent.Roots)
             {
                 var tree = await ReadPermissionTreeCoreAsync(root.ManifestId, cancellationToken, transaction).ConfigureAwait(false)
@@ -144,7 +149,7 @@ public sealed partial class MirrorPulseProductCatalog
             throw new InvalidDataException("The initialization completion fingerprint changed.");
         var result = JsonSerializer.Deserialize<MirrorPulseNamespaceInitializationCompletion>(payload, TopologyJsonOptions)
             ?? throw new InvalidDataException("The initialization completion is missing.");
-        if (result.OperationId != operationId || result.AnchorMemberId == Guid.Empty || result.MemberCount < 2 || result.CompletedAt == default ||
+        if (result.OperationId != operationId || result.AnchorMemberId == Guid.Empty || result.MemberCount < 1 || result.CompletedAt == default ||
             !Enum.IsDefined(result.InventoryKind) ||
             result.CatalogFingerprint is not { Length: 64 } || !result.CatalogFingerprint.All(char.IsAsciiHexDigitUpper) ||
             !new SecurityIdentifier(result.RoleSid).IsWellKnown(WellKnownSidType.LogonIdsSid))

@@ -355,6 +355,13 @@ cannot accidentally use a disposed store. Full default Host bootstrap, pending
 namespace-operation recovery and independent root failure recovery remain
 separate integration work.
 
+Explicit runtime initialization also supports a user with no configured Adapters.
+Version 3 retains an empty root inventory and its chosen recovery route. The
+runtime protects and registers the actual sync-root anchor, audits the empty local
+inventory, and retains its ancestor guard. A later owner performs a fresh current
+audit and role rotation. Empty recovery scopes drain the owner lifetime without
+admitting subsequently registered roots; versions 1 and 2 still require roots.
+
 An opt-in Windows test uses an external consumer process to enumerate a
 partial directory and read an online-only placeholder, then reopens the same
 CfSharp database and reads again. Another test exits a separate process with

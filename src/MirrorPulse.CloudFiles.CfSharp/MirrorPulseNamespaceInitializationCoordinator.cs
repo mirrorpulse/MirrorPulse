@@ -42,12 +42,11 @@ public sealed class MirrorPulseNamespaceInitializationCoordinator(CloudFileSyste
             return new(completed, null);
         }
         var registrations = router.Registrations.OrderBy(root => root.RootId.Value).ToArray();
-        if (registrations.Length == 0) throw new InvalidOperationException("Original-tree initialization requires configured Adapter roots.");
         if (retained is null)
         {
             var roots = await SelectOriginalRootsAsync(catalog, registrations, false, cancellationToken).ConfigureAwait(false);
             await RequireOriginalGraphAsync(catalog, registrations, roots, cancellationToken).ConfigureAwait(false);
-            retained = await catalog.PrepareNamespaceInitializationAsync(new(1, operationId, roots, DateTimeOffset.UtcNow)
+            retained = await catalog.PrepareNamespaceInitializationAsync(new(roots.Count == 0 ? 3 : 1, operationId, roots, DateTimeOffset.UtcNow)
             { RequestedInventoryKind = MirrorPulseNamespaceInitializationInventoryKind.OriginalInventory }, cancellationToken).ConfigureAwait(false);
         }
         if (!retained.Roots.Select(root => root.RootId).ToHashSet().SetEquals(registrations.Select(root => root.RootId)))
@@ -70,6 +69,11 @@ public sealed class MirrorPulseNamespaceInitializationCoordinator(CloudFileSyste
         {
             var registration = new MirrorPulseNamespaceOriginalTreeRegistration(fileSystem, catalog, router, execution, actor, scheduler);
             var members = new Dictionary<Guid, MirrorPulseNamespaceMemberRegistration>();
+            if (retained.Roots.Count == 0)
+            {
+                var member = await registration.RegisterAnchorAsync(anchor, cancellationToken).ConfigureAwait(false);
+                members.Add(member.MemberId, member);
+            }
             foreach (var root in retained.Roots)
                 foreach (var member in await registration.RegisterAsync(root.ManifestId, anchor, cancellationToken).ConfigureAwait(false))
                     members.TryAdd(member.MemberId, member);

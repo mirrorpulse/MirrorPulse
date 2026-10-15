@@ -16,6 +16,18 @@ public sealed class MirrorPulseNamespaceOriginalTreeRegistration(CloudFileSystem
     MirrorPulseRootRouter router, MirrorPulseNamespaceExecutionSession execution, MirrorPulseNamespaceActor actor,
     MirrorPulseInstanceScheduler scheduler)
 {
+    internal ValueTask<MirrorPulseNamespaceMemberRegistration> RegisterAnchorAsync(MirrorPulseNamespaceAnchorProtection anchor,
+        CancellationToken cancellationToken) => actor.RunAsync(async token =>
+        {
+            actor.AssertAccess(); MirrorPulseNamespaceMemberRegistration result = null!;
+            await execution.RunNamespaceOperationAsync(async () =>
+            {
+                await RequireAnchorAsync(anchor, token).ConfigureAwait(false);
+                result = await RegisterOneAsync(anchor.Original, null, fileSystem.Root, null, token).ConfigureAwait(false);
+            }).ConfigureAwait(false);
+            return result;
+        }, cancellationToken);
+
     public async ValueTask<IReadOnlyList<MirrorPulseNamespaceMemberRegistration>> RegisterAsync(Guid manifestId,
         MirrorPulseNamespaceAnchorProtection anchor, CancellationToken cancellationToken = default)
     {
@@ -31,14 +43,9 @@ public sealed class MirrorPulseNamespaceOriginalTreeRegistration(CloudFileSystem
             await execution.RunNamespaceOperationAsync(async () =>
             {
                 var current = router.GetRegistration(registration.InstanceId, registration.UniquenessKey);
-                if (current.RootId != registration.RootId || current.DirectoryName != tree.Definition.Anchor.Intent.RelativePath ||
-                    anchor.Original.RootId is not null || anchor.Original.RelativePath.Length != 0 ||
-                    anchor.Change.Intent.RoleSid != execution.RoleSid.Value || anchor.Change.Phase != MirrorPulseNamespacePermissionPhase.Verified ||
-                    anchor.Result.Permission?.Outcome is not (MirrorPulseNamespacePermissionOutcome.Verified or MirrorPulseNamespacePermissionOutcome.AlreadyVerified) ||
-                    anchor.Result.Receipt is not { Outcome: CloudProtectedLocalOperationOutcome.Completed, Drained: true })
-                    throw new InvalidDataException("Initial registration requires the unchanged root mapping and verified live anchor role.");
-                if (await catalog.ReadNamespacePermissionChangeAsync(anchor.Change.Intent.OperationId, stop).ConfigureAwait(false) != anchor.Change)
-                    throw new InvalidDataException("The admitted anchor permission epoch changed.");
+                if (current.RootId != registration.RootId || current.DirectoryName != tree.Definition.Anchor.Intent.RelativePath)
+                    throw new InvalidDataException("Initial registration requires the unchanged root mapping.");
+                await RequireAnchorAsync(anchor, stop).ConfigureAwait(false);
                 // Revalidate the complete immutable seal before registering even the anchor.
                 await catalog.SealNamespacePermissionTreeAsync(manifestId, tree.Seal!.SealedAt, stop).ConfigureAwait(false);
                 var captures = new List<MirrorPulseNamespacePermissionTreeMember>(tree.CapturedMembers);
@@ -69,6 +76,18 @@ public sealed class MirrorPulseNamespaceOriginalTreeRegistration(CloudFileSystem
             }).ConfigureAwait(false);
             return result;
         }, token), cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task RequireAnchorAsync(MirrorPulseNamespaceAnchorProtection anchor, CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(anchor);
+        if (anchor.Original.RootId is not null || anchor.Original.RelativePath.Length != 0 || !anchor.Original.IsDirectory ||
+            anchor.Change.Intent.RoleSid != execution.RoleSid.Value || anchor.Change.Phase != MirrorPulseNamespacePermissionPhase.Verified ||
+            anchor.Result.Permission?.Outcome is not (MirrorPulseNamespacePermissionOutcome.Verified or MirrorPulseNamespacePermissionOutcome.AlreadyVerified) ||
+            anchor.Result.Receipt is not { Outcome: CloudProtectedLocalOperationOutcome.Completed, Drained: true })
+            throw new InvalidDataException("Initial registration requires a verified live sync-root anchor role.");
+        if (await catalog.ReadNamespacePermissionChangeAsync(anchor.Change.Intent.OperationId, token).ConfigureAwait(false) != anchor.Change)
+            throw new InvalidDataException("The admitted anchor permission epoch changed.");
     }
 
     private async Task<MirrorPulseNamespaceMemberRegistration> RegisterOneAsync(MirrorPulseNamespacePermissionBaseline original,

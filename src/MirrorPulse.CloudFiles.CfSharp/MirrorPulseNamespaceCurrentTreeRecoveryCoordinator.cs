@@ -28,11 +28,10 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
             return new(historical, null);
         }
         var registrations = router.Registrations.OrderBy(root => root.RootId.Value).ToArray();
-        if (registrations.Length == 0) throw new InvalidOperationException("Current graph recovery requires configured Adapter roots.");
         if (retained is null)
         {
             var roots = await MirrorPulseNamespaceCurrentRootSelector.SelectAsync(fileSystem, catalog, registrations, cancellationToken).ConfigureAwait(false);
-            retained = await catalog.PrepareNamespaceInitializationAsync(new(roots.Any(root => root.BornRootMemberId is not null) ? 2 : 1,
+            retained = await catalog.PrepareNamespaceInitializationAsync(new(roots.Count == 0 ? 3 : roots.Any(root => root.BornRootMemberId is not null) ? 2 : 1,
                 operationId, roots, DateTimeOffset.UtcNow)
             { RequestedInventoryKind = MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory }, cancellationToken).ConfigureAwait(false);
         }
