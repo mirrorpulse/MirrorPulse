@@ -36,6 +36,7 @@ public sealed partial class MirrorPulseCliOriginalTreeRecoveryTests
             else Assert.AreEqual("CurrentInventoryRecoveryRequired", data.GetProperty("recoveryCode").GetString());
             Assert.IsFalse(data.TryGetProperty("roleSid", out _)); Assert.IsFalse(data.TryGetProperty("catalogFingerprint", out _));
             Assert.IsFalse(data.TryGetProperty("treeReady", out _));
+            Assert.IsFalse(data.TryGetProperty("scopeRootId", out _));
             foreach (string[] invalid in new string[][] { ["extra"], ["--operation-id"], ["--operation-id", "invalid"],
                 ["--operation-id", Guid.Empty.ToString("D")], ["--unexpected", operation.ToString("D")] })
                 Assert.AreEqual(2, await RunAsync(operations, "recover-current", invalid, TextWriter.Null, TextWriter.Null));

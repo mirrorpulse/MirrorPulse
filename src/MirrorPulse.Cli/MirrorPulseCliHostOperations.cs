@@ -390,17 +390,25 @@ public sealed class MirrorPulseCliHostOperations : IMirrorPulseCliHostOperations
                         initializations.Select(attempt => $"{attempt.OperationId:D} · {attempt.Phase} · {attempt.RootIds.Count} roots"));
                     break;
                 case ("namespace", "protection") when command.Path.Count > 2 &&
-                    (command.Path[2].Equals("initialize", StringComparison.OrdinalIgnoreCase) || command.Path[2].Equals("recover-current", StringComparison.OrdinalIgnoreCase)):
+                    (command.Path[2].Equals("initialize", StringComparison.OrdinalIgnoreCase) || command.Path[2].Equals("recover-current", StringComparison.OrdinalIgnoreCase) ||
+                     command.Path[2].Equals("recover-root", StringComparison.OrdinalIgnoreCase)):
                     bool currentInventory = command.Path[2].Equals("recover-current", StringComparison.OrdinalIgnoreCase);
+                    bool scopedInventory = command.Path[2].Equals("recover-root", StringComparison.OrdinalIgnoreCase);
+                    Guid recoveryRoot = Guid.Empty;
+                    if (scopedInventory && (command.Arguments.Count == 0 ||
+                        !Guid.TryParse(command.Arguments[0], out recoveryRoot) || recoveryRoot == Guid.Empty))
+                        throw new ArgumentException("Selected-root recovery requires one nonempty root ID.");
+                    int optionStart = scopedInventory ? 1 : 0;
                     Guid initializationId = Guid.NewGuid();
-                    if (command.Arguments.Count != 0 && (command.Arguments.Count != 2 ||
-                        !command.Arguments[0].Equals("--operation-id", StringComparison.OrdinalIgnoreCase) ||
-                        !Guid.TryParse(command.Arguments[1], out initializationId) || initializationId == Guid.Empty))
+                    if (command.Arguments.Count != optionStart && (command.Arguments.Count != optionStart + 2 ||
+                        !command.Arguments[optionStart].Equals("--operation-id", StringComparison.OrdinalIgnoreCase) ||
+                        !Guid.TryParse(command.Arguments[optionStart + 1], out initializationId) || initializationId == Guid.Empty))
                         throw new ArgumentException("Namespace initialization accepts --operation-id GUID once.");
                     MirrorPulseControlNamespaceInitialization initialized;
                     try
                     {
-                        initialized = currentInventory ? await _client.RecoverNamespaceCurrentTreeAsync(initializationId, cancellationToken).ConfigureAwait(false)
+                        initialized = scopedInventory ? await _client.RecoverNamespaceRootAsync(initializationId, recoveryRoot, cancellationToken).ConfigureAwait(false)
+                            : currentInventory ? await _client.RecoverNamespaceCurrentTreeAsync(initializationId, cancellationToken).ConfigureAwait(false)
                             : await _client.InitializeNamespaceProtectionAsync(initializationId, cancellationToken).ConfigureAwait(false);
                     }
                     catch (MirrorPulseControlException exception)
@@ -411,7 +419,7 @@ public sealed class MirrorPulseCliHostOperations : IMirrorPulseCliHostOperations
                             problem.Retryable, problem.DiagnosticId), exception.RequestId);
                     }
                     result = initialized;
-                    human = $"{(currentInventory ? "Current namespace recovery" : "Original namespace initialization")} {initialized.Phase} · {initialized.OperationId:D} · " +
+                    human = $"{(scopedInventory ? $"Root {recoveryRoot:D} recovery" : currentInventory ? "Current namespace recovery" : "Original namespace initialization")} {initialized.Phase} · {initialized.OperationId:D} · " +
                         (initialized.MemberCount is { } auditedCount ? $"{auditedCount} members" : "member count pending");
                     exitCode = initialized.Phase == "Completed" ? MirrorPulseControlExitCodes.Success : MirrorPulseControlExitCodes.Pending;
                     break;
@@ -421,7 +429,7 @@ public sealed class MirrorPulseCliHostOperations : IMirrorPulseCliHostOperations
                         throw new ArgumentException("Namespace initialization status requires one operation ID.");
                     var initializationStatus = await _client.GetNamespaceInitializationStatusAsync(initializationStatusId, cancellationToken).ConfigureAwait(false);
                     result = initializationStatus;
-                    human = $"Original namespace initialization {initializationStatus.Phase} · {initializationStatus.OperationId:D}";
+                    human = $"Namespace initialization {initializationStatus.Phase} · {initializationStatus.OperationId:D}";
                     exitCode = initializationStatus.Phase == "Completed" ? MirrorPulseControlExitCodes.Success : MirrorPulseControlExitCodes.Pending;
                     break;
                 case ("namespace", "protection") when command.Path.Count > 2 &&

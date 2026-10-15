@@ -147,3 +147,12 @@ and historical attempts even if a caller lost its retry handle. Each page is
 bounded to 256 entries in canonical operation ID order. Missing admissions,
 damaged reservations and corrupt completion records fail the query rather than
 silently omitting recovery work. A historical completion is not current readiness.
+
+`namespace protection recover-root ROOT_ID [--operation-id GUID]` selects one
+registered root and audits its current members and shared sync-root anchor. It
+returns `scopeRootId` in pending and completed results. Only the selected root
+is admitted after a fresh native audit; another root's pending work remains
+fenced. A retry must use the same root and operation ID. Whole-inventory and
+selected-root attempts cannot reuse each other's operation IDs. Neither a
+historical result nor a selected-root result grants whole-tree readiness or
+asserts remote acceptance.
