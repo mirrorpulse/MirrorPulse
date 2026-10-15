@@ -89,6 +89,7 @@ public sealed partial class MirrorPulseJournalUploadPump
             await _feed.AcknowledgeAsync(plan.Members.Select(member =>
                 new CloudLocalChangeAcknowledgement(member.OperationId, revision)), token).ConfigureAwait(false);
             await _catalog.CompleteJournalCoalescingRetryCommandsAsync(plan.PlanId, token).ConfigureAwait(false);
+            _runner.ClearCoalescingRecoveryFault(plan.PlanId);
             foreach (var member in plan.Members)
             {
                 _completedCoalescedOriginals.Add(member.OperationId);
@@ -181,27 +182,4 @@ public sealed partial class MirrorPulseJournalUploadPump
         return false;
     }
 
-    private async ValueTask RecoverCoalescingUserCommandsAsync(CancellationToken token)
-    {
-        Guid? after = null;
-        while (true)
-        {
-            var groups = await _catalog.ReadPendingJournalCoalescingRetryGroupsAsync(after, token).ConfigureAwait(false);
-            if (groups.Count == 0) return;
-            foreach (Guid id in groups)
-            {
-                var plan = await _catalog.ReadJournalCoalescingPlanAsync(id, token).ConfigureAwait(false);
-                bool pending = false;
-                await using (var transaction = await _state.OpenStore.BeginTransactionAsync(token).ConfigureAwait(false))
-                {
-                    foreach (var member in plan.Members)
-                        if (await transaction.Operations.GetAsync(member.OperationId, token).ConfigureAwait(false) is not null)
-                        { pending = true; break; }
-                    await transaction.RollbackAsync(token).ConfigureAwait(false);
-                }
-                if (!pending) await _catalog.CompleteJournalCoalescingRetryCommandsAsync(id, token).ConfigureAwait(false);
-            }
-            after = groups[^1];
-        }
-    }
 }

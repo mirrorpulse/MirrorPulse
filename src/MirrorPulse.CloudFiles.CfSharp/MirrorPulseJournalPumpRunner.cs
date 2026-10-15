@@ -10,6 +10,7 @@ public sealed record MirrorPulseJournalPumpHealth(bool Healthy, int PendingFault
 public sealed class MirrorPulseJournalPumpRunner
 {
     private readonly ConcurrentDictionary<Guid, string> _faults = new();
+    private readonly ConcurrentDictionary<Guid, string> _coalescingRecoveryFaults = new();
     private readonly int _maximumCommandsPerCycle;
     private readonly int _maximumCommandsPerRoot;
     private (InstanceId Instance, string Root)? _nextRoute;
@@ -22,8 +23,11 @@ public sealed class MirrorPulseJournalPumpRunner
         _maximumCommandsPerRoot = maximumCommandsPerRoot;
     }
     public void ClearRecoveredFault(Guid operationId) => _faults.TryRemove(operationId, out _);
-    public MirrorPulseJournalPumpHealth Health => new(_faults.IsEmpty, _faults.Count,
-        _faults.Values.Order(StringComparer.Ordinal).FirstOrDefault());
+    internal void RetainCoalescingRecoveryFault(Guid planId) => _coalescingRecoveryFaults[planId] = "JournalGroupRecoveryFailed";
+    internal void ClearCoalescingRecoveryFault(Guid planId) => _coalescingRecoveryFaults.TryRemove(planId, out _);
+    public MirrorPulseJournalPumpHealth Health => new(_faults.IsEmpty && _coalescingRecoveryFaults.IsEmpty,
+        _faults.Count + _coalescingRecoveryFaults.Count,
+        _faults.Values.Concat(_coalescingRecoveryFaults.Values).Order(StringComparer.Ordinal).FirstOrDefault());
 
     public async ValueTask<bool> RunCycleAsync(
         Func<CancellationToken, ValueTask<MirrorPulseJournalUploadBatch>> read,

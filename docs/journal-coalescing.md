@@ -47,6 +47,14 @@ the whole group's current conflict projection in one product transaction. The
 production conflict action shares the instance scheduler with the pump. After the
 entire original group is acknowledged, the user command is marked resolved; a
 restart can recover that projection after verifying the original IDs are absent.
+Recovery checks at most 64 groups per pump cycle and retains a cursor across
+cycles. An incomplete, ambiguous or damaged group keeps its pending command and
+reports `JournalGroupRecoveryFailed` in pump health. Independent groups and
+ordinary journal dispatch continue. Repairing the group clears its recovery
+fault only after its current authorized effects and original acknowledgements
+are verified. Shared official-store failures still fail the source read, and
+cancellation propagates. Diagnostics retain the plan ID, failure category and
+HRESULT without paths, content or exception text.
 Other group decisions remain pending until their complete local operation can be
 applied; rejecting an action does not acknowledge any group member.
 

@@ -10,6 +10,23 @@ namespace MirrorPulse.Core.Tests;
 public sealed class SafeDiagnosticPolicyTests
 {
     [TestMethod]
+    public void GroupRecoveryDiagnosticRetainsOnlyTheRegisteredPlanIdentityAndFailureFacts()
+    {
+        Guid plan = Guid.NewGuid();
+        var safe = SafeDiagnosticPolicy.Sanitize(new LogEntry(LogLevel.Warning, "CloudFiles.Upload", "JournalGroupRecoveryFailed", DateTimeOffset.UtcNow,
+            [new("planId", plan.ToString("D")), new("hresult", "8007000D"), new("failureCategory", "InvalidData"),
+             new("exception", "private-password-needle"), new("path", "private-path-needle")]));
+        Assert.AreEqual("JournalGroupRecoveryFailed", safe.Code);
+        Assert.AreEqual(plan.ToString("D"), safe.Fields["planId"]);
+        Assert.AreEqual("8007000D", safe.Fields["hresult"]);
+        Assert.IsFalse(JsonSerializer.Serialize(safe).Contains("needle", StringComparison.Ordinal));
+        var invalid = SafeDiagnosticPolicy.Sanitize(new LogEntry(LogLevel.Warning, "CloudFiles.Upload", "JournalGroupRecoveryFailed", DateTimeOffset.UtcNow,
+            [new("planId", "secret-needle")]));
+        Assert.IsFalse(invalid.Fields.ContainsKey("planId"));
+        Assert.IsFalse(JsonSerializer.Serialize(invalid).Contains("needle", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
     public async Task ArbitrarySecretsInEveryInputSurfaceAreAbsentFromLogsAndExportedZip()
     {
         string fixture = Path.Combine(Path.GetTempPath(), "MirrorPulse-safe-diagnostics", Guid.NewGuid().ToString("N"));

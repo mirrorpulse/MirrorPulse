@@ -44,6 +44,7 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
     private readonly bool _ownsScheduler;
     private readonly MirrorPulseNamespaceContentConfirmation _contentConfirmation;
     private readonly MirrorPulseNamespaceWorkAdmission? _namespaceWork;
+    private readonly MirrorPulseJournalCoalescingRecovery _coalescingRecovery;
 
     public MirrorPulseJournalPumpHealth Health => _runner.Health;
 
@@ -94,6 +95,7 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
         _mayDispatch = mayDispatch;
         _syncRootPath = Path.GetFullPath(syncRootPath);
         _log = new LocalRollingLogWriter(Path.Combine(dataRootPath, "logs"));
+        _coalescingRecovery = new(catalog, state, _runner, _log);
         _completion = completion ?? throw new ArgumentNullException(nameof(completion));
         _source = new MirrorPulseJournalUploadSource(feed, router, catalog, mayDispatch, _completion, namespaceWork);
     }
@@ -133,7 +135,7 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
         _planningBatch = null;
         foreach (Guid original in _completedCoalescedOriginals) _runner.ClearRecoveredFault(original);
         _completedCoalescedOriginals.Clear();
-        await RecoverCoalescingUserCommandsAsync(cancellationToken).ConfigureAwait(false);
+        await _coalescingRecovery.RepairAsync(cancellationToken).ConfigureAwait(false);
         var recovery = new MirrorPulseMutationProjectionRecovery(_catalog);
         IReadOnlyList<Guid> repaired = await recovery.RepairAsync(async (operationId, token) =>
         {
