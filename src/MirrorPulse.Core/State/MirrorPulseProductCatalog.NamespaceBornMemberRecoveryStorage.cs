@@ -92,8 +92,10 @@ public sealed partial class MirrorPulseProductCatalog
             throw new InvalidDataException("Born recovery lost its immutable member, original observation or earlier protection.");
         var childPosition = await ReadNamespaceMemberPositionEvidenceCoreAsync(child, action.Child.Location.CurrentPositionOperationId, action.PreparedAt, transaction, token).ConfigureAwait(false);
         var parentPosition = await ReadNamespaceMemberPositionEvidenceCoreAsync(parent, action.Parent.Context.Location.CurrentPositionOperationId, action.PreparedAt, transaction, token).ConfigureAwait(false);
+        int separator = childPosition.RelativePath.LastIndexOf('/');
+        string parentPath = separator < 0 ? string.Empty : childPosition.RelativePath[..separator];
         if (childPosition.RelativePath != action.Child.Location.RelativePath || childPosition.ParentMemberId != parent.MemberId ||
-            parentPosition.RelativePath != action.Parent.Context.Location.RelativePath || ParentMovePath(childPosition.RelativePath) != parentPosition.RelativePath)
+            parentPosition.RelativePath != action.Parent.Context.Location.RelativePath || parentPath != parentPosition.RelativePath)
             throw new InvalidDataException("Born recovery lost its retained child and direct-parent positions.");
         var proof = await ReadNamespaceMemberProofAsync(parent, false, transaction, token,
             action.Parent.Context.Protection.ProtectionId, action.PreparedAt).ConfigureAwait(false);

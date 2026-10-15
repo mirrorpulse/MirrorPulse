@@ -6,6 +6,29 @@ namespace MirrorPulse.Core.Tests;
 public sealed partial class MirrorPulseNamespaceBirthCatalogTests
 {
     [TestMethod]
+    public async Task RegisteredTopLevelBornRecoveryKeepsTheEmptyParentPathAcrossRestart()
+    {
+        using var fixture = new Fixture(); MirrorPulseNamespaceBornMemberRecoveryAction action;
+        await using (var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths))
+        {
+            var setup = await PrepareBornRootInitializationAsync(catalog);
+            await catalog.PrepareNamespaceInitializationAsync(setup.Intent);
+            action = await RegisteredRecoveryActionAsync(catalog, setup.Roots[0], setup.Intent.PreparedAt.AddSeconds(1), setup.Intent.OperationId);
+            Assert.DoesNotContain(action.Child.Location.RelativePath, "/");
+            Assert.AreEqual(string.Empty, action.Parent.Context.Location.RelativePath);
+            await catalog.PrepareNamespaceBornMemberRecoveryAsync(action);
+            Assert.AreEqual(action, await catalog.ValidateNamespaceBornMemberRecoveryExecutionAsync(action.ActionId));
+        }
+        await using var reopened = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        Assert.AreEqual(action, (await reopened.ReadNamespaceBornMemberRecoveryActionsAsync(action.Child.Member.MemberId)).Single());
+        Assert.AreEqual(action, await reopened.ValidateNamespaceBornMemberRecoveryExecutionAsync(action.ActionId));
+        Assert.AreEqual(action, await reopened.PrepareNamespaceBornMemberRecoveryAsync(action));
+        Assert.AreEqual(action.Child.BirthObservation, await reopened.ReadNamespaceBirthObservationAsync(action.Child.Member.OriginId));
+        Assert.IsNull(await reopened.ReadNamespaceBornMemberRecoveryCompletionAsync(action.ActionId));
+        Assert.IsFalse(Directory.Exists(fixture.Paths.SyncRootPath));
+    }
+
+    [TestMethod]
     [DataRow(false)]
     [DataRow(true)]
     public async Task RegisteredBornRecoveryAdmissionSurvivesRestartWithoutInventingOriginalOrNativeFacts(bool moved)
