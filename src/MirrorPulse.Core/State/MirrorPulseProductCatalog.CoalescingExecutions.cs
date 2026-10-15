@@ -63,18 +63,7 @@ public sealed partial class MirrorPulseProductCatalog
         }
         foreach (MirrorPulseCoalescingStep step in execution.Steps)
         {
-            await using SqliteCommand ownership = _connection.CreateCommand();
-            ownership.Transaction = transaction;
-            ownership.CommandText = """
-                SELECT 1 FROM mutation_intents WHERE operation_id=$id
-                UNION ALL SELECT 1 FROM journal_coalescing_members WHERE operation_id=$id
-                UNION ALL SELECT 1 FROM journal_coalescing_plans WHERE plan_id=$id
-                UNION ALL SELECT 1 FROM journal_coalescing_steps WHERE operation_id=$id
-                UNION ALL SELECT 1 FROM worker_requests WHERE operation_id=$id LIMIT 1;
-                """;
-            ownership.Parameters.AddWithValue("$id", step.OperationId.ToString("D"));
-            if (await ownership.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null)
-                throw new InvalidOperationException("The remote-effect identity already belongs to another operation.");
+            await RequireUnownedCoalescingEffectAsync(step.OperationId, transaction, cancellationToken).ConfigureAwait(false);
         }
         await using (SqliteCommand insert = _connection.CreateCommand())
         {
@@ -96,6 +85,23 @@ public sealed partial class MirrorPulseProductCatalog
             await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
         return execution;
+    }
+
+    private async Task RequireUnownedCoalescingEffectAsync(Guid operationId, SqliteTransaction transaction, CancellationToken cancellationToken)
+    {
+        await using SqliteCommand ownership = _connection.CreateCommand();
+        ownership.Transaction = transaction;
+        ownership.CommandText = """
+            SELECT 1 FROM mutation_intents WHERE operation_id=$id
+            UNION ALL SELECT 1 FROM journal_coalescing_members WHERE operation_id=$id
+            UNION ALL SELECT 1 FROM journal_coalescing_plans WHERE plan_id=$id
+            UNION ALL SELECT 1 FROM journal_coalescing_steps WHERE operation_id=$id
+            UNION ALL SELECT 1 FROM journal_coalescing_retries WHERE operation_id=$id
+            UNION ALL SELECT 1 FROM worker_requests WHERE operation_id=$id LIMIT 1;
+            """;
+        ownership.Parameters.AddWithValue("$id", operationId.ToString("D"));
+        if (await ownership.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null)
+            throw new InvalidOperationException("The remote-effect identity already belongs to another operation.");
     }
 
     public async Task<MirrorPulseJournalCoalescingExecution?> ReadJournalCoalescingExecutionAsync(

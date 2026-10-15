@@ -104,7 +104,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                 version.CommandText = "PRAGMA user_version;";
                 currentVersion = (long)(await version.ExecuteScalarAsync(cancellationToken)
                     .ConfigureAwait(false) ?? 0L);
-                if (currentVersion > 54)
+                if (currentVersion > 55)
                 {
                     throw new InvalidDataException("The MP product catalog schema is newer than this Host supports.");
                 }
@@ -232,6 +232,19 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                         ordinal INTEGER NOT NULL CHECK (ordinal IN (0,1)),
                         UNIQUE(plan_id, ordinal)
                     );
+                    CREATE TABLE IF NOT EXISTS journal_coalescing_retries (
+                        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                        command_id TEXT NOT NULL UNIQUE REFERENCES user_commands(command_id),
+                        operation_id TEXT NOT NULL UNIQUE,
+                        plan_id TEXT NOT NULL REFERENCES journal_coalescing_executions(plan_id),
+                        ordinal INTEGER NOT NULL CHECK (ordinal IN (0,1)),
+                        payload BLOB NOT NULL,
+                        fingerprint BLOB NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS ix_journal_coalescing_retries_step
+                        ON journal_coalescing_retries(plan_id, ordinal, sequence);
+                    CREATE INDEX IF NOT EXISTS ix_upload_conflicts_original_status
+                        ON upload_conflicts(change_id, status);
                     CREATE TABLE IF NOT EXISTS namespace_permission_baselines (
                         evidence_id TEXT PRIMARY KEY,
                         volume_serial TEXT NOT NULL,
@@ -431,7 +444,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                 await EnsureNamespaceReplacementCompletionSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
                 await EnsureNamespaceInitializationSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
                 await EnsureBornMemberRecoverySchemaAsync(connection, cancellationToken).ConfigureAwait(false);
-                version.CommandText = "PRAGMA user_version=54;";
+                version.CommandText = "PRAGMA user_version=55;";
                 await version.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
 

@@ -52,7 +52,7 @@ public sealed class MirrorPulseJournalCoalescingExecutor(MirrorPulseProductCatal
                 token.ThrowIfCancellationRequested();
                 if (step.Kind is MirrorPulseCoalescingStepKind.Upload or MirrorPulseCoalescingStepKind.Move && string.IsNullOrEmpty(revision))
                     throw new InvalidDataException("A completed remote effect requires an accepted revision.");
-                var accepted = await catalog.ReadMutationAsync(step.OperationId, token).ConfigureAwait(false)
+                var accepted = await catalog.ReadMutationAsync(record.Intent.OperationId, token).ConfigureAwait(false)
                     ?? throw new InvalidDataException("The accepted coalesced effect is missing.");
                 if (accepted.State != MirrorPulseMutationState.RemoteAccepted || accepted.Intent != record.Intent || accepted.AcceptedRevision != revision)
                     throw new InvalidDataException("Local completion requires the unchanged accepted coalesced effect.");
@@ -92,7 +92,7 @@ public sealed class MirrorPulseJournalCoalescingExecutor(MirrorPulseProductCatal
                 await _executor.ReconcileAsync(record, (retained, token) => step.Kind is MirrorPulseCoalescingStepKind.VerifyAbsence or MirrorPulseCoalescingStepKind.VerifyUnchanged
                     ? VerifyOnlyAsync(step, retained, token) : readback.VerifyAsync(retained, token), Complete, cancellationToken).ConfigureAwait(false);
             }
-            results.Add(await catalog.ReadMutationAsync(step.OperationId, cancellationToken).ConfigureAwait(false)
+            results.Add(await catalog.ReadMutationAsync(record.Intent.OperationId, cancellationToken).ConfigureAwait(false)
                 ?? throw new InvalidDataException("The executed effect disappeared."));
         }
         return results.AsReadOnly();

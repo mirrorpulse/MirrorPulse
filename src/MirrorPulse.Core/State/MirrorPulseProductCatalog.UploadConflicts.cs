@@ -112,7 +112,7 @@ public sealed partial class MirrorPulseProductCatalog
             await using SqliteCommand query = _connection.CreateCommand();
             query.CommandText = """
                 SELECT 1 FROM upload_conflicts
-                WHERE conflict_id = $id AND status = $pending LIMIT 1;
+                WHERE (conflict_id = $id OR change_id = $id) AND status = $pending LIMIT 1;
                 """;
             query.Parameters.AddWithValue("$id", operationId.ToString("D"));
             query.Parameters.AddWithValue("$pending", (int)MirrorPulseConflictStatus.Pending);

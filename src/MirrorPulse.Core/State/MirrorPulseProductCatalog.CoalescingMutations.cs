@@ -64,7 +64,8 @@ public sealed partial class MirrorPulseProductCatalog
             string? baseline = execution.ExpectedRevision;
             if (ordinal == 1)
             {
-                MirrorPulseMutationIntent previousIntent = CoalescingIntent(plan, execution, 0, baseline);
+                MirrorPulseMutationIntent previousIntent = await ReadCurrentCoalescingIntentAsync(plan, execution, 0,
+                    baseline, transaction, cancellationToken).ConfigureAwait(false);
                 MirrorPulseMutationRecord? previous = await ReadMutationCoreAsync(previousIntent.OperationId, cancellationToken, transaction).ConfigureAwait(false);
                 if (previous is null || !SameIntent(previous.Intent, previousIntent) || previous.State != MirrorPulseMutationState.Acknowledged)
                     throw new MirrorPulseMutationAmbiguousException("The preceding coalesced effect has not completed with unchanged intent.");
@@ -72,7 +73,8 @@ public sealed partial class MirrorPulseProductCatalog
                     baseline = !string.IsNullOrEmpty(previous.AcceptedRevision) ? previous.AcceptedRevision :
                         throw new InvalidDataException("The accepted move revision is required for the subsequent upload.");
             }
-            MirrorPulseMutationIntent intent = CoalescingIntent(plan, execution, ordinal, baseline);
+            MirrorPulseMutationIntent intent = await ReadCurrentCoalescingIntentAsync(plan, execution, ordinal,
+                baseline, transaction, cancellationToken).ConfigureAwait(false);
             MirrorPulseMutationRecord record = await PrepareMutationCoreAsync(intent,
                 JsonSerializer.SerializeToUtf8Bytes(intent, TopologyJsonOptions), cancellationToken, transaction).ConfigureAwait(false);
             transaction.Commit();
