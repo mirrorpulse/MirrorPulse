@@ -25,7 +25,7 @@ $hydrationReads = [Collections.Generic.List[object]]::new()
 $hydrationAudits = [Collections.Generic.List[object]]::new()
 
 function Invoke-CliFixtureProbe {
-    param([Parameter(Mandatory)][ValidateSet('read', 'audit', 'inspect')][string]$Mode, [Parameter(Mandatory)][string]$Phase)
+    param([Parameter(Mandatory)][ValidateSet('read', 'audit', 'inspect', 'cleanup')][string]$Mode, [Parameter(Mandatory)][string]$Phase)
     $start = [Diagnostics.ProcessStartInfo]::new('dotnet')
     $start.UseShellExecute = $false
     $start.CreateNoWindow = $true
@@ -447,6 +447,7 @@ finally {
     }
     if ($null -ne $hostProcess -and -not $hostProcess.HasExited) {
         $hostProcess.Kill($true)
+        $hostProcess.WaitForExit()
     }
     Remove-Item Env:\MIRRORPULSE_DATA_ROOT -ErrorAction SilentlyContinue
     Remove-Item Env:\MIRRORPULSE_SYNC_ROOT -ErrorAction SilentlyContinue
@@ -460,7 +461,15 @@ finally {
             (Get-Item -LiteralPath $cleanupRoot -Force).Attributes.HasFlag([IO.FileAttributes]::ReparsePoint)) {
             throw 'The cleanup target is outside the isolated CLI fixture.'
         }
-        Remove-Item -LiteralPath $cleanupRoot -Recurse -Force -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath (Join-Path $cleanupRoot '.mp-cli-fixture.json')) {
+            $cleanup = Invoke-CliFixtureProbe -Mode cleanup -Phase Teardown
+            if ($cleanup.exclusiveCatalogOwner -ne $true -or $cleanup.validatedObjects -lt 1 -or
+                $cleanup.restoredObjects -ne $cleanup.validatedObjects) {
+                throw 'The isolated fixture permission cleanup was incomplete.'
+            }
+        }
+        Remove-Item -LiteralPath $cleanupRoot -Recurse -Force -ErrorAction Stop
+        if (Test-Path -LiteralPath $cleanupRoot) { throw 'The isolated CLI fixture workspace was not removed.' }
     }
 }
 if ($EvidencePath) {

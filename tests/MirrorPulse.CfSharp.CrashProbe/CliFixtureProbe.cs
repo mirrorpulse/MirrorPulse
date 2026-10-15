@@ -20,14 +20,14 @@ public sealed record CliFixtureItemObservation(string Role, bool Exists, bool Is
 public sealed record CliFixtureInspectionResult(int SchemaVersion, IReadOnlyList<CliFixtureItemObservation> Items);
 
 /// <summary>Independent consumers and a stopped-Host catalog oracle for synthetic CLI fixtures only.</summary>
-public static class CliFixtureProbe
+public static partial class CliFixtureProbe
 {
     public const string MarkerFileName = ".mp-cli-fixture.json";
     public const int BinaryLength = 2 * 1024 * 1024 + 257;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private static readonly string[] ReadOnlyPaths = ["nested/fixture.txt", "nested/fixture.bin"];
 
-    public static async Task<int> RunAsync(string directory, bool audit, bool inspect = false)
+    public static async Task<int> RunAsync(string directory, bool audit, bool inspect = false, bool cleanup = false)
     {
         string root = Path.GetFullPath(directory);
         string parent = Path.TrimEndingDirectorySeparator(Path.GetTempPath());
@@ -46,7 +46,8 @@ public static class CliFixtureProbe
             !Guid.TryParse(marker.RootId, out Guid rootId) || rootId == Guid.Empty || string.IsNullOrWhiteSpace(marker.RootKey) ||
             string.IsNullOrWhiteSpace(marker.DirectoryName) || marker.DirectoryName is "." or ".." ||
             marker.DirectoryName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0) return 2;
-        object result = inspect ? await InspectAsync(root, marker) : audit ? await AuditAsync(root, marker) : await ReadAsync(root, marker);
+        object result = cleanup ? await CleanupPermissionsAsync(root, marker) :
+            inspect ? await InspectAsync(root, marker) : audit ? await AuditAsync(root, marker) : await ReadAsync(root, marker);
         Console.WriteLine(JsonSerializer.Serialize(result, JsonOptions));
         return 0;
     }

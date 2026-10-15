@@ -16,12 +16,12 @@ if (args.Length == 4 && args[0] == "--namespace-source-consumer")
     }
 }
 
-if (args.Length == 2 && args[0] is "--read-cli-fixture" or "--audit-cli-fixture" or "--inspect-cli-fixture")
+if (args.Length == 2 && args[0] is "--read-cli-fixture" or "--audit-cli-fixture" or "--inspect-cli-fixture" or "--cleanup-cli-fixture")
 {
     try
     {
         return await CliFixtureProbe.RunAsync(args[1], audit: args[0] == "--audit-cli-fixture",
-            inspect: args[0] == "--inspect-cli-fixture");
+            inspect: args[0] == "--inspect-cli-fixture", cleanup: args[0] == "--cleanup-cli-fixture");
     }
     catch (Exception exception)
     {

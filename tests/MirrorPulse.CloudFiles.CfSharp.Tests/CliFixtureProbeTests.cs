@@ -91,6 +91,36 @@ public sealed class CliFixtureProbeTests
     }
 
     [TestMethod]
+    [DataRow("owner-held")]
+    [DataRow("missing-marker")]
+    [DataRow("missing-catalog")]
+    [DataRow("wrong-route")]
+    public async Task CleanupRejectsLiveOrUnprovenFixturesBeforeOpeningCloudFiles(string scenario)
+    {
+        await using Fixture fixture = await Fixture.CreateAsync();
+        string sentinel = Path.Combine(fixture.Paths.SyncRootPath, "unrelated.txt");
+        await File.WriteAllTextAsync(sentinel, "retain unrelated bytes");
+        MirrorPulseProductCatalog? owner = null;
+        try
+        {
+            if (scenario == "owner-held") owner = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+            if (scenario == "missing-marker") File.Delete(Path.Combine(fixture.Root, CliFixtureProbe.MarkerFileName));
+            if (scenario == "missing-catalog") File.Delete(fixture.Paths.ProductCatalogDatabasePath);
+            if (scenario == "wrong-route")
+                await File.WriteAllTextAsync(Path.Combine(fixture.Root, CliFixtureProbe.MarkerFileName),
+                    JsonSerializer.Serialize(fixture.Marker with { RootKey = "other" }, JsonOptions));
+            var result = await RunAsync(fixture.Root, audit: false, cleanup: true);
+            Assert.AreNotEqual(0, result.ExitCode);
+            Assert.AreEqual(string.Empty, result.Output.Trim());
+            Assert.IsFalse(result.Error.Contains(fixture.Root, StringComparison.OrdinalIgnoreCase));
+            Assert.AreEqual("retain unrelated bytes", await File.ReadAllTextAsync(sentinel));
+            Assert.IsFalse(Directory.Exists(Path.Combine(fixture.Root, "inspection")), "Rejection must precede Cloud Files startup.");
+            if (scenario == "missing-catalog") Assert.IsFalse(File.Exists(fixture.Paths.ProductCatalogDatabasePath));
+        }
+        finally { if (owner is not null) await owner.DisposeAsync(); }
+    }
+
+    [TestMethod]
     [DataRow(false)]
     [DataRow(true)]
     public async Task ExternalReaderChecksCompleteBytesAndChunkBoundaryRanges(bool corrupt)
@@ -158,11 +188,11 @@ public sealed class CliFixtureProbeTests
             await catalog.TransitionMutationAsync(id, MirrorPulseMutationState.RemoteAccepted, state, "after");
     }
 
-    private static async Task<(int ExitCode, string Output, string Error)> RunAsync(string root, bool audit, bool inspect = false)
+    private static async Task<(int ExitCode, string Output, string Error)> RunAsync(string root, bool audit, bool inspect = false, bool cleanup = false)
     {
         var start = new ProcessStartInfo("dotnet") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
         foreach (string argument in new[] { typeof(ProbeMarker).Assembly.Location,
-            inspect ? "--inspect-cli-fixture" : audit ? "--audit-cli-fixture" : "--read-cli-fixture", root })
+            cleanup ? "--cleanup-cli-fixture" : inspect ? "--inspect-cli-fixture" : audit ? "--audit-cli-fixture" : "--read-cli-fixture", root })
             start.ArgumentList.Add(argument);
         using Process process = Process.Start(start)!;
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
