@@ -102,6 +102,15 @@ internal sealed class MirrorPulseNamespaceStartupCoordinator(CloudFileSystem fil
                 try
                 {
                     var child = await catalog.ReadNamespaceMemberChildAsync(anchor.MemberId, root.DirectoryName, cancellationToken).ConfigureAwait(false);
+                    var pendingOperations = await catalog.ReadNamespacePendingOperationsAsync(root.RootId, cancellationToken).ConfigureAwait(false);
+                    if (child is not null && pendingOperations.Count != 0)
+                    {
+                        // A new initializer would fence the original operation's own executor.
+                        // Keep its retry identity and closed admission until that work settles.
+                        outcomes[root.RootId] = new(root.RootId, pendingOperations[0].OperationId, false,
+                            "PendingNamespaceOperationRecoveryRequired");
+                        continue;
+                    }
                     if (child is null)
                     {
                         // A missing configured name is new only when no original history owns it.

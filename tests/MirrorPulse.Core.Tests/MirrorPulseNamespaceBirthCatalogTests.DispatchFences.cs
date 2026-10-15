@@ -68,6 +68,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         await ExecuteSqlAsync(fixture.Paths, sql);
         await using var current = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
         await Assert.ThrowsExactlyAsync<InvalidDataException>(() => current.ReadNamespaceDispatchFencedRootsAsync());
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(() => current.ReadNamespacePendingOperationsAsync(birth.RootId));
         Assert.HasCount(0, await current.ReadNamespaceRecoveryRootsAsync());
     }
 }
