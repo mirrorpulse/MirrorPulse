@@ -93,10 +93,11 @@ public sealed class MirrorPulseFullRescanPolicyTests
                         {
                             Assert.IsNotNull(await currentOwner.ReadContentAcceptanceProofAsync(record.Intent.OperationId, timeout.Token));
                             MirrorPulseContentConfirmationReceipt? receipt = await currentOwner.ReadContentConfirmationReceiptAsync(record.Intent.OperationId, timeout.Token);
-                            if (receipt is null || receipt.Outcome is not (MirrorPulseContentConfirmationOutcome.Busy or
+                            if (receipt is null) throw;
+                            ReportConfirmation(receipt, attempt);
+                            if (receipt.Outcome is not (MirrorPulseContentConfirmationOutcome.Busy or
                                 MirrorPulseContentConfirmationOutcome.ProtectionLost or MirrorPulseContentConfirmationOutcome.NativeAppliedProjectionPending)) throw;
                             Assert.IsFalse(receipt.MayAcknowledge);
-                            TestContext.WriteLine($"Rescan confirmation recovery: attempt={attempt}, outcome={receipt.Outcome}, nativeApplied={receipt.NativeApplied}, projected={receipt.DurableProjectionCommitted}.");
                         }
                         await Task.Delay(50, timeout.Token);
                     }
@@ -104,10 +105,24 @@ public sealed class MirrorPulseFullRescanPolicyTests
                     {
                         // Only disposable fixture paths and data exist in this native test.
                         TestContext.WriteLine($"Rescan acceptance failure: {exception}");
+                        MirrorPulseProductCatalog currentOwner = currentCatalog ?? catalog;
+                        foreach (var record in await currentOwner.ReadIncompleteMutationsAsync(timeout.Token))
+                        {
+                            if (record.State != MirrorPulseMutationState.RemoteAccepted) continue;
+                            if (await currentOwner.ReadContentConfirmationReceiptAsync(record.Intent.OperationId, timeout.Token) is { } receipt)
+                                ReportConfirmation(receipt, attempt);
+                        }
                         throw;
                     }
                 }
             }
+            void ReportConfirmation(MirrorPulseContentConfirmationReceipt receipt, int attempt) =>
+                TestContext.WriteLine($"Rescan confirmation recovery: attempt={attempt}, outcome={receipt.Outcome}, " +
+                    $"stage={receipt.Stage}, nativeStage={receipt.NativeStage}, prepared={receipt.NativeIdentityPrepared}, " +
+                    $"nativeApplied={receipt.NativeApplied}, verified={receipt.NativeConfirmationVerified}, projected={receipt.DurableProjectionCommitted}, " +
+                    $"prepareHResult={receipt.PreparationHResult:X8}, markHResult={receipt.NativeMarkHResult:X8}, " +
+                    $"nativeError={receipt.NativeErrorHResult:X8}, projectionError={receipt.ProjectionErrorHResult:X8}, " +
+                    $"bytesVerified={receipt.BytesVerified}, segmentsRead={receipt.SegmentsRead}, observedInSync={receipt.ObservedInSync}.");
             var router = new MirrorPulseRootRouter(paths.SyncRootPath, [first, second]);
             var policy = new MirrorPulseFullRescanPolicy(fileSystem, feed, state, router, catalog, transport, transport,
                 instance => instance == active, transport, transport, transport);
