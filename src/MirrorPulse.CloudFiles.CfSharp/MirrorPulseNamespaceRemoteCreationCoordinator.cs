@@ -94,7 +94,8 @@ public sealed class MirrorPulseNamespaceRemoteCreationCoordinator(CloudFileSyste
                 _ = await catalog.RecordNamespaceBirthStartAsync(new(1, operationId, DateTimeOffset.UtcNow), token).ConfigureAwait(false);
                 // The mature API owns native creation and its official SQLite projection.
                 // If it fails after creation, keep the original intent and never recreate by path.
-                await parent.CreatePlaceholdersAsync([specification], cancellationToken: CancellationToken.None).ConfigureAwait(false);
+                var created = await parent.CreatePlaceholdersAsync([specification], cancellationToken: CancellationToken.None).ConfigureAwait(false);
+                created.ThrowIfAnyFailed();
             }
             else if (await catalog.ReadNamespaceBirthObservationAsync(operationId, token).ConfigureAwait(false) is null)
                 throw new InvalidOperationException("A started source publication requires original native outcome recovery before retry.");
