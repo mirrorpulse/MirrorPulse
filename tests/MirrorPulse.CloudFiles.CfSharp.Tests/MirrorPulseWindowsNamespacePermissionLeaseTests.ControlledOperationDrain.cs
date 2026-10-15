@@ -61,6 +61,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             var parent = (await catalog.ReadNamespaceMemberTreeAsync(initialized.AnchorMemberId, timeout.Token)).Single(member => member.RelativePath == "Import");
             Guid importOperation = Guid.NewGuid(), recoveryOperation = Guid.NewGuid();
             var plan = await runtime.PrepareNamespaceImportAsync(importOperation, parent.MemberId, "retained.txt", inputPath, timeout.Token);
+            await using (var closed = await admission.BeginRecoveryAsync([importingRoot.RootId], timeout.Token)) { }
+            Assert.IsFalse(admission.IsAdmitted(importingRoot.RootId));
             pause.ItemId = plan.ItemId; pause.Armed = true;
             Task<MirrorPulseNamespaceMemberRegistration> importing = runtime.ExecuteNamespaceImportAsync(importOperation, timeout.Token).AsTask();
             try
@@ -75,12 +77,14 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         await runtime.RecoverNamespaceRootAsync(recoveryOperation, recoveryRoot.RootId, queued.Token));
                 }
                 Assert.IsNull(await catalog.ReadNamespaceInitializationAsync(recoveryOperation, timeout.Token));
-                Assert.IsTrue(admission.IsAdmitted(recoveryRoot.RootId)); Assert.IsTrue(admission.IsAdmitted(importingRoot.RootId));
+                Assert.IsTrue(admission.IsAdmitted(recoveryRoot.RootId)); Assert.IsFalse(admission.IsAdmitted(importingRoot.RootId));
                 Assert.IsFalse(pause.StoreDisposed.Task.IsCompleted); Assert.IsFalse(pause.Committed);
                 pause.Release.TrySetResult();
                 var imported = await importing.WaitAsync(timeout.Token);
                 Assert.IsTrue(pause.Committed); Assert.AreEqual(importingRoot.RootId, imported.RootId);
                 Assert.IsTrue((await runtime.ReadNamespaceImportStatusAsync(importOperation, timeout.Token)).Registered);
+                Assert.IsFalse(admission.IsAdmitted(importingRoot.RootId));
+                _ = await runtime.RecoverNamespaceRootAsync(Guid.NewGuid(), importingRoot.RootId, timeout.Token);
                 var recovered = await runtime.RecoverNamespaceRootAsync(recoveryOperation, recoveryRoot.RootId, timeout.Token);
                 Assert.AreEqual(recoveryRoot.RootId, recovered.ScopeRoot);
                 Assert.IsTrue(pause.StoreDisposed.Task.IsCompleted);

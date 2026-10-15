@@ -7,6 +7,46 @@ namespace MirrorPulse.Core.Tests;
 public sealed class MirrorPulseNamespaceWorkAdmissionTests
 {
     [TestMethod]
+    public async Task PendingOperationOnClosedRootStaysClosedAndDoesNotBlockAnotherRoot()
+    {
+        RootId first = RootId.New(), second = RootId.New();
+        await using var admission = new MirrorPulseNamespaceWorkAdmission([first, second]); await OpenAsync(admission, second);
+        await using (var pending = await admission.EnterPendingOperationAsync(first))
+        {
+            Assert.IsFalse(admission.IsAdmitted(first));
+            Assert.ThrowsExactly<InvalidOperationException>(() => admission.Enter([first]));
+            await Assert.ThrowsExactlyAsync<InvalidOperationException>(async () => await admission.EnterPendingOperationAsync(first));
+            Assert.AreEqual(31, await admission.RunAsync(second, _ => ValueTask.FromResult(31)));
+        }
+        Assert.IsFalse(admission.IsAdmitted(first));
+        await OpenAsync(admission, first); Assert.IsTrue(admission.IsAdmitted(first));
+    }
+
+    [TestMethod]
+    public async Task PendingOperationRetainsItsActualLifetimeDuringShutdown()
+    {
+        RootId root = RootId.New(); var admission = new MirrorPulseNamespaceWorkAdmission([root]);
+        var pending = await admission.EnterPendingOperationAsync(root);
+        Task stopping = admission.DisposeAsync().AsTask(); Assert.IsFalse(stopping.IsCompleted);
+        await Assert.ThrowsExactlyAsync<ObjectDisposedException>(async () => await admission.EnterPendingOperationAsync(root));
+        await pending.DisposeAsync(); await pending.DisposeAsync(); await stopping.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.IsFalse(admission.IsAdmitted(root));
+    }
+
+    [TestMethod]
+    public async Task PendingOperationOnReadyRootDrainsBeforeRecoveryAndCancellationNeverAdmitsAClosedRoot()
+    {
+        RootId root = RootId.New(); await using var admission = new MirrorPulseNamespaceWorkAdmission([root]); await OpenAsync(admission, root);
+        var pending = await admission.EnterPendingOperationAsync(root);
+        Task<MirrorPulseNamespaceWorkAdmission.RecoveryLease> recovering = admission.BeginRecoveryAsync([root]).AsTask();
+        Assert.IsFalse(recovering.IsCompleted); Assert.IsFalse(admission.IsAdmitted(root));
+        await pending.DisposeAsync(); await using (var scope = await recovering.WaitAsync(TimeSpan.FromSeconds(5))) { }
+        using var stop = new CancellationTokenSource(); stop.Cancel();
+        await Assert.ThrowsAsync<OperationCanceledException>(async () => await admission.EnterPendingOperationAsync(root, stop.Token));
+        Assert.IsFalse(admission.IsAdmitted(root));
+    }
+
+    [TestMethod]
     public async Task RecoveryClosesBeforeDrainAndLeavesAnotherRootWorking()
     {
         RootId first = RootId.New(), second = RootId.New();

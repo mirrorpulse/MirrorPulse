@@ -68,6 +68,27 @@ public sealed class MirrorPulseNamespaceWorkAdmission : IAsyncDisposable
         using var lease = Enter([root]); return await work(cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Retains execution of an already admitted durable operation, including on a closed root.</summary>
+    /// <remarks>The Host must validate the original operation before entering. A closed-root
+    /// execution drains earlier work and remains closed afterwards; completion is not a fresh audit.
+    /// New preparation and ordinary synchronization must continue using Enter.</remarks>
+    public async ValueTask<IAsyncDisposable> EnterPendingOperationAsync(RootId root, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (TryEnter([root], out var work)) return new PendingOperationLease(work!, null);
+        return new PendingOperationLease(null, await BeginRecoveryAsync([root], cancellationToken).ConfigureAwait(false));
+    }
+
+    private sealed class PendingOperationLease(WorkLease? work, RecoveryLease? recovery) : IAsyncDisposable
+    {
+        public async ValueTask DisposeAsync()
+        {
+            Interlocked.Exchange(ref work, null)?.Dispose();
+            var owned = Interlocked.Exchange(ref recovery, null);
+            if (owned is not null) await owned.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
     /// <summary>Closes all selected roots atomically, then drains already accepted work.</summary>
     /// <remarks>Failure or cancellation leaves the roots closed; it never restores stale readiness.
     /// An empty inventory retains the owner lifecycle while its sync-root anchor is
