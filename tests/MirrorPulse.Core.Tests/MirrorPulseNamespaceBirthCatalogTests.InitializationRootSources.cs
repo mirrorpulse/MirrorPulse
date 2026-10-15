@@ -41,6 +41,35 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
     }
 
     [TestMethod]
+    public async Task CurrentInitializationSupportsABornOnlyRootInventoryWithoutAnyOriginalRootCapture()
+    {
+        using var fixture = new Fixture(); await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        var baseline = Baseline();
+        var anchor = baseline with
+        {
+            RootId = null,
+            RelativePath = string.Empty,
+            LocalObject = baseline.LocalObject with { LocalFileId = baseline.LocalObject.SyncRootFileId }
+        };
+        var proof = Protection(anchor); await ProtectAsync(catalog, anchor, proof);
+        var parent = await catalog.RegisterNamespaceMemberAsync(OriginalMember(anchor, proof, null));
+        var birth = new MirrorPulseNamespaceBirthIntent(1, Guid.NewGuid(), RootId.New(), anchor.EvidenceId,
+            proof.OperationId, anchor.LocalObject, "First", true, MirrorPulseNamespaceBirthOrigin.RemotePopulation,
+            Role, proof.PreparedAt.AddSeconds(4));
+        var born = await AddBornAsync(catalog, birth);
+        var root = await catalog.RegisterNamespaceMemberAsync(BornMember(born, parent));
+        var intent = new MirrorPulseNamespaceInitializationIntent(2, Guid.NewGuid(),
+            [new(birth.RootId, Guid.Empty) { BornRootMemberId = root.MemberId }], root.RegisteredAt.AddSeconds(1))
+        { RequestedInventoryKind = MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory };
+        await catalog.PrepareNamespaceInitializationAsync(intent);
+        var inventory = await catalog.ReadNamespaceCurrentTreeSnapshotAsync(parent.MemberId);
+        var completed = await catalog.CompleteNamespaceCurrentInitializationAsync(intent.OperationId, inventory, intent.PreparedAt.AddSeconds(1));
+        Assert.AreEqual(2, completed.MemberCount); Assert.IsEmpty(await catalog.ReadNamespaceDispatchFencedRootsAsync());
+        Assert.IsEmpty(await catalog.ReadNamespacePermissionTreesAsync(birth.RootId));
+        Assert.AreEqual(born.Observation, await catalog.ReadNamespaceBirthObservationAsync(birth.OperationId));
+    }
+
+    [TestMethod]
     [DataRow("version-one")]
     [DataRow("original-route")]
     [DataRow("both-sources")]

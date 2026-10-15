@@ -31,8 +31,9 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
         if (registrations.Length == 0) throw new InvalidOperationException("Current graph recovery requires configured Adapter roots.");
         if (retained is null)
         {
-            var roots = await MirrorPulseNamespaceInitializationCoordinator.SelectOriginalRootsAsync(catalog, registrations, true, cancellationToken).ConfigureAwait(false);
-            retained = await catalog.PrepareNamespaceInitializationAsync(new(1, operationId, roots, DateTimeOffset.UtcNow)
+            var roots = await MirrorPulseNamespaceCurrentRootSelector.SelectAsync(fileSystem, catalog, registrations, cancellationToken).ConfigureAwait(false);
+            retained = await catalog.PrepareNamespaceInitializationAsync(new(roots.Any(root => root.BornRootMemberId is not null) ? 2 : 1,
+                operationId, roots, DateTimeOffset.UtcNow)
             { RequestedInventoryKind = MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory }, cancellationToken).ConfigureAwait(false);
         }
         if (!retained.Roots.Select(root => root.RootId).ToHashSet().SetEquals(registrations.Select(root => root.RootId)))

@@ -330,6 +330,16 @@ is repeated after the work drain before committing the new initializer, covering
 a mutation that finished while recovery was being admitted. Existing pending
 owners retain their original route; this preflight does not settle or replace them.
 
+Current recovery selects each configured root by its complete public native
+binding and retained top-level membership. An original root retains its sealed
+capture; a later-born root retains its registered birth instead of inventing an
+original inventory. Version 2 admissions identify these sources separately while
+legacy admissions keep their original bytes and route. The selection is checked
+again after the work drain. It is recovery input, not permission or readiness:
+the new Runtime still restores the current role and audits every actual member
+before releasing its fences. Unregistered or partially executed births continue
+to require their own recovery.
+
 Runtime shutdown serializes with initialization before stopping dependent services.
 It closes the lifetime's work-admission owner, cancels and drains the upload pump,
 then awaits public library disposal and the remaining application work. The anchor

@@ -365,8 +365,9 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             IReadOnlyList<MirrorPulseNamespaceInitializationRoot>? plannedRoots = null;
             if (retained is null)
             {
-                plannedRoots = await MirrorPulseNamespaceInitializationCoordinator.SelectOriginalRootsAsync(catalog, registrations,
-                    inventoryKind == MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory, token).ConfigureAwait(false);
+                plannedRoots = inventoryKind == MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory
+                    ? await MirrorPulseNamespaceCurrentRootSelector.SelectAsync(fileSystem, catalog, registrations, token).ConfigureAwait(false)
+                    : await MirrorPulseNamespaceInitializationCoordinator.SelectOriginalRootsAsync(catalog, registrations, false, token).ConfigureAwait(false);
                 if (inventoryKind == MirrorPulseNamespaceInitializationInventoryKind.OriginalInventory)
                     await MirrorPulseNamespaceInitializationCoordinator.RequireOriginalGraphAsync(catalog, registrations, plannedRoots, token).ConfigureAwait(false);
             }
@@ -375,9 +376,13 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             {
                 if (retained is null)
                 {
+                    var selectedRoots = plannedRoots ?? throw new InvalidDataException("The initializer has no selected root provenance.");
                     if (inventoryKind == MirrorPulseNamespaceInitializationInventoryKind.OriginalInventory)
-                        await MirrorPulseNamespaceInitializationCoordinator.RequireOriginalGraphAsync(catalog, registrations, plannedRoots!, token).ConfigureAwait(false);
-                    await catalog.PrepareNamespaceInitializationAsync(new(1, operationId, plannedRoots!, DateTimeOffset.UtcNow)
+                        await MirrorPulseNamespaceInitializationCoordinator.RequireOriginalGraphAsync(catalog, registrations, selectedRoots, token).ConfigureAwait(false);
+                    else if (!selectedRoots.SequenceEqual(await MirrorPulseNamespaceCurrentRootSelector.SelectAsync(fileSystem, catalog, registrations, token).ConfigureAwait(false)))
+                        throw new InvalidDataException("Current root provenance changed while earlier work drained.");
+                    await catalog.PrepareNamespaceInitializationAsync(new(selectedRoots.Any(root => root.BornRootMemberId is not null) ? 2 : 1,
+                        operationId, selectedRoots, DateTimeOffset.UtcNow)
                     { RequestedInventoryKind = inventoryKind }, token).ConfigureAwait(false);
                 }
                 await ReopenLibraryForNamespaceRecoveryAsync(token).ConfigureAwait(false);
