@@ -7,6 +7,25 @@ namespace MirrorPulse.Core.State;
 
 public sealed partial class MirrorPulseProductCatalog
 {
+    /// <summary>Atomically reserves original journal IDs, final content and every remote-effect ID.</summary>
+    /// <remarks>A new decision must contain only never-prepared original mutations. The complete
+    /// official window and upload-time binding are validated before any reservation. A failure
+    /// rolls back the entire preparation; no source mutation or official journal ACK occurs.</remarks>
+    public async Task<MirrorPulseJournalCoalescingExecution> PrepareJournalCoalescingAndExecutionAsync(
+        MirrorPulseJournalCoalescingPlan plan, IReadOnlyList<MirrorPulseWorkerChangeCommand> completeWindow,
+        string? expectedRevision, MirrorPulseCoalescingContent? content = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        ArgumentNullException.ThrowIfNull(plan.Members);
+        ArgumentNullException.ThrowIfNull(completeWindow);
+        plan = plan with { Members = Array.AsReadOnly(plan.Members.ToArray()) };
+        MirrorPulseWorkerChangeCommand[] window = completeWindow.ToArray();
+        var execution = MirrorPulseJournalCoalescingExecutionPlanner.Create(plan, window, expectedRevision, content);
+        _ = await PrepareJournalCoalescingCoreAsync(plan, [], cancellationToken, (execution, window)).ConfigureAwait(false);
+        return await ReadJournalCoalescingExecutionAsync(plan.PlanId, cancellationToken).ConfigureAwait(false)
+            ?? throw new InvalidDataException("The committed coalesced execution is missing.");
+    }
+
     /// <summary>Persists a decision and reserves its original operation IDs; it never acknowledges CfSharp.</summary>
     public Task<MirrorPulseJournalCoalescingPlan> PrepareJournalCoalescingAsync(MirrorPulseJournalCoalescingPlan plan,
         CancellationToken cancellationToken = default) => PrepareJournalCoalescingCoreAsync(plan, [], cancellationToken);
@@ -48,7 +67,8 @@ public sealed partial class MirrorPulseProductCatalog
     }
 
     private async Task<MirrorPulseJournalCoalescingPlan> PrepareJournalCoalescingCoreAsync(MirrorPulseJournalCoalescingPlan plan,
-        MirrorPulseMutationIntent[] unstartedIntents, CancellationToken cancellationToken)
+        MirrorPulseMutationIntent[] unstartedIntents, CancellationToken cancellationToken,
+        (MirrorPulseJournalCoalescingExecution Execution, MirrorPulseWorkerChangeCommand[] Window)? executionPreparation = null)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(plan.Members);
@@ -91,6 +111,13 @@ public sealed partial class MirrorPulseProductCatalog
                     count.Parameters.AddWithValue("$superseded", (int)MirrorPulseMutationState.Superseded);
                     if ((long)(await count.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) ?? 0L) != unstartedIntents.Length)
                         throw new InvalidDataException("A coalescing replay cannot omit superseded original intent.");
+                }
+                if (executionPreparation is { } preparation)
+                {
+                    using var replayTransaction = _connection.BeginTransaction();
+                    _ = await PrepareCoalescingExecutionCoreAsync(plan, preparation.Execution, preparation.Window,
+                        replayTransaction, cancellationToken).ConfigureAwait(false);
+                    replayTransaction.Commit();
                 }
                 return plan;
             }
@@ -160,6 +187,9 @@ public sealed partial class MirrorPulseProductCatalog
                 insert.Parameters.AddWithValue("$plan", plan.PlanId.ToString());
                 await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
+            if (executionPreparation is { } newPreparation)
+                _ = await PrepareCoalescingExecutionCoreAsync(plan, newPreparation.Execution, newPreparation.Window,
+                    transaction, cancellationToken).ConfigureAwait(false);
             transaction.Commit();
             return plan;
         }

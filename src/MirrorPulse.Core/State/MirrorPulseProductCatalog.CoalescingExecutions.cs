@@ -29,64 +29,73 @@ public sealed partial class MirrorPulseProductCatalog
         {
             ThrowIfDisposed();
             using SqliteTransaction transaction = _connection.BeginTransaction();
-            MirrorPulseJournalCoalescingPlan retainedPlan = await ReadCoalescingPlanCoreAsync(
-                plan.PlanId, transaction, cancellationToken).ConfigureAwait(false);
-            if (!JsonSerializer.SerializeToUtf8Bytes(retainedPlan, TopologyJsonOptions).AsSpan()
-                .SequenceEqual(JsonSerializer.SerializeToUtf8Bytes(plan, TopologyJsonOptions)))
-                throw new InvalidDataException("The execution cannot replace its immutable journal decision.");
-            execution = execution with
-            {
-                OriginalMutations = await ValidateCoalescingExecutionOriginalsAsync(plan, execution,
-                    transaction, cancellationToken, window).ConfigureAwait(false),
-            };
-            byte[] payload = JsonSerializer.SerializeToUtf8Bytes(execution, TopologyJsonOptions);
-            MirrorPulseJournalCoalescingExecution? replay = await ReadCoalescingExecutionCoreAsync(
-                plan.PlanId, transaction, cancellationToken).ConfigureAwait(false);
-            if (replay is not null)
-            {
-                if (!JsonSerializer.SerializeToUtf8Bytes(replay, TopologyJsonOptions).AsSpan().SequenceEqual(payload))
-                    throw new InvalidDataException("The final coalesced content, baseline and remote-effect identities are immutable.");
-                transaction.Commit();
-                return replay;
-            }
-            foreach (MirrorPulseCoalescingStep step in execution.Steps)
-            {
-                await using SqliteCommand ownership = _connection.CreateCommand();
-                ownership.Transaction = transaction;
-                ownership.CommandText = """
-                    SELECT 1 FROM mutation_intents WHERE operation_id=$id
-                    UNION ALL SELECT 1 FROM journal_coalescing_members WHERE operation_id=$id
-                    UNION ALL SELECT 1 FROM journal_coalescing_plans WHERE plan_id=$id
-                    UNION ALL SELECT 1 FROM journal_coalescing_steps WHERE operation_id=$id
-                    UNION ALL SELECT 1 FROM worker_requests WHERE operation_id=$id LIMIT 1;
-                    """;
-                ownership.Parameters.AddWithValue("$id", step.OperationId.ToString("D"));
-                if (await ownership.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null)
-                    throw new InvalidOperationException("The remote-effect identity already belongs to another operation.");
-            }
-            await using (SqliteCommand insert = _connection.CreateCommand())
-            {
-                insert.Transaction = transaction;
-                insert.CommandText = "INSERT INTO journal_coalescing_executions(plan_id,payload,fingerprint) VALUES($plan,$payload,$fingerprint);";
-                insert.Parameters.AddWithValue("$plan", plan.PlanId.ToString("D"));
-                insert.Parameters.AddWithValue("$payload", payload);
-                insert.Parameters.AddWithValue("$fingerprint", SHA256.HashData(payload));
-                await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-            }
-            foreach (MirrorPulseCoalescingStep step in execution.Steps)
-            {
-                await using SqliteCommand insert = _connection.CreateCommand();
-                insert.Transaction = transaction;
-                insert.CommandText = "INSERT INTO journal_coalescing_steps(operation_id,plan_id,ordinal) VALUES($id,$plan,$ordinal);";
-                insert.Parameters.AddWithValue("$id", step.OperationId.ToString("D"));
-                insert.Parameters.AddWithValue("$plan", plan.PlanId.ToString("D"));
-                insert.Parameters.AddWithValue("$ordinal", step.Ordinal);
-                await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-            }
+            execution = await PrepareCoalescingExecutionCoreAsync(plan, execution, window, transaction,
+                cancellationToken).ConfigureAwait(false);
             transaction.Commit();
             return execution;
         }
         finally { _gate.Release(); }
+    }
+
+    private async Task<MirrorPulseJournalCoalescingExecution> PrepareCoalescingExecutionCoreAsync(
+        MirrorPulseJournalCoalescingPlan plan, MirrorPulseJournalCoalescingExecution execution,
+        IReadOnlyList<MirrorPulseWorkerChangeCommand> window, SqliteTransaction transaction,
+        CancellationToken cancellationToken)
+    {
+        MirrorPulseJournalCoalescingPlan retainedPlan = await ReadCoalescingPlanCoreAsync(
+            plan.PlanId, transaction, cancellationToken).ConfigureAwait(false);
+        if (!JsonSerializer.SerializeToUtf8Bytes(retainedPlan, TopologyJsonOptions).AsSpan()
+            .SequenceEqual(JsonSerializer.SerializeToUtf8Bytes(plan, TopologyJsonOptions)))
+            throw new InvalidDataException("The execution cannot replace its immutable journal decision.");
+        execution = execution with
+        {
+            OriginalMutations = await ValidateCoalescingExecutionOriginalsAsync(plan, execution,
+                transaction, cancellationToken, window).ConfigureAwait(false),
+        };
+        byte[] payload = JsonSerializer.SerializeToUtf8Bytes(execution, TopologyJsonOptions);
+        MirrorPulseJournalCoalescingExecution? replay = await ReadCoalescingExecutionCoreAsync(
+            plan.PlanId, transaction, cancellationToken).ConfigureAwait(false);
+        if (replay is not null)
+        {
+            if (!JsonSerializer.SerializeToUtf8Bytes(replay, TopologyJsonOptions).AsSpan().SequenceEqual(payload))
+                throw new InvalidDataException("The final coalesced content, baseline and remote-effect identities are immutable.");
+            return replay;
+        }
+        foreach (MirrorPulseCoalescingStep step in execution.Steps)
+        {
+            await using SqliteCommand ownership = _connection.CreateCommand();
+            ownership.Transaction = transaction;
+            ownership.CommandText = """
+                SELECT 1 FROM mutation_intents WHERE operation_id=$id
+                UNION ALL SELECT 1 FROM journal_coalescing_members WHERE operation_id=$id
+                UNION ALL SELECT 1 FROM journal_coalescing_plans WHERE plan_id=$id
+                UNION ALL SELECT 1 FROM journal_coalescing_steps WHERE operation_id=$id
+                UNION ALL SELECT 1 FROM worker_requests WHERE operation_id=$id LIMIT 1;
+                """;
+            ownership.Parameters.AddWithValue("$id", step.OperationId.ToString("D"));
+            if (await ownership.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null)
+                throw new InvalidOperationException("The remote-effect identity already belongs to another operation.");
+        }
+        await using (SqliteCommand insert = _connection.CreateCommand())
+        {
+            insert.Transaction = transaction;
+            insert.CommandText = "INSERT INTO journal_coalescing_executions(plan_id,payload,fingerprint) VALUES($plan,$payload,$fingerprint);";
+            insert.Parameters.AddWithValue("$plan", plan.PlanId.ToString("D"));
+            insert.Parameters.AddWithValue("$payload", payload);
+            insert.Parameters.AddWithValue("$fingerprint", SHA256.HashData(payload));
+            await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+        foreach (MirrorPulseCoalescingStep step in execution.Steps)
+        {
+            await using SqliteCommand insert = _connection.CreateCommand();
+            insert.Transaction = transaction;
+            insert.CommandText = "INSERT INTO journal_coalescing_steps(operation_id,plan_id,ordinal) VALUES($id,$plan,$ordinal);";
+            insert.Parameters.AddWithValue("$id", step.OperationId.ToString("D"));
+            insert.Parameters.AddWithValue("$plan", plan.PlanId.ToString("D"));
+            insert.Parameters.AddWithValue("$ordinal", step.Ordinal);
+            await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+        return execution;
     }
 
     public async Task<MirrorPulseJournalCoalescingExecution?> ReadJournalCoalescingExecutionAsync(
