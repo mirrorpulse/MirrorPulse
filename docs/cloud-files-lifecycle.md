@@ -349,9 +349,13 @@ callback is still committing its official projection. A shutdown admission owner
 is not reusable by a later Host lifetime.
 
 Controlled creation, import, replacement, movement and retirement retain root
-work leases through their actual execution and input cleanup. They acquire their
-lease before capturing a library-dependent coordinator, so a resumed operation
-cannot accidentally use a disposed store. Full default Host bootstrap, pending
+work leases through their actual execution and input cleanup. Their preparation
+and execution also hold the same library-owner gate as initialization, recovery
+and shutdown. A root lease alone cannot protect an operation in another root
+when the complete CfSharp instance is replaced. A queued recovery cancelled at
+this gate leaves no initializer or root fence behind. Historical status reads
+remain available while a controlled import waits for its official commit.
+Full default Host bootstrap, pending
 namespace-operation recovery and independent root failure recovery remain
 separate integration work.
 

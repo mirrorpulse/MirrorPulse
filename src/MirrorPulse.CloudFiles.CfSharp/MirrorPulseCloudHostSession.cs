@@ -521,7 +521,12 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
-        public async ValueTask<MirrorPulseNamespaceMemberRegistration> CreateNamespaceMemberAsync(Guid operationId,
+        public ValueTask<MirrorPulseNamespaceMemberRegistration> CreateNamespaceMemberAsync(Guid operationId,
+            Guid parentMemberId, string name, bool isDirectory, CancellationToken cancellationToken) =>
+            WithCurrentLibraryAsync(token => CreateNamespaceMemberCoreAsync(operationId, parentMemberId, name, isDirectory, token), cancellationToken);
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        private async ValueTask<MirrorPulseNamespaceMemberRegistration> CreateNamespaceMemberCoreAsync(Guid operationId,
             Guid parentMemberId, string name, bool isDirectory, CancellationToken cancellationToken)
         {
             if (router is null || catalog is null || _namespaceExecution is null || _namespaceActor is null)
@@ -537,7 +542,12 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
-        public async ValueTask<MirrorPulseNamespaceBirthPlan> PrepareNamespaceImportAsync(Guid operationId, Guid parentMemberId,
+        public ValueTask<MirrorPulseNamespaceBirthPlan> PrepareNamespaceImportAsync(Guid operationId, Guid parentMemberId,
+            string name, string sourcePath, CancellationToken cancellationToken) =>
+            WithCurrentLibraryAsync(token => PrepareNamespaceImportCoreAsync(operationId, parentMemberId, name, sourcePath, token), cancellationToken);
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        private async ValueTask<MirrorPulseNamespaceBirthPlan> PrepareNamespaceImportCoreAsync(Guid operationId, Guid parentMemberId,
             string name, string sourcePath, CancellationToken cancellationToken)
         {
             RequireImportBoundary();
@@ -559,7 +569,11 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
-        public async ValueTask<MirrorPulseNamespaceMemberRegistration> ExecuteNamespaceImportAsync(Guid operationId,
+        public ValueTask<MirrorPulseNamespaceMemberRegistration> ExecuteNamespaceImportAsync(Guid operationId,
+            CancellationToken cancellationToken) => WithCurrentLibraryAsync(token => ExecuteNamespaceImportCoreAsync(operationId, token), cancellationToken);
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        private async ValueTask<MirrorPulseNamespaceMemberRegistration> ExecuteNamespaceImportCoreAsync(Guid operationId,
             CancellationToken cancellationToken)
         {
             RequireImportBoundary();
@@ -602,7 +616,12 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
-        public async ValueTask<MirrorPulseNamespaceReplacementExecution> PrepareNamespaceReplacementAsync(Guid operationId, Guid memberId,
+        public ValueTask<MirrorPulseNamespaceReplacementExecution> PrepareNamespaceReplacementAsync(Guid operationId, Guid memberId,
+            string sourcePath, CancellationToken cancellationToken) =>
+            WithCurrentLibraryAsync(token => PrepareNamespaceReplacementCoreAsync(operationId, memberId, sourcePath, token), cancellationToken);
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        private async ValueTask<MirrorPulseNamespaceReplacementExecution> PrepareNamespaceReplacementCoreAsync(Guid operationId, Guid memberId,
             string sourcePath, CancellationToken cancellationToken)
         {
             RequireImportBoundary();
@@ -617,7 +636,11 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
-        public async ValueTask<MirrorPulseNamespaceReplacementCompletion> ExecuteNamespaceReplacementAsync(Guid operationId,
+        public ValueTask<MirrorPulseNamespaceReplacementCompletion> ExecuteNamespaceReplacementAsync(Guid operationId,
+            CancellationToken cancellationToken) => WithCurrentLibraryAsync(token => ExecuteNamespaceReplacementCoreAsync(operationId, token), cancellationToken);
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        private async ValueTask<MirrorPulseNamespaceReplacementCompletion> ExecuteNamespaceReplacementCoreAsync(Guid operationId,
             CancellationToken cancellationToken)
         {
             RequireImportBoundary();
@@ -665,7 +688,12 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
-        public async ValueTask<MirrorPulseNamespaceMemberMoveIntent> PrepareNamespaceMemberMoveAsync(Guid operationId, Guid memberId,
+        public ValueTask<MirrorPulseNamespaceMemberMoveIntent> PrepareNamespaceMemberMoveAsync(Guid operationId, Guid memberId,
+            Guid targetParentMemberId, string targetName, CancellationToken cancellationToken) =>
+            WithCurrentLibraryAsync(token => PrepareNamespaceMemberMoveCoreAsync(operationId, memberId, targetParentMemberId, targetName, token), cancellationToken);
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        private async ValueTask<MirrorPulseNamespaceMemberMoveIntent> PrepareNamespaceMemberMoveCoreAsync(Guid operationId, Guid memberId,
             Guid targetParentMemberId, string targetName, CancellationToken cancellationToken)
         {
             if (router is null || catalog is null || _namespaceExecution is null || _namespaceActor is null)
@@ -680,7 +708,11 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
-        public async ValueTask<MirrorPulseNamespaceMemberMoveCompletion> ExecuteNamespaceMemberMoveAsync(
+        public ValueTask<MirrorPulseNamespaceMemberMoveCompletion> ExecuteNamespaceMemberMoveAsync(Guid operationId,
+            CancellationToken cancellationToken) => WithCurrentLibraryAsync(token => ExecuteNamespaceMemberMoveCoreAsync(operationId, token), cancellationToken);
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        private async ValueTask<MirrorPulseNamespaceMemberMoveCompletion> ExecuteNamespaceMemberMoveCoreAsync(
             Guid operationId, CancellationToken cancellationToken)
         {
             if (router is null || catalog is null || _namespaceExecution is null || _namespaceActor is null)
@@ -707,7 +739,12 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
-        public async ValueTask<MirrorPulseNamespaceRetirement> PrepareNamespaceMemberRetirementAsync(Guid operationId,
+        public ValueTask<MirrorPulseNamespaceRetirement> PrepareNamespaceMemberRetirementAsync(Guid operationId,
+            Guid memberId, CancellationToken cancellationToken) =>
+            WithCurrentLibraryAsync(token => PrepareNamespaceMemberRetirementCoreAsync(operationId, memberId, token), cancellationToken);
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        private async ValueTask<MirrorPulseNamespaceRetirement> PrepareNamespaceMemberRetirementCoreAsync(Guid operationId,
             Guid memberId, CancellationToken cancellationToken)
         {
             if (router is null || catalog is null || _namespaceExecution is null || _namespaceActor is null)
@@ -722,7 +759,11 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
-        public async ValueTask<MirrorPulseNamespaceRetirement> ExecuteNamespaceMemberRetirementAsync(Guid operationId,
+        public ValueTask<MirrorPulseNamespaceRetirement> ExecuteNamespaceMemberRetirementAsync(Guid operationId,
+            CancellationToken cancellationToken) => WithCurrentLibraryAsync(token => ExecuteNamespaceMemberRetirementCoreAsync(operationId, token), cancellationToken);
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        private async ValueTask<MirrorPulseNamespaceRetirement> ExecuteNamespaceMemberRetirementCoreAsync(Guid operationId,
             CancellationToken cancellationToken)
         {
             if (router is null || catalog is null || _namespaceExecution is null || _namespaceActor is null)
@@ -746,7 +787,12 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
-        public async ValueTask<MirrorPulseNamespaceRetirementBatch> PrepareNamespaceRetirementBatchAsync(Guid operationId,
+        public ValueTask<MirrorPulseNamespaceRetirementBatch> PrepareNamespaceRetirementBatchAsync(Guid operationId,
+            Guid memberId, CancellationToken cancellationToken) =>
+            WithCurrentLibraryAsync(token => PrepareNamespaceRetirementBatchCoreAsync(operationId, memberId, token), cancellationToken);
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        private async ValueTask<MirrorPulseNamespaceRetirementBatch> PrepareNamespaceRetirementBatchCoreAsync(Guid operationId,
             Guid memberId, CancellationToken cancellationToken)
         {
             if (router is null || catalog is null || _namespaceExecution is null || _namespaceActor is null)
@@ -761,7 +807,11 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
-        public async ValueTask<MirrorPulseNamespaceRetirementBatch> ExecuteNamespaceRetirementBatchAsync(Guid operationId,
+        public ValueTask<MirrorPulseNamespaceRetirementBatch> ExecuteNamespaceRetirementBatchAsync(Guid operationId,
+            CancellationToken cancellationToken) => WithCurrentLibraryAsync(token => ExecuteNamespaceRetirementBatchCoreAsync(operationId, token), cancellationToken);
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        private async ValueTask<MirrorPulseNamespaceRetirementBatch> ExecuteNamespaceRetirementBatchCoreAsync(Guid operationId,
             CancellationToken cancellationToken)
         {
             if (router is null || catalog is null || _namespaceExecution is null || _namespaceActor is null)

@@ -141,6 +141,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     {
         private int _selected;
         private int _armed;
+        public Guid ItemId { get; set; } = itemId;
         public bool Armed { get => Volatile.Read(ref _armed) != 0; set => Volatile.Write(ref _armed, value ? 1 : 0); }
         public bool Committed { get; private set; }
         public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -148,7 +149,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         public TaskCompletionSource StoreDisposed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public async ValueTask CommitAsync(ICloudStateTransaction transaction, CancellationToken token)
         {
-            if (Armed && Volatile.Read(ref _selected) == 0 && await transaction.Items.GetByItemIdAsync(itemId, token) is not null &&
+            if (Armed && Volatile.Read(ref _selected) == 0 && await transaction.Items.GetByItemIdAsync(ItemId, token) is not null &&
                 Interlocked.CompareExchange(ref _selected, 1, 0) == 0)
             {
                 // Deliberately model an already accepted, temporarily non-cooperative storage
