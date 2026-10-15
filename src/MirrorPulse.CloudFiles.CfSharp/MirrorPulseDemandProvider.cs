@@ -107,7 +107,11 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
                 throw new InvalidDataException("The top-level Adapter roots have no continuation page.");
             }
 
-            return _rootRouter.CreateRootPage();
+            // Protected roots are materialized by controlled startup/recovery with
+            // durable birth provenance. Returning specifications here would let the
+            // library create them outside that boundary. Existing local roots remain
+            // visible to the filesystem when this callback completes with no new items.
+            return _namespaceWork is null ? _rootRouter.CreateRootPage() : new CloudProviderDirectoryPage([]);
         }
 
         if ((normalizedPath.Length == 0 || normalizedPath is "/" or "\\")

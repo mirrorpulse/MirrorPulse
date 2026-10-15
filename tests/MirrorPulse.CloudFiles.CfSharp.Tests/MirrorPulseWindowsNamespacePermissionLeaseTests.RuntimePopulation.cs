@@ -59,6 +59,10 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             Assert.IsEmpty(worker.Calls);
             var initialized = await runtime.InitializeNamespaceProtectionAsync(Guid.NewGuid(), timeout.Token);
             Assert.IsTrue(admission.IsAdmitted(registration.RootId));
+            var topLevel = await provider.FetchChildrenAsync(paths.SyncRootPath, ReadOnlyMemory<byte>.Empty, null, timeout.Token);
+            Assert.IsTrue(topLevel.IsComplete);
+            Assert.IsEmpty(topLevel.Children, "Protected root callbacks must not bypass controlled root creation.");
+            Assert.IsTrue(Directory.Exists(Path.Combine(paths.SyncRootPath, "Docs")));
             var root = (await catalog.ReadNamespaceMemberTreeAsync(initialized.AnchorMemberId, timeout.Token)).Single(item => item.RelativePath == "Docs");
             var enumerated = await RunSourceConsumerAsync(directory, "enumerate", execution, timeout.Token);
             TestContext.WriteLine($"RuntimePopulationConsumer: names={string.Join(',', enumerated.Names)}; sourcePages={worker.Calls.Count(call => call == "directory")}.");

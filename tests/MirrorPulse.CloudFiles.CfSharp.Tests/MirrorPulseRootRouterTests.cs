@@ -4,6 +4,7 @@ using MirrorPulse.CloudFiles.CfSharp;
 using MirrorPulse.Core.CloudFiles;
 using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.State;
+using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 
@@ -81,6 +82,35 @@ public sealed class MirrorPulseRootRouterTests
         await stream.ReadExactlyAsync(bytes);
         Assert.AreEqual(second, transport.Request?.InstanceId);
         Assert.AreEqual(Path.Combine("sub", "file.txt"), transport.Request?.NormalizedPath);
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task ProtectedRootEnumerationCannotCreateRootsOutsideControlledStartup(bool admitted)
+    {
+        string syncRoot = Path.Combine(Path.GetTempPath(), "MirrorPulse-tests", Guid.NewGuid().ToString("N"));
+        var root = CreateRoot(InstanceId.New(), "Documents");
+        var router = new MirrorPulseRootRouter(syncRoot, [root]);
+        await using var work = new MirrorPulseNamespaceWorkAdmission([root.RootId]);
+        if (admitted)
+        {
+            // Model the admission transition only; this managed test performs no native audit.
+            await using var recovery = await work.BeginRecoveryAsync([root.RootId]);
+            recovery.CompleteAfterFreshAudit();
+        }
+        var source = new RecordingDirectorySource();
+        var provider = new MirrorPulseDemandProvider(router, new RecordingRangeTransport(), source, work);
+        foreach (string path in new[] { string.Empty, syncRoot })
+        {
+            var page = await provider.FetchChildrenAsync(path, ReadOnlyMemory<byte>.Empty, null);
+            Assert.IsTrue(page.IsComplete);
+            Assert.IsEmpty(page.Children);
+        }
+        Assert.IsNull(source.RelativePath);
+        Assert.HasCount(1, router.CreateRootPage().Children);
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(() =>
+            provider.FetchChildrenAsync(syncRoot, ReadOnlyMemory<byte>.Empty, "unexpected").AsTask());
     }
 
     [TestMethod]
