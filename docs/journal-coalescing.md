@@ -35,8 +35,19 @@ projection may clear a journal item's reference; this nullable change does not
 replace the plan's original observation fingerprint or upload-time binding.
 
 Uncertain remote outcomes remain subject to the existing readback and conflict
-policy. A conflict retains the entire original group. Single-operation conflict
-actions are rejected for grouped IDs until a complete group decision can be
+policy. A conflict retains the entire original group. Retry requires a matching
+pending user command and creates a distinct remote-effect attempt. The rejected
+effect, original program, content proof and native binding remain unchanged.
+Keep-local can authorize the observed remote baseline for an upload or deletion,
+including a move followed by an upload. Verification-only and move-only programs
+require a complete content decision before keep-local can be implemented safely.
+
+Every rejected attempt has a separate conflict epoch. Authorizing a retry resolves
+the whole group's current conflict projection in one product transaction. The
+production conflict action shares the instance scheduler with the pump. After the
+entire original group is acknowledged, the user command is marked resolved; a
+restart can recover that projection after verifying the original IDs are absent.
+Other group decisions remain pending until their complete local operation can be
 applied; rejecting an action does not acknowledge any group member.
 
 The native production-pump regression injects a failure after effect completion

@@ -5,6 +5,7 @@ using MirrorPulse.Core.Configuration;
 using MirrorPulse.Core.Conflicts;
 using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.State;
+using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.CloudFiles.CfSharp;
 
@@ -20,6 +21,8 @@ public sealed class MirrorPulseUploadConflictActions
     private readonly MirrorPulseConflictCopyStore _copies;
     private readonly MirrorPulseRootRouter? _router;
     private readonly IMirrorPulseWorkerMutationTransport? _mutations;
+    private readonly MirrorPulseConflictCenter? _conflictCenter;
+    private readonly MirrorPulseInstanceScheduler? _scheduler;
 
     public MirrorPulseUploadConflictActions(
         MirrorPulseProductCatalog catalog,
@@ -28,7 +31,9 @@ public sealed class MirrorPulseUploadConflictActions
         BackoffPolicy retryPolicy,
         MirrorPulseStoragePaths paths,
         MirrorPulseRootRouter? router = null,
-        IMirrorPulseWorkerMutationTransport? mutations = null)
+        IMirrorPulseWorkerMutationTransport? mutations = null,
+        MirrorPulseConflictCenter? conflictCenter = null,
+        MirrorPulseInstanceScheduler? scheduler = null)
     {
         _catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
         _state = state ?? throw new ArgumentNullException(nameof(state));
@@ -38,6 +43,8 @@ public sealed class MirrorPulseUploadConflictActions
         _copies = new MirrorPulseConflictCopyStore(paths);
         _router = router;
         _mutations = mutations;
+        _conflictCenter = conflictCenter;
+        _scheduler = scheduler;
     }
 
     public async ValueTask<MirrorPulseConflictResolution> ApplyAsync(
@@ -48,13 +55,24 @@ public sealed class MirrorPulseUploadConflictActions
         MirrorPulseConflictRecord conflict = await _catalog.ReadUploadConflictAsync(
             conflictId, cancellationToken).ConfigureAwait(false)
             ?? throw new FileNotFoundException("The upload conflict was not found.");
+        return _scheduler is null ? await ApplyAdmittedAsync(conflict, action, cancellationToken).ConfigureAwait(false) :
+            await _scheduler.RunAsync(conflict.InstanceId, token => ApplyAdmittedAsync(conflict, action, token), cancellationToken).ConfigureAwait(false);
+    }
+
+    private async ValueTask<MirrorPulseConflictResolution> ApplyAdmittedAsync(MirrorPulseConflictRecord conflict,
+        MirrorPulseConflictAction action, CancellationToken cancellationToken)
+    {
+        Guid conflictId = conflict.ConflictId;
+        conflict = await _catalog.ReadUploadConflictAsync(conflictId, cancellationToken).ConfigureAwait(false)
+            ?? throw new FileNotFoundException("The admitted upload conflict disappeared.");
         if (!conflict.IsPending)
         {
             throw new InvalidOperationException("The upload conflict has already been resolved.");
         }
-        if (Guid.TryParse(conflict.ChangeId, out Guid originalId) &&
-            await _catalog.ReadJournalCoalescingOwnerAsync(originalId, cancellationToken).ConfigureAwait(false) is not null)
-            throw new NotSupportedException("A coalesced conflict requires its complete group resolution; no original journal ID was acknowledged.");
+        var group = Guid.TryParse(conflict.ChangeId, out Guid originalId) ?
+            await _catalog.ReadJournalCoalescingOwnerAsync(originalId, cancellationToken).ConfigureAwait(false) : null;
+        if (group is not null && action is not (MirrorPulseConflictAction.Retry or MirrorPulseConflictAction.KeepLocal))
+            throw new NotSupportedException("This coalesced decision requires a complete local group operation; no original journal ID was acknowledged.");
 
         string? preservedPath = null;
         if (!Enum.IsDefined(action) || action == MirrorPulseConflictAction.Defer)
@@ -64,6 +82,18 @@ public sealed class MirrorPulseUploadConflictActions
         await _catalog.SaveUserCommandAsync(new(commandId, actionName, conflictId.ToString("D"), "pending"), cancellationToken).ConfigureAwait(false);
         try
         {
+            if (group is not null)
+            {
+                _ = await _catalog.AuthorizeJournalCoalescingRetryAsync(commandId, conflict.ConflictId,
+                    action == MirrorPulseConflictAction.KeepLocal, cancellationToken).ConfigureAwait(false);
+                if (_conflictCenter is not null)
+                    foreach (var resolved in await _catalog.ReadUploadConflictsAsync(pendingOnly: false, cancellationToken).ConfigureAwait(false))
+                        if (!resolved.IsPending && group.Members.Any(member => member.OperationId.ToString("D") == resolved.ChangeId))
+                            _conflictCenter.Remove(resolved.ConflictId);
+                foreach (var member in group.Members)
+                    await _completion.PrepareRetryAsync(member.OperationId, cancellationToken).ConfigureAwait(false);
+                return new(commandId, conflictId, action, null, DateTimeOffset.UtcNow);
+            }
             switch (action)
             {
                 case MirrorPulseConflictAction.KeepLocal:

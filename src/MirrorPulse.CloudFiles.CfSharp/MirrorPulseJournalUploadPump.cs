@@ -133,6 +133,7 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
         _planningBatch = null;
         foreach (Guid original in _completedCoalescedOriginals) _runner.ClearRecoveredFault(original);
         _completedCoalescedOriginals.Clear();
+        await RecoverCoalescingUserCommandsAsync(cancellationToken).ConfigureAwait(false);
         var recovery = new MirrorPulseMutationProjectionRecovery(_catalog);
         IReadOnlyList<Guid> repaired = await recovery.RepairAsync(async (operationId, token) =>
         {

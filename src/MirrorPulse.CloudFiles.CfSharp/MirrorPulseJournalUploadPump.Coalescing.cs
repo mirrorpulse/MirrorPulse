@@ -88,6 +88,7 @@ public sealed partial class MirrorPulseJournalUploadPump
             // later notification for the same file remains independently pending.
             await _feed.AcknowledgeAsync(plan.Members.Select(member =>
                 new CloudLocalChangeAcknowledgement(member.OperationId, revision)), token).ConfigureAwait(false);
+            await _catalog.CompleteJournalCoalescingRetryCommandsAsync(plan.PlanId, token).ConfigureAwait(false);
             foreach (var member in plan.Members)
             {
                 _completedCoalescedOriginals.Add(member.OperationId);
@@ -150,10 +151,22 @@ public sealed partial class MirrorPulseJournalUploadPump
             string path = _router.ResolveUploadPath(command.InstanceId, command.RootKey, plan?.FinalPath ?? command.RelativePath);
             return await DeferConflictAsync(command, Path.GetRelativePath(_syncRootPath, path).Replace(Path.DirectorySeparatorChar, '/'), expected, actual, token).ConfigureAwait(false);
         }
+        var execution = await _catalog.ReadJournalCoalescingExecutionAsync(plan.PlanId, token).ConfigureAwait(false)
+            ?? throw new InvalidDataException("The rejected group lost its execution.");
+        var rejected = new List<MirrorPulseMutationRecord>();
+        for (int ordinal = 0; ordinal < execution.Steps.Count; ordinal++)
+        {
+            var record = await _catalog.PrepareJournalCoalescingMutationAsync(plan.PlanId, ordinal, token).ConfigureAwait(false);
+            if (record.State == MirrorPulseMutationState.Conflict) { rejected.Add(record); break; }
+            if (record.State != MirrorPulseMutationState.Acknowledged) break;
+        }
+        if (rejected.Count != 1) throw new InvalidDataException("A rejected group requires the actual current effect conflict.");
         foreach (var member in plan.Members)
         {
             string path = _router.ResolveUploadPath(plan.InstanceId, plan.RootKey, plan.FinalPath);
-            var conflict = new MirrorPulseConflictRecord(member.OperationId, plan.InstanceId, member.OperationId.ToString("D"),
+            byte[] epoch = SHA256.HashData(System.Text.Encoding.UTF8.GetBytes("MirrorPulse.Coalescing.Conflict.v1/" +
+                rejected[0].Intent.OperationId.ToString("D") + "/" + member.OperationId.ToString("D")));
+            var conflict = new MirrorPulseConflictRecord(new Guid(epoch.AsSpan(0, 16)), plan.InstanceId, member.OperationId.ToString("D"),
                 Path.GetRelativePath(_syncRootPath, path).Replace(Path.DirectorySeparatorChar, '/'),
                 MirrorPulseConflictReason.StaleRemoteRevision, MirrorPulseVersionComparison.Diverged, expected, actual, DateTimeOffset.UtcNow);
             await _catalog.SaveUploadConflictAsync(conflict, token).ConfigureAwait(false);
@@ -166,5 +179,29 @@ public sealed partial class MirrorPulseJournalUploadPump
             await _completion.DeferFailedUploadAsync(member.OperationId, DateTimeOffset.UtcNow, token).ConfigureAwait(false);
         }
         return false;
+    }
+
+    private async ValueTask RecoverCoalescingUserCommandsAsync(CancellationToken token)
+    {
+        Guid? after = null;
+        while (true)
+        {
+            var groups = await _catalog.ReadPendingJournalCoalescingRetryGroupsAsync(after, token).ConfigureAwait(false);
+            if (groups.Count == 0) return;
+            foreach (Guid id in groups)
+            {
+                var plan = await _catalog.ReadJournalCoalescingPlanAsync(id, token).ConfigureAwait(false);
+                bool pending = false;
+                await using (var transaction = await _state.OpenStore.BeginTransactionAsync(token).ConfigureAwait(false))
+                {
+                    foreach (var member in plan.Members)
+                        if (await transaction.Operations.GetAsync(member.OperationId, token).ConfigureAwait(false) is not null)
+                        { pending = true; break; }
+                    await transaction.RollbackAsync(token).ConfigureAwait(false);
+                }
+                if (!pending) await _catalog.CompleteJournalCoalescingRetryCommandsAsync(id, token).ConfigureAwait(false);
+            }
+            after = groups[^1];
+        }
     }
 }
