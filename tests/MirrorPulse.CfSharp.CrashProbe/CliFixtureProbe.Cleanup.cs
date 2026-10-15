@@ -9,7 +9,7 @@ using MirrorPulse.Core.State;
 namespace MirrorPulse.CfSharp.CrashProbe;
 
 public sealed record CliFixtureCleanupResult(int SchemaVersion, bool ExclusiveCatalogOwner,
-    int ValidatedObjects, int RestoredObjects);
+    int ValidatedObjects, int RestoredObjects, bool ProtectedNamespace = true);
 
 public static partial class CliFixtureProbe
 {
@@ -31,6 +31,13 @@ public static partial class CliFixtureProbe
         if (topology.Instances.Count != 1 || topology.Roots.Count != 1 || topology.Instances[0].InstanceId != instance ||
             registration.InstanceId != instance || registration.UniquenessKey != marker.RootKey || registration.DirectoryName != marker.DirectoryName)
             throw new InvalidDataException("Fixture cleanup requires the exact synthetic route.");
+        // Legacy/default composition has not enabled namespace protection yet.
+        // Every MP ACL write is preceded by a permission intent or birth intent.
+        // With neither present, do not acquire a protected-object lease or rewrite
+        // ordinary ACLs. The harness still validates its exact GUID deletion target.
+        if ((await catalog.ReadNamespacePermissionChangesAsync()).Count == 0 &&
+            (await catalog.BeginNamespaceBirthRecoveryScanAsync()).ThroughSequence == 0)
+            return new(1, true, 0, 0, ProtectedNamespace: false);
         string inspection = Path.Combine(root, "inspection");
         if (Path.Exists(inspection) && (File.GetAttributes(inspection) & FileAttributes.ReparsePoint) != 0)
             throw new InvalidDataException("The fixture inspection directory was redirected.");

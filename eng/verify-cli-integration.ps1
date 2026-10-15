@@ -463,8 +463,11 @@ finally {
         }
         if (Test-Path -LiteralPath (Join-Path $cleanupRoot '.mp-cli-fixture.json')) {
             $cleanup = Invoke-CliFixtureProbe -Mode cleanup -Phase Teardown
-            if ($cleanup.exclusiveCatalogOwner -ne $true -or $cleanup.validatedObjects -lt 1 -or
-                $cleanup.restoredObjects -ne $cleanup.validatedObjects) {
+            if ($cleanup.exclusiveCatalogOwner -ne $true -or
+                ($cleanup.protectedNamespace -eq $true -and ($cleanup.validatedObjects -lt 1 -or
+                    $cleanup.restoredObjects -ne $cleanup.validatedObjects)) -or
+                ($cleanup.protectedNamespace -eq $false -and ($cleanup.validatedObjects -ne 0 -or $cleanup.restoredObjects -ne 0)) -or
+                $null -eq $cleanup.protectedNamespace) {
                 throw 'The isolated fixture permission cleanup was incomplete.'
             }
         }

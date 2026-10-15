@@ -121,6 +121,23 @@ public sealed class CliFixtureProbeTests
     }
 
     [TestMethod]
+    public async Task CleanupWithoutRecordedProtectionDoesNotOpenCloudFilesOrRewriteOrdinaryPermissions()
+    {
+        await using Fixture fixture = await Fixture.CreateAsync();
+        string sentinel = Path.Combine(fixture.Paths.SyncRootPath, "unrelated.txt");
+        await File.WriteAllTextAsync(sentinel, "ordinary fixture bytes");
+        var before = new FileInfo(sentinel).GetAccessControl().GetSecurityDescriptorBinaryForm();
+        var result = await RunAsync(fixture.Root, audit: false, cleanup: true);
+        Assert.AreEqual(0, result.ExitCode, result.Error);
+        var cleanup = JsonSerializer.Deserialize<CliFixtureCleanupResult>(result.Output, JsonOptions)!;
+        Assert.IsTrue(cleanup.ExclusiveCatalogOwner); Assert.IsFalse(cleanup.ProtectedNamespace);
+        Assert.AreEqual(0, cleanup.ValidatedObjects); Assert.AreEqual(0, cleanup.RestoredObjects);
+        Assert.IsFalse(Directory.Exists(Path.Combine(fixture.Root, "inspection")));
+        Assert.AreEqual("ordinary fixture bytes", await File.ReadAllTextAsync(sentinel));
+        CollectionAssert.AreEqual(before, new FileInfo(sentinel).GetAccessControl().GetSecurityDescriptorBinaryForm());
+    }
+
+    [TestMethod]
     [DataRow(false)]
     [DataRow(true)]
     public async Task ExternalReaderChecksCompleteBytesAndChunkBoundaryRanges(bool corrupt)
