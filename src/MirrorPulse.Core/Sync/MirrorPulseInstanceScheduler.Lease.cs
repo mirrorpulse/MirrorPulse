@@ -41,7 +41,7 @@ public sealed partial class MirrorPulseInstanceScheduler
         lock (_lifecycle) if (--_active == 0 && _closing) _drained.TrySetResult();
     }
 
-    public sealed class InstanceLease : IAsyncDisposable
+    public sealed class InstanceLease : IMirrorPulseInstanceScheduler, IAsyncDisposable
     {
         private readonly MirrorPulseInstanceScheduler _owner;
         private readonly SemaphoreSlim[] _held;

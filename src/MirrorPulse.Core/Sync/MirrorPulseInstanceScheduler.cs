@@ -4,7 +4,7 @@ using MirrorPulse.Core.Contracts;
 namespace MirrorPulse.Core.Sync;
 
 /// <summary>Serializes operations within an instance while allowing independent instances to progress.</summary>
-public sealed partial class MirrorPulseInstanceScheduler : IAsyncDisposable
+public sealed partial class MirrorPulseInstanceScheduler : IMirrorPulseInstanceScheduler, IAsyncDisposable
 {
     private readonly ConcurrentDictionary<InstanceId, SemaphoreSlim> _gates = new();
     private readonly CancellationTokenSource _shutdown = new();
@@ -12,6 +12,7 @@ public sealed partial class MirrorPulseInstanceScheduler : IAsyncDisposable
     private readonly TaskCompletionSource _drained = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int _active;
     private bool _closing;
+    private Task? _disposeTask;
 
     public async ValueTask<T> RunAsync<T>(InstanceId instanceId,
         Func<CancellationToken, ValueTask<T>> operation, CancellationToken cancellationToken = default)
@@ -43,17 +44,25 @@ public sealed partial class MirrorPulseInstanceScheduler : IAsyncDisposable
         }
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
         lock (_lifecycle)
         {
-            if (_closing) return;
+            if (_disposeTask is not null) return new(_disposeTask);
             _closing = true;
             if (_active == 0) _drained.TrySetResult();
+            return new(_disposeTask = DisposeCoreAsync());
         }
-        await _shutdown.CancelAsync().ConfigureAwait(false);
-        await _drained.Task.ConfigureAwait(false);
-        foreach (SemaphoreSlim gate in _gates.Values) gate.Dispose();
-        _shutdown.Dispose();
+    }
+
+    private async Task DisposeCoreAsync()
+    {
+        try { await _shutdown.CancelAsync().ConfigureAwait(false); }
+        finally
+        {
+            await _drained.Task.ConfigureAwait(false);
+            foreach (SemaphoreSlim gate in _gates.Values) gate.Dispose();
+            _shutdown.Dispose();
+        }
     }
 }

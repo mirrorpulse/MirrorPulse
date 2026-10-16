@@ -74,6 +74,42 @@ public sealed class MirrorPulseInstanceSchedulerLeaseTests
     }
 
     [TestMethod]
+    public async Task SchedulerShutdownWithAThrowingCallbackStillWaitsForItsAdmittedTail()
+    {
+        var scheduler = new MirrorPulseInstanceScheduler(); var instance = InstanceId.New();
+        var lease = await scheduler.AcquireAsync([instance]);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var active = lease.RunAsync(instance, async token =>
+        {
+            using var registration = token.Register(() => { cancelled.TrySetResult(); throw new InvalidOperationException("Synthetic cancellation callback failure."); });
+            entered.SetResult(); await release.Task.WaitAsync(deadline.Token); return true;
+        }).AsTask();
+        await entered.Task.WaitAsync(deadline.Token);
+        var closing = scheduler.DisposeAsync().AsTask();
+        try
+        {
+            await cancelled.Task.WaitAsync(deadline.Token);
+            // Observe the cancellation failure without releasing the accepted operation.
+            // Both callers must still wait for that operation and its physical lease.
+            var repeated = scheduler.DisposeAsync().AsTask();
+            Assert.IsFalse(repeated.IsCompleted, "Repeated shutdown must retain the original drain even when a callback throws.");
+            release.SetResult(); Assert.IsTrue(await active.WaitAsync(deadline.Token));
+            await lease.DisposeAsync();
+            await Assert.ThrowsAsync<AggregateException>(() => closing);
+            await Assert.ThrowsAsync<AggregateException>(() => repeated);
+            await Assert.ThrowsAsync<ObjectDisposedException>(() => scheduler.RunAsync(instance, _ => ValueTask.FromResult(false)).AsTask());
+        }
+        finally
+        {
+            release.TrySetResult(); await active; await lease.DisposeAsync();
+            try { await closing; } catch (AggregateException) { }
+        }
+    }
+
+    [TestMethod]
     public async Task SchedulerShutdownCancelsWaitersButDrainsAnAlreadyAdmittedNonCooperativeTail()
     {
         var scheduler = new MirrorPulseInstanceScheduler(); var instance = InstanceId.New();
