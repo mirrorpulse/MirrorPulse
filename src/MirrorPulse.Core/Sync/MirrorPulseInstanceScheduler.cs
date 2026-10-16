@@ -4,7 +4,7 @@ using MirrorPulse.Core.Contracts;
 namespace MirrorPulse.Core.Sync;
 
 /// <summary>Serializes operations within an instance while allowing independent instances to progress.</summary>
-public sealed class MirrorPulseInstanceScheduler : IAsyncDisposable
+public sealed partial class MirrorPulseInstanceScheduler : IAsyncDisposable
 {
     private readonly ConcurrentDictionary<InstanceId, SemaphoreSlim> _gates = new();
     private readonly CancellationTokenSource _shutdown = new();
