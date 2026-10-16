@@ -22,6 +22,9 @@ if (-not (Test-Path -LiteralPath (Join-Path $payload $assemblyName) -PathType Le
     throw 'Build the Release namespace test assembly before ordinary-user verification.'
 }
 $catalog = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'test-suites.json') -Raw | ConvertFrom-Json
+. (Join-Path $PSScriptRoot 'namespace-nonadmin-controller.ps1')
+$childBudgetMilliseconds = Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount @($catalog.required.namespace).Count
+Write-Output ("Ordinary-user catalog: selected={0}; controllerBudgetSeconds={1}; nativeCaseDeadlinesUnchanged=True." -f @($catalog.required.namespace).Count, ($childBudgetMilliseconds / 1000))
 $filter = (@($catalog.required.namespace) | ForEach-Object { 'FullyQualifiedName=' + $_ }) -join '|'
 $evidenceDirectory = Join-Path $repository ('artifacts/test-results/namespace-nonadmin-' + $ExpectedArchitecture.ToLowerInvariant())
 New-Item -ItemType Directory -Path $evidenceDirectory -Force | Out-Null
@@ -38,6 +41,9 @@ $context = $null
 $userRemoved = $false
 $profileRemoved = $false
 $workspaceRemoved = $false
+$primaryFailure = $null
+$cleanupFailures = [Collections.Generic.List[Exception]]::new()
+$childStopped = $true
 try {
     if (Test-Path -LiteralPath $scratch) { throw 'The disposable namespace workspace already exists.' }
     if ((Test-Path -LiteralPath $baseDirectory) -and
@@ -99,7 +105,8 @@ try {
             -ArgumentList @('-NoProfile', '-NonInteractive', '-File', ('"' + (Join-Path $scratch 'run.ps1') + '"'),
                 '-ConfigurationPath', ('"' + $configuration + '"')) `
             -RedirectStandardOutput (Join-Path $scratch 'stdout.log') -RedirectStandardError (Join-Path $scratch 'stderr.log')
-        if (-not $child.WaitForExit(600000)) {
+        $childStopped = $false
+        if (-not $child.WaitForExit($childBudgetMilliseconds)) {
             $child.Kill($true)
             $child.WaitForExit()
             throw 'The ordinary-user namespace child did not finish within its CI step budget.'
@@ -130,12 +137,23 @@ try {
             -OutputPath (Join-Path $evidenceDirectory 'test-evidence.json')
         $success = $true
     } finally { $credential = $null; $password.Dispose() }
+} catch {
+    $primaryFailure = $_.Exception
 } finally {
     try {
         if ($null -ne $child) {
             if (-not $child.HasExited) { $child.Kill($true); $child.WaitForExit() }
+            $childStopped = $true
             $child.Dispose()
         }
+    } catch { $cleanupFailures.Add($_.Exception) }
+    # Save bounded original diagnostics after the child stops and before any
+    # profile/workspace cleanup can fail or remove them. Never copy credentials.
+    if (-not $success -and $childStopped -and (Test-Path -LiteralPath $marker -PathType Leaf)) {
+        try { Copy-OrdinaryUserNamespaceFailureEvidence -Workspace $scratch -Identifier $identifier -EvidenceDirectory $evidenceDirectory }
+        catch { $cleanupFailures.Add($_.Exception) }
+    }
+    try {
         if ($null -ne $user) {
             $profile = @(Get-CimInstance Win32_UserProfile -Filter ("SID='" + $user.SID.Value + "'"))
             foreach ($entry in $profile) {
@@ -153,8 +171,10 @@ try {
             Remove-LocalUser -InputObject $actual
             $userRemoved = $null -eq (Get-LocalUser -Name $userName -ErrorAction SilentlyContinue)
         }
-    } finally {
+    } catch { $cleanupFailures.Add($_.Exception) }
+    try {
         if (Test-Path -LiteralPath $scratch) {
+            if (-not $childStopped) { throw 'The disposable child is still live; workspace cleanup was refused.' }
             if ([IO.Path]::GetDirectoryName($scratch) -cne [IO.Path]::GetFullPath($baseDirectory) -or
                 [IO.Path]::GetFileName($scratch) -cne $identifier -or
                 ((Get-Item -LiteralPath $scratch).Attributes -band [IO.FileAttributes]::ReparsePoint) -or
@@ -164,7 +184,20 @@ try {
             Remove-Item -LiteralPath $scratch -Recurse -Force
             $workspaceRemoved = -not (Test-Path -LiteralPath $scratch)
         }
-    }
+    } catch { $cleanupFailures.Add($_.Exception) }
+}
+if ($null -ne $primaryFailure -or $cleanupFailures.Count -gt 0) {
+    [ordered]@{ schemaVersion=1; sourceSha=$sourceSha; architecture=$ExpectedArchitecture;
+        selectedTests=@($catalog.required.namespace).Count; controllerBudgetMilliseconds=$childBudgetMilliseconds;
+        childStopped=$childStopped; testsVerified=$success; accountRemoved=$userRemoved;
+        profileRemoved=$profileRemoved; workspaceRemoved=$workspaceRemoved;
+        primaryFailure=if ($null -ne $primaryFailure) { @{type=$primaryFailure.GetType().FullName;hresult=$primaryFailure.HResult} } else { $null };
+        cleanupFailures=@($cleanupFailures | ForEach-Object { @{type=$_.GetType().FullName;hresult=$_.HResult} }) } |
+        ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $evidenceDirectory 'controller-failure.json') -Encoding utf8
+    $failures = [Collections.Generic.List[Exception]]::new()
+    if ($null -ne $primaryFailure) { $failures.Add($primaryFailure) }
+    foreach ($failure in $cleanupFailures) { $failures.Add($failure) }
+    throw [AggregateException]::new('Ordinary-user verification failed; original diagnostics and independent cleanup failures were retained.', [Exception[]]$failures)
 }
 if ($success -and $userRemoved -and $profileRemoved -and $workspaceRemoved) {
     [ordered]@{ schemaVersion=1; sourceSha=$sourceSha; architecture=$ExpectedArchitecture; nonAdministrator=$true;

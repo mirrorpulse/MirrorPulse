@@ -51,7 +51,7 @@ try {
     New-Item -ItemType Directory -Path $env:TEMP -Force | Out-Null
     [ordered]@{ schemaVersion=1; architecture=$architecture; nonAdministrator=$true; expectedUserMatched=$true;
         profileLoaded=$true } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $configuration.workDirectory 'context.json') -Encoding utf8
-    & $configuration.dotnetPath test $configuration.testAssembly --filter $configuration.filter --logger 'trx;LogFileName=namespace.trx' `
+    & $configuration.dotnetPath test $configuration.testAssembly --filter $configuration.filter --logger 'trx;LogFileName=namespace.trx' --logger 'console;verbosity=normal' `
         --results-directory (Join-Path $configuration.workDirectory 'results')
     if ($LASTEXITCODE -ne 0) { throw 'The ordinary-user namespace tests failed.' }
 } finally { $identity.Dispose() }

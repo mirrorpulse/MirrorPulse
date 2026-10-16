@@ -238,3 +238,18 @@ early exit, a missing pipe connection, a silent Hello, an invalid first frame,
 an invalid executable, a rejected version negotiation, and requested shutdown. Official package failures include
 the Host's sanitized stage and process facts in the original TRX failure output.
 These tests preserve the production connection and Hello deadlines.
+
+## Ordinary-user controller diagnostics
+
+The disposable account controller budgets the complete required namespace catalog:
+two minutes of process overhead plus fifteen seconds per selected test, with a
+ten-minute minimum and a maximum selection of 100 tests. Individual native case
+deadlines and all required results remain unchanged. A larger selection requires
+an explicit policy review rather than an unbounded controller timeout.
+
+After a failed or interrupted child stops, its bounded original context, TRX and
+synthetic stdout/stderr are copied before account, profile or workspace cleanup.
+Credential configuration is excluded. Controller failures retain the primary
+failure and each cleanup failure independently; cleanup failure cannot turn the
+run green or erase the original diagnostic. Successful execution still requires
+all existing ordinary-user identity and cleanup evidence.
