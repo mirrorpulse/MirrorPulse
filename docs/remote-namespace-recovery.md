@@ -15,6 +15,13 @@ positions, public item identity, original protection, and directory move evidenc
 The batch reference does not prove that a native operation succeeded.
 
 Catalog schema 59 adds a separate unique index for remote entry ownership.
+
+Catalog schema 60 also retains the public identity of an existing directory placeholder
+before its first permission write. Files keep version 1 identity records; directories
+use version 2. This is metadata inspection within the public protected scope, without
+conversion, hydration, revision acceptance or journal acknowledgement. Ordinary
+directories keep no identity record. Historical directories with no original identity
+remain unresolved; migration never adopts a later identity from their current path.
 Admission and index insertion share one transaction. Reusing a batch ordinal or
 change ID for another move, changing the batch fingerprint, and replaying an
 ordinary move ID as a remote move are rejected. Reading a remote admission

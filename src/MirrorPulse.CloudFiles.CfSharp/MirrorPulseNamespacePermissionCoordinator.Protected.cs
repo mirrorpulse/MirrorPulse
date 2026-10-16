@@ -90,6 +90,8 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinator
         MirrorPulseNamespacePermissionBaseline baseline, IMirrorPulseProtectedNamespacePermissionLease lease,
         CloudPlaceholderIdentity? initialLocalIdentity, CancellationToken cancellationToken)
     {
+        if (baseline.IsDirectory)
+            return await RetainExistingDirectoryIdentityAsync(change, baseline, lease, cancellationToken).ConfigureAwait(false);
         if (!baseline.IsDirectory)
         {
             MirrorPulseNamespacePermissionLocalIdentity? retained = await _catalog.ReadNamespacePermissionLocalIdentityAsync(
@@ -119,6 +121,28 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinator
             if (!local.IsPlaceholder || local.PlaceholderIdentity!.RemoteRevision is null)
                 await lease.PrepareLocalIdentityAsync(identity, cancellationToken).ConfigureAwait(false);
         }
+        return null;
+    }
+
+    private async Task<MirrorPulseNamespacePermissionResult?> RetainExistingDirectoryIdentityAsync(
+        MirrorPulseNamespacePermissionChange change, MirrorPulseNamespacePermissionBaseline baseline,
+        IMirrorPulseProtectedNamespacePermissionLease lease, CancellationToken token)
+    {
+        var retained = await _catalog.ReadNamespacePermissionLocalIdentityAsync(baseline.EvidenceId, token).ConfigureAwait(false);
+        var local = await lease.InspectLocalIdentityAsync(token).ConfigureAwait(false);
+        // Ordinary directories have no placeholder identity to retain. Permission work
+        // must neither convert them nor invent a remote identity for them.
+        if (retained is null && !local.IsPlaceholder && local.ItemId is null && local.RemoteId is null) return null;
+        if (!local.IsPlaceholder || local.PlaceholderIdentity is null || local.ItemId is null || local.RemoteId is null ||
+            !MatchesRetainedIdentity(local, retained, null))
+            return await FenceAsync(change, MirrorPulseNamespacePermissionRecoveryReason.ObjectChanged).ConfigureAwait(false);
+        if (retained is not null) return null;
+        var history = await _catalog.ReadNamespacePermissionObjectHistoryAsync(baseline.EvidenceId, token).ConfigureAwait(false);
+        if (change.Phase != MirrorPulseNamespacePermissionPhase.Prepared ||
+            change.Intent.Kind != MirrorPulseNamespacePermissionChangeKind.Protect || history.Count != 1)
+            return await FenceAsync(change, MirrorPulseNamespacePermissionRecoveryReason.Interrupted).ConfigureAwait(false);
+        await _catalog.PrepareNamespacePermissionLocalIdentityAsync(new(2, baseline.EvidenceId, change.Intent.OperationId,
+            baseline.LocalObject, local.ItemId.Value, local.RemoteId, DateTimeOffset.UtcNow), token).ConfigureAwait(false);
         return null;
     }
 

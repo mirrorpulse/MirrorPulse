@@ -231,7 +231,7 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinatorTests
         lease.Object.Current = lease.Object.Current with { IsDirectory = true, RelativePath = "Docs" };
         Assert.AreEqual(MirrorPulseNamespacePermissionOutcome.Verified,
             (await ApplyProtectedFixtureAsync(coordinator, intent.OperationId, lease, null)).Outcome);
-        Assert.AreEqual(0, lease.IdentityReads);
+        Assert.AreEqual(1, lease.IdentityReads);
         Assert.AreEqual(0, lease.Preparations);
         Assert.AreEqual(1, lease.Object.Writes);
         Assert.IsNull(await catalog.ReadNamespacePermissionLocalIdentityAsync(baseline.EvidenceId));
@@ -347,8 +347,13 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinatorTests
         public bool Disposed { get; private set; }
         public CloudPlaceholderIdentity? ConvertedIdentity { get; private set; }
         public Func<CloudPlaceholderIdentity, Task>? BeforeConversion { get; set; }
+        public Func<Task>? BeforeAccessWrite { get; set; }
         public ValueTask<MirrorPulseNamespacePermissionObject> InspectAsync(CancellationToken cancellationToken) => Object.InspectAsync(cancellationToken);
-        public ValueTask ApplyDaclAsync(string dacl, CancellationToken cancellationToken) => Object.ApplyDaclAsync(dacl, cancellationToken);
+        public async ValueTask ApplyDaclAsync(string dacl, CancellationToken cancellationToken)
+        {
+            if (BeforeAccessWrite is not null) await BeforeAccessWrite();
+            await Object.ApplyDaclAsync(dacl, cancellationToken);
+        }
         public ValueTask<MirrorPulseProtectedLocalIdentityObservation> InspectLocalIdentityAsync(CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();

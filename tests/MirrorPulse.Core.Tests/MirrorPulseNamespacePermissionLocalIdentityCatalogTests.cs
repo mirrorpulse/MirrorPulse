@@ -174,9 +174,52 @@ public sealed class MirrorPulseNamespacePermissionLocalIdentityCatalogTests
         await catalog.PrepareNamespacePermissionChangesAsync([new(file, fileIntent), new(directory, directoryIntent)]);
         await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => catalog.PrepareNamespacePermissionLocalIdentityAsync(Identity(directory, directoryIntent)));
         await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => catalog.PrepareNamespacePermissionLocalIdentityAsync(
+            Identity(file, fileIntent) with { Version = 2 }));
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => catalog.PrepareNamespacePermissionLocalIdentityAsync(
             Identity(file, fileIntent) with { EvidenceId = directory.EvidenceId }));
         Assert.IsNull(await catalog.ReadNamespacePermissionLocalIdentityAsync(file.EvidenceId));
         Assert.IsNull(await catalog.ReadNamespacePermissionLocalIdentityAsync(directory.EvidenceId));
+    }
+
+    [TestMethod]
+    public async Task ExistingDirectoryIdentitySurvivesStoreOwnersWithoutAcceptingARemoteRevision()
+    {
+        using var fixture = new CatalogFixture();
+        var baseline = Baseline() with { IsDirectory = true, RelativePath = "Docs" };
+        var intent = Intent(baseline);
+        var identity = Identity(baseline, intent) with { Version = 2, RemoteId = "existing-provider-directory" };
+        await using (var first = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths))
+        {
+            await first.PrepareNamespacePermissionChangeAsync(baseline, intent);
+            Assert.AreEqual(identity, await first.PrepareNamespacePermissionLocalIdentityAsync(identity));
+            await CompleteAsync(first, baseline, intent);
+        }
+        await using var reopened = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        Assert.AreEqual(identity, await reopened.ReadNamespacePermissionLocalIdentityAsync(baseline.EvidenceId));
+        Assert.AreEqual(identity, await reopened.PrepareNamespacePermissionLocalIdentityAsync(identity));
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => reopened.PrepareNamespacePermissionLocalIdentityAsync(
+            identity with { ItemId = Guid.NewGuid() }));
+        Assert.AreEqual(baseline, await reopened.ReadNamespacePermissionBaselineAsync(baseline.EvidenceId));
+        Assert.IsFalse(File.Exists(fixture.Paths.CfSharpStateDatabasePath));
+    }
+
+    [TestMethod]
+    public async Task Schema59UpgradePreservesMissingHistoricalDirectoryIdentity()
+    {
+        using var fixture = new CatalogFixture();
+        var baseline = Baseline() with { IsDirectory = true, RelativePath = "Docs" };
+        var intent = Intent(baseline);
+        await using (var first = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths))
+        {
+            await first.PrepareNamespacePermissionChangeAsync(baseline, intent);
+            await CompleteAsync(first, baseline, intent);
+        }
+        await ExecuteSqlAsync(fixture.Paths, "PRAGMA user_version=59;");
+        await using var reopened = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        Assert.IsNull(await reopened.ReadNamespacePermissionLocalIdentityAsync(baseline.EvidenceId));
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => reopened.PrepareNamespacePermissionLocalIdentityAsync(
+            Identity(baseline, intent) with { Version = 2 }));
+        Assert.AreEqual(baseline, await reopened.ReadNamespacePermissionBaselineAsync(baseline.EvidenceId));
     }
 
     [TestMethod]
@@ -217,7 +260,7 @@ public sealed class MirrorPulseNamespacePermissionLocalIdentityCatalogTests
         await using var connection = Connection(fixture.Paths);
         await connection.OpenAsync();
         await using var query = connection.CreateCommand(); query.CommandText = "PRAGMA user_version;";
-        Assert.AreEqual(59L, await query.ExecuteScalarAsync());
+        Assert.AreEqual(60L, await query.ExecuteScalarAsync());
         Assert.IsFalse(File.Exists(fixture.Paths.CfSharpStateDatabasePath));
     }
 

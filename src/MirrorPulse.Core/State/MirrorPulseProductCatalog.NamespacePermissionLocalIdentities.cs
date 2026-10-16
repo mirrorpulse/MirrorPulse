@@ -11,6 +11,8 @@ namespace MirrorPulse.Core.State;
 /// ItemId and RemoteId, and validate the public identity encoding before preparation. Existing
 /// records must be reused across role rotation and restart; they cannot be inferred from a
 /// later path or created to repair a historical application that lacks original evidence.
+/// Version 1 belongs to a file; version 2 retains an already existing directory identity.
+/// Directory retention does not authorize conversion or create an identity for an ordinary directory.
 /// </remarks>
 public sealed record MirrorPulseNamespacePermissionLocalIdentity(int Version, Guid EvidenceId,
     Guid PermissionOperationId, MirrorPulseLocalFileBinding LocalObject, Guid ItemId, string RemoteId,
@@ -35,9 +37,9 @@ public sealed partial class MirrorPulseProductCatalog
             MirrorPulseNamespacePermissionBaseline original = await ReadPermissionBaselineCoreAsync(
                 identity.EvidenceId, cancellationToken, transaction).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The original permission evidence is missing.");
-            if (original.IsDirectory || identity.LocalObject != original.LocalObject ||
+            if (original.IsDirectory != (identity.Version == 2) || identity.LocalObject != original.LocalObject ||
                 change.Intent.EvidenceId != original.EvidenceId || identity.PreparedAt < change.Intent.PreparedAt)
-                throw new InvalidOperationException("Local identity does not belong to the original file and permission operation.");
+                throw new InvalidOperationException("Local identity does not belong to the original object kind and permission operation.");
             MirrorPulseNamespacePermissionLocalIdentity? retained = await ReadPermissionLocalIdentityCoreAsync(
                 identity.EvidenceId, cancellationToken, transaction).ConfigureAwait(false);
             if (retained is not null)
@@ -59,7 +61,7 @@ public sealed partial class MirrorPulseProductCatalog
                 planned.CommandText = "SELECT 1 FROM namespace_birth_plans WHERE item_id=$item;";
                 planned.Parameters.AddWithValue("$item", identity.ItemId.ToString("D"));
                 if (await planned.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null)
-                    throw new InvalidOperationException("An original file cannot adopt a planned birth identity.");
+                    throw new InvalidOperationException("An original object cannot adopt a planned birth identity.");
             }
             byte[] payload = JsonSerializer.SerializeToUtf8Bytes(identity, TopologyJsonOptions);
             await using SqliteCommand insert = _connection.CreateCommand();
@@ -129,7 +131,7 @@ public sealed partial class MirrorPulseProductCatalog
             ?? throw new InvalidDataException("The original local identity lost its object evidence.");
         IReadOnlyList<MirrorPulseNamespacePermissionChange> history = await ReadPermissionChangesCoreAsync(
             evidenceId, token, transaction).ConfigureAwait(false);
-        if (original.IsDirectory || original.LocalObject != identity.LocalObject || change.Intent.EvidenceId != identity.EvidenceId ||
+        if (original.IsDirectory != (identity.Version == 2) || original.LocalObject != identity.LocalObject || change.Intent.EvidenceId != identity.EvidenceId ||
             change.Intent.Kind != MirrorPulseNamespacePermissionChangeKind.Protect || identity.PreparedAt < change.Intent.PreparedAt ||
             history.Count == 0 || history[0].Intent.OperationId != operationId ||
             change.AppliedAt is not null && identity.PreparedAt > change.AppliedAt)
@@ -140,7 +142,7 @@ public sealed partial class MirrorPulseProductCatalog
     private static void ValidatePermissionLocalIdentity(MirrorPulseNamespacePermissionLocalIdentity identity)
     {
         ValidatePermissionBinding(identity.LocalObject);
-        if (identity.Version != 1 || identity.EvidenceId == Guid.Empty || identity.PermissionOperationId == Guid.Empty ||
+        if (identity.Version is not (1 or 2) || identity.EvidenceId == Guid.Empty || identity.PermissionOperationId == Guid.Empty ||
             identity.ItemId == Guid.Empty || string.IsNullOrWhiteSpace(identity.RemoteId) || identity.RemoteId.Length > 4096 || identity.PreparedAt == default)
             throw new ArgumentException("The original local identity is incomplete or unsupported.", nameof(identity));
     }
