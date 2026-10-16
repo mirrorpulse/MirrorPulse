@@ -100,13 +100,42 @@ or native evidence, and the current schema does not repair a missing claim.
 A rejected replay returns history and cannot release a newer operation's fence.
 The SDK conflict and original local journal remain unresolved. This does not move
 or hydrate content, acknowledge an upload, or publish an Adapter cursor. These
-coordinator APIs still require production batch-driver and Host integration.
+coordinator APIs are used by the managed move-batch driver described below. The
+remaining entry lifecycles and default Host integration are still pending.
 
 ## Integration still in progress
 
-Production remote batch dispatch does not yet use these admissions. Remote birth,
-move settlement, retirement, and interrupted operations under a new Host role
+Managed remote move dispatch uses these admissions. Remote birth, replacement,
+retirement, and interrupted operations under a new Host role
 must be integrated before default strict Host startup is enabled. An applied
 entry count includes durable conflicts, and `AlreadyApplied` on replay is not
 native-success evidence. Recovery must use the original binding and receipts;
 the object currently occupying a pathname cannot replace missing historical facts.
+
+## Managed remote batch boundaries
+
+The strict runtime retains its current SDK owner and root work admission for the complete
+remote apply call. It admits one entry of the original public batch at a time, preserves its
+batch ID, fingerprint and conservative options, and returns the actual SDK result. The
+current driver supports moves; birth, replacement and retirement batches remain rejected
+until their product lifecycles are connected. This does not enable the default Host.
+
+Before SDK execution, the move coordinator retains the original native member, parents,
+position, identity and before-native start. After SDK execution, the driver verifies either
+the actual target and official projection or the durable conflict and unchanged source.
+An Adapter checkpoint is published only after this product settlement. Recovery after an
+SDK commit settles the retained entry before allowing a later entry or cursor publication.
+An existing start without committed SDK progress remains uncertain and cannot authorize
+another native dispatch.
+
+Polling may reconstruct its durable original batch before checking the ordinary polling
+fence. Its explicit replay predicate admits only the batch owning the pending remote move;
+ordinary polling stays fenced and does not observe a newer source snapshot. The shared live
+work owner still requires fresh root readiness. This query does not reopen a root or transfer
+an old Host role's authority. Default Host composition, new-role recovery, streamed durable
+intent, multiple roots and the remaining entry lifecycles are still pending.
+
+The driver bounds batches to 65,536 entries. Prefix settlement currently validates historical
+move references, and conflict recovery uses CfSharp preview.5's decoded list API because it
+does not expose a batch-scoped conflict page. These paths do not constitute the complete
+fairness and query-budget acceptance required for S06.

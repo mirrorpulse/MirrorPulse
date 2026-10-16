@@ -1012,7 +1012,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             finally { _initializationGate.Release(); }
         }
 
-        public async ValueTask<CloudRemoteApplyResult> ApplyRemoteBatchAsync(
+        public ValueTask<CloudRemoteApplyResult> ApplyRemoteBatchAsync(
             InstanceId instanceId,
             CloudRemoteChangeBatch batch,
             MirrorPulseProductCatalog catalog,
@@ -1020,6 +1020,11 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             MirrorPulseConflictNotificationBridge notifications,
             CloudRemoteApplyOptions? options,
             CancellationToken cancellationToken)
+            => WithCurrentLibraryAsync(token => ApplyRemoteBatchCoreAsync(instanceId, batch, catalog, center, notifications, options, token), cancellationToken);
+
+        private async ValueTask<CloudRemoteApplyResult> ApplyRemoteBatchCoreAsync(InstanceId instanceId,
+            CloudRemoteChangeBatch batch, MirrorPulseProductCatalog catalog, MirrorPulseConflictCenter center,
+            MirrorPulseConflictNotificationBridge notifications, CloudRemoteApplyOptions? options, CancellationToken cancellationToken)
         {
             MirrorPulseNamespaceWorkAdmission.WorkLease? admission = null;
             if (namespaceWork is not null)
@@ -1038,6 +1043,18 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             using (admission)
             {
                 var projector = new MirrorPulseRemoteConflictProjector(fileSystem, catalog, center, notifications);
+                if (initializeNamespaceOnStart)
+                {
+                    if (router is null || _namespaceExecution is null || _namespaceActor is null)
+                        throw new InvalidOperationException("Managed remote batches require the complete Host namespace boundary.");
+                    if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
+                        throw new PlatformNotSupportedException("Managed remote batches require Windows 11 24H2 or later.");
+                    await new MirrorPulseRemoteNamespaceFence(router, catalog, allowOriginalMoveRecovery: true)
+                        .EnsureApplyAllowedAsync(instanceId, batch, cancellationToken).ConfigureAwait(false);
+                    var driver = new MirrorPulseRemoteNamespaceBatchDriver(fileSystem, state, catalog, router, _namespaceExecution, _namespaceActor);
+                    return await new MirrorPulseRemoteBatchCoordinator(fileSystem, state, projector, driver)
+                        .ApplyAsync(instanceId, batch, options, cancellationToken).ConfigureAwait(false);
+                }
                 var coordinator = new MirrorPulseRemoteBatchCoordinator(fileSystem, state, projector);
                 if (_namespaceActor is null) return await coordinator.ApplyAsync(instanceId, batch, options, cancellationToken).ConfigureAwait(false);
                 return await _namespaceActor.RunAsync(async token =>

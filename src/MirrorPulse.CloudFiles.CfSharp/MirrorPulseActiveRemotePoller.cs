@@ -33,6 +33,7 @@ public sealed class MirrorPulseActiveRemotePoller : IAsyncDisposable
     private readonly MirrorPulseInstanceScheduler _scheduler;
     private readonly bool _ownsScheduler;
     private readonly MirrorPulseNamespaceWorkAdmission? _namespaceWork;
+    private readonly Func<RootRegistration, CloudRemoteChangeBatch, CancellationToken, ValueTask<bool>>? _mayReplay;
     private readonly CancellationTokenSource _shutdown = new();
     private Task? _loop;
 
@@ -49,7 +50,8 @@ public sealed class MirrorPulseActiveRemotePoller : IAsyncDisposable
         MirrorPulseInstanceScheduler? scheduler = null,
         Func<RootRegistration, CancellationToken, ValueTask<bool>>? mayPoll = null,
         Func<IReadOnlyList<RootRegistration>>? currentRoots = null,
-        MirrorPulseNamespaceWorkAdmission? namespaceWork = null)
+        MirrorPulseNamespaceWorkAdmission? namespaceWork = null,
+        Func<RootRegistration, CloudRemoteChangeBatch, CancellationToken, ValueTask<bool>>? mayReplay = null)
     {
         _source = source ?? throw new ArgumentNullException(nameof(source));
         ArgumentNullException.ThrowIfNull(instances);
@@ -78,6 +80,7 @@ public sealed class MirrorPulseActiveRemotePoller : IAsyncDisposable
         _ownsScheduler = scheduler is null;
         _scheduler = scheduler ?? new MirrorPulseInstanceScheduler();
         _namespaceWork = namespaceWork;
+        _mayReplay = mayReplay;
         if (pendingStore is not null && snapshotStore is null)
             throw new ArgumentException("Pending batches require a durable snapshot store.", nameof(snapshotStore));
     }
@@ -108,11 +111,6 @@ public sealed class MirrorPulseActiveRemotePoller : IAsyncDisposable
         }
 
         RootRegistration root = roots[0];
-        if (_mayPoll is not null && !await _mayPoll(root, cancellationToken).ConfigureAwait(false)) return false;
-        MirrorPulseNamespaceWorkAdmission.WorkLease? admission = null;
-        if (_namespaceWork is not null && !_namespaceWork.TryEnter([root.RootId], out admission)) return false;
-        using var retainedAdmission = admission;
-
         MirrorPulsePendingRemotePoll? pending = _pendingStore is null ? null :
             await _pendingStore.LoadAsync(instanceId, cancellationToken).ConfigureAwait(false);
         if (pending is not null)
@@ -124,9 +122,21 @@ public sealed class MirrorPulseActiveRemotePoller : IAsyncDisposable
             CloudRemoteChangeBatch replay = CreateBatch(instanceId, root, prior, candidate, pending.ProjectionVersion);
             if (replay.BatchId != pending.BatchId || !replay.Fingerprint.Span.SequenceEqual(pending.Fingerprint))
                 throw new InvalidDataException("The pending poll intent does not recreate its immutable batch.");
+            bool allowed = _mayReplay is not null
+                ? await _mayReplay(root, replay, cancellationToken).ConfigureAwait(false)
+                : _mayPoll is null || await _mayPoll(root, cancellationToken).ConfigureAwait(false);
+            if (!allowed) return false;
+            MirrorPulseNamespaceWorkAdmission.WorkLease? replayAdmission = null;
+            if (_namespaceWork is not null && !_namespaceWork.TryEnter([root.RootId], out replayAdmission)) return false;
+            using var retainedReplayAdmission = replayAdmission;
             // Do not enumerate a newer remote tree until this exact batch has converged.
             return await ApplyAndCommitAsync(instanceId, replay, candidate, cancellationToken).ConfigureAwait(false);
         }
+
+        if (_mayPoll is not null && !await _mayPoll(root, cancellationToken).ConfigureAwait(false)) return false;
+        MirrorPulseNamespaceWorkAdmission.WorkLease? admission = null;
+        if (_namespaceWork is not null && !_namespaceWork.TryEnter([root.RootId], out admission)) return false;
+        using var retainedAdmission = admission;
 
         IReadOnlyDictionary<string, SnapshotEntry> current = await ReadSnapshotAsync(
             instanceId, root.UniquenessKey, cancellationToken).ConfigureAwait(false);

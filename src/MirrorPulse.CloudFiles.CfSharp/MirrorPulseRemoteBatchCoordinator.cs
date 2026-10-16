@@ -14,6 +14,7 @@ public sealed class MirrorPulseRemoteBatchCoordinator
     private readonly CloudFileSystem _fileSystem;
     private readonly MirrorPulseCfSharpStateSession _state;
     private readonly MirrorPulseRemoteConflictProjector? _conflicts;
+    private readonly MirrorPulseRemoteNamespaceBatchDriver? _namespaceDriver;
 
     public MirrorPulseRemoteBatchCoordinator(
         CloudFileSystem fileSystem,
@@ -26,6 +27,11 @@ public sealed class MirrorPulseRemoteBatchCoordinator
         _state = state;
         _conflicts = conflicts;
     }
+
+    [SupportedOSPlatform("windows10.0.26100")]
+    internal MirrorPulseRemoteBatchCoordinator(CloudFileSystem fileSystem, MirrorPulseCfSharpStateSession state,
+        MirrorPulseRemoteConflictProjector? conflicts, MirrorPulseRemoteNamespaceBatchDriver namespaceDriver)
+        : this(fileSystem, state, conflicts) => _namespaceDriver = namespaceDriver;
 
     public async ValueTask<CloudRemoteApplyResult> ApplyAsync(
         InstanceId instanceId,
@@ -63,9 +69,12 @@ public sealed class MirrorPulseRemoteBatchCoordinator
             await preflight.RollbackAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        CloudRemoteApplyResult result = await _fileSystem.ApplyRemoteChangesAsync(
-            batch, options ?? CloudRemoteApplyOptions.Default, cancellationToken).ConfigureAwait(false);
-        if (_conflicts is not null)
+        if (_namespaceDriver is not null && !OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
+            throw new PlatformNotSupportedException("Managed remote entries require Windows 11 24H2 or later.");
+        CloudRemoteApplyResult result = _namespaceDriver is null
+            ? await _fileSystem.ApplyRemoteChangesAsync(batch, options ?? CloudRemoteApplyOptions.Default, cancellationToken).ConfigureAwait(false)
+            : await _namespaceDriver.ApplyAsync(instanceId, batch, options ?? CloudRemoteApplyOptions.Default, _conflicts, cancellationToken).ConfigureAwait(false);
+        if (_namespaceDriver is null && _conflicts is not null)
         {
             await _conflicts.CaptureResultAsync(instanceId, result, cancellationToken).ConfigureAwait(false);
         }

@@ -7,7 +7,8 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 
 /// <summary>Retains remote replay intent while its managed namespace is being recovered.</summary>
 [SupportedOSPlatform("windows10.0.16299")]
-public sealed class MirrorPulseRemoteNamespaceFence(MirrorPulseRootRouter router, MirrorPulseProductCatalog catalog)
+public sealed class MirrorPulseRemoteNamespaceFence(MirrorPulseRootRouter router, MirrorPulseProductCatalog catalog,
+    bool allowOriginalMoveRecovery = false)
 {
     public async ValueTask<bool> CanPollAsync(RootRegistration root, CancellationToken cancellationToken)
     {
@@ -15,6 +16,33 @@ public sealed class MirrorPulseRemoteNamespaceFence(MirrorPulseRootRouter router
         if (current.RootId != root.RootId || current.DirectoryName != root.DirectoryName ||
             current.State != RootRegistrationState.Active) return false;
         return !(await catalog.ReadNamespaceDispatchFencedRootsAsync(cancellationToken).ConfigureAwait(false)).Contains(root.RootId);
+    }
+
+    /// <summary>Allows only the immutable batch owning a pending move to reach outcome recovery.</summary>
+    public async ValueTask<bool> CanReplayAsync(RootRegistration root, CloudRemoteChangeBatch batch, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(batch);
+        RootRegistration current = router.GetRegistration(root.InstanceId, root.UniquenessKey);
+        if (current.RootId != root.RootId || current.DirectoryName != root.DirectoryName || current.State != RootRegistrationState.Active)
+            return false;
+        var move = await catalog.ReadPendingNamespaceMemberMoveAsync(root.RootId, cancellationToken).ConfigureAwait(false);
+        if (move is null) return await CanPollAsync(root, cancellationToken).ConfigureAwait(false);
+        if (move.RemoteEntry is not { } remote || remote.InstanceId != root.InstanceId || remote.BatchId != batch.BatchId ||
+            remote.BatchFingerprint != Convert.ToHexString(batch.Fingerprint.Span) || remote.BatchEntryCount != batch.Changes.Count ||
+            remote.Ordinal >= batch.Changes.Count) return false;
+        var change = batch.Changes[remote.Ordinal];
+        if (change.Kind != CloudRemoteChangeKind.Move || change.ChangeId != remote.ChangeId || change.ItemId != move.ItemId ||
+            change.RemoteId != move.RemoteId || change.PreviousRemoteRevision != remote.PreviousRemoteRevision ||
+            change.RemoteRevision != remote.RemoteRevision || change.PreviousRelativePath?.Replace('\\', '/') != move.Source.RelativePath ||
+            change.RelativePath.Replace('\\', '/') != move.Target.RelativePath ||
+            (change.ItemKind == CloudItemKind.Directory) != (move.DirectoryMoveEvidence is not null)) return false;
+        foreach (var entry in batch.Changes)
+            foreach (string path in entry.PreviousRelativePath is { } previous ? new[] { entry.RelativePath, previous } : [entry.RelativePath])
+            {
+                var route = router.ResolveCurrentPath(path);
+                if (route.InstanceId != root.InstanceId || router.GetRegistration(route.InstanceId, route.RootKey).RootId != root.RootId) return false;
+            }
+        return await catalog.CanResumeNamespaceRemoteMoveAsync(move, cancellationToken).ConfigureAwait(false);
     }
 
     public async ValueTask EnsureApplyAllowedAsync(InstanceId instance, CloudRemoteChangeBatch batch,
@@ -33,7 +61,11 @@ public sealed class MirrorPulseRemoteNamespaceFence(MirrorPulseRootRouter router
                         throw new InvalidDataException("A remote batch belongs to another Adapter instance.");
                     return router.GetRegistration(routed.InstanceId, routed.RootKey).RootId;
                 });
-        if (affected.Any(pending.Contains))
-            throw new InvalidOperationException("Remote changes must wait for managed root namespace recovery.");
+        foreach (RootId rootId in affected.Distinct().Where(pending.Contains))
+        {
+            var root = router.Registrations.Single(item => item.RootId == rootId);
+            if (!allowOriginalMoveRecovery || !await CanReplayAsync(root, batch, cancellationToken).ConfigureAwait(false))
+                throw new InvalidOperationException("Remote changes must wait for managed root namespace recovery.");
+        }
     }
 }

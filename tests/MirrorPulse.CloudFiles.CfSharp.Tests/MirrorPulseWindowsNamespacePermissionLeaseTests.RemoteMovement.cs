@@ -53,7 +53,14 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     public Task NativeRemoteCaseOnlyConflictRejectionReleasesOnlyItsOriginalAdmissionAcrossStoreOwners() =>
         RunOriginalRemoteMovementAsync(directoryMove: false, caseOnly: true, retainPending: true, settleRejected: true);
 
-    private async Task RunOriginalRemoteMovementAsync(bool directoryMove, bool caseOnly = false, bool retainPending = false, bool settleRejected = false)
+    [TestMethod]
+    [DoNotParallelize]
+    [TestCategory("NativeCloudFiles")]
+    public Task NativeManagedRemoteFileBatchRecoversSdkCommitBeforeMemberSettlementAndCursor() =>
+        RunOriginalRemoteMovementAsync(directoryMove: false, managedBatch: true);
+
+    private async Task RunOriginalRemoteMovementAsync(bool directoryMove, bool caseOnly = false, bool retainPending = false,
+        bool settleRejected = false, bool managedBatch = false)
     {
         if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
             Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
@@ -157,6 +164,26 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     Guid memberId = members.Single(member => member.RelativePath == sourcePath).MemberId;
                     Guid targetParent = members.Single(member => member.RelativePath == (caseOnly ? "Docs" : "Docs/right")).MemberId;
                     firstMember = (await catalog.ReadNamespaceMemberAsync(memberId, deadline.Token))!;
+                    if (managedBatch)
+                    {
+                        var driver = new MirrorPulseRemoteNamespaceBatchDriver(fileSystem, state, catalog, router, execution, actor,
+                            (_, _) => ValueTask.FromException(new IOException("Synthetic stop after original SDK commit.")));
+                        var engine = new MirrorPulseRemoteBatchCoordinator(fileSystem, state, null, driver);
+                        await Assert.ThrowsExactlyAsync<IOException>(() => engine.ApplyAsync(registration.InstanceId, batch,
+                            cancellationToken: deadline.Token).AsTask());
+                        intent = (await catalog.ReadNamespaceRemoteMoveAsync(registration.InstanceId, batch.BatchId, 0, deadline.Token))!;
+                        Assert.IsNotNull(intent); operation = intent.OperationId;
+                        Assert.IsNotNull(await catalog.ReadNamespaceMemberMoveStartAsync(operation, deadline.Token));
+                        Assert.IsNull(await catalog.ReadNamespaceMemberMoveCompletionAsync(operation, deadline.Token));
+                        Assert.AreEqual(sourcePath, (await catalog.ReadNamespaceMemberLocationAsync(memberId, deadline.Token)).RelativePath);
+                        Assert.IsNull(await engine.ReadCursorAsync(registration.InstanceId, deadline.Token));
+                        await using var committed = await state.OpenStore.BeginTransactionAsync(deadline.Token);
+                        var progress = await committed.RemoteBatches.GetAsync(batch.BatchId, deadline.Token);
+                        Assert.IsNotNull(progress); Assert.AreEqual(1, progress.AppliedEntryCount);
+                        Assert.AreEqual(CloudRemoteBatchStatus.Applied, progress.Status);
+                        await committed.RollbackAsync(deadline.Token);
+                        continue;
+                    }
                     intent = await coordinator.PrepareRemoteAsync(operation, memberId, targetParent,
                         directoryMove ? "moved" : caseOnly ? "REMOTE.bin" : "remote.bin", registration.InstanceId, batch, 0, deadline.Token);
                     if (directoryMove) firstTree = await catalog.ReadNamespaceDirectoryMoveSnapshotAsync(operation, deadline.Token);
@@ -234,6 +261,27 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     Assert.IsNotNull(firstNative); Assert.IsNotNull(firstProjection);
                     Assert.IsNull(await catalog.ReadNamespaceMemberMoveCompletionAsync(operation, deadline.Token));
                     Assert.AreEqual(sourcePath, (await catalog.ReadNamespaceMemberLocationAsync(memberId, deadline.Token)).RelativePath);
+                }
+                else if (managedBatch)
+                {
+                    var driver = new MirrorPulseRemoteNamespaceBatchDriver(fileSystem, state, catalog, router, execution, actor);
+                    var engine = new MirrorPulseRemoteBatchCoordinator(fileSystem, state, null, driver);
+                    var replay = await engine.ApplyAsync(registration.InstanceId, batch, cancellationToken: deadline.Token);
+                    Assert.AreEqual(CloudRemoteApplyEntryStatus.AlreadyApplied, replay.Entries.Single().Status);
+                    Assert.IsFalse(replay.RequiresRetry);
+                    Assert.AreEqual(intent, await catalog.ReadNamespaceRemoteMoveAsync(registration.InstanceId, batch.BatchId, 0, deadline.Token));
+                    var completion = await catalog.ReadNamespaceMemberMoveCompletionAsync(operation, deadline.Token);
+                    Assert.IsNotNull(completion);
+                    Assert.AreEqual(targetPath, (await catalog.ReadNamespaceMemberLocationAsync(intent.MemberId, deadline.Token)).RelativePath);
+                    Assert.IsNull(await catalog.ReadPendingNamespaceMemberMoveAsync(registration.RootId, deadline.Token));
+                    CollectionAssert.AreEqual(batch.FinalCursor.ToArray(), (await engine.ReadCursorAsync(registration.InstanceId, deadline.Token))!.Value.ToArray());
+                    Assert.AreEqual(firstMember.LocalObject.LocalFileId, (await fileSystem.GetFile(targetPath).InspectAsync(deadline.Token)).LocalBinding!.LocalFileId);
+                    Assert.AreEqual(CloudContentAvailability.OnlineOnly, (await fileSystem.GetFile(targetPath).InspectAsync(deadline.Token)).ContentAvailability);
+                    Assert.IsFalse((await fileSystem.GetFile(sourcePath).InspectAsync(deadline.Token)).Exists);
+                    Assert.AreEqual(0, provider.Reads);
+                    TestContext.WriteLine("ManagedRemoteBatch: twoSdkOwners=True; originalSdkCommitBeforeProductSettlement=True; " +
+                        "originalBatchAndAdmissionRetained=True; nativeRedispatch=False; adapterCursorAfterSettlement=True; hydration=False; defaultHostIntegrated=False.");
+                    continue;
                 }
                 else if (settleRejected)
                 {
