@@ -247,8 +247,9 @@ public sealed partial class MirrorPulseProductCatalog
             if (deletion.Phase != from) throw new InvalidOperationException("The deletion phase changed before completion.");
             if (to >= MirrorPulseConflictDeletionPhase.RemoteAccepted)
             {
-                var remote = await ReadMutationCoreAsync(deletion.Intent.RemoteDeletion.OperationId, cancellationToken, transaction).ConfigureAwait(false);
-                if (remote is not { State: MirrorPulseMutationState.Acknowledged } || !SameIntent(remote.Intent, deletion.Intent.RemoteDeletion) || remote.AcceptedRevision is not null)
+                var current = await ReadCurrentDeletionEffectCoreAsync(deletion, transaction, cancellationToken).ConfigureAwait(false);
+                var remote = await ReadMutationCoreAsync(current.OperationId, cancellationToken, transaction).ConfigureAwait(false);
+                if (remote is not { State: MirrorPulseMutationState.Acknowledged } || !SameIntent(remote.Intent, current) || remote.AcceptedRevision is not null)
                     throw new InvalidOperationException("Remote deletion requires its own completed conditional effect, not an original rejected mutation.");
             }
             await using (var update = _connection.CreateCommand())
@@ -259,18 +260,20 @@ public sealed partial class MirrorPulseProductCatalog
             }
             if (to == MirrorPulseConflictDeletionPhase.Completed)
             {
-                foreach (Guid id in deletion.Intent.ConflictIds)
-                {
-                    await using var update = _connection.CreateCommand(); update.Transaction = transaction;
-                    update.CommandText = "UPDATE upload_conflicts SET status=1 WHERE conflict_id=$id AND status=0;";
-                    update.Parameters.AddWithValue("$id", id.ToString("D"));
-                    if (await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
-                        throw new InvalidDataException("A deletion decision lost its unresolved group conflict.");
-                }
+                var current = await ReadCurrentDeletionEffectCoreAsync(deletion, transaction, cancellationToken).ConfigureAwait(false);
+                for (int ordinal = 0; ordinal < deletion.Intent.OriginalOperationIds.Count; ordinal++)
+                    await ResolvePendingDeletionConflictAsync(deletion, current.OperationId, ordinal, transaction, cancellationToken).ConfigureAwait(false);
                 await using var command = _connection.CreateCommand(); command.Transaction = transaction;
                 command.CommandText = "UPDATE user_commands SET state='resolved' WHERE command_id=$id AND action='deleteremote' AND target_id=$target;";
                 command.Parameters.AddWithValue("$id", commandId.ToString("D")); command.Parameters.AddWithValue("$target", deletion.Intent.ConflictId.ToString("D"));
                 if (await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1) throw new InvalidDataException("The deletion command lost its explicit authorization.");
+                await using (var retries = _connection.CreateCommand())
+                {
+                    retries.Transaction = transaction;
+                    retries.CommandText = "UPDATE user_commands SET state='resolved' WHERE state IN ('pending','failed') AND command_id IN (SELECT command_id FROM conflict_deletion_retries WHERE decision_id=$decision);";
+                    retries.Parameters.AddWithValue("$decision", commandId.ToString("D"));
+                    await retries.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                }
                 if (deletion.Intent.PlanId is { } planId)
                 {
                     await using var prior = _connection.CreateCommand(); prior.Transaction = transaction;

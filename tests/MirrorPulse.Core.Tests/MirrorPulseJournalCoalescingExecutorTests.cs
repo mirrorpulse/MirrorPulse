@@ -385,6 +385,7 @@ public sealed partial class MirrorPulseJournalCoalescingExecutorTests
         }
 
         public void Seed(string path, string revision, byte[] content) { File.WriteAllBytes(Path.Combine(_directory, path), content); _revisions[path] = revision; }
+        public void RemoveExternally(string path) { File.Delete(Path.Combine(_directory, path)); _revisions.Remove(path); }
         public bool Exists(string path) => File.Exists(Path.Combine(_directory, path));
         public byte[] Read(string path) => File.ReadAllBytes(Path.Combine(_directory, path));
         private string? Revision(string path) => _revisions.GetValueOrDefault(path);

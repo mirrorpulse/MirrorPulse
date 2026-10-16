@@ -21,6 +21,7 @@ public sealed class MirrorPulseConflictDeletionExecutor(MirrorPulseProductCatalo
         var decision = await catalog.ReadConflictDeletionAsync(commandId, cancellationToken).ConfigureAwait(false)
             ?? throw new FileNotFoundException("The conflict deletion decision is missing.");
         if (decision.Phase == MirrorPulseConflictDeletionPhase.Completed) return decision;
+        var intent = await catalog.ReadCurrentConflictDeletionEffectAsync(commandId, cancellationToken).ConfigureAwait(false);
         // Revalidate a retained archive and original local absence on every replay,
         // including after remote acceptance and before original acknowledgement.
         await completeLocal(decision, cancellationToken).ConfigureAwait(false);
@@ -30,16 +31,51 @@ public sealed class MirrorPulseConflictDeletionExecutor(MirrorPulseProductCatalo
             throw new InvalidOperationException("Local preservation and controlled retirement must complete before deleting remote content.");
         if (decision.Phase == MirrorPulseConflictDeletionPhase.Retired)
         {
-            var intent = decision.Intent.RemoteDeletion;
             var record = await catalog.ReadMutationAsync(intent.OperationId, cancellationToken).ConfigureAwait(false)
                 ?? throw new InvalidDataException("The authorized deletion lost its independent remote effect.");
             if (record.Intent != intent) throw new InvalidDataException("The authorized remote deletion changed.");
             var executor = new MirrorPulseMutationExecutor(catalog);
-            if (record.State == MirrorPulseMutationState.Prepared && record.ExecutionEvidence == MirrorPulseMutationExecutionEvidence.NeverStarted)
-                await executor.ExecutePreparedAsync(record, token => mutations.DeleteAsync(new(intent.InstanceId, intent.RelativePath,
-                    intent.ExpectedRevision, false, intent.OperationId, intent.RootKey), token), RequireDeleted, cancellationToken).ConfigureAwait(false);
-            else
-                await executor.ReconcileAsync(record, readback.VerifyAsync, RequireDeleted, cancellationToken).ConfigureAwait(false);
+            if (record.State == MirrorPulseMutationState.Conflict)
+            {
+                var observation = await catalog.ReadConflictDeletionObservationAsync(intent.OperationId, cancellationToken).ConfigureAwait(false);
+                if (observation is null)
+                {
+                    // Older decisions may retain rejection without its actual revision.
+                    // A new readback is a current observation, never invented history or
+                    // permission to send another deletion before a new user choice.
+                    var current = await readback.VerifyAsync(record, cancellationToken).ConfigureAwait(false);
+                    observation = new(1, commandId, intent.OperationId, intent.ExpectedRevision, current.Revision,
+                        MirrorPulseConflictDeletionObservationOrigin.Readback, DateTimeOffset.UtcNow);
+                    await catalog.RecordConflictDeletionObservationAsync(observation, cancellationToken).ConfigureAwait(false);
+                }
+                throw new MirrorPulseWorkerMutationConflictException(intent.ExpectedRevision, observation.ObservedRevision);
+            }
+            try
+            {
+                if (record.State == MirrorPulseMutationState.Prepared && record.ExecutionEvidence == MirrorPulseMutationExecutionEvidence.NeverStarted)
+                    await executor.ExecutePreparedAsync(record, async token =>
+                    {
+                        // A user may accept an observed absence. Null must never
+                        // become an unconditional delete if a new object appears.
+                        if (intent.ExpectedRevision is null)
+                        {
+                            var absent = await readback.VerifyAsync(record, token).ConfigureAwait(false);
+                            if (absent.Kind != MirrorPulseMutationProofKind.Verified)
+                                throw new MirrorPulseWorkerMutationConflictException(null, absent.Revision);
+                            return null;
+                        }
+                        return await mutations.DeleteAsync(new(intent.InstanceId, intent.RelativePath,
+                            intent.ExpectedRevision, false, intent.OperationId, intent.RootKey), token).ConfigureAwait(false);
+                    }, RequireDeleted, cancellationToken).ConfigureAwait(false);
+                else
+                    await executor.ReconcileAsync(record, readback.VerifyAsync, RequireDeleted, cancellationToken).ConfigureAwait(false);
+            }
+            catch (MirrorPulseWorkerMutationConflictException conflict)
+            {
+                await catalog.RecordConflictDeletionObservationAsync(new(1, commandId, intent.OperationId, intent.ExpectedRevision,
+                    conflict.ActualRevision, MirrorPulseConflictDeletionObservationOrigin.WorkerRejection, DateTimeOffset.UtcNow), CancellationToken.None).ConfigureAwait(false);
+                throw;
+            }
             await catalog.AdvanceConflictDeletionAsync(commandId, MirrorPulseConflictDeletionPhase.Retired,
                 MirrorPulseConflictDeletionPhase.RemoteAccepted, cancellationToken).ConfigureAwait(false);
             decision = decision with { Phase = MirrorPulseConflictDeletionPhase.RemoteAccepted };
