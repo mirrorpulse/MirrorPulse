@@ -40,7 +40,19 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     public Task NativeRemoteCaseOnlyMovementRetainsTheOriginalWhenPermissionNotificationsArePending() =>
         RunOriginalRemoteMovementAsync(directoryMove: false, caseOnly: true, retainPending: true);
 
-    private async Task RunOriginalRemoteMovementAsync(bool directoryMove, bool caseOnly = false, bool retainPending = false)
+    [TestMethod]
+    [DoNotParallelize]
+    [TestCategory("NativeCloudFiles")]
+    public Task NativeRemoteFileConflictRejectionReleasesOnlyItsOriginalAdmissionAcrossStoreOwners() =>
+        RunOriginalRemoteMovementAsync(directoryMove: false, retainPending: true, settleRejected: true);
+
+    [TestMethod]
+    [DoNotParallelize]
+    [TestCategory("NativeCloudFiles")]
+    public Task NativeRemoteCaseOnlyConflictRejectionReleasesOnlyItsOriginalAdmissionAcrossStoreOwners() =>
+        RunOriginalRemoteMovementAsync(directoryMove: false, caseOnly: true, retainPending: true, settleRejected: true);
+
+    private async Task RunOriginalRemoteMovementAsync(bool directoryMove, bool caseOnly = false, bool retainPending = false, bool settleRejected = false)
     {
         if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
             Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
@@ -56,6 +68,9 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         MirrorPulseNamespaceMemberMoveIntent intent = null!; MirrorPulseNamespaceMemberRegistration firstMember = null!;
         MirrorPulseNamespaceMemberMoveObservation firstNative = null!; MirrorPulseNamespaceMemberMoveProjection firstProjection = null!;
         MirrorPulseNamespaceDirectoryMoveSnapshot? firstTree = null;
+        MirrorPulseNamespaceRemoteMoveRejection? firstRejection = null;
+        MirrorPulseNamespaceMemberMoveIntent? peer = null;
+        Guid[] originalJournal = [];
         Guid operation = Guid.NewGuid(); string sourcePath = directoryMove ? "Docs/left" : "Docs/remote.bin";
         string targetPath = directoryMove ? "Docs/right/moved" : caseOnly ? "Docs/REMOTE.bin" : "Docs/right/remote.bin";
         string coldSource = directoryMove ? "Docs/left/cold.bin" : sourcePath;
@@ -186,7 +201,25 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         TestContext.WriteLine($"OriginalRemoteMoveConflict: caseOnly={caseOnly}; liveFeedDuringProtection=True; defaultSdkOptions=True; " +
                             "originalObjectAndJournalRetained=True; noNativeMove=True; noFalseSettlement=True; redispatchRefused=True; " +
                             "pendingFenceRetained=True; adapterCursorPublished=False; hydration=False; defaultHostIntegrated=False.");
-                        return;
+                        if (!settleRejected) return;
+                        await Assert.ThrowsExactlyAsync<InvalidDataException>(() => coordinator.RejectRemoteAsync(operation,
+                            registration.InstanceId, batch, 0, Guid.NewGuid(), deadline.Token).AsTask());
+                        await using (var originalRows = await state.OpenStore.BeginTransactionAsync(deadline.Token))
+                        {
+                            var rows = await originalRows.Operations.ListByItemIdAsync(sourceIdentity.ItemId, 64, deadline.Token);
+                            Assert.IsLessThan(64, rows.Count); originalJournal = rows.Select(row => row.OperationId).ToArray();
+                            Assert.IsNotEmpty(originalJournal); await originalRows.RollbackAsync(deadline.Token);
+                        }
+                        firstRejection = await coordinator.RejectRemoteAsync(operation, registration.InstanceId, batch, 0,
+                            applied.ConflictIds.Single(), deadline.Token);
+                        Assert.IsNull(await catalog.ReadPendingNamespaceMemberMoveAsync(registration.RootId, deadline.Token));
+                        Assert.AreEqual("Rejected", (await catalog.ReadNamespaceMemberMoveStatusAsync(operation, deadline.Token))!.Phase);
+                        peer = await coordinator.PrepareAsync(Guid.NewGuid(), memberId, targetParent,
+                            caseOnly ? "REMOTE.bin" : "remote.bin", deadline.Token);
+                        Assert.AreEqual(firstRejection, await coordinator.RejectRemoteAsync(operation, registration.InstanceId, batch, 0,
+                            firstRejection.ConflictId, deadline.Token));
+                        Assert.AreEqual(peer, await catalog.ReadPendingNamespaceMemberMoveAsync(registration.RootId, deadline.Token));
+                        continue;
                     }
                     Assert.AreEqual(CloudRemoteApplyEntryStatus.Applied, applied.Entries[0].Status);
                     Assert.IsFalse(applied.RequiresRetry); Assert.IsEmpty(applied.ConflictIds);
@@ -200,6 +233,33 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     Assert.IsNotNull(firstNative); Assert.IsNotNull(firstProjection);
                     Assert.IsNull(await catalog.ReadNamespaceMemberMoveCompletionAsync(operation, deadline.Token));
                     Assert.AreEqual(sourcePath, (await catalog.ReadNamespaceMemberLocationAsync(memberId, deadline.Token)).RelativePath);
+                }
+                else if (settleRejected)
+                {
+                    Assert.IsNotNull(firstRejection); Assert.IsNotNull(peer);
+                    Assert.AreEqual(intent, await catalog.ReadNamespaceMemberMoveAsync(operation, deadline.Token));
+                    Assert.AreEqual(firstRejection, await coordinator.RejectRemoteAsync(operation, registration.InstanceId, batch, 0,
+                        firstRejection.ConflictId, deadline.Token));
+                    Assert.AreEqual(peer, await catalog.ReadPendingNamespaceMemberMoveAsync(registration.RootId, deadline.Token));
+                    Assert.AreEqual(sourcePath, (await catalog.ReadNamespaceMemberLocationAsync(intent.MemberId, deadline.Token)).RelativePath);
+                    Assert.IsNotNull(await fileSystem.GetRemoteConflictAsync(firstRejection.ConflictId, deadline.Token));
+                    Assert.IsNull(await catalog.ReadNamespaceMemberMoveObservationAsync(operation, deadline.Token));
+                    Assert.IsNull(await catalog.ReadNamespaceMemberMoveProjectionAsync(operation, deadline.Token));
+                    Assert.IsNull(await catalog.ReadNamespaceMemberMoveCompletionAsync(operation, deadline.Token));
+                    await using (var retainedRows = await state.OpenStore.BeginTransactionAsync(deadline.Token))
+                    {
+                        foreach (Guid id in originalJournal) Assert.IsNotNull(await retainedRows.Operations.GetAsync(id, deadline.Token));
+                        await retainedRows.RollbackAsync(deadline.Token);
+                    }
+                    var unchanged = await fileSystem.GetFile(sourcePath).InspectAsync(deadline.Token);
+                    Assert.AreEqual(firstMember.LocalObject.LocalFileId, unchanged.LocalBinding!.LocalFileId);
+                    Assert.AreEqual(CloudContentAvailability.OnlineOnly, unchanged.ContentAvailability);
+                    Assert.AreEqual(0, provider.Reads);
+                    Assert.IsNull(await new MirrorPulseRemoteBatchCoordinator(fileSystem, state).ReadCursorAsync(registration.InstanceId, deadline.Token));
+                    TestContext.WriteLine($"OriginalRemoteRejection: caseOnly={caseOnly}; twoSdkOwners=True; originalIntentAndStart=True; " +
+                        "originalJournalRetained=True; noNativeMove=True; noFalseCompletion=True; peerAdmissionRetained=True; " +
+                        "sdkConflictUnresolved=True; adapterCursorPublished=False; hydration=False; defaultHostIntegrated=False.");
+                    continue;
                 }
                 else
                 {

@@ -23,6 +23,21 @@ public sealed partial class MirrorPulseRemoteNamespaceFenceTests
 
     [TestMethod]
     [SupportedOSPlatform("windows10.0.26100")]
+    [DataRow("missing")]
+    [DataRow("fingerprint")]
+    [DataRow("count")]
+    [DataRow("ordinal")]
+    [DataRow("change")]
+    [DataRow("status")]
+    [DataRow("missing-start")]
+    [DataRow("offline")]
+    public async Task RemoteRejectionRefusesInexactProgressBeforeReadingAConflictOrTouchingAnObject(string mismatch)
+    {
+        await VerifyRemoteProgressRefusalAsync(mismatch, settle: true, reject: true);
+    }
+
+    [TestMethod]
+    [SupportedOSPlatform("windows10.0.26100")]
     [DataRow("fingerprint")]
     [DataRow("count")]
     [DataRow("ordinal")]
@@ -35,7 +50,7 @@ public sealed partial class MirrorPulseRemoteNamespaceFenceTests
     }
 
     [SupportedOSPlatform("windows10.0.26100")]
-    private static async Task VerifyRemoteProgressRefusalAsync(string mismatch, bool settle)
+    private static async Task VerifyRemoteProgressRefusalAsync(string mismatch, bool settle, bool reject = false)
     {
         await using var fixture = await MoveFixture.OpenAsync(); var instance = fixture.Docs.InstanceId;
         var batch = new CloudRemoteChangeBatch($"{instance}/batch", ReadOnlyMemory<byte>.Empty,
@@ -70,14 +85,14 @@ public sealed partial class MirrorPulseRemoteNamespaceFenceTests
             .WithContentProvider(MirrorPulseDemandProvider.CreateWithoutAdapters(fixture.Paths.SyncRootPath)).Build();
         await using var execution = new MirrorPulseNamespaceExecutionSession(); await using var actor = new MirrorPulseNamespaceActor();
         var coordinator = new MirrorPulseNamespaceMemberMoveCoordinator(fileSystem, state, fixture.Catalog, fixture.Router, execution, actor);
+        Func<Task> dispatch = () => reject ? coordinator.RejectRemoteAsync(intent.OperationId, instance, batch, 0, Guid.NewGuid()).AsTask() :
+            settle ? coordinator.SettleRemoteAsync(intent.OperationId, instance, batch, 0).AsTask() :
+            coordinator.BeginRemoteAsync(intent.OperationId, instance, batch, 0).AsTask();
         if (mismatch is "started" or "offline")
-            await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => settle ?
-                coordinator.SettleRemoteAsync(intent.OperationId, instance, batch, 0).AsTask() :
-                coordinator.BeginRemoteAsync(intent.OperationId, instance, batch, 0).AsTask());
+            await Assert.ThrowsExactlyAsync<InvalidOperationException>(dispatch);
         else
-            await Assert.ThrowsExactlyAsync<InvalidDataException>(() => settle ?
-                coordinator.SettleRemoteAsync(intent.OperationId, instance, batch, 0).AsTask() :
-                coordinator.BeginRemoteAsync(intent.OperationId, instance, batch, 0).AsTask());
+            await Assert.ThrowsExactlyAsync<InvalidDataException>(dispatch);
+        Assert.IsNull(await fixture.Catalog.ReadNamespaceRemoteMoveRejectionAsync(intent.OperationId));
         Assert.AreEqual(started, await fixture.Catalog.ReadNamespaceMemberMoveStartAsync(intent.OperationId) is not null);
         Assert.IsNull(await fixture.Catalog.ReadNamespaceMemberMoveObservationAsync(intent.OperationId));
         Assert.IsNull(await fixture.Catalog.ReadNamespaceMemberMoveCompletionAsync(intent.OperationId));

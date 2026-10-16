@@ -117,13 +117,15 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
         });
 
     private static async Task RequireActualTargetSpellingAsync(CloudDirectory parent, MirrorPulseNamespaceMemberMoveIntent intent,
-        CancellationToken token)
+        CancellationToken token) => await RequireActualRemoteSpellingAsync(parent, intent.Target.RelativePath, token).ConfigureAwait(false);
+
+    private static async Task RequireActualRemoteSpellingAsync(CloudDirectory parent, string expectedPath, CancellationToken token)
     {
         int observed = 0;
         await foreach (var item in parent.EnumerateLocalChildrenAsync(CloudDirectoryEnumerationOptions.Default, token).ConfigureAwait(false))
         {
             if (++observed > 65_536) throw new InvalidOperationException("The remote case-only move parent exceeds its bounded inspection limit.");
-            if (string.Equals(item.RelativePath.Replace('\\', '/'), intent.Target.RelativePath, StringComparison.Ordinal)) return;
+            if (string.Equals(item.RelativePath.Replace('\\', '/'), expectedPath, StringComparison.Ordinal)) return;
         }
         throw new InvalidDataException("The remote case-only move has not established its actual target spelling.");
     }

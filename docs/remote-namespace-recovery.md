@@ -80,6 +80,28 @@ official revision must also agree. These APIs do not resolve a remote conflict,
 publish an Adapter cursor, or acknowledge local content. A completed replay
 returns history after validating its original batch reference.
 
+## Preserved, unmoved conflicts
+
+Catalog schema 61 retains a separate immutable remote rejection. `RejectRemoteAsync`
+requires the original batch boundary and start, a matching unresolved decoded SDK
+conflict, and fresh original child and parent bindings, protection and source
+projection. Case-only movement requires the actual old spelling. A directory also
+requires its original public move proof to report `NotMoved` and a complete audit
+of the sealed source subtree. An absent source, occupied target, changed revision
+or unknown native outcome retains the pending admission.
+
+Recording rejection releases only that operation's pending row, reserved target
+and exclusive predecessor claim in one product transaction. It retains the intent,
+start, remote entry index and rejection history. Successful moves keep their
+predecessor claims; a rejected attempt does not consume or enter the completed
+relocation chain. Migration preserves existing claims without inventing rejection
+or native evidence, and the current schema does not repair a missing claim.
+
+A rejected replay returns history and cannot release a newer operation's fence.
+The SDK conflict and original local journal remain unresolved. This does not move
+or hydrate content, acknowledge an upload, or publish an Adapter cursor. These
+coordinator APIs still require production batch-driver and Host integration.
+
 ## Integration still in progress
 
 Production remote batch dispatch does not yet use these admissions. Remote birth,
