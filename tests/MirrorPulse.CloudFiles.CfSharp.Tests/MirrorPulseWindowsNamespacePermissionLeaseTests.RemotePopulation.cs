@@ -189,8 +189,13 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         }
         finally
         {
-            registry.Unregister(paths.SyncRootPath);
-            RestoreCurrentRuntimeFixtureForCleanup(directory, paths.SyncRootPath, caller.User!); DeleteFixture(directory);
+            try
+            {
+                RemoveKnownRegisteredFixturePlaceholdersForCleanup(directory, paths.SyncRootPath, caller.User!,
+                    ["Docs", "More", "Offline"], ["Docs/cold.bin", "More/nested.bin"]);
+            }
+            finally { registry.Unregister(paths.SyncRootPath); }
+            DeleteFixture(directory);
         }
     }
 }

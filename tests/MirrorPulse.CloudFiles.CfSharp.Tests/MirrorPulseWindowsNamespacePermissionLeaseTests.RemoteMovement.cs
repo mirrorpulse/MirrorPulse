@@ -1,4 +1,3 @@
-using System.Security.AccessControl;
 using System.Security.Principal;
 using CfSharp;
 using MirrorPulse.Core.CloudFiles;
@@ -350,26 +349,14 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         }
         finally
         {
-            registry.Unregister(paths.SyncRootPath);
-            RestoreCurrentRuntimeFixtureForCleanup(directory, paths.SyncRootPath, caller.User!);
-            RestoreRemoteMovePayloadForCleanup(paths.SyncRootPath, caller.User!);
+            try
+            {
+                RemoveKnownRegisteredFixturePlaceholdersForCleanup(directory, paths.SyncRootPath, caller.User!,
+                    ["Docs", "Docs/left", "Docs/right", "Docs/right/moved"],
+                    ["Docs/remote.bin", "Docs/REMOTE.bin", "Docs/right/remote.bin", "Docs/left/cold.bin", "Docs/right/moved/cold.bin"]);
+            }
+            finally { registry.Unregister(paths.SyncRootPath); }
             DeleteFixture(directory);
-        }
-    }
-
-    private static void RestoreRemoteMovePayloadForCleanup(string syncRoot, SecurityIdentifier user)
-    {
-        // The preceding root helper authenticates the exact GUID fixture and marker.
-        // Captured descendants keep explicit protected descriptors after a directory move.
-        // Restore both possible endpoints, including an interrupted move, before deletion.
-        foreach (string relative in new[] { "Docs/left/cold.bin", "Docs/right/moved/cold.bin" })
-        {
-            var file = new FileInfo(Path.Combine(syncRoot, relative.Replace('/', Path.DirectorySeparatorChar)));
-            if (!file.Exists) continue;
-            if (file.LinkTarget is not null) throw new InvalidOperationException("Remote movement cleanup cannot follow a file link.");
-            var access = new FileSecurity(); access.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
-            access.AddAccessRule(new FileSystemAccessRule(user, FileSystemRights.FullControl, AccessControlType.Allow));
-            file.SetAccessControl(access);
         }
     }
 
