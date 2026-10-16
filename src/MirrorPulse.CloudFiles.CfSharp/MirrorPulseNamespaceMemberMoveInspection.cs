@@ -12,11 +12,11 @@ internal static class MirrorPulseNamespaceMemberMoveInspection
         MirrorPulseNamespaceProtectionProof proof, string path, MirrorPulseNamespaceMemberMoveIntent intent)
     {
         RequireObject(facts, snapshot, proof, path, intent);
-        if (facts.IsDirectory || !snapshot.IsPlaceholder ||
+        if (facts.IsDirectory != (intent.DirectoryMoveEvidence is not null) || !snapshot.IsPlaceholder ||
             snapshot.ItemId is { } projectedItem && projectedItem != intent.ItemId ||
             snapshot.RemoteId is { } projectedRemote && projectedRemote != intent.RemoteId ||
             facts.LocalObject != intent.LocalObject || proof.ProtectionId != intent.ProtectionId || snapshot.PlaceholderIdentity.IsEmpty)
-            throw new InvalidDataException("The actual moved file lost its original binding or public identity.");
+            throw new InvalidDataException("The actual moved member lost its admitted kind, original binding or public identity.");
         var identity = CloudPlaceholderIdentity.Decode(snapshot.PlaceholderIdentity.Span);
         if (identity.ItemId != intent.ItemId || identity.RemoteId != intent.RemoteId)
             throw new InvalidDataException("The raw native identity disagrees with the admitted move object.");

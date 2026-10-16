@@ -107,15 +107,22 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 Assert.AreEqual(original, await catalog.ReadNamespaceMemberByBindingAsync(original.LocalObject, token));
                 var location = await MirrorPulseNamespaceMemberLocator.ResolveAsync(catalog, state.OpenStore, original.MemberId, actor, token);
                 Assert.AreEqual(original, location.Member);
+                var retained = original.Origin == MirrorPulseNamespaceMemberOrigin.CapturedOriginal && original.IsDirectory
+                    ? await catalog.ReadNamespacePermissionLocalIdentityAsync(original.OriginId, token) : null;
                 if (original.ParentMemberId is null)
                     Assert.AreEqual(MirrorPulseNamespaceMemberLocationState.SyncRootAnchor, location.State);
-                else if (original.Origin == MirrorPulseNamespaceMemberOrigin.CapturedOriginal && original.IsDirectory)
+                else if (original.Origin == MirrorPulseNamespaceMemberOrigin.CapturedOriginal && original.IsDirectory && retained is null)
                     Assert.AreEqual(MirrorPulseNamespaceMemberLocationState.IdentityUnavailable, location.State);
                 else
                 {
                     Assert.AreEqual(MirrorPulseNamespaceMemberLocationState.Projected, location.State);
                     Assert.AreEqual(original.RelativePath, location.RelativePath?.Replace('\\', '/'));
                     Assert.AreEqual((await item.InspectAsync(token)).ItemId, location.ItemId);
+                    if (retained is not null)
+                    {
+                        Assert.AreEqual(retained.ItemId, location.ItemId);
+                        Assert.AreEqual(retained.RemoteId, location.RemoteId);
+                    }
                 }
             }
         }, token);

@@ -98,7 +98,8 @@ public sealed class MirrorPulseRemoteBatchCoordinator
         CloudStateCheckpoint? checkpoint = await transaction.Checkpoints
             .GetAsync(GetCheckpointName(instanceId), cancellationToken).ConfigureAwait(false);
         await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
-        return checkpoint?.Value.ToArray();
+        if (checkpoint is null) return null;
+        return new ReadOnlyMemory<byte>(checkpoint.Value.ToArray());
     }
 
     public static string GetCheckpointName(InstanceId instanceId) =>

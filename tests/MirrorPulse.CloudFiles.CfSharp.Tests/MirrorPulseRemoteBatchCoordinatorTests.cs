@@ -12,6 +12,41 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 public sealed class MirrorPulseRemoteBatchCoordinatorTests
 {
     [TestMethod]
+    public async Task CursorReadsDistinguishAnAbsentCheckpointFromAnExistingEmptyCursor()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "MirrorPulse-cursor-tests", Guid.NewGuid().ToString("N"));
+        var paths = new MirrorPulseStoragePaths(Path.Combine(directory, "sync"), Path.Combine(directory, "data"));
+        var instance = InstanceId.New();
+        Directory.CreateDirectory(paths.SyncRootPath);
+        try
+        {
+            var state = new MirrorPulseCfSharpStateSession(paths);
+            await using var store = await state.OpenAsync(new(paths.SyncRootPath));
+            await using var fileSystem = new MirrorPulseCloudFileSystemBuilder(paths).WithStateStore(state)
+                .WithContentProvider(MirrorPulseDemandProvider.CreateWithoutAdapters(paths.SyncRootPath)).Build();
+            var coordinator = new MirrorPulseRemoteBatchCoordinator(fileSystem, state);
+            Assert.IsNull(await coordinator.ReadCursorAsync(instance));
+            await using (var transaction = await store.BeginTransactionAsync())
+            {
+                await transaction.Checkpoints.UpsertAsync(new(MirrorPulseRemoteBatchCoordinator.GetCheckpointName(instance),
+                    ReadOnlySpan<byte>.Empty, DateTimeOffset.UtcNow));
+                await transaction.CommitAsync();
+            }
+            var empty = await coordinator.ReadCursorAsync(instance);
+            Assert.IsTrue(empty.HasValue); Assert.IsTrue(empty.Value.IsEmpty);
+            await using (var transaction = await store.BeginTransactionAsync())
+            {
+                await transaction.Checkpoints.UpsertAsync(new(MirrorPulseRemoteBatchCoordinator.GetCheckpointName(instance),
+                    new byte[] { 1, 2, 3 }, DateTimeOffset.UtcNow));
+                await transaction.CommitAsync();
+            }
+            CollectionAssert.AreEqual(new byte[] { 1, 2, 3 }, (await coordinator.ReadCursorAsync(instance))!.Value.ToArray());
+            Assert.IsNull(await coordinator.ReadCursorAsync(InstanceId.New()));
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [TestMethod]
     [DoNotParallelize]
     [TestCategory("NativeCloudFiles")]
     public async Task NativeBatchCursorSurvivesCrashGapAndRejectsFingerprintReuse()
