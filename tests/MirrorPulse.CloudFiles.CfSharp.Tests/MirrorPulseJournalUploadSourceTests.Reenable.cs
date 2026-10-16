@@ -13,6 +13,31 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 public sealed partial class MirrorPulseJournalUploadSourceTests
 {
     [TestMethod]
+    public async Task ReenableTransportSupportsProductionAcceptedUploadReadback()
+    {
+        var instance = InstanceId.New(); var remote = new ReenableTransport(instance);
+        byte[] bytes = "accepted baseline"u8.ToArray();
+        Guid operation = Guid.NewGuid(); string hash = Convert.ToHexString(SHA256.HashData(bytes));
+        var intent = new MirrorPulseMutationIntent(operation, instance, "docs", MirrorPulseWorkerChangeKind.Create,
+            "reenabled.txt", null, false, null, bytes.LongLength, hash, MirrorPulseMutationOrigin.Journal);
+        var readback = new MirrorPulseMutationReadback(remote, remote, remote);
+        Assert.IsNull(await readback.ReadMetadataAsync(intent, default));
+        using var content = new MemoryStream(bytes);
+        string revision = await remote.UploadAsync(new(instance, intent.RelativePath, null, content,
+            bytes.LongLength, operation, hash, "docs"), default);
+        var metadata = await readback.ReadMetadataAsync(intent, default);
+        Assert.IsNotNull(metadata); Assert.AreEqual("reenable:file", metadata.RemoteId);
+        Assert.AreEqual(bytes.LongLength, metadata.Length); Assert.AreEqual(revision, metadata.RemoteRevision);
+        var accepted = new MirrorPulseMutationRecord(intent, MirrorPulseMutationState.RemoteAccepted, revision, DateTimeOffset.UtcNow);
+        var proof = await readback.VerifyAsync(accepted, default);
+        Assert.AreEqual(MirrorPulseMutationProofKind.Verified, proof.Kind); Assert.AreEqual(revision, proof.Revision);
+        Assert.HasCount(1, remote.Uploads);
+        remote.Seed("concurrent remote edit"u8.ToArray());
+        Assert.AreEqual(MirrorPulseMutationProofKind.Conflict, (await readback.VerifyAsync(accepted, default)).Kind);
+        Assert.HasCount(1, remote.Uploads);
+    }
+
+    [TestMethod]
     [DoNotParallelize]
     [TestCategory("NativeCloudFiles")]
     [SupportedOSPlatform("windows10.0.26100")]
@@ -65,7 +90,7 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
                 MirrorPulseJournalUploadPump CreatePump() => new(feed, router, catalog, remote, remote, state,
                     paths.SyncRootPath, paths.DataRootPath, _ => true,
                     new MirrorPulseJournalUploadCompletion(feed, state, new BackoffPolicy(TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(5))),
-                    fileSystem: fileSystem);
+                    ranges: remote, directories: remote, fileSystem: fileSystem);
                 if (owner == 0)
                 {
                     (await new MirrorPulseRootPopulationCoordinator(fileSystem, feed).PopulateAsync(router, deadline.Token)).ThrowIfAnyFailed();
@@ -106,13 +131,14 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
                     if (remoteChanged) remote.Seed("concurrent remote edit"u8.ToArray());
                 }
                 int statBefore = remote.Stats;
+                int callsBefore = remote.Calls;
                 await using (var pump = CreatePump())
                 {
                     await pump.StartAsync(deadline.Token);
                     // Observe an actual running disabled pump across several polls,
                     // including a new SDK/store owner, without touching the source.
                     await Task.Delay(600, deadline.Token);
-                    Assert.AreEqual(statBefore, remote.Stats); Assert.HasCount(1, remote.Uploads);
+                    Assert.AreEqual(statBefore, remote.Stats); Assert.AreEqual(callsBefore, remote.Calls); Assert.HasCount(1, remote.Uploads);
                     var pending = await source.ReadPendingAsync(deadline.Token);
                     Assert.IsEmpty(pending.ReadyCommands); Assert.IsGreaterThan(0, pending.DeferredCount);
                     await AssertOriginalsAsync(expectedPresent: true);
@@ -179,10 +205,13 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
         }
     }
 
-    private sealed class ReenableTransport(InstanceId instance) : IMirrorPulseWorkerUploadTransport, IMirrorPulseWorkerStatTransport
+    private sealed class ReenableTransport(InstanceId instance) : IMirrorPulseWorkerUploadTransport, IMirrorPulseWorkerStatTransport,
+        IMirrorPulseWorkerDirectoryPageSource, IMirrorPulseWorkerRangeTransport
     {
         private int _stats;
+        private int _calls;
         public int Stats => Volatile.Read(ref _stats);
+        public int Calls => Volatile.Read(ref _calls);
         public byte[]? Bytes { get; private set; }
         public string? Revision => Bytes is null ? null : Convert.ToHexString(SHA256.HashData(Bytes));
         private readonly System.Collections.Concurrent.ConcurrentQueue<(Guid Operation, string? ExpectedRevision)> _uploads = new();
@@ -191,9 +220,23 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
         private void Require(InstanceId actual, string? rootKey, string path)
         { Assert.AreEqual(instance, actual); Assert.AreEqual("docs", rootKey); Assert.AreEqual("reenabled.txt", path); }
         public ValueTask<string?> StatAsync(MirrorPulseWorkerStatRequest request, CancellationToken token)
-        { token.ThrowIfCancellationRequested(); Require(request.InstanceId, request.RootKey, request.NormalizedPath); Interlocked.Increment(ref _stats); return ValueTask.FromResult(Revision); }
+        { token.ThrowIfCancellationRequested(); Interlocked.Increment(ref _calls); Require(request.InstanceId, request.RootKey, request.NormalizedPath); Interlocked.Increment(ref _stats); return ValueTask.FromResult(Revision); }
+        public ValueTask<MirrorPulseWorkerDirectoryPage> ReadDirectoryPageAsync(MirrorPulseWorkerDirectoryPageRequest request, CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested(); Interlocked.Increment(ref _calls);
+            Require(request.InstanceId, request.RootKey, "reenabled.txt");
+            Assert.AreEqual(string.Empty, request.NormalizedPath); Assert.IsTrue(request.ContinuationCursor.IsEmpty);
+            return ValueTask.FromResult(new MirrorPulseWorkerDirectoryPage(Bytes is null ? [] :
+                [new("reenable:file", Revision!, "File", "reenabled.txt", Bytes.LongLength, null, null, false)], ReadOnlyMemory<byte>.Empty, true));
+        }
+        public ValueTask<Stream> ReadRangeAsync(MirrorPulseWorkerReadRangeRequest request, CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested(); Interlocked.Increment(ref _calls); Require(request.InstanceId, request.RootKey, request.NormalizedPath);
+            return ValueTask.FromResult<Stream>(new MemoryStream(Bytes!.AsSpan(checked((int)request.Offset), checked((int)request.Length)).ToArray()));
+        }
         public async ValueTask<string> UploadAsync(MirrorPulseWorkerUploadRequest request, CancellationToken token)
         {
+            Interlocked.Increment(ref _calls);
             Require(request.InstanceId, request.RootKey, request.NormalizedPath);
             Assert.AreEqual(request.ExpectedRevision, Revision); Assert.IsNotNull(request.OperationId);
             using var output = new MemoryStream(); await request.Content.CopyToAsync(output, token);
