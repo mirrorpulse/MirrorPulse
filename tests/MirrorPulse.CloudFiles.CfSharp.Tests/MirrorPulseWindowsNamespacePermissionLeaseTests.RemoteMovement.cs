@@ -28,7 +28,19 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     public Task NativeRemoteCaseOnlyFileMovementRequiresItsActualTargetSpellingAcrossStoreOwners() =>
         RunOriginalRemoteMovementAsync(directoryMove: false, caseOnly: true);
 
-    private async Task RunOriginalRemoteMovementAsync(bool directoryMove, bool caseOnly = false)
+    [TestMethod]
+    [DoNotParallelize]
+    [TestCategory("NativeCloudFiles")]
+    public Task NativeRemoteFileMovementRetainsTheOriginalWhenPermissionNotificationsArePending() =>
+        RunOriginalRemoteMovementAsync(directoryMove: false, retainPending: true);
+
+    [TestMethod]
+    [DoNotParallelize]
+    [TestCategory("NativeCloudFiles")]
+    public Task NativeRemoteCaseOnlyMovementRetainsTheOriginalWhenPermissionNotificationsArePending() =>
+        RunOriginalRemoteMovementAsync(directoryMove: false, caseOnly: true, retainPending: true);
+
+    private async Task RunOriginalRemoteMovementAsync(bool directoryMove, bool caseOnly = false, bool retainPending = false)
     {
         if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
             Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
@@ -79,17 +91,42 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 var state = new MirrorPulseCfSharpStateSession(paths);
                 await using var fileSystem = new MirrorPulseCloudFileSystemBuilder(paths).WithStateStore(state).WithContentProvider(provider).Build();
                 await MirrorPulseNamespaceRuntimeStartup.StartAsync(fileSystem, execution, deadline.Token);
-                await using var feed = fileSystem.CreateLocalChangeFeed(); await feed.StartAsync(deadline.Token);
+                await using var feed = fileSystem.CreateLocalChangeFeed();
+                // Separate the clean remote-move boundary from the live watcher's conservative
+                // content notifications during ACL initialization. Both paths are mandatory.
+                if (directoryMove || retainPending || owner != 0) await feed.StartAsync(deadline.Token);
                 await using var actor = new MirrorPulseNamespaceActor(); await using var scheduler = new MirrorPulseInstanceScheduler();
                 await using var catalog = await MirrorPulseProductCatalog.OpenAsync(paths, deadline.Token);
                 await using var permissions = new MirrorPulseNamespacePermissionCoordinator(catalog);
                 await using var initialized = owner == 0 ? await new MirrorPulseNamespaceInitializationCoordinator(fileSystem,
                     catalog, router, execution, actor, scheduler, permissions).InitializeAsync(Guid.NewGuid(), deadline.Token) : null;
+                if (!directoryMove && !retainPending && owner == 0) await feed.StartAsync(deadline.Token);
                 await using var guard = await MirrorPulseWindowsNamespacePermissionLease.OpenAsync(fileSystem.Root, router, deadline.Token);
                 var coordinator = new MirrorPulseNamespaceMemberMoveCoordinator(fileSystem, state, catalog, router, execution, actor);
                 if (owner == 0)
                 {
                     var members = await catalog.ReadNamespaceMemberTreeAsync(initialized!.Completion.AnchorMemberId, deadline.Token);
+                    if (retainPending)
+                    {
+                        // A metadata-only change is deliberately observed by the real watcher.
+                        // CfSharp conservatively classifies file notifications as content intent.
+                        await execution.RunNamespaceOperationAsync(() =>
+                        {
+                            File.SetLastWriteTimeUtc(fileSystem.GetFile(sourcePath).FullPath, DateTime.UtcNow.AddSeconds(-3));
+                            return Task.CompletedTask;
+                        });
+                        _ = await feed.ReadBatchAsync(deadline.Token);
+                        // Wait for the exact public journal row, not an earlier directory
+                        // notification or an arbitrary delay after FileSystemWatcher delivery.
+                        while (true)
+                        {
+                            await using var observation = await state.OpenStore.BeginTransactionAsync(deadline.Token);
+                            var pendingContent = await observation.Operations.ListByItemIdAsync(sourceIdentity.ItemId, 16, deadline.Token);
+                            await observation.RollbackAsync(deadline.Token);
+                            if (pendingContent.Any(entry => entry.Kind == CloudStateOperationKind.ContentUpdate)) break;
+                            await Task.Delay(TimeSpan.FromMilliseconds(25), deadline.Token);
+                        }
+                    }
                     var scan = await feed.BeginScanAsync(deadline.Token);
                     var page = await feed.ReadPageAsync(scan, 0, 64, deadline.Token);
                     Assert.IsFalse(scan.RequiresFullRescan); Assert.IsFalse(page.RequiresFullRescan);
@@ -124,6 +161,33 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         return true;
                     }, deadline.Token);
                     TestContext.WriteLine($"OriginalRemoteMoveApply: directory={directoryMove}; status={applied.Status}; entry={applied.Entries[0].Status}; retry={applied.RequiresRetry}; conflicts={applied.ConflictIds.Count}.");
+                    if (retainPending)
+                    {
+                        Assert.AreEqual(CloudRemoteApplyEntryStatus.Conflict, applied.Entries[0].Status);
+                        Assert.IsFalse(applied.RequiresRetry); Assert.HasCount(1, applied.ConflictIds);
+                        Assert.IsNull(await catalog.ReadNamespaceMemberMoveObservationAsync(operation, deadline.Token));
+                        Assert.IsNull(await catalog.ReadNamespaceMemberMoveProjectionAsync(operation, deadline.Token));
+                        Assert.IsNull(await catalog.ReadNamespaceMemberMoveCompletionAsync(operation, deadline.Token));
+                        Assert.AreEqual(operation, (await catalog.ReadPendingNamespaceMemberMoveAsync(registration.RootId, deadline.Token))!.OperationId);
+                        Assert.AreEqual(sourcePath, (await catalog.ReadNamespaceMemberLocationAsync(memberId, deadline.Token)).RelativePath);
+                        var unchanged = await fileSystem.GetFile(sourcePath).InspectAsync(deadline.Token);
+                        Assert.IsTrue(unchanged.Exists); Assert.AreEqual(firstMember.LocalObject.LocalFileId, unchanged.LocalBinding!.LocalFileId);
+                        Assert.AreEqual(CloudContentAvailability.OnlineOnly, unchanged.ContentAvailability);
+                        await Assert.ThrowsExactlyAsync<InvalidDataException>(() => coordinator.SettleRemoteAsync(operation,
+                            registration.InstanceId, batch, 0, deadline.Token).AsTask());
+                        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => coordinator.BeginRemoteAsync(operation,
+                            registration.InstanceId, batch, 0, deadline.Token).AsTask());
+                        await using var retained = await state.OpenStore.BeginTransactionAsync(deadline.Token);
+                        Assert.IsTrue((await retained.Operations.ListByItemIdAsync(sourceIdentity.ItemId, 16, deadline.Token))
+                            .Any(entry => entry.Kind == CloudStateOperationKind.ContentUpdate));
+                        await retained.RollbackAsync(deadline.Token);
+                        Assert.AreEqual(0, provider.Reads);
+                        Assert.IsNull(await new MirrorPulseRemoteBatchCoordinator(fileSystem, state).ReadCursorAsync(registration.InstanceId, deadline.Token));
+                        TestContext.WriteLine($"OriginalRemoteMoveConflict: caseOnly={caseOnly}; liveFeedDuringProtection=True; defaultSdkOptions=True; " +
+                            "originalObjectAndJournalRetained=True; noNativeMove=True; noFalseSettlement=True; redispatchRefused=True; " +
+                            "pendingFenceRetained=True; adapterCursorPublished=False; hydration=False; defaultHostIntegrated=False.");
+                        return;
+                    }
                     Assert.AreEqual(CloudRemoteApplyEntryStatus.Applied, applied.Entries[0].Status);
                     Assert.IsFalse(applied.RequiresRetry); Assert.IsEmpty(applied.ConflictIds);
                     var interrupted = new MirrorPulseNamespaceMemberMoveCoordinator(fileSystem, state, catalog, router, execution, actor,
@@ -171,7 +235,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 }
                 else Assert.IsFalse((await original.InspectAsync(deadline.Token)).Exists);
                 TestContext.WriteLine($"OriginalRemoteMove: owner={owner}; directory={directoryMove}; caseOnly={caseOnly}; originalBatch=True; beforeStartBinding=True; " +
-                    $"publicSdkExecution=True; publicDirectoryReconciliation={directoryMove}; productPositionSeparate=True; adapterCursorPublished=False; hydration=False; sameRoleAcrossSdkOwners=True; defaultHostIntegrated=False.");
+                    $"publicSdkExecution=True; publicDirectoryReconciliation={directoryMove}; feedStartedAfterProtection={!directoryMove}; " +
+                    "productPositionSeparate=True; adapterCursorPublished=False; hydration=False; sameRoleAcrossSdkOwners=True; defaultHostIntegrated=False.");
             }
         }
         finally

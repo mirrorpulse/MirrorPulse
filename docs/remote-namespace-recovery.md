@@ -22,6 +22,15 @@ use version 2. This is metadata inspection within the public protected scope, wi
 conversion, hydration, revision acceptance or journal acknowledgement. Ordinary
 directories keep no identity record. Historical directories with no original identity
 remain unresolved; migration never adopts a later identity from their current path.
+
+The native move matrix keeps clean movement and conservative watcher conflicts
+separate. The clean file cases start their live feed after initial protection;
+the conflict cases retain a feed throughout protection and observe a file metadata
+notification. CfSharp may classify that notification as pending content. Its
+default apply then preserves the original object and journal. MP must refuse false
+settlement and another native dispatch. These component cases do not establish
+that production startup can discard those notifications or that pending conflict
+admissions are recovered; that dispatcher work remains required.
 Admission and index insertion share one transaction. Reusing a batch ordinal or
 change ID for another move, changing the batch fingerprint, and replaying an
 ordinary move ID as a remote move are rejected. Reading a remote admission
