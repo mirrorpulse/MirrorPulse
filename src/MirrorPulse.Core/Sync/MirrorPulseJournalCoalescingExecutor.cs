@@ -47,10 +47,18 @@ public sealed class MirrorPulseJournalCoalescingExecutor(MirrorPulseProductCatal
         foreach (MirrorPulseCoalescingStep step in execution.Steps)
         {
             MirrorPulseMutationRecord record = await catalog.PrepareJournalCoalescingMutationAsync(planId, step.Ordinal, cancellationToken).ConfigureAwait(false);
+            MirrorPulseCoalescingStepKind currentKind = record.Intent.Kind switch
+            {
+                MirrorPulseWorkerChangeKind.Delete => MirrorPulseCoalescingStepKind.Delete,
+                MirrorPulseWorkerChangeKind.Move => MirrorPulseCoalescingStepKind.Move,
+                MirrorPulseWorkerChangeKind.Create or MirrorPulseWorkerChangeKind.ContentUpdate => MirrorPulseCoalescingStepKind.Upload,
+                MirrorPulseWorkerChangeKind.MetadataUpdate when step.Kind is MirrorPulseCoalescingStepKind.VerifyAbsence or MirrorPulseCoalescingStepKind.VerifyUnchanged => step.Kind,
+                _ => throw new InvalidDataException("The current authorized coalesced effect is unsupported."),
+            };
             async ValueTask Complete(string? revision, CancellationToken token)
             {
                 token.ThrowIfCancellationRequested();
-                if (step.Kind is MirrorPulseCoalescingStepKind.Upload or MirrorPulseCoalescingStepKind.Move && string.IsNullOrEmpty(revision))
+                if (currentKind is MirrorPulseCoalescingStepKind.Upload or MirrorPulseCoalescingStepKind.Move && string.IsNullOrEmpty(revision))
                     throw new InvalidDataException("A completed remote effect requires an accepted revision.");
                 var accepted = await catalog.ReadMutationAsync(record.Intent.OperationId, token).ConfigureAwait(false)
                     ?? throw new InvalidDataException("The accepted coalesced effect is missing.");
@@ -65,7 +73,7 @@ public sealed class MirrorPulseJournalCoalescingExecutor(MirrorPulseProductCatal
                 await _executor.ExecutePreparedAsync(record, async token =>
                 {
                     MirrorPulseMutationIntent intent = record.Intent;
-                    switch (step.Kind)
+                    switch (currentKind)
                     {
                         case MirrorPulseCoalescingStepKind.VerifyAbsence:
                         case MirrorPulseCoalescingStepKind.VerifyUnchanged:
@@ -80,7 +88,8 @@ public sealed class MirrorPulseJournalCoalescingExecutor(MirrorPulseProductCatal
                             return await mutations.MoveAsync(new(intent.InstanceId, intent.PreviousRelativePath!, intent.RelativePath,
                                 intent.ExpectedRevision, false, intent.OperationId, intent.RootKey, intent.RootKey), token).ConfigureAwait(false);
                         case MirrorPulseCoalescingStepKind.Upload:
-                            await using (Stream content = await openContent(execution.Content!, token).ConfigureAwait(false))
+                            var authorized = new MirrorPulseCoalescingContent(intent.ContentLength!.Value, intent.ContentSha256!, intent.UploadBinding!);
+                            await using (Stream content = await openContent(authorized, token).ConfigureAwait(false))
                                 return await uploads.UploadAsync(new(intent.InstanceId, intent.RelativePath, intent.ExpectedRevision,
                                     content, intent.ContentLength!.Value, intent.OperationId, intent.ContentSha256, intent.RootKey), token).ConfigureAwait(false);
                         default: throw new InvalidDataException("The coalesced effect is unsupported.");
@@ -89,7 +98,7 @@ public sealed class MirrorPulseJournalCoalescingExecutor(MirrorPulseProductCatal
             }
             else
             {
-                await _executor.ReconcileAsync(record, (retained, token) => step.Kind is MirrorPulseCoalescingStepKind.VerifyAbsence or MirrorPulseCoalescingStepKind.VerifyUnchanged
+                await _executor.ReconcileAsync(record, (retained, token) => currentKind is MirrorPulseCoalescingStepKind.VerifyAbsence or MirrorPulseCoalescingStepKind.VerifyUnchanged
                     ? VerifyOnlyAsync(step, retained, token) : readback.VerifyAsync(retained, token), Complete, cancellationToken).ConfigureAwait(false);
             }
             results.Add(await catalog.ReadMutationAsync(record.Intent.OperationId, cancellationToken).ConfigureAwait(false)

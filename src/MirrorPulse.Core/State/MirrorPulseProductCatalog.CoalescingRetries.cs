@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Data.Sqlite;
 using MirrorPulse.Core.Sync;
 
@@ -9,13 +10,29 @@ namespace MirrorPulse.Core.State;
 /// <summary>A distinct, explicitly authorized attempt; the rejected effect and original execution remain immutable.</summary>
 public sealed record MirrorPulseJournalCoalescingRetry(int Version, Guid CommandId, Guid PlanId, int Ordinal,
     Guid PreviousOperationId, Guid ConflictId, Guid OriginalOperationId, bool AcceptObservedRemoteRevision,
-    MirrorPulseMutationIntent Intent, DateTimeOffset PreparedAt);
+    MirrorPulseMutationIntent Intent, DateTimeOffset PreparedAt)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public MirrorPulseCoalescingContent? AuthorizedContent { get; init; }
+}
 
 public sealed partial class MirrorPulseProductCatalog
 {
     /// <summary>Creates one new effect attempt and resolves the entire group's conflict projection atomically.</summary>
-    public async Task<MirrorPulseJournalCoalescingRetry> AuthorizeJournalCoalescingRetryAsync(Guid commandId,
-        Guid conflictId, bool acceptObservedRemoteRevision, CancellationToken cancellationToken = default)
+    public Task<MirrorPulseJournalCoalescingRetry> AuthorizeJournalCoalescingRetryAsync(Guid commandId,
+        Guid conflictId, bool acceptObservedRemoteRevision, CancellationToken cancellationToken = default) =>
+        AuthorizeCoalescingRetryCoreAsync(commandId, conflictId, acceptObservedRemoteRevision, null, cancellationToken);
+
+    /// <summary>Retains a new explicit local-content decision for a verification-only program.</summary>
+    public Task<MirrorPulseJournalCoalescingRetry> AuthorizeJournalCoalescingKeepLocalContentAsync(Guid commandId,
+        Guid conflictId, MirrorPulseCoalescingContent content, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        return AuthorizeCoalescingRetryCoreAsync(commandId, conflictId, true, content, cancellationToken);
+    }
+
+    private async Task<MirrorPulseJournalCoalescingRetry> AuthorizeCoalescingRetryCoreAsync(Guid commandId,
+        Guid conflictId, bool acceptObservedRemoteRevision, MirrorPulseCoalescingContent? content, CancellationToken cancellationToken)
     {
         if (commandId == Guid.Empty || conflictId == Guid.Empty) throw new ArgumentException("A user command and group conflict ID are required.");
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -57,7 +74,8 @@ public sealed partial class MirrorPulseProductCatalog
                 {
                     var retained = DecodeCoalescingRetry((byte[])reader[1], (byte[])reader[2], reader.GetString(0), plan, execution);
                     if (retained.CommandId != commandId || retained.ConflictId != conflictId || retained.OriginalOperationId != originalOperationId ||
-                        retained.AcceptObservedRemoteRevision != acceptObservedRemoteRevision)
+                        retained.AcceptObservedRemoteRevision != acceptObservedRemoteRevision ||
+                        content is not null && retained.AuthorizedContent != content)
                         throw new InvalidDataException("The retry authorization changed during replay.");
                     transaction.Commit(); return retained;
                 }
@@ -94,17 +112,30 @@ public sealed partial class MirrorPulseProductCatalog
                     observed = revision;
                 }
                 if (!conflicts.Contains(conflictId)) throw new InvalidOperationException("The selected conflict is not the current pending group epoch.");
-                if (acceptObservedRemoteRevision && execution.Steps[ordinal].Kind is MirrorPulseCoalescingStepKind.VerifyAbsence or MirrorPulseCoalescingStepKind.VerifyUnchanged ||
-                    acceptObservedRemoteRevision && execution.Steps[ordinal].Kind == MirrorPulseCoalescingStepKind.Move && execution.Content is null)
-                    throw new NotSupportedException("Keeping local content requires a complete authorized content or deletion effect; a verification or move-only baseline cannot establish it.");
+                var kind = execution.Steps[ordinal].Kind;
+                if (content is not null && (!acceptObservedRemoteRevision || kind != MirrorPulseCoalescingStepKind.VerifyUnchanged))
+                    throw new InvalidOperationException("New content requires an explicit keep-local decision for a verification-only program.");
+                if (acceptObservedRemoteRevision && kind == MirrorPulseCoalescingStepKind.Move && execution.Content is null)
+                    throw new NotSupportedException("A move-only keep-local decision requires a complete move and content program.");
+                bool replacesVerification = kind is MirrorPulseCoalescingStepKind.VerifyAbsence or MirrorPulseCoalescingStepKind.VerifyUnchanged &&
+                    (acceptObservedRemoteRevision || intent.Kind != MirrorPulseWorkerChangeKind.MetadataUpdate);
+                MirrorPulseCoalescingContent? authorizedContent = replacesVerification && kind == MirrorPulseCoalescingStepKind.VerifyUnchanged
+                    ? content ?? (intent.UploadBinding is not null && intent.ContentLength is { } length && intent.ContentSha256 is { } hash
+                        ? new(length, hash, intent.UploadBinding) : throw new NotSupportedException("Keeping local content requires its newly captured object and byte proof."))
+                    : null;
+                if (replacesVerification && kind == MirrorPulseCoalescingStepKind.VerifyAbsence && string.IsNullOrEmpty(acceptObservedRemoteRevision ? observed : intent.ExpectedRevision))
+                    throw new InvalidDataException("A keep-local deletion requires the explicitly observed remote revision.");
                 byte[] identity = SHA256.HashData(Encoding.UTF8.GetBytes("MirrorPulse.Coalescing.Retry.v1/" + commandId.ToString("D")));
-                var nextIntent = intent with { OperationId = new Guid(identity.AsSpan(0, 16)), ExpectedRevision = acceptObservedRemoteRevision ? observed : intent.ExpectedRevision };
+                var nextIntent = RetryIntent(plan, execution, ordinal, acceptObservedRemoteRevision ? observed : intent.ExpectedRevision,
+                    replacesVerification ? 2 : 1, authorizedContent) with
+                { OperationId = new Guid(identity.AsSpan(0, 16)) };
                 if (nextIntent.OperationId == Guid.Empty || nextIntent.OperationId == plan.PlanId || plan.Members.Any(member => member.OperationId == nextIntent.OperationId) ||
                     await ReadMutationCoreAsync(nextIntent.OperationId, cancellationToken, transaction).ConfigureAwait(false) is not null)
                     throw new InvalidOperationException("The new retry identity is already owned.");
                 await RequireUnownedCoalescingEffectAsync(nextIntent.OperationId, transaction, cancellationToken).ConfigureAwait(false);
-                var retry = new MirrorPulseJournalCoalescingRetry(1, commandId, planId, ordinal, intent.OperationId,
-                    conflictId, originalOperationId, acceptObservedRemoteRevision, nextIntent, DateTimeOffset.UtcNow);
+                var retry = new MirrorPulseJournalCoalescingRetry(replacesVerification ? 2 : 1, commandId, planId, ordinal, intent.OperationId,
+                    conflictId, originalOperationId, acceptObservedRemoteRevision, nextIntent, DateTimeOffset.UtcNow)
+                { AuthorizedContent = authorizedContent };
                 byte[] payload = JsonSerializer.SerializeToUtf8Bytes(retry, TopologyJsonOptions);
                 await using (var insert = _connection.CreateCommand())
                 {
@@ -143,11 +174,44 @@ public sealed partial class MirrorPulseProductCatalog
             if (await reader.ReadAsync(token).ConfigureAwait(false)) retry = DecodeCoalescingRetry((byte[])reader[1], (byte[])reader[2], reader.GetString(0), plan, execution);
         }
         if (retry is null) return CoalescingIntent(plan, execution, ordinal, baseline);
-        var previous = await ReadMutationCoreAsync(retry.PreviousOperationId, token, transaction).ConfigureAwait(false);
-        if (previous is not { State: MirrorPulseMutationState.Conflict } || !SameIntent(previous.Intent with
-        { OperationId = execution.Steps[ordinal].OperationId }, CoalescingIntent(plan, execution, ordinal, previous.Intent.ExpectedRevision)) ||
-            !retry.AcceptObservedRemoteRevision && retry.Intent.ExpectedRevision != previous.Intent.ExpectedRevision)
-            throw new InvalidDataException("The retry lost its original rejected effect evidence.");
+        await ValidateCoalescingRetryHistoryAsync(retry, plan, execution, baseline, transaction, token).ConfigureAwait(false);
+        return retry.Intent;
+    }
+
+    private async Task ValidateCoalescingRetryHistoryAsync(MirrorPulseJournalCoalescingRetry retry,
+        MirrorPulseJournalCoalescingPlan plan, MirrorPulseJournalCoalescingExecution execution, string? baseline,
+        SqliteTransaction transaction, CancellationToken token)
+    {
+        var visited = new HashSet<Guid>();
+        while (true)
+        {
+            if (!visited.Add(retry.Intent.OperationId)) throw new InvalidDataException("The retained retry history contains a cycle.");
+            var previous = await ReadMutationCoreAsync(retry.PreviousOperationId, token, transaction).ConfigureAwait(false);
+            if (previous is not { State: MirrorPulseMutationState.Conflict } ||
+                !retry.AcceptObservedRemoteRevision && !SameIntent(retry.Intent with { OperationId = previous.Intent.OperationId }, previous.Intent))
+                throw new InvalidDataException("The retry lost its original rejected effect evidence.");
+            await RequireRetainedCoalescingRetryAuthorizationAsync(retry, plan, transaction, token).ConfigureAwait(false);
+            if (previous.Intent.OperationId == execution.Steps[retry.Ordinal].OperationId)
+            {
+                if (!SameIntent(previous.Intent, CoalescingIntent(plan, execution, retry.Ordinal, baseline)))
+                    throw new InvalidDataException("The first rejected effect lost its original execution baseline or proof.");
+                return;
+            }
+            await using var query = _connection.CreateCommand(); query.Transaction = transaction;
+            query.CommandText = "SELECT operation_id,payload,fingerprint FROM journal_coalescing_retries WHERE operation_id=$operation AND plan_id=$plan AND ordinal=$ordinal;";
+            query.Parameters.AddWithValue("$operation", previous.Intent.OperationId.ToString("D"));
+            query.Parameters.AddWithValue("$plan", plan.PlanId.ToString("D")); query.Parameters.AddWithValue("$ordinal", retry.Ordinal);
+            await using var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
+            if (!await reader.ReadAsync(token).ConfigureAwait(false)) throw new InvalidDataException("A prior retry authorization disappeared.");
+            var prior = DecodeCoalescingRetry((byte[])reader[1], (byte[])reader[2], reader.GetString(0), plan, execution);
+            if (!SameIntent(prior.Intent, previous.Intent)) throw new InvalidDataException("The previous retry intent changed.");
+            retry = prior;
+        }
+    }
+
+    private async Task RequireRetainedCoalescingRetryAuthorizationAsync(MirrorPulseJournalCoalescingRetry retry,
+        MirrorPulseJournalCoalescingPlan plan, SqliteTransaction transaction, CancellationToken token)
+    {
         await using (var authorization = _connection.CreateCommand())
         {
             authorization.Transaction = transaction;
@@ -169,7 +233,6 @@ public sealed partial class MirrorPulseProductCatalog
                 retry.Intent.ExpectedRevision != (reader.IsDBNull(2) ? null : reader.GetString(2)))
                 throw new InvalidDataException("The retry lost its retained group conflict and observed baseline.");
         }
-        return retry.Intent;
     }
 
     /// <summary>Lists retained user-command groups for Host recovery before waiting on an empty official feed.</summary>
@@ -229,14 +292,36 @@ public sealed partial class MirrorPulseProductCatalog
         var retry = JsonSerializer.Deserialize<MirrorPulseJournalCoalescingRetry>(payload, TopologyJsonOptions)
             ?? throw new InvalidDataException("The retry authorization is empty.");
         byte[] derived = SHA256.HashData(Encoding.UTF8.GetBytes("MirrorPulse.Coalescing.Retry.v1/" + retry.CommandId.ToString("D")));
-        if (retry.Version != 1 || retry.PlanId != plan.PlanId || retry.CommandId == Guid.Empty || retry.PreviousOperationId == Guid.Empty ||
+        if (retry.Intent is null || retry.Version is not (1 or 2) || retry.PlanId != plan.PlanId || retry.CommandId == Guid.Empty || retry.PreviousOperationId == Guid.Empty ||
             retry.ConflictId == Guid.Empty || !plan.Members.Any(member => member.OperationId == retry.OriginalOperationId) ||
             retry.Ordinal < 0 || retry.Ordinal >= execution.Steps.Count || retry.Intent.OperationId.ToString("D") != operationId || retry.PreparedAt == default ||
             retry.Intent.OperationId == retry.PreviousOperationId || retry.Intent.OperationId != new Guid(derived.AsSpan(0, 16)) ||
             !SameIntent(retry.Intent with { OperationId = execution.Steps[retry.Ordinal].OperationId },
-                CoalescingIntent(plan, execution, retry.Ordinal, retry.Intent.ExpectedRevision)))
-            throw new InvalidDataException("The retry cannot change the original effect, content or upload-time binding.");
+                RetryIntent(plan, execution, retry.Ordinal, retry.Intent.ExpectedRevision, retry.Version, retry.AuthorizedContent)))
+            throw new InvalidDataException("The retry cannot change its original program or explicitly authorized replacement proof.");
         return retry;
+    }
+
+    private static MirrorPulseMutationIntent RetryIntent(MirrorPulseJournalCoalescingPlan plan,
+        MirrorPulseJournalCoalescingExecution execution, int ordinal, string? baseline, int version, MirrorPulseCoalescingContent? content)
+    {
+        var intent = CoalescingIntent(plan, execution, ordinal, baseline);
+        if (version == 1)
+            return content is null ? intent : throw new InvalidDataException("An original retry cannot replace its retained content.");
+        if (version != 2) throw new InvalidDataException("The retry version is unsupported.");
+        if (execution.Steps[ordinal].Kind == MirrorPulseCoalescingStepKind.VerifyAbsence && content is null && !string.IsNullOrEmpty(baseline))
+            return intent with { Kind = MirrorPulseWorkerChangeKind.Delete };
+        if (execution.Steps[ordinal].Kind != MirrorPulseCoalescingStepKind.VerifyUnchanged || content is null ||
+            content.Length < 0 || content.Sha256 is not { Length: 64 } || !content.Sha256.All(Uri.IsHexDigit) || content.UploadBinding is null)
+            throw new InvalidDataException("A verification replacement requires a complete local content or conditional deletion decision.");
+        content.UploadBinding.Validate();
+        return intent with
+        {
+            Kind = MirrorPulseWorkerChangeKind.ContentUpdate,
+            ContentLength = content.Length,
+            ContentSha256 = content.Sha256,
+            UploadBinding = content.UploadBinding
+        };
     }
 
     private async Task RequireCoalescingRetryCommandAsync(Guid commandId, Guid conflictId, bool acceptObserved,
