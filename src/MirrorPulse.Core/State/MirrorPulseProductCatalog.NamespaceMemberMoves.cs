@@ -15,6 +15,11 @@ public sealed record MirrorPulseNamespaceMoveEndpoint(Guid ParentMemberId, Mirro
     public Guid? ParentPositionOperationId { get; init; }
 }
 
+/// <summary>The immutable remote batch entry that owns a move; this is not evidence of native success.</summary>
+public sealed record MirrorPulseNamespaceRemoteMoveReference(int Version, InstanceId InstanceId,
+    string BatchId, string BatchFingerprint, int BatchEntryCount, int Ordinal, string ChangeId,
+    string? PreviousRemoteRevision, string? RemoteRevision, string? OriginalRemoteRevision);
+
 /// <summary>Product admission retained before a controlled member relocation.</summary>
 /// <remarks>
 /// Paths are operation snapshots, not a second CfSharp item graph. The source name remains owned
@@ -40,6 +45,10 @@ public sealed record MirrorPulseNamespaceMemberMoveIntent(int Version, Guid Oper
     /// <summary>The source placement when an ancestor move superseded this member's direct move destination.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Guid? SourcePositionOperationId { get; init; }
+
+    /// <summary>Present only on version 2 admissions owned by an original CfSharp remote batch.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public MirrorPulseNamespaceRemoteMoveReference? RemoteEntry { get; init; }
 }
 
 /// <summary>A durable before-native start; it is not evidence that the move occurred.</summary>
@@ -86,6 +95,7 @@ public sealed partial class MirrorPulseProductCatalog
             insert.Parameters.AddWithValue("$payload", payload);
             insert.Parameters.AddWithValue("$fingerprint", SHA256.HashData(payload));
             await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            await InsertNamespaceRemoteMoveReferenceAsync(intent, transaction, cancellationToken).ConfigureAwait(false);
             if (intent.DirectoryMoveEvidence is not null)
                 await SealNamespaceDirectoryMoveCoreAsync(intent, transaction, cancellationToken).ConfigureAwait(false);
             transaction.Commit();

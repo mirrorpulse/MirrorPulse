@@ -14,6 +14,8 @@ public sealed partial class MirrorPulseProductCatalog
         switch (fact)
         {
             case MirrorPulseNamespaceMemberMoveObservation native:
+                if (intent.RemoteEntry is { } remote && native.NativeRemoteRevision != remote.OriginalRemoteRevision)
+                    throw new InvalidOperationException("The remote move must retain its original native identity revision.");
                 var member = await ReadNamespaceMemberCoreAsync(intent.MemberId, transaction, token).ConfigureAwait(false)
                     ?? throw new InvalidDataException("The original moved member is missing.");
                 var parent = await ReadNamespaceMemberCoreAsync(intent.Target.ParentMemberId, transaction, token).ConfigureAwait(false)
@@ -29,6 +31,8 @@ public sealed partial class MirrorPulseProductCatalog
                     throw new InvalidOperationException("Native move facts require the original child, actual target parent and retained protected descriptors.");
                 break;
             case MirrorPulseNamespaceMemberMoveProjection projection:
+                if (intent.RemoteEntry is { } remoteProjection && projection.ProjectedRemoteRevision != remoteProjection.RemoteRevision)
+                    throw new InvalidOperationException("The remote move projection must match its original incoming revision.");
                 var observation = await ReadNamespaceMoveFactCoreAsync<MirrorPulseNamespaceMemberMoveObservation>(operationId, true, transaction, token, false).ConfigureAwait(false)
                     ?? throw new FileNotFoundException("The native move observation is missing.");
                 if (projection.OperationId != operationId || projection.ItemId != observation.ItemId || projection.RemoteId != observation.RemoteId ||
@@ -36,7 +40,7 @@ public sealed partial class MirrorPulseProductCatalog
                     projection.ObservedAt < observation.Parent.ObservedAt)
                     throw new InvalidOperationException("The official projection must follow the retained native object at its admitted target.");
                 // Native identity revision and official accepted baseline are different observations.
-                // No revision comparison here proves that the source accepted content or metadata.
+                // Matching an incoming remote batch revision does not prove a local upload was accepted.
                 break;
         }
     }

@@ -67,6 +67,7 @@ public sealed partial class MirrorPulseProductCatalog
                 (reader.IsDBNull(8) ? null : reader.GetString(8)) != intent.PreviousMoveOperationId?.ToString("D"))
                 throw new InvalidDataException("The move indexes disagree with the retained intent.");
         }
+        await ValidateNamespaceRemoteMoveReferenceIndexAsync(intent, transaction, token).ConfigureAwait(false);
         return intent;
     }
 

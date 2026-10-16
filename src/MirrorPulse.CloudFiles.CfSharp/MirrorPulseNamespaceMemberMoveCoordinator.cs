@@ -59,6 +59,8 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
         var completed = await _catalog.ReadNamespaceMemberMoveCompletionAsync(operationId, token).ConfigureAwait(false);
         if (completed is not null) return completed;
         var intent = await _catalog.ValidateNamespaceMemberMoveExecutionAsync(operationId, token).ConfigureAwait(false);
+        if (intent.RemoteEntry is not null)
+            throw new InvalidOperationException("A remote move requires its original CfSharp batch owner.");
         var member = await _catalog.ReadNamespaceMemberAsync(intent.MemberId, token).ConfigureAwait(false)
             ?? throw new FileNotFoundException("The admitted move member is missing.");
         if (member.IsDirectory)

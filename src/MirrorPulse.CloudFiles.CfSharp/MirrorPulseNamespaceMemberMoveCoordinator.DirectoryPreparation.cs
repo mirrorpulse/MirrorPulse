@@ -6,7 +6,7 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
 {
     private async Task<MirrorPulseNamespaceMemberMoveIntent> PrepareDirectoryMoveAdmittedAsync(Guid operationId,
-        MirrorPulseNamespaceMemberRegistration member, Guid targetParentMemberId, string targetName, CancellationToken token)
+        MirrorPulseNamespaceMemberRegistration member, Guid targetParentMemberId, string targetName, RemoteMoveRequest? remoteRequest, CancellationToken token)
     {
         _actor.AssertAccess();
         var location = await _catalog.ReadNamespaceMemberLocationAsync(member.MemberId, token).ConfigureAwait(false);
@@ -77,8 +77,9 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
             MirrorPulseNamespaceBirthProtectionVerifier.RequireUnchangedParent(sourceBefore, await sourceLease.InspectAsync(token).ConfigureAwait(false));
             MirrorPulseNamespaceBirthProtectionVerifier.RequireUnchangedParent(targetBefore, await targetLease.InspectAsync(token).ConfigureAwait(false));
             _actor.AssertAccess();
-            prepared = await _catalog.PrepareNamespaceMemberMoveAsync(intent with
-            { DirectoryMoveEvidence = Convert.ToBase64String(proof.Encode()), PreparedAt = DateTimeOffset.UtcNow }, token).ConfigureAwait(false);
+            intent = intent with { DirectoryMoveEvidence = Convert.ToBase64String(proof.Encode()), PreparedAt = DateTimeOffset.UtcNow };
+            intent = AttachRemoteReference(intent, remoteRequest, CloudPlaceholderIdentity.Decode(originalIdentity));
+            prepared = await _catalog.PrepareNamespaceMemberMoveAsync(intent, token).ConfigureAwait(false);
         }).ConfigureAwait(false);
         return prepared;
     }

@@ -104,7 +104,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                 version.CommandText = "PRAGMA user_version;";
                 currentVersion = (long)(await version.ExecuteScalarAsync(cancellationToken)
                     .ConfigureAwait(false) ?? 0L);
-                if (currentVersion > 58)
+                if (currentVersion > 59)
                 {
                     throw new InvalidDataException("The MP product catalog schema is newer than this Host supports.");
                 }
@@ -434,6 +434,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                 await EnsureNamespaceBirthContentSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
                 await EnsureNamespaceMemberSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
                 await EnsureNamespaceMemberMoveSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+                await EnsureNamespaceRemoteMoveSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
                 await EnsureNamespaceMemberMoveFactSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
                 await EnsureNamespaceMemberMoveChainSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
                 await EnsureNamespaceIdentityAcceptanceSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
@@ -448,7 +449,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                 await EnsureBornMemberRecoverySchemaAsync(connection, cancellationToken).ConfigureAwait(false);
                 await EnsureConflictDeletionSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
                 await EnsureConflictDeletionRetrySchemaAsync(connection, cancellationToken).ConfigureAwait(false);
-                version.CommandText = "PRAGMA user_version=58;";
+                version.CommandText = "PRAGMA user_version=59;";
                 await version.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
 

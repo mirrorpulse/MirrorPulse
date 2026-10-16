@@ -18,7 +18,8 @@ public sealed partial class MirrorPulseProductCatalog
         ValidatePermissionSid(intent.RoleSid, role: true);
         ValidatePermissionRelativePath(intent.Source.RelativePath);
         ValidatePermissionRelativePath(intent.Target.RelativePath);
-        if (intent.Version != 1 || intent.OperationId == Guid.Empty || intent.MemberId == Guid.Empty || intent.ProtectionId == Guid.Empty ||
+        if (intent.Version is not (1 or 2) || (intent.Version == 2) != (intent.RemoteEntry is not null) ||
+            intent.OperationId == Guid.Empty || intent.MemberId == Guid.Empty || intent.ProtectionId == Guid.Empty ||
             intent.RootId.Value == Guid.Empty || intent.ItemId == Guid.Empty || intent.Source.ParentMemberId == Guid.Empty ||
             intent.Target.ParentMemberId == Guid.Empty || intent.Source.ParentProtectionId == Guid.Empty || intent.Target.ParentProtectionId == Guid.Empty ||
             intent.PreparedAt == default || string.IsNullOrWhiteSpace(intent.RemoteId) || intent.RemoteId.Length > 16_384 ||
@@ -30,6 +31,20 @@ public sealed partial class MirrorPulseProductCatalog
             intent.Target.ParentPositionOperationId == Guid.Empty || intent.Source.ParentPositionOperationId == intent.OperationId ||
             intent.Target.ParentPositionOperationId == intent.OperationId)
             throw new ArgumentException("A relocation predecessor must identify a distinct completed move.", nameof(intent));
+        if (intent.RemoteEntry is { } remote)
+        {
+            if (remote.Version != 1 || remote.InstanceId.Value == Guid.Empty ||
+                string.IsNullOrWhiteSpace(remote.BatchId) || remote.BatchId.Length > 16_384 || remote.BatchId.Contains('\0') ||
+                !remote.BatchId.StartsWith($"{remote.InstanceId}/", StringComparison.Ordinal) ||
+                remote.BatchId.Length == remote.InstanceId.ToString().Length + 1 ||
+                remote.BatchFingerprint is null || remote.BatchFingerprint.Length != 64 ||
+                remote.BatchFingerprint.Any(character => character is not (>= '0' and <= '9') and not (>= 'A' and <= 'F')) ||
+                remote.BatchEntryCount <= 0 || remote.Ordinal < 0 || remote.Ordinal >= remote.BatchEntryCount ||
+                string.IsNullOrWhiteSpace(remote.ChangeId) || remote.ChangeId.Length > 16_384 || remote.ChangeId.Contains('\0') ||
+                new[] { remote.PreviousRemoteRevision, remote.RemoteRevision, remote.OriginalRemoteRevision }
+                    .Any(revision => revision is not null && (revision.Length > 16_384 || revision.Contains('\0'))))
+                throw new ArgumentException("A remote move requires its complete bounded original batch reference.", nameof(intent));
+        }
         if (intent.DirectoryMoveEvidence is { } encoded)
         {
             try
