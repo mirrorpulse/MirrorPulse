@@ -130,6 +130,12 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinator
     {
         var retained = await _catalog.ReadNamespacePermissionLocalIdentityAsync(baseline.EvidenceId, token).ConfigureAwait(false);
         var local = await lease.InspectLocalIdentityAsync(token).ConfigureAwait(false);
+        // The sync-root registration is the namespace anchor, not a remote member.
+        // Windows can classify it as a placeholder without a CfSharp item identity.
+        // Its original native binding, owner and descriptor were already checked.
+        if (baseline.RootId is null && baseline.RelativePath.Length == 0)
+            return baseline.LocalObject.LocalFileId == baseline.LocalObject.SyncRootFileId && retained is null
+                ? null : await FenceAsync(change, MirrorPulseNamespacePermissionRecoveryReason.ObjectChanged).ConfigureAwait(false);
         // Ordinary directories have no placeholder identity to retain. Permission work
         // must neither convert them nor invent a remote identity for them.
         if (retained is null && !local.IsPlaceholder && local.ItemId is null && local.RemoteId is null) return null;

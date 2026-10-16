@@ -30,6 +30,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         Guid manifestId = Guid.NewGuid();
         MirrorPulseNamespacePermissionLocalIdentity? retainedFileIdentity = null;
         MirrorPulseNamespacePermissionLocalIdentity? retainedColdIdentity = null;
+        MirrorPulseNamespacePermissionLocalIdentity? retainedDirectoryIdentity = null;
         CloudLocalFileBinding? firstBinding = null;
         string latest = "original unsent bytes before protected permission application";
         string filePath = Path.Combine(paths.SyncRootPath, "Docs", "unsent.txt");
@@ -62,6 +63,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 await using var coordinator = new MirrorPulseNamespacePermissionCoordinator(catalog);
                 if (owner == 0)
                 {
+                    CloudItemSnapshot directoryBeforeProtection = await items[2].InspectAsync(timeout.Token);
                     originals = new MirrorPulseNamespacePermissionBaseline[items.Length];
                     protections = new MirrorPulseNamespacePermissionIntent[items.Length];
                     int normalizedOwners = 0;
@@ -160,7 +162,12 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     }
                     TestContext.WriteLine("ProtectedOwnedReplay: writeAfterReadback=False; independentCurrentDescriptorAudit=True; originalBindingAndOwner=True; noAclRewrite=True.");
                     retainedColdIdentity = (await catalog.ReadNamespacePermissionLocalIdentityAsync(originals[1].EvidenceId, timeout.Token))!;
-                    Assert.IsNull(await catalog.ReadNamespacePermissionLocalIdentityAsync(originals[2].EvidenceId, timeout.Token));
+                    retainedDirectoryIdentity = (await catalog.ReadNamespacePermissionLocalIdentityAsync(originals[2].EvidenceId, timeout.Token))!;
+                    Assert.IsNotNull(retainedDirectoryIdentity);
+                    Assert.AreEqual(2, retainedDirectoryIdentity.Version);
+                    Assert.AreEqual(directoryBeforeProtection.ItemId, retainedDirectoryIdentity.ItemId);
+                    Assert.AreEqual(directoryBeforeProtection.RemoteId, retainedDirectoryIdentity.RemoteId);
+                    Assert.AreEqual(originals[2].LocalObject, retainedDirectoryIdentity.LocalObject);
                     await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() => File.Delete(filePath), timeout.Token));
                     await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() => File.Move(filePath, filePath + ".renamed"), timeout.Token));
                     latest = "latest in-place unsent bytes after protection, before restart";
@@ -178,6 +185,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 {
                     Assert.AreEqual(retainedFileIdentity, await catalog.ReadNamespacePermissionLocalIdentityAsync(originals![0].EvidenceId, timeout.Token));
                     Assert.AreEqual(retainedColdIdentity, await catalog.ReadNamespacePermissionLocalIdentityAsync(originals[1].EvidenceId, timeout.Token));
+                    Assert.AreEqual(retainedDirectoryIdentity, await catalog.ReadNamespacePermissionLocalIdentityAsync(originals[2].EvidenceId, timeout.Token));
                     for (int index = 0; index < items.Length; index++)
                     {
                         var replayed = await ApplyOwnedAsync(protections![index], items[index], null);

@@ -23,6 +23,12 @@ conversion, hydration, revision acceptance or journal acknowledgement. Ordinary
 directories keep no identity record. Historical directories with no original identity
 remain unresolved; migration never adopts a later identity from their current path.
 
+The sync-root anchor belongs to the Cloud Files registration, rather than a remote
+member. Its permission work validates the original root binding, owner and access
+descriptor without requiring or retaining a remote placeholder identity. Windows
+placeholder classification alone does not give an anchor a remote member identity.
+This distinction does not relax identity checks for directories below the anchor.
+
 The native move matrix keeps clean movement and conservative watcher conflicts
 separate. The clean file cases start their live feed after initial protection;
 the conflict cases retain a feed throughout protection and observe a file metadata
