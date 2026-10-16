@@ -168,8 +168,6 @@ public sealed partial class MirrorPulseProductCatalog
         // NULL preserves existing first-relocation records. Migration invents no predecessor,
         // native observation, accepted source identity, or completion for a legacy operation.
         command.CommandText = """
-            CREATE UNIQUE INDEX IF NOT EXISTS ux_namespace_move_previous ON namespace_member_moves(previous_move_id)
-                WHERE previous_move_id IS NOT NULL;
             CREATE INDEX IF NOT EXISTS ix_namespace_move_completion_member ON namespace_member_move_completions(member_id);
             """;
         await command.ExecuteNonQueryAsync(token).ConfigureAwait(false);

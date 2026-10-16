@@ -90,6 +90,8 @@ public sealed partial class MirrorPulseProductCatalog
                 VALUES($id,$member,$root,$source,$target,$name,$previous,$payload,$fingerprint);
                 INSERT INTO namespace_member_move_pending(root_id,member_id,operation_id) VALUES($root,$member,$id);
                 INSERT INTO namespace_member_move_reservations(operation_id,parent_member_id,child_name_key) VALUES($id,$target,$name);
+                INSERT INTO namespace_member_move_predecessor_claims(previous_move_id,operation_id)
+                SELECT $previous,$id WHERE $previous IS NOT NULL;
                 """;
             AddNamespaceMemberMoveParameters(insert, intent);
             insert.Parameters.AddWithValue("$payload", payload);
@@ -227,7 +229,8 @@ public sealed partial class MirrorPulseProductCatalog
             var projection = await ReadNamespaceMoveFactCoreAsync<MirrorPulseNamespaceMemberMoveProjection>(
                 operationId, false, transaction, cancellationToken, false).ConfigureAwait(false);
             var completion = await ReadNamespaceMemberMoveCompletionCoreAsync(operationId, transaction, cancellationToken, false).ConfigureAwait(false);
-            string phase = completion is not null ? "Completed" : projection is not null ? "Projected" :
+            var rejected = await ReadNamespaceRemoteMoveRejectionRowAsync(operationId, transaction, cancellationToken).ConfigureAwait(false);
+            string phase = rejected is not null ? "Rejected" : completion is not null ? "Completed" : projection is not null ? "Projected" :
                 observation is not null ? "Observed" : start is not null ? "Started" : "Prepared";
             transaction.Commit();
             return new(operationId, member.MemberId, member.IsDirectory, intent.Source.RelativePath,

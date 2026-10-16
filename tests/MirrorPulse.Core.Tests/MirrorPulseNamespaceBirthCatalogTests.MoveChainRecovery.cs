@@ -79,7 +79,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             else await StartMoveAsync(catalog, setup);
         }
         string previous = await ReadMoveChainMigrationBytesAsync(fixture.Paths);
-        await ExecuteSqlAsync(fixture.Paths, "DROP INDEX ux_namespace_move_previous; ALTER TABLE namespace_member_moves DROP COLUMN previous_move_id; PRAGMA user_version=38;");
+        await ExecuteSqlAsync(fixture.Paths, "DROP TABLE namespace_remote_move_rejections; DROP TABLE namespace_member_move_predecessor_claims; DROP INDEX ix_namespace_move_previous; ALTER TABLE namespace_member_moves DROP COLUMN previous_move_id; PRAGMA user_version=38;");
         await using var current = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
         Assert.AreEqual(previous, await ReadMoveChainMigrationBytesAsync(fixture.Paths));
         Assert.AreEqual(setup.Move, await current.ReadNamespaceMemberMoveAsync(setup.Move.OperationId));
@@ -89,7 +89,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         await using var connection = Connection(fixture.Paths); await connection.OpenAsync(); await using var query = connection.CreateCommand();
         query.CommandText = "SELECT COUNT(*) FROM namespace_member_moves WHERE previous_move_id IS NOT NULL;";
         Assert.AreEqual(0L, await query.ExecuteScalarAsync());
-        query.CommandText = "PRAGMA user_version;"; Assert.AreEqual(60L, await query.ExecuteScalarAsync());
+        query.CommandText = "PRAGMA user_version;"; Assert.AreEqual(61L, await query.ExecuteScalarAsync());
         query.CommandText = "PRAGMA foreign_key_check;"; Assert.IsNull(await query.ExecuteScalarAsync());
     }
 

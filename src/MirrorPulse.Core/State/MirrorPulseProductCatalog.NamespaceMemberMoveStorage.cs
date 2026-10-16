@@ -32,6 +32,10 @@ public sealed partial class MirrorPulseProductCatalog
             {
                 await ValidateNamespaceMemberMoveReferencesAsync(intent, false, transaction, token).ConfigureAwait(false);
                 reads.Moves.Add(operationId, intent);
+                var rejection = await ReadNamespaceRemoteMoveRejectionRowAsync(operationId, transaction, token).ConfigureAwait(false);
+                if (rejection is not null)
+                    await ValidateNamespaceRemoteMoveRejectionReferencesAsync(intent, rejection, transaction, token).ConfigureAwait(false);
+                await ValidateNamespaceMovePredecessorClaimAsync(intent, rejection, transaction, token).ConfigureAwait(false);
             }
             if (validateRelocationChain && !reads.MoveChains.Contains(operationId))
             {
