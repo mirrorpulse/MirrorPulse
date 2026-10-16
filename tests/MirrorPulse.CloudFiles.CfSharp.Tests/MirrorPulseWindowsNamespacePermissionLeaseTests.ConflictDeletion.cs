@@ -18,7 +18,13 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles")]
     public Task NativeSingleRemoteDeletionPreservesLocalBytesAndRecoversWithoutReupload() => RunConflictDeletionAsync(grouped: false);
 
-    private async Task RunConflictDeletionAsync(bool grouped)
+    [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles")]
+    public Task NativeGroupRemoteDeletionRequiresANewConflictEpochAfterAnotherRemoteChange() => RunConflictDeletionAsync(grouped: true, reauthorize: true);
+
+    [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles")]
+    public Task NativeSingleRemoteDeletionRequiresANewConflictEpochAfterAnotherRemoteChange() => RunConflictDeletionAsync(grouped: false, reauthorize: true);
+
+    private async Task RunConflictDeletionAsync(bool grouped, bool reauthorize = false)
     {
         if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
             Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
@@ -35,7 +41,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         var source = new ProtectedPermissionNoSourceProvider();
         var originals = new List<MirrorPulseNamespacePermissionPreparation>();
         var members = new Dictionary<Guid, MirrorPulseNamespaceMemberRegistration>();
-        var remote = new ConflictDeletionRemote(Path.Combine(paths.DataRootPath, "synthetic-remote.bin"));
+        var remote = new ConflictDeletionRemote(Path.Combine(paths.DataRootPath, "synthetic-remote.bin")) { RejectFirstDelete = reauthorize };
         Guid commandId = Guid.Empty; Guid[] originalIds = []; Guid conflictId = Guid.Empty;
         byte[] expected = []; Guid logicalItemId = Guid.Empty; string? preservedPath = null; int rejectedUploadCalls = 0;
         try
@@ -62,9 +68,11 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 await using var feed = fileSystem.CreateLocalChangeFeed(new() { BatchSize = 1 });
                 await feed.StartAsync(deadline.Token);
                 var center = new MirrorPulseConflictCenter();
+                var announced = new List<Guid>();
                 var actions = new MirrorPulseUploadConflictActions(catalog, state, feed,
                     new BackoffPolicy(TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(5)), paths, router, remote, center,
-                    scheduler, fileSystem, actor, role, stats: remote);
+                    scheduler, fileSystem, actor, role, stats: remote,
+                    conflictNotifications: new((conflict, _) => { announced.Add(conflict.ConflictId); return ValueTask.CompletedTask; }));
                 if (owner == 0)
                 {
                     var file = fileSystem.GetFile("Docs/original.bin");
@@ -128,6 +136,20 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         await catalog.SaveUploadConflictAsync(conflict, deadline.Token); center.Upsert(conflict); conflictId = conflict.ConflictId;
                     }
                     await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() => File.Delete(file.FullPath), deadline.Token));
+                    if (reauthorize)
+                    {
+                        await Assert.ThrowsExactlyAsync<MirrorPulseWorkerMutationConflictException>(() => actions.ApplyAsync(conflictId, MirrorPulseConflictAction.DeleteRemote, deadline.Token).AsTask());
+                        commandId = (await catalog.ReadConflictDeletionOwnerAsync(originalIds[0], deadline.Token))!.Value;
+                        var rejected = (await catalog.ReadConflictDeletionAsync(commandId, deadline.Token))!;
+                        Assert.AreEqual(MirrorPulseConflictDeletionPhase.Retired, rejected.Phase); Assert.AreEqual(0, remote.DeleteCalls);
+                        Assert.AreEqual(MirrorPulseMutationState.Conflict, (await catalog.ReadMutationAsync(rejected.Intent.RemoteDeletion.OperationId, deadline.Token))!.State);
+                        var epoch = await catalog.ReadUploadConflictsAsync(cancellationToken: deadline.Token);
+                        Assert.HasCount(originalIds.Length, epoch);
+                        Assert.IsTrue(epoch.All(value => value.RemoteRevision == "later-remote" && !rejected.Intent.ConflictIds.Contains(value.ConflictId)));
+                        CollectionAssert.AreEquivalent(epoch.Select(value => value.ConflictId).ToArray(), announced.ToArray());
+                        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => actions.ApplyAsync(conflictId, MirrorPulseConflictAction.DeleteRemote, deadline.Token).AsTask());
+                        conflictId = epoch[0].ConflictId;
+                    }
                     await Assert.ThrowsExactlyAsync<IOException>(() => actions.ApplyAsync(conflictId, MirrorPulseConflictAction.DeleteRemote, deadline.Token).AsTask());
                     commandId = (await catalog.ReadConflictDeletionOwnerAsync(originalIds[0], deadline.Token))!.Value;
                     var deletion = (await catalog.ReadConflictDeletionAsync(commandId, deadline.Token))!;
@@ -138,7 +160,14 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         Assert.IsNull(await catalog.ReadMutationAsync(originalIds[0], deadline.Token));
                     }
                     Assert.AreEqual(MirrorPulseConflictDeletionPhase.Retired, deletion.Phase);
-                    Assert.AreEqual(MirrorPulseMutationState.Ambiguous, (await catalog.ReadMutationAsync(deletion.Intent.RemoteDeletion.OperationId, deadline.Token))!.State);
+                    var current = await catalog.ReadCurrentConflictDeletionEffectAsync(commandId, deadline.Token);
+                    Assert.AreEqual(MirrorPulseMutationState.Ambiguous, (await catalog.ReadMutationAsync(current.OperationId, deadline.Token))!.State);
+                    if (reauthorize)
+                    {
+                        Assert.AreNotEqual(deletion.Intent.RemoteDeletion.OperationId, current.OperationId);
+                        Assert.AreEqual("later-remote", current.ExpectedRevision);
+                        Assert.AreEqual(MirrorPulseMutationState.Conflict, (await catalog.ReadMutationAsync(deletion.Intent.RemoteDeletion.OperationId, deadline.Token))!.State);
+                    }
                     Assert.AreEqual(1, remote.DeleteCalls); Assert.IsFalse(File.Exists(remote.Path));
                     await using var pending = await state.OpenStore.BeginTransactionAsync(deadline.Token);
                     foreach (Guid id in originalIds) Assert.IsNotNull(await pending.Operations.GetAsync(id, deadline.Token));
@@ -162,7 +191,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 Assert.AreEqual(1, remote.DeleteCalls); Assert.AreEqual(rejectedUploadCalls, remote.UploadCalls);
             }
             Assert.IsNotNull(preservedPath); Assert.AreEqual(0, source.Reads);
-            TestContext.WriteLine($"ConflictDeletion: grouped={grouped}; productionAction=True; protectedRetirement=True; latestLocalBytesArchived=True; twoSdkOwners=True; lostReplyReadback=True; originalCount={originalIds.Length}; remoteDeleteCalls=1; postDecisionUploadAttempts={remote.UploadCalls - rejectedUploadCalls}; sourceReads=0; defaultHostIntegration=False; remoteTransportFixture=True.");
+            Assert.AreEqual(reauthorize ? 1 : 0, remote.RejectedDeletes);
+            TestContext.WriteLine($"ConflictDeletion: grouped={grouped}; productionAction=True; protectedRetirement=True; latestLocalBytesArchived=True; twoSdkOwners=True; lostReplyReadback=True; originalCount={originalIds.Length}; remoteDeleteCalls=1; explicitNewConflictEpoch={reauthorize}; conditionalRemoteRejections={remote.RejectedDeletes}; postDecisionUploadAttempts={remote.UploadCalls - rejectedUploadCalls}; sourceReads=0; defaultHostIntegration=False; remoteTransportFixture=True.");
         }
         finally
         {
@@ -178,18 +208,27 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         internal string Path => path;
         internal int DeleteCalls { get; private set; }
         internal int UploadCalls { get; private set; }
+        internal bool RejectFirstDelete { get; init; }
+        internal int RejectedDeletes { get; private set; }
+        private string _revision = "concurrent-remote";
         internal void Seed() => File.WriteAllBytes(path, [6, 6, 6]);
         public ValueTask<string?> StatAsync(MirrorPulseWorkerStatRequest request, CancellationToken token)
-        { token.ThrowIfCancellationRequested(); return ValueTask.FromResult(File.Exists(path) ? "concurrent-remote" : null); }
+        { token.ThrowIfCancellationRequested(); return ValueTask.FromResult(File.Exists(path) ? _revision : null); }
         public ValueTask<string> UploadAsync(MirrorPulseWorkerUploadRequest request, CancellationToken token)
         { UploadCalls++; throw new MirrorPulseWorkerMutationConflictException(request.ExpectedRevision, "concurrent-remote"); }
         public ValueTask<string> MoveAsync(MirrorPulseWorkerMoveRequest request, CancellationToken token) => throw new AssertFailedException("No remote move is authorized.");
         public ValueTask<string?> DeleteAsync(MirrorPulseWorkerDeleteRequest request, CancellationToken token)
         {
             token.ThrowIfCancellationRequested(); Assert.AreEqual("original.bin", request.NormalizedPath);
-            Assert.AreEqual("docs", request.RootKey); Assert.AreEqual("concurrent-remote", request.ExpectedRevision);
+            string? submittedCondition = request.ExpectedRevision;
+            Assert.AreEqual("docs", request.RootKey); Assert.AreEqual(_revision, submittedCondition);
             Assert.IsFalse(request.IsDirectory); Assert.IsNotNull(request.OperationId);
             if (!File.Exists(path)) throw new AssertFailedException("Lost replies must reconcile rather than delete again.");
+            if (RejectFirstDelete && RejectedDeletes == 0)
+            {
+                _revision = "later-remote"; File.WriteAllBytes(path, [9, 9, 9]); RejectedDeletes++;
+                throw new MirrorPulseWorkerMutationConflictException(request.ExpectedRevision, _revision);
+            }
             File.Delete(path); DeleteCalls++;
             throw new IOException("Injected lost reply after the conditional remote delete.");
         }

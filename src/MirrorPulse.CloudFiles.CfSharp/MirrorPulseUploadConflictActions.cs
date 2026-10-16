@@ -31,6 +31,8 @@ public sealed partial class MirrorPulseUploadConflictActions
     private readonly MirrorPulseConflictDeletionLocalCoordinator? _localDeletion;
     private readonly IMirrorPulseWorkerStatTransport? _stats;
     private readonly Func<InstanceId, bool> _mayDispatch;
+    private readonly MirrorPulseConflictNotificationBridge? _conflictNotifications;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, byte> _announcedDeletionConflicts = new();
 
     public MirrorPulseUploadConflictActions(
         MirrorPulseProductCatalog catalog,
@@ -47,7 +49,8 @@ public sealed partial class MirrorPulseUploadConflictActions
         MirrorPulseNamespaceExecutionSession? namespaceExecution = null,
         MirrorPulseNamespaceWorkAdmission? namespaceWork = null,
         IMirrorPulseWorkerStatTransport? stats = null,
-        Func<InstanceId, bool>? mayDispatch = null)
+        Func<InstanceId, bool>? mayDispatch = null,
+        MirrorPulseConflictNotificationBridge? conflictNotifications = null)
     {
         _catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
         _state = state ?? throw new ArgumentNullException(nameof(state));
@@ -64,6 +67,7 @@ public sealed partial class MirrorPulseUploadConflictActions
         _namespaceWork = namespaceWork;
         _stats = stats;
         _mayDispatch = mayDispatch ?? (_ => true);
+        _conflictNotifications = conflictNotifications;
         _contentConfirmation = router is null ? null : new(catalog, router, namespaceActor, namespaceExecution);
         if (fileSystem is not null && router is not null && namespaceActor is not null && namespaceExecution is not null &&
             OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
@@ -99,7 +103,7 @@ public sealed partial class MirrorPulseUploadConflictActions
         {
             if (action != MirrorPulseConflictAction.DeleteRemote)
                 throw new InvalidOperationException("This conflict already belongs to a retained deletion decision.");
-            return await ExecuteDeletionAdmittedAsync(deletionOwner, cancellationToken).ConfigureAwait(false);
+            return await ApplyExistingDeletionAsync(deletionOwner, conflict, cancellationToken).ConfigureAwait(false);
         }
         if (group is not null && action is not (MirrorPulseConflictAction.Retry or MirrorPulseConflictAction.KeepLocal or MirrorPulseConflictAction.DeleteRemote))
             throw new NotSupportedException("This coalesced decision requires a complete local group operation; no original journal ID was acknowledged.");

@@ -46,6 +46,28 @@ replacement stops the operation rather than discarding newer bytes.
 The current decision covers a rejected single file effect and supported owned
 file programs. It does not infer permission to delete a second unobserved remote
 occupant in a remaining verification step. Directory conflict decisions and
-explicit reauthorization after another remote rejection require further work.
+multiple remote occupants require further work.
 Default Host tree protection and installed end-to-end acceptance remain separate
 verification gates; passing the Core orchestration tests does not satisfy them.
+
+## Another remote change after a deletion decision
+
+A rejected deletion retains its original effect, local archive and retirement.
+Its actual remote observation is immutable. Every original journal member receives
+a distinct new conflict ID for that rejected effect, so a choice against an older
+conflict list cannot silently accept an unseen remote revision. The conflict center
+and normal notification path expose the new complete group.
+
+Only a new explicit `DeleteRemote` choice against that current epoch creates a
+new command and conditional effect ID. It retains the same target, original IDs
+and preservation receipts, and uses exactly the displayed observed revision.
+Background recovery cannot authorize a new attempt. A later rejection creates
+another epoch; an ambiguous reply requires readback before any new decision.
+All authorized commands resolve only after the complete original group is
+acknowledged. Previous rejected effects and conflict facts remain available.
+
+An accepted observation of remote absence is verification only: its new effect
+checks absence and never issues an unconditional delete. If another object has
+appeared, it creates another conflict instead. Older rejected decisions without
+a saved remote observation obtain a separately identified current readback and
+still wait for a fresh user choice.
