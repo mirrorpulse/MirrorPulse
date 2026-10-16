@@ -221,9 +221,18 @@ jobs:
           path: artifacts/test-results/namespace-arm64/**/*.trx
           if-no-files-found: ignore
 
+      - name: Determine ordinary-user verification envelope
+        id: namespace-nonadmin-budget
+        shell: pwsh
+        run: |
+          . ./eng/namespace-nonadmin-controller.ps1
+          $catalog = Get-Content ./eng/test-suites.json -Raw | ConvertFrom-Json
+          $minutes = Get-OrdinaryUserNamespaceStepTimeoutMinutes -TestCount @($catalog.required.namespace).Count
+          "timeout_minutes=$minutes" >> $env:GITHUB_OUTPUT
+
       - name: Verify strict Cloud Files ACLs as a fresh non-administrator user
         shell: pwsh
-        timeout-minutes: 12
+        timeout-minutes: ${{ fromJSON(steps.namespace-nonadmin-budget.outputs.timeout_minutes) }}
         run: pwsh ./eng/verify-namespace-nonadmin.ps1 -ExpectedArchitecture Arm64
 
       - name: Upload original ordinary-user namespace results

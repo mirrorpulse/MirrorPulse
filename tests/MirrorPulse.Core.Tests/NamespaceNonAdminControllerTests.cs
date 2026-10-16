@@ -9,6 +9,7 @@ public sealed class NamespaceNonAdminControllerTests
     [DataRow("allowed", 1)]
     [DataRow("allowed", 52)]
     [DataRow("allowed", 56)]
+    [DataRow("allowed", 66)]
     [DataRow("allowed", 100)]
     [DataRow("rejected", 0)]
     [DataRow("rejected", 101)]
@@ -36,7 +37,10 @@ public sealed class NamespaceNonAdminControllerTests
                 . $Policy
                 if ($Scenario -like 'budget-*') {
                     $rejected=$false
-                    try { $budget=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $Count }
+                    try {
+                        $budget=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $Count
+                        $stepMinutes=Get-OrdinaryUserNamespaceStepTimeoutMinutes -TestCount $Count
+                    }
                     catch { $rejected=$true }
                     if ($Scenario -eq 'budget-rejected') {
                         if (-not $rejected) { throw 'An invalid or unbounded selection was accepted.' }
@@ -45,6 +49,9 @@ public sealed class NamespaceNonAdminControllerTests
                         if ($Count -ge 52 -and $budget -le 600000) { throw 'The growing suite still has the obsolete fixed ten-minute envelope.' }
                         if ($Count -eq 56 -and $budget -le (Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 52)) {
                             throw 'New required cases did not receive execution budget.'
+                        }
+                        if ($stepMinutes -lt 15 -or $stepMinutes -gt 32 -or $stepMinutes*60000 - $budget -lt 300000) {
+                            throw 'The workflow can terminate the controller before its child timeout and diagnostic cleanup.'
                         }
                     }
                     exit 0
@@ -92,5 +99,15 @@ public sealed class NamespaceNonAdminControllerTests
             Assert.AreEqual(0, process.ExitCode, await output + await error);
         }
         finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [TestMethod]
+    public async Task WorkflowUsesTheControllerEnvelopeBeforeLaunchingTheDisposableUser()
+    {
+        string workflow = await File.ReadAllTextAsync(Path.Combine(SftpProtocolFixture.FindRepositoryRoot(), ".github", "workflows", "ci.yml"));
+        StringAssert.Contains(workflow, "Get-OrdinaryUserNamespaceStepTimeoutMinutes -TestCount @($catalog.required.namespace).Count");
+        StringAssert.Contains(workflow, "timeout-minutes: ${{ fromJSON(steps.namespace-nonadmin-budget.outputs.timeout_minutes) }}");
+        Assert.IsLessThan(workflow.IndexOf("Verify strict Cloud Files ACLs as a fresh non-administrator user", StringComparison.Ordinal),
+            workflow.IndexOf("id: namespace-nonadmin-budget", StringComparison.Ordinal));
     }
 }

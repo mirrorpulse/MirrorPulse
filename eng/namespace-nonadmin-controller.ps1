@@ -6,6 +6,14 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
     return [Math]::Max(600000, 120000 + $TestCount * 15000)
 }
 
+function Get-OrdinaryUserNamespaceStepTimeoutMinutes {
+    param([Parameter(Mandatory)][ValidateRange(1, 100)][int]$TestCount)
+    # The workflow must let the existing child budget expire and allow the
+    # controller to preserve diagnostics and remove its disposable user/profile.
+    $childMilliseconds = Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $TestCount
+    return [int][Math]::Ceiling($childMilliseconds / 60000.0) + 5
+}
+
 function Copy-OrdinaryUserNamespaceFailureEvidence {
     param([Parameter(Mandatory)][string]$Workspace, [Parameter(Mandatory)][string]$Identifier,
         [Parameter(Mandatory)][string]$EvidenceDirectory)
