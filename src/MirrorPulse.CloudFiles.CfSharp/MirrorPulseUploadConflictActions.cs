@@ -135,8 +135,9 @@ public sealed partial class MirrorPulseUploadConflictActions
                     _ = await _catalog.AuthorizeJournalCoalescingRetryAsync(commandId, conflict.ConflictId,
                         action == MirrorPulseConflictAction.KeepLocal, cancellationToken).ConfigureAwait(false);
                 if (_conflictCenter is not null)
-                    foreach (var resolved in await _catalog.ReadUploadConflictsAsync(pendingOnly: false, cancellationToken).ConfigureAwait(false))
-                        if (!resolved.IsPending && group.Members.Any(member => member.OperationId.ToString("D") == resolved.ChangeId))
+                    await foreach (var resolved in ReadOriginalConflictEpochsAsync(conflict.InstanceId,
+                        group.Members.Select(member => member.OperationId), cancellationToken).ConfigureAwait(false))
+                        if (!resolved.IsPending)
                             _conflictCenter.Remove(resolved.ConflictId);
                 foreach (var member in group.Members)
                     await _completion.PrepareRetryAsync(member.OperationId, cancellationToken).ConfigureAwait(false);

@@ -135,10 +135,8 @@ public sealed partial class MirrorPulseUploadConflictActions
 
     private async Task PublishDeletionConflictsAsync(MirrorPulseConflictDeletionIntent intent, CancellationToken token)
     {
-        var originals = intent.OriginalOperationIds.Select(id => id.ToString("D")).ToHashSet(StringComparer.Ordinal);
-        foreach (var conflict in await _catalog.ReadUploadConflictsAsync(pendingOnly: false, token).ConfigureAwait(false))
+        await foreach (var conflict in ReadOriginalConflictEpochsAsync(intent.InstanceId, intent.OriginalOperationIds, token).ConfigureAwait(false))
         {
-            if (conflict.InstanceId != intent.InstanceId || !originals.Contains(conflict.ChangeId)) continue;
             if (!conflict.IsPending)
             {
                 _conflictCenter?.Remove(conflict.ConflictId); _announcedDeletionConflicts.TryRemove(conflict.ConflictId, out _); continue;
@@ -149,6 +147,24 @@ public sealed partial class MirrorPulseUploadConflictActions
             catch (OperationCanceledException) { _announcedDeletionConflicts.TryRemove(conflict.ConflictId, out _); throw; }
             catch (Exception error) when (error is not OperationCanceledException)
             { _announcedDeletionConflicts.TryRemove(conflict.ConflictId, out _); }
+        }
+    }
+
+    private async IAsyncEnumerable<MirrorPulseConflictRecord> ReadOriginalConflictEpochsAsync(InstanceId instanceId,
+        IEnumerable<Guid> originalIds, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken token)
+    {
+        const int pageSize = 64;
+        foreach (Guid original in originalIds)
+        {
+            Guid? after = null;
+            while (true)
+            {
+                token.ThrowIfCancellationRequested();
+                var page = await _catalog.ReadUploadConflictEpochsAsync(instanceId, original, after, pageSize, token).ConfigureAwait(false);
+                foreach (var conflict in page) yield return conflict;
+                if (page.Count < pageSize) break;
+                after = page[^1].ConflictId;
+            }
         }
     }
 

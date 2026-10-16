@@ -104,7 +104,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                 version.CommandText = "PRAGMA user_version;";
                 currentVersion = (long)(await version.ExecuteScalarAsync(cancellationToken)
                     .ConfigureAwait(false) ?? 0L);
-                if (currentVersion > 57)
+                if (currentVersion > 58)
                 {
                     throw new InvalidDataException("The MP product catalog schema is newer than this Host supports.");
                 }
@@ -245,6 +245,8 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                         ON journal_coalescing_retries(plan_id, ordinal, sequence);
                     CREATE INDEX IF NOT EXISTS ix_upload_conflicts_original_status
                         ON upload_conflicts(change_id, status);
+                    CREATE INDEX IF NOT EXISTS ix_upload_conflicts_operation_epoch
+                        ON upload_conflicts(change_id, instance_id, conflict_id);
                     CREATE TABLE IF NOT EXISTS namespace_permission_baselines (
                         evidence_id TEXT PRIMARY KEY,
                         volume_serial TEXT NOT NULL,
@@ -446,7 +448,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                 await EnsureBornMemberRecoverySchemaAsync(connection, cancellationToken).ConfigureAwait(false);
                 await EnsureConflictDeletionSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
                 await EnsureConflictDeletionRetrySchemaAsync(connection, cancellationToken).ConfigureAwait(false);
-                version.CommandText = "PRAGMA user_version=57;";
+                version.CommandText = "PRAGMA user_version=58;";
                 await version.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
 

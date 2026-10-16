@@ -71,3 +71,14 @@ checks absence and never issues an unconditional delete. If another object has
 appeared, it creates another conflict instead. Older rejected decisions without
 a saved remote observation obtain a separately identified current readback and
 still wait for a fresh user choice.
+
+## Conflict history queries
+
+Selecting a conflict reads its primary key directly. Group decisions refresh the
+conflict center from indexed, instance-scoped pages for each original journal
+operation. Pages retain pending, resolved and dismissed epochs and advance by
+canonical conflict ID, so status changes do not shift an offset or hide an old
+notification that must be removed. Each query returns at most 256 records;
+runtime publication uses pages of 64 and observes cancellation between pages.
+It does not enumerate another instance's conflict history. These query bounds
+do not replace the remaining limits for complete decision replay and journal work.

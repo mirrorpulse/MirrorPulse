@@ -16,9 +16,54 @@ public sealed partial class MirrorPulseProductCatalog
             throw new ArgumentException("The conflict ID cannot be empty.", nameof(conflictId));
         }
 
-        IReadOnlyList<MirrorPulseConflictRecord> records =
-            await ReadUploadConflictsAsync(pendingOnly: false, cancellationToken).ConfigureAwait(false);
-        return records.SingleOrDefault(item => item.ConflictId == conflictId);
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            await using SqliteCommand query = _connection.CreateCommand();
+            query.CommandText = """
+                SELECT conflict_id, instance_id, change_id, relative_path, reason,
+                       version_comparison, local_revision, remote_revision, detected_utc, status
+                FROM upload_conflicts WHERE conflict_id = $id;
+                """;
+            query.Parameters.AddWithValue("$id", conflictId.ToString("D"));
+            await using SqliteDataReader reader = await query.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            return await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ? ReadUploadConflictRecord(reader) : null;
+        }
+        finally { _gate.Release(); }
+    }
+
+    /// <summary>Reads a bounded keyset page of one original operation's conflict epochs for its owning instance.</summary>
+    /// <remarks>Ordering uses canonical conflict IDs, not wall-clock timestamps. Resolved epochs remain available for center cleanup.</remarks>
+    public async Task<IReadOnlyList<MirrorPulseConflictRecord>> ReadUploadConflictEpochsAsync(
+        InstanceId instanceId, Guid operationId, Guid? afterConflictId = null, int limit = 256,
+        CancellationToken cancellationToken = default)
+    {
+        if (operationId == Guid.Empty) throw new ArgumentException("An original journal operation ID is required.", nameof(operationId));
+        if (afterConflictId == Guid.Empty) throw new ArgumentException("A conflict cursor cannot be empty.", nameof(afterConflictId));
+        if (limit is < 1 or > 256) throw new ArgumentOutOfRangeException(nameof(limit), "Conflict pages contain between 1 and 256 epochs.");
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            await using SqliteCommand query = _connection.CreateCommand();
+            query.CommandText = """
+                SELECT conflict_id, instance_id, change_id, relative_path, reason,
+                       version_comparison, local_revision, remote_revision, detected_utc, status
+                FROM upload_conflicts
+                WHERE change_id = $operation AND instance_id = $instance AND conflict_id > $after
+                ORDER BY conflict_id COLLATE BINARY LIMIT $limit;
+                """;
+            query.Parameters.AddWithValue("$operation", operationId.ToString("D"));
+            query.Parameters.AddWithValue("$instance", instanceId.ToString());
+            query.Parameters.AddWithValue("$after", afterConflictId?.ToString("D") ?? string.Empty);
+            query.Parameters.AddWithValue("$limit", limit);
+            await using SqliteDataReader reader = await query.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            var records = new List<MirrorPulseConflictRecord>();
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false)) records.Add(ReadUploadConflictRecord(reader));
+            return records.AsReadOnly();
+        }
+        finally { _gate.Release(); }
     }
 
     public async Task SetUploadConflictStatusAsync(
@@ -154,7 +199,18 @@ public sealed partial class MirrorPulseProductCatalog
             var records = new List<MirrorPulseConflictRecord>();
             while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             {
-                records.Add(new MirrorPulseConflictRecord(
+                records.Add(ReadUploadConflictRecord(reader));
+            }
+
+            return records;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    private static MirrorPulseConflictRecord ReadUploadConflictRecord(SqliteDataReader reader) => new(
                     Guid.Parse(reader.GetString(0)),
                     InstanceId.Parse(reader.GetString(1)),
                     reader.GetString(2),
@@ -166,14 +222,5 @@ public sealed partial class MirrorPulseProductCatalog
                     DateTimeOffset.Parse(reader.GetString(8),
                         System.Globalization.CultureInfo.InvariantCulture),
                     (MirrorPulseConflictStatus)reader.GetInt32(9),
-                    MirrorPulseConflictSource.Upload));
-            }
-
-            return records;
-        }
-        finally
-        {
-            _gate.Release();
-        }
-    }
+                    MirrorPulseConflictSource.Upload);
 }
