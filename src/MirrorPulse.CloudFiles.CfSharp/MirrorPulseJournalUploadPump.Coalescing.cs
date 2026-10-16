@@ -51,8 +51,7 @@ public sealed partial class MirrorPulseJournalUploadPump
                 string localPath = _router.ResolveUploadPath(plan.InstanceId, plan.RootKey, plan.FinalPath);
                 string relative = Path.GetRelativePath(_syncRootPath, localPath).Replace(Path.DirectorySeparatorChar, '/');
                 string? baseline = originals.Length > 0 ? originals[0].ExpectedRevision :
-                    await MirrorPulseJournalUploadRevisionGuard.ResolveAsync(_state.OpenStore, _stats, command,
-                    relative, remoteStatPath: plan.OriginalPath,
+                    await MirrorPulseJournalUploadRevisionGuard.ReadAcknowledgedRevisionAsync(_state.OpenStore, command, relative,
                     allowTombstone: plan.Effect is MirrorPulseCoalescedEffect.DeleteFile or MirrorPulseCoalescedEffect.VerifyRemoteAbsence,
                     cancellationToken: token).ConfigureAwait(false);
                 if (originals.Length == 0 && plan.Effect is MirrorPulseCoalescedEffect.CreateFile or MirrorPulseCoalescedEffect.UpdateFile &&

@@ -21,8 +21,24 @@ public static class MirrorPulseJournalUploadRevisionGuard
         string? remoteStatRootKey = null,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(state);
         ArgumentNullException.ThrowIfNull(stats);
+        string? expected = await ReadAcknowledgedRevisionAsync(state, command, syncRootRelativePath,
+            allowTombstone, cancellationToken).ConfigureAwait(false);
+        string? actual = await stats.StatAsync(new MirrorPulseWorkerStatRequest(
+            command.InstanceId, remoteStatPath ?? command.RelativePath, remoteStatRootKey ?? command.RootKey), cancellationToken).ConfigureAwait(false);
+        actual = string.IsNullOrEmpty(actual) ? null : actual;
+        if (allowMissingRemote && actual is null) return expected;
+        if (!string.Equals(expected, actual, StringComparison.Ordinal))
+            throw new MirrorPulseUploadConflictException(expected, actual);
+        return expected;
+    }
+
+    /// <summary>Reads the retained baseline before an atomic group preparation; the executor checks the remote condition afterwards.</summary>
+    public static async ValueTask<string?> ReadAcknowledgedRevisionAsync(ICloudStateStore state,
+        MirrorPulseWorkerChangeCommand command, string syncRootRelativePath, bool allowTombstone = false,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(state);
         ArgumentNullException.ThrowIfNull(command);
         ArgumentException.ThrowIfNullOrWhiteSpace(syncRootRelativePath);
 
@@ -74,19 +90,6 @@ public static class MirrorPulseJournalUploadRevisionGuard
         }
 
         string? expected = string.IsNullOrEmpty(item?.RemoteRevision) ? null : item.RemoteRevision;
-        string? actual = await stats.StatAsync(new MirrorPulseWorkerStatRequest(
-            command.InstanceId, remoteStatPath ?? command.RelativePath, remoteStatRootKey ?? command.RootKey), cancellationToken).ConfigureAwait(false);
-        actual = string.IsNullOrEmpty(actual) ? null : actual;
-        if (allowMissingRemote && actual is null)
-        {
-            return expected;
-        }
-
-        if (!string.Equals(expected, actual, StringComparison.Ordinal))
-        {
-            throw new MirrorPulseUploadConflictException(expected, actual);
-        }
-
         return expected;
     }
 }
