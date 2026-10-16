@@ -14,6 +14,25 @@ public sealed class MirrorPulseContentConfirmationTests
 {
     public TestContext TestContext { get; set; } = null!;
     [TestMethod]
+    public void ObservedContentRequestKeepsTheRealAcceptedTargetAndCannotPrepareAnotherIdentity()
+    {
+        var binding = new MirrorPulseLocalFileBinding(ulong.MaxValue, Guid.NewGuid(), Guid.NewGuid());
+        var proof = new MirrorPulseContentAcceptanceProof(Guid.NewGuid(),
+            new(binding, MirrorPulseContentPreparation.ReplacePlaceholderIdentity, Convert.ToBase64String([9, 8, 7])),
+            Guid.NewGuid(), "accepted-object", "accepted-revision", 4, Convert.ToHexString(SHA256.HashData([1, 2, 3, 4])));
+        string original = System.Text.Json.JsonSerializer.Serialize(proof);
+        var request = MirrorPulseContentConfirmation.CreateObservationRequest(proof);
+        Assert.AreEqual(CloudContentPreparation.None, request.Preparation);
+        Assert.IsTrue(request.ExpectedPlaceholderIdentity.IsEmpty);
+        Assert.AreEqual(proof.AcceptedItemId, request.AcceptedIdentity.ItemId);
+        Assert.AreEqual(proof.RemoteId, request.AcceptedIdentity.RemoteId);
+        Assert.AreEqual(proof.AcceptedRevision, request.AcceptedIdentity.RemoteRevision);
+        Assert.AreEqual(proof.Sha256, Convert.ToHexString(request.ExpectedSha256.Span));
+        Assert.AreEqual(binding.LocalFileId, request.ExpectedBinding.LocalFileId);
+        Assert.AreEqual(original, System.Text.Json.JsonSerializer.Serialize(proof));
+    }
+
+    [TestMethod]
     public void ProductProofMapsFullNativeBindingAndExactAcceptedIdentityToPublicRequest()
     {
         var binding = new MirrorPulseLocalFileBinding(ulong.MaxValue, Guid.NewGuid(), Guid.NewGuid());

@@ -36,6 +36,16 @@ public static class MirrorPulseContentConfirmation
             }, proof.UploadBinding.PreviousPlaceholderIdentity is { } previous ? Convert.FromBase64String(previous) : []);
     }
 
+    /// <summary>Rechecks accepted bytes on the already accepted native identity; it cannot convert or replace an identity.</summary>
+    public static CloudContentConfirmationRequest CreateObservationRequest(MirrorPulseContentAcceptanceProof proof)
+    {
+        ArgumentNullException.ThrowIfNull(proof);
+        MirrorPulseLocalFileBinding binding = proof.UploadBinding.LocalObject;
+        return new(new(binding.VolumeSerialNumber, binding.SyncRootFileId, binding.LocalFileId),
+            new(proof.AcceptedItemId, proof.RemoteId, proof.AcceptedRevision ?? string.Empty), proof.Length,
+            Convert.FromHexString(proof.Sha256), CloudContentPreparation.None, []);
+    }
+
     public static async ValueTask<MirrorPulseContentConfirmationReceipt> ConfirmAsync(CloudFile file,
         MirrorPulseContentAcceptanceProof proof, CancellationToken token) =>
         MapReceipt(await file.ConfirmUploadedContentAsync(CreateRequest(proof), token).ConfigureAwait(false));

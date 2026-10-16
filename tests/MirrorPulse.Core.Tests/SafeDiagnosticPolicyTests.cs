@@ -10,6 +10,18 @@ namespace MirrorPulse.Core.Tests;
 public sealed class SafeDiagnosticPolicyTests
 {
     [TestMethod]
+    public void ContentObservationDiagnosticUsesAClosedDecisionAndDoesNotExposeArbitraryData()
+    {
+        var safe = SafeDiagnosticPolicy.Sanitize(new LogEntry(LogLevel.Information, "CloudFiles.Upload", "JournalContentObservation", DateTimeOffset.UtcNow,
+            [new("planId", Guid.NewGuid().ToString("D")), new("contentObservation", "Selected"), new("path", "private-needle")]));
+        Assert.AreEqual("JournalContentObservation", safe.Code); Assert.AreEqual("Selected", safe.Fields["contentObservation"]);
+        Assert.IsFalse(JsonSerializer.Serialize(safe).Contains("needle", StringComparison.Ordinal));
+        var invalid = SafeDiagnosticPolicy.Sanitize(new LogEntry(LogLevel.Information, "CloudFiles.Upload", "JournalContentObservation", DateTimeOffset.UtcNow,
+            [new("contentObservation", "private-token-needle")]));
+        Assert.IsFalse(invalid.Fields.ContainsKey("contentObservation")); Assert.IsFalse(JsonSerializer.Serialize(invalid).Contains("needle", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
     public void DeletionRecoveryRetainsOnlyATypedCommandIdentityAndRegisteredFailureFacts()
     {
         Guid command = Guid.NewGuid();

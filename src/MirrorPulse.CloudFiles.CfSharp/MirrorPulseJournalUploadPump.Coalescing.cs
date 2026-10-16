@@ -54,9 +54,11 @@ public sealed partial class MirrorPulseJournalUploadPump
                     await MirrorPulseJournalUploadRevisionGuard.ReadAcknowledgedRevisionAsync(_state.OpenStore, command, relative,
                     allowTombstone: plan.Effect is MirrorPulseCoalescedEffect.DeleteFile or MirrorPulseCoalescedEffect.VerifyRemoteAbsence,
                     cancellationToken: token).ConfigureAwait(false);
-                if (originals.Length == 0 && plan.Effect is MirrorPulseCoalescedEffect.CreateFile or MirrorPulseCoalescedEffect.UpdateFile &&
-                    MirrorPulseJournalContentPolicy.IsAcceptedObservation(await _fileSystem!.GetFile(relative).InspectAsync(token).ConfigureAwait(false),
-                        _router.GetRegistration(plan.InstanceId, plan.RootKey), baseline))
+                var initial = await _fileSystem!.GetFile(relative).InspectAsync(token).ConfigureAwait(false);
+                if (originals.Length == 0 && (plan.Effect == MirrorPulseCoalescedEffect.CreateFile ||
+                    plan.Effect == MirrorPulseCoalescedEffect.UpdateFile && (initial.ContentAvailability != CloudContentAvailability.FullyAvailable ||
+                        window.Where(observation => observation.ItemId == plan.ItemId).All(observation => observation.Kind != MirrorPulseWorkerChangeKind.Move))) &&
+                    MirrorPulseJournalContentPolicy.IsAcceptedObservation(initial, _router.GetRegistration(plan.InstanceId, plan.RootKey), baseline))
                 {
                     // Retain the existing observation-only policy for already
                     // accepted content. A notification chain must not turn a
@@ -67,6 +69,7 @@ public sealed partial class MirrorPulseJournalUploadPump
                     return true;
                 }
                 MirrorPulseCoalescingContent? final = null;
+                MirrorPulseCoalescingObservedContent? observed = null;
                 if (plan.Effect is MirrorPulseCoalescedEffect.CreateFile or MirrorPulseCoalescedEffect.UpdateFile or MirrorPulseCoalescedEffect.MoveAndUpdateFile)
                 {
                     await using var content = new FileStream(localPath, FileMode.Open, FileAccess.Read, FileShare.Read,
@@ -76,8 +79,22 @@ public sealed partial class MirrorPulseJournalUploadPump
                         await file.InspectAsync(token).ConfigureAwait(false), token).ConfigureAwait(false);
                     final = new MirrorPulseCoalescingContent(content.Length,
                         Convert.ToHexString(await SHA256.HashDataAsync(content, token).ConfigureAwait(false)), binding);
+                    var after = await file.InspectAsync(token).ConfigureAwait(false);
+                    if (after.Length != final.Length || await _contentConfirmation.CaptureUploadBindingAsync(file, after, token).ConfigureAwait(false) != binding)
+                        throw new InvalidDataException("The guarded coalesced object changed during content capture.");
+                    if (originals.Length == 0 && plan.Effect == MirrorPulseCoalescedEffect.UpdateFile && baseline is not null)
+                        observed = await TryObserveAcceptedContentAsync(plan, after, final, baseline, token).ConfigureAwait(false);
+                    if (observed is null && originals.Length == 0 && plan.Effect == MirrorPulseCoalescedEffect.UpdateFile &&
+                        MirrorPulseJournalContentPolicy.IsAcceptedObservation(after, _router.GetRegistration(plan.InstanceId, plan.RootKey), baseline))
+                    {
+                        await _feed.AcknowledgeAsync(plan.Members.Select(member => new CloudLocalChangeAcknowledgement(member.OperationId, baseline)), token).ConfigureAwait(false);
+                        foreach (var member in plan.Members) _completedCoalescedOriginals.Add(member.OperationId);
+                        return true;
+                    }
                 }
-                if (originals.Length == 0)
+                if (observed is not null)
+                    _ = await _catalog.PrepareJournalCoalescingObservedExecutionAsync(plan, window, baseline!, observed, token).ConfigureAwait(false);
+                else if (originals.Length == 0)
                     _ = await _catalog.PrepareJournalCoalescingAndExecutionAsync(plan, window, baseline, final, token).ConfigureAwait(false);
                 else
                     _ = await _catalog.PrepareJournalCoalescingAndExecutionWithUnstartedIntentsAsync(plan, window, originals,
@@ -91,8 +108,12 @@ public sealed partial class MirrorPulseJournalUploadPump
             var executor = new MirrorPulseJournalCoalescingExecutor(_catalog, _stats, _uploads, _mutations, _readback);
             var results = await executor.ExecuteAsync(plan.PlanId,
                 (content, stop) => OpenCoalescedContentAsync(plan, content, stop),
-                (accepted, stop) => AcknowledgeAsync(accepted.Intent.OperationId, accepted.AcceptedRevision, stop,
-                    acknowledgeJournal: false), token).ConfigureAwait(false);
+                async (accepted, stop) =>
+                {
+                    if (accepted.Intent.Kind == MirrorPulseWorkerChangeKind.MetadataUpdate && execution.ObservedContent is not null)
+                        await ReconfirmObservedEffectAsync(plan, execution, accepted, stop).ConfigureAwait(false);
+                    await AcknowledgeAsync(accepted.Intent.OperationId, accepted.AcceptedRevision, stop, acknowledgeJournal: false).ConfigureAwait(false);
+                }, token).ConfigureAwait(false);
             if (results.Count != execution.Steps.Count || results.Any(result => result.State != MirrorPulseMutationState.Acknowledged))
                 throw new MirrorPulseMutationAmbiguousException("Every owned effect must complete before the original journal group is acknowledged.");
             string? revision = plan.Effect is MirrorPulseCoalescedEffect.DeleteFile or MirrorPulseCoalescedEffect.VerifyRemoteAbsence

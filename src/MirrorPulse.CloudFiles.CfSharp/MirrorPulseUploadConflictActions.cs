@@ -119,7 +119,9 @@ public sealed partial class MirrorPulseUploadConflictActions
             }
             if (group is not null)
             {
-                if (action == MirrorPulseConflictAction.KeepLocal && group.Effect == MirrorPulseCoalescedEffect.VerifyRemoteUnchanged)
+                if (action == MirrorPulseConflictAction.KeepLocal &&
+                    (await _catalog.ReadJournalCoalescingExecutionAsync(group.PlanId, cancellationToken).ConfigureAwait(false))!
+                    .Steps.Any(step => step.Kind == MirrorPulseCoalescingStepKind.VerifyUnchanged))
                 {
                     var content = await CaptureGroupKeepLocalContentAsync(group, cancellationToken).ConfigureAwait(false);
                     _ = await _catalog.AuthorizeJournalCoalescingKeepLocalContentAsync(commandId, conflict.ConflictId,

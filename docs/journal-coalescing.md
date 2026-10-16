@@ -28,6 +28,30 @@ Already accepted content keeps the existing observation-only policy. Repeated
 notifications do not require another upload when the owned native identity,
 in-sync state and mutually acknowledged revision still agree.
 
+## Unchanged bytes with update notifications
+
+CfSharp conservatively reports file modification notifications as content updates.
+A round-trip rename can therefore retain both move and update observations. MP
+keeps that original `UpdateFile` plan and every original ID and kind. It can select
+a version 2 verification execution only when guarded resident bytes, the exact
+native object and current placeholder identity match a real acknowledged upload,
+its accepted revision and successful native confirmation receipt. The execution
+retains this observation separately from upload content; it cannot discard a
+prepared original intent or replace an already frozen execution.
+
+The conditional remote version is still checked. An unchanged source requires no
+upload. Public CfSharp content confirmation rechecks the accepted bytes with
+identity preparation disabled. Reconfirmation does not create another remote
+acceptance proof or overwrite the historical receipt. A changed source retains
+the entire conflict group; only an explicit keep-local decision authorizes a new
+conditional upload and content proof.
+
+Already accepted notifications without moves keep the existing fast observation
+path, preventing confirmation echoes from producing another program. Accepted
+online-only placeholders are not hydrated merely to classify a notification.
+The pump attaches to CfSharp's single shared feed and stops it only when it started
+that feed itself; the filesystem remains its final lifetime owner.
+
 ## Recovery boundaries
 
 The original-ID index finds a retained plan after restart. Official identity

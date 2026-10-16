@@ -1,5 +1,6 @@
 using System.Runtime.Versioning;
 using CfSharp;
+using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.State;
 using MirrorPulse.Core.Sync;
 
@@ -15,8 +16,29 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 public sealed partial class MirrorPulseNamespaceContentConfirmation(MirrorPulseProductCatalog catalog, MirrorPulseRootRouter router,
     MirrorPulseNamespaceActor? namespaceActor = null, MirrorPulseNamespaceExecutionSession? namespaceExecution = null)
 {
-    public async ValueTask<MirrorPulseContentConfirmationReceipt> ConfirmAsync(CloudFile file,
+    public ValueTask<MirrorPulseContentConfirmationReceipt> ConfirmAsync(CloudFile file,
+        MirrorPulseContentAcceptanceProof proof, CancellationToken cancellationToken) => ConfirmCoreAsync(file, proof, false, cancellationToken);
+
+    /// <summary>Reconfirms an unchanged accepted placeholder without replacing its historical acceptance or receipt.</summary>
+    public async ValueTask<MirrorPulseContentConfirmationReceipt> ReconfirmObservedContentAsync(CloudFile file,
         MirrorPulseContentAcceptanceProof proof, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(file); ArgumentNullException.ThrowIfNull(proof);
+        var accepted = await catalog.ReadMutationAsync(proof.OperationId, cancellationToken).ConfigureAwait(false);
+        var route = router.ResolvePath(file.RelativePath);
+        var snapshot = await file.InspectAsync(cancellationToken).ConfigureAwait(false);
+        if (accepted is not { State: MirrorPulseMutationState.Acknowledged } || accepted.Intent.InstanceId != route.InstanceId ||
+            accepted.Intent.RootKey != route.RootKey || router.GetRegistration(route.InstanceId, route.RootKey).State != RootRegistrationState.Active ||
+            await catalog.ReadContentAcceptanceProofAsync(proof.OperationId, cancellationToken).ConfigureAwait(false) != proof ||
+            (await catalog.ReadContentConfirmationReceiptAsync(proof.OperationId, cancellationToken).ConfigureAwait(false))?.MayAcknowledge != true ||
+            !snapshot.Exists || !snapshot.IsPlaceholder || snapshot.IsTombstone || snapshot.ItemId != proof.AcceptedItemId ||
+            !snapshot.PlaceholderIdentity.Span.SequenceEqual(new CloudPlaceholderIdentity(proof.AcceptedItemId, proof.RemoteId, proof.AcceptedRevision ?? string.Empty).Encode()))
+            throw new InvalidDataException("Observation reconfirmation requires the actual completed acceptance and its unchanged native identity.");
+        return await ConfirmCoreAsync(file, proof, true, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async ValueTask<MirrorPulseContentConfirmationReceipt> ConfirmCoreAsync(CloudFile file,
+        MirrorPulseContentAcceptanceProof proof, bool reconfirm, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(file); ArgumentNullException.ThrowIfNull(proof);
         ArgumentNullException.ThrowIfNull(proof.UploadBinding);
@@ -24,7 +46,7 @@ public sealed partial class MirrorPulseNamespaceContentConfirmation(MirrorPulseP
         {
             if (await catalog.ReadNamespaceMemberByBindingAsync(proof.UploadBinding.LocalObject, cancellationToken).ConfigureAwait(false) is not null)
                 throw new InvalidOperationException("Registered member confirmation requires the Host's shared namespace actor and execution role.");
-            return await ConfirmAndSaveAsync(file, proof, cancellationToken).ConfigureAwait(false);
+            return await ConfirmAndSaveAsync(file, proof, reconfirm, cancellationToken).ConfigureAwait(false);
         }
         return await namespaceActor.RunAsync(async token =>
         {
@@ -32,7 +54,7 @@ public sealed partial class MirrorPulseNamespaceContentConfirmation(MirrorPulseP
             // Registration uses this same actor. Decide membership under admission so an
             // unregistered file cannot become registered during its confirmation boundary.
             var member = await catalog.ReadNamespaceMemberByBindingAsync(proof.UploadBinding.LocalObject, token).ConfigureAwait(false);
-            if (member is null) return await ConfirmAndSaveAsync(file, proof, token).ConfigureAwait(false);
+            if (member is null) return await ConfirmAndSaveAsync(file, proof, reconfirm, token).ConfigureAwait(false);
             if (namespaceExecution is null)
                 throw new InvalidOperationException("Registered member confirmation requires the Host's namespace execution role.");
             if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
@@ -46,7 +68,7 @@ public sealed partial class MirrorPulseNamespaceContentConfirmation(MirrorPulseP
                 mutation.Intent.InstanceId != route.InstanceId || mutation.Intent.RootKey != route.RootKey ||
                 (await catalog.ReadNamespaceRecoveryRootsAsync(token).ConfigureAwait(false)).Contains(member.RootId.Value))
                 throw new InvalidOperationException("Content confirmation requires this member's committed location and unfenced owning root.");
-            return await ConfirmProtectedMemberAsync(file, proof, member, location, namespaceExecution, namespaceActor, token).ConfigureAwait(false);
+            return await ConfirmProtectedMemberAsync(file, proof, member, location, namespaceExecution, namespaceActor, reconfirm, token).ConfigureAwait(false);
         }, cancellationToken).ConfigureAwait(false);
     }
 
@@ -54,7 +76,7 @@ public sealed partial class MirrorPulseNamespaceContentConfirmation(MirrorPulseP
     private async Task<MirrorPulseContentConfirmationReceipt> ConfirmProtectedMemberAsync(CloudFile file,
         MirrorPulseContentAcceptanceProof proof, MirrorPulseNamespaceMemberRegistration member,
         MirrorPulseNamespaceMemberLocation location, MirrorPulseNamespaceExecutionSession execution,
-        MirrorPulseNamespaceActor actor, CancellationToken token)
+        MirrorPulseNamespaceActor actor, bool reconfirm, CancellationToken token)
     {
         // Validate durable acceptance and predecessor identity before the public native mark.
         if (await catalog.ReadContentAcceptanceProofAsync(proof.OperationId, token).ConfigureAwait(false) != proof)
@@ -86,7 +108,7 @@ public sealed partial class MirrorPulseNamespaceContentConfirmation(MirrorPulseP
             RequireProtectedObject(parentBefore, await parent.InspectAsync(token).ConfigureAwait(false), parentMember, parentProof, parentLocation.RelativePath);
             RequireProtectedObject(await childLease.InspectAsync(token).ConfigureAwait(false), await file.InspectAsync(token).ConfigureAwait(false),
                 member, childProof, location.RelativePath);
-            receipt = await ConfirmAndSaveAsync(file, proof, token).ConfigureAwait(false);
+            receipt = await ConfirmAndSaveAsync(file, proof, reconfirm, token).ConfigureAwait(false);
             if (!receipt.MayAcknowledge) return;
             CancellationToken durable = CancellationToken.None;
             RequireProtectedObject(await childLease.InspectAsync(durable).ConfigureAwait(false), await file.InspectAsync(durable).ConfigureAwait(false),
@@ -98,7 +120,7 @@ public sealed partial class MirrorPulseNamespaceContentConfirmation(MirrorPulseP
                 await MirrorPulseNamespaceProtectionProofReader.ReadMemberAsync(catalog, parentMember, durable).ConfigureAwait(false) != parentProof)
                 throw new InvalidDataException("Protection changed across public content confirmation.");
             actor.AssertAccess();
-            await RetainConfirmedIdentityAsync(catalog, proof, receipt, actor, durable).ConfigureAwait(false);
+            if (!reconfirm) await RetainConfirmedIdentityAsync(catalog, proof, receipt, actor, durable).ConfigureAwait(false);
         }).ConfigureAwait(false);
         return receipt;
     }
@@ -119,11 +141,14 @@ public sealed partial class MirrorPulseNamespaceContentConfirmation(MirrorPulseP
     }
 
     private async ValueTask<MirrorPulseContentConfirmationReceipt> ConfirmAndSaveAsync(CloudFile file,
-        MirrorPulseContentAcceptanceProof proof, CancellationToken token)
+        MirrorPulseContentAcceptanceProof proof, bool reconfirm, CancellationToken token)
     {
-        var receipt = await MirrorPulseContentConfirmation.ConfirmAsync(file, proof, token).ConfigureAwait(false);
-        // Once the native boundary returns, retain its observation even after caller cancellation.
-        await catalog.SaveContentConfirmationReceiptAsync(proof.OperationId, receipt, CancellationToken.None).ConfigureAwait(false);
+        var receipt = reconfirm ? MirrorPulseContentConfirmation.MapReceipt(await file.ConfirmUploadedContentAsync(
+            MirrorPulseContentConfirmation.CreateObservationRequest(proof), token).ConfigureAwait(false)) :
+            await MirrorPulseContentConfirmation.ConfirmAsync(file, proof, token).ConfigureAwait(false);
+        // Upload confirmation retains its observation after caller cancellation.
+        // A new observation must not overwrite the historical acceptance receipt.
+        if (!reconfirm) await catalog.SaveContentConfirmationReceiptAsync(proof.OperationId, receipt, CancellationToken.None).ConfigureAwait(false);
         return receipt;
     }
 
