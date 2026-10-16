@@ -34,6 +34,7 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
     private readonly LocalRollingLogWriter _log;
     private readonly CancellationTokenSource _shutdown = new();
     private Task? _loop;
+    private bool _ownsFeed;
     private readonly MirrorPulseJournalPumpRunner _runner = new();
     private readonly MirrorPulseMutationExecutor _mutationExecutor;
     private readonly MirrorPulseMutationReadback _readback;
@@ -110,7 +111,13 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
             throw new InvalidOperationException("The local journal upload pump has already started.");
         }
 
-        await _feed.StartAsync(cancellationToken).ConfigureAwait(false);
+        // CfSharp owns one shared feed per filesystem. Recovery or another Host
+        // component may already have started that owner before the pump attaches.
+        if (!_feed.IsStarted)
+        {
+            await _feed.StartAsync(cancellationToken).ConfigureAwait(false);
+            _ownsFeed = true;
+        }
         _loop = Task.Run(() => RunAsync(_shutdown.Token), CancellationToken.None);
     }
 
@@ -551,7 +558,7 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
             await _loop.ConfigureAwait(false);
         }
 
-        await _feed.DisposeAsync().ConfigureAwait(false);
+        if (_ownsFeed) await _feed.DisposeAsync().ConfigureAwait(false);
         if (_ownsScheduler) await _scheduler.DisposeAsync().ConfigureAwait(false);
         _log.Dispose();
         _shutdown.Dispose();

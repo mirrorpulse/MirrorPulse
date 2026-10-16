@@ -102,7 +102,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     {
                         var original = window.ReadyCommands.First(value => value.ItemId == logicalItemId);
                         originalIds = [original.OperationId];
-                        await using var preflightFeed = fileSystem.CreateLocalChangeFeed(new() { BatchSize = 1 });
+                        var preflightFeed = feed; // The SDK owns one already-started feed, shared with conflict actions.
+                        Assert.IsTrue(preflightFeed.IsStarted);
                         var completion = new MirrorPulseJournalUploadCompletion(preflightFeed, state,
                             new BackoffPolicy(TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(5)));
                         // A content-only Worker disables coalescing here, exercising
@@ -119,6 +120,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         Assert.IsNull(await catalog.ReadMutationAsync(original.OperationId, deadline.Token));
                     }
                     rejectedUploadCalls = remote.UploadCalls;
+                    Assert.IsTrue(feed.IsStarted, "Stopping the pump must retain the SDK-owned feed for conflict actions.");
                     foreach (Guid original in grouped ? originalIds : [])
                     {
                         var conflict = new MirrorPulseConflictRecord(Guid.NewGuid(), root.InstanceId, original.ToString("D"), "Docs/original.bin",
