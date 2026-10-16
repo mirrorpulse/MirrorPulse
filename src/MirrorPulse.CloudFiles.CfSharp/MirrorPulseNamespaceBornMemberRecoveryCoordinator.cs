@@ -15,7 +15,7 @@ public sealed record MirrorPulseNamespaceBornMemberRecoveryResult(Guid ActionId,
 [SupportedOSPlatform("windows10.0.26100")]
 public sealed class MirrorPulseNamespaceBornMemberRecoveryCoordinator(CloudFileSystem fileSystem, MirrorPulseProductCatalog catalog,
     MirrorPulseRootRouter router, MirrorPulseNamespaceExecutionSession execution, MirrorPulseNamespaceActor actor,
-    MirrorPulseInstanceScheduler scheduler, MirrorPulseNamespacePermissionCoordinator permissions)
+    IMirrorPulseInstanceScheduler scheduler, MirrorPulseNamespacePermissionCoordinator permissions)
 {
     internal Func<MirrorPulseNamespaceBornMemberRecoveryCheckpoint, CancellationToken, ValueTask>? Checkpoint { get; init; }
 

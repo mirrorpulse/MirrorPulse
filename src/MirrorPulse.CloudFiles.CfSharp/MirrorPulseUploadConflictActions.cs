@@ -79,19 +79,65 @@ public sealed partial class MirrorPulseUploadConflictActions
         MirrorPulseConflictAction action,
         CancellationToken cancellationToken = default)
     {
-        MirrorPulseConflictRecord conflict = await _catalog.ReadUploadConflictAsync(
-            conflictId, cancellationToken).ConfigureAwait(false)
-            ?? throw new FileNotFoundException("The upload conflict was not found.");
-        return _scheduler is null ? await ApplyAdmittedAsync(conflict, action, cancellationToken).ConfigureAwait(false) :
-            await _scheduler.RunAsync(conflict.InstanceId, token => ApplyAdmittedAsync(conflict, action, token), cancellationToken).ConfigureAwait(false);
+        await using var admission = await RetainRootAsync(conflictId, action, cancellationToken).ConfigureAwait(false);
+        return _scheduler is null ? await ApplyRetainedAsync(admission, action, cancellationToken).ConfigureAwait(false) :
+            await _scheduler.RunAsync(admission.Conflict.InstanceId, token => ApplyRetainedAsync(admission, action, token), cancellationToken).ConfigureAwait(false);
     }
 
+    internal sealed class RootAdmission(MirrorPulseConflictRecord conflict, RootId? rootId,
+        MirrorPulseNamespaceWorkAdmission.WorkLease? work, IAsyncDisposable? recovery) : IAsyncDisposable
+    {
+        internal MirrorPulseConflictRecord Conflict { get; } = conflict;
+        internal RootId? RootId { get; } = rootId;
+        public async ValueTask DisposeAsync()
+        {
+            Interlocked.Exchange(ref work, null)?.Dispose();
+            var owned = Interlocked.Exchange(ref recovery, null);
+            if (owned is not null) await owned.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    // This phase uses only the Host catalog and root owner, never a captured SDK object.
+    // Runtime may rotate the SDK while this admission waits for earlier root work.
+    internal async ValueTask<RootAdmission> RetainRootAsync(Guid conflictId, MirrorPulseConflictAction action, CancellationToken token)
+    {
+        if (!Enum.IsDefined(action) || action == MirrorPulseConflictAction.Defer) throw new ArgumentOutOfRangeException(nameof(action));
+        var conflict = await _catalog.ReadUploadConflictAsync(conflictId, token).ConfigureAwait(false)
+            ?? throw new FileNotFoundException("The upload conflict was not found.");
+        if (!conflict.IsPending) throw new InvalidOperationException("The upload conflict has already been resolved.");
+        if (_router is null)
+        {
+            if (_namespaceWork is not null) throw new InvalidOperationException("Root admission requires the Host router.");
+            return new(conflict, null, null, null);
+        }
+        var route = _router.ResolvePath(conflict.RelativePath);
+        if (route.InstanceId != conflict.InstanceId) throw new InvalidDataException("The conflict route belongs to another instance.");
+        var root = _router.GetRegistration(route.InstanceId, route.RootKey);
+        if (_namespaceWork is null) return new(conflict, root.RootId, null, null);
+        bool pending = action == MirrorPulseConflictAction.Retry || Guid.TryParse(conflict.ChangeId, out var original) &&
+            await _catalog.ReadConflictDeletionOwnerAsync(original, token).ConfigureAwait(false) is not null;
+        return pending ? new(conflict, root.RootId, null, await _namespaceWork.EnterPendingOperationAsync(root.RootId, token).ConfigureAwait(false)) :
+            new(conflict, root.RootId, _namespaceWork.Enter([root.RootId]), null);
+    }
+
+    internal ValueTask<MirrorPulseConflictResolution> ApplyRetainedAsync(RootAdmission admission,
+        MirrorPulseConflictAction action, CancellationToken token) => ApplyAdmittedAsync(admission.Conflict, action, admission.RootId, token);
+
     private async ValueTask<MirrorPulseConflictResolution> ApplyAdmittedAsync(MirrorPulseConflictRecord conflict,
-        MirrorPulseConflictAction action, CancellationToken cancellationToken)
+        MirrorPulseConflictAction action, RootId? admittedRoot, CancellationToken cancellationToken)
     {
         Guid conflictId = conflict.ConflictId;
+        var originalInstance = conflict.InstanceId;
         conflict = await _catalog.ReadUploadConflictAsync(conflictId, cancellationToken).ConfigureAwait(false)
             ?? throw new FileNotFoundException("The admitted upload conflict disappeared.");
+        if (conflict.InstanceId != originalInstance)
+            throw new InvalidDataException("The conflict changed its admitted instance or root.");
+        if (admittedRoot is { } retained)
+        {
+            var route = _router!.ResolvePath(conflict.RelativePath);
+            if (route.InstanceId != originalInstance || _router.GetRegistration(route.InstanceId, route.RootKey).RootId != retained)
+                throw new InvalidDataException("The conflict changed its admitted instance or root.");
+        }
         if (!conflict.IsPending)
         {
             throw new InvalidOperationException("The upload conflict has already been resolved.");
@@ -103,7 +149,7 @@ public sealed partial class MirrorPulseUploadConflictActions
         {
             if (action != MirrorPulseConflictAction.DeleteRemote)
                 throw new InvalidOperationException("This conflict already belongs to a retained deletion decision.");
-            return await ApplyExistingDeletionAsync(deletionOwner, conflict, cancellationToken).ConfigureAwait(false);
+            return await ApplyExistingDeletionAsync(deletionOwner, conflict, admittedRoot, cancellationToken).ConfigureAwait(false);
         }
         if (group is not null && action is not (MirrorPulseConflictAction.Retry or MirrorPulseConflictAction.KeepLocal or MirrorPulseConflictAction.DeleteRemote))
             throw new NotSupportedException("This coalesced decision requires a complete local group operation; no original journal ID was acknowledged.");
@@ -118,8 +164,8 @@ public sealed partial class MirrorPulseUploadConflictActions
         {
             if (action == MirrorPulseConflictAction.DeleteRemote)
             {
-                await PrepareDeletionAdmittedAsync(commandId, conflict, group, cancellationToken).ConfigureAwait(false);
-                return await ExecuteDeletionAdmittedAsync(commandId, cancellationToken).ConfigureAwait(false);
+                await PrepareDeletionAdmittedAsync(commandId, conflict, group, admittedRoot, cancellationToken).ConfigureAwait(false);
+                return await ExecuteDeletionAdmittedAsync(commandId, admittedRoot, cancellationToken).ConfigureAwait(false);
             }
             if (group is not null)
             {
@@ -127,7 +173,7 @@ public sealed partial class MirrorPulseUploadConflictActions
                     (await _catalog.ReadJournalCoalescingExecutionAsync(group.PlanId, cancellationToken).ConfigureAwait(false))!
                     .Steps.Any(step => step.Kind == MirrorPulseCoalescingStepKind.VerifyUnchanged))
                 {
-                    var content = await CaptureGroupKeepLocalContentAsync(group, cancellationToken).ConfigureAwait(false);
+                    var content = await CaptureGroupKeepLocalContentAsync(group, admittedRoot, cancellationToken).ConfigureAwait(false);
                     _ = await _catalog.AuthorizeJournalCoalescingKeepLocalContentAsync(commandId, conflict.ConflictId,
                         content, cancellationToken).ConfigureAwait(false);
                 }
@@ -188,12 +234,12 @@ public sealed partial class MirrorPulseUploadConflictActions
     }
 
     private async Task<MirrorPulseCoalescingContent> CaptureGroupKeepLocalContentAsync(MirrorPulseJournalCoalescingPlan group,
-        CancellationToken token)
+        RootId? admittedRoot, CancellationToken token)
     {
         if (_fileSystem is null || _router is null || _contentConfirmation is null)
             throw new NotSupportedException("Keeping local verification content requires the active Cloud Files owner.");
         var root = _router.GetRegistration(group.InstanceId, group.RootKey);
-        using var admission = _namespaceWork?.Enter([root.RootId]);
+        using var admission = admittedRoot == root.RootId ? null : _namespaceWork?.Enter([root.RootId]);
         if (_namespaceExecution is null) return await CaptureAsync().ConfigureAwait(false);
         if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
             throw new PlatformNotSupportedException("Protected content capture requires Windows 11 version 24H2 or later.");

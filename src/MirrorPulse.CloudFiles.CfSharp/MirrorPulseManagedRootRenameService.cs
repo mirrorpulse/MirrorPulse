@@ -13,11 +13,11 @@ public sealed record MirrorPulseManagedRootRenameRestoreResult(Guid OperationId,
 public sealed class MirrorPulseManagedRootRenameService
 {
     private readonly MirrorPulseProductCatalog _catalog;
-    private readonly MirrorPulseInstanceScheduler _scheduler;
+    private readonly IMirrorPulseInstanceScheduler _scheduler;
     private readonly Func<Guid, CancellationToken, ValueTask<MirrorPulseManagedRootRenameRecovery>> _recover;
 
     public MirrorPulseManagedRootRenameService(MirrorPulseProductCatalog catalog,
-        MirrorPulseInstanceScheduler scheduler,
+        IMirrorPulseInstanceScheduler scheduler,
         Func<Guid, CancellationToken, ValueTask<MirrorPulseManagedRootRenameRecovery>> recover)
     {
         _catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));

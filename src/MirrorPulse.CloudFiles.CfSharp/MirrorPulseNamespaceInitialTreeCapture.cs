@@ -16,7 +16,7 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 [SupportedOSPlatform("windows10.0.26100")]
 public sealed class MirrorPulseNamespaceInitialTreeCapture(CloudFileSystem fileSystem, MirrorPulseProductCatalog catalog,
     MirrorPulseRootRouter router, MirrorPulseNamespaceExecutionSession execution, MirrorPulseNamespaceActor actor,
-    MirrorPulseInstanceScheduler scheduler, MirrorPulseNamespacePermissionCoordinator permissions)
+    IMirrorPulseInstanceScheduler scheduler, MirrorPulseNamespacePermissionCoordinator permissions)
 {
     private const int PageSize = 256;
 

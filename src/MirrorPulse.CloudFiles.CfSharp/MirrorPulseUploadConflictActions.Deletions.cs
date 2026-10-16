@@ -10,7 +10,7 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 public sealed partial class MirrorPulseUploadConflictActions
 {
     private async ValueTask<MirrorPulseConflictResolution> ApplyExistingDeletionAsync(Guid decisionId,
-        MirrorPulseConflictRecord conflict, CancellationToken token)
+        MirrorPulseConflictRecord conflict, RootId? admittedRoot, CancellationToken token)
     {
         var decision = await _catalog.ReadConflictDeletionAsync(decisionId, token).ConfigureAwait(false)
             ?? throw new FileNotFoundException("The original conflict deletion is missing.");
@@ -18,7 +18,7 @@ public sealed partial class MirrorPulseUploadConflictActions
         var current = await _catalog.ReadMutationAsync(effect.OperationId, token).ConfigureAwait(false);
         if (decision.Phase != MirrorPulseConflictDeletionPhase.Retired || current?.State != MirrorPulseMutationState.Conflict ||
             await _catalog.ReadConflictDeletionObservationAsync(effect.OperationId, token).ConfigureAwait(false) is null)
-            return await ExecuteDeletionAdmittedAsync(decisionId, token).ConfigureAwait(false);
+            return await ExecuteDeletionAdmittedAsync(decisionId, admittedRoot, token).ConfigureAwait(false);
         RequireDeletionService();
         var root = _router!.GetRegistration(decision.Intent.InstanceId, decision.Intent.RootKey);
         if (root.State != RootRegistrationState.Active || !_mayDispatch(root.InstanceId))
@@ -28,7 +28,7 @@ public sealed partial class MirrorPulseUploadConflictActions
         try
         {
             _ = await _catalog.AuthorizeConflictDeletionRetryAsync(commandId, decisionId, conflict.ConflictId, token).ConfigureAwait(false);
-            return (await ExecuteDeletionAdmittedAsync(decisionId, token).ConfigureAwait(false)) with { ResolutionId = commandId };
+            return (await ExecuteDeletionAdmittedAsync(decisionId, admittedRoot, token).ConfigureAwait(false)) with { ResolutionId = commandId };
         }
         catch (Exception error) when (error is not OperationCanceledException)
         {
@@ -39,7 +39,7 @@ public sealed partial class MirrorPulseUploadConflictActions
     }
 
     private async Task PrepareDeletionAdmittedAsync(Guid commandId, MirrorPulseConflictRecord conflict,
-        MirrorPulseJournalCoalescingPlan? group, CancellationToken token)
+        MirrorPulseJournalCoalescingPlan? group, RootId? admittedRoot, CancellationToken token)
     {
         if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100)) throw new PlatformNotSupportedException();
         RequireDeletionService();
@@ -47,7 +47,7 @@ public sealed partial class MirrorPulseUploadConflictActions
         var root = _router.GetRegistration(route.InstanceId, route.RootKey);
         if (route.InstanceId != conflict.InstanceId || route.RelativePath.Length == 0 || root.State != RootRegistrationState.Active || !_mayDispatch(route.InstanceId))
             throw new InvalidOperationException("A destructive conflict decision requires its enabled managed root and Worker.");
-        using var admission = _namespaceWork?.Enter([root.RootId]);
+        using var admission = admittedRoot == root.RootId ? null : _namespaceWork?.Enter([root.RootId]);
         Guid originalId = Guid.Parse(conflict.ChangeId);
         Guid itemId;
         long originalSequence;
@@ -98,11 +98,13 @@ public sealed partial class MirrorPulseUploadConflictActions
     {
         var decision = await _catalog.ReadConflictDeletionAsync(commandId, token).ConfigureAwait(false)
             ?? throw new FileNotFoundException("The conflict deletion decision is missing.");
-        return _scheduler is null ? await ExecuteDeletionAdmittedAsync(commandId, token).ConfigureAwait(false) :
-            await _scheduler.RunAsync(decision.Intent.InstanceId, stop => ExecuteDeletionAdmittedAsync(commandId, stop), token).ConfigureAwait(false);
+        var root = _router!.GetRegistration(decision.Intent.InstanceId, decision.Intent.RootKey);
+        await using var admission = _namespaceWork is null ? null : await _namespaceWork.EnterPendingOperationAsync(root.RootId, token).ConfigureAwait(false);
+        return _scheduler is null ? await ExecuteDeletionAdmittedAsync(commandId, root.RootId, token).ConfigureAwait(false) :
+            await _scheduler.RunAsync(decision.Intent.InstanceId, stop => ExecuteDeletionAdmittedAsync(commandId, root.RootId, stop), token).ConfigureAwait(false);
     }
 
-    private async ValueTask<MirrorPulseConflictResolution> ExecuteDeletionAdmittedAsync(Guid commandId, CancellationToken token)
+    private async ValueTask<MirrorPulseConflictResolution> ExecuteDeletionAdmittedAsync(Guid commandId, RootId? admittedRoot, CancellationToken token)
     {
         if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100)) throw new PlatformNotSupportedException();
         RequireDeletionService();
@@ -111,7 +113,7 @@ public sealed partial class MirrorPulseUploadConflictActions
         var root = _router!.GetRegistration(decision.Intent.InstanceId, decision.Intent.RootKey);
         if (root.State != RootRegistrationState.Active || !_mayDispatch(root.InstanceId))
             throw new InvalidOperationException("An offline root retains its deletion decision without accessing local or remote content.");
-        await using var admission = _namespaceWork is null ? null : await _namespaceWork.EnterPendingOperationAsync(root.RootId, token).ConfigureAwait(false);
+        if (admittedRoot != root.RootId) throw new InvalidDataException("Conflict deletion lost its explicit root admission.");
         var executor = new MirrorPulseConflictDeletionExecutor(_catalog, _mutations!, new(_stats!));
         MirrorPulseConflictDeletion completed;
         try

@@ -305,6 +305,8 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         private readonly MirrorPulseNamespacePermissionCoordinator? _permissions = catalog is null ? null : new(catalog);
         private MirrorPulseNamespaceInitializationResult? _initializationProtection;
         private readonly SemaphoreSlim _initializationGate = new(1, 1);
+        private readonly SemaphoreSlim _recoveryRequests = new(1, 1);
+        private readonly CancellationTokenSource _admissionShutdown = new();
         private int _initializationClosing;
         private readonly object _disposal = new();
         private Task? _disposeTask;
@@ -331,21 +333,18 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                 throw new ArgumentException("Current recovery requires a nonempty operation and selected root identity.");
             RequireImportBoundary();
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
-            await _initializationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-            try
+            return await RunNamespaceInitializationRecoveryAsync(operationId, MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory,
+                selectedRoot, async (admission, instances, token) =>
             {
-                ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
-                await using var admission = await BeginInitializationWorkRecoveryAsync(operationId,
-                    MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory, cancellationToken, selectedRoot).ConfigureAwait(false);
                 if (selectedRoot is not null && _scopedAnchorProtection is null &&
-                    await catalog!.ReadNamespaceInitializationCompletionAsync(operationId, cancellationToken).ConfigureAwait(false) is null)
+                    await catalog!.ReadNamespaceInitializationCompletionAsync(operationId, token).ConfigureAwait(false) is null)
                     _scopedAnchorProtection = await new MirrorPulseNamespaceAnchorProtectionCoordinator(fileSystem, catalog, router!,
-                        _namespaceExecution!, _namespaceActor!, _permissions!).ProtectAsync(cancellationToken).ConfigureAwait(false);
+                        _namespaceExecution!, _namespaceActor!, _permissions!).ProtectAsync(token).ConfigureAwait(false);
                 var coordinator = new MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(fileSystem, catalog!, router!, _namespaceExecution!,
-                    _namespaceActor!, _scheduler, _permissions!);
+                    _namespaceActor!, instances, _permissions!);
                 var result = selectedRoot is { } root
-                    ? await coordinator.RecoverRootAsync(operationId, root, cancellationToken).ConfigureAwait(false)
-                    : await coordinator.RecoverAsync(operationId, cancellationToken).ConfigureAwait(false);
+                    ? await coordinator.RecoverRootAsync(operationId, root, token).ConfigureAwait(false)
+                    : await coordinator.RecoverAsync(operationId, token).ConfigureAwait(false);
                 if (!result.IsHistoricalReplay)
                 {
                     var prior = _initializationProtection; _initializationProtection = result;
@@ -353,8 +352,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                     admission?.CompleteAfterFreshAudit();
                 }
                 return result.Completion;
-            }
-            finally { _initializationGate.Release(); }
+            }, cancellationToken).ConfigureAwait(false);
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
@@ -363,14 +361,11 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         {
             RequireImportBoundary();
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
-            await _initializationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-            try
+            return await RunNamespaceInitializationRecoveryAsync(operationId, MirrorPulseNamespaceInitializationInventoryKind.OriginalInventory,
+                null, async (admission, instances, token) =>
             {
-                ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
-                await using var admission = await BeginInitializationWorkRecoveryAsync(operationId,
-                    MirrorPulseNamespaceInitializationInventoryKind.OriginalInventory, cancellationToken).ConfigureAwait(false);
                 var result = await new MirrorPulseNamespaceInitializationCoordinator(fileSystem, catalog!, router!, _namespaceExecution!,
-                    _namespaceActor!, _scheduler, _permissions!).InitializeAsync(operationId, cancellationToken).ConfigureAwait(false);
+                    _namespaceActor!, instances, _permissions!).InitializeAsync(operationId, token).ConfigureAwait(false);
                 if (!result.IsHistoricalReplay)
                 {
                     var prior = _initializationProtection; _initializationProtection = result;
@@ -378,12 +373,33 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                     admission?.CompleteAfterFreshAudit();
                 }
                 return result.Completion;
-            }
-            finally { _initializationGate.Release(); }
+            }, cancellationToken).ConfigureAwait(false);
+        }
+
+        private sealed record InitializationWorkRecovery(MirrorPulseNamespaceInitializationIntent? Retained,
+            IReadOnlyList<RootRegistration> Registrations, IReadOnlyList<MirrorPulseNamespaceInitializationRoot>? PlannedRoots);
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        private async ValueTask<MirrorPulseNamespaceInitializationCompletion> RunNamespaceInitializationRecoveryAsync(Guid operationId,
+            MirrorPulseNamespaceInitializationInventoryKind inventoryKind, RootId? selectedRoot,
+            Func<MirrorPulseNamespaceWorkAdmission.RecoveryLease?, IMirrorPulseInstanceScheduler, CancellationToken,
+                ValueTask<MirrorPulseNamespaceInitializationCompletion>> recover, CancellationToken token)
+        {
+            using var admissionToken = CancellationTokenSource.CreateLinkedTokenSource(token, _admissionShutdown.Token);
+            return await MirrorPulseRuntimeInstanceDispatcher.RunRecoveryAsync(_recoveryRequests, _scheduler,
+                router!.Registrations.Select(root => root.InstanceId).Distinct(),
+                stop => WithCurrentLibraryAsync(current => PrepareInitializationWorkRecoveryAsync(operationId, inventoryKind, current, selectedRoot), stop),
+                (preparation, admission, instances, stop) => WithCurrentLibraryAsync(async current =>
+                {
+                    if (admission is not null)
+                        await FinishInitializationWorkRecoveryAsync(operationId, inventoryKind, selectedRoot, preparation, instances, current).ConfigureAwait(false);
+                    return await recover(admission, instances, current).ConfigureAwait(false);
+                }, stop), admissionToken.Token).ConfigureAwait(false);
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
-        private async ValueTask<MirrorPulseNamespaceWorkAdmission.RecoveryLease?> BeginInitializationWorkRecoveryAsync(Guid operationId,
+        private async ValueTask<(InitializationWorkRecovery Preparation, Task<MirrorPulseNamespaceWorkAdmission.RecoveryLease?> Drain)>
+            PrepareInitializationWorkRecoveryAsync(Guid operationId,
             MirrorPulseNamespaceInitializationInventoryKind inventoryKind, CancellationToken token, RootId? selectedRoot = null)
         {
             var retained = await catalog!.ReadNamespaceInitializationAsync(operationId, token).ConfigureAwait(false);
@@ -392,10 +408,10 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             if (retained is not null && (selectedRoot is { } selected ? retained.Version != 4 || retained.Roots.Count != 1 ||
                 retained.Roots[0].RootId != selected : retained.Version == 4))
                 throw new InvalidOperationException("The retained initializer requires its explicit complete or selected-root recovery route.");
-            if (namespaceWork is null || await catalog!.ReadNamespaceInitializationCompletionAsync(operationId, token).ConfigureAwait(false) is not null)
-                return null;
             var registrations = router!.Registrations.Where(root => selectedRoot is null || root.RootId == selectedRoot.Value)
                 .OrderBy(root => root.RootId.Value).ToArray();
+            if (namespaceWork is null || await catalog!.ReadNamespaceInitializationCompletionAsync(operationId, token).ConfigureAwait(false) is not null)
+                return (new(retained, registrations, null), Task.FromResult<MirrorPulseNamespaceWorkAdmission.RecoveryLease?>(null));
             if (selectedRoot is not null && registrations.Length != 1)
                 throw new InvalidOperationException("The selected recovery root is not configured.");
             if (retained is not null && !retained.Roots.Select(root => root.RootId).ToHashSet().SetEquals(registrations.Select(root => root.RootId)))
@@ -409,27 +425,34 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                 if (inventoryKind == MirrorPulseNamespaceInitializationInventoryKind.OriginalInventory)
                     await MirrorPulseNamespaceInitializationCoordinator.RequireOriginalGraphAsync(catalog, registrations, plannedRoots, token).ConfigureAwait(false);
             }
-            var admission = await namespaceWork.BeginRecoveryAsync(registrations.Select(root => root.RootId), token).ConfigureAwait(false);
-            try
-            {
-                if (retained is null)
-                {
-                    var selectedRoots = plannedRoots ?? throw new InvalidDataException("The initializer has no selected root provenance.");
-                    if (inventoryKind == MirrorPulseNamespaceInitializationInventoryKind.OriginalInventory)
-                        await MirrorPulseNamespaceInitializationCoordinator.RequireOriginalGraphAsync(catalog, registrations, selectedRoots, token).ConfigureAwait(false);
-                    else if (!selectedRoots.SequenceEqual(await MirrorPulseNamespaceCurrentRootSelector.SelectAsync(fileSystem, catalog, registrations, token).ConfigureAwait(false)))
-                        throw new InvalidDataException("Current root provenance changed while earlier work drained.");
-                    await catalog.PrepareNamespaceInitializationAsync(new(selectedRoot is not null ? 4 : selectedRoots.Count == 0 ? 3 : selectedRoots.Any(root => root.BornRootMemberId is not null) ? 2 : 1,
-                        operationId, selectedRoots, DateTimeOffset.UtcNow)
-                    { RequestedInventoryKind = inventoryKind }, token).ConfigureAwait(false);
-                }
-                await ReopenLibraryForNamespaceRecoveryAsync(token).ConfigureAwait(false);
-                return admission;
-            }
-            catch { await admission.DisposeAsync().ConfigureAwait(false); throw; }
+            // Calling BeginRecovery closes the selected roots synchronously. Its asynchronous
+            // tail is awaited only after releasing the library needed by accepted work.
+            static async Task<MirrorPulseNamespaceWorkAdmission.RecoveryLease?> DrainAsync(Task<MirrorPulseNamespaceWorkAdmission.RecoveryLease> drain) =>
+                await drain.ConfigureAwait(false);
+            return (new(retained, registrations, plannedRoots), DrainAsync(namespaceWork.BeginRecoveryAsync(
+                registrations.Select(root => root.RootId), token).AsTask()));
         }
 
-        private async Task ReopenLibraryForNamespaceRecoveryAsync(CancellationToken token)
+        [SupportedOSPlatform("windows10.0.26100")]
+        private async Task FinishInitializationWorkRecoveryAsync(Guid operationId,
+            MirrorPulseNamespaceInitializationInventoryKind inventoryKind, RootId? selectedRoot, InitializationWorkRecovery preparation,
+            IMirrorPulseInstanceScheduler instances, CancellationToken token)
+        {
+            if (preparation.Retained is null)
+            {
+                var selectedRoots = preparation.PlannedRoots ?? throw new InvalidDataException("The initializer has no selected root provenance.");
+                if (inventoryKind == MirrorPulseNamespaceInitializationInventoryKind.OriginalInventory)
+                    await MirrorPulseNamespaceInitializationCoordinator.RequireOriginalGraphAsync(catalog!, preparation.Registrations, selectedRoots, token).ConfigureAwait(false);
+                else if (!selectedRoots.SequenceEqual(await MirrorPulseNamespaceCurrentRootSelector.SelectAsync(fileSystem, catalog!, preparation.Registrations, token).ConfigureAwait(false)))
+                    throw new InvalidDataException("Current root provenance changed while earlier work drained.");
+                await catalog!.PrepareNamespaceInitializationAsync(new(selectedRoot is not null ? 4 : selectedRoots.Count == 0 ? 3 : selectedRoots.Any(root => root.BornRootMemberId is not null) ? 2 : 1,
+                    operationId, selectedRoots, DateTimeOffset.UtcNow)
+                { RequestedInventoryKind = inventoryKind }, token).ConfigureAwait(false);
+            }
+            await ReopenLibraryForNamespaceRecoveryAsync(instances, token).ConfigureAwait(false);
+        }
+
+        private async Task ReopenLibraryForNamespaceRecoveryAsync(IMirrorPulseInstanceScheduler instances, CancellationToken token)
         {
             // Application leases do not cover the native transfer and official projection
             // after FetchChildren returns. Public disposal drains that complete library tail.
@@ -446,19 +469,53 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             fileSystem = new MirrorPulseCloudFileSystemBuilder(paths).WithStateStore(stateStoreDecorator?.Invoke(state) ?? state)
                 .WithContentProvider(provider).Build();
             await StartLibraryAsync(token).ConfigureAwait(false);
-            await StartLibraryServicesAsync(token).ConfigureAwait(false);
+            await StartLibraryServicesAsync(token, instances).ConfigureAwait(false);
         }
 
         private async ValueTask<T> WithCurrentLibraryAsync<T>(Func<CancellationToken, ValueTask<T>> operation, CancellationToken token)
         {
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
-            await _initializationGate.WaitAsync(token).ConfigureAwait(false);
+            using var admissionToken = CancellationTokenSource.CreateLinkedTokenSource(token, _admissionShutdown.Token);
+            await _initializationGate.WaitAsync(admissionToken.Token).ConfigureAwait(false);
             try
             {
                 ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
                 return await operation(token).ConfigureAwait(false);
             }
             finally { _initializationGate.Release(); }
+        }
+
+        private async ValueTask<T> WithInstanceLibraryAsync<T>(InstanceId instance, Func<CancellationToken, ValueTask<T>> operation,
+            CancellationToken token)
+        {
+            using var admissionToken = CancellationTokenSource.CreateLinkedTokenSource(token, _admissionShutdown.Token);
+            return await MirrorPulseRuntimeInstanceDispatcher.RunAsync(_scheduler, instance,
+                WithCurrentLibraryAsync, operation, admissionToken.Token).ConfigureAwait(false);
+        }
+
+        private ValueTask<T> WithAdmittedInstanceLibraryAsync<T>(InstanceId instance,
+            Func<IMirrorPulseInstanceScheduler, CancellationToken, ValueTask<T>> operation, CancellationToken token) =>
+            WithAdmittedInstancesLibraryAsync([instance], operation, token);
+
+        private async ValueTask<T> WithAdmittedInstancesLibraryAsync<T>(IEnumerable<InstanceId> instances,
+            Func<IMirrorPulseInstanceScheduler, CancellationToken, ValueTask<T>> operation, CancellationToken token)
+        {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
+            using var admissionToken = CancellationTokenSource.CreateLinkedTokenSource(token, _admissionShutdown.Token);
+            await using var admitted = await _scheduler.AcquireAsync(instances, admissionToken.Token).ConfigureAwait(false);
+            return await WithCurrentLibraryAsync(current => operation(admitted, current), admissionToken.Token).ConfigureAwait(false);
+        }
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        private async ValueTask<T> WithMemberRecoveryLibraryAsync<T>(Guid memberId,
+            Func<IMirrorPulseInstanceScheduler, CancellationToken, ValueTask<T>> operation, CancellationToken token)
+        {
+            RequireImportBoundary();
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
+            var member = await catalog!.ReadNamespaceMemberAsync(memberId, token).ConfigureAwait(false)
+                ?? throw new FileNotFoundException("The recovery member is not registered.");
+            var root = router!.Registrations.Single(candidate => candidate.RootId == member.RootId);
+            return await WithAdmittedInstanceLibraryAsync(root.InstanceId, operation, token).ConfigureAwait(false);
         }
 
         public ValueTask<MirrorPulseNamespaceInitializationStatus> ReadNamespaceInitializationStatusAsync(Guid operationId,
@@ -472,14 +529,9 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         {
             RequireImportBoundary();
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
-            await _initializationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-            try
-            {
-                ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
-                return await new MirrorPulseNamespaceOriginalMemberRecoveryCoordinator(fileSystem, catalog!, router!, _namespaceExecution!,
-                    _namespaceActor!, _scheduler, _permissions!).RecoverAsync(initializationOperationId, memberId, cancellationToken).ConfigureAwait(false);
-            }
-            finally { _initializationGate.Release(); }
+            return await WithMemberRecoveryLibraryAsync(memberId, (instances, token) =>
+                new MirrorPulseNamespaceOriginalMemberRecoveryCoordinator(fileSystem, catalog!, router!, _namespaceExecution!,
+                    _namespaceActor!, instances, _permissions!).RecoverAsync(initializationOperationId, memberId, token), cancellationToken).ConfigureAwait(false);
         }
 
         public ValueTask<IReadOnlyList<MirrorPulseNamespacePermissionTree>> ReadNamespacePermissionTreesAsync(RootId rootId,
@@ -494,14 +546,9 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         {
             RequireImportBoundary();
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
-            await _initializationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-            try
-            {
-                ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
-                return await new MirrorPulseNamespaceBornMemberRecoveryCoordinator(fileSystem, catalog!, router!, _namespaceExecution!,
-                    _namespaceActor!, _scheduler, _permissions!).RecoverAsync(initializationOperationId, actionId, memberId, cancellationToken).ConfigureAwait(false);
-            }
-            finally { _initializationGate.Release(); }
+            return await WithMemberRecoveryLibraryAsync(memberId, (instances, token) =>
+                new MirrorPulseNamespaceBornMemberRecoveryCoordinator(fileSystem, catalog!, router!, _namespaceExecution!,
+                    _namespaceActor!, instances, _permissions!).RecoverAsync(initializationOperationId, actionId, memberId, token), cancellationToken).ConfigureAwait(false);
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
@@ -510,34 +557,35 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         {
             RequireImportBoundary();
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
-            await _initializationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-            try
-            {
-                ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
-                return await new MirrorPulseNamespaceBornMemberReadbackCoordinator(fileSystem, catalog!, router!, _namespaceExecution!,
-                    _namespaceActor!, _scheduler).VerifyAsync(initializationOperationId, protectionId, memberId, cancellationToken).ConfigureAwait(false);
-            }
-            finally { _initializationGate.Release(); }
+            return await WithMemberRecoveryLibraryAsync(memberId, (instances, token) =>
+                new MirrorPulseNamespaceBornMemberReadbackCoordinator(fileSystem, catalog!, router!, _namespaceExecution!,
+                    _namespaceActor!, instances).VerifyAsync(initializationOperationId, protectionId, memberId, token), cancellationToken).ConfigureAwait(false);
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
-        public ValueTask<MirrorPulseNamespacePermissionTreeResult> RecoverNamespaceOriginalTreeAsync(Guid manifestId,
+        public async ValueTask<MirrorPulseNamespacePermissionTreeResult> RecoverNamespaceOriginalTreeAsync(Guid manifestId,
             CancellationToken cancellationToken)
         {
             RequireImportBoundary();
-            return WithCurrentLibraryAsync(token => new MirrorPulseNamespaceOriginalTreeRecoveryCoordinator(fileSystem, catalog!, router!,
-                _namespaceExecution!, _namespaceActor!, _scheduler, _permissions!).RecoverAsync(manifestId, token), cancellationToken);
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
+            var tree = await catalog!.ReadNamespacePermissionTreeAsync(manifestId, cancellationToken).ConfigureAwait(false)
+                ?? throw new FileNotFoundException("The original recovery tree is not registered.");
+            var root = router!.Registrations.Single(candidate => candidate.RootId == tree.Definition.Anchor.Intent.RootId);
+            return await WithAdmittedInstanceLibraryAsync(root.InstanceId, (instances, token) =>
+                new MirrorPulseNamespaceOriginalTreeRecoveryCoordinator(fileSystem, catalog!, router!,
+                    _namespaceExecution!, _namespaceActor!, instances, _permissions!).RecoverAsync(manifestId, token), cancellationToken).ConfigureAwait(false);
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
         public ValueTask<MirrorPulseNamespaceMemberRegistration> CreateNamespaceMemberAsync(Guid operationId,
             Guid parentMemberId, string name, bool isDirectory, CancellationToken cancellationToken) =>
-            WithCurrentLibraryAsync(token => CreateNamespaceMemberCoreAsync(operationId, parentMemberId, name, isDirectory, token), cancellationToken);
+            CreateNamespaceMemberCoreAsync(operationId, parentMemberId, name, isDirectory, cancellationToken);
 
         [SupportedOSPlatform("windows10.0.26100")]
         private async ValueTask<MirrorPulseNamespaceMemberRegistration> CreateNamespaceMemberCoreAsync(Guid operationId,
             Guid parentMemberId, string name, bool isDirectory, CancellationToken cancellationToken)
         {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
             if (router is null || catalog is null || _namespaceExecution is null || _namespaceActor is null)
                 throw new NotSupportedException("Controlled creation requires the Host namespace boundary.");
             var parent = await catalog.ReadNamespaceMemberAsync(parentMemberId, cancellationToken).ConfigureAwait(false)
@@ -545,20 +593,21 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             if (parent.RootId is null) throw new InvalidOperationException("Creation requires an Adapter's managed root.");
             var registration = router.Registrations.Single(root => root.RootId == parent.RootId);
             using var admission = namespaceWork?.Enter([registration.RootId]);
-            var coordinator = new MirrorPulseNamespaceCreationCoordinator(fileSystem, state, catalog, router, _namespaceExecution, _namespaceActor);
-            return await _scheduler.RunAsync(registration.InstanceId,
-                token => coordinator.CreateAsync(operationId, parentMemberId, name, isDirectory, token), cancellationToken).ConfigureAwait(false);
+            return await WithInstanceLibraryAsync(registration.InstanceId, token =>
+                new MirrorPulseNamespaceCreationCoordinator(fileSystem, state, catalog, router, _namespaceExecution, _namespaceActor)
+                    .CreateAsync(operationId, parentMemberId, name, isDirectory, token), cancellationToken).ConfigureAwait(false);
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
         public ValueTask<MirrorPulseNamespaceBirthPlan> PrepareNamespaceImportAsync(Guid operationId, Guid parentMemberId,
             string name, string sourcePath, CancellationToken cancellationToken) =>
-            WithCurrentLibraryAsync(token => PrepareNamespaceImportCoreAsync(operationId, parentMemberId, name, sourcePath, token), cancellationToken);
+            PrepareNamespaceImportCoreAsync(operationId, parentMemberId, name, sourcePath, cancellationToken);
 
         [SupportedOSPlatform("windows10.0.26100")]
         private async ValueTask<MirrorPulseNamespaceBirthPlan> PrepareNamespaceImportCoreAsync(Guid operationId, Guid parentMemberId,
             string name, string sourcePath, CancellationToken cancellationToken)
         {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
             RequireImportBoundary();
             if (operationId == Guid.Empty || parentMemberId == Guid.Empty)
                 throw new ArgumentException("Operation and parent member IDs are required.");
@@ -567,24 +616,26 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             var registration = router!.Registrations.Single(root => root.RootId == parent.RootId);
             using var admission = namespaceWork?.Enter([registration.RootId]);
             var inputs = new MirrorPulseLocalImportStagingStore(new(syncRootPath, dataRootPath));
-            // A source may hydrate through this same instance. Capture and verify before either lock.
-            var content = await _namespaceExecution!.RunNormalUserOperationAsync(
-                () => inputs.StageAsync(operationId, sourcePath, cancellationToken)).ConfigureAwait(false);
-            await using var input = await _namespaceExecution.RunNormalUserOperationAsync(
+            // A source may hydrate through this SDK owner. Retain it while capturing input,
+            // then release that scope before waiting for the instance's execution admission.
+            var content = await WithCurrentLibraryAsync(async token => await _namespaceExecution!.RunNormalUserOperationAsync(
+                () => inputs.StageAsync(operationId, sourcePath, token)).ConfigureAwait(false), cancellationToken).ConfigureAwait(false);
+            await using var input = await _namespaceExecution!.RunNormalUserOperationAsync(
                 () => inputs.OpenLeaseAsync(operationId, content, cancellationToken)).ConfigureAwait(false);
-            var coordinator = new MirrorPulseNamespaceCreationCoordinator(fileSystem, state, catalog, router, _namespaceExecution, _namespaceActor!);
-            return await _scheduler.RunAsync(registration.InstanceId,
-                token => coordinator.PrepareImportAsync(operationId, parentMemberId, name, input, token), cancellationToken).ConfigureAwait(false);
+            return await WithInstanceLibraryAsync(registration.InstanceId, token =>
+                new MirrorPulseNamespaceCreationCoordinator(fileSystem, state, catalog, router, _namespaceExecution, _namespaceActor!)
+                    .PrepareImportAsync(operationId, parentMemberId, name, input, token), cancellationToken).ConfigureAwait(false);
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
         public ValueTask<MirrorPulseNamespaceMemberRegistration> ExecuteNamespaceImportAsync(Guid operationId,
-            CancellationToken cancellationToken) => WithCurrentLibraryAsync(token => ExecuteNamespaceImportCoreAsync(operationId, token), cancellationToken);
+            CancellationToken cancellationToken) => ExecuteNamespaceImportCoreAsync(operationId, cancellationToken);
 
         [SupportedOSPlatform("windows10.0.26100")]
         private async ValueTask<MirrorPulseNamespaceMemberRegistration> ExecuteNamespaceImportCoreAsync(Guid operationId,
             CancellationToken cancellationToken)
         {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
             RequireImportBoundary();
             var status = await ReadNamespaceImportStatusAsync(operationId, cancellationToken).ConfigureAwait(false);
             var birth = (await catalog!.ReadNamespaceBirthAsync(operationId, cancellationToken).ConfigureAwait(false))!;
@@ -592,18 +643,19 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             await using var admission = namespaceWork is null ? null :
                 await namespaceWork.EnterPendingOperationAsync(registration.RootId, cancellationToken).ConfigureAwait(false);
             var inputs = new MirrorPulseLocalImportStagingStore(new(syncRootPath, dataRootPath));
-            var coordinator = new MirrorPulseNamespaceCreationCoordinator(fileSystem, state, catalog, router, _namespaceExecution!, _namespaceActor!);
             MirrorPulseNamespaceMemberRegistration result;
             if (!status.ContentRecorded && !status.Registered)
             {
                 await using var input = await _namespaceExecution!.RunNormalUserOperationAsync(
                     () => inputs.OpenLeaseAsync(operationId, new(status.Length, status.Sha256), cancellationToken)).ConfigureAwait(false);
-                result = await _scheduler.RunAsync(registration.InstanceId,
-                    token => coordinator.ExecuteImportAsync(operationId, input, token), cancellationToken).ConfigureAwait(false);
+                result = await WithInstanceLibraryAsync(registration.InstanceId, token =>
+                    new MirrorPulseNamespaceCreationCoordinator(fileSystem, state, catalog, router, _namespaceExecution!, _namespaceActor!)
+                        .ExecuteImportAsync(operationId, input, token), cancellationToken).ConfigureAwait(false);
             }
             else
-                result = await _scheduler.RunAsync(registration.InstanceId,
-                    token => coordinator.ExecuteImportAsync(operationId, null, token), cancellationToken).ConfigureAwait(false);
+                result = await WithInstanceLibraryAsync(registration.InstanceId, token =>
+                    new MirrorPulseNamespaceCreationCoordinator(fileSystem, state, catalog, router, _namespaceExecution!, _namespaceActor!)
+                        .ExecuteImportAsync(operationId, null, token), cancellationToken).ConfigureAwait(false);
             // Membership is durable before reclaiming input; closing its lease precedes deletion.
             await _namespaceExecution!.RunNormalUserOperationAsync(() => { inputs.RemoveCompleted(operationId); return Task.CompletedTask; }).ConfigureAwait(false);
             return result;
@@ -628,41 +680,57 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         [SupportedOSPlatform("windows10.0.26100")]
         public ValueTask<MirrorPulseNamespaceReplacementExecution> PrepareNamespaceReplacementAsync(Guid operationId, Guid memberId,
             string sourcePath, CancellationToken cancellationToken) =>
-            WithCurrentLibraryAsync(token => PrepareNamespaceReplacementCoreAsync(operationId, memberId, sourcePath, token), cancellationToken);
+            PrepareNamespaceReplacementCoreAsync(operationId, memberId, sourcePath, cancellationToken);
 
         [SupportedOSPlatform("windows10.0.26100")]
         private async ValueTask<MirrorPulseNamespaceReplacementExecution> PrepareNamespaceReplacementCoreAsync(Guid operationId, Guid memberId,
             string sourcePath, CancellationToken cancellationToken)
         {
             RequireImportBoundary();
-            var member = await catalog!.ReadNamespaceMemberAsync(memberId, cancellationToken).ConfigureAwait(false)
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
+            var historical = await catalog!.ReadNamespaceReplacementExecutionAsync(operationId, cancellationToken).ConfigureAwait(false);
+            if (historical is not null)
+            {
+                if (historical.Intent.MemberId != memberId || historical.Action is null)
+                    throw new InvalidOperationException("The existing replacement admission cannot replay this preparation.");
+                return historical;
+            }
+            var original = await catalog.ReadNamespaceMemberProtectionSnapshotAsync(memberId, cancellationToken).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The replacement member is not registered.");
-            if (member.RootId is not { } rootId) throw new InvalidOperationException("Replacement requires a managed root member.");
+            if (original.Context.Member.IsDirectory || original.Context.Member.RootId is not { } rootId)
+                throw new InvalidOperationException("Replacement requires a managed root file.");
+            var root = router!.Registrations.Single(candidate => candidate.RootId == rootId);
             using var admission = namespaceWork?.Enter([rootId]);
             var inputs = new MirrorPulseLocalImportStagingStore(new(syncRootPath, dataRootPath));
-            var preparation = new MirrorPulseNamespaceReplacementPreparationCoordinator(fileSystem, state, catalog!, router!,
-                _namespaceExecution!, _namespaceActor!, _scheduler, inputs, mayDispatch ?? (_ => false));
-            return await preparation.PrepareAsync(operationId, memberId, sourcePath, cancellationToken).ConfigureAwait(false);
+            var materialized = await WithCurrentLibraryAsync(token => new MirrorPulseNamespaceReplacementPreparationCoordinator(fileSystem,
+                state, catalog, router, _namespaceExecution!, _namespaceActor!, _scheduler, inputs, mayDispatch ?? (_ => false))
+                .MaterializeAsync(operationId, original, sourcePath, token), cancellationToken).ConfigureAwait(false);
+            return await WithAdmittedInstanceLibraryAsync(root.InstanceId, (instances, token) =>
+                new MirrorPulseNamespaceReplacementPreparationCoordinator(fileSystem, state, catalog, router, _namespaceExecution!,
+                    _namespaceActor!, instances, inputs, mayDispatch ?? (_ => false))
+                    .PrepareMaterializedAsync(operationId, memberId, materialized, token), cancellationToken).ConfigureAwait(false);
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
         public ValueTask<MirrorPulseNamespaceReplacementCompletion> ExecuteNamespaceReplacementAsync(Guid operationId,
-            CancellationToken cancellationToken) => WithCurrentLibraryAsync(token => ExecuteNamespaceReplacementCoreAsync(operationId, token), cancellationToken);
+            CancellationToken cancellationToken) => ExecuteNamespaceReplacementCoreAsync(operationId, cancellationToken);
 
         [SupportedOSPlatform("windows10.0.26100")]
         private async ValueTask<MirrorPulseNamespaceReplacementCompletion> ExecuteNamespaceReplacementCoreAsync(Guid operationId,
             CancellationToken cancellationToken)
         {
             RequireImportBoundary();
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
             var intent = await catalog!.ReadNamespaceReplacementAsync(operationId, cancellationToken).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The replacement admission is not registered.");
             await using var admission = namespaceWork is null ? null :
                 await namespaceWork.EnterPendingOperationAsync(intent.RootId, cancellationToken).ConfigureAwait(false);
             var paths = new MirrorPulseStoragePaths(syncRootPath, dataRootPath);
             var inputs = new MirrorPulseLocalImportStagingStore(paths);
-            var executor = new MirrorPulseNamespaceReplacementExecutor(fileSystem, catalog!, router!, _namespaceExecution!,
-                _namespaceActor!, _scheduler, inputs, new(paths));
-            var result = await executor.ExecuteAsync(operationId, cancellationToken).ConfigureAwait(false);
+            var root = router!.Registrations.Single(candidate => candidate.RootId == intent.RootId);
+            var result = await WithAdmittedInstanceLibraryAsync(root.InstanceId, (instances, token) =>
+                new MirrorPulseNamespaceReplacementExecutor(fileSystem, catalog!, router, _namespaceExecution!,
+                    _namespaceActor!, instances, inputs, new(paths)).ExecuteAsync(operationId, token), cancellationToken).ConfigureAwait(false);
             await _namespaceExecution!.RunNormalUserOperationAsync(() => { inputs.RemoveCompleted(operationId); return Task.CompletedTask; }).ConfigureAwait(false);
             return result;
         }
@@ -681,13 +749,8 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         {
             if (router is null || catalog is null || _namespaceExecution is null || _namespaceActor is null)
                 throw new NotSupportedException("Membership inspection requires the Host namespace boundary.");
-            await _initializationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-            try
-            {
-                return await new MirrorPulseNamespaceMemberInspector(fileSystem, catalog, router, _namespaceExecution, _namespaceActor)
-                    .InspectAsync(relativePath, isDirectory, cancellationToken).ConfigureAwait(false);
-            }
-            finally { _initializationGate.Release(); }
+            return await WithCurrentLibraryAsync(token => new MirrorPulseNamespaceMemberInspector(fileSystem, catalog, router, _namespaceExecution, _namespaceActor)
+                .InspectAsync(relativePath, isDirectory, token), cancellationToken).ConfigureAwait(false);
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
@@ -701,31 +764,33 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         [SupportedOSPlatform("windows10.0.26100")]
         public ValueTask<MirrorPulseNamespaceMemberMoveIntent> PrepareNamespaceMemberMoveAsync(Guid operationId, Guid memberId,
             Guid targetParentMemberId, string targetName, CancellationToken cancellationToken) =>
-            WithCurrentLibraryAsync(token => PrepareNamespaceMemberMoveCoreAsync(operationId, memberId, targetParentMemberId, targetName, token), cancellationToken);
+            PrepareNamespaceMemberMoveCoreAsync(operationId, memberId, targetParentMemberId, targetName, cancellationToken);
 
         [SupportedOSPlatform("windows10.0.26100")]
         private async ValueTask<MirrorPulseNamespaceMemberMoveIntent> PrepareNamespaceMemberMoveCoreAsync(Guid operationId, Guid memberId,
             Guid targetParentMemberId, string targetName, CancellationToken cancellationToken)
         {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
             if (router is null || catalog is null || _namespaceExecution is null || _namespaceActor is null)
                 throw new NotSupportedException("Controlled move preparation requires the Host namespace boundary.");
             var member = await catalog.ReadNamespaceMemberAsync(memberId, cancellationToken).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The source member is not registered.");
             var registration = router.Registrations.Single(root => root.RootId == member.RootId);
             using var admission = namespaceWork?.Enter([registration.RootId]);
-            var coordinator = new MirrorPulseNamespaceMemberMoveCoordinator(fileSystem, state, catalog, router, _namespaceExecution, _namespaceActor);
-            return await _scheduler.RunAsync(registration.InstanceId,
-                token => coordinator.PrepareAsync(operationId, memberId, targetParentMemberId, targetName, token), cancellationToken).ConfigureAwait(false);
+            return await WithInstanceLibraryAsync(registration.InstanceId, token =>
+                new MirrorPulseNamespaceMemberMoveCoordinator(fileSystem, state, catalog, router, _namespaceExecution, _namespaceActor)
+                    .PrepareAsync(operationId, memberId, targetParentMemberId, targetName, token), cancellationToken).ConfigureAwait(false);
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
         public ValueTask<MirrorPulseNamespaceMemberMoveCompletion> ExecuteNamespaceMemberMoveAsync(Guid operationId,
-            CancellationToken cancellationToken) => WithCurrentLibraryAsync(token => ExecuteNamespaceMemberMoveCoreAsync(operationId, token), cancellationToken);
+            CancellationToken cancellationToken) => ExecuteNamespaceMemberMoveCoreAsync(operationId, cancellationToken);
 
         [SupportedOSPlatform("windows10.0.26100")]
         private async ValueTask<MirrorPulseNamespaceMemberMoveCompletion> ExecuteNamespaceMemberMoveCoreAsync(
             Guid operationId, CancellationToken cancellationToken)
         {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
             if (router is null || catalog is null || _namespaceExecution is null || _namespaceActor is null)
                 throw new NotSupportedException("Controlled member moves require the Host namespace boundary.");
             var intent = await catalog.ReadNamespaceMemberMoveAsync(operationId, cancellationToken).ConfigureAwait(false)
@@ -733,12 +798,11 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             var registration = router.Registrations.Single(root => root.RootId == intent.RootId);
             await using var admission = namespaceWork is null ? null :
                 await namespaceWork.EnterPendingOperationAsync(registration.RootId, cancellationToken).ConfigureAwait(false);
-            var coordinator = new MirrorPulseNamespaceMemberMoveCoordinator(
-                fileSystem, state, catalog, router, _namespaceExecution, _namespaceActor);
             // Drain earlier instance work before entering the namespace actor. Subsequent dispatch
             // rechecks the durable root fence after acquiring this same scheduler.
-            return await _scheduler.RunAsync(registration.InstanceId,
-                token => coordinator.ExecuteAsync(operationId, token), cancellationToken).ConfigureAwait(false);
+            return await WithInstanceLibraryAsync(registration.InstanceId, token =>
+                new MirrorPulseNamespaceMemberMoveCoordinator(fileSystem, state, catalog, router, _namespaceExecution, _namespaceActor)
+                    .ExecuteAsync(operationId, token), cancellationToken).ConfigureAwait(false);
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
@@ -753,31 +817,33 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         [SupportedOSPlatform("windows10.0.26100")]
         public ValueTask<MirrorPulseNamespaceRetirement> PrepareNamespaceMemberRetirementAsync(Guid operationId,
             Guid memberId, CancellationToken cancellationToken) =>
-            WithCurrentLibraryAsync(token => PrepareNamespaceMemberRetirementCoreAsync(operationId, memberId, token), cancellationToken);
+            PrepareNamespaceMemberRetirementCoreAsync(operationId, memberId, cancellationToken);
 
         [SupportedOSPlatform("windows10.0.26100")]
         private async ValueTask<MirrorPulseNamespaceRetirement> PrepareNamespaceMemberRetirementCoreAsync(Guid operationId,
             Guid memberId, CancellationToken cancellationToken)
         {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
             if (router is null || catalog is null || _namespaceExecution is null || _namespaceActor is null)
                 throw new NotSupportedException("Controlled retirement preparation requires the Host namespace boundary.");
             var member = await catalog.ReadNamespaceMemberAsync(memberId, cancellationToken).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The retirement member is not registered.");
             var registration = router.Registrations.Single(root => root.RootId == member.RootId);
             using var admission = namespaceWork?.Enter([registration.RootId]);
-            var coordinator = new MirrorPulseNamespaceRetirementCoordinator(fileSystem, catalog, router, _namespaceExecution, _namespaceActor);
-            return await _scheduler.RunAsync(registration.InstanceId,
-                token => coordinator.PrepareAsync(operationId, memberId, token), cancellationToken).ConfigureAwait(false);
+            return await WithInstanceLibraryAsync(registration.InstanceId, token =>
+                new MirrorPulseNamespaceRetirementCoordinator(fileSystem, catalog, router, _namespaceExecution, _namespaceActor)
+                    .PrepareAsync(operationId, memberId, token), cancellationToken).ConfigureAwait(false);
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
         public ValueTask<MirrorPulseNamespaceRetirement> ExecuteNamespaceMemberRetirementAsync(Guid operationId,
-            CancellationToken cancellationToken) => WithCurrentLibraryAsync(token => ExecuteNamespaceMemberRetirementCoreAsync(operationId, token), cancellationToken);
+            CancellationToken cancellationToken) => ExecuteNamespaceMemberRetirementCoreAsync(operationId, cancellationToken);
 
         [SupportedOSPlatform("windows10.0.26100")]
         private async ValueTask<MirrorPulseNamespaceRetirement> ExecuteNamespaceMemberRetirementCoreAsync(Guid operationId,
             CancellationToken cancellationToken)
         {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
             if (router is null || catalog is null || _namespaceExecution is null || _namespaceActor is null)
                 throw new NotSupportedException("Controlled retirements require the Host namespace boundary.");
             var retirement = await catalog.ReadNamespaceRetirementAsync(operationId, cancellationToken).ConfigureAwait(false)
@@ -785,9 +851,9 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             var registration = router.Registrations.Single(root => root.RootId == retirement.Intent.RootId);
             await using var admission = namespaceWork is null ? null :
                 await namespaceWork.EnterPendingOperationAsync(registration.RootId, cancellationToken).ConfigureAwait(false);
-            var coordinator = new MirrorPulseNamespaceRetirementCoordinator(fileSystem, catalog, router, _namespaceExecution, _namespaceActor);
-            return await _scheduler.RunAsync(registration.InstanceId,
-                token => coordinator.ExecuteAsync(operationId, token), cancellationToken).ConfigureAwait(false);
+            return await WithInstanceLibraryAsync(registration.InstanceId, token =>
+                new MirrorPulseNamespaceRetirementCoordinator(fileSystem, catalog, router, _namespaceExecution, _namespaceActor)
+                    .ExecuteAsync(operationId, token), cancellationToken).ConfigureAwait(false);
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
@@ -802,31 +868,33 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         [SupportedOSPlatform("windows10.0.26100")]
         public ValueTask<MirrorPulseNamespaceRetirementBatch> PrepareNamespaceRetirementBatchAsync(Guid operationId,
             Guid memberId, CancellationToken cancellationToken) =>
-            WithCurrentLibraryAsync(token => PrepareNamespaceRetirementBatchCoreAsync(operationId, memberId, token), cancellationToken);
+            PrepareNamespaceRetirementBatchCoreAsync(operationId, memberId, cancellationToken);
 
         [SupportedOSPlatform("windows10.0.26100")]
         private async ValueTask<MirrorPulseNamespaceRetirementBatch> PrepareNamespaceRetirementBatchCoreAsync(Guid operationId,
             Guid memberId, CancellationToken cancellationToken)
         {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
             if (router is null || catalog is null || _namespaceExecution is null || _namespaceActor is null)
                 throw new NotSupportedException("Subtree retirement requires the Host namespace boundary.");
             var member = await catalog.ReadNamespaceMemberAsync(memberId, cancellationToken).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The retirement member is not registered.");
             var registration = router.Registrations.Single(root => root.RootId == member.RootId);
             using var admission = namespaceWork?.Enter([registration.RootId]);
-            var coordinator = new MirrorPulseNamespaceRetirementCoordinator(fileSystem, catalog, router, _namespaceExecution, _namespaceActor);
-            return await _scheduler.RunAsync(registration.InstanceId,
-                token => coordinator.PrepareBatchAsync(operationId, memberId, token), cancellationToken).ConfigureAwait(false);
+            return await WithInstanceLibraryAsync(registration.InstanceId, token =>
+                new MirrorPulseNamespaceRetirementCoordinator(fileSystem, catalog, router, _namespaceExecution, _namespaceActor)
+                    .PrepareBatchAsync(operationId, memberId, token), cancellationToken).ConfigureAwait(false);
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
         public ValueTask<MirrorPulseNamespaceRetirementBatch> ExecuteNamespaceRetirementBatchAsync(Guid operationId,
-            CancellationToken cancellationToken) => WithCurrentLibraryAsync(token => ExecuteNamespaceRetirementBatchCoreAsync(operationId, token), cancellationToken);
+            CancellationToken cancellationToken) => ExecuteNamespaceRetirementBatchCoreAsync(operationId, cancellationToken);
 
         [SupportedOSPlatform("windows10.0.26100")]
         private async ValueTask<MirrorPulseNamespaceRetirementBatch> ExecuteNamespaceRetirementBatchCoreAsync(Guid operationId,
             CancellationToken cancellationToken)
         {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
             if (router is null || catalog is null || _namespaceExecution is null || _namespaceActor is null)
                 throw new NotSupportedException("Subtree retirement requires the Host namespace boundary.");
             var batch = await catalog.ReadNamespaceRetirementBatchAsync(operationId, cancellationToken).ConfigureAwait(false)
@@ -834,9 +902,9 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             var registration = router.Registrations.Single(root => root.RootId == batch.RootId);
             await using var admission = namespaceWork is null ? null :
                 await namespaceWork.EnterPendingOperationAsync(registration.RootId, cancellationToken).ConfigureAwait(false);
-            var coordinator = new MirrorPulseNamespaceRetirementCoordinator(fileSystem, catalog, router, _namespaceExecution, _namespaceActor);
-            return await _scheduler.RunAsync(registration.InstanceId,
-                token => coordinator.ExecuteBatchAsync(operationId, token), cancellationToken).ConfigureAwait(false);
+            return await WithInstanceLibraryAsync(registration.InstanceId, token =>
+                new MirrorPulseNamespaceRetirementCoordinator(fileSystem, catalog, router, _namespaceExecution, _namespaceActor)
+                    .ExecuteBatchAsync(operationId, token), cancellationToken).ConfigureAwait(false);
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
@@ -849,34 +917,33 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
-        public ValueTask<MirrorPulseNamespaceBirthRecoveryResult> ExecuteNamespaceBirthRecoveryAsync(
+        public async ValueTask<MirrorPulseNamespaceBirthRecoveryResult> ExecuteNamespaceBirthRecoveryAsync(
             Guid recoveryId, CancellationToken requestCancellation)
         {
             if (router is null || catalog is null || _namespaceExecution is null || _namespaceActor is null)
                 throw new NotSupportedException("Staged birth recovery requires the Host namespace boundary.");
-            return WithCurrentLibraryAsync(async cancellationToken =>
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
+            var action = await catalog.ReadNamespaceBirthRecoveryActionAsync(recoveryId, requestCancellation).ConfigureAwait(false)
+                ?? throw new FileNotFoundException("The recovery action is not registered.");
+            var birth = await catalog.ReadNamespaceBirthAsync(action.BirthOperationId, requestCancellation).ConfigureAwait(false)
+                ?? throw new FileNotFoundException("The birth admission is not registered.");
+            await using var admission = namespaceWork is null ? null : await namespaceWork.EnterPendingOperationAsync(birth.RootId, requestCancellation).ConfigureAwait(false);
+            var registration = router.Registrations.Single(root => root.RootId == birth.RootId);
+            return await WithInstanceLibraryAsync(registration.InstanceId, stop => _namespaceActor.RunAsync(async token =>
             {
-                var action = await catalog.ReadNamespaceBirthRecoveryActionAsync(recoveryId, cancellationToken).ConfigureAwait(false)
-                    ?? throw new FileNotFoundException("The recovery action is not registered.");
-                var birth = await catalog.ReadNamespaceBirthAsync(action.BirthOperationId, cancellationToken).ConfigureAwait(false)
-                    ?? throw new FileNotFoundException("The birth admission is not registered.");
                 int separator = birth.RelativePath.LastIndexOf('/');
                 string parentPath = separator < 0 ? string.Empty : birth.RelativePath[..separator];
                 CloudFile file = fileSystem.GetFile(birth.RelativePath);
                 CloudDirectory parent = parentPath.Length == 0 ? fileSystem.Root : fileSystem.GetDirectory(parentPath);
                 var coordinator = new MirrorPulseNamespaceBirthRecoveryCoordinator(catalog, router, _namespaceExecution);
-                var registration = router.Registrations.Single(root => root.RootId == birth.RootId);
-                return await _scheduler.RunAsync(registration.InstanceId, async stop => await _namespaceActor.RunAsync(async token =>
+                _namespaceActor.AssertAccess();
+                MirrorPulseNamespaceBirthRecoveryResult result = null!;
+                await _namespaceExecution.RunNamespaceOperationAsync(async () =>
                 {
-                    _namespaceActor.AssertAccess();
-                    MirrorPulseNamespaceBirthRecoveryResult result = null!;
-                    await _namespaceExecution.RunNamespaceOperationAsync(async () =>
-                    {
-                        result = await coordinator.ExecuteStagedFileAsync(recoveryId, file, parent, token).ConfigureAwait(false);
-                    }).ConfigureAwait(false);
-                    return result;
-                }, stop).ConfigureAwait(false), cancellationToken).ConfigureAwait(false);
-            }, requestCancellation);
+                    result = await coordinator.ExecuteStagedFileAsync(recoveryId, file, parent, token).ConfigureAwait(false);
+                }).ConfigureAwait(false);
+                return result;
+            }, stop), requestCancellation).ConfigureAwait(false);
         }
 
         public async ValueTask StartAsync(CancellationToken cancellationToken)
@@ -888,15 +955,18 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             {
                 if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
                     throw new PlatformNotSupportedException("Automatic namespace startup requires Windows 11 24H2 or later.");
-                await _initializationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-                try
-                {
-                    var started = await new MirrorPulseNamespaceStartupCoordinator(fileSystem, catalog!, router!, _namespaceExecution!,
-                        _namespaceActor!, _scheduler, _permissions!, namespaceWork!).StartAsync(cancellationToken).ConfigureAwait(false);
-                    _startupProtection = started.Guard; NamespaceStartupResults = started.Roots;
-                }
-                finally { _initializationGate.Release(); }
+                await WithAdmittedInstancesLibraryAsync(router!.Registrations.Select(root => root.InstanceId).Distinct(),
+                    BootstrapNamespaceAsync, cancellationToken).ConfigureAwait(false);
             }
+        }
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        private async ValueTask<bool> BootstrapNamespaceAsync(IMirrorPulseInstanceScheduler instances, CancellationToken token)
+        {
+            var started = await new MirrorPulseNamespaceStartupCoordinator(fileSystem, catalog!, router!, _namespaceExecution!,
+                _namespaceActor!, instances, _permissions!, namespaceWork!).StartAsync(token).ConfigureAwait(false);
+            _startupProtection = started.Guard; NamespaceStartupResults = started.Roots;
+            return true;
         }
 
         private async Task StartLibraryAsync(CancellationToken cancellationToken)
@@ -918,15 +988,17 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                 await fileSystem.StartAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        private async Task StartLibraryServicesAsync(CancellationToken cancellationToken)
+        private async Task StartLibraryServicesAsync(CancellationToken cancellationToken, IMirrorPulseInstanceScheduler? admittedInstances = null)
         {
             if (catalog is not null && router is not null)
             {
-                var coordinator = new MirrorPulseManagedRootRenameCoordinator(fileSystem, catalog, router);
-                _rootRenames = new(catalog, _scheduler, coordinator.RecoverAsync);
+                _rootRenames = new(catalog, _scheduler, (operation, token) => WithCurrentLibraryAsync(
+                    current => new MirrorPulseManagedRootRenameCoordinator(fileSystem, catalog, router).RecoverAsync(operation, current), token));
                 // Recover original namespace evidence before upload dispatch starts.
                 // Incomplete and legacy records keep their per-root durable fence.
-                RootRenameRecoveryResults = await _rootRenames.RestorePendingAsync(cancellationToken).ConfigureAwait(false);
+                var restoration = admittedInstances is null ? _rootRenames : new MirrorPulseManagedRootRenameService(catalog, admittedInstances,
+                    (operation, token) => new MirrorPulseManagedRootRenameCoordinator(fileSystem, catalog, router).RecoverAsync(operation, token));
+                RootRenameRecoveryResults = await restoration.RestorePendingAsync(cancellationToken).ConfigureAwait(false);
             }
             if (catalog is not null && conflicts is not null && notifications is not null)
                 await new MirrorPulseRemoteConflictProjector(fileSystem, catalog, conflicts, notifications)
@@ -956,61 +1028,78 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             }
         }
 
-        public ValueTask<MirrorPulseManagedRootRenameRecovery> RecoverManagedRootRenameAsync(
-            Guid operationId, CancellationToken cancellationToken) =>
-            WithCurrentLibraryAsync(token => (_rootRenames ?? throw new NotSupportedException("The managed root recovery service is unavailable."))
-                .RecoverAsync(operationId, token), cancellationToken);
+        public async ValueTask<MirrorPulseManagedRootRenameRecovery> RecoverManagedRootRenameAsync(
+            Guid operationId, CancellationToken cancellationToken)
+        {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
+            var service = _rootRenames ?? throw new NotSupportedException("The managed root recovery service is unavailable.");
+            using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _admissionShutdown.Token);
+            var intent = (await catalog!.ReadManagedRootRenameHistoryAsync(stop.Token).ConfigureAwait(false))
+                .SingleOrDefault(history => history.Intent.OperationId == operationId)?.Intent
+                ?? throw new FileNotFoundException("The root rename history is not registered.");
+            await using var admission = namespaceWork is null ? null : await namespaceWork.EnterPendingOperationAsync(intent.RootId, stop.Token).ConfigureAwait(false);
+            return await service.RecoverAsync(operationId, stop.Token).ConfigureAwait(false);
+        }
 
         [SupportedOSPlatform("windows10.0.26100")]
-        public ValueTask<MirrorPulseRootRenameHistory> PrepareManagedRootRenameAsync(RootId rootId, string label,
+        public async ValueTask<MirrorPulseRootRenameHistory> PrepareManagedRootRenameAsync(RootId rootId, string label,
             CancellationToken requestCancellation)
         {
             if (router is null || catalog is null) throw new NotSupportedException("Managed root rename requires the Host namespace boundary.");
-            return WithCurrentLibraryAsync(async cancellationToken =>
-            {
-                var root = (await catalog.ReadAdapterTopologyAsync(cancellationToken).ConfigureAwait(false)).Roots.Single(item => item.RootId == rootId);
-                var coordinator = new MirrorPulseManagedRootRenameCoordinator(fileSystem, catalog, router);
-                return await _scheduler.RunAsync(root.InstanceId, token => coordinator.PrepareAsync(rootId, label, token), cancellationToken).ConfigureAwait(false);
-            }, requestCancellation);
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
+            var root = (await catalog.ReadAdapterTopologyAsync(requestCancellation).ConfigureAwait(false)).Roots.Single(item => item.RootId == rootId);
+            using var admission = namespaceWork?.Enter([rootId]);
+            return await WithInstanceLibraryAsync(root.InstanceId, token =>
+                new MirrorPulseManagedRootRenameCoordinator(fileSystem, catalog, router).PrepareAsync(rootId, label, token), requestCancellation).ConfigureAwait(false);
         }
 
-        public ValueTask<MirrorPulseConflictResolution> ApplyUploadConflictAsync(
+        public async ValueTask<MirrorPulseConflictResolution> ApplyUploadConflictAsync(
             Guid conflictId,
             MirrorPulseConflictAction action,
-            CancellationToken cancellationToken) =>
-            WithCurrentLibraryAsync(token => (_conflictActions ?? throw new InvalidOperationException(
-                "The upload conflict action service has not started.")).ApplyAsync(
-                    conflictId, action, token), cancellationToken);
+            CancellationToken cancellationToken)
+        {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
+            var service = _conflictActions ?? throw new InvalidOperationException("The upload conflict action service has not started.");
+            await using var admission = await service.RetainRootAsync(conflictId, action, cancellationToken).ConfigureAwait(false);
+            return await WithInstanceLibraryAsync(admission.Conflict.InstanceId, token =>
+                (_conflictActions ?? throw new InvalidOperationException("The upload conflict action service has not started."))
+                    .ApplyRetainedAsync(admission, action, token), cancellationToken).ConfigureAwait(false);
+        }
 
-        public ValueTask<MirrorPulseRemoteConflictActionOutcome> ApplyRemoteConflictAsync(
+        public async ValueTask<MirrorPulseRemoteConflictActionOutcome> ApplyRemoteConflictAsync(
             Guid conflictId,
             MirrorPulseConflictAction action,
             MirrorPulseProductCatalog catalog,
             CancellationToken requestCancellation)
         {
-            return WithCurrentLibraryAsync(async cancellationToken =>
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
+            MirrorPulseConflictRecord conflict = (await catalog.ReadRemoteConflictProjectionsAsync(
+                requestCancellation).ConfigureAwait(false)).SingleOrDefault(item =>
+                    item.ConflictId == conflictId) ?? throw new FileNotFoundException(
+                        "The remote conflict was not found.");
+            MirrorPulseNamespaceWorkAdmission.WorkLease? admission = null;
+            if (namespaceWork is not null)
             {
-                MirrorPulseRemoteConflictActions actions = _remoteConflictActions ?? throw new InvalidOperationException(
-                    "The remote conflict action service has not started.");
-                MirrorPulseConflictRecord conflict = (await catalog.ReadRemoteConflictProjectionsAsync(
-                    cancellationToken).ConfigureAwait(false)).SingleOrDefault(item =>
-                        item.ConflictId == conflictId) ?? throw new FileNotFoundException(
-                            "The remote conflict was not found.");
-                return await actions.ApplyAsync(Guid.NewGuid(), conflict, action,
-                    action == MirrorPulseConflictAction.KeepBoth
-                        ? MirrorPulseConflictPreservedSide.Local
-                        : null, cancellationToken: cancellationToken).ConfigureAwait(false);
-            }, requestCancellation);
+                var route = router!.ResolvePath(conflict.RelativePath);
+                if (route.InstanceId != conflict.InstanceId) throw new InvalidDataException("The conflict belongs to another routed instance.");
+                admission = namespaceWork.Enter([router.GetRegistration(route.InstanceId, route.RootKey).RootId]);
+            }
+            using (admission)
+                return await WithInstanceLibraryAsync(conflict.InstanceId, async cancellationToken =>
+                {
+                    MirrorPulseRemoteConflictActions actions = _remoteConflictActions ?? throw new InvalidOperationException(
+                        "The remote conflict action service has not started.");
+                    return await actions.ApplyAsync(Guid.NewGuid(), conflict, action,
+                        action == MirrorPulseConflictAction.KeepBoth
+                            ? MirrorPulseConflictPreservedSide.Local
+                            : null, cancellationToken: cancellationToken).ConfigureAwait(false);
+                }, requestCancellation).ConfigureAwait(false);
         }
 
-        public async ValueTask<MirrorPulseCloudStatusSnapshot> ReadStatusAsync(
+        public ValueTask<MirrorPulseCloudStatusSnapshot> ReadStatusAsync(
             IEnumerable<InstanceId> instanceIds,
             CancellationToken cancellationToken)
-        {
-            await _initializationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-            try { return await MirrorPulseCloudStatusReader.ReadAsync(state.OpenStore, instanceIds, cancellationToken).ConfigureAwait(false); }
-            finally { _initializationGate.Release(); }
-        }
+            => WithCurrentLibraryAsync(async token => await MirrorPulseCloudStatusReader.ReadAsync(state.OpenStore, instanceIds, token).ConfigureAwait(false), cancellationToken);
 
         public ValueTask<CloudRemoteApplyResult> ApplyRemoteBatchAsync(
             InstanceId instanceId,
@@ -1078,69 +1167,83 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         private async Task DisposeCoreAsync()
         {
             Interlocked.Exchange(ref _initializationClosing, 1);
-            await _initializationGate.WaitAsync().ConfigureAwait(false);
-            try
+            try { await _admissionShutdown.CancelAsync().ConfigureAwait(false); }
+            finally
             {
-                // Close every live work entry before cancellation. Library disposal can then
-                // release provider bodies while the application drain remains pending.
-                Task? workDrained = namespaceWork?.DisposeAsync().AsTask();
+                // Recovery drains roots outside the library. Cancel its queued admissions
+                // and await that owner before taking the library for final native disposal.
+                await _recoveryRequests.WaitAsync().ConfigureAwait(false);
                 try
                 {
+                    await _initializationGate.WaitAsync().ConfigureAwait(false);
                     try
                     {
-                        if (_uploadPump is not null) await _uploadPump.DisposeAsync().ConfigureAwait(false);
-                    }
-                    finally { if (_ownsScheduler) await _scheduler.DisposeAsync().ConfigureAwait(false); }
-                }
-                finally
-                {
-                    try
-                    {
+                        // Close every live work entry before cancellation. Library disposal can then
+                        // release provider bodies while the application drain remains pending.
+                        Task? workDrained = namespaceWork?.DisposeAsync().AsTask();
                         try
                         {
-                            // A public placeholder creation may still need this live library
-                            // for its first binding and protected membership registration.
                             try
                             {
-                                if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100) &&
-                                    provider is MirrorPulseDemandProvider { NamespacePublisher: { } publication })
-                                    await publication.CloseAndDrainAsync().ConfigureAwait(false);
+                                if (_uploadPump is not null) await _uploadPump.DisposeAsync().ConfigureAwait(false);
                             }
-                            finally { await fileSystem.DisposeAsync().ConfigureAwait(false); }
+                            finally { if (_ownsScheduler) await _scheduler.DisposeAsync().ConfigureAwait(false); }
                         }
-                        finally { if (workDrained is not null) await workDrained.ConfigureAwait(false); }
-                    }
-                    finally
-                    {
-                        try { if (_permissions is not null) await _permissions.DisposeAsync().ConfigureAwait(false); }
                         finally
                         {
                             try
                             {
-                                if (_initializationProtection is not null && OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
-                                    await _initializationProtection.DisposeAsync().ConfigureAwait(false);
+                                try
+                                {
+                                    // A public placeholder creation may still need this live library
+                                    // for its first binding and protected membership registration.
+                                    try
+                                    {
+                                        if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100) &&
+                                            provider is MirrorPulseDemandProvider { NamespacePublisher: { } publication })
+                                            await publication.CloseAndDrainAsync().ConfigureAwait(false);
+                                    }
+                                    finally { await fileSystem.DisposeAsync().ConfigureAwait(false); }
+                                }
+                                finally { if (workDrained is not null) await workDrained.ConfigureAwait(false); }
                             }
                             finally
                             {
-                                try
-                                {
-                                    if (_scopedAnchorProtection is not null && OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
-                                        await _scopedAnchorProtection.DisposeAsync().ConfigureAwait(false);
-                                }
+                                try { if (_permissions is not null) await _permissions.DisposeAsync().ConfigureAwait(false); }
                                 finally
                                 {
-                                    if (_startupProtection is not null && OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
-                                        await _startupProtection.DisposeAsync().ConfigureAwait(false);
+                                    try
+                                    {
+                                        if (_initializationProtection is not null && OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
+                                            await _initializationProtection.DisposeAsync().ConfigureAwait(false);
+                                    }
+                                    finally
+                                    {
+                                        try
+                                        {
+                                            if (_scopedAnchorProtection is not null && OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
+                                                await _scopedAnchorProtection.DisposeAsync().ConfigureAwait(false);
+                                        }
+                                        finally
+                                        {
+                                            if (_startupProtection is not null && OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
+                                                await _startupProtection.DisposeAsync().ConfigureAwait(false);
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
+                    finally
+                    {
+                        _initializationGate.Release(); _initializationGate.Dispose();
+                        if (_providerDiagnostics is not null) await _providerDiagnostics.DisposeAsync().ConfigureAwait(false);
+                    }
                 }
-            }
-            finally
-            {
-                _initializationGate.Release(); _initializationGate.Dispose();
-                if (_providerDiagnostics is not null) await _providerDiagnostics.DisposeAsync().ConfigureAwait(false);
+                finally
+                {
+                    _recoveryRequests.Release(); _recoveryRequests.Dispose(); _admissionShutdown.Dispose();
+                }
             }
         }
     }

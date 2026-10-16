@@ -14,7 +14,7 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 [SupportedOSPlatform("windows10.0.26100")]
 public sealed class MirrorPulseNamespaceOriginalTreeRecoveryCoordinator(CloudFileSystem fileSystem,
     MirrorPulseProductCatalog catalog, MirrorPulseRootRouter router, MirrorPulseNamespaceExecutionSession execution,
-    MirrorPulseNamespaceActor actor, MirrorPulseInstanceScheduler scheduler,
+    MirrorPulseNamespaceActor actor, IMirrorPulseInstanceScheduler scheduler,
     MirrorPulseNamespacePermissionCoordinator permissions)
 {
     public async ValueTask<MirrorPulseNamespacePermissionTreeResult> RecoverAsync(Guid manifestId,

@@ -20,7 +20,7 @@ public sealed record MirrorPulseNamespaceStartupRoot(RootId RootId, Guid? Operat
 [SupportedOSPlatform("windows10.0.26100")]
 internal sealed class MirrorPulseNamespaceStartupCoordinator(CloudFileSystem fileSystem, MirrorPulseProductCatalog catalog,
     MirrorPulseRootRouter router, MirrorPulseNamespaceExecutionSession execution, MirrorPulseNamespaceActor actor,
-    MirrorPulseInstanceScheduler scheduler, MirrorPulseNamespacePermissionCoordinator permissions, MirrorPulseNamespaceWorkAdmission work)
+    IMirrorPulseInstanceScheduler scheduler, MirrorPulseNamespacePermissionCoordinator permissions, MirrorPulseNamespaceWorkAdmission work)
 {
     internal async ValueTask<(MirrorPulseNamespaceAnchorProtection Guard, IReadOnlyList<MirrorPulseNamespaceStartupRoot> Roots)> StartAsync(
         CancellationToken cancellationToken)

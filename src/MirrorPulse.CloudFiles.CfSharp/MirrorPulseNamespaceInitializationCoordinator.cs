@@ -29,7 +29,7 @@ public sealed class MirrorPulseNamespaceInitializationResult(MirrorPulseNamespac
 [SupportedOSPlatform("windows10.0.26100")]
 public sealed class MirrorPulseNamespaceInitializationCoordinator(CloudFileSystem fileSystem, MirrorPulseProductCatalog catalog,
     MirrorPulseRootRouter router, MirrorPulseNamespaceExecutionSession execution, MirrorPulseNamespaceActor actor,
-    MirrorPulseInstanceScheduler scheduler, MirrorPulseNamespacePermissionCoordinator permissions)
+    IMirrorPulseInstanceScheduler scheduler, MirrorPulseNamespacePermissionCoordinator permissions)
 {
     public async ValueTask<MirrorPulseNamespaceInitializationResult> InitializeAsync(Guid operationId,
         CancellationToken cancellationToken = default)

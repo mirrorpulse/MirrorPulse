@@ -11,7 +11,7 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 [SupportedOSPlatform("windows10.0.26100")]
 public sealed class MirrorPulseNamespaceReplacementExecutor(CloudFileSystem fileSystem, MirrorPulseProductCatalog catalog,
     MirrorPulseRootRouter router, MirrorPulseNamespaceExecutionSession execution, MirrorPulseNamespaceActor actor,
-    MirrorPulseInstanceScheduler scheduler, MirrorPulseLocalImportStagingStore inputs, MirrorPulseLocalReplacementBackupStore backups)
+    IMirrorPulseInstanceScheduler scheduler, MirrorPulseLocalImportStagingStore inputs, MirrorPulseLocalReplacementBackupStore backups)
 {
     public async ValueTask<MirrorPulseNamespaceReplacementCompletion> ExecuteAsync(Guid operationId, CancellationToken cancellationToken = default)
     {

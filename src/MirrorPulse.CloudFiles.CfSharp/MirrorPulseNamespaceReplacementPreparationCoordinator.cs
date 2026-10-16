@@ -7,11 +7,14 @@ using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.CloudFiles.CfSharp;
 
+internal sealed record MirrorPulseNamespaceReplacementMaterialization(MirrorPulseNamespaceMemberProtectionSnapshot Original,
+    MirrorPulseNamespaceImportContent Content);
+
 /// <summary>Prepares a resident original and verified private input before atomic replacement admission.</summary>
 [SupportedOSPlatform("windows10.0.26100")]
 public sealed class MirrorPulseNamespaceReplacementPreparationCoordinator(CloudFileSystem fileSystem, MirrorPulseCfSharpStateSession state,
     MirrorPulseProductCatalog catalog, MirrorPulseRootRouter router, MirrorPulseNamespaceExecutionSession execution,
-    MirrorPulseNamespaceActor actor, MirrorPulseInstanceScheduler scheduler, MirrorPulseLocalImportStagingStore inputs,
+    MirrorPulseNamespaceActor actor, IMirrorPulseInstanceScheduler scheduler, MirrorPulseLocalImportStagingStore inputs,
     Func<InstanceId, bool> mayDispatch, MirrorPulseNamespaceWorkAdmission? namespaceWork = null)
 {
     public async ValueTask<MirrorPulseNamespaceReplacementExecution> PrepareAsync(Guid operationId, Guid memberId,
@@ -30,8 +33,18 @@ public sealed class MirrorPulseNamespaceReplacementPreparationCoordinator(CloudF
             ?? throw new FileNotFoundException("The replacement member is not registered.");
         if (original.Context.Member.IsDirectory || original.Context.Member.RootId is not { } rootId)
             throw new InvalidOperationException("Replacement requires a registered file below a managed root.");
-        var registration = router.Registrations.Single(root => root.RootId == rootId);
         using var admission = namespaceWork?.Enter([rootId]);
+        var materialized = await MaterializeAsync(operationId, original, sourcePath, cancellationToken).ConfigureAwait(false);
+        return await PrepareMaterializedAsync(operationId, memberId, materialized, cancellationToken).ConfigureAwait(false);
+    }
+
+    internal async ValueTask<MirrorPulseNamespaceReplacementMaterialization> MaterializeAsync(Guid operationId,
+        MirrorPulseNamespaceMemberProtectionSnapshot original, string sourcePath, CancellationToken cancellationToken)
+    {
+        if (operationId == Guid.Empty || original.Context.Member.IsDirectory || original.Context.Member.RootId is not { } rootId)
+            throw new ArgumentException("Materialization requires an operation and registered file below a managed root.");
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourcePath);
+        var registration = router.Registrations.Single(root => root.RootId == rootId);
         var file = fileSystem.GetFile(original.Context.Location.RelativePath);
         await execution.RunNormalUserOperationAsync(async () =>
         {
@@ -64,6 +77,24 @@ public sealed class MirrorPulseNamespaceReplacementPreparationCoordinator(CloudF
             }
             return await inputs.StageAsync(operationId, absoluteSource, cancellationToken).ConfigureAwait(false);
         }).ConfigureAwait(false);
+        return new(original, content);
+    }
+
+    internal async ValueTask<MirrorPulseNamespaceReplacementExecution> PrepareMaterializedAsync(Guid operationId, Guid memberId,
+        MirrorPulseNamespaceReplacementMaterialization materialized, CancellationToken cancellationToken)
+    {
+        var original = materialized.Original; var content = materialized.Content;
+        if (original.Context.Member.MemberId != memberId || original.Context.Member.RootId is not { } rootId)
+            throw new InvalidDataException("The materialized original belongs to another replacement member.");
+        var historical = await catalog.ReadNamespaceReplacementExecutionAsync(operationId, cancellationToken).ConfigureAwait(false);
+        if (historical is not null)
+        {
+            if (historical.Intent.MemberId != memberId || historical.Action is null)
+                throw new InvalidOperationException("The existing replacement admission cannot replay this preparation.");
+            return historical;
+        }
+        var registration = router.Registrations.Single(root => root.RootId == rootId);
+        var file = fileSystem.GetFile(original.Context.Location.RelativePath);
         await using var input = await execution.RunNormalUserOperationAsync(() => inputs.OpenLeaseAsync(operationId, content, cancellationToken)).ConfigureAwait(false);
         return await scheduler.RunAsync(registration.InstanceId, token => actor.RunAsync(async stop =>
         {
