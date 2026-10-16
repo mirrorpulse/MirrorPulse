@@ -50,6 +50,14 @@ public sealed partial class MirrorPulseProductCatalog
                     throw new InvalidOperationException("A retained upload conflict must identify its original operation.");
             }
             Guid planId;
+            await using (var deletion = _connection.CreateCommand())
+            {
+                deletion.Transaction = transaction;
+                deletion.CommandText = "SELECT 1 FROM conflict_deletion_members WHERE original_id=$operation;";
+                deletion.Parameters.AddWithValue("$operation", originalOperationId.ToString("D"));
+                if (await deletion.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null)
+                    throw new InvalidOperationException("The original group belongs to an explicit deletion decision.");
+            }
             await using (var owner = _connection.CreateCommand())
             {
                 owner.Transaction = transaction;

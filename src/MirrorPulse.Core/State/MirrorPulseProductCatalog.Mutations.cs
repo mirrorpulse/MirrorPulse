@@ -7,7 +7,7 @@ using MirrorPulse.Core.Sync;
 namespace MirrorPulse.Core.State;
 
 public enum MirrorPulseMutationState { Prepared, Executing, RemoteAccepted, Ambiguous, Acknowledged, Conflict, Superseded }
-public enum MirrorPulseMutationOrigin { Journal, Rescan, CoalescedJournal }
+public enum MirrorPulseMutationOrigin { Journal, Rescan, CoalescedJournal, ConflictDecision }
 /// <summary>Historical execution evidence; Prepared alone does not prove that a mutation was never dispatched.</summary>
 public enum MirrorPulseMutationExecutionEvidence { Unknown, NeverStarted, Started }
 public sealed record MirrorPulseMutationIntent(Guid OperationId, InstanceId InstanceId, string RootKey,
@@ -26,8 +26,8 @@ public sealed partial class MirrorPulseProductCatalog
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(intent);
-        if (intent.Origin == MirrorPulseMutationOrigin.CoalescedJournal)
-            throw new InvalidOperationException("A coalesced effect requires its owning execution preparation.");
+        if (intent.Origin is MirrorPulseMutationOrigin.CoalescedJournal or MirrorPulseMutationOrigin.ConflictDecision)
+            throw new InvalidOperationException("A product-owned effect requires its owning execution preparation.");
         if (intent.OperationId == Guid.Empty || intent.InstanceId.Value == Guid.Empty || string.IsNullOrWhiteSpace(intent.RootKey) || string.IsNullOrWhiteSpace(intent.RelativePath) ||
             !Enum.IsDefined(intent.Kind) || !Enum.IsDefined(intent.Origin) || intent.ContentLength < 0 ||
             (intent.ContentSha256 is not null && (intent.ContentSha256.Length != 64 || !intent.ContentSha256.All(Uri.IsHexDigit))))
