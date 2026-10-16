@@ -1,4 +1,5 @@
 using System.Runtime.Versioning;
+using System.Security.Cryptography;
 using CfSharp;
 using MirrorPulse.Core.CloudFiles;
 using MirrorPulse.Core.Configuration;
@@ -23,6 +24,10 @@ public sealed class MirrorPulseUploadConflictActions
     private readonly IMirrorPulseWorkerMutationTransport? _mutations;
     private readonly MirrorPulseConflictCenter? _conflictCenter;
     private readonly MirrorPulseInstanceScheduler? _scheduler;
+    private readonly CloudFileSystem? _fileSystem;
+    private readonly MirrorPulseNamespaceContentConfirmation? _contentConfirmation;
+    private readonly MirrorPulseNamespaceExecutionSession? _namespaceExecution;
+    private readonly MirrorPulseNamespaceWorkAdmission? _namespaceWork;
 
     public MirrorPulseUploadConflictActions(
         MirrorPulseProductCatalog catalog,
@@ -33,7 +38,11 @@ public sealed class MirrorPulseUploadConflictActions
         MirrorPulseRootRouter? router = null,
         IMirrorPulseWorkerMutationTransport? mutations = null,
         MirrorPulseConflictCenter? conflictCenter = null,
-        MirrorPulseInstanceScheduler? scheduler = null)
+        MirrorPulseInstanceScheduler? scheduler = null,
+        CloudFileSystem? fileSystem = null,
+        MirrorPulseNamespaceActor? namespaceActor = null,
+        MirrorPulseNamespaceExecutionSession? namespaceExecution = null,
+        MirrorPulseNamespaceWorkAdmission? namespaceWork = null)
     {
         _catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
         _state = state ?? throw new ArgumentNullException(nameof(state));
@@ -45,6 +54,10 @@ public sealed class MirrorPulseUploadConflictActions
         _mutations = mutations;
         _conflictCenter = conflictCenter;
         _scheduler = scheduler;
+        _fileSystem = fileSystem;
+        _namespaceExecution = namespaceExecution;
+        _namespaceWork = namespaceWork;
+        _contentConfirmation = router is null ? null : new(catalog, router, namespaceActor, namespaceExecution);
     }
 
     public async ValueTask<MirrorPulseConflictResolution> ApplyAsync(
@@ -84,8 +97,15 @@ public sealed class MirrorPulseUploadConflictActions
         {
             if (group is not null)
             {
-                _ = await _catalog.AuthorizeJournalCoalescingRetryAsync(commandId, conflict.ConflictId,
-                    action == MirrorPulseConflictAction.KeepLocal, cancellationToken).ConfigureAwait(false);
+                if (action == MirrorPulseConflictAction.KeepLocal && group.Effect == MirrorPulseCoalescedEffect.VerifyRemoteUnchanged)
+                {
+                    var content = await CaptureGroupKeepLocalContentAsync(group, cancellationToken).ConfigureAwait(false);
+                    _ = await _catalog.AuthorizeJournalCoalescingKeepLocalContentAsync(commandId, conflict.ConflictId,
+                        content, cancellationToken).ConfigureAwait(false);
+                }
+                else
+                    _ = await _catalog.AuthorizeJournalCoalescingRetryAsync(commandId, conflict.ConflictId,
+                        action == MirrorPulseConflictAction.KeepLocal, cancellationToken).ConfigureAwait(false);
                 if (_conflictCenter is not null)
                     foreach (var resolved in await _catalog.ReadUploadConflictsAsync(pendingOnly: false, cancellationToken).ConfigureAwait(false))
                         if (!resolved.IsPending && group.Members.Any(member => member.OperationId.ToString("D") == resolved.ChangeId))
@@ -138,6 +158,39 @@ public sealed class MirrorPulseUploadConflictActions
         {
             await _catalog.SaveUserCommandAsync(new(commandId, actionName, conflictId.ToString("D"), "failed"), cancellationToken).ConfigureAwait(false);
             throw;
+        }
+    }
+
+    private async Task<MirrorPulseCoalescingContent> CaptureGroupKeepLocalContentAsync(MirrorPulseJournalCoalescingPlan group,
+        CancellationToken token)
+    {
+        if (_fileSystem is null || _router is null || _contentConfirmation is null)
+            throw new NotSupportedException("Keeping local verification content requires the active Cloud Files owner.");
+        var root = _router.GetRegistration(group.InstanceId, group.RootKey);
+        using var admission = _namespaceWork?.Enter([root.RootId]);
+        if (_namespaceExecution is null) return await CaptureAsync().ConfigureAwait(false);
+        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
+            throw new PlatformNotSupportedException("Protected content capture requires Windows 11 version 24H2 or later.");
+        return await _namespaceExecution.RunNormalUserOperationAsync(CaptureAsync).ConfigureAwait(false);
+
+        async Task<MirrorPulseCoalescingContent> CaptureAsync()
+        {
+            string path = _router.ResolveUploadPath(group.InstanceId, group.RootKey, group.FinalPath);
+            string relative = Path.GetRelativePath(_syncRootPath, path).Replace(Path.DirectorySeparatorChar, '/');
+            var file = _fileSystem.GetFile(relative);
+            var before = await file.InspectAsync(token).ConfigureAwait(false);
+            if (!before.Exists || before.IsTombstone || before.ItemId != group.ItemId ||
+                before.IsPlaceholder && before.ContentAvailability != CloudContentAvailability.FullyAvailable)
+                throw new InvalidOperationException("Keeping local content requires the original logical item with resident local bytes.");
+            await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024, FileOptions.Asynchronous);
+            var binding = await _contentConfirmation.CaptureUploadBindingAsync(file, await file.InspectAsync(token).ConfigureAwait(false), token).ConfigureAwait(false);
+            var content = new MirrorPulseCoalescingContent(stream.Length,
+                Convert.ToHexString(await SHA256.HashDataAsync(stream, token).ConfigureAwait(false)), binding);
+            var after = await file.InspectAsync(token).ConfigureAwait(false);
+            if (after.ItemId != group.ItemId || after.Length != content.Length ||
+                await _contentConfirmation.CaptureUploadBindingAsync(file, after, token).ConfigureAwait(false) != binding)
+                throw new InvalidDataException("The authorized local object changed during content capture.");
+            return content;
         }
     }
 

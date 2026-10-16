@@ -39,8 +39,19 @@ policy. A conflict retains the entire original group. Retry requires a matching
 pending user command and creates a distinct remote-effect attempt. The rejected
 effect, original program, content proof and native binding remain unchanged.
 Keep-local can authorize the observed remote baseline for an upload or deletion,
-including a move followed by an upload. Verification-only and move-only programs
-require a complete content decision before keep-local can be implemented safely.
+including a move followed by an upload. A keep-local absence decision replaces
+the rejected verification with a conditional remote deletion. A keep-local
+unchanged-name decision captures resident local bytes, the current logical item
+and native object, then retains an explicit upload proof. Its versioned retry
+record preserves the original verification program. Normal retries retain that
+authorized effect and proof, including after a lost reply or restart. Every prior
+authorization and the original rejected baseline are checked during replay.
+Move-only programs still require a complete move and content decision.
+
+Group preparation reads the mutually acknowledged revision from the official
+store before the executor checks the remote condition. A changed source therefore
+becomes a conflict of the durably owned group. The ordinary single-operation path
+continues to reject a changed remote during its preflight.
 
 Every rejected attempt has a separate conflict epoch. Authorizing a retry resolves
 the whole group's current conflict projection in one product transaction. The

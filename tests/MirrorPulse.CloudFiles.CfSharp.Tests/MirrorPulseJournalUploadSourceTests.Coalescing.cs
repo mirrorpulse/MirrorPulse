@@ -33,8 +33,23 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
     public Task NativeProductionPumpAtomicallyTransfersNeverStartedIntentAndRecoversAllOriginalAcknowledgements() =>
         RunProductionCoalescingScenarioAsync(resolveConflict: false, prepareOriginal: true);
 
+    [TestMethod]
+    [DoNotParallelize]
+    [TestCategory("NativeCloudFiles")]
     [SupportedOSPlatform("windows10.0.26100")]
-    private async Task RunProductionCoalescingScenarioAsync(bool resolveConflict, bool prepareOriginal = false)
+    public Task NativeProductionPumpKeepsLocalAbsenceByConditionalDeletionAndRecoversTheWholeGroup() =>
+        RunProductionCoalescingScenarioAsync(resolveConflict: true, verificationEffect: MirrorPulseCoalescedEffect.VerifyRemoteAbsence);
+
+    [TestMethod]
+    [DoNotParallelize]
+    [TestCategory("NativeCloudFiles")]
+    [SupportedOSPlatform("windows10.0.26100")]
+    public Task NativeProductionPumpKeepsResidentContentAfterARoundTripRenameAndRecoversTheWholeGroup() =>
+        RunProductionCoalescingScenarioAsync(resolveConflict: true, verificationEffect: MirrorPulseCoalescedEffect.VerifyRemoteUnchanged);
+
+    [SupportedOSPlatform("windows10.0.26100")]
+    private async Task RunProductionCoalescingScenarioAsync(bool resolveConflict, bool prepareOriginal = false,
+        MirrorPulseCoalescedEffect? verificationEffect = null)
     {
         if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
             Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
@@ -45,11 +60,14 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
         var root = AdapterRootRegistrationMapper.Map(AdapterId.Parse("example.coalescing"), instance,
             new("docs", "Docs", "Docs", false), RootRegistrationState.Active);
         var router = new MirrorPulseRootRouter(paths.SyncRootPath, [root]);
-        var remote = new CoalescingTransport(instance) { RejectFirstUpload = resolveConflict };
+        bool absence = verificationEffect == MirrorPulseCoalescedEffect.VerifyRemoteAbsence;
+        bool unchanged = verificationEffect == MirrorPulseCoalescedEffect.VerifyRemoteUnchanged;
+        var remote = new CoalescingTransport(instance) { RejectFirstUpload = resolveConflict && verificationEffect is null, AllowDelete = absence };
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(65));
         Guid planId = Guid.Empty; Guid[] originals = []; Guid effectId = Guid.Empty;
         Guid? retryCommandId = null;
         MirrorPulseMutationIntent? transferredOriginal = null;
+        Guid? seedPlanId = null;
         try
         {
             registry.Register(new(paths.SyncRootPath, "0.1.0", Guid.NewGuid(), [1, 2, 3]));
@@ -89,6 +107,53 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
                     while ((window = await source.ReadPendingAsync(timeout.Token)).ReadyCommands.Count(command => command.RelativePath == "coalesced.txt") < 2)
                         await Task.Delay(25, timeout.Token);
                     Assert.IsNotNull(window.CompleteWindow); Assert.Contains(first, window.ReadyCommands.Select(command => command.OperationId).ToArray());
+                    if (absence)
+                    {
+                        File.Delete(file);
+                        while (!(window = await source.ReadPendingAsync(timeout.Token)).ReadyCommands.Any(command => command.Kind == MirrorPulseWorkerChangeKind.Delete))
+                            await Task.Delay(25, timeout.Token);
+                        remote.Seed("concurrent remote bytes"u8.ToArray());
+                    }
+                    if (unchanged)
+                    {
+                        await feed.DisposeAsync();
+                        await using (var seedFeed = fileSystem.CreateLocalChangeFeed(new() { BatchSize = 1 }))
+                        {
+                            var seedCompletion = new MirrorPulseJournalUploadCompletion(seedFeed, state,
+                                new BackoffPolicy(TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(5)));
+                            await using var seedPump = new MirrorPulseJournalUploadPump(seedFeed, router, catalog, remote, remote, state,
+                                paths.SyncRootPath, paths.DataRootPath, _ => true, seedCompletion, mutations: remote, ranges: remote,
+                                directories: remote, fileSystem: fileSystem);
+                            await seedPump.StartAsync(timeout.Token);
+                            while (true)
+                            {
+                                if (remote.UploadedOperations.Count == 1)
+                                {
+                                    var seeded = (await catalog.ReadJournalCoalescingPlansAsync(timeout.Token)).Single();
+                                    await using var checking = await state.OpenStore.BeginTransactionAsync(timeout.Token);
+                                    bool pending = false;
+                                    foreach (var member in seeded.Members)
+                                        pending |= await checking.Operations.GetAsync(member.OperationId, timeout.Token) is not null;
+                                    await checking.RollbackAsync(timeout.Token);
+                                    if (!pending) { seedPlanId = seeded.PlanId; break; }
+                                }
+                                await Task.Delay(25, timeout.Token);
+                            }
+                        }
+                        Assert.IsTrue((await fileSystem.GetFile("Docs/coalesced.txt").InspectAsync(timeout.Token)).IsPlaceholder);
+                        Assert.IsTrue((await catalog.ReadContentConfirmationReceiptAsync(remote.UploadedOperations[0], timeout.Token))!.MayAcknowledge);
+                        await using var moves = fileSystem.CreateLocalChangeFeed(new() { BatchSize = 1 });
+                        await moves.StartAsync(timeout.Token);
+                        var moveSource = new MirrorPulseJournalUploadSource(moves, router, catalog, _ => true);
+                        string middle = Path.Combine(paths.SyncRootPath, "Docs", "middle.txt");
+                        File.Move(file, middle);
+                        while (!(window = await moveSource.ReadPendingAsync(timeout.Token)).ReadyCommands.Any(command => command.Kind == MirrorPulseWorkerChangeKind.Move))
+                            await Task.Delay(25, timeout.Token);
+                        File.Move(middle, file);
+                        while ((window = await moveSource.ReadPendingAsync(timeout.Token)).ReadyCommands.Count(command => command.Kind == MirrorPulseWorkerChangeKind.Move) < 2)
+                            await Task.Delay(25, timeout.Token);
+                        remote.Seed("concurrent remote bytes"u8.ToArray());
+                    }
                 }
                 await feed.DisposeAsync();
                 await using var pumpFeed = fileSystem.CreateLocalChangeFeed(new() { BatchSize = 1 });
@@ -117,16 +182,25 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
                         while ((conflicts = (await catalog.ReadUploadConflictsAsync(cancellationToken: timeout.Token)).ToArray()).Length < 2)
                             await Task.Delay(25, timeout.Token);
                         var actions = new MirrorPulseUploadConflictActions(catalog, state, pumpFeed,
-                            new BackoffPolicy(TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(5)), paths, router, remote, center, scheduler);
+                            new BackoffPolicy(TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(5)), paths, router, remote, center, scheduler, fileSystem);
                         var decision = await actions.ApplyAsync(conflicts[1].ConflictId, MirrorPulseConflictAction.KeepLocal, timeout.Token);
                         retryCommandId = decision.ResolutionId;
                         Assert.IsEmpty(center.Query()); Assert.IsEmpty(await catalog.ReadUploadConflictsAsync(cancellationToken: timeout.Token));
                     }
                     await reached.Task.WaitAsync(timeout.Token);
-                    var plan = (await catalog.ReadJournalCoalescingPlansAsync(timeout.Token)).Single();
+                    var plan = (await catalog.ReadJournalCoalescingPlansAsync(timeout.Token)).Single(candidate => candidate.PlanId != seedPlanId);
                     var execution = (await catalog.ReadJournalCoalescingExecutionAsync(plan.PlanId, timeout.Token))!;
-                    Assert.AreEqual(MirrorPulseCoalescedEffect.CreateFile, plan.Effect); Assert.HasCount(1, execution.Steps);
+                    Assert.AreEqual(verificationEffect ?? MirrorPulseCoalescedEffect.CreateFile, plan.Effect); Assert.HasCount(1, execution.Steps);
                     var current = await catalog.PrepareJournalCoalescingMutationAsync(plan.PlanId, 0, timeout.Token);
+                    if (verificationEffect is not null)
+                    {
+                        Assert.IsNull(execution.Content);
+                        string? expectedBaseline = absence ? null : Convert.ToHexString(SHA256.HashData("final coalesced bytes"u8));
+                        Assert.AreEqual(expectedBaseline, execution.ExpectedRevision);
+                        string expectedRemoteRevision = Convert.ToHexString(SHA256.HashData("concurrent remote bytes"u8));
+                        Assert.AreEqual(expectedRemoteRevision, current.Intent.ExpectedRevision);
+                        Assert.AreEqual(absence ? MirrorPulseWorkerChangeKind.Delete : MirrorPulseWorkerChangeKind.ContentUpdate, current.Intent.Kind);
+                    }
                     if (prepareOriginal)
                     {
                         Assert.IsNotNull(transferredOriginal);
@@ -153,19 +227,30 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
                                 await Task.Delay(25, timeout.Token);
                         }
                     }
-                    Assert.IsFalse(originals.Contains(effectId)); Assert.HasCount(1, remote.UploadedOperations);
-                    Assert.AreEqual(effectId, remote.UploadedOperations[0]);
-                    Assert.AreEqual("final coalesced bytes", System.Text.Encoding.UTF8.GetString(remote.Bytes!));
+                    Assert.IsFalse(originals.Contains(effectId));
+                    if (absence)
+                    {
+                        Assert.IsEmpty(remote.UploadedOperations); Assert.HasCount(1, remote.DeletedOperations);
+                        Assert.AreEqual(effectId, remote.DeletedOperations[0]); Assert.IsNull(remote.Bytes); Assert.IsFalse(File.Exists(file));
+                        Assert.IsNull(await catalog.ReadContentConfirmationReceiptAsync(effectId, timeout.Token));
+                    }
+                    else
+                    {
+                        Assert.HasCount(unchanged ? 2 : 1, remote.UploadedOperations);
+                        Assert.AreEqual(effectId, remote.UploadedOperations[^1]);
+                        Assert.AreEqual("final coalesced bytes", System.Text.Encoding.UTF8.GetString(remote.Bytes!));
+                        Assert.IsTrue((await catalog.ReadContentConfirmationReceiptAsync(effectId, timeout.Token))!.MayAcknowledge);
+                    }
                     Assert.AreEqual(MirrorPulseMutationState.Acknowledged, (await catalog.ReadMutationAsync(effectId, timeout.Token))!.State);
-                    Assert.IsTrue((await catalog.ReadContentConfirmationReceiptAsync(effectId, timeout.Token))!.MayAcknowledge);
                     await using var transaction = await state.OpenStore.BeginTransactionAsync(timeout.Token);
                     foreach (Guid id in originals)
                         Assert.AreEqual(owner == 0, await transaction.Operations.GetAsync(id, timeout.Token) is not null);
                     await transaction.RollbackAsync(timeout.Token);
                     TestContext.WriteLine($"ProductionCoalescing: owner={owner}; originalCount={originals.Length}; separateEffectId=True; " +
-                        "remoteUploads=1; actualNativeConfirmation=True; officialProjection=True; originalIdsRetainedAtCut=True; " +
+                        $"remoteUploads={(absence ? 0 : 1)}; initialSeedUploads={(unchanged ? 1 : 0)}; conditionalDeletes={(absence ? 1 : 0)}; " +
+                        $"actualNativeConfirmation={!absence}; officialProjection=True; originalIdsRetainedAtCut=True; " +
                         $"reopenedOwnerDoesNotRedispatch=True; wholeOriginalGroupAcknowledged=True; authorizedGroupRetry={resolveConflict}; " +
-                        $"explicitNeverStartedTransfer={prepareOriginal}; strictHostIntegration=False.");
+                        $"explicitNeverStartedTransfer={prepareOriginal}; verificationDecision={verificationEffect}; strictHostIntegration=False.");
                 }
             }
         }
@@ -182,6 +267,9 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
     {
         public byte[]? Bytes { get; private set; }
         public List<Guid> UploadedOperations { get; } = [];
+        public List<Guid> DeletedOperations { get; } = [];
+        public bool AllowDelete { get; init; }
+        public void Seed(byte[] bytes) => Bytes = bytes;
         public bool RejectFirstUpload { get; set; }
         private string? Revision => Bytes is null ? null : Convert.ToHexString(SHA256.HashData(Bytes));
         private void Require(InstanceId actual, string? rootKey) { Assert.AreEqual(instance, actual); Assert.AreEqual("docs", rootKey); }
@@ -208,7 +296,14 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
         }
         public ValueTask<Stream> ReadRangeAsync(MirrorPulseWorkerReadRangeRequest request, CancellationToken token)
         { token.ThrowIfCancellationRequested(); Require(request.InstanceId, request.RootKey); return ValueTask.FromResult<Stream>(new MemoryStream(Bytes!.AsSpan((int)request.Offset, (int)request.Length).ToArray())); }
-        public ValueTask<string?> DeleteAsync(MirrorPulseWorkerDeleteRequest request, CancellationToken token) => throw new AssertFailedException("No delete is part of this content chain.");
+        public ValueTask<string?> DeleteAsync(MirrorPulseWorkerDeleteRequest request, CancellationToken token)
+        {
+            if (!AllowDelete) throw new AssertFailedException("No delete is part of this content chain.");
+            token.ThrowIfCancellationRequested(); Require(request.InstanceId, request.RootKey);
+            Assert.AreEqual("coalesced.txt", request.NormalizedPath); Assert.AreEqual(request.ExpectedRevision, Revision);
+            Assert.IsNotNull(request.OperationId); Bytes = null; DeletedOperations.Add(request.OperationId.Value);
+            return ValueTask.FromResult<string?>(null);
+        }
         public ValueTask<string> MoveAsync(MirrorPulseWorkerMoveRequest request, CancellationToken token) => throw new AssertFailedException("No move is part of this content chain.");
     }
 }
