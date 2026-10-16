@@ -84,7 +84,7 @@ public sealed partial class MirrorPulseJournalCoalescingExecutorTests
         await using var reopened = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
         int localCalls = 0;
         await DeletionExecutor(reopened, remote).ExecuteAsync(command, async (deletion, token) =>
-        { localCalls++; await CompleteSyntheticLocalRetirementAsync(reopened, deletion, token); }, (_, _) => ValueTask.CompletedTask);
+        { if (deletion.Phase < MirrorPulseConflictDeletionPhase.Retired) localCalls++; await CompleteSyntheticLocalRetirementAsync(reopened, deletion, token); }, (_, _) => ValueTask.CompletedTask);
         Assert.AreEqual(boundary == "local" ? 1 : 0, localCalls);
         Assert.HasCount(1, remote.Writes); Assert.AreEqual("Delete", remote.Writes[0].Kind);
         Assert.IsFalse(remote.Exists(fixture.Plan.FinalPath));
@@ -138,6 +138,67 @@ public sealed partial class MirrorPulseJournalCoalescingExecutorTests
         var content = new MirrorPulseCoalescingContent(FinalBytes.Length, Convert.ToHexString(SHA256.HashData(FinalBytes)),
             new(new(42, Guid.NewGuid(), Guid.NewGuid()), MirrorPulseContentPreparation.None));
         return await catalog.PrepareConflictDeletionAsync(command, selected, fixture.Plan.RootKey, fixture.Plan.ItemId, fixture.Plan.FinalPath, content);
+    }
+
+    [TestMethod]
+    public async Task AFailedArchiveRevalidationAfterRemoteAcceptanceRetainsOriginalsWithoutAnotherDelete()
+    {
+        using var fixture = new Fixture(MirrorPulseCoalescedEffect.UpdateFile); var remote = new FileRemote(fixture);
+        await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        var prepared = await PrepareDeletionAsync(catalog, fixture, remote);
+        await Assert.ThrowsExactlyAsync<IOException>(() => DeletionExecutor(catalog, remote).ExecuteAsync(prepared.Intent.CommandId,
+            (decision, token) => CompleteSyntheticLocalRetirementAsync(catalog, decision, token),
+            (_, _) => throw new IOException("Synthetic official acknowledgement interruption.")).AsTask());
+        Assert.AreEqual(MirrorPulseConflictDeletionPhase.RemoteAccepted, (await catalog.ReadConflictDeletionAsync(prepared.Intent.CommandId))!.Phase);
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(() => DeletionExecutor(catalog, remote).ExecuteAsync(prepared.Intent.CommandId,
+            (_, _) => throw new InvalidDataException("Synthetic committed archive corruption."),
+            (_, _) => throw new AssertFailedException("Unverified preserved bytes cannot authorize original acknowledgement.")).AsTask());
+        Assert.HasCount(1, remote.Writes); Assert.HasCount(fixture.Plan.Members.Count, await catalog.ReadUploadConflictsAsync());
+        Assert.AreEqual("pending", (await catalog.ReadUserCommandAsync(prepared.Intent.CommandId))!.State);
+    }
+
+    [TestMethod]
+    public async Task ARejectedSingleOriginalReceivesAnIndependentDeletionWithoutCreatingACoalescingPlan()
+    {
+        using var fixture = new Fixture(MirrorPulseCoalescedEffect.UpdateFile);
+        await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        var original = fixture.Intent(fixture.Window[0]);
+        await Assert.ThrowsExactlyAsync<MirrorPulseWorkerMutationConflictException>(() => new MirrorPulseMutationExecutor(catalog).ExecuteAsync(original,
+            _ => throw new MirrorPulseWorkerMutationConflictException(fixture.Revision, "changed-single"),
+            (_, _) => throw new AssertFailedException("Rejected original cannot be acknowledged."), default).AsTask());
+        Guid conflictId = Guid.NewGuid(), command = Guid.NewGuid();
+        await catalog.SaveUploadConflictAsync(new(conflictId, original.InstanceId, original.OperationId.ToString("D"), original.RelativePath,
+            MirrorPulseConflictReason.StaleRemoteRevision, MirrorPulseVersionComparison.Diverged, original.ExpectedRevision, "changed-single", DateTimeOffset.UtcNow));
+        await catalog.SaveUserCommandAsync(new(command, "deleteremote", conflictId.ToString("D"), "pending"));
+        var decision = await catalog.PrepareConflictDeletionAsync(command, conflictId, original.RootKey, fixture.Plan.ItemId,
+            original.RelativePath, fixture.Content);
+        Assert.IsNull(decision.Intent.PlanId); Assert.HasCount(1, decision.Intent.OriginalOperationIds);
+        Assert.AreEqual(original.OperationId, decision.Intent.OriginalOperationIds[0]);
+        Assert.AreNotEqual(original.OperationId, decision.Intent.RemoteDeletion.OperationId);
+        Assert.AreEqual(MirrorPulseMutationState.Conflict, (await catalog.ReadMutationAsync(original.OperationId))!.State);
+        Assert.IsEmpty(await catalog.ReadJournalCoalescingPlansAsync());
+        await Assert.ThrowsExactlyAsync<ArgumentException>(() => catalog.AdvanceConflictDeletionAsync(command,
+            MirrorPulseConflictDeletionPhase.Prepared, MirrorPulseConflictDeletionPhase.RemoteAccepted));
+    }
+
+    [TestMethod]
+    public async Task Schema55UpgradePreservesARejectedGroupWithoutInventingADeletionDecision()
+    {
+        using var fixture = new Fixture(MirrorPulseCoalescedEffect.UpdateFile); var remote = new FileRemote(fixture);
+        MirrorPulseMutationRecord rejected;
+        await using (var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths))
+        {
+            var execution = await catalog.PrepareJournalCoalescingAndExecutionAsync(fixture.Plan, fixture.Window, fixture.Revision, fixture.Content);
+            remote.Seed(fixture.Plan.FinalPath, "changed", [8]);
+            await Assert.ThrowsExactlyAsync<MirrorPulseWorkerMutationConflictException>(() => Executor(catalog, remote).ExecuteAsync(fixture.Plan.PlanId, OpenContent).AsTask());
+            rejected = (await catalog.ReadMutationAsync(execution.Steps[0].OperationId))!;
+            await SaveGroupConflictsAsync(catalog, fixture, "changed");
+        }
+        await ExecuteRetrySqlAsync(fixture, "DROP TABLE conflict_deletion_members; DROP TABLE conflict_deletions; PRAGMA user_version=55;");
+        await using var upgraded = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        Assert.IsEmpty(await upgraded.ReadPendingConflictDeletionsAsync());
+        Assert.AreEqual(rejected, await upgraded.ReadMutationAsync(rejected.Intent.OperationId));
+        Assert.HasCount(fixture.Plan.Members.Count, await upgraded.ReadUploadConflictsAsync());
     }
 
     // This port exercises Core's durable orchestration only. Native preservation/ACL

@@ -95,6 +95,39 @@ public sealed class MirrorPulseConflictCopyStoreTests
         finally { Directory.Delete(fixture, true); }
     }
 
+    [TestMethod]
+    public async Task DecisionCopiesRemainIndependentWhileAReadGuardBlocksWritesAndAllowsRetirement()
+    {
+        string fixture = Path.Combine(Path.GetTempPath(), "MirrorPulse-deletion-copy", Guid.NewGuid().ToString("N"));
+        var paths = new MirrorPulseStoragePaths(Path.Combine(fixture, "sync"), Path.Combine(fixture, "data"));
+        Directory.CreateDirectory(paths.SyncRootPath); Directory.CreateDirectory(paths.DataRootPath);
+        string source = Path.Combine(paths.SyncRootPath, "latest.bin"); var conflict = Create();
+        var copies = new MirrorPulseConflictCopyStore(paths); Guid first = Guid.NewGuid(), second = Guid.NewGuid();
+        try
+        {
+            await File.WriteAllBytesAsync(source, [1, 2, 3]);
+            string original = await copies.PreserveDecisionAsync(first, conflict, MirrorPulseConflictPreservedSide.Local,
+                _ => ValueTask.FromResult<Stream>(new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read)));
+            await File.WriteAllBytesAsync(source, [4, 5, 6, 7]);
+            string latest;
+            await using (var guard = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete))
+            {
+                Assert.ThrowsExactly<IOException>(() => { using var writer = File.OpenWrite(source); });
+                latest = await copies.PreserveDecisionAsync(second, conflict, MirrorPulseConflictPreservedSide.Local,
+                    _ => ValueTask.FromResult<Stream>(new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete)));
+                File.Delete(source);
+                Assert.IsFalse(File.Exists(source));
+                Assert.AreEqual(4L, guard.Length);
+            }
+            Assert.AreNotEqual(original, latest);
+            CollectionAssert.AreEqual(new byte[] { 1, 2, 3 }, await File.ReadAllBytesAsync(original));
+            CollectionAssert.AreEqual(new byte[] { 4, 5, 6, 7 }, await File.ReadAllBytesAsync(latest));
+            Assert.AreEqual(latest, await copies.PreserveDecisionAsync(second, conflict, MirrorPulseConflictPreservedSide.Local,
+                _ => throw new AssertFailedException("The retired source cannot be reopened during replay.")));
+        }
+        finally { Directory.Delete(fixture, true); }
+    }
+
     private sealed class FailingSource : MemoryStream
     {
         private bool _read;

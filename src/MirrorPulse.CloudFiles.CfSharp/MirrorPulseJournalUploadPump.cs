@@ -45,6 +45,7 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
     private readonly MirrorPulseNamespaceContentConfirmation _contentConfirmation;
     private readonly MirrorPulseNamespaceWorkAdmission? _namespaceWork;
     private readonly MirrorPulseJournalCoalescingRecovery _coalescingRecovery;
+    private readonly MirrorPulseConflictDeletionRecovery? _deletionRecovery;
 
     public MirrorPulseJournalPumpHealth Health => _runner.Health;
 
@@ -68,7 +69,8 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
         MirrorPulseInstanceScheduler? scheduler = null,
         MirrorPulseNamespaceActor? namespaceActor = null,
         MirrorPulseNamespaceExecutionSession? namespaceExecution = null,
-        MirrorPulseNamespaceWorkAdmission? namespaceWork = null)
+        MirrorPulseNamespaceWorkAdmission? namespaceWork = null,
+        MirrorPulseUploadConflictActions? conflictActions = null)
     {
         _feed = feed ?? throw new ArgumentNullException(nameof(feed));
         _router = router ?? throw new ArgumentNullException(nameof(router));
@@ -96,6 +98,7 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
         _syncRootPath = Path.GetFullPath(syncRootPath);
         _log = new LocalRollingLogWriter(Path.Combine(dataRootPath, "logs"));
         _coalescingRecovery = new(catalog, state, _runner, _log);
+        if (conflictActions is not null) _deletionRecovery = new(catalog, conflictActions.ResumeConflictDeletionAsync, router, mayDispatch, _runner, _log);
         _completion = completion ?? throw new ArgumentNullException(nameof(completion));
         _source = new MirrorPulseJournalUploadSource(feed, router, catalog, mayDispatch, _completion, namespaceWork);
     }
@@ -135,6 +138,7 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
         _planningBatch = null;
         foreach (Guid original in _completedCoalescedOriginals) _runner.ClearRecoveredFault(original);
         _completedCoalescedOriginals.Clear();
+        if (_deletionRecovery is not null) await _deletionRecovery.RepairAsync(cancellationToken).ConfigureAwait(false);
         await _coalescingRecovery.RepairAsync(cancellationToken).ConfigureAwait(false);
         var recovery = new MirrorPulseMutationProjectionRecovery(_catalog);
         IReadOnlyList<Guid> repaired = await recovery.RepairAsync(async (operationId, token) =>

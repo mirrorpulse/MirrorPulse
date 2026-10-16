@@ -11,6 +11,7 @@ public sealed class MirrorPulseJournalPumpRunner
 {
     private readonly ConcurrentDictionary<Guid, string> _faults = new();
     private readonly ConcurrentDictionary<Guid, string> _coalescingRecoveryFaults = new();
+    private readonly ConcurrentDictionary<Guid, string> _conflictDeletionRecoveryFaults = new();
     private readonly int _maximumCommandsPerCycle;
     private readonly int _maximumCommandsPerRoot;
     private (InstanceId Instance, string Root)? _nextRoute;
@@ -25,9 +26,14 @@ public sealed class MirrorPulseJournalPumpRunner
     public void ClearRecoveredFault(Guid operationId) => _faults.TryRemove(operationId, out _);
     internal void RetainCoalescingRecoveryFault(Guid planId) => _coalescingRecoveryFaults[planId] = "JournalGroupRecoveryFailed";
     internal void ClearCoalescingRecoveryFault(Guid planId) => _coalescingRecoveryFaults.TryRemove(planId, out _);
-    public MirrorPulseJournalPumpHealth Health => new(_faults.IsEmpty && _coalescingRecoveryFaults.IsEmpty,
-        _faults.Count + _coalescingRecoveryFaults.Count,
-        _faults.Values.Concat(_coalescingRecoveryFaults.Values).Order(StringComparer.Ordinal).FirstOrDefault());
+    internal void RetainConflictDeletionRecoveryFault(Guid commandId) => _conflictDeletionRecoveryFaults[commandId] = "ConflictDeletionRecoveryFailed";
+    internal void ClearConflictDeletionRecoveryFault(Guid commandId) => _conflictDeletionRecoveryFaults.TryRemove(commandId, out _);
+    internal IReadOnlyList<Guid> ReadConflictDeletionRecoveryFaults(Guid? after) => _conflictDeletionRecoveryFaults.Keys
+        .Where(id => after is null || string.CompareOrdinal(id.ToString("D"), after.Value.ToString("D")) > 0)
+        .OrderBy(id => id.ToString("D"), StringComparer.Ordinal).Take(64).ToArray();
+    public MirrorPulseJournalPumpHealth Health => new(_faults.IsEmpty && _coalescingRecoveryFaults.IsEmpty && _conflictDeletionRecoveryFaults.IsEmpty,
+        _faults.Count + _coalescingRecoveryFaults.Count + _conflictDeletionRecoveryFaults.Count,
+        _faults.Values.Concat(_coalescingRecoveryFaults.Values).Concat(_conflictDeletionRecoveryFaults.Values).Order(StringComparer.Ordinal).FirstOrDefault());
 
     public async ValueTask<bool> RunCycleAsync(
         Func<CancellationToken, ValueTask<MirrorPulseJournalUploadBatch>> read,

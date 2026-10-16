@@ -10,6 +10,22 @@ namespace MirrorPulse.Core.Tests;
 public sealed class SafeDiagnosticPolicyTests
 {
     [TestMethod]
+    public void DeletionRecoveryRetainsOnlyATypedCommandIdentityAndRegisteredFailureFacts()
+    {
+        Guid command = Guid.NewGuid();
+        var safe = SafeDiagnosticPolicy.Sanitize(new LogEntry(LogLevel.Warning, "CloudFiles.Upload", "ConflictDeletionRecoveryFailed", DateTimeOffset.UtcNow,
+            [new("commandId", command.ToString("D")), new("failureCategory", "InvalidData"), new("hresult", "8007000D"),
+             new("path", "private-path-needle"), new("exception", "private-credential-needle")]));
+        Assert.AreEqual("ConflictDeletionRecoveryFailed", safe.Code);
+        Assert.AreEqual(command.ToString("D"), safe.Fields["commandId"]);
+        Assert.IsFalse(JsonSerializer.Serialize(safe).Contains("needle", StringComparison.Ordinal));
+        var rejected = SafeDiagnosticPolicy.Sanitize(new LogEntry(LogLevel.Warning, "CloudFiles.Upload", "ConflictDeletionRecoveryFailed", DateTimeOffset.UtcNow,
+            [new("commandId", "private-token-needle")]));
+        Assert.IsFalse(rejected.Fields.ContainsKey("commandId"));
+        Assert.IsFalse(JsonSerializer.Serialize(rejected).Contains("needle", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
     public void GroupRecoveryDiagnosticRetainsOnlyTheRegisteredPlanIdentityAndFailureFacts()
     {
         Guid plan = Guid.NewGuid();

@@ -237,6 +237,13 @@ public sealed partial class MirrorPulseProductCatalog
                 command.CommandText = "UPDATE user_commands SET state='resolved' WHERE command_id=$id AND action='deleteremote' AND target_id=$target;";
                 command.Parameters.AddWithValue("$id", commandId.ToString("D")); command.Parameters.AddWithValue("$target", deletion.Intent.ConflictId.ToString("D"));
                 if (await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1) throw new InvalidDataException("The deletion command lost its explicit authorization.");
+                if (deletion.Intent.PlanId is { } planId)
+                {
+                    await using var prior = _connection.CreateCommand(); prior.Transaction = transaction;
+                    prior.CommandText = "UPDATE user_commands SET state='superseded' WHERE state IN ('pending','failed') AND command_id IN (SELECT command_id FROM journal_coalescing_retries WHERE plan_id=$plan);";
+                    prior.Parameters.AddWithValue("$plan", planId.ToString("D"));
+                    await prior.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                }
             }
             transaction.Commit();
         }

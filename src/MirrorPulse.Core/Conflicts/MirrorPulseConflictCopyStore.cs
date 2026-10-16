@@ -28,11 +28,23 @@ public sealed class MirrorPulseConflictCopyStore
         _checkpoint = checkpoint;
     }
 
-    public async Task<string> PreserveAsync(
+    public Task<string> PreserveAsync(
         MirrorPulseConflictRecord conflict,
         MirrorPulseConflictPreservedSide side,
         Func<CancellationToken, ValueTask<Stream>> openSource,
+        CancellationToken cancellationToken = default) => PreserveCoreAsync(conflict, side, null, openSource, cancellationToken);
+
+    /// <summary>Isolates an immutable command's preserved bytes from earlier choices for the same conflict.</summary>
+    public Task<string> PreserveDecisionAsync(Guid commandId, MirrorPulseConflictRecord conflict,
+        MirrorPulseConflictPreservedSide side, Func<CancellationToken, ValueTask<Stream>> openSource,
         CancellationToken cancellationToken = default)
+    {
+        if (commandId == Guid.Empty) throw new ArgumentException("A preservation command ID is required.", nameof(commandId));
+        return PreserveCoreAsync(conflict, side, commandId, openSource, cancellationToken);
+    }
+
+    private async Task<string> PreserveCoreAsync(MirrorPulseConflictRecord conflict, MirrorPulseConflictPreservedSide side,
+        Guid? commandId, Func<CancellationToken, ValueTask<Stream>> openSource, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(conflict);
         ArgumentNullException.ThrowIfNull(openSource);
@@ -44,6 +56,7 @@ public sealed class MirrorPulseConflictCopyStore
         string directory = Path.Combine(
             MirrorPulseConflictDirectory.GetPath(_paths, conflict.InstanceId),
             side.ToString().ToLowerInvariant());
+        if (commandId is { } scope) directory = Path.Combine(directory, scope.ToString("D"));
         Directory.CreateDirectory(directory);
         EnsureNoReparsePoints(_paths.DataRootPath, directory);
         string destination = Path.Combine(directory, MirrorPulseConflictFileName.Create(conflict));

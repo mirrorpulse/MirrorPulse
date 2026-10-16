@@ -21,14 +21,13 @@ public sealed class MirrorPulseConflictDeletionExecutor(MirrorPulseProductCatalo
         var decision = await catalog.ReadConflictDeletionAsync(commandId, cancellationToken).ConfigureAwait(false)
             ?? throw new FileNotFoundException("The conflict deletion decision is missing.");
         if (decision.Phase == MirrorPulseConflictDeletionPhase.Completed) return decision;
+        // Revalidate a retained archive and original local absence on every replay,
+        // including after remote acceptance and before original acknowledgement.
+        await completeLocal(decision, cancellationToken).ConfigureAwait(false);
+        decision = await catalog.ReadConflictDeletionAsync(commandId, cancellationToken).ConfigureAwait(false)
+            ?? throw new InvalidDataException("The local deletion decision disappeared.");
         if (decision.Phase < MirrorPulseConflictDeletionPhase.Retired)
-        {
-            await completeLocal(decision, cancellationToken).ConfigureAwait(false);
-            decision = await catalog.ReadConflictDeletionAsync(commandId, cancellationToken).ConfigureAwait(false)
-                ?? throw new InvalidDataException("The local deletion decision disappeared.");
-            if (decision.Phase != MirrorPulseConflictDeletionPhase.Retired)
-                throw new InvalidOperationException("Local preservation and controlled retirement must complete before deleting remote content.");
-        }
+            throw new InvalidOperationException("Local preservation and controlled retirement must complete before deleting remote content.");
         if (decision.Phase == MirrorPulseConflictDeletionPhase.Retired)
         {
             var intent = decision.Intent.RemoteDeletion;

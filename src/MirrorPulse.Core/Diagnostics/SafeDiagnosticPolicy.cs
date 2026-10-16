@@ -30,6 +30,7 @@ public static class SafeDiagnosticPolicy
         ["CloudProviderRequestFailed"] = "A Windows Cloud Files request failed.",
         ["JournalCommandFailed"] = "A local journal command failed.",
         ["JournalGroupRecoveryFailed"] = "A retained journal group requires recovery before its user command can complete.",
+        ["ConflictDeletionRecoveryFailed"] = "A retained conflict deletion requires recovery before its original journal can be acknowledged.",
         ["JournalDispatchBoundary"] = "A local content command reached a deferred dispatch boundary.",
         ["JournalAcknowledgementFailed"] = "An accepted Worker result could not be acknowledged.",
         ["MutationOutcomeAmbiguous"] = "A remote outcome requires reconciliation before retry.",
@@ -106,7 +107,7 @@ public static class SafeDiagnosticPolicy
         {
             string? accepted = name switch
             {
-                "operationId" or "instanceId" or "diagnosticId" or "correlationId" or "workerSessionId" or "planId" =>
+                "operationId" or "instanceId" or "diagnosticId" or "correlationId" or "workerSessionId" or "planId" or "commandId" =>
                     Guid.TryParse(value, out Guid id) ? id.ToString("D") : null,
                 "hresult" => value.Length == 8 && uint.TryParse(value, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out uint number)
                     ? number.ToString("X8", CultureInfo.InvariantCulture) : null,

@@ -937,14 +937,14 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                 CloudLocalChangeFeed feed = fileSystem.CreateLocalChangeFeed();
                 var completion = new MirrorPulseJournalUploadCompletion(
                     feed, state, new BackoffPolicy(TimeSpan.FromSeconds(2), TimeSpan.FromMinutes(5)));
-                _uploadPump = new MirrorPulseJournalUploadPump(feed, router, catalog, uploads, stats, state,
-                    syncRootPath, dataRootPath, mayDispatch, completion, conflicts, notifications, mutations,
-                    uploads as IMirrorPulseWorkerRangeTransport, uploads as IMirrorPulseWorkerDirectoryPageSource, fileSystem, _scheduler,
-                    _namespaceActor, _namespaceExecution, namespaceWork);
                 _conflictActions = new MirrorPulseUploadConflictActions(catalog, state, feed,
                     new BackoffPolicy(TimeSpan.FromSeconds(2), TimeSpan.FromMinutes(5)),
                     new MirrorPulseStoragePaths(syncRootPath, dataRootPath), router, mutations, conflicts, _scheduler,
-                    fileSystem, _namespaceActor, _namespaceExecution, namespaceWork);
+                    fileSystem, _namespaceActor, _namespaceExecution, namespaceWork, stats, mayDispatch);
+                _uploadPump = new MirrorPulseJournalUploadPump(feed, router, catalog, uploads, stats, state,
+                    syncRootPath, dataRootPath, mayDispatch, completion, conflicts, notifications, mutations,
+                    uploads as IMirrorPulseWorkerRangeTransport, uploads as IMirrorPulseWorkerDirectoryPageSource, fileSystem, _scheduler,
+                    _namespaceActor, _namespaceExecution, namespaceWork, _conflictActions);
                 await _uploadPump.StartAsync(cancellationToken).ConfigureAwait(false);
             }
 
