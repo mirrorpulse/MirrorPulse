@@ -1,9 +1,48 @@
 using Microsoft.Data.Sqlite;
+using MirrorPulse.Core.Contracts;
 
 namespace MirrorPulse.Core.State;
 
 public sealed partial class MirrorPulseProductCatalog
 {
+    /// <summary>Finds an original remote move by its durable entry owner, including completed and rejected history.</summary>
+    /// <remarks>The indexed owner and the full retained move are validated in one read transaction.
+    /// A lookup never adopts the object currently occupying a source or target path.</remarks>
+    public async Task<MirrorPulseNamespaceMemberMoveIntent?> ReadNamespaceRemoteMoveAsync(
+        InstanceId instanceId, string batchId, int ordinal, CancellationToken cancellationToken = default)
+    {
+        if (instanceId.Value == Guid.Empty || string.IsNullOrWhiteSpace(batchId) || batchId.Length > 16_384 ||
+            batchId.Contains('\0') || !batchId.StartsWith($"{instanceId}/", StringComparison.Ordinal) ||
+            batchId.Length == instanceId.ToString().Length + 1 || ordinal < 0)
+            throw new ArgumentException("A remote move lookup requires its bounded original entry owner.");
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed(); using var transaction = _connection.BeginTransaction(deferred: true);
+            Guid? operation = null;
+            await using (var query = _connection.CreateCommand())
+            {
+                query.Transaction = transaction;
+                query.CommandText = """
+                    SELECT operation_id FROM namespace_remote_move_entries
+                    WHERE instance_id=$instance AND batch_id=$batch AND ordinal=$ordinal;
+                    """;
+                query.Parameters.AddWithValue("$instance", instanceId.ToString());
+                query.Parameters.AddWithValue("$batch", batchId);
+                query.Parameters.AddWithValue("$ordinal", ordinal);
+                if (await query.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is string stored)
+                    operation = ParseNamespaceMemberId(stored);
+            }
+            if (operation is null) { transaction.Commit(); return null; }
+            var intent = await ReadNamespaceMemberMoveCoreAsync(operation.Value, transaction, cancellationToken).ConfigureAwait(false)
+                ?? throw new InvalidDataException("The remote entry index lost its original move admission.");
+            if (intent.RemoteEntry is not { } remote || remote.InstanceId != instanceId || remote.BatchId != batchId || remote.Ordinal != ordinal)
+                throw new InvalidDataException("The remote entry lookup disagrees with its retained original owner.");
+            transaction.Commit(); return intent;
+        }
+        finally { _gate.Release(); }
+    }
+
     private async Task InsertNamespaceRemoteMoveReferenceAsync(MirrorPulseNamespaceMemberMoveIntent intent,
         SqliteTransaction transaction, CancellationToken token)
     {

@@ -21,6 +21,12 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         }
         await using var reopened = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
         Assert.AreEqual(intent, await reopened.ReadNamespaceMemberMoveAsync(intent.OperationId));
+        var owner = intent.RemoteEntry!;
+        Assert.AreEqual(intent, await reopened.ReadNamespaceRemoteMoveAsync(owner.InstanceId, owner.BatchId, owner.Ordinal));
+        Assert.IsNull(await reopened.ReadNamespaceRemoteMoveAsync(owner.InstanceId, owner.BatchId, 0));
+        Assert.IsNull(await reopened.ReadNamespaceRemoteMoveAsync(owner.InstanceId, $"{owner.InstanceId}/another", owner.Ordinal));
+        Assert.IsTrue(await reopened.CanResumeNamespaceRemoteMoveAsync(intent));
+        Assert.IsFalse(await reopened.CanResumeNamespaceRemoteMoveAsync(intent with { OperationId = Guid.NewGuid() }));
         Assert.AreEqual(intent, await reopened.PrepareNamespaceMemberMoveAsync(intent));
         Assert.AreEqual(intent, await reopened.ValidateNamespaceMemberMoveExecutionAsync(intent.OperationId));
         Assert.IsNull(await reopened.ReadNamespaceMemberMoveStartAsync(intent.OperationId));
@@ -122,6 +128,9 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         await using var reopened = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
         Assert.AreEqual(intent, await reopened.ReadNamespaceMemberMoveAsync(intent.OperationId));
         Assert.IsNotNull(await reopened.ReadNamespaceMemberMoveCompletionAsync(intent.OperationId));
+        Assert.AreEqual(intent, await reopened.ReadNamespaceRemoteMoveAsync(intent.RemoteEntry!.InstanceId,
+            intent.RemoteEntry.BatchId, intent.RemoteEntry.Ordinal));
+        Assert.IsFalse(await reopened.CanResumeNamespaceRemoteMoveAsync(intent));
         Assert.AreEqual(setup.Member, await reopened.ReadNamespaceMemberChildAsync(setup.ParentMember.MemberId, "moved.txt"));
         Assert.IsNull(await reopened.ReadNamespaceMemberChildAsync(setup.ParentMember.MemberId, "new.txt"));
         Assert.AreEqual(intent.Target.RelativePath, (await reopened.ReadNamespaceMemberLocationAsync(intent.MemberId)).RelativePath);

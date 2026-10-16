@@ -25,6 +25,9 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         await using var reopened = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
         Assert.AreEqual(rejected, await reopened.ReadNamespaceRemoteMoveRejectionAsync(rejected.OperationId));
         Assert.AreEqual(setup.Move, await reopened.ReadNamespaceMemberMoveAsync(rejected.OperationId));
+        Assert.AreEqual(setup.Move, await reopened.ReadNamespaceRemoteMoveAsync(setup.Move.RemoteEntry!.InstanceId,
+            setup.Move.RemoteEntry.BatchId, setup.Move.RemoteEntry.Ordinal));
+        Assert.IsFalse(await reopened.CanResumeNamespaceRemoteMoveAsync(setup.Move));
         Assert.AreEqual(rejected, await reopened.RecordNamespaceRemoteMoveRejectionAsync(rejected));
         Assert.IsNotNull(await reopened.ReadNamespaceMemberMoveStartAsync(rejected.OperationId));
         await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => reopened.ValidateNamespaceMemberMoveExecutionAsync(rejected.OperationId));

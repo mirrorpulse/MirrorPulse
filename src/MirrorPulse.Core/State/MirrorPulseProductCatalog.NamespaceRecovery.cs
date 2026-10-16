@@ -23,6 +23,26 @@ public sealed partial class MirrorPulseProductCatalog
     public Task<IReadOnlyList<RootId>> ReadNamespaceDispatchFencedRootsAsync(CancellationToken cancellationToken = default)
         => ReadNamespaceRootFencesAsync(includeUnregisteredBirths: true, cancellationToken);
 
+    /// <summary>Checks whether the only durable fence in this root is this exact original remote move.</summary>
+    /// <remarks>This grants no native dispatch or live root admission. The Host must recover the
+    /// original SDK outcome and retain its shared work lease and namespace actor.</remarks>
+    public async Task<bool> CanResumeNamespaceRemoteMoveAsync(MirrorPulseNamespaceMemberMoveIntent original,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(original);
+        if (original.RemoteEntry is null) throw new ArgumentException("Recovery requires an original remote move.", nameof(original));
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed(); using var transaction = _connection.BeginTransaction(deferred: true);
+            var pending = await ReadPendingNamespaceMemberMoveCoreAsync(original.RootId, transaction, cancellationToken).ConfigureAwait(false);
+            if (pending != original) { transaction.Commit(); return false; }
+            var fenced = await ReadNamespaceRootFencesCoreAsync(true, transaction, cancellationToken, original.OperationId).ConfigureAwait(false);
+            transaction.Commit(); return !fenced.Contains(original.RootId);
+        }
+        finally { _gate.Release(); }
+    }
+
     private async Task<IReadOnlyList<RootId>> ReadNamespaceRootFencesAsync(bool includeUnregisteredBirths,
         CancellationToken cancellationToken)
     {
@@ -38,7 +58,7 @@ public sealed partial class MirrorPulseProductCatalog
     }
 
     private async Task<IReadOnlyList<RootId>> ReadNamespaceRootFencesCoreAsync(bool includeUnregisteredBirths,
-        SqliteTransaction transaction, CancellationToken cancellationToken)
+        SqliteTransaction transaction, CancellationToken cancellationToken, Guid? admittedRemoteMoveId = null)
     {
         HashSet<RootId> roots = (await ReadManagedRootRenamesCoreAsync(cancellationToken, transaction).ConfigureAwait(false))
             .Where(intent => intent.IsPending).Select(intent => intent.RootId).ToHashSet();
@@ -58,9 +78,9 @@ public sealed partial class MirrorPulseProductCatalog
         }
         foreach (RootId root in moveRoots)
         {
-            _ = await ReadPendingNamespaceMemberMoveCoreAsync(root, transaction, cancellationToken).ConfigureAwait(false)
+            var move = await ReadPendingNamespaceMemberMoveCoreAsync(root, transaction, cancellationToken).ConfigureAwait(false)
                 ?? throw new InvalidDataException("The pending move lost its durable root fence.");
-            roots.Add(root);
+            if (move.OperationId != admittedRemoteMoveId || move.RemoteEntry is null) roots.Add(root);
         }
         foreach (var retirement in await ReadPendingNamespaceRetirementsCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
             roots.Add(retirement.Intent.RootId);
