@@ -347,7 +347,14 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     CollectionAssert.AreEqual(batch.FinalCursor.ToArray(), (await engine.ReadCursorAsync(registration.InstanceId, deadline.Token))!.Value.ToArray());
                     Assert.AreEqual(firstMember.LocalObject.LocalFileId, (await fileSystem.GetFile(targetPath).InspectAsync(deadline.Token)).LocalBinding!.LocalFileId);
                     Assert.AreEqual(CloudContentAvailability.OnlineOnly, (await fileSystem.GetFile(targetPath).InspectAsync(deadline.Token)).ContentAvailability);
-                    Assert.IsFalse((await fileSystem.GetFile(sourcePath).InspectAsync(deadline.Token)).Exists);
+                    if (caseOnly)
+                    {
+                        var names = new List<string>();
+                        await foreach (var item in fileSystem.GetDirectory("Docs").EnumerateLocalChildrenAsync(CloudDirectoryEnumerationOptions.Default, deadline.Token))
+                            names.Add(item.RelativePath.Replace('\\', '/'));
+                        Assert.Contains(targetPath, names); Assert.DoesNotContain(sourcePath, names);
+                    }
+                    else Assert.IsFalse((await fileSystem.GetFile(sourcePath).InspectAsync(deadline.Token)).Exists);
                     Assert.AreEqual(0, provider.Reads);
                     TestContext.WriteLine($"ManagedRemoteBatch: twoSdkOwners=True; recoveredUnmovedStart={stopBeforeSdk}; originalSdkCommitBeforeProductSettlement={!stopBeforeSdk}; " +
                         "originalBatchAndAdmissionRetained=True; nativeRedispatch=False; adapterCursorAfterSettlement=True; hydration=False; defaultHostIntegrated=False.");
