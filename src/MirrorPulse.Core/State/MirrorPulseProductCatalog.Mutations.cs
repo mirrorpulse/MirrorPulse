@@ -49,6 +49,7 @@ public sealed partial class MirrorPulseProductCatalog
                 ownership.CommandText = """
                     SELECT 1 FROM journal_coalescing_members WHERE operation_id=$operation
                     UNION ALL SELECT 1 FROM journal_coalescing_plans WHERE plan_id=$operation
+                    UNION ALL SELECT 1 FROM conflict_deletion_members WHERE original_id=$operation
                     UNION ALL SELECT 1 FROM journal_coalescing_steps WHERE operation_id=$operation LIMIT 1;
                     """;
                 ownership.Parameters.AddWithValue("$operation", intent.OperationId.ToString());

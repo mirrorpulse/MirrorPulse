@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Data.Sqlite;
 using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.Sync;
@@ -13,16 +14,34 @@ public enum MirrorPulseConflictDeletionPhase { Prepared, Preserved, Retiring, Re
 public sealed record MirrorPulseConflictDeletionIntent(int Version, Guid CommandId, Guid ConflictId,
     InstanceId InstanceId, string RootKey, Guid? PlanId, Guid ItemId, string LocalRelativePath,
     MirrorPulseMutationIntent RemoteDeletion, MirrorPulseCoalescingContent? LocalContent,
-    IReadOnlyList<Guid> OriginalOperationIds, IReadOnlyList<Guid> ConflictIds, DateTimeOffset PreparedAt);
+    IReadOnlyList<Guid> OriginalOperationIds, IReadOnlyList<Guid> ConflictIds, DateTimeOffset PreparedAt)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public MirrorPulseWorkerChangeCommand? OriginalObservation { get; init; }
+}
 
 public sealed record MirrorPulseConflictDeletion(MirrorPulseConflictDeletionIntent Intent, MirrorPulseConflictDeletionPhase Phase);
 
 public sealed partial class MirrorPulseProductCatalog
 {
     /// <summary>Freezes the complete rejected group and its observed remote condition before any local removal.</summary>
-    public async Task<MirrorPulseConflictDeletion> PrepareConflictDeletionAsync(Guid commandId, Guid conflictId,
+    public Task<MirrorPulseConflictDeletion> PrepareConflictDeletionAsync(Guid commandId, Guid conflictId,
         string rootKey, Guid itemId, string localRelativePath, MirrorPulseCoalescingContent? content,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        PrepareConflictDeletionCoreAsync(commandId, conflictId, rootKey, itemId, localRelativePath, content, null, cancellationToken);
+
+    /// <summary>Retains an exact public journal observation when a preflight conflict has no remote execution intent.</summary>
+    public Task<MirrorPulseConflictDeletion> PrepareConflictDeletionFromObservationAsync(Guid commandId, Guid conflictId,
+        string rootKey, Guid itemId, string localRelativePath, MirrorPulseCoalescingContent? content,
+        MirrorPulseWorkerChangeCommand observation, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(observation);
+        return PrepareConflictDeletionCoreAsync(commandId, conflictId, rootKey, itemId, localRelativePath, content, observation, cancellationToken);
+    }
+
+    private async Task<MirrorPulseConflictDeletion> PrepareConflictDeletionCoreAsync(Guid commandId, Guid conflictId,
+        string rootKey, Guid itemId, string localRelativePath, MirrorPulseCoalescingContent? content,
+        MirrorPulseWorkerChangeCommand? observation, CancellationToken cancellationToken)
     {
         if (commandId == Guid.Empty || conflictId == Guid.Empty || itemId == Guid.Empty || string.IsNullOrWhiteSpace(rootKey))
             throw new ArgumentException("Conflict deletion requires command, conflict, root and logical item identities.");
@@ -42,7 +61,7 @@ public sealed partial class MirrorPulseProductCatalog
             {
                 var old = replay.Intent;
                 if (old.ConflictId != conflictId || old.RootKey != rootKey || old.ItemId != itemId ||
-                    old.LocalRelativePath != localRelativePath || old.LocalContent != content)
+                    old.LocalRelativePath != localRelativePath || old.LocalContent != content || old.OriginalObservation != observation)
                     throw new InvalidDataException("A retained deletion decision cannot replace its original object or content.");
                 transaction.Commit(); return replay;
             }
@@ -57,6 +76,7 @@ public sealed partial class MirrorPulseProductCatalog
                     throw new InvalidOperationException("A matching pending user command must authorize deletion.");
             }
             var selected = await ReadDeletionConflictAsync(conflictId, transaction, cancellationToken).ConfigureAwait(false);
+            if (observation is not null) ValidateDeletionObservation(observation, selected.OriginalId, selected.InstanceId, rootKey, itemId);
             Guid? planId = null;
             await using (var owner = _connection.CreateCommand())
             {
@@ -66,9 +86,10 @@ public sealed partial class MirrorPulseProductCatalog
                 if (await owner.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is string value) planId = Guid.Parse(value);
             }
             var originals = new List<Guid>(); var conflicts = new List<Guid>();
-            MirrorPulseMutationIntent rejected;
+            string remoteTarget;
             if (planId is { } ownerId)
             {
+                if (observation is not null) throw new ArgumentException("A single observation cannot replace an owned group's complete execution.", nameof(observation));
                 var plan = await ReadCoalescingPlanCoreAsync(ownerId, transaction, cancellationToken).ConfigureAwait(false);
                 var execution = await ReadCoalescingExecutionCoreAsync(ownerId, transaction, cancellationToken).ConfigureAwait(false)
                     ?? throw new InvalidDataException("The rejected group lost its original execution.");
@@ -93,7 +114,8 @@ public sealed partial class MirrorPulseProductCatalog
                         throw new NotSupportedException("Remaining remote verification requires its own explicit decision.");
                     current = intent; break;
                 }
-                rejected = current ?? throw new InvalidOperationException("The group has no current rejected effect.");
+                var rejected = current ?? throw new InvalidOperationException("The group has no current rejected effect.");
+                remoteTarget = rejected.Kind == MirrorPulseWorkerChangeKind.Move ? rejected.PreviousRelativePath! : rejected.RelativePath;
                 foreach (var member in plan.Members)
                 {
                     await using var query = _connection.CreateCommand(); query.Transaction = transaction;
@@ -111,10 +133,21 @@ public sealed partial class MirrorPulseProductCatalog
             else
             {
                 var record = await ReadMutationCoreAsync(selected.OriginalId, cancellationToken, transaction).ConfigureAwait(false);
-                if (record is not { State: MirrorPulseMutationState.Conflict, Intent.Origin: MirrorPulseMutationOrigin.Journal } ||
-                    record.Intent.InstanceId != selected.InstanceId || record.Intent.RootKey != rootKey || record.Intent.IsDirectory)
-                    throw new InvalidOperationException("Single-operation deletion requires the original rejected file mutation.");
-                rejected = record.Intent; originals.Add(selected.OriginalId); conflicts.Add(conflictId);
+                if (record is null)
+                {
+                    if (observation is null) throw new InvalidOperationException("A preflight conflict requires its exact public journal observation.");
+                    remoteTarget = observation.Kind == MirrorPulseWorkerChangeKind.Move ? observation.PreviousRelativePath! : observation.RelativePath;
+                }
+                else
+                {
+                    if (record is not { State: MirrorPulseMutationState.Conflict, Intent.Origin: MirrorPulseMutationOrigin.Journal } ||
+                        record.Intent.InstanceId != selected.InstanceId || record.Intent.RootKey != rootKey || record.Intent.IsDirectory ||
+                        observation is not null && (record.Intent.Kind != observation.Kind || record.Intent.RelativePath != observation.RelativePath ||
+                            record.Intent.PreviousRelativePath != observation.PreviousRelativePath))
+                        throw new InvalidOperationException("An existing original mutation must remain explicitly rejected and match its public observation.");
+                    remoteTarget = record.Intent.Kind == MirrorPulseWorkerChangeKind.Move ? record.Intent.PreviousRelativePath! : record.Intent.RelativePath;
+                }
+                originals.Add(selected.OriginalId); conflicts.Add(conflictId);
             }
             if (!conflicts.Contains(conflictId)) throw new InvalidDataException("The selected conflict is not the current group epoch.");
             foreach (Guid id in conflicts)
@@ -136,10 +169,11 @@ public sealed partial class MirrorPulseProductCatalog
             Guid remoteId = new(SHA256.HashData(Encoding.UTF8.GetBytes("MirrorPulse.ConflictDeletion.v1/" + commandId.ToString("D"))).AsSpan(0, 16));
             await RequireUnownedCoalescingEffectAsync(remoteId, transaction, cancellationToken).ConfigureAwait(false);
             var remote = new MirrorPulseMutationIntent(remoteId, selected.InstanceId, rootKey, MirrorPulseWorkerChangeKind.Delete,
-                rejected.Kind == MirrorPulseWorkerChangeKind.Move ? rejected.PreviousRelativePath! : rejected.RelativePath,
+                remoteTarget,
                 null, false, selected.Revision, null, null, MirrorPulseMutationOrigin.ConflictDecision);
-            var deletion = new MirrorPulseConflictDeletionIntent(1, commandId, conflictId, selected.InstanceId, rootKey, planId,
-                itemId, localRelativePath, remote, content, originals.AsReadOnly(), conflicts.AsReadOnly(), DateTimeOffset.UtcNow);
+            var deletion = new MirrorPulseConflictDeletionIntent(observation is null ? 1 : 2, commandId, conflictId, selected.InstanceId, rootKey, planId,
+                itemId, localRelativePath, remote, content, originals.AsReadOnly(), conflicts.AsReadOnly(), DateTimeOffset.UtcNow)
+            { OriginalObservation = observation };
             byte[] payload = JsonSerializer.SerializeToUtf8Bytes(deletion, TopologyJsonOptions);
             await using (var insert = _connection.CreateCommand())
             {
@@ -265,7 +299,7 @@ public sealed partial class MirrorPulseProductCatalog
                 ?? throw new InvalidDataException("The deletion decision is empty.");
             phase = (MirrorPulseConflictDeletionPhase)reader.GetInt32(2);
         }
-        if (intent.Version != 1 || intent.CommandId != commandId || intent.ConflictId == Guid.Empty || intent.ItemId == Guid.Empty ||
+        if (intent.Version is not (1 or 2) || (intent.Version == 2) != (intent.OriginalObservation is not null) || intent.CommandId != commandId || intent.ConflictId == Guid.Empty || intent.ItemId == Guid.Empty ||
             intent.PreparedAt == default || !Enum.IsDefined(phase) || intent.OriginalOperationIds is not { Count: > 0 } ||
             intent.ConflictIds is null || intent.ConflictIds.Count != intent.OriginalOperationIds.Count ||
             intent.OriginalOperationIds.Distinct().Count() != intent.OriginalOperationIds.Count ||
@@ -275,6 +309,14 @@ public sealed partial class MirrorPulseProductCatalog
             string.IsNullOrEmpty(intent.RemoteDeletion.ExpectedRevision) || intent.RemoteDeletion.OperationId !=
                 new Guid(SHA256.HashData(Encoding.UTF8.GetBytes("MirrorPulse.ConflictDeletion.v1/" + commandId.ToString("D"))).AsSpan(0, 16)))
             throw new InvalidDataException("The retained deletion decision lost its original provenance.");
+        if (intent.OriginalObservation is { } observation)
+        {
+            if (intent.PlanId is not null || intent.OriginalOperationIds.Count != 1)
+                throw new InvalidDataException("A preflight deletion lost its original single-operation scope.");
+            ValidateDeletionObservation(observation, intent.OriginalOperationIds[0], intent.InstanceId, intent.RootKey, intent.ItemId);
+            if (intent.RemoteDeletion.RelativePath != (observation.Kind == MirrorPulseWorkerChangeKind.Move ? observation.PreviousRelativePath : observation.RelativePath))
+                throw new InvalidDataException("The preflight deletion target changed from its original public observation.");
+        }
         ValidatePermissionRelativePath(intent.LocalRelativePath);
         ValidatePermissionRelativePath(intent.RemoteDeletion.RelativePath);
         intent.LocalContent?.UploadBinding.Validate();
@@ -326,5 +368,16 @@ public sealed partial class MirrorPulseProductCatalog
             CREATE INDEX IF NOT EXISTS conflict_deletions_pending ON conflict_deletions(phase,command_id);
             """;
         await command.ExecuteNonQueryAsync(token).ConfigureAwait(false);
+    }
+
+    private static void ValidateDeletionObservation(MirrorPulseWorkerChangeCommand observation, Guid originalId, InstanceId instanceId, string rootKey, Guid itemId)
+    {
+        if (observation.OperationId != originalId || observation.Sequence <= 0 || observation.InstanceId != instanceId ||
+            observation.RootKey != rootKey || observation.ItemId != itemId || observation.IsDirectory || observation.ObservedAt == default ||
+            observation.Kind is not (MirrorPulseWorkerChangeKind.Create or MirrorPulseWorkerChangeKind.ContentUpdate or MirrorPulseWorkerChangeKind.Move or MirrorPulseWorkerChangeKind.Delete) ||
+            observation.Kind == MirrorPulseWorkerChangeKind.Move && (observation.PreviousRootKey != rootKey || observation.PreviousRelativePath is null))
+            throw new InvalidDataException("The preflight decision requires the exact original routable file observation.");
+        ValidatePermissionRelativePath(observation.RelativePath);
+        if (observation.PreviousRelativePath is not null) ValidatePermissionRelativePath(observation.PreviousRelativePath);
     }
 }

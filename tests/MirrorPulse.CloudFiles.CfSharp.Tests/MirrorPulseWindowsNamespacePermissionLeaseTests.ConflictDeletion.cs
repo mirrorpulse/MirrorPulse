@@ -102,15 +102,24 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     {
                         var original = window.ReadyCommands.First(value => value.ItemId == logicalItemId);
                         originalIds = [original.OperationId];
-                        var intent = new MirrorPulseMutationIntent(original.OperationId, root.InstanceId, "docs", original.Kind,
-                            original.RelativePath, null, false, baseline, content.Length, content.Sha256, MirrorPulseMutationOrigin.Journal, binding);
-                        var mutation = new MirrorPulseMutationExecutor(catalog);
-                        await Assert.ThrowsExactlyAsync<MirrorPulseWorkerMutationConflictException>(() => mutation.ExecuteAsync(intent,
-                            _ => throw new MirrorPulseWorkerMutationConflictException(baseline, "concurrent-remote"),
-                            (_, _) => throw new AssertFailedException("Rejected original must stay pending."), deadline.Token).AsTask());
+                        await using var preflightFeed = fileSystem.CreateLocalChangeFeed(new() { BatchSize = 1 });
+                        var completion = new MirrorPulseJournalUploadCompletion(preflightFeed, state,
+                            new BackoffPolicy(TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(5)));
+                        // A content-only Worker disables coalescing here, exercising
+                        // the production revision guard before any mutation intent.
+                        await using var pump = new MirrorPulseJournalUploadPump(preflightFeed, router, catalog, remote, remote, state,
+                            paths.SyncRootPath, paths.DataRootPath, _ => true, completion, conflicts: center,
+                            fileSystem: fileSystem, scheduler: scheduler, namespaceActor: actor, namespaceExecution: role);
+                        await pump.StartAsync(deadline.Token);
+                        MirrorPulseConflictRecord? preflight;
+                        while ((preflight = (await catalog.ReadUploadConflictsAsync(cancellationToken: deadline.Token))
+                            .SingleOrDefault(value => value.ChangeId == original.OperationId.ToString("D"))) is null)
+                            await Task.Delay(25, deadline.Token);
+                        conflictId = preflight.ConflictId;
+                        Assert.IsNull(await catalog.ReadMutationAsync(original.OperationId, deadline.Token));
                     }
                     rejectedUploadCalls = remote.UploadCalls;
-                    foreach (Guid original in originalIds)
+                    foreach (Guid original in grouped ? originalIds : [])
                     {
                         var conflict = new MirrorPulseConflictRecord(Guid.NewGuid(), root.InstanceId, original.ToString("D"), "Docs/original.bin",
                             MirrorPulseConflictReason.StaleRemoteRevision, MirrorPulseVersionComparison.Diverged, baseline, "concurrent-remote", DateTimeOffset.UtcNow);
@@ -120,6 +129,12 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     await Assert.ThrowsExactlyAsync<IOException>(() => actions.ApplyAsync(conflictId, MirrorPulseConflictAction.DeleteRemote, deadline.Token).AsTask());
                     commandId = (await catalog.ReadConflictDeletionOwnerAsync(originalIds[0], deadline.Token))!.Value;
                     var deletion = (await catalog.ReadConflictDeletionAsync(commandId, deadline.Token))!;
+                    Assert.AreEqual(grouped ? 1 : 2, deletion.Intent.Version);
+                    if (!grouped)
+                    {
+                        Assert.IsNotNull(deletion.Intent.OriginalObservation);
+                        Assert.IsNull(await catalog.ReadMutationAsync(originalIds[0], deadline.Token));
+                    }
                     Assert.AreEqual(MirrorPulseConflictDeletionPhase.Retired, deletion.Phase);
                     Assert.AreEqual(MirrorPulseMutationState.Ambiguous, (await catalog.ReadMutationAsync(deletion.Intent.RemoteDeletion.OperationId, deadline.Token))!.State);
                     Assert.AreEqual(1, remote.DeleteCalls); Assert.IsFalse(File.Exists(remote.Path));

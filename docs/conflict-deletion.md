@@ -10,6 +10,10 @@ upload conflicts and owned journal groups use the same deletion service.
 1. Retain the explicit user command, logical item, complete original journal IDs,
    current conflict epoch, observed remote revision and local object/byte proof.
    Reserve a distinct remote mutation ID. Rejected effects remain unchanged.
+   A preflight conflict may have no mutation ledger record: retain its exact
+   public CfSharp observation instead, seeking one bounded page by its official
+   sequence. Never invent a rejected mutation or substitute a later path identity.
+   An existing unknown or accepted execution still requires reconciliation.
 2. Preserve local bytes under the instance's conflict directory and command ID.
    Flush the data and manifest, then verify their hash against the decision. An
    earlier copy for another command cannot substitute for the latest local bytes.

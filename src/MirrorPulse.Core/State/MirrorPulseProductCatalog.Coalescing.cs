@@ -148,6 +148,14 @@ public sealed partial class MirrorPulseProductCatalog
                 return plan;
             }
             using SqliteTransaction transaction = _connection.BeginTransaction();
+            foreach (var member in plan.Members)
+            {
+                await using var deletion = _connection.CreateCommand(); deletion.Transaction = transaction;
+                deletion.CommandText = "SELECT 1 FROM conflict_deletion_members WHERE original_id=$operation;";
+                deletion.Parameters.AddWithValue("$operation", member.OperationId.ToString("D"));
+                if (await deletion.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null)
+                    throw new InvalidOperationException("The original observation belongs to an explicit deletion decision.");
+            }
             await using (SqliteCommand aggregate = _connection.CreateCommand())
             {
                 aggregate.Transaction = transaction;
