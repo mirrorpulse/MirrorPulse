@@ -7,6 +7,21 @@ namespace MirrorPulse.Core.State;
 
 public sealed partial class MirrorPulseProductCatalog
 {
+    /// <summary>Retains every original observation while proving an update chain has no net new file content.</summary>
+    public async Task<MirrorPulseJournalCoalescingExecution> PrepareJournalCoalescingObservedExecutionAsync(
+        MirrorPulseJournalCoalescingPlan plan, IReadOnlyList<MirrorPulseWorkerChangeCommand> completeWindow,
+        string expectedRevision, MirrorPulseCoalescingObservedContent observedContent, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(plan); ArgumentNullException.ThrowIfNull(plan.Members);
+        ArgumentNullException.ThrowIfNull(completeWindow); ArgumentNullException.ThrowIfNull(observedContent);
+        plan = plan with { Members = Array.AsReadOnly(plan.Members.ToArray()) };
+        var window = completeWindow.ToArray();
+        var execution = MirrorPulseJournalCoalescingExecutionPlanner.Create(plan, window, expectedRevision, observedContent: observedContent);
+        _ = await PrepareJournalCoalescingCoreAsync(plan, [], cancellationToken, (execution, window)).ConfigureAwait(false);
+        return await ReadJournalCoalescingExecutionAsync(plan.PlanId, cancellationToken).ConfigureAwait(false)
+            ?? throw new InvalidDataException("The observed coalesced execution is missing.");
+    }
+
     /// <summary>Atomically reserves original journal IDs, final content and every remote-effect ID.</summary>
     /// <remarks>A new decision must contain only never-prepared original mutations. The complete
     /// official window and upload-time binding are validated before any reservation. A failure

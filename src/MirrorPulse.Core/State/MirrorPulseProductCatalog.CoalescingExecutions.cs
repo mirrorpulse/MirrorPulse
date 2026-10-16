@@ -52,6 +52,7 @@ public sealed partial class MirrorPulseProductCatalog
             OriginalMutations = await ValidateCoalescingExecutionOriginalsAsync(plan, execution,
                 transaction, cancellationToken, window).ConfigureAwait(false),
         };
+        await ValidateCoalescingObservedContentAsync(plan, execution, transaction, cancellationToken).ConfigureAwait(false);
         byte[] payload = JsonSerializer.SerializeToUtf8Bytes(execution, TopologyJsonOptions);
         MirrorPulseJournalCoalescingExecution? replay = await ReadCoalescingExecutionCoreAsync(
             plan.PlanId, transaction, cancellationToken).ConfigureAwait(false);
@@ -163,11 +164,12 @@ public sealed partial class MirrorPulseProductCatalog
                 ?? throw new InvalidDataException("The retained coalesced execution is empty.");
             MirrorPulseJournalCoalescingPlan plan = await ReadCoalescingPlanCoreAsync(planId, transaction, token).ConfigureAwait(false);
             MirrorPulseJournalCoalescingExecution expected = MirrorPulseJournalCoalescingExecutionPlanner.FromPlan(
-                plan, execution.ExpectedRevision, execution.Content);
+                plan, execution.ExpectedRevision, execution.Content, execution.ObservedContent);
             expected = expected with
             {
                 OriginalMutations = await ValidateCoalescingExecutionOriginalsAsync(plan, execution, transaction, token).ConfigureAwait(false),
             };
+            await ValidateCoalescingObservedContentAsync(plan, expected, transaction, token).ConfigureAwait(false);
             if (!JsonSerializer.SerializeToUtf8Bytes(expected, TopologyJsonOptions).AsSpan().SequenceEqual(payload))
                 throw new InvalidDataException("The retained execution does not follow its original coalescing decision.");
         }
