@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using CfSharp;
@@ -125,17 +126,28 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
                                 paths.SyncRootPath, paths.DataRootPath, _ => true, seedCompletion, mutations: remote, ranges: remote,
                                 directories: remote, fileSystem: fileSystem);
                             await seedPump.StartAsync(timeout.Token);
+                            long? quietSince = null;
                             while (true)
                             {
                                 if (remote.UploadedOperations.Count == 1)
                                 {
                                     var seeded = (await catalog.ReadJournalCoalescingPlansAsync(timeout.Token)).Single();
+                                    var acceptedSnapshot = await fileSystem.GetFile("Docs/coalesced.txt").InspectAsync(timeout.Token);
                                     await using var checking = await state.OpenStore.BeginTransactionAsync(timeout.Token);
                                     bool pending = false;
                                     foreach (var member in seeded.Members)
                                         pending |= await checking.Operations.GetAsync(member.OperationId, timeout.Token) is not null;
+                                    pending |= (await checking.Operations.ListByItemIdAsync(seeded.ItemId, 1, timeout.Token)).Count != 0;
+                                    if (acceptedSnapshot.ItemId is { } acceptedItemId && acceptedItemId != seeded.ItemId)
+                                        pending |= (await checking.Operations.ListByItemIdAsync(acceptedItemId, 1, timeout.Token)).Count != 0;
                                     await checking.RollbackAsync(timeout.Token);
-                                    if (!pending) { seedPlanId = seeded.PlanId; break; }
+                                    if (pending) quietSince = null;
+                                    else
+                                    {
+                                        quietSince ??= Stopwatch.GetTimestamp();
+                                        if (Stopwatch.GetElapsedTime(quietSince.Value) >= TimeSpan.FromSeconds(1))
+                                        { seedPlanId = seeded.PlanId; break; }
+                                    }
                                 }
                                 await Task.Delay(25, timeout.Token);
                             }
@@ -152,6 +164,8 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
                         File.Move(middle, file);
                         while ((window = await moveSource.ReadPendingAsync(timeout.Token)).ReadyCommands.Count(command => command.Kind == MirrorPulseWorkerChangeKind.Move) < 2)
                             await Task.Delay(25, timeout.Token);
+                        TestContext.WriteLine("RoundTripOriginalWindow: " + string.Join(",", window.CompleteWindow!.Select(command =>
+                            $"sequence={command.Sequence};kind={command.Kind};sameItem={command.ItemId == window.ReadyCommands[0].ItemId}")));
                         remote.Seed("concurrent remote bytes"u8.ToArray());
                     }
                 }
