@@ -429,7 +429,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         {
             try
             {
-                RemoveKnownRegisteredFixturePlaceholdersForCleanup(directory, paths.SyncRootPath, caller.User!,
+                await RemoveKnownRegisteredFixturePlaceholdersForCleanupAsync(directory, paths, caller.User!,
                     ["Docs", "Docs/left", "Docs/right", "Docs/right/moved"],
                     ["Docs/remote.bin", "Docs/REMOTE.bin", "Docs/right/remote.bin", "Docs/left/cold.bin", "Docs/right/moved/cold.bin"]);
             }
