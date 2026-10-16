@@ -135,10 +135,11 @@ public sealed partial class MirrorPulseProductCatalog
             query.Parameters.AddWithValue("$id", operationId.ToString("D"));
             await using SqliteDataReader reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
             if (!await reader.ReadAsync(token).ConfigureAwait(false)) return null;
-            start = ReadNamespaceMovePayload<MirrorPulseNamespaceMemberMoveStart>((byte[])reader[1], (byte[])reader[2], 4096,
+            start = ReadNamespaceMovePayload<MirrorPulseNamespaceMemberMoveStart>((byte[])reader[1], (byte[])reader[2], NamespaceMemberMoveStartPayloadLimit,
                 value =>
                 {
-                    if (value.Version != 1 || value.OperationId != operationId || value.StartedAt == default)
+                    ValidateNamespaceMemberMoveStart(value);
+                    if (value.OperationId != operationId)
                         throw new ArgumentException("The retained move start is invalid.");
                 });
             if (reader.GetString(0) != operationId.ToString("D")) throw new InvalidDataException("The move start index is invalid.");
@@ -146,6 +147,8 @@ public sealed partial class MirrorPulseProductCatalog
         var intent = await ReadNamespaceMemberMoveCoreAsync(operationId, transaction, token, validateRelocationChain).ConfigureAwait(false)
             ?? throw new InvalidDataException("The start lost its original move intent.");
         if (start.StartedAt < intent.PreparedAt) throw new InvalidDataException("The start predates its original move admission.");
+        if (start.Version == 2 && intent.RemoteEntry is null)
+            throw new InvalidDataException("A retained ordinary move start cannot acquire a remote projection baseline.");
         return start;
     }
 

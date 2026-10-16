@@ -106,8 +106,9 @@ public sealed partial class MirrorPulseProductCatalog
     {
         var start = await ReadNamespaceMemberMoveStartCoreAsync(intent.OperationId, transaction, token, false).ConfigureAwait(false)
             ?? throw new InvalidOperationException("Remote rejection cannot invent a before-native start.");
+        string? originalOfficialRevision = start.Version == 2 ? start.OriginalOfficialRemoteRevision : intent.RemoteEntry?.PreviousRemoteRevision;
         if (intent.RemoteEntry is not { } remote || rejection.OperationId != intent.OperationId || rejection.ConflictDetectedAt < start.StartedAt ||
-            rejection.NativeRemoteRevision != remote.OriginalRemoteRevision || rejection.OfficialRemoteRevision != remote.PreviousRemoteRevision)
+            rejection.NativeRemoteRevision != remote.OriginalRemoteRevision || rejection.OfficialRemoteRevision != originalOfficialRevision)
             throw new InvalidOperationException("Remote rejection must retain the original start, native identity and unmoved official revision.");
         if (intent.DirectoryMoveEvidence is not null &&
             await ReadNamespaceDirectoryMoveSnapshotCoreAsync(intent.OperationId, transaction, token).ConfigureAwait(false) is null)

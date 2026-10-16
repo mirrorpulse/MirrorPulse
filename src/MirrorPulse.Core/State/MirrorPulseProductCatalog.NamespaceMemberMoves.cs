@@ -52,7 +52,13 @@ public sealed record MirrorPulseNamespaceMemberMoveIntent(int Version, Guid Oper
 }
 
 /// <summary>A durable before-native start; it is not evidence that the move occurred.</summary>
-public sealed record MirrorPulseNamespaceMemberMoveStart(int Version, Guid OperationId, DateTimeOffset StartedAt);
+public sealed record MirrorPulseNamespaceMemberMoveStart(int Version, Guid OperationId, DateTimeOffset StartedAt)
+{
+    /// <summary>The actual official source revision observed before remote dispatch, including an explicit null in version 2.</summary>
+    /// <remarks>Version 1 did not retain this fact. A remote request's expected revision is a different value.</remarks>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? OriginalOfficialRemoteRevision { get; init; }
+}
 
 /// <summary>Read-only progress assembled from the retained move intent and durable facts.</summary>
 public sealed record MirrorPulseNamespaceMemberMoveStatus(Guid OperationId, Guid MemberId, bool IsDirectory,
@@ -161,8 +167,7 @@ public sealed partial class MirrorPulseProductCatalog
         MirrorPulseNamespaceMemberMoveStart start, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(start);
-        if (start.Version != 1 || start.OperationId == Guid.Empty || start.StartedAt == default)
-            throw new ArgumentException("A versioned before-native start is required.", nameof(start));
+        ValidateNamespaceMemberMoveStart(start);
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -171,6 +176,8 @@ public sealed partial class MirrorPulseProductCatalog
             var intent = await ReadNamespaceMemberMoveCoreAsync(start.OperationId, transaction, cancellationToken).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The move intent is missing.");
             if (start.StartedAt < intent.PreparedAt) throw new InvalidOperationException("Move execution cannot precede admission.");
+            if (start.Version == 2 && intent.RemoteEntry is null)
+                throw new InvalidOperationException("Only an original remote move may retain a pre-dispatch official revision.");
             var replay = await ReadNamespaceMemberMoveStartCoreAsync(start.OperationId, transaction, cancellationToken).ConfigureAwait(false);
             if (replay is not null)
             {
@@ -180,6 +187,7 @@ public sealed partial class MirrorPulseProductCatalog
             }
             _ = await RequireNamespaceMemberMoveExecutionCoreAsync(start.OperationId, transaction, cancellationToken).ConfigureAwait(false);
             byte[] payload = JsonSerializer.SerializeToUtf8Bytes(start, TopologyJsonOptions);
+            if (payload.Length > NamespaceMemberMoveStartPayloadLimit) throw new ArgumentException("Move start evidence must be bounded.", nameof(start));
             await using SqliteCommand insert = _connection.CreateCommand();
             insert.Transaction = transaction;
             insert.CommandText = "INSERT INTO namespace_member_move_starts(operation_id,payload,fingerprint) VALUES($id,$payload,$fingerprint);";
@@ -191,6 +199,16 @@ public sealed partial class MirrorPulseProductCatalog
             return start;
         }
         finally { _gate.Release(); }
+    }
+
+    private const int NamespaceMemberMoveStartPayloadLimit = 131_072;
+
+    private static void ValidateNamespaceMemberMoveStart(MirrorPulseNamespaceMemberMoveStart start)
+    {
+        if (start.Version is not (1 or 2) || start.OperationId == Guid.Empty || start.StartedAt == default ||
+            start.Version == 1 && start.OriginalOfficialRemoteRevision is not null ||
+            start.OriginalOfficialRemoteRevision is { } revision && (revision.Length > 16_384 || revision.Contains('\0')))
+            throw new ArgumentException("A versioned before-native start requires its bounded original evidence.", nameof(start));
     }
 
     public async Task<MirrorPulseNamespaceMemberMoveStart?> ReadNamespaceMemberMoveStartAsync(Guid operationId,
