@@ -237,3 +237,17 @@ Interrupted prefixes preserve their original binding, owner, descriptor and
 role. Registered members use their existing provenance rather than entering a
 new original capture. Capture performs no hydration, content read or ACL write;
 the subsequent native application and complete live audit remain separate.
+
+## Re-enabling an offline root
+
+Disabling a root preserves its stable identity, pending official journal IDs and
+last mutually acknowledged revisions. A running disabled root performs no source
+stat or upload. Restarting the Host does not adopt a newer source revision as its
+baseline.
+
+When the root is enabled again, the production upload pump checks the source
+against that retained baseline. Unchanged source content permits a conditional
+upload of the offline edit, followed by public native confirmation and official
+journal acknowledgement. A changed source preserves the local bytes and pending
+original operations in the conflict center without uploading over the remote
+version. Explicit user decisions are required to resolve that conflict.
