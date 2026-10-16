@@ -46,7 +46,8 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
                 string? nativeRevision = CloudPlaceholderIdentity.Decode(original.Snapshot.PlaceholderIdentity.Span).RemoteRevision;
                 var projection = await ReadProjectionAsync(intent.MemberId, token).ConfigureAwait(false);
                 RequireProjection(projection, intent, intent.Source.RelativePath);
-                if (nativeRevision != intent.RemoteEntry!.OriginalRemoteRevision || projection.RemoteRevision != intent.RemoteEntry.PreviousRemoteRevision)
+                string? originalOfficialRevision = start.Version == 2 ? start.OriginalOfficialRemoteRevision : intent.RemoteEntry!.PreviousRemoteRevision;
+                if (nativeRevision != intent.RemoteEntry!.OriginalRemoteRevision || projection.RemoteRevision != originalOfficialRevision)
                     throw new InvalidDataException("The original remote source has changed identity or official revision.");
                 if (string.Equals(intent.Source.RelativePath, intent.Target.RelativePath, StringComparison.OrdinalIgnoreCase))
                     await RequireActualRemoteSpellingAsync(sourceParent, intent.Source.RelativePath, token).ConfigureAwait(false);

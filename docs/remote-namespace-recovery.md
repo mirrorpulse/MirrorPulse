@@ -82,7 +82,7 @@ returns history after validating its original batch reference.
 
 ## Preserved, unmoved conflicts
 
-Catalog schema 61 retains a separate immutable remote rejection. `RejectRemoteAsync`
+Catalog schema 62 retains a separate immutable remote rejection. `RejectRemoteAsync`
 requires the original batch boundary and start, a matching unresolved decoded SDK
 conflict, and fresh original child and parent bindings, protection and source
 projection. Case-only movement requires the actual old spelling. A directory also
@@ -125,8 +125,20 @@ position, identity and before-native start. After SDK execution, the driver veri
 the actual target and official projection or the durable conflict and unchanged source.
 An Adapter checkpoint is published only after this product settlement. Recovery after an
 SDK commit settles the retained entry before allowing a later entry or cursor publication.
-An existing start without committed SDK progress remains uncertain and cannot authorize
-another native dispatch.
+A start without committed SDK progress requires explicit outcome recovery. A version 2
+start retains the actual official source revision observed before dispatch, separately
+from the remote request's expected revision. A stale request can therefore become a
+durable rejection against the unchanged actual source, without retaining its own fence
+forever or rewriting either opaque revision.
+
+The driver may resume an unmoved version 2 start only after fresh checks of its original
+native binding, identity revision, source spelling, parents, protection epochs and actual
+official revision. Directory recovery also requires the original public move proof to
+report `NotMoved` and validates every sealed descendant. The actor, current role and
+parent guards remain held while the SDK applies the original entry. The first start is
+immutable. A moved, replaced, missing, reprotected or otherwise uncertain source cannot
+use this route. Legacy starts remain readable and acquire no fabricated revision evidence.
+Native success before SDK batch-progress commit still requires a separate recovery path.
 
 Polling may reconstruct its durable original batch before checking the ordinary polling
 fence. Its explicit replay predicate admits only the batch owning the pending remote move;

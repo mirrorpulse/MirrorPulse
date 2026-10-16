@@ -6,12 +6,12 @@ using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.CloudFiles.CfSharp;
 
-internal enum MirrorPulseRemoteNamespaceBatchCheckpoint { AfterSdkApply }
+internal enum MirrorPulseRemoteNamespaceBatchCheckpoint { AfterMoveStart, AfterSdkApply }
 
 /// <summary>Admits and settles one original SDK entry before any Adapter cursor can be published.</summary>
 /// <remarks>The current managed path supports moves. Other entry kinds remain closed until
 /// their birth, replacement and retirement lifecycles are connected. An uncertain native start
-/// is retained for recovery and never grants another dispatch.</remarks>
+/// requires fresh original outcome recovery and never grants blind redispatch.</remarks>
 [SupportedOSPlatform("windows10.0.26100")]
 internal sealed class MirrorPulseRemoteNamespaceBatchDriver(
     CloudFileSystem fileSystem, MirrorPulseCfSharpStateSession state, MirrorPulseProductCatalog catalog,
@@ -34,6 +34,7 @@ internal sealed class MirrorPulseRemoteNamespaceBatchDriver(
         if (batch.Changes.Any(change => change.Kind != CloudRemoteChangeKind.Move))
             throw new NotSupportedException("This managed remote batch requires a birth, replacement or retirement lifecycle.");
         int count = await ReadProgressAsync(batch, token).ConfigureAwait(false);
+        CloudRemoteApplyResult? recoveredResult = null;
         // No later native entry may overtake an unsettled product entry after a crash.
         for (int ordinal = 0; ordinal < count; ordinal++)
         {
@@ -62,11 +63,16 @@ internal sealed class MirrorPulseRemoteNamespaceBatchDriver(
             }
             if (await IsSettledAsync(intent.OperationId, token).ConfigureAwait(false))
                 throw new InvalidDataException("Product move settlement is ahead of its original SDK progress.");
-            // BeginRemoteAsync refuses an existing start, including an SDK failure whose native
-            // result has not yet been established. Do not blind-replay that operation.
-            await _moves.BeginRemoteAsync(intent.OperationId, instance, batch, count, token).ConfigureAwait(false);
+            if (await catalog.ReadNamespaceMemberMoveStartAsync(intent.OperationId, token).ConfigureAwait(false) is null)
+            {
+                await _moves.BeginRemoteAsync(intent.OperationId, instance, batch, count, token).ConfigureAwait(false);
+                if (checkpoint is not null)
+                    await checkpoint(MirrorPulseRemoteNamespaceBatchCheckpoint.AfterMoveStart, token).ConfigureAwait(false);
+            }
+            else
+                recoveredResult = await _moves.ResumeUnmovedRemoteAsync(intent.OperationId, instance, batch, count, options, token).ConfigureAwait(false);
         }
-        var result = await actor.RunAsync(async admitted =>
+        var result = recoveredResult ?? await actor.RunAsync(async admitted =>
         {
             CloudRemoteApplyResult applied = null!;
             await execution.RunNamespaceOperationAsync(async () => applied = await fileSystem.ApplyRemoteChangesAsync(

@@ -16,14 +16,18 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
     }
 
     private async ValueTask<MirrorPulseNamespaceMemberMoveStart> BeginRemoteAdmittedAsync(Guid operationId,
-        RemoteMoveRequest request, CancellationToken token)
+        RemoteMoveRequest request, CancellationToken token, bool recoverUnmovedStart = false,
+        Func<CancellationToken, ValueTask>? dispatch = null)
     {
         _actor.AssertAccess();
         var intent = await _catalog.ValidateNamespaceMemberMoveExecutionAsync(operationId, token).ConfigureAwait(false);
         RequireRemoteRequestReplay(intent, request);
         RequireActiveRemoteRoute(intent);
-        if (await _catalog.ReadNamespaceMemberMoveStartAsync(operationId, token).ConfigureAwait(false) is not null)
+        var originalStart = await _catalog.ReadNamespaceMemberMoveStartAsync(operationId, token).ConfigureAwait(false);
+        if (!recoverUnmovedStart && originalStart is not null)
             throw new InvalidOperationException("An existing remote start requires original outcome recovery before another dispatch.");
+        if (recoverUnmovedStart && originalStart?.Version != 2)
+            throw new InvalidOperationException("Original outcome recovery requires its retained actual pre-dispatch revision.");
         await RequireRemoteProgressAsync(request, completed: false, token).ConfigureAwait(false);
         var childProof = await ReadProofAsync(intent.MemberId, intent.ProtectionId, intent, token).ConfigureAwait(false);
         var sourceProof = await ReadProofAsync(intent.Source.ParentMemberId, intent.Source.ParentProtectionId, intent, token).ConfigureAwait(false);
@@ -48,11 +52,23 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
                 throw new InvalidDataException("The original remote move identity changed before its start.");
             var originalProjection = await ReadProjectionAsync(intent.MemberId, token).ConfigureAwait(false);
             RequireProjection(originalProjection, intent, intent.Source.RelativePath);
+            if (recoverUnmovedStart && originalProjection.RemoteRevision != originalStart!.OriginalOfficialRemoteRevision)
+                throw new InvalidDataException("The official source changed after the retained remote start.");
+            if (recoverUnmovedStart && string.Equals(intent.Source.RelativePath, intent.Target.RelativePath, StringComparison.OrdinalIgnoreCase))
+                await RequireActualRemoteSpellingAsync(sourceParent, intent.Source.RelativePath, token).ConfigureAwait(false);
             if (!string.Equals(intent.Source.RelativePath, intent.Target.RelativePath, StringComparison.OrdinalIgnoreCase) &&
                 (await target.InspectAsync(token).ConfigureAwait(false)).Exists)
                 throw new IOException("The original remote move target is occupied.");
             if (member.IsDirectory)
             {
+                if (recoverUnmovedStart)
+                {
+                    var proof = CloudDirectoryMoveProof.Decode(Convert.FromBase64String(intent.DirectoryMoveEvidence!));
+                    RequireDirectoryMoveProof(proof, intent);
+                    var recovered = await ((CloudDirectory)source).ReconcileMoveAsync(proof, token).ConfigureAwait(false);
+                    if (recovered.Outcome != CloudDirectoryMoveReconciliationOutcome.NotMoved || recovered.NativeMoveObserved || recovered.DurableProjectionCommitted)
+                        throw new InvalidDataException("The original public directory proof does not establish an unmoved source.");
+                }
                 var tree = await _catalog.ReadNamespaceDirectoryMoveSnapshotAsync(operationId, token).ConfigureAwait(false)
                     ?? throw new InvalidDataException("The original remote directory has no sealed subtree.");
                 await using var objects = await OpenDirectoryMoveObjectsAsync(tree.Entries, intent, atTarget: false, token).ConfigureAwait(false);
@@ -64,9 +80,41 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
             await RequireUnchangedAdmissionAsync(intent, childProof, sourceProof, targetProof, token).ConfigureAwait(false);
             MirrorPulseNamespaceBirthProtectionVerifier.RequireUnchangedParent(beforeSource, await sourceLease.InspectAsync(token).ConfigureAwait(false));
             MirrorPulseNamespaceBirthProtectionVerifier.RequireUnchangedParent(beforeTarget, await targetLease.InspectAsync(token).ConfigureAwait(false));
-            result = await _catalog.RecordNamespaceMemberMoveStartAsync(new(1, operationId, DateTimeOffset.UtcNow), token).ConfigureAwait(false);
+            var finalProjection = await ReadProjectionAsync(intent.MemberId, token).ConfigureAwait(false);
+            RequireProjection(finalProjection, intent, intent.Source.RelativePath);
+            if (finalProjection.RemoteRevision != originalProjection.RemoteRevision)
+                throw new InvalidDataException("The official source revision changed before the original remote start.");
+            result = originalStart ?? await _catalog.RecordNamespaceMemberMoveStartAsync(new(2, operationId, DateTimeOffset.UtcNow)
+            { OriginalOfficialRemoteRevision = finalProjection.RemoteRevision }, token).ConfigureAwait(false);
+            if (dispatch is not null)
+            {
+                // Retain the actor, current namespace role and original parent guards across
+                // dispatch. Fresh source inspection released its child handle for the SDK move.
+                await RequireRemoteProgressAsync(request, completed: false, token).ConfigureAwait(false);
+                if (await _catalog.ReadNamespaceMemberMoveObservationAsync(operationId, token).ConfigureAwait(false) is not null ||
+                    await _catalog.ReadNamespaceMemberMoveProjectionAsync(operationId, token).ConfigureAwait(false) is not null)
+                    throw new InvalidDataException("A remote start with successful move evidence cannot dispatch from its source.");
+                await dispatch(token).ConfigureAwait(false);
+            }
         }).ConfigureAwait(false);
         return result;
+    }
+
+    /// <summary>Resumes only an original start whose complete fresh evidence proves the native move did not occur.</summary>
+    /// <remarks>This is a source recovery boundary, not blind replay. A moved, missing, replaced,
+    /// case-renamed, reprotected or otherwise uncertain object remains fenced.</remarks>
+    internal ValueTask<CloudRemoteApplyResult> ResumeUnmovedRemoteAsync(Guid operationId, InstanceId instanceId,
+        CloudRemoteChangeBatch batch, int ordinal, CloudRemoteApplyOptions options, CancellationToken cancellationToken)
+    {
+        var request = new RemoteMoveRequest(instanceId, batch, ordinal); _ = RequireRemoteChange(request);
+        return _actor.RunAsync(async token =>
+        {
+            CloudRemoteApplyResult result = null!;
+            _ = await BeginRemoteAdmittedAsync(operationId, request, token, recoverUnmovedStart: true,
+                dispatch: async admitted => result = await _fileSystem.ApplyRemoteChangesAsync(batch,
+                    options with { MaximumEntries = 1 }, admitted).ConfigureAwait(false)).ConfigureAwait(false);
+            return result;
+        }, cancellationToken);
     }
 
     /// <summary>Settles the original batch's actual target using retained bindings and public CfSharp progress.</summary>
