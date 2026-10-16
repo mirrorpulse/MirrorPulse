@@ -52,23 +52,28 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
         return await _actor.RunAsync(token => ExecuteAdmittedAsync(operationId, token), cancellationToken).ConfigureAwait(false);
     }
 
-    private async ValueTask<MirrorPulseNamespaceMemberMoveCompletion> ExecuteAdmittedAsync(Guid operationId, CancellationToken token)
+    private async ValueTask<MirrorPulseNamespaceMemberMoveCompletion> ExecuteAdmittedAsync(Guid operationId, CancellationToken token,
+        bool observeRemoteOnly = false)
     {
         _actor.AssertAccess();
         // A completed replay returns history only, without inspecting or mutating today's path.
         var completed = await _catalog.ReadNamespaceMemberMoveCompletionAsync(operationId, token).ConfigureAwait(false);
         if (completed is not null) return completed;
         var intent = await _catalog.ValidateNamespaceMemberMoveExecutionAsync(operationId, token).ConfigureAwait(false);
-        if (intent.RemoteEntry is not null)
+        if (intent.RemoteEntry is not null && !observeRemoteOnly)
             throw new InvalidOperationException("A remote move requires its original CfSharp batch owner.");
+        if (observeRemoteOnly && intent.RemoteEntry is null)
+            throw new InvalidOperationException("Remote settlement requires its original remote admission.");
         var member = await _catalog.ReadNamespaceMemberAsync(intent.MemberId, token).ConfigureAwait(false)
             ?? throw new FileNotFoundException("The admitted move member is missing.");
         if (member.IsDirectory)
-            return await ExecuteDirectoryMoveAdmittedAsync(intent, token).ConfigureAwait(false);
+            return await ExecuteDirectoryMoveAdmittedAsync(intent, token, observeRemoteOnly).ConfigureAwait(false);
         var childProof = await ReadProofAsync(member.MemberId, intent.ProtectionId, intent, token).ConfigureAwait(false);
         var sourceProof = await ReadProofAsync(intent.Source.ParentMemberId, intent.Source.ParentProtectionId, intent, token).ConfigureAwait(false);
         var targetProof = await ReadProofAsync(intent.Target.ParentMemberId, intent.Target.ParentProtectionId, intent, token).ConfigureAwait(false);
         var start = await _catalog.ReadNamespaceMemberMoveStartAsync(operationId, token).ConfigureAwait(false);
+        if (observeRemoteOnly && start is null)
+            throw new InvalidDataException("Remote settlement cannot invent a before-native start.");
         CloudFile source = _fileSystem.GetFile(intent.Source.RelativePath);
         CloudFile moved = _fileSystem.GetFile(intent.Target.RelativePath);
         CloudDirectory sourceParent = source.Parent ?? throw new InvalidDataException("A member requires a source parent.");
@@ -84,7 +89,14 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
             var sourceSnapshot = await source.InspectAsync(token).ConfigureAwait(false);
             var targetSnapshot = await moved.InspectAsync(token).ConfigureAwait(false);
             bool sameName = string.Equals(intent.Source.RelativePath, intent.Target.RelativePath, StringComparison.OrdinalIgnoreCase);
-            if (sourceSnapshot.Exists)
+            if (observeRemoteOnly)
+            {
+                if (start is null || !targetSnapshot.Exists || sourceSnapshot.Exists && !sameName)
+                    throw new InvalidDataException("Remote settlement requires the original start and the moved object at its admitted target.");
+                _ = await InspectChildAsync(moved, childProof, intent.Target.RelativePath, intent, token).ConfigureAwait(false);
+                if (sameName) await RequireActualTargetSpellingAsync(targetParent, intent, token).ConfigureAwait(false);
+            }
+            else if (sourceSnapshot.Exists)
             {
                 _ = await InspectChildAsync(source, childProof, intent.Source.RelativePath, intent, token).ConfigureAwait(false);
                 if (targetSnapshot.Exists && !sameName)
@@ -98,17 +110,19 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
             }
             // Once the original object is verified at the target, recovery drains even if the
             // client cancels. A fresh source still observes cancellation before native movement.
-            CancellationToken operationToken = sourceSnapshot.Exists ? token : CancellationToken.None;
+            CancellationToken operationToken = !observeRemoteOnly && sourceSnapshot.Exists ? token : CancellationToken.None;
             // Verify the official item before a native write. A path alone is never recovery evidence.
             var projectedBefore = await ReadProjectionAsync(member.MemberId, operationToken).ConfigureAwait(false);
-            RequireProjection(projectedBefore, intent, sourceSnapshot.Exists ? intent.Source.RelativePath : null);
+            RequireProjection(projectedBefore, intent, observeRemoteOnly ? intent.Target.RelativePath : sourceSnapshot.Exists ? intent.Source.RelativePath : null);
+            if (observeRemoteOnly && projectedBefore.RemoteRevision != intent.RemoteEntry!.RemoteRevision)
+                throw new InvalidDataException("The original remote move has not projected its incoming revision.");
             await RequireUnchangedAdmissionAsync(intent, childProof, sourceProof, targetProof, operationToken).ConfigureAwait(false);
             MirrorPulseNamespaceBirthProtectionVerifier.RequireUnchangedParent(sourceBefore, await sourceLease.InspectAsync(operationToken).ConfigureAwait(false));
             MirrorPulseNamespaceBirthProtectionVerifier.RequireUnchangedParent(targetBefore, await targetLease.InspectAsync(operationToken).ConfigureAwait(false));
             if (start is null)
                 await _catalog.RecordNamespaceMemberMoveStartAsync(new(1, operationId, DateTimeOffset.UtcNow), token).ConfigureAwait(false);
 
-            if (sourceSnapshot.Exists || !string.Equals(projectedBefore.RelativePath?.Replace('\\', '/'), intent.Target.RelativePath, StringComparison.OrdinalIgnoreCase))
+            if (!observeRemoteOnly && (sourceSnapshot.Exists || !string.Equals(projectedBefore.RelativePath?.Replace('\\', '/'), intent.Target.RelativePath, StringComparison.OrdinalIgnoreCase)))
             {
                 // CfSharp owns projection recovery if a previous native move left the source absent.
                 // Its public operation ignores cancellation for durable work after native success.

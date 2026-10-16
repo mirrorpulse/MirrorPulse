@@ -36,6 +36,28 @@ Native observations retain the original placeholder identity revision, while the
 official projection must match the incoming batch revision. These observations
 do not authorize acknowledging a local content upload.
 
+## Remote start and settlement
+
+`BeginRemoteAsync` checks the exact public batch boundary, both protected parents,
+the original child identity and projection, and the sealed directory subtree
+before recording a start. An existing start requires outcome recovery; it does
+not authorize dispatching again. Offline or rerouted roots retain their original
+intent without entering native work.
+
+After the original CfSharp batch has processed this entry, `SettleRemoteAsync`
+checks its public fingerprint, entry count, ordinal and last change ID. It then
+inspects the original binding at the target and commits product membership using
+the existing move receipts. It never issues a second native move. Case-only file
+renames also require the actual target spelling from public local enumeration.
+Directory settlement uses the original public move proof and CfSharp's subtree
+path reconciliation. A missing original start cannot be recreated after movement.
+
+Public progress counts durable conflicts too. It is only a sequencing check;
+the fresh native binding, original identity, parent protection and incoming
+official revision must also agree. These APIs do not resolve a remote conflict,
+publish an Adapter cursor, or acknowledge local content. A completed replay
+returns history after validating its original batch reference.
+
 ## Integration still in progress
 
 Production remote batch dispatch does not yet use these admissions. Remote birth,

@@ -6,7 +6,7 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
 {
     private async ValueTask<MirrorPulseNamespaceMemberMoveCompletion> ExecuteDirectoryMoveAdmittedAsync(
-        MirrorPulseNamespaceMemberMoveIntent intent, CancellationToken token)
+        MirrorPulseNamespaceMemberMoveIntent intent, CancellationToken token, bool observeRemoteOnly = false)
     {
         _actor.AssertAccess();
         var snapshot = await _catalog.ReadNamespaceDirectoryMoveSnapshotAsync(intent.OperationId, token).ConfigureAwait(false)
@@ -18,6 +18,8 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
         var sourceProof = await ReadProofAsync(intent.Source.ParentMemberId, intent.Source.ParentProtectionId, intent, token).ConfigureAwait(false);
         var targetProof = await ReadProofAsync(intent.Target.ParentMemberId, intent.Target.ParentProtectionId, intent, token).ConfigureAwait(false);
         var start = await _catalog.ReadNamespaceMemberMoveStartAsync(intent.OperationId, token).ConfigureAwait(false);
+        if (observeRemoteOnly && start is null)
+            throw new InvalidDataException("Remote directory settlement cannot invent a before-native start.");
         CloudDirectory source = _fileSystem.GetDirectory(intent.Source.RelativePath);
         CloudDirectory target = _fileSystem.GetDirectory(intent.Target.RelativePath);
         CloudDirectory sourceParent = source.Parent ?? throw new InvalidDataException("A controlled directory requires a source parent.");
@@ -42,7 +44,10 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
                 var recovered = await source.ReconcileMoveAsync(proof, token).ConfigureAwait(false);
                 if (recovered.Outcome == CloudDirectoryMoveReconciliationOutcome.NotMoved &&
                     !recovered.NativeMoveObserved && !recovered.DurableProjectionCommitted)
+                {
+                    if (observeRemoteOnly) throw new InvalidOperationException("The original remote directory has not moved.");
                     atTarget = false;
+                }
                 else
                 {
                     RequireSuccessfulDirectoryReconciliation(recovered);
@@ -72,6 +77,7 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
             // The external parent guards, role and actor remain held across the operation.
             if (publicResult is null)
             {
+                if (observeRemoteOnly) throw new InvalidOperationException("Remote settlement cannot issue a second directory move.");
                 var moved = await source.MoveToAsync(targetParent, TargetName(intent), new CloudMoveOptions(proof), token).ConfigureAwait(false);
                 publicResult = moved.DirectoryReconciliation
                     ?? throw new InvalidDataException("CfSharp did not return directory reconciliation evidence.");
