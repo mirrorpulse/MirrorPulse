@@ -38,6 +38,41 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
     }
 
     [TestMethod]
+    public async Task ReenableQuietObservationUsesOfficialJournalQueriesWithoutWaitingForANotification()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "MirrorPulse-tests", Guid.NewGuid().ToString("N"));
+        var paths = new MirrorPulseStoragePaths(Path.Combine(directory, "sync"), Path.Combine(directory, "data"));
+        Guid original = Guid.NewGuid(), item = Guid.NewGuid(), unrelated = Guid.NewGuid();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        try
+        {
+            Directory.CreateDirectory(paths.SyncRootPath);
+            await using var store = await MirrorPulseCfSharpStateStoreFactory.Create(paths).OpenAsync(new(paths.SyncRootPath), deadline.Token);
+            Assert.IsFalse(await ReenableJournalContainsAsync(store, [original], [item], deadline.Token));
+            await using (var transaction = await store.BeginTransactionAsync(deadline.Token))
+            {
+                await transaction.Operations.EnqueueAsync(new(original, CloudStateOperationKind.MetadataUpdate, null, [1], DateTimeOffset.UtcNow, 0, null, 0), deadline.Token);
+                await transaction.Operations.EnqueueAsync(new(unrelated, CloudStateOperationKind.MetadataUpdate, null, [1], DateTimeOffset.UtcNow, 0, null, 0), deadline.Token);
+                await transaction.CommitAsync(deadline.Token);
+            }
+            Assert.IsTrue(await ReenableJournalContainsAsync(store, [original], [item], deadline.Token));
+            await using (var transaction = await store.BeginTransactionAsync(deadline.Token))
+            {
+                await transaction.Operations.RemoveAsync(original, deadline.Token); await transaction.CommitAsync(deadline.Token);
+            }
+            Assert.IsFalse(await ReenableJournalContainsAsync(store, [original], [item], deadline.Token));
+            await using (var transaction = await store.BeginTransactionAsync(deadline.Token))
+            {
+                await transaction.Items.UpsertAsync(new(item, "source:item", "Docs/reenabled.txt", CloudItemKind.File, "base", 42, false, DateTimeOffset.UtcNow), deadline.Token);
+                await transaction.Operations.EnqueueAsync(new(Guid.NewGuid(), CloudStateOperationKind.ContentUpdate, item, [1], DateTimeOffset.UtcNow, 0, null, 0), deadline.Token);
+                await transaction.CommitAsync(deadline.Token);
+            }
+            Assert.IsTrue(await ReenableJournalContainsAsync(store, [original], [item], deadline.Token));
+        }
+        finally { if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true); }
+    }
+
+    [TestMethod]
     [DoNotParallelize]
     [TestCategory("NativeCloudFiles")]
     [SupportedOSPlatform("windows10.0.26100")]
@@ -95,6 +130,13 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
                 {
                     (await new MirrorPulseRootPopulationCoordinator(fileSystem, feed).PopulateAsync(router, deadline.Token)).ThrowIfAnyFailed();
                     await File.WriteAllTextAsync(file, "accepted baseline", deadline.Token);
+                    MirrorPulseJournalUploadBatch seed;
+                    while ((seed = await source.ReadPendingAsync(deadline.Token)).CompleteWindow?
+                        .Any(command => command.RelativePath == "reenabled.txt" && !command.IsDirectory) != true)
+                        await Task.Delay(25, deadline.Token);
+                    var seedCommands = seed.CompleteWindow!.Where(command => command.RelativePath == "reenabled.txt" && !command.IsDirectory).ToArray();
+                    Guid[] seedIds = seedCommands.Select(command => command.OperationId).ToArray();
+                    Guid[] seedItems = seedCommands.Where(command => command.ItemId is not null).Select(command => command.ItemId!.Value).Distinct().ToArray();
                     await using (var seedPump = CreatePump())
                     {
                         await seedPump.StartAsync(deadline.Token);
@@ -103,7 +145,8 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
                         {
                             var snapshot = await cloud.InspectAsync(deadline.Token);
                             bool accepted = remote.Uploads.Length == 1 && snapshot.IsPlaceholder && snapshot.RemoteRevision == seedRevision;
-                            if (accepted && (await source.ReadPendingAsync(deadline.Token)).ReadyCommands.Count == 0)
+                            if (accepted && snapshot.ItemId is { } currentItem &&
+                                !await ReenableJournalContainsAsync(state.OpenStore, seedIds, seedItems.Append(currentItem), deadline.Token))
                             {
                                 quietSince ??= Stopwatch.GetTimestamp();
                                 if (Stopwatch.GetElapsedTime(quietSince.Value) >= TimeSpan.FromSeconds(1))
@@ -118,6 +161,7 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
                             await Task.Delay(25, deadline.Token);
                         }
                     }
+                    TestContext.WriteLine("ReenabledRootCheckpoint: seedUploadConfirmed=True; seedJournalDrained=True; observationUsesPublicRepositories=True.");
                     Assert.IsTrue((await catalog.ReadContentConfirmationReceiptAsync(remote.Uploads[0].Operation, deadline.Token))!.MayAcknowledge);
                     router.ReplaceRegistrations([disabled]);
                     await File.WriteAllTextAsync(file, "latest offline edit", deadline.Token);
@@ -128,6 +172,7 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
                     originals = pending.CompleteWindow!.Where(command => command.ItemId == acceptedItem)
                         .Select(command => command.OperationId).ToArray();
                     Assert.IsNotEmpty(originals); Assert.IsEmpty(pending.ReadyCommands);
+                    TestContext.WriteLine($"ReenabledRootCheckpoint: disabled=True; originalCount={originals.Length}; offlineEditObserved=True.");
                     if (remoteChanged) remote.Seed("concurrent remote edit"u8.ToArray());
                 }
                 int statBefore = remote.Stats;
@@ -156,7 +201,7 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
                     while (true)
                     {
                         bool settled = remoteChanged ? (await catalog.ReadUploadConflictsAsync(cancellationToken: deadline.Token)).Count > 0 :
-                            remote.Uploads.Length == 2 && (await source.ReadPendingAsync(deadline.Token)).ReadyCommands.Count == 0;
+                            remote.Uploads.Length == 2 && !await ReenableJournalContainsAsync(state.OpenStore, originals, [acceptedItem], deadline.Token);
                         if (settled)
                         {
                             settledSince ??= Stopwatch.GetTimestamp();
@@ -203,6 +248,16 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
             registry.Unregister(paths.SyncRootPath);
             if (Directory.Exists(directory)) Directory.Delete(directory, true);
         }
+    }
+
+    private static async Task<bool> ReenableJournalContainsAsync(ICloudStateStore store, IEnumerable<Guid> originalIds,
+        IEnumerable<Guid> itemIds, CancellationToken token)
+    {
+        await using var transaction = await store.BeginTransactionAsync(token);
+        bool pending = false;
+        foreach (Guid id in originalIds) pending |= await transaction.Operations.GetAsync(id, token) is not null;
+        foreach (Guid id in itemIds.Distinct()) pending |= (await transaction.Operations.ListByItemIdAsync(id, 1, token)).Count != 0;
+        await transaction.RollbackAsync(token); return pending;
     }
 
     private sealed class ReenableTransport(InstanceId instance) : IMirrorPulseWorkerUploadTransport, IMirrorPulseWorkerStatTransport,
