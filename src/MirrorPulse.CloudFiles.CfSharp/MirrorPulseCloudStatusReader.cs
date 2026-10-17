@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text.Json;
 using CfSharp;
 using MirrorPulse.Core.Contracts;
 
@@ -19,14 +20,21 @@ public sealed record MirrorPulseCloudStatusSnapshot(
 /// <summary>Reads CfSharp's authoritative journal, conflicts and checkpoints for product status UI.</summary>
 public static class MirrorPulseCloudStatusReader
 {
-    public static async Task<MirrorPulseCloudStatusSnapshot> ReadAsync(
+    public static Task<MirrorPulseCloudStatusSnapshot> ReadAsync(
         ICloudStateStore store,
         IEnumerable<InstanceId> instanceIds,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) => ReadAsync(store, instanceIds, [], cancellationToken);
+
+    /// <summary>Summarizes actual streamed and root-scoped checkpoints for display, without publishing or merging cursors.</summary>
+    internal static async Task<MirrorPulseCloudStatusSnapshot> ReadAsync(
+        ICloudStateStore store, IEnumerable<InstanceId> instanceIds, IEnumerable<RootRegistration> roots,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(instanceIds);
+        ArgumentNullException.ThrowIfNull(roots);
         InstanceId[] instances = instanceIds.Distinct().ToArray();
+        RootRegistration[] registrations = roots.ToArray();
         await using ICloudStateTransaction transaction = await store.BeginTransactionAsync(cancellationToken)
             .ConfigureAwait(false);
         IReadOnlyList<CloudOperationJournalEntry> pending = await transaction.Operations
@@ -36,14 +44,31 @@ public static class MirrorPulseCloudStatusReader
         var cursors = new List<MirrorPulseInstanceCursorStatus>(instances.Length);
         foreach (InstanceId instanceId in instances)
         {
+            var checkpoints = new List<(string Name, CloudStateCheckpoint Value)>();
+            string name = MirrorPulseRemoteBatchCoordinator.GetCheckpointName(instanceId);
             CloudStateCheckpoint? checkpoint = await transaction.Checkpoints.GetAsync(
-                MirrorPulseRemoteBatchCoordinator.GetCheckpointName(instanceId), cancellationToken)
+                name, cancellationToken)
                 .ConfigureAwait(false);
-            cursors.Add(checkpoint is null
-                ? new(instanceId, false, null, null)
-                : new(instanceId, true,
-                    Convert.ToHexString(SHA256.HashData(checkpoint.Value.Span))[..12],
-                    checkpoint.UpdatedAt));
+            if (checkpoint is not null) checkpoints.Add((name, checkpoint));
+            // Disabled roots keep their real checkpoints visible. Reading status never dispatches them.
+            foreach (var root in registrations.Where(root => root.InstanceId == instanceId).DistinctBy(root => root.RootId))
+            {
+                string rootName = MirrorPulseRemoteBatchCoordinator.GetCheckpointName(instanceId, root.RootId);
+                var rootCursor = await transaction.Checkpoints.GetAsync(rootName, cancellationToken).ConfigureAwait(false);
+                if (rootCursor is not null) checkpoints.Add((rootName, rootCursor));
+            }
+            if (checkpoints.Count == 0) { cursors.Add(new(instanceId, false, null, null)); continue; }
+            // Retain the existing display fingerprint for a lone streamed/legacy instance cursor.
+            // Otherwise hash the complete named checkpoint set, binding each value to its stable root.
+            byte[] displayState = checkpoints.Count == 1 && checkpoints[0].Name == name ? checkpoints[0].Value.Value.ToArray() :
+                JsonSerializer.SerializeToUtf8Bytes(new
+                {
+                    version = "MirrorPulse.InstanceCursorStatus/v1",
+                    checkpoints = checkpoints.OrderBy(item => item.Name, StringComparer.Ordinal)
+                        .Select(item => new { name = item.Name, value = item.Value.Value.ToArray() })
+                });
+            cursors.Add(new(instanceId, true, Convert.ToHexString(SHA256.HashData(displayState))[..12],
+                checkpoints.Max(item => item.Value.UpdatedAt)));
         }
 
         await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);

@@ -1107,7 +1107,8 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         public ValueTask<MirrorPulseCloudStatusSnapshot> ReadStatusAsync(
             IEnumerable<InstanceId> instanceIds,
             CancellationToken cancellationToken)
-            => WithCurrentLibraryAsync(async token => await MirrorPulseCloudStatusReader.ReadAsync(state.OpenStore, instanceIds, token).ConfigureAwait(false), cancellationToken);
+            => WithCurrentLibraryAsync(async token => await MirrorPulseCloudStatusReader.ReadAsync(
+                state.OpenStore, instanceIds, router?.Registrations ?? [], token).ConfigureAwait(false), cancellationToken);
 
         public ValueTask<CloudRemoteApplyResult> ApplyRemoteBatchAsync(
             InstanceId instanceId,

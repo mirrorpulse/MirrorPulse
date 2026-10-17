@@ -1,5 +1,15 @@
 # Root-scoped remote polling
 
+Host instance status reads the actual public streamed checkpoint and each configured
+stable root's polling checkpoint, including retained checkpoints of disabled roots.
+The displayed cursor fingerprint summarizes their named values in a canonical order;
+its timestamp is the most recent checkpoint update. Labels and enumeration order do
+not alter the summary, and a root without a checkpoint does not invent progress.
+A lone legacy/streamed checkpoint retains its existing display fingerprint. This
+summary is only for display: it does not publish an instance cursor, merge root
+cursors or authorize batch acceptance/recovery. Each apply path still validates its
+own original SDK cursor. CLI and WinUI obtain this state through the Host contract.
+
 The active poller takes one bounded root turn per enabled Adapter instance and
 rotates by stable RootId. The turn advances even when that root is fenced, its
 source fails, or an earlier apply still needs recovery. Disabled roots perform
