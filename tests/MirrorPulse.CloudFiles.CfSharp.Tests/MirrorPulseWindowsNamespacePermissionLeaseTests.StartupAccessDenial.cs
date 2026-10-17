@@ -90,9 +90,14 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 // Inject the ACL fault only after this owner's runtime has drained.
                 if (owner == 0)
                 {
-                    await runtime.DisposeAsync();
+                    // Retain only metadata and owner DACL authority while the
+                    // public SDK is connected. LIST_DIRECTORY on an offline
+                    // cloud directory can require a provider name request.
                     phase = "RetainRestorationHandle";
-                    restorationHandle = MirrorPulseWindowsNamespacePermissionLease.Open(deniedPath, target: true);
+                    restorationHandle = MirrorPulseWindowsNamespacePermissionLease.Open(deniedPath, target: true,
+                        metadataOnlyTarget: true, ownerMetadataWrite: true);
+                    phase = "DrainInitialRuntime";
+                    await runtime.DisposeAsync();
                     var deniedAccess = new DirectorySecurity();
                     deniedAccess.SetSecurityDescriptorSddlForm(original!.GetSecurityDescriptorSddlForm(AccessControlSections.Access), AccessControlSections.Access);
                     // OWNER RIGHTS disables implicit owner READ_CONTROL. The saved
@@ -110,7 +115,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         }
         catch (Exception error)
         {
-            TestContext.WriteLine($"StartupAccessDenialFailure: phase={phase}; type={error.GetType().Name}; hresult={error.HResult:X8}.");
+            TestContext.WriteLine($"StartupAccessDenialFailure: phase={phase}; type={error.GetType().Name}; hresult={error.HResult:X8}; " +
+                $"nativeErrorCode={(error as System.ComponentModel.Win32Exception)?.NativeErrorCode}.");
             throw;
         }
         finally
