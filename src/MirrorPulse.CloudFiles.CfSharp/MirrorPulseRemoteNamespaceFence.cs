@@ -26,7 +26,22 @@ public sealed class MirrorPulseRemoteNamespaceFence(MirrorPulseRootRouter router
         if (current.RootId != root.RootId || current.DirectoryName != root.DirectoryName || current.State != RootRegistrationState.Active)
             return false;
         var move = await catalog.ReadPendingNamespaceMemberMoveAsync(root.RootId, cancellationToken).ConfigureAwait(false);
-        if (move is null) return await CanPollAsync(root, cancellationToken).ConfigureAwait(false);
+        if (move is null)
+        {
+            var births = (await catalog.ReadPendingNamespaceRemoteBirthsAsync(root.InstanceId, batch.BatchId, cancellationToken).ConfigureAwait(false))
+                .Where(birth => birth.RootId == root.RootId).ToArray();
+            if (births.Length == 0) return await CanPollAsync(root, cancellationToken).ConfigureAwait(false);
+            if (births.Length != 1) return false;
+            var birth = births[0]; var original = birth.RemoteEntry!;
+            if (original.BatchFingerprint != Convert.ToHexString(batch.Fingerprint.Span) ||
+                original.BatchEntryCount != batch.Changes.Count || original.Ordinal >= batch.Changes.Count) return false;
+            var entry = batch.Changes[original.Ordinal];
+            if (entry.Kind is not (CloudRemoteChangeKind.FileUpsert or CloudRemoteChangeKind.DirectoryUpsert) ||
+                entry.ItemId != original.ItemId || entry.ChangeId != original.ChangeId || entry.RemoteId != original.RemoteId ||
+                entry.RemoteRevision != original.RemoteRevision || entry.RelativePath.Replace('\\', '/') != birth.RelativePath ||
+                (entry.ItemKind == CloudItemKind.Directory) != birth.IsDirectory) return false;
+            return await catalog.CanResumeNamespaceRemoteBirthAsync(birth, cancellationToken).ConfigureAwait(false);
+        }
         if (move.RemoteEntry is not { } remote || remote.InstanceId != root.InstanceId || remote.BatchId != batch.BatchId ||
             remote.BatchFingerprint != Convert.ToHexString(batch.Fingerprint.Span) || remote.BatchEntryCount != batch.Changes.Count ||
             remote.Ordinal >= batch.Changes.Count) return false;

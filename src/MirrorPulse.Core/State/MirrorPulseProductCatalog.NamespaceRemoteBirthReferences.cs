@@ -15,6 +15,45 @@ public sealed record MirrorPulseNamespaceRemoteBirthReference(int Version, Insta
 
 public sealed partial class MirrorPulseProductCatalog
 {
+    /// <summary>Reads a bounded set of original unregistered birth owners for one exact batch, without scanning history.</summary>
+    public async Task<IReadOnlyList<MirrorPulseNamespaceBirthIntent>> ReadPendingNamespaceRemoteBirthsAsync(InstanceId instanceId,
+        string batchId, CancellationToken cancellationToken = default)
+    {
+        ValidateRemoteBirthLookup(instanceId, batchId, 0);
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed(); using var transaction = _connection.BeginTransaction(deferred: true);
+            var ids = new List<Guid>();
+            await using (var query = _connection.CreateCommand())
+            {
+                query.Transaction = transaction;
+                query.CommandText = """
+                    SELECT r.operation_id FROM namespace_remote_birth_entries r
+                    LEFT JOIN namespace_members m ON m.birth_operation_id=r.operation_id
+                    WHERE r.instance_id=$instance AND r.batch_id=$batch AND m.member_id IS NULL
+                    ORDER BY r.ordinal LIMIT 65;
+                    """;
+                query.Parameters.AddWithValue("$instance", instanceId.ToString()); query.Parameters.AddWithValue("$batch", batchId);
+                await using var reader = await query.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+                while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false)) ids.Add(ParseNamespaceMemberId(reader.GetString(0)));
+            }
+            if (ids.Count > 64) throw new InvalidDataException("The original remote batch has too many unresolved birth owners.");
+            var births = new List<MirrorPulseNamespaceBirthIntent>(ids.Count);
+            foreach (var id in ids)
+            {
+                var birth = await ReadNamespaceBirthCoreAsync(id, transaction, cancellationToken).ConfigureAwait(false)
+                    ?? throw new InvalidDataException("The pending remote birth lost its original admission.");
+                if (birth.RemoteEntry is not { } remote || remote.InstanceId != instanceId || remote.BatchId != batchId)
+                    throw new InvalidDataException("The pending remote birth index changed its owner.");
+                await RequireNamespaceBirthReservationAsync(birth, transaction, cancellationToken).ConfigureAwait(false);
+                births.Add(birth);
+            }
+            transaction.Commit(); return births.AsReadOnly();
+        }
+        finally { _gate.Release(); }
+    }
+
     /// <summary>Reads original remote birth admission by immutable entry ownership, including registered history.</summary>
     public async Task<MirrorPulseNamespaceBirthIntent?> ReadNamespaceRemoteBirthAsync(InstanceId instanceId,
         string batchId, int ordinal, CancellationToken cancellationToken = default)

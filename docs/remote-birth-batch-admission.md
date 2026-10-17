@@ -25,7 +25,33 @@ Actual native work must remain with the SDK public apply/recovery path.
 Tests exercise real product SQLite owners, atomic rollback, identity and entry
 collisions, original and born direct parents, reservation transfer at registration,
 corrupt lineage and migration. They are catalog-boundary tests and supply no
-native success evidence. The managed remote batch driver still supports moves
-only. Connecting birth execution, durable conflict settlement, original-owner
-fence recovery, role handoff and default Host composition remains necessary
-before this admission becomes a delivered remote birth lifecycle.
+native success evidence.
+
+The managed remote batch driver now routes new explicit-identity file/directory
+upserts through an SDK-owned birth coordinator. Under the shared namespace actor
+and original protected-parent guard, it commits the original admission, plan and
+start, applies the unchanged SDK batch one entry at a time, checks the public SDK
+prefix and item projection, and records the first native object before protection
+and membership. The Adapter cursor remains with the outer batch coordinator and
+is published only after registration. No preliminary placeholder is created.
+
+A committed first observation can be settled after reopening the product/SDK
+owners: the current object must retain that exact native binding. A registered
+directory can then act as the actual direct parent of the next file entry. The
+original batch alone can pass its own pending-birth fence; another unresolved
+birth or namespace operation keeps that root closed. Disabled roots are rejected.
+Pure public-input checks run before native admission.
+
+An existing start without a first native observation remains unresolved, even
+when the SDK prefix advanced. The implementation does not infer its original
+native object from a current matching path/identity. SDK conflicts, occupied
+replacement destinations, metadata and retirement entries also retain their
+separate lifecycle requirements. Durable birth-conflict closure, every unknown
+start cutpoint, new-role handoff and full default Host startup recovery are still
+required before the complete remote birth lifecycle is delivered.
+
+The mandatory native fixture covers SDK creation, an interruption after the first
+directory observation, two product/SDK owners under the same role, nested file
+creation, original binding preservation and registration before cursor publication.
+It is compiled locally and awaits clean native CI; managed SQLite/input checks do
+not substitute for executing it.

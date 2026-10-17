@@ -43,6 +43,27 @@ public sealed partial class MirrorPulseProductCatalog
         finally { _gate.Release(); }
     }
 
+    /// <summary>Checks that this exact unregistered remote birth is the only durable fence in its root.</summary>
+    /// <remarks>Only the original SDK entry may use this result. It grants no native or new-role authority.</remarks>
+    public async Task<bool> CanResumeNamespaceRemoteBirthAsync(MirrorPulseNamespaceBirthIntent original,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(original);
+        if (original.RemoteEntry is null) throw new ArgumentException("Recovery requires an original remote birth.", nameof(original));
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed(); using var transaction = _connection.BeginTransaction(deferred: true);
+            var retained = await ReadNamespaceBirthCoreAsync(original.OperationId, transaction, cancellationToken).ConfigureAwait(false);
+            if (retained != original || await ReadNamespaceMemberForBirthCoreAsync(original.OperationId, transaction, cancellationToken).ConfigureAwait(false) is not null)
+            { transaction.Commit(); return false; }
+            var fenced = await ReadNamespaceRootFencesCoreAsync(true, transaction, cancellationToken,
+                admittedRemoteBirthId: original.OperationId).ConfigureAwait(false);
+            transaction.Commit(); return !fenced.Contains(original.RootId);
+        }
+        finally { _gate.Release(); }
+    }
+
     private async Task<IReadOnlyList<RootId>> ReadNamespaceRootFencesAsync(bool includeUnregisteredBirths,
         CancellationToken cancellationToken)
     {
@@ -58,7 +79,7 @@ public sealed partial class MirrorPulseProductCatalog
     }
 
     private async Task<IReadOnlyList<RootId>> ReadNamespaceRootFencesCoreAsync(bool includeUnregisteredBirths,
-        SqliteTransaction transaction, CancellationToken cancellationToken, Guid? admittedRemoteMoveId = null)
+        SqliteTransaction transaction, CancellationToken cancellationToken, Guid? admittedRemoteMoveId = null, Guid? admittedRemoteBirthId = null)
     {
         HashSet<RootId> roots = (await ReadManagedRootRenamesCoreAsync(cancellationToken, transaction).ConfigureAwait(false))
             .Where(intent => intent.IsPending).Select(intent => intent.RootId).ToHashSet();
@@ -92,13 +113,13 @@ public sealed partial class MirrorPulseProductCatalog
             roots.Add(action.Child.Member.RootId!.Value);
         if (includeUnregisteredBirths)
         {
-            await AddUnregisteredBirthRootFencesAsync(roots, transaction, cancellationToken).ConfigureAwait(false);
+            await AddUnregisteredBirthRootFencesAsync(roots, transaction, cancellationToken, admittedRemoteBirthId).ConfigureAwait(false);
         }
         return Array.AsReadOnly(roots.OrderBy(root => root.Value).ToArray());
     }
 
     private async Task AddUnregisteredBirthRootFencesAsync(HashSet<RootId> roots,
-        SqliteTransaction transaction, CancellationToken token)
+        SqliteTransaction transaction, CancellationToken token, Guid? admittedRemoteBirthId = null)
     {
         var operations = new List<Guid>();
         await using (SqliteCommand query = _connection.CreateCommand())
@@ -137,7 +158,7 @@ public sealed partial class MirrorPulseProductCatalog
             {
                 throw new InvalidDataException("The pending birth lost its original name reservation.", exception);
             }
-            roots.Add(birth.RootId);
+            if (operation != admittedRemoteBirthId || birth.RemoteEntry is null) roots.Add(birth.RootId);
         }
     }
 }
