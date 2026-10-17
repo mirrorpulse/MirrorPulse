@@ -115,7 +115,8 @@ public sealed partial class MirrorPulseUploadConflictActions
         var root = _router.GetRegistration(route.InstanceId, route.RootKey);
         if (_namespaceWork is null) return new(conflict, root.RootId, null, null);
         bool pending = action == MirrorPulseConflictAction.Retry || Guid.TryParse(conflict.ChangeId, out var original) &&
-            await _catalog.ReadConflictDeletionOwnerAsync(original, token).ConfigureAwait(false) is not null;
+            (await _catalog.ReadConflictDeletionOwnerAsync(original, token).ConfigureAwait(false) is not null ||
+             await _catalog.ReadConflictLocalRemovalOwnerAsync(original, token).ConfigureAwait(false) is not null);
         return pending ? new(conflict, root.RootId, null, await _namespaceWork.EnterPendingOperationAsync(root.RootId, token).ConfigureAwait(false)) :
             new(conflict, root.RootId, _namespaceWork.Enter([root.RootId]), null);
     }
@@ -144,6 +145,12 @@ public sealed partial class MirrorPulseUploadConflictActions
         }
         var group = Guid.TryParse(conflict.ChangeId, out Guid originalId) ?
             await _catalog.ReadJournalCoalescingOwnerAsync(originalId, cancellationToken).ConfigureAwait(false) : null;
+        if (originalId != Guid.Empty && await _catalog.ReadConflictLocalRemovalOwnerAsync(originalId, cancellationToken).ConfigureAwait(false) is { } localOwner)
+        {
+            if (action != MirrorPulseConflictAction.DeleteLocal)
+                throw new InvalidOperationException("This conflict already belongs to a retained local-only choice.");
+            return await ExecuteLocalRemovalAdmittedAsync(localOwner, admittedRoot, cancellationToken).ConfigureAwait(false);
+        }
         if (Guid.TryParse(conflict.ChangeId, out Guid deletionOriginal) &&
             await _catalog.ReadConflictDeletionOwnerAsync(deletionOriginal, cancellationToken).ConfigureAwait(false) is { } deletionOwner)
         {
@@ -151,7 +158,7 @@ public sealed partial class MirrorPulseUploadConflictActions
                 throw new InvalidOperationException("This conflict already belongs to a retained deletion decision.");
             return await ApplyExistingDeletionAsync(deletionOwner, conflict, admittedRoot, cancellationToken).ConfigureAwait(false);
         }
-        if (group is not null && action is not (MirrorPulseConflictAction.Retry or MirrorPulseConflictAction.KeepLocal or MirrorPulseConflictAction.DeleteRemote))
+        if (group is not null && action is not (MirrorPulseConflictAction.Retry or MirrorPulseConflictAction.KeepLocal or MirrorPulseConflictAction.DeleteRemote or MirrorPulseConflictAction.DeleteLocal))
             throw new NotSupportedException("This coalesced decision requires a complete local group operation; no original journal ID was acknowledged.");
 
         string? preservedPath = null;
@@ -162,9 +169,14 @@ public sealed partial class MirrorPulseUploadConflictActions
         await _catalog.SaveUserCommandAsync(new(commandId, actionName, conflictId.ToString("D"), "pending"), cancellationToken).ConfigureAwait(false);
         try
         {
+            if (action == MirrorPulseConflictAction.DeleteLocal && (_localDeletion is not null || group is not null))
+            {
+                await PrepareDeletionAdmittedAsync(commandId, conflict, group, admittedRoot, true, cancellationToken).ConfigureAwait(false);
+                return await ExecuteLocalRemovalAdmittedAsync(commandId, admittedRoot, cancellationToken).ConfigureAwait(false);
+            }
             if (action == MirrorPulseConflictAction.DeleteRemote)
             {
-                await PrepareDeletionAdmittedAsync(commandId, conflict, group, admittedRoot, cancellationToken).ConfigureAwait(false);
+                await PrepareDeletionAdmittedAsync(commandId, conflict, group, admittedRoot, false, cancellationToken).ConfigureAwait(false);
                 return await ExecuteDeletionAdmittedAsync(commandId, admittedRoot, cancellationToken).ConfigureAwait(false);
             }
             if (group is not null)

@@ -107,8 +107,11 @@ fault only after its current authorized effects and original acknowledgements
 are verified. Shared official-store failures still fail the source read, and
 cancellation propagates. Diagnostics retain the plan ID, failure category and
 HRESULT without paths, content or exception text.
-Other group decisions remain pending until their complete local operation can be
-applied; rejecting an action does not acknowledge any group member.
+`DeleteLocal` uses a separate [durable local-only workflow](conflict-local-removal.md).
+It preserves the original bytes and retires the registered object before the
+whole group's acknowledgement, with no remote effect. Other group decisions
+remain pending until their complete local operation can be applied; rejecting an
+action does not acknowledge any group member.
 
 The production planner may transfer explicitly supplied original `Prepared`
 intents only when their retained execution evidence is `NeverStarted`. It commits

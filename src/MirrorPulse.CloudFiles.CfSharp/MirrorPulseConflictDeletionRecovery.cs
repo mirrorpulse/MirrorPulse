@@ -12,8 +12,11 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 [SupportedOSPlatform("windows10.0.16299")]
 internal sealed class MirrorPulseConflictDeletionRecovery(MirrorPulseProductCatalog catalog,
     Func<Guid, CancellationToken, ValueTask<MirrorPulseConflictResolution>> resume,
-    MirrorPulseRootRouter router, Func<InstanceId, bool> mayDispatch, MirrorPulseJournalPumpRunner runner, LocalRollingLogWriter log)
+    MirrorPulseRootRouter router, Func<InstanceId, bool> mayDispatch, MirrorPulseJournalPumpRunner runner, LocalRollingLogWriter log,
+    bool localOnly = false)
 {
+    private sealed record Decision(Guid CommandId, InstanceId InstanceId, string RootKey, Guid? PlanId,
+        IReadOnlyList<Guid> Originals, bool Completed);
     private Guid? _after;
     private Guid? _faultAfter;
 
@@ -27,24 +30,26 @@ internal sealed class MirrorPulseConflictDeletionRecovery(MirrorPulseProductCata
             _faultAfter = id;
             try
             {
-                var completed = await catalog.ReadConflictDeletionAsync(id, token).ConfigureAwait(false);
-                if (completed?.Phase == MirrorPulseConflictDeletionPhase.Completed) ClearCompleted(completed);
+                var completed = await ReadDecisionAsync(id, token).ConfigureAwait(false);
+                if (completed?.Completed == true) ClearCompleted(completed);
             }
             catch (Exception error) when (IsDecisionFailure(error)) { }
         }
         if (faults.Count < 64) _faultAfter = null;
-        var pending = await catalog.ReadPendingConflictDeletionsAsync(_after, token).ConfigureAwait(false);
+        var pending = localOnly ? await catalog.ReadPendingConflictLocalRemovalsAsync(_after, token).ConfigureAwait(false) :
+            await catalog.ReadPendingConflictDeletionsAsync(_after, token).ConfigureAwait(false);
         foreach (Guid id in pending)
         {
             token.ThrowIfCancellationRequested(); _after = id;
             try
             {
-                var decision = await catalog.ReadConflictDeletionAsync(id, token).ConfigureAwait(false)
+                var decision = await ReadDecisionAsync(id, token).ConfigureAwait(false)
                     ?? throw new InvalidDataException("The pending deletion decision disappeared.");
-                var root = router.GetRegistration(decision.Intent.InstanceId, decision.Intent.RootKey);
-                if (root.State != RootRegistrationState.Active || !mayDispatch(root.InstanceId)) continue;
+                var root = router.GetRegistration(decision.InstanceId, decision.RootKey);
+                if (localOnly ? root.State is not (RootRegistrationState.Active or RootRegistrationState.Disabled) :
+                    root.State != RootRegistrationState.Active || !mayDispatch(root.InstanceId)) continue;
                 _ = await resume(id, token).ConfigureAwait(false);
-                var completed = await catalog.ReadConflictDeletionAsync(id, token).ConfigureAwait(false)
+                var completed = await ReadDecisionAsync(id, token).ConfigureAwait(false)
                     ?? throw new InvalidDataException("The completed deletion decision disappeared.");
                 ClearCompleted(completed);
             }
@@ -53,7 +58,7 @@ internal sealed class MirrorPulseConflictDeletionRecovery(MirrorPulseProductCata
                 runner.RetainConflictDeletionRecoveryFault(id);
                 try
                 {
-                    await log.WriteAsync(new(LogLevel.Warning, "CloudFiles.Upload", "ConflictDeletionRecoveryFailed", DateTimeOffset.UtcNow,
+                    await log.WriteAsync(new(LogLevel.Warning, "CloudFiles.Upload", localOnly ? "ConflictLocalRemovalRecoveryFailed" : "ConflictDeletionRecoveryFailed", DateTimeOffset.UtcNow,
                         [new("commandId", id.ToString("D")), new("failureCategory", SafeDiagnosticPolicy.ClassifyFailure(error)),
                          new("hresult", error.HResult.ToString("X8", System.Globalization.CultureInfo.InvariantCulture))]), token).ConfigureAwait(false);
                 }
@@ -63,12 +68,25 @@ internal sealed class MirrorPulseConflictDeletionRecovery(MirrorPulseProductCata
         if (pending.Count < 64) _after = null;
     }
 
-    private void ClearCompleted(MirrorPulseConflictDeletion completed)
+    private async Task<Decision?> ReadDecisionAsync(Guid id, CancellationToken token)
     {
-        if (completed.Phase != MirrorPulseConflictDeletionPhase.Completed) throw new InvalidDataException("Deletion recovery did not settle the original group.");
-        runner.ClearConflictDeletionRecoveryFault(completed.Intent.CommandId);
-        foreach (Guid original in completed.Intent.OriginalOperationIds) runner.ClearRecoveredFault(original);
-        if (completed.Intent.PlanId is { } planId) runner.ClearCoalescingRecoveryFault(planId);
+        if (localOnly)
+        {
+            var value = await catalog.ReadConflictLocalRemovalAsync(id, token).ConfigureAwait(false);
+            return value is null ? null : new(value.Intent.CommandId, value.Intent.InstanceId, value.Intent.RootKey,
+                value.Intent.PlanId, value.Intent.OriginalOperationIds, value.Phase == MirrorPulseConflictLocalRemovalPhase.Completed);
+        }
+        var remote = await catalog.ReadConflictDeletionAsync(id, token).ConfigureAwait(false);
+        return remote is null ? null : new(remote.Intent.CommandId, remote.Intent.InstanceId, remote.Intent.RootKey,
+            remote.Intent.PlanId, remote.Intent.OriginalOperationIds, remote.Phase == MirrorPulseConflictDeletionPhase.Completed);
+    }
+
+    private void ClearCompleted(Decision completed)
+    {
+        if (!completed.Completed) throw new InvalidDataException("Deletion recovery did not settle the original group.");
+        runner.ClearConflictDeletionRecoveryFault(completed.CommandId);
+        foreach (Guid original in completed.Originals) runner.ClearRecoveredFault(original);
+        if (completed.PlanId is { } planId) runner.ClearCoalescingRecoveryFault(planId);
     }
 
     private static bool IsDecisionFailure(Exception error) =>

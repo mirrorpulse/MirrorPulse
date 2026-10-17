@@ -56,7 +56,7 @@ public sealed partial class MirrorPulseProductCatalog
             await using (var deletion = _connection.CreateCommand())
             {
                 deletion.Transaction = transaction;
-                deletion.CommandText = "SELECT 1 FROM conflict_deletion_members WHERE original_id=$operation;";
+                deletion.CommandText = "SELECT 1 FROM conflict_deletion_members WHERE original_id=$operation UNION ALL SELECT 1 FROM conflict_local_removal_members WHERE original_id=$operation LIMIT 1;";
                 deletion.Parameters.AddWithValue("$operation", originalOperationId.ToString("D"));
                 if (await deletion.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null)
                     throw new InvalidOperationException("The original group belongs to an explicit deletion decision.");

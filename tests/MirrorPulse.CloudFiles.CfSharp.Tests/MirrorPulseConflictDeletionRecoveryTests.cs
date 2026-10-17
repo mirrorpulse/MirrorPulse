@@ -14,6 +14,34 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 public sealed class MirrorPulseConflictDeletionRecoveryTests
 {
     [TestMethod]
+    public async Task LocalOnlyRecoveryDoesNotNeedAnEnabledWorkerAndHealsItsRetainedFault()
+    {
+        await using var fixture = await Fixture.OpenAsync();
+        Guid command = await fixture.PrepareAsync(localOnly: true);
+        bool fail = true;
+        var recovery = fixture.Recovery((id, token) => fail ? throw new IOException("Synthetic local preservation failure; private-note") :
+            fixture.CompleteAsync(id, true, token), enabled: false, localOnly: true);
+        await recovery.RepairAsync(default);
+        Assert.IsFalse(fixture.Runner.Health.Healthy);
+        Assert.AreEqual(MirrorPulseConflictLocalRemovalPhase.Prepared, (await fixture.Catalog.ReadConflictLocalRemovalAsync(command))!.Phase);
+        fail = false; await recovery.RepairAsync(default);
+        Assert.IsTrue(fixture.Runner.Health.Healthy);
+        Assert.AreEqual(MirrorPulseConflictLocalRemovalPhase.Completed, (await fixture.Catalog.ReadConflictLocalRemovalAsync(command))!.Phase);
+        Assert.IsFalse((await File.ReadAllTextAsync(fixture.Log.FilePath)).Contains("private-note", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public async Task LocalOnlyRecoveryRotatesItsBoundedPagePastSixtyFourFailures()
+    {
+        await using var fixture = await Fixture.OpenAsync();
+        for (int index = 0; index < 65; index++) await fixture.PrepareAsync(localOnly: true);
+        var attempted = new HashSet<Guid>();
+        var recovery = fixture.Recovery((id, _) => { Assert.IsTrue(attempted.Add(id)); throw new IOException("Synthetic local recovery failure."); }, localOnly: true);
+        await recovery.RepairAsync(default); Assert.HasCount(64, attempted);
+        await recovery.RepairAsync(default); Assert.HasCount(65, attempted);
+    }
+
+    [TestMethod]
     public async Task ACorruptDecisionDoesNotBlockAPeerAndDirectCompletionHealsItsRetainedFault()
     {
         await using var fixture = await Fixture.OpenAsync();
@@ -99,9 +127,9 @@ public sealed class MirrorPulseConflictDeletionRecoveryTests
         }
         internal static async Task<Fixture> OpenAsync()
         { var fixture = new Fixture(); fixture.Catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths); return fixture; }
-        internal MirrorPulseConflictDeletionRecovery Recovery(Func<Guid, CancellationToken, ValueTask<MirrorPulseConflictResolution>> resume, bool enabled = true) =>
-            new(Catalog, resume, _router, _ => enabled, Runner, Log);
-        internal async Task<Guid> PrepareAsync()
+        internal MirrorPulseConflictDeletionRecovery Recovery(Func<Guid, CancellationToken, ValueTask<MirrorPulseConflictResolution>> resume, bool enabled = true, bool localOnly = false) =>
+            new(Catalog, resume, _router, _ => enabled, Runner, Log, localOnly);
+        internal async Task<Guid> PrepareAsync(bool localOnly = false)
         {
             Guid original = Guid.NewGuid(), conflict = Guid.NewGuid(), command = Guid.NewGuid();
             string path = "private-note-" + original.ToString("N") + ".txt";
@@ -111,12 +139,25 @@ public sealed class MirrorPulseConflictDeletionRecoveryTests
                 _ => throw new MirrorPulseWorkerMutationConflictException("old", "observed"), (_, _) => throw new AssertFailedException(), default).AsTask());
             await Catalog.SaveUploadConflictAsync(new(conflict, _root.InstanceId, original.ToString("D"), "Docs/" + path,
                 MirrorPulseConflictReason.StaleRemoteRevision, MirrorPulseVersionComparison.Diverged, "old", "observed", DateTimeOffset.UtcNow));
-            await Catalog.SaveUserCommandAsync(new(command, "deleteremote", conflict.ToString("D"), "pending"));
-            await Catalog.PrepareConflictDeletionAsync(command, conflict, "docs", Guid.NewGuid(), "Docs/" + path, null);
+            await Catalog.SaveUserCommandAsync(new(command, localOnly ? "deletelocal" : "deleteremote", conflict.ToString("D"), "pending"));
+            if (localOnly) await Catalog.PrepareConflictLocalRemovalAsync(command, conflict, "docs", Guid.NewGuid(), "Docs/" + path, null);
+            else await Catalog.PrepareConflictDeletionAsync(command, conflict, "docs", Guid.NewGuid(), "Docs/" + path, null);
             return command;
         }
-        internal async ValueTask<MirrorPulseConflictResolution> CompleteAsync(Guid command, CancellationToken token)
+        internal ValueTask<MirrorPulseConflictResolution> CompleteAsync(Guid command, CancellationToken token) => CompleteAsync(command, false, token);
+
+        internal async ValueTask<MirrorPulseConflictResolution> CompleteAsync(Guid command, bool localOnly, CancellationToken token)
         {
+            if (localOnly)
+            {
+                var removal = (await Catalog.ReadConflictLocalRemovalAsync(command, token))!;
+                while (removal.Phase != MirrorPulseConflictLocalRemovalPhase.Completed)
+                {
+                    var next = removal.Phase + 1;
+                    await Catalog.AdvanceConflictLocalRemovalAsync(command, removal.Phase, next, token); removal = removal with { Phase = next };
+                }
+                return new(command, removal.Intent.ConflictId, MirrorPulseConflictAction.DeleteLocal, null, DateTimeOffset.UtcNow);
+            }
             var decision = (await Catalog.ReadConflictDeletionAsync(command, token))!;
             Guid remote = decision.Intent.RemoteDeletion.OperationId;
             await Catalog.TransitionMutationAsync(remote, MirrorPulseMutationState.Prepared, MirrorPulseMutationState.Executing, cancellationToken: token);

@@ -21,6 +21,7 @@ public sealed class MirrorPulseNamespaceRetirementCoordinator(CloudFileSystem fi
     MirrorPulseNamespaceExecutionSession execution, MirrorPulseNamespaceActor actor)
 {
     internal Func<MirrorPulseNamespaceRetirementCheckpoint, ValueTask>? Checkpoint { get; init; }
+    internal Func<CloudItemSnapshot, CancellationToken, ValueTask>? BeforeNativeDeletion { get; init; }
 
     public ValueTask<MirrorPulseNamespaceRetirement> PrepareAsync(Guid operationId, Guid memberId,
         CancellationToken cancellationToken = default) => actor.RunAsync(token => PrepareAdmittedAsync(operationId, memberId, token), cancellationToken);
@@ -133,6 +134,7 @@ public sealed class MirrorPulseNamespaceRetirementCoordinator(CloudFileSystem fi
                 if (current.StartedAt is null)
                     current = await catalog.RecordNamespaceRetirementStartAsync(current.OperationId, DateTimeOffset.UtcNow,
                         snapshot.ItemId, token).ConfigureAwait(false);
+                if (BeforeNativeDeletion is not null) await BeforeNativeDeletion(snapshot, token).ConfigureAwait(false);
                 await item.DeleteAsync(token).ConfigureAwait(false);
                 if (Checkpoint is not null) await Checkpoint(MirrorPulseNamespaceRetirementCheckpoint.AfterNativeDeletion).ConfigureAwait(false);
             }

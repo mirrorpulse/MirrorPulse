@@ -75,95 +75,17 @@ public sealed partial class MirrorPulseProductCatalog
                     reader.GetString(1) != conflictId.ToString("D") || reader.GetString(2) != "pending")
                     throw new InvalidOperationException("A matching pending user command must authorize deletion.");
             }
-            var selected = await ReadDeletionConflictAsync(conflictId, transaction, cancellationToken).ConfigureAwait(false);
-            if (observation is not null) ValidateDeletionObservation(observation, selected.OriginalId, selected.InstanceId, rootKey, itemId);
-            Guid? planId = null;
-            await using (var owner = _connection.CreateCommand())
-            {
-                owner.Transaction = transaction;
-                owner.CommandText = "SELECT plan_id FROM journal_coalescing_members WHERE operation_id=$operation;";
-                owner.Parameters.AddWithValue("$operation", selected.OriginalId.ToString("D"));
-                if (await owner.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is string value) planId = Guid.Parse(value);
-            }
-            var originals = new List<Guid>(); var conflicts = new List<Guid>();
-            string remoteTarget;
-            if (planId is { } ownerId)
-            {
-                if (observation is not null) throw new ArgumentException("A single observation cannot replace an owned group's complete execution.", nameof(observation));
-                var plan = await ReadCoalescingPlanCoreAsync(ownerId, transaction, cancellationToken).ConfigureAwait(false);
-                var original = await ReadCoalescingExecutionCoreAsync(ownerId, transaction, cancellationToken).ConfigureAwait(false)
-                    ?? throw new InvalidDataException("The rejected group lost its original execution.");
-                var execution = await ReadCoalescingDispatchCoreAsync(plan, original, transaction, cancellationToken).ConfigureAwait(false);
-                if (plan.ItemId != itemId || plan.InstanceId != selected.InstanceId || plan.RootKey != rootKey)
-                    throw new InvalidDataException("Deletion cannot adopt another group's logical item or root.");
-                string? baseline = execution.ExpectedRevision;
-                MirrorPulseMutationIntent? current = null;
-                foreach (var step in execution.Steps)
-                {
-                    var intent = await ReadCurrentCoalescingIntentAsync(plan, execution, step.Ordinal, baseline, transaction, cancellationToken).ConfigureAwait(false);
-                    var record = await ReadMutationCoreAsync(intent.OperationId, cancellationToken, transaction).ConfigureAwait(false);
-                    if (record is { State: MirrorPulseMutationState.Acknowledged })
-                    {
-                        if (step.Kind == MirrorPulseCoalescingStepKind.Move || execution.HasMoveContent && step.Ordinal == 0)
-                            baseline = record.AcceptedRevision;
-                        continue;
-                    }
-                    if (record is not { State: MirrorPulseMutationState.Conflict } || !SameIntent(record.Intent, intent))
-                        throw new InvalidOperationException("Unknown outcomes require reconciliation before a destructive conflict decision.");
-                    // Two absence checks may describe different remote occupants. One choice
-                    // cannot silently authorize deleting an unobserved second occupant.
-                    if (execution.Steps.Skip(step.Ordinal + 1).Any(later => later.Kind != MirrorPulseCoalescingStepKind.Upload))
-                        throw new NotSupportedException("Remaining remote verification requires its own explicit decision.");
-                    current = intent; break;
-                }
-                var rejected = current ?? throw new InvalidOperationException("The group has no current rejected effect.");
-                remoteTarget = rejected.Kind == MirrorPulseWorkerChangeKind.Move ? rejected.PreviousRelativePath! : rejected.RelativePath;
-                foreach (var member in plan.Members)
-                {
-                    await using var query = _connection.CreateCommand(); query.Transaction = transaction;
-                    query.CommandText = "SELECT conflict_id FROM upload_conflicts WHERE change_id=$original AND status=0;";
-                    query.Parameters.AddWithValue("$original", member.OperationId.ToString("D"));
-                    await using var reader = await query.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-                    if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
-                        throw new InvalidOperationException("Every original group member requires pending conflict evidence.");
-                    Guid id = Guid.Parse(reader.GetString(0));
-                    if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
-                        throw new InvalidDataException("A group member has multiple pending conflict epochs.");
-                    originals.Add(member.OperationId); conflicts.Add(id);
-                }
-            }
-            else
-            {
-                var record = await ReadMutationCoreAsync(selected.OriginalId, cancellationToken, transaction).ConfigureAwait(false);
-                if (record is null)
-                {
-                    if (observation is null) throw new InvalidOperationException("A preflight conflict requires its exact public journal observation.");
-                    remoteTarget = observation.Kind == MirrorPulseWorkerChangeKind.Move ? observation.PreviousRelativePath! : observation.RelativePath;
-                }
-                else
-                {
-                    if (record is not { State: MirrorPulseMutationState.Conflict, Intent.Origin: MirrorPulseMutationOrigin.Journal } ||
-                        record.Intent.InstanceId != selected.InstanceId || record.Intent.RootKey != rootKey || record.Intent.IsDirectory ||
-                        observation is not null && (record.Intent.Kind != observation.Kind || record.Intent.RelativePath != observation.RelativePath ||
-                            record.Intent.PreviousRelativePath != observation.PreviousRelativePath))
-                        throw new InvalidOperationException("An existing original mutation must remain explicitly rejected and match its public observation.");
-                    remoteTarget = record.Intent.Kind == MirrorPulseWorkerChangeKind.Move ? record.Intent.PreviousRelativePath! : record.Intent.RelativePath;
-                }
-                originals.Add(selected.OriginalId); conflicts.Add(conflictId);
-            }
-            if (!conflicts.Contains(conflictId)) throw new InvalidDataException("The selected conflict is not the current group epoch.");
-            foreach (Guid id in conflicts)
-            {
-                var evidence = await ReadDeletionConflictAsync(id, transaction, cancellationToken).ConfigureAwait(false);
-                if (evidence.InstanceId != selected.InstanceId || evidence.Revision != selected.Revision || evidence.LocalPath != localRelativePath)
-                    throw new InvalidDataException("The complete group's conflict provenance or observed remote revisions disagree.");
-            }
+            var selection = await ReadConflictDecisionSelectionAsync(conflictId, rootKey, itemId, localRelativePath,
+                observation, true, transaction, cancellationToken).ConfigureAwait(false);
+            var originals = selection.Originals; var conflicts = selection.Conflicts;
+            var planId = selection.PlanId; string remoteTarget = selection.RemoteTarget;
+            var selected = (InstanceId: selection.InstanceId, Revision: selection.RemoteRevision);
             if (string.IsNullOrEmpty(selected.Revision))
                 throw new InvalidOperationException("Remote deletion requires an explicitly observed remote revision.");
             foreach (Guid original in originals)
             {
                 await using var query = _connection.CreateCommand(); query.Transaction = transaction;
-                query.CommandText = "SELECT 1 FROM conflict_deletion_members WHERE original_id=$original;";
+                query.CommandText = "SELECT 1 FROM conflict_deletion_members WHERE original_id=$original UNION ALL SELECT 1 FROM conflict_local_removal_members WHERE original_id=$original LIMIT 1;";
                 query.Parameters.AddWithValue("$original", original.ToString("D"));
                 if (await query.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null)
                     throw new InvalidOperationException("An original operation already belongs to a retained deletion decision.");
@@ -174,7 +96,7 @@ public sealed partial class MirrorPulseProductCatalog
                 remoteTarget,
                 null, false, selected.Revision, null, null, MirrorPulseMutationOrigin.ConflictDecision);
             var deletion = new MirrorPulseConflictDeletionIntent(observation is null ? 1 : 2, commandId, conflictId, selected.InstanceId, rootKey, planId,
-                itemId, localRelativePath, remote, content, originals.AsReadOnly(), conflicts.AsReadOnly(), DateTimeOffset.UtcNow)
+                itemId, localRelativePath, remote, content, originals, conflicts, DateTimeOffset.UtcNow)
             { OriginalObservation = observation };
             byte[] payload = JsonSerializer.SerializeToUtf8Bytes(deletion, TopologyJsonOptions);
             await using (var insert = _connection.CreateCommand())

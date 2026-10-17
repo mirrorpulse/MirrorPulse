@@ -39,7 +39,27 @@ internal sealed class MirrorPulseConflictDeletionLocalCoordinator(CloudFileSyste
             return content;
         });
 
+    private sealed record LocalRemovalIntent(Guid CommandId, Guid ConflictId, Guid ItemId,
+        string LocalRelativePath, MirrorPulseCoalescingContent? LocalContent);
+    private sealed record LocalRemoval(LocalRemovalIntent Intent, MirrorPulseConflictLocalRemovalPhase Phase);
+
     internal Task CompleteAsync(MirrorPulseConflictDeletion deletion, CancellationToken token) =>
+        CompleteCoreAsync(new(new(deletion.Intent.CommandId, deletion.Intent.ConflictId, deletion.Intent.ItemId,
+            deletion.Intent.LocalRelativePath, deletion.Intent.LocalContent),
+            (MirrorPulseConflictLocalRemovalPhase)Math.Min((int)deletion.Phase, 3)),
+            (from, to, stop) => catalog.AdvanceConflictDeletionAsync(deletion.Intent.CommandId,
+                (MirrorPulseConflictDeletionPhase)from, (MirrorPulseConflictDeletionPhase)to, stop), null, token);
+
+    internal Task CompleteLocalAsync(MirrorPulseConflictLocalRemoval removal,
+        Func<CloudItemSnapshot, CancellationToken, ValueTask> beforeDelete, CancellationToken token) =>
+        CompleteCoreAsync(new(new(removal.Intent.CommandId, removal.Intent.ConflictId, removal.Intent.ItemId,
+            removal.Intent.LocalRelativePath, removal.Intent.LocalContent),
+            (MirrorPulseConflictLocalRemovalPhase)Math.Min((int)removal.Phase, 3)),
+            (from, to, stop) => catalog.AdvanceConflictLocalRemovalAsync(removal.Intent.CommandId, from, to, stop), beforeDelete, token);
+
+    private Task CompleteCoreAsync(LocalRemoval deletion,
+        Func<MirrorPulseConflictLocalRemovalPhase, MirrorPulseConflictLocalRemovalPhase, CancellationToken, Task> advance,
+        Func<CloudItemSnapshot, CancellationToken, ValueTask>? beforeDelete, CancellationToken token) =>
         execution.RunNormalUserOperationAsync(async () =>
         {
             var intent = deletion.Intent;
@@ -49,16 +69,16 @@ internal sealed class MirrorPulseConflictDeletionLocalCoordinator(CloudFileSyste
             if (intent.LocalContent is null)
             {
                 RequireTombstone(await file.InspectAsync(token).ConfigureAwait(false), intent.ItemId);
-                await AdvanceLocalBoundariesAsync(deletion, token).ConfigureAwait(false);
+                await AdvanceLocalBoundariesAsync(deletion, advance, token).ConfigureAwait(false);
                 return;
             }
             var content = intent.LocalContent;
             var member = await catalog.ReadNamespaceMemberByBindingAsync(content.UploadBinding.LocalObject, token).ConfigureAwait(false)
                 ?? throw new InvalidDataException("The preserved local object lost its registered membership.");
             Guid retirementId = new(SHA256.HashData(Encoding.UTF8.GetBytes("MirrorPulse.ConflictDeletion.Retirement.v1/" + intent.CommandId.ToString("D"))).AsSpan(0, 16));
-            var retirement = new MirrorPulseNamespaceRetirementCoordinator(fileSystem, catalog, router, execution, actor);
+            var retirement = new MirrorPulseNamespaceRetirementCoordinator(fileSystem, catalog, router, execution, actor) { BeforeNativeDeletion = beforeDelete };
             var current = await file.InspectAsync(token).ConfigureAwait(false);
-            if (deletion.Phase >= MirrorPulseConflictDeletionPhase.Retired)
+            if (deletion.Phase >= MirrorPulseConflictLocalRemovalPhase.Retired)
             {
                 _ = await VerifyPreservedAsync(intent.CommandId, conflict, content, token).ConfigureAwait(false);
                 RequireTombstone(current, intent.ItemId);
@@ -69,7 +89,7 @@ internal sealed class MirrorPulseConflictDeletionLocalCoordinator(CloudFileSyste
                 // Absence alone is insufficient. Only the same started protected
                 // retirement may recover native success before its durable receipt.
                 var retained = await catalog.ReadNamespaceRetirementAsync(retirementId, token).ConfigureAwait(false);
-                if (deletion.Phase != MirrorPulseConflictDeletionPhase.Retiring || retained?.StartedAt is null || retained.Intent.MemberId != member.MemberId)
+                if (deletion.Phase != MirrorPulseConflictLocalRemovalPhase.Retiring || retained?.StartedAt is null || retained.Intent.MemberId != member.MemberId)
                     throw new InvalidDataException("Local absence has no original controlled retirement start.");
                 _ = await VerifyPreservedAsync(intent.CommandId, conflict, content, token).ConfigureAwait(false);
                 _ = await retirement.ExecuteAsync(retirementId, token).ConfigureAwait(false);
@@ -86,32 +106,38 @@ internal sealed class MirrorPulseConflictDeletionLocalCoordinator(CloudFileSyste
                 _ = await copies.PreserveDecisionAsync(intent.CommandId, conflict, MirrorPulseConflictPreservedSide.Local,
                     stop => { stop.ThrowIfCancellationRequested(); return ValueTask.FromResult<Stream>(OpenGuard(file)); }, token).ConfigureAwait(false);
                 _ = await VerifyPreservedAsync(intent.CommandId, conflict, content, token).ConfigureAwait(false);
-                if (deletion.Phase == MirrorPulseConflictDeletionPhase.Prepared)
+                if (deletion.Phase == MirrorPulseConflictLocalRemovalPhase.Prepared)
                 {
-                    await catalog.AdvanceConflictDeletionAsync(intent.CommandId, deletion.Phase, MirrorPulseConflictDeletionPhase.Preserved, token).ConfigureAwait(false);
-                    deletion = deletion with { Phase = MirrorPulseConflictDeletionPhase.Preserved };
+                    await advance(deletion.Phase, MirrorPulseConflictLocalRemovalPhase.Preserved, token).ConfigureAwait(false);
+                    deletion = deletion with { Phase = MirrorPulseConflictLocalRemovalPhase.Preserved };
                 }
                 var prepared = await retirement.PrepareAsync(retirementId, member.MemberId, token).ConfigureAwait(false);
                 if (prepared.Intent.LocalObject != content.UploadBinding.LocalObject || prepared.Intent.RelativePath != intent.LocalRelativePath)
                     throw new InvalidDataException("The retirement does not belong to the preserved original object and location.");
-                if (deletion.Phase == MirrorPulseConflictDeletionPhase.Preserved)
+                if (deletion.Phase == MirrorPulseConflictLocalRemovalPhase.Preserved)
                 {
-                    await catalog.AdvanceConflictDeletionAsync(intent.CommandId, deletion.Phase, MirrorPulseConflictDeletionPhase.Retiring, token).ConfigureAwait(false);
-                    deletion = deletion with { Phase = MirrorPulseConflictDeletionPhase.Retiring };
+                    await advance(deletion.Phase, MirrorPulseConflictLocalRemovalPhase.Retiring, token).ConfigureAwait(false);
+                    deletion = deletion with { Phase = MirrorPulseConflictLocalRemovalPhase.Retiring };
                 }
                 _ = await retirement.ExecuteAsync(retirementId, token).ConfigureAwait(false);
             }
             RequireTombstone(await file.InspectAsync(token).ConfigureAwait(false), intent.ItemId);
-            await catalog.AdvanceConflictDeletionAsync(intent.CommandId, MirrorPulseConflictDeletionPhase.Retiring,
-                MirrorPulseConflictDeletionPhase.Retired, token).ConfigureAwait(false);
+            await advance(MirrorPulseConflictLocalRemovalPhase.Retiring,
+                MirrorPulseConflictLocalRemovalPhase.Retired, token).ConfigureAwait(false);
         });
 
-    internal async Task<string?> ReadPreservedPathAsync(MirrorPulseConflictDeletionIntent intent, CancellationToken token)
+    internal Task<string?> ReadPreservedPathAsync(MirrorPulseConflictDeletionIntent intent, CancellationToken token) =>
+        ReadPreservedPathCoreAsync(intent.CommandId, intent.ConflictId, intent.LocalContent, token);
+
+    internal Task<string?> ReadPreservedPathAsync(MirrorPulseConflictLocalRemovalIntent intent, CancellationToken token) =>
+        ReadPreservedPathCoreAsync(intent.CommandId, intent.ConflictId, intent.LocalContent, token);
+
+    private async Task<string?> ReadPreservedPathCoreAsync(Guid commandId, Guid conflictId, MirrorPulseCoalescingContent? content, CancellationToken token)
     {
-        if (intent.LocalContent is null) return null;
-        var conflict = await catalog.ReadUploadConflictAsync(intent.ConflictId, token).ConfigureAwait(false)
+        if (content is null) return null;
+        var conflict = await catalog.ReadUploadConflictAsync(conflictId, token).ConfigureAwait(false)
             ?? throw new InvalidDataException("The preservation conflict is missing.");
-        return await VerifyPreservedAsync(intent.CommandId, conflict, intent.LocalContent, token).ConfigureAwait(false);
+        return await VerifyPreservedAsync(commandId, conflict, content, token).ConfigureAwait(false);
     }
 
     private async Task<string> VerifyPreservedAsync(Guid commandId, MirrorPulseConflictRecord conflict, MirrorPulseCoalescingContent content, CancellationToken token)
@@ -143,12 +169,14 @@ internal sealed class MirrorPulseConflictDeletionLocalCoordinator(CloudFileSyste
             throw new InvalidDataException("The original file lost its logical identity or committed location.");
     }
 
-    private async Task AdvanceLocalBoundariesAsync(MirrorPulseConflictDeletion deletion, CancellationToken token)
+    private static async Task AdvanceLocalBoundariesAsync(LocalRemoval deletion,
+        Func<MirrorPulseConflictLocalRemovalPhase, MirrorPulseConflictLocalRemovalPhase, CancellationToken, Task> advance,
+        CancellationToken token)
     {
-        while (deletion.Phase < MirrorPulseConflictDeletionPhase.Retired)
+        while (deletion.Phase < MirrorPulseConflictLocalRemovalPhase.Retired)
         {
-            var next = (MirrorPulseConflictDeletionPhase)((int)deletion.Phase + 1);
-            await catalog.AdvanceConflictDeletionAsync(deletion.Intent.CommandId, deletion.Phase, next, token).ConfigureAwait(false);
+            var next = (MirrorPulseConflictLocalRemovalPhase)((int)deletion.Phase + 1);
+            await advance(deletion.Phase, next, token).ConfigureAwait(false);
             deletion = deletion with { Phase = next };
         }
     }

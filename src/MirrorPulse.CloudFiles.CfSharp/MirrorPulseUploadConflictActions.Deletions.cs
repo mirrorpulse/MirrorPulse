@@ -39,13 +39,15 @@ public sealed partial class MirrorPulseUploadConflictActions
     }
 
     private async Task PrepareDeletionAdmittedAsync(Guid commandId, MirrorPulseConflictRecord conflict,
-        MirrorPulseJournalCoalescingPlan? group, RootId? admittedRoot, CancellationToken token)
+        MirrorPulseJournalCoalescingPlan? group, RootId? admittedRoot, bool localOnly, CancellationToken token)
     {
         if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100)) throw new PlatformNotSupportedException();
-        RequireDeletionService();
+        if (localOnly) RequireLocalRemovalService(); else RequireDeletionService();
         var route = _router!.ResolvePath(conflict.RelativePath);
         var root = _router.GetRegistration(route.InstanceId, route.RootKey);
-        if (route.InstanceId != conflict.InstanceId || route.RelativePath.Length == 0 || root.State != RootRegistrationState.Active || !_mayDispatch(route.InstanceId))
+        if (route.InstanceId != conflict.InstanceId || route.RelativePath.Length == 0 ||
+            (localOnly ? root.State is not (RootRegistrationState.Active or RootRegistrationState.Disabled) :
+                root.State != RootRegistrationState.Active || !_mayDispatch(route.InstanceId)))
             throw new InvalidOperationException("A destructive conflict decision requires its enabled managed root and Worker.");
         using var admission = admittedRoot == root.RootId ? null : _namespaceWork?.Enter([root.RootId]);
         Guid originalId = Guid.Parse(conflict.ChangeId);
@@ -86,7 +88,10 @@ public sealed partial class MirrorPulseUploadConflictActions
                 throw new InvalidDataException("The original public file observation does not match the conflict's routed local object.");
         }
         var content = await _localDeletion!.CaptureAsync(conflict, itemId, token).ConfigureAwait(false);
-        if (observation is null)
+        if (localOnly)
+            _ = await _catalog.PrepareConflictLocalRemovalAsync(commandId, conflict.ConflictId, route.RootKey, itemId,
+                conflict.RelativePath, content, observation, token).ConfigureAwait(false);
+        else if (observation is null)
             _ = await _catalog.PrepareConflictDeletionAsync(commandId, conflict.ConflictId, route.RootKey, itemId,
                 conflict.RelativePath, content, token).ConfigureAwait(false);
         else
@@ -171,20 +176,23 @@ public sealed partial class MirrorPulseUploadConflictActions
     }
 
     private async ValueTask AcknowledgeDeletedOriginalsAsync(MirrorPulseConflictDeletionIntent intent, CancellationToken token)
+        => await AcknowledgeRemovedOriginalsAsync(intent.ItemId, intent.OriginalOperationIds, token).ConfigureAwait(false);
+
+    private async ValueTask AcknowledgeRemovedOriginalsAsync(Guid itemId, IReadOnlyList<Guid> originalIds, CancellationToken token)
     {
         await using (var transaction = await _state.OpenStore.BeginTransactionAsync(token).ConfigureAwait(false))
         {
-            foreach (Guid originalId in intent.OriginalOperationIds)
+            foreach (Guid originalId in originalIds)
             {
                 var original = await transaction.Operations.GetAsync(originalId, token).ConfigureAwait(false);
-                if (original is not null && original.ItemId != intent.ItemId)
+                if (original is not null && original.ItemId != itemId)
                     throw new InvalidDataException("The retained deletion cannot acknowledge a different official logical item.");
             }
             await transaction.RollbackAsync(token).ConfigureAwait(false);
         }
-        await _feed.AcknowledgeAsync(intent.OriginalOperationIds.Select(id => new CloudLocalChangeAcknowledgement(id, null)), token).ConfigureAwait(false);
+        await _feed.AcknowledgeAsync(originalIds.Select(id => new CloudLocalChangeAcknowledgement(id, null)), token).ConfigureAwait(false);
         await using var checking = await _state.OpenStore.BeginTransactionAsync(token).ConfigureAwait(false);
-        foreach (Guid id in intent.OriginalOperationIds)
+        foreach (Guid id in originalIds)
             if (await checking.Operations.GetAsync(id, token).ConfigureAwait(false) is not null)
                 throw new InvalidDataException("The complete original group was not acknowledged by the official feed.");
         await checking.RollbackAsync(token).ConfigureAwait(false);
