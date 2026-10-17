@@ -70,7 +70,24 @@ and native object, then retains an explicit upload proof. Its versioned retry
 record preserves the original verification program. Normal retries retain that
 authorized effect and proof, including after a lost reply or restart. Every prior
 authorization and the original rejected baseline are checked during replay.
-Move-only programs still require a complete move and content decision.
+For a move-only program, keep-local captures resident bytes from the original
+logical item and reserves two distinct effect identities in a version 3 decision.
+The original move preparation and rejected mutation remain immutable. A validated
+dispatch view adds a conditional upload after the authorized move; its baseline
+is the revision actually accepted by that move. No upload is prepared until the
+move and its local completion are acknowledged. A lost upload reply uses the
+existing readback path without moving or uploading again. Retrying a rejected
+move retains the content suffix and proof. A later explicit keep-local decision
+can capture new bytes after either the move or upload conflicts.
+If the observed remote source has disappeared, the decision instead verifies its
+absence before conditionally creating the target. A newly occupied source or
+target becomes another conflict; local bytes and the unrelated target remain.
+
+Catalog schema 63 reserves each future upload identity independently of the
+immutable original steps. Upgrade retains old retries without inventing a content
+decision. Replay checks the suffix index, payload digest, complete authorization
+history and original rejected baseline. Every current effect must complete before
+the original group can be acknowledged or its user command resolved.
 
 Group preparation reads the mutually acknowledged revision from the official
 store before the executor checks the remote condition. A changed source therefore

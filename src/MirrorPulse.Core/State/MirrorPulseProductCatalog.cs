@@ -104,7 +104,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                 version.CommandText = "PRAGMA user_version;";
                 currentVersion = (long)(await version.ExecuteScalarAsync(cancellationToken)
                     .ConfigureAwait(false) ?? 0L);
-                if (currentVersion > 62)
+                if (currentVersion > 63)
                 {
                     throw new InvalidDataException("The MP product catalog schema is newer than this Host supports.");
                 }
@@ -239,7 +239,8 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                         plan_id TEXT NOT NULL REFERENCES journal_coalescing_executions(plan_id),
                         ordinal INTEGER NOT NULL CHECK (ordinal IN (0,1)),
                         payload BLOB NOT NULL,
-                        fingerprint BLOB NOT NULL
+                        fingerprint BLOB NOT NULL,
+                        followup_operation_id TEXT NULL
                     );
                     CREATE INDEX IF NOT EXISTS ix_journal_coalescing_retries_step
                         ON journal_coalescing_retries(plan_id, ordinal, sequence);
@@ -450,7 +451,8 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                 await EnsureBornMemberRecoverySchemaAsync(connection, cancellationToken).ConfigureAwait(false);
                 await EnsureConflictDeletionSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
                 await EnsureConflictDeletionRetrySchemaAsync(connection, cancellationToken).ConfigureAwait(false);
-                version.CommandText = "PRAGMA user_version=62;";
+                await EnsureCoalescingMoveContentSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+                version.CommandText = "PRAGMA user_version=63;";
                 await version.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
 
@@ -495,6 +497,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
         try
         {
             ThrowIfDisposed();
+            await RequirePreparedCoalescingFollowupAsync(operationId, instanceId, cancellationToken).ConfigureAwait(false);
             await using SqliteCommand insert = _connection.CreateCommand();
             insert.CommandText = """
                 INSERT INTO worker_requests (operation_id, instance_id, fingerprint, stable_fingerprint)

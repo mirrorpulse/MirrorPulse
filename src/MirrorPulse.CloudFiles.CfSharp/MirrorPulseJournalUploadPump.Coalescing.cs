@@ -114,7 +114,8 @@ public sealed partial class MirrorPulseJournalUploadPump
                         await ReconfirmObservedEffectAsync(plan, execution, accepted, stop).ConfigureAwait(false);
                     await AcknowledgeAsync(accepted.Intent.OperationId, accepted.AcceptedRevision, stop, acknowledgeJournal: false).ConfigureAwait(false);
                 }, token).ConfigureAwait(false);
-            if (results.Count != execution.Steps.Count || results.Any(result => result.State != MirrorPulseMutationState.Acknowledged))
+            var dispatch = await _catalog.ReadJournalCoalescingDispatchAsync(plan.PlanId, token).ConfigureAwait(false);
+            if (results.Count != dispatch.Steps.Count || results.Any(result => result.State != MirrorPulseMutationState.Acknowledged))
                 throw new MirrorPulseMutationAmbiguousException("Every owned effect must complete before the original journal group is acknowledged.");
             string? revision = plan.Effect is MirrorPulseCoalescedEffect.DeleteFile or MirrorPulseCoalescedEffect.VerifyRemoteAbsence
                 ? null : results[^1].AcceptedRevision;
@@ -188,8 +189,7 @@ public sealed partial class MirrorPulseJournalUploadPump
             string path = _router.ResolveUploadPath(command.InstanceId, command.RootKey, plan?.FinalPath ?? command.RelativePath);
             return await DeferConflictAsync(command, Path.GetRelativePath(_syncRootPath, path).Replace(Path.DirectorySeparatorChar, '/'), expected, actual, token).ConfigureAwait(false);
         }
-        var execution = await _catalog.ReadJournalCoalescingExecutionAsync(plan.PlanId, token).ConfigureAwait(false)
-            ?? throw new InvalidDataException("The rejected group lost its execution.");
+        var execution = await _catalog.ReadJournalCoalescingDispatchAsync(plan.PlanId, token).ConfigureAwait(false);
         var rejected = new List<MirrorPulseMutationRecord>();
         for (int ordinal = 0; ordinal < execution.Steps.Count; ordinal++)
         {

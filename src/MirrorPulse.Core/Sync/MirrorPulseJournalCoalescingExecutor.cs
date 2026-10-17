@@ -41,8 +41,7 @@ public sealed class MirrorPulseJournalCoalescingExecutor(MirrorPulseProductCatal
         Func<MirrorPulseMutationRecord, CancellationToken, ValueTask> completeEffect,
         CancellationToken cancellationToken)
     {
-        MirrorPulseJournalCoalescingExecution execution = await catalog.ReadJournalCoalescingExecutionAsync(planId, cancellationToken).ConfigureAwait(false)
-            ?? throw new FileNotFoundException("The immutable coalesced execution is missing.");
+        MirrorPulseJournalCoalescingDispatch execution = await catalog.ReadJournalCoalescingDispatchAsync(planId, cancellationToken).ConfigureAwait(false);
         var results = new List<MirrorPulseMutationRecord>(execution.Steps.Count);
         foreach (MirrorPulseCoalescingStep step in execution.Steps)
         {

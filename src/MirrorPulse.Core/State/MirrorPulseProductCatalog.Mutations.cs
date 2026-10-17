@@ -50,6 +50,7 @@ public sealed partial class MirrorPulseProductCatalog
                     SELECT 1 FROM journal_coalescing_members WHERE operation_id=$operation
                     UNION ALL SELECT 1 FROM journal_coalescing_plans WHERE plan_id=$operation
                     UNION ALL SELECT 1 FROM conflict_deletion_members WHERE original_id=$operation
+                    UNION ALL SELECT 1 FROM journal_coalescing_retries WHERE operation_id=$operation OR followup_operation_id=$operation
                     UNION ALL SELECT 1 FROM journal_coalescing_steps WHERE operation_id=$operation LIMIT 1;
                     """;
                 ownership.Parameters.AddWithValue("$operation", intent.OperationId.ToString());
@@ -79,7 +80,7 @@ public sealed partial class MirrorPulseProductCatalog
                 SELECT operation_id, payload, state, accepted_revision, updated_utc, execution_started,
                     (SELECT plan_id FROM journal_coalescing_members WHERE operation_id=mutation_intents.operation_id),
                     (SELECT plan_id FROM journal_coalescing_steps WHERE operation_id=mutation_intents.operation_id
-                     UNION ALL SELECT plan_id FROM journal_coalescing_retries WHERE operation_id=mutation_intents.operation_id)
+                     UNION ALL SELECT plan_id FROM journal_coalescing_retries WHERE operation_id=mutation_intents.operation_id OR followup_operation_id=mutation_intents.operation_id)
                 FROM mutation_intents WHERE state NOT IN ($acknowledged,$superseded) ORDER BY operation_id;
                 """;
             command.Parameters.AddWithValue("$acknowledged", (int)MirrorPulseMutationState.Acknowledged);
@@ -155,7 +156,7 @@ public sealed partial class MirrorPulseProductCatalog
             SELECT payload,state,accepted_revision,updated_utc,execution_started,
                 (SELECT plan_id FROM journal_coalescing_members WHERE operation_id=$operation),
                 (SELECT plan_id FROM journal_coalescing_steps WHERE operation_id=$operation
-                 UNION ALL SELECT plan_id FROM journal_coalescing_retries WHERE operation_id=$operation)
+                 UNION ALL SELECT plan_id FROM journal_coalescing_retries WHERE operation_id=$operation OR followup_operation_id=$operation)
             FROM mutation_intents WHERE operation_id=$operation;
             """;
         command.Parameters.AddWithValue("$operation", operationId.ToString("D"));

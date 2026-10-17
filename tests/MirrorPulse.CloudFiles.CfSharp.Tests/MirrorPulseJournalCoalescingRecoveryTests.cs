@@ -77,6 +77,26 @@ public sealed class MirrorPulseJournalCoalescingRecoveryTests
     }
 
     [TestMethod]
+    public async Task MissingOfficialOriginalsCannotResolveKeepLocalAfterOnlyItsMoveHasCompleted()
+    {
+        await using var fixture = await Fixture.OpenAsync();
+        Group group = await fixture.PrepareAsync(moveContent: true);
+        await fixture.FinishAsync(group);
+        await fixture.Recovery.RepairAsync(default);
+        Assert.AreEqual("pending", (await fixture.Catalog.ReadUserCommandAsync(group.Command))!.State);
+        Assert.IsNull(await fixture.Catalog.ReadMutationAsync(group.Followup!.Value));
+        Assert.AreEqual(1, fixture.Runner.Health.PendingFaults);
+
+        var upload = await fixture.Catalog.PrepareJournalCoalescingMutationAsync(group.Plan.PlanId, 1);
+        Assert.AreEqual("accepted-move", upload.Intent.ExpectedRevision);
+        Assert.AreEqual(group.Followup, upload.Intent.OperationId);
+        await fixture.FinishAsync(group with { Effect = upload.Intent.OperationId });
+        await fixture.Recovery.RepairAsync(default);
+        Assert.AreEqual("resolved", (await fixture.Catalog.ReadUserCommandAsync(group.Command))!.State);
+        Assert.IsTrue(fixture.Runner.Health.Healthy);
+    }
+
+    [TestMethod]
     public async Task RecoveryBudgetRotatesPastSixtyFourPendingGroupsAndDoesNotAcknowledgeTheirOriginals()
     {
         await using var fixture = await Fixture.OpenAsync();
@@ -141,7 +161,7 @@ public sealed class MirrorPulseJournalCoalescingRecoveryTests
         Assert.IsTrue(fixture.Runner.Health.Healthy, "The pump runner records a shared source failure; it must not be mislabeled as a single group fault.");
     }
 
-    private sealed record Group(MirrorPulseJournalCoalescingPlan Plan, Guid Command, Guid Effect);
+    private sealed record Group(MirrorPulseJournalCoalescingPlan Plan, Guid Command, Guid Effect, Guid? Followup = null);
 
     private sealed class Fixture : IAsyncDisposable
     {
@@ -165,15 +185,18 @@ public sealed class MirrorPulseJournalCoalescingRecoveryTests
             return fixture;
         }
 
-        internal async Task<Group> PrepareAsync()
+        internal async Task<Group> PrepareAsync(bool moveContent = false)
         {
             InstanceId instance = InstanceId.New(); Guid item = Guid.NewGuid();
             string path = "private-" + Guid.NewGuid().ToString("N") + ".txt";
-            MirrorPulseWorkerChangeCommand[] window = [new(Guid.NewGuid(), 1, instance, "files", MirrorPulseWorkerChangeKind.Create,
-                path, null, null, false, item, DateTimeOffset.UtcNow), new(Guid.NewGuid(), 2, instance, "files", MirrorPulseWorkerChangeKind.Delete,
-                path, null, null, false, item, DateTimeOffset.UtcNow)];
+            MirrorPulseWorkerChangeCommand[] window = moveContent ?
+                [new(Guid.NewGuid(), 1, instance, "files", MirrorPulseWorkerChangeKind.Move, "middle-" + path, "files", path, false, item, DateTimeOffset.UtcNow),
+                 new(Guid.NewGuid(), 2, instance, "files", MirrorPulseWorkerChangeKind.Move, "final-" + path, "files", "middle-" + path, false, item, DateTimeOffset.UtcNow)] :
+                [new(Guid.NewGuid(), 1, instance, "files", MirrorPulseWorkerChangeKind.Create,
+                 path, null, null, false, item, DateTimeOffset.UtcNow), new(Guid.NewGuid(), 2, instance, "files", MirrorPulseWorkerChangeKind.Delete,
+                 path, null, null, false, item, DateTimeOffset.UtcNow)];
             var plan = MirrorPulseJournalCoalescingPlanner.TryPlan(window, item, 2, new HashSet<Guid>())!;
-            await Catalog.PrepareJournalCoalescingAndExecutionAsync(plan, window, null);
+            await Catalog.PrepareJournalCoalescingAndExecutionAsync(plan, window, moveContent ? "baseline" : null);
             var rejected = await Catalog.PrepareJournalCoalescingMutationAsync(plan.PlanId, 0);
             await Catalog.TransitionMutationAsync(rejected.Intent.OperationId, MirrorPulseMutationState.Prepared, MirrorPulseMutationState.Executing);
             await Catalog.TransitionMutationAsync(rejected.Intent.OperationId, MirrorPulseMutationState.Executing, MirrorPulseMutationState.Conflict);
@@ -184,9 +207,11 @@ public sealed class MirrorPulseJournalCoalescingRecoveryTests
                 await Catalog.SaveUploadConflictAsync(new(conflict, instance, member.OperationId.ToString("D"), path,
                     MirrorPulseConflictReason.StaleRemoteRevision, MirrorPulseVersionComparison.Diverged, null, "observed", DateTimeOffset.UtcNow));
             }
-            Guid command = Guid.NewGuid(); await Catalog.SaveUserCommandAsync(new(command, "retry", conflict.ToString("D"), "pending"));
-            var retry = await Catalog.AuthorizeJournalCoalescingRetryAsync(command, conflict, false);
-            return new(plan, command, retry.Intent.OperationId);
+            Guid command = Guid.NewGuid(); await Catalog.SaveUserCommandAsync(new(command, moveContent ? "keeplocal" : "retry", conflict.ToString("D"), "pending"));
+            var retry = moveContent ? await Catalog.AuthorizeJournalCoalescingKeepLocalContentAsync(command, conflict,
+                new(1, Convert.ToHexString(SHA256.HashData(new byte[] { 1 })), new(new(42, Guid.NewGuid(), Guid.NewGuid()), MirrorPulseContentPreparation.None))) :
+                await Catalog.AuthorizeJournalCoalescingRetryAsync(command, conflict, false);
+            return new(plan, command, retry.Intent.OperationId, retry.FollowupOperationId);
         }
 
         // Synthetic acceptance is limited to this product-projection fixture;
@@ -197,7 +222,8 @@ public sealed class MirrorPulseJournalCoalescingRecoveryTests
             if (record.State == MirrorPulseMutationState.Prepared)
                 await Catalog.TransitionMutationAsync(group.Effect, MirrorPulseMutationState.Prepared, MirrorPulseMutationState.Executing);
             await Catalog.TransitionMutationAsync(group.Effect, record.State == MirrorPulseMutationState.Ambiguous
-                ? MirrorPulseMutationState.Ambiguous : MirrorPulseMutationState.Executing, MirrorPulseMutationState.RemoteAccepted);
+                ? MirrorPulseMutationState.Ambiguous : MirrorPulseMutationState.Executing, MirrorPulseMutationState.RemoteAccepted,
+                record.Intent.Kind == MirrorPulseWorkerChangeKind.Move ? "accepted-move" : record.Intent.ContentSha256);
             await Catalog.TransitionMutationAsync(group.Effect, MirrorPulseMutationState.RemoteAccepted, MirrorPulseMutationState.Acknowledged);
         }
 

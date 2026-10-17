@@ -98,6 +98,7 @@ public sealed partial class MirrorPulseProductCatalog
             UNION ALL SELECT 1 FROM journal_coalescing_plans WHERE plan_id=$id
             UNION ALL SELECT 1 FROM journal_coalescing_steps WHERE operation_id=$id
             UNION ALL SELECT 1 FROM journal_coalescing_retries WHERE operation_id=$id
+            UNION ALL SELECT 1 FROM journal_coalescing_retries WHERE followup_operation_id=$id
             UNION ALL SELECT 1 FROM worker_requests WHERE operation_id=$id LIMIT 1;
             """;
         ownership.Parameters.AddWithValue("$id", operationId.ToString("D"));

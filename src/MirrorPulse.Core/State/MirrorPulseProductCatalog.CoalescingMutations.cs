@@ -57,10 +57,11 @@ public sealed partial class MirrorPulseProductCatalog
         {
             ThrowIfDisposed();
             using var transaction = _connection.BeginTransaction();
-            MirrorPulseJournalCoalescingExecution execution = await ReadCoalescingExecutionCoreAsync(planId, transaction, cancellationToken).ConfigureAwait(false)
+            MirrorPulseJournalCoalescingExecution original = await ReadCoalescingExecutionCoreAsync(planId, transaction, cancellationToken).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The immutable coalesced execution is missing.");
-            ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(ordinal, execution.Steps.Count);
             MirrorPulseJournalCoalescingPlan plan = await ReadCoalescingPlanCoreAsync(planId, transaction, cancellationToken).ConfigureAwait(false);
+            var execution = await ReadCoalescingDispatchCoreAsync(plan, original, transaction, cancellationToken).ConfigureAwait(false);
+            ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(ordinal, execution.Steps.Count);
             string? baseline = execution.ExpectedRevision;
             if (ordinal == 1)
             {
@@ -72,6 +73,7 @@ public sealed partial class MirrorPulseProductCatalog
                 if (execution.Steps[0].Kind == MirrorPulseCoalescingStepKind.Move)
                     baseline = !string.IsNullOrEmpty(previous.AcceptedRevision) ? previous.AcceptedRevision :
                         throw new InvalidDataException("The accepted move revision is required for the subsequent upload.");
+                else if (execution.HasMoveContent) baseline = previous.AcceptedRevision;
             }
             MirrorPulseMutationIntent intent = await ReadCurrentCoalescingIntentAsync(plan, execution, ordinal,
                 baseline, transaction, cancellationToken).ConfigureAwait(false);
@@ -84,7 +86,7 @@ public sealed partial class MirrorPulseProductCatalog
     }
 
     private static MirrorPulseMutationIntent CoalescingIntent(MirrorPulseJournalCoalescingPlan plan,
-        MirrorPulseJournalCoalescingExecution execution, int ordinal, string? baseline)
+        MirrorPulseJournalCoalescingDispatch execution, int ordinal, string? baseline)
     {
         MirrorPulseCoalescingStep step = execution.Steps[ordinal];
         bool uploads = step.Kind == MirrorPulseCoalescingStepKind.Upload;

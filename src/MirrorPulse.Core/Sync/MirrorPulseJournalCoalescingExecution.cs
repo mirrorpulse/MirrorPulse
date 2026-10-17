@@ -31,6 +31,15 @@ public sealed record MirrorPulseJournalCoalescingExecution(int Version, Guid Pla
     public MirrorPulseCoalescingObservedContent? ObservedContent { get; init; }
 }
 
+/// <summary>A validated dispatch view combining immutable preparation with an explicit later user decision.</summary>
+/// <remarks>This view is reconstructed from retained authorization; it never replaces the original execution.</remarks>
+public sealed record MirrorPulseJournalCoalescingDispatch(MirrorPulseJournalCoalescingExecution Original,
+    MirrorPulseCoalescingContent? Content, IReadOnlyList<MirrorPulseCoalescingStep> Steps)
+{
+    public string? ExpectedRevision => Original.ExpectedRevision;
+    public bool HasMoveContent => Original.Steps.Count == 1 && Steps.Count == 2 && Original.Content is null;
+}
+
 public static class MirrorPulseJournalCoalescingExecutionPlanner
 {
     /// <summary>Validates the complete observation window before binding final content and remote-effect identities.</summary>

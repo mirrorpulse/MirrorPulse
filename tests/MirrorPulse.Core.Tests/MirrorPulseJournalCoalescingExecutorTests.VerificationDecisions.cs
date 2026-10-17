@@ -172,7 +172,7 @@ public sealed partial class MirrorPulseJournalCoalescingExecutorTests
     }
 
     private static async Task<MirrorPulseJournalCoalescingRetry> AuthorizeVerificationDecisionAsync(MirrorPulseProductCatalog catalog,
-        Fixture fixture, MirrorPulseCoalescingContent? content, string observed = "changed")
+        Fixture fixture, MirrorPulseCoalescingContent? content, string? observed = "changed")
     {
         var conflicts = await SaveGroupConflictsAsync(catalog, fixture, observed);
         Guid command = Guid.NewGuid(); await catalog.SaveUserCommandAsync(new(command, "keeplocal", conflicts[^1].ToString("D"), "pending"));

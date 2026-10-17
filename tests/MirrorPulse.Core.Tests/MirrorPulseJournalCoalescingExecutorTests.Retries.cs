@@ -137,7 +137,7 @@ public sealed partial class MirrorPulseJournalCoalescingExecutorTests
         Assert.IsTrue(await catalog.HasPendingUploadConflictAsync(fixture.Plan.Members[0].OperationId));
     }
 
-    private static async Task<Guid[]> SaveGroupConflictsAsync(MirrorPulseProductCatalog catalog, Fixture fixture, string observed)
+    private static async Task<Guid[]> SaveGroupConflictsAsync(MirrorPulseProductCatalog catalog, Fixture fixture, string? observed)
     {
         var conflicts = new List<Guid>();
         foreach (var member in fixture.Plan.Members)

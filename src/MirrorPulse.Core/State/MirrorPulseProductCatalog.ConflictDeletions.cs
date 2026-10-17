@@ -91,8 +91,9 @@ public sealed partial class MirrorPulseProductCatalog
             {
                 if (observation is not null) throw new ArgumentException("A single observation cannot replace an owned group's complete execution.", nameof(observation));
                 var plan = await ReadCoalescingPlanCoreAsync(ownerId, transaction, cancellationToken).ConfigureAwait(false);
-                var execution = await ReadCoalescingExecutionCoreAsync(ownerId, transaction, cancellationToken).ConfigureAwait(false)
+                var original = await ReadCoalescingExecutionCoreAsync(ownerId, transaction, cancellationToken).ConfigureAwait(false)
                     ?? throw new InvalidDataException("The rejected group lost its original execution.");
+                var execution = await ReadCoalescingDispatchCoreAsync(plan, original, transaction, cancellationToken).ConfigureAwait(false);
                 if (plan.ItemId != itemId || plan.InstanceId != selected.InstanceId || plan.RootKey != rootKey)
                     throw new InvalidDataException("Deletion cannot adopt another group's logical item or root.");
                 string? baseline = execution.ExpectedRevision;
@@ -103,7 +104,8 @@ public sealed partial class MirrorPulseProductCatalog
                     var record = await ReadMutationCoreAsync(intent.OperationId, cancellationToken, transaction).ConfigureAwait(false);
                     if (record is { State: MirrorPulseMutationState.Acknowledged })
                     {
-                        if (step.Kind == MirrorPulseCoalescingStepKind.Move) baseline = record.AcceptedRevision;
+                        if (step.Kind == MirrorPulseCoalescingStepKind.Move || execution.HasMoveContent && step.Ordinal == 0)
+                            baseline = record.AcceptedRevision;
                         continue;
                     }
                     if (record is not { State: MirrorPulseMutationState.Conflict } || !SameIntent(record.Intent, intent))
