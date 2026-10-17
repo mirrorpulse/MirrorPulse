@@ -259,7 +259,7 @@ public sealed partial class MirrorPulseProductCatalog
                 member_id TEXT NOT NULL REFERENCES namespace_members(member_id),
                 payload BLOB NOT NULL,
                 fingerprint BLOB NOT NULL CHECK(length(fingerprint)=32),
-                phase INTEGER NOT NULL CHECK(phase IN (0,1,2,3))
+                phase INTEGER NOT NULL CHECK(phase IN (0,1,2,3,4))
             );
             CREATE TABLE IF NOT EXISTS namespace_member_retirement_batches (
                 operation_id TEXT NOT NULL PRIMARY KEY,

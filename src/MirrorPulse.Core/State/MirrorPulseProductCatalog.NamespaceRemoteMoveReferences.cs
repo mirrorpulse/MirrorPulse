@@ -55,6 +55,9 @@ public sealed partial class MirrorPulseProductCatalog
             UNION ALL SELECT batch_fingerprint,entry_count,ordinal,change_id FROM namespace_remote_birth_entries
             WHERE instance_id=$instance AND batch_id=$batch
               AND (batch_fingerprint<>$hash OR entry_count<>$count OR ordinal=$ordinal OR change_id=$change)
+            UNION ALL SELECT batch_fingerprint,entry_count,ordinal,change_id FROM namespace_remote_retirement_entries
+            WHERE instance_id=$instance AND batch_id=$batch
+              AND (batch_fingerprint<>$hash OR entry_count<>$count OR ordinal=$ordinal OR change_id=$change)
             LIMIT 1;
             """;
         AddNamespaceRemoteMoveParameters(previous, intent);
@@ -91,7 +94,7 @@ public sealed partial class MirrorPulseProductCatalog
             throw new InvalidDataException("The remote move owner index disagrees with its immutable batch admission.");
         await reader.DisposeAsync().ConfigureAwait(false);
         await ValidateNamespaceRemoteEntryCrossKindAsync(intent.OperationId, remote.InstanceId, remote.BatchId,
-            remote.BatchFingerprint, remote.BatchEntryCount, remote.Ordinal, remote.ChangeId, false, transaction, token).ConfigureAwait(false);
+            remote.BatchFingerprint, remote.BatchEntryCount, remote.Ordinal, remote.ChangeId, 0, transaction, token).ConfigureAwait(false);
     }
 
     private static void AddNamespaceRemoteMoveParameters(SqliteCommand command, MirrorPulseNamespaceMemberMoveIntent intent)

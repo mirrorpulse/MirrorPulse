@@ -78,6 +78,8 @@ public sealed class MirrorPulseNamespaceRetirementCoordinator(CloudFileSystem fi
     {
         actor.AssertAccess();
         var current = await catalog.ValidateNamespaceRetirementExecutionAsync(operationId, token).ConfigureAwait(false);
+        if (current.Intent.RemoteEntry is not null)
+            throw new InvalidOperationException("The original SDK batch owns this remote deletion; controlled deletion cannot pre-execute it.");
         if (current.Phase == MirrorPulseNamespaceRetirementPhase.Completed) return current;
         var member = await catalog.ReadNamespaceMemberAsync(current.Intent.MemberId, token).ConfigureAwait(false)
             ?? throw new FileNotFoundException("The retired member provenance is missing.");

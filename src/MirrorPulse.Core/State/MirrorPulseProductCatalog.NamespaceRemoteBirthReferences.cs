@@ -149,6 +149,9 @@ public sealed partial class MirrorPulseProductCatalog
             UNION ALL SELECT operation_id FROM namespace_remote_move_entries
             WHERE instance_id=$instance AND batch_id=$batch
               AND (batch_fingerprint<>$hash OR entry_count<>$count OR ordinal=$ordinal OR change_id=$change)
+            UNION ALL SELECT operation_id FROM namespace_remote_retirement_entries
+            WHERE instance_id=$instance AND batch_id=$batch
+              AND (batch_fingerprint<>$hash OR entry_count<>$count OR ordinal=$ordinal OR change_id=$change)
             LIMIT 1;
             """;
         AddNamespaceRemoteBirthParameters(previous, birth);
@@ -182,26 +185,29 @@ public sealed partial class MirrorPulseProductCatalog
             throw new InvalidDataException("The remote birth owner index disagrees with its immutable admission.");
         await reader.DisposeAsync().ConfigureAwait(false);
         await ValidateNamespaceRemoteEntryCrossKindAsync(birth.OperationId, remote.InstanceId, remote.BatchId,
-            remote.BatchFingerprint, remote.BatchEntryCount, remote.Ordinal, remote.ChangeId, true, transaction, token).ConfigureAwait(false);
+            remote.BatchFingerprint, remote.BatchEntryCount, remote.Ordinal, remote.ChangeId, 1, transaction, token).ConfigureAwait(false);
     }
 
     private async Task ValidateNamespaceRemoteEntryCrossKindAsync(Guid operationId, InstanceId instanceId, string batchId,
-        string fingerprint, int count, int ordinal, string changeId, bool birthEntry, SqliteTransaction? transaction, CancellationToken token)
+        string fingerprint, int count, int ordinal, string changeId, int ownerKind, SqliteTransaction? transaction, CancellationToken token)
     {
         await using var query = _connection.CreateCommand(); query.Transaction = transaction;
         query.CommandText = """
             SELECT operation_id FROM namespace_remote_birth_entries WHERE instance_id=$instance AND batch_id=$batch
-              AND (operation_id<>$operation OR $birth=0) AND
+              AND (operation_id<>$operation OR $kind<>1) AND
               (batch_fingerprint<>$hash OR entry_count<>$count OR ordinal=$ordinal OR change_id=$change)
             UNION ALL SELECT operation_id FROM namespace_remote_move_entries WHERE instance_id=$instance AND batch_id=$batch
-              AND (operation_id<>$operation OR $birth=1) AND
+              AND (operation_id<>$operation OR $kind<>0) AND
+              (batch_fingerprint<>$hash OR entry_count<>$count OR ordinal=$ordinal OR change_id=$change)
+            UNION ALL SELECT operation_id FROM namespace_remote_retirement_entries WHERE instance_id=$instance AND batch_id=$batch
+              AND (operation_id<>$operation OR $kind<>2) AND
               (batch_fingerprint<>$hash OR entry_count<>$count OR ordinal=$ordinal OR change_id=$change)
             LIMIT 1;
             """;
         query.Parameters.AddWithValue("$operation", operationId.ToString("D")); query.Parameters.AddWithValue("$instance", instanceId.ToString());
         query.Parameters.AddWithValue("$batch", batchId); query.Parameters.AddWithValue("$hash", fingerprint);
         query.Parameters.AddWithValue("$count", count); query.Parameters.AddWithValue("$ordinal", ordinal); query.Parameters.AddWithValue("$change", changeId);
-        query.Parameters.AddWithValue("$birth", birthEntry);
+        query.Parameters.AddWithValue("$kind", ownerKind);
         if (await query.ExecuteScalarAsync(token).ConfigureAwait(false) is not null)
             throw new InvalidDataException("The retained remote namespace entry has conflicting batch ownership.");
     }
