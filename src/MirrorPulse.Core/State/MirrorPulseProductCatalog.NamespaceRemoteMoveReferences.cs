@@ -58,6 +58,9 @@ public sealed partial class MirrorPulseProductCatalog
             UNION ALL SELECT batch_fingerprint,entry_count,ordinal,change_id FROM namespace_remote_retirement_entries
             WHERE instance_id=$instance AND batch_id=$batch
               AND (batch_fingerprint<>$hash OR entry_count<>$count OR ordinal=$ordinal OR change_id=$change)
+            UNION ALL SELECT batch_fingerprint,entry_count,ordinal,change_id FROM namespace_remote_retirement_tree_owners
+            WHERE instance_id=$instance AND batch_id=$batch
+              AND (batch_fingerprint<>$hash OR entry_count<>$count OR ordinal=$ordinal OR change_id=$change)
             LIMIT 1;
             """;
         AddNamespaceRemoteMoveParameters(previous, intent);

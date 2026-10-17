@@ -50,3 +50,17 @@ its clean native execution is still pending. Recursive directory retirement,
 new-role recovery and complete default Host integration remain required. A
 nonempty native directory is rejected before the leaf admission can create a
 pending owner.
+
+Schema 71 adds an original SDK subtree admission. Its complete registered graph,
+SDK entry owner, current child/parent protection and per-member identity/revision
+snapshots commit atomically. Separate bounded metadata rows retain the full tree
+fingerprint and can be read in pages of at most 64. The existing retirement graph
+bounds remain 65,536 members and 4 MiB for its structural header. Reopening or
+reading pages cannot replace missing members, positions, identities or metadata
+with current paths. Ordinary controlled retirement cannot execute or complete
+this SDK-owned admission.
+
+This subtree catalog boundary is preparatory. The managed driver still routes
+only registered leaves. Original SDK recursive dispatch, before-native starts,
+partial deletion/tombstone recovery, descendant settlement, conflicts and cursor
+publication still require their dedicated execution path and clean native proof.
