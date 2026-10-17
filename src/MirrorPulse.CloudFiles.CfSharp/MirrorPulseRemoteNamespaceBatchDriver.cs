@@ -65,12 +65,12 @@ internal sealed class MirrorPulseRemoteNamespaceBatchDriver(
                 throw new InvalidDataException("Product move settlement is ahead of its original SDK progress.");
             if (await catalog.ReadNamespaceMemberMoveStartAsync(intent.OperationId, token).ConfigureAwait(false) is null)
             {
-                await _moves.BeginRemoteAsync(intent.OperationId, instance, batch, count, token).ConfigureAwait(false);
+                await _moves.BeginRemoteWithProtocolAsync(intent.OperationId, instance, batch, count, options, token).ConfigureAwait(false);
                 if (checkpoint is not null)
                     await checkpoint(MirrorPulseRemoteNamespaceBatchCheckpoint.AfterMoveStart, token).ConfigureAwait(false);
             }
             else
-                recoveredResult = await _moves.ResumeUnmovedRemoteAsync(intent.OperationId, instance, batch, count, options, token).ConfigureAwait(false);
+                recoveredResult = await _moves.ResumeOriginalRemoteAsync(intent.OperationId, instance, batch, count, options, token).ConfigureAwait(false);
         }
         var result = recoveredResult ?? await actor.RunAsync(async admitted =>
         {

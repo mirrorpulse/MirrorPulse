@@ -36,8 +36,9 @@ supported protocol before its first dispatch under that protocol. The original
 start still remains immutable. Foreign keys and the product schema fence prevent
 older Hosts from silently ignoring these new facts.
 
-The current pinned SDK and runtime dispatch boundary remain separate from this
-catalog support. Switching packages, connecting the protocol-aware production
-replay branch and verifying native recovery are required before automatic
-recovery can be claimed. Directory movement, execution-role handoff and default
-Host composition retain their separate acceptance requirements.
+The preview.6 runtime records this admission under its fresh before-dispatch
+guards and uses it to select original-batch file recovery. Missing admission
+retains the existing unmoved-source route; a moved target cannot invent one.
+Native acceptance of the revised production-driver fixtures is still required
+before automatic recovery can be claimed. Directory movement, execution-role
+handoff and default Host composition retain their separate requirements.

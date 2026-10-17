@@ -85,7 +85,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
 
     private async Task RunOriginalRemoteMovementAsync(bool directoryMove, bool caseOnly = false, bool retainPending = false,
         bool settleRejected = false, bool managedBatch = false, bool staleExpectedRevision = false, bool stopBeforeSdk = false,
-        bool failProgressCommit = false)
+        bool failProgressCommit = false, bool legacyProtocolStart = false)
     {
         if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
             Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
@@ -103,6 +103,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         MirrorPulseNamespaceDirectoryMoveSnapshot? firstTree = null;
         MirrorPulseNamespaceRemoteMoveRejection? firstRejection = null;
         MirrorPulseNamespaceMemberMoveStart? firstStart = null;
+        MirrorPulseRemoteFileMoveProtocolAdmission? firstProtocol = null;
         MirrorPulseNamespaceMemberMoveIntent? peer = null;
         Guid[] originalJournal = [];
         Guid operation = Guid.NewGuid(); string sourcePath = directoryMove ? "Docs/left" : "Docs/remote.bin";
@@ -200,14 +201,42 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                                 MirrorPulseRemoteNamespaceBatchCheckpoint.AfterSdkApply)
                                 ? ValueTask.FromException(new IOException("Synthetic stop at the original remote dispatch boundary.")) : ValueTask.CompletedTask);
                         var engine = new MirrorPulseRemoteBatchCoordinator(fileSystem, state, null, driver);
-                        await Assert.ThrowsExactlyAsync<IOException>(() => engine.ApplyAsync(registration.InstanceId, batch,
-                            cancellationToken: deadline.Token).AsTask());
+                        await Assert.ThrowsExactlyAsync<IOException>(ApplyFirstBatchAsync);
+
+                        async Task ApplyFirstBatchAsync()
+                        {
+                            if (!legacyProtocolStart)
+                            {
+                                await engine.ApplyAsync(registration.InstanceId, batch, cancellationToken: deadline.Token);
+                                return;
+                            }
+                            // Exercise the older public product admission path without
+                            // deleting or manufacturing any retained catalog facts.
+                            intent = await coordinator.PrepareRemoteAsync(operation, memberId, targetParent,
+                                caseOnly ? "REMOTE.bin" : "remote.bin", registration.InstanceId, batch, 0, deadline.Token);
+                            await coordinator.BeginRemoteAsync(operation, registration.InstanceId, batch, 0, deadline.Token);
+                            await actor.RunAsync(async token =>
+                            {
+                                await execution.RunNamespaceOperationAsync(async () =>
+                                    await fileSystem.ApplyRemoteChangesAsync(batch, cancellationToken: token));
+                                return true;
+                            }, deadline.Token);
+                        }
                         intent = (await catalog.ReadNamespaceRemoteMoveAsync(registration.InstanceId, batch.BatchId, 0, deadline.Token))!;
                         Assert.IsNotNull(intent); operation = intent.OperationId;
                         var originalStart = await catalog.ReadNamespaceMemberMoveStartAsync(operation, deadline.Token);
                         Assert.IsNotNull(originalStart); Assert.AreEqual(2, originalStart.Version);
                         Assert.AreEqual("v1", originalStart.OriginalOfficialRemoteRevision);
                         firstStart = originalStart;
+                        firstProtocol = await catalog.ReadNamespaceRemoteFileMoveProtocolAsync(operation, deadline.Token);
+                        if (!directoryMove && !legacyProtocolStart)
+                        {
+                            Assert.IsNotNull(firstProtocol);
+                            Assert.AreEqual("0.1.0-preview.6", firstProtocol.PackageVersion);
+                            Assert.AreEqual("3caa382e341d260543d3afc05e25fa034fb32e16", firstProtocol.PackageSourceCommit);
+                            Assert.AreEqual(originalStart, firstProtocol.OriginalStart);
+                        }
+                        if (legacyProtocolStart) Assert.IsNull(firstProtocol);
                         Assert.IsNull(await catalog.ReadNamespaceMemberMoveCompletionAsync(operation, deadline.Token));
                         Assert.AreEqual(sourcePath, (await catalog.ReadNamespaceMemberLocationAsync(memberId, deadline.Token)).RelativePath);
                         Assert.IsNull(await engine.ReadCursorAsync(registration.InstanceId, deadline.Token));
@@ -329,44 +358,40 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     if (failProgressCommit)
                     {
                         await VerifyUncommittedRemoteMoveAsync(fileSystem, state, catalog, intent, firstStart!, batch, sourcePath, targetPath, deadline.Token);
-                        Exception? blocked = null;
-                        try { await engine.ApplyAsync(registration.InstanceId, batch, cancellationToken: deadline.Token); }
-                        catch (Exception error) when (error is IOException or InvalidDataException) { blocked = error; }
-                        catch (Win32Exception error) when (error.NativeErrorCode == 2) { blocked = error; }
-                        Assert.IsNotNull(blocked, "An unknown native result must not be redispatched or settled from incomplete SDK progress.");
-                        TestContext.WriteLine($"OriginalRemoteProgressGuard: caseOnly={caseOnly}; failureType={blocked.GetType().Name}; sdkProgressStillUncommitted=True.");
-                        await VerifyUncommittedRemoteMoveAsync(fileSystem, state, catalog, intent, firstStart!, batch, sourcePath, targetPath, deadline.Token);
-                        CloudRemoteApplyResult actualReplay = null!;
-                        // Exercise the library's original public replay independently of the
-                        // product guard. Keep its actual result and durable conflict as evidence.
-                        await actor.RunAsync(async token =>
+                        Assert.AreEqual(firstProtocol, await catalog.ReadNamespaceRemoteFileMoveProtocolAsync(operation, deadline.Token));
+                        if (legacyProtocolStart)
                         {
-                            await execution.RunNamespaceOperationAsync(async () =>
-                                actualReplay = await fileSystem.ApplyRemoteChangesAsync(batch, cancellationToken: token));
-                            return true;
-                        }, deadline.Token);
-                        TestContext.WriteLine($"OriginalRemoteProgressSdkReplay: status={actualReplay.Status}; entries={string.Join(',', actualReplay.Entries.Select(entry => entry.Status))}; " +
-                            $"count={actualReplay.AppliedEntryCount}; retry={actualReplay.RequiresRetry}; conflicts={actualReplay.ConflictIds.Count}.");
-                        Assert.AreEqual(CloudRemoteApplyEntryStatus.Conflict, actualReplay.Entries.Single().Status);
-                        Assert.AreEqual(1, actualReplay.AppliedEntryCount); Assert.IsFalse(actualReplay.RequiresRetry);
-                        var record = await fileSystem.GetRemoteConflictAsync(actualReplay.ConflictIds.Single(), deadline.Token);
-                        Assert.IsNotNull(record); Assert.AreEqual(CloudRemoteConflictReason.StaleRemoteRevision, record.Conflict.Reason);
-                        Assert.AreEqual("v1", record.Conflict.Change.PreviousRemoteRevision);
-                        Assert.IsNull(await catalog.ReadNamespaceMemberMoveCompletionAsync(operation, deadline.Token));
-                        Assert.IsNull(await engine.ReadCursorAsync(registration.InstanceId, deadline.Token));
-                        Assert.AreEqual(firstMember.LocalObject.LocalFileId, (await fileSystem.GetFile(targetPath).InspectAsync(deadline.Token)).LocalBinding!.LocalFileId);
-                        Assert.AreEqual(0, provider.Reads);
-                        TestContext.WriteLine($"OriginalRemoteProgressGap: caseOnly={caseOnly}; twoSdkOwners=True; nativeMoveAndOfficialItemCommitted=True; " +
-                            "originalProgressCommitLost=True; originalStartAndBindingPreserved=True; productRecoveryBlockedBeforeSdkRedispatch=True; " +
-                            $"publicSdkReplayEntry={actualReplay.Entries.Single().Status}; publicSdkReplayReason={record.Conflict.Reason}; " +
-                            "adapterCursorPublished=False; productMoveCompleted=False; hydration=False; syntheticPersistenceFailureHasNoNativeError=True; " +
-                            "automaticOutcomeRecoveryDelivered=False; sameRoleAcrossSdkOwners=True; defaultHostIntegrated=False.");
-                        continue;
+                            Exception? blocked = null;
+                            try { await engine.ApplyAsync(registration.InstanceId, batch, cancellationToken: deadline.Token); }
+                            catch (Exception error) when (error is IOException or InvalidDataException) { blocked = error; }
+                            catch (Win32Exception error) when (error.NativeErrorCode == 2) { blocked = error; }
+                            Assert.IsNotNull(blocked, "A moved legacy product start cannot acquire a new protocol from its current target.");
+                            await VerifyUncommittedRemoteMoveAsync(fileSystem, state, catalog, intent, firstStart!, batch, sourcePath, targetPath, deadline.Token);
+                            Assert.IsNull(await catalog.ReadNamespaceRemoteFileMoveProtocolAsync(operation, deadline.Token));
+                            Assert.IsEmpty(await fileSystem.ListRemoteConflictsAsync(deadline.Token));
+                            Assert.AreEqual(0, provider.Reads);
+                            TestContext.WriteLine($"LegacyRemoteProductStart: caseOnly={caseOnly}; originalStartWithoutProtocol=True; " +
+                                "twoSdkOwners=True; movedTargetNotAdopted=True; originalSdkProgressUnchanged=True; " +
+                                "newProtocolInvented=False; adapterCursorPublished=False; hydration=False; sdkVersion=preview.6; preview5BinaryMigration=False.");
+                            continue;
+                        }
                     }
+                    // This metadata-only handle denies DELETE sharing. A second native
+                    // rename, including through a case-only source alias, cannot succeed.
+                    using var noRepeatRename = failProgressCommit ? RetainRemoteMoveTargetWithoutRename(fileSystem.GetFile(targetPath).FullPath) : null;
                     var replay = await engine.ApplyAsync(registration.InstanceId, batch, cancellationToken: deadline.Token);
-                    Assert.AreEqual(stopBeforeSdk ? CloudRemoteApplyEntryStatus.Applied : CloudRemoteApplyEntryStatus.AlreadyApplied,
+                    Assert.AreEqual(stopBeforeSdk || failProgressCommit ? CloudRemoteApplyEntryStatus.Applied : CloudRemoteApplyEntryStatus.AlreadyApplied,
                         replay.Entries.Single().Status);
                     Assert.IsFalse(replay.RequiresRetry);
+                    if (failProgressCommit)
+                    {
+                        Assert.AreEqual(1, replay.AppliedEntryCount); Assert.IsEmpty(replay.ConflictIds);
+                        Assert.IsEmpty(await fileSystem.ListRemoteConflictsAsync(deadline.Token));
+                        TestContext.WriteLine($"OriginalRemoteProgressRecovered: caseOnly={caseOnly}; twoSdkOwners=True; " +
+                            "originalProgressCommitLost=True; originalProtocolAndStartRetained=True; productionDriverRecovery=True; " +
+                            $"actualSdkStatus={replay.Status}; actualSdkEntry={replay.Entries.Single().Status}; " +
+                            "secondNativeRenameDenied=True; noSpuriousConflict=True; sameRoleAcrossSdkOwners=True; defaultHostIntegrated=False.");
+                    }
                     Assert.AreEqual(intent, await catalog.ReadNamespaceRemoteMoveAsync(registration.InstanceId, batch.BatchId, 0, deadline.Token));
                     Assert.AreEqual(firstStart, await catalog.ReadNamespaceMemberMoveStartAsync(operation, deadline.Token));
                     if (staleExpectedRevision)

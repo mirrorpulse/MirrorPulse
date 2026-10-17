@@ -15,9 +15,17 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
         return _actor.RunAsync(token => BeginRemoteAdmittedAsync(operationId, request, token), cancellationToken);
     }
 
+    internal ValueTask<MirrorPulseNamespaceMemberMoveStart> BeginRemoteWithProtocolAsync(Guid operationId, InstanceId instanceId,
+        CloudRemoteChangeBatch batch, int ordinal, CloudRemoteApplyOptions options, CancellationToken cancellationToken)
+    {
+        var request = new RemoteMoveRequest(instanceId, batch, ordinal); _ = RequireRemoteChange(request);
+        return _actor.RunAsync(token => BeginRemoteAdmittedAsync(operationId, request, token,
+            protocolOptions: options), cancellationToken);
+    }
+
     private async ValueTask<MirrorPulseNamespaceMemberMoveStart> BeginRemoteAdmittedAsync(Guid operationId,
         RemoteMoveRequest request, CancellationToken token, bool recoverUnmovedStart = false,
-        Func<CancellationToken, ValueTask>? dispatch = null)
+        Func<CancellationToken, ValueTask>? dispatch = null, CloudRemoteApplyOptions? protocolOptions = null)
     {
         _actor.AssertAccess();
         var intent = await _catalog.ValidateNamespaceMemberMoveExecutionAsync(operationId, token).ConfigureAwait(false);
@@ -86,6 +94,9 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
                 throw new InvalidDataException("The official source revision changed before the original remote start.");
             result = originalStart ?? await _catalog.RecordNamespaceMemberMoveStartAsync(new(2, operationId, DateTimeOffset.UtcNow)
             { OriginalOfficialRemoteRevision = finalProjection.RemoteRevision }, token).ConfigureAwait(false);
+            if (protocolOptions is not null && !member.IsDirectory)
+                await _catalog.AdmitNamespaceRemoteFileMoveProtocolAsync(operationId, RemoteFilePackageVersion, RemoteFilePackageSource,
+                    RemoteFilePolicy(protocolOptions), DateTimeOffset.UtcNow, token).ConfigureAwait(false);
             if (dispatch is not null)
             {
                 // Retain the actor, current namespace role and original parent guards across
@@ -112,7 +123,7 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
             CloudRemoteApplyResult result = null!;
             _ = await BeginRemoteAdmittedAsync(operationId, request, token, recoverUnmovedStart: true,
                 dispatch: async admitted => result = await _fileSystem.ApplyRemoteChangesAsync(batch,
-                    options with { MaximumEntries = 1 }, admitted).ConfigureAwait(false)).ConfigureAwait(false);
+                    options with { MaximumEntries = 1 }, admitted).ConfigureAwait(false), protocolOptions: options).ConfigureAwait(false);
             return result;
         }, cancellationToken);
     }

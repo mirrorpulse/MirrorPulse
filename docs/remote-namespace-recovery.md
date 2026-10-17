@@ -138,15 +138,31 @@ report `NotMoved` and validates every sealed descendant. The actor, current role
 parent guards remain held while the SDK applies the original entry. The first start is
 immutable. A moved, replaced, missing, reprotected or otherwise uncertain source cannot
 use this route. Legacy starts remain readable and acquire no fabricated revision evidence.
-Native success before SDK batch-progress commit still requires a separate recovery path.
+Files with an original [SDK protocol admission](remote-file-move-protocol-admission.md)
+use the preview.6 original-batch recovery path. The driver verifies the unchanged member,
+current role, both protected parents and the original native object at either admitted
+endpoint. It accepts only the original official source baseline or incoming target
+projection, then delegates replay to CfSharp. The SDK authenticates its own opaque
+preparation, local work and native state before deciding whether another rename,
+projection or only outcome publication is required. Product admission alone cannot
+establish success. The driver returns the actual SDK result and settles the product
+only after the original entry's real progress advances.
 
 The commit-gap fixtures decorate the public state-store transaction and fail its
 original progress commit only after the SDK item has the target path and incoming
-revision. They verify that the persisted progress remains behind the actual native
-binding and official item across SDK owners. Product recovery must retain the
-original start and fence without another native dispatch or Adapter cursor. A
-separate direct public SDK replay records its real result and conflict reason;
-this preservation boundary does not deliver automatic outcome recovery.
+revision. They require the persisted progress to remain behind the actual native
+binding and official item across SDK owners, then require production-driver recovery
+of that original entry. A metadata-only target handle denies another native rename,
+including a case-only source alias. The assertions require the same protocol/start,
+actual successful SDK outcome, no spurious conflict, stable binding, cold content,
+and product settlement before the Adapter cursor. These revised fixtures require
+fresh native acceptance; earlier preview.5 defect-characterization results do not
+prove preview.6 recovery.
+
+A start without protocol admission cannot adopt an already-moved target. The legacy
+guard fixtures use the older public product-start path under preview.6 and require
+the original progress, start and pending fence to remain intact without inventing
+protocol evidence. They do not claim a preview.5-binary database migration test.
 
 Polling may reconstruct its durable original batch before checking the ordinary polling
 fence. Its explicit replay predicate admits only the batch owning the pending remote move;
@@ -156,6 +172,6 @@ an old Host role's authority. Default Host composition, new-role recovery, strea
 intent, multiple roots and the remaining entry lifecycles are still pending.
 
 The driver bounds batches to 65,536 entries. Prefix settlement currently validates historical
-move references, and conflict recovery uses CfSharp preview.5's decoded list API because it
+move references, and conflict recovery uses the decoded list API introduced in preview.5 because it
 does not expose a batch-scoped conflict page. These paths do not constitute the complete
 fairness and query-budget acceptance required for S06.

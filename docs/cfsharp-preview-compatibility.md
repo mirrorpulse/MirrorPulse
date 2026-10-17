@@ -1,8 +1,21 @@
 # CfSharp Preview Compatibility Report
 
-MirrorPulse pins `CfSharp` and `CfSharp.Storage.Sqlite` to `0.1.0-preview.5` from
+MirrorPulse pins `CfSharp` and `CfSharp.Storage.Sqlite` to `0.1.0-preview.6` from
 NuGet.org. The integration project owns CfSharp types and lifecycle; Core exposes
 MirrorPulse contracts to Adapters and the product UI.
+
+The core, SQLite provider and native NuGet publications identify the same source
+commit, `3caa382e341d260543d3afc05e25fa034fb32e16`. Package and lock updates do
+not establish native acceptance. The native evidence described below was obtained
+with earlier previews; preview.6 integration and its original-batch recovery need
+their own validation on the exact MirrorPulse source.
+
+Preview.6 retains an original file-move preparation and reconciles immutable-batch
+replay before stale-revision checks. Its official SQLite schema is 7. Directory
+remote-batch outcome recovery and legacy preview.5 gaps without original evidence
+remain conservative under the documented SDK contract. MirrorPulse separately
+retains [product protocol admission](remote-file-move-protocol-admission.md); that
+record alone does not prove SDK preparation, movement or outcome completion.
 
 ## Current boundary
 

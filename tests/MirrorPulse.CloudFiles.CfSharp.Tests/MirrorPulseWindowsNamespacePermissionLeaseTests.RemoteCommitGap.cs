@@ -1,10 +1,26 @@
+using System.ComponentModel;
+using System.Runtime.InteropServices;
 using CfSharp;
+using Microsoft.Win32.SafeHandles;
 using MirrorPulse.Core.State;
 
 namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 
 public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
 {
+    private static SafeFileHandle RetainRemoteMoveTargetWithoutRename(string path)
+    {
+        var handle = OpenRemoteMoveObservationHandle(path, 0x80, 3, IntPtr.Zero, 3, 0x00200000, IntPtr.Zero);
+        if (!handle.IsInvalid) return handle;
+        int error = Marshal.GetLastPInvokeError(); handle.Dispose();
+        throw new Win32Exception(error, "The original remote target could not be retained without rename sharing.");
+    }
+
+    [LibraryImport("kernel32.dll", EntryPoint = "CreateFileW", StringMarshalling = StringMarshalling.Utf16, SetLastError = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    private static partial SafeFileHandle OpenRemoteMoveObservationHandle(string path, uint access, uint share,
+        IntPtr securityAttributes, uint creation, uint flags, IntPtr template);
+
     [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles")]
     public Task NativeManagedRemoteFileCommitGapRetainsTheOriginalMovedObjectWithoutRedispatch() =>
         RunOriginalRemoteMovementAsync(directoryMove: false, managedBatch: true, failProgressCommit: true);
@@ -12,6 +28,14 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles")]
     public Task NativeManagedRemoteCaseOnlyCommitGapRetainsTheOriginalMovedObjectWithoutRedispatch() =>
         RunOriginalRemoteMovementAsync(directoryMove: false, caseOnly: true, managedBatch: true, failProgressCommit: true);
+
+    [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles")]
+    public Task NativeLegacyRemoteFileStartWithoutProtocolCannotAdoptAMovedTargetAfterReopen() =>
+        RunOriginalRemoteMovementAsync(directoryMove: false, managedBatch: true, failProgressCommit: true, legacyProtocolStart: true);
+
+    [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles")]
+    public Task NativeLegacyRemoteCaseOnlyStartWithoutProtocolCannotAdoptAMovedTargetAfterReopen() =>
+        RunOriginalRemoteMovementAsync(directoryMove: false, caseOnly: true, managedBatch: true, failProgressCommit: true, legacyProtocolStart: true);
 
     private static async Task VerifyUncommittedRemoteMoveAsync(CloudFileSystem fileSystem, MirrorPulseCfSharpStateSession state,
         MirrorPulseProductCatalog catalog, MirrorPulseNamespaceMemberMoveIntent intent, MirrorPulseNamespaceMemberMoveStart originalStart,
