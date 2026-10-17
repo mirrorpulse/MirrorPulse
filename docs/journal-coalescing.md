@@ -130,9 +130,22 @@ test. Passing the component case does not establish installed Host integration
 or complete conflict-resolution coverage.
 
 The move-only KeepLocal case retains the complete real rename-notification window.
-It requires an original MoveFile plan, a distinct authorized move and upload,
+It requires an original single-move execution, a distinct authorized move and upload,
 and the move's actual accepted revision as the upload precondition. It checks
 native content confirmation, retained rejected history and seed proof, and all
 original IDs across a second library owner. An unexpected content notification
-is reported in the original window; the fixture does not remove it to manufacture
-a move-only plan.
+is retained in the original plan; the fixture does not remove it to manufacture
+a move-only plan. An immutable MoveAndUpdateFile plan can select a version 3
+single-move execution only when a prior completed upload, confirmation receipt,
+current native binding/identity, and complete byte hash prove unchanged content.
+The original plan and every notification remain unchanged.
+
+Catalog schema 65 prevents an older runtime from interpreting the new execution
+or its move-content identity provenance. Ordinary observed moves confirm the
+same bytes against the actual move-accepted revision through public CfSharp
+content confirmation, before original acknowledgement. This is an accepted move,
+not another upload. A narrow catalog check binds its content proof and registered
+identity transition to the original observed execution. Explicit KeepLocal
+move-and-upload decisions confirm only their later upload. Historical seed
+acceptance and receipts remain immutable. Lost move replies without a retained
+accepted revision stay unresolved; target presence alone is insufficient.

@@ -24,6 +24,7 @@ public sealed partial class MirrorPulseProductCatalog
                     SELECT proof.operation_id FROM content_acceptance_proofs proof
                     JOIN mutation_intents mutation USING(operation_id)
                     WHERE mutation.state=$acknowledged
+                      AND json_extract(CAST(mutation.payload AS TEXT),'$.Kind') IN ($create,$update)
                       AND json_extract(CAST(mutation.payload AS TEXT),'$.InstanceId')=$instance
                       AND json_extract(CAST(mutation.payload AS TEXT),'$.RootKey')=$root
                       AND json_extract(CAST(proof.payload AS TEXT),'$.AcceptedItemId')=$item
@@ -32,6 +33,8 @@ public sealed partial class MirrorPulseProductCatalog
                     ORDER BY mutation.updated_utc DESC,proof.operation_id DESC LIMIT 1;
                     """;
                 query.Parameters.AddWithValue("$acknowledged", (int)MirrorPulseMutationState.Acknowledged);
+                query.Parameters.AddWithValue("$create", (int)MirrorPulseWorkerChangeKind.Create);
+                query.Parameters.AddWithValue("$update", (int)MirrorPulseWorkerChangeKind.ContentUpdate);
                 query.Parameters.AddWithValue("$instance", instanceId.ToString()); query.Parameters.AddWithValue("$root", rootKey);
                 query.Parameters.AddWithValue("$item", itemId.ToString("D")); query.Parameters.AddWithValue("$revision", revision);
                 query.Parameters.AddWithValue("$binding", JsonSerializer.Serialize(localObject, TopologyJsonOptions));
@@ -53,7 +56,7 @@ public sealed partial class MirrorPulseProductCatalog
         MirrorPulseJournalCoalescingExecution execution, SqliteTransaction transaction, CancellationToken token)
     {
         if (execution.ObservedContent is not { } observed) return;
-        if (execution.Version != 2 || execution.OriginalMutations.Count != 0)
+        if (execution.Version != (plan.Effect == MirrorPulseCoalescedEffect.MoveAndUpdateFile ? 3 : 2) || execution.OriginalMutations.Count != 0)
             throw new InvalidDataException("An observed program cannot discard prepared original mutation intent.");
         var proof = await ReadContentAcceptanceProofCoreAsync(observed.AcceptanceOperationId, token, transaction).ConfigureAwait(false)
             ?? throw new InvalidDataException("The observed program has no actual historical acceptance proof.");

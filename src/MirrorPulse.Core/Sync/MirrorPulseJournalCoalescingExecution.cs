@@ -29,6 +29,9 @@ public sealed record MirrorPulseJournalCoalescingExecution(int Version, Guid Pla
 {
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public MirrorPulseCoalescingObservedContent? ObservedContent { get; init; }
+
+    [JsonIgnore]
+    public bool IsMoveOnly => Content is null && Steps.Count == 1 && Steps[0].Kind == MirrorPulseCoalescingStepKind.Move;
 }
 
 /// <summary>A validated dispatch view combining immutable preparation with an explicit later user decision.</summary>
@@ -37,7 +40,7 @@ public sealed record MirrorPulseJournalCoalescingDispatch(MirrorPulseJournalCoal
     MirrorPulseCoalescingContent? Content, IReadOnlyList<MirrorPulseCoalescingStep> Steps)
 {
     public string? ExpectedRevision => Original.ExpectedRevision;
-    public bool HasMoveContent => Original.Steps.Count == 1 && Steps.Count == 2 && Original.Content is null;
+    public bool HasMoveContent => Original.IsMoveOnly && Steps.Count == 2;
 }
 
 public static class MirrorPulseJournalCoalescingExecutionPlanner
@@ -75,7 +78,8 @@ public static class MirrorPulseJournalCoalescingExecutionPlanner
             throw new ArgumentException("The coalesced effect requires an explicit unchanged remote baseline.", nameof(expectedRevision));
         if (observedContent is not null)
         {
-            if (plan.Effect != MirrorPulseCoalescedEffect.UpdateFile || plan.OriginalPath != plan.FinalPath ||
+            if ((plan.Effect != MirrorPulseCoalescedEffect.UpdateFile || plan.OriginalPath != plan.FinalPath) &&
+                (plan.Effect != MirrorPulseCoalescedEffect.MoveAndUpdateFile || plan.OriginalPath == plan.FinalPath) ||
                 observedContent.AcceptanceOperationId == Guid.Empty || observedContent.ItemId != plan.ItemId ||
                 string.IsNullOrEmpty(observedContent.RemoteId) || observedContent.RemoteRevision != expectedRevision ||
                 observedContent.Content is not { Length: >= 0, Sha256.Length: 64, UploadBinding: not null } ||
@@ -100,7 +104,11 @@ public static class MirrorPulseJournalCoalescingExecutionPlanner
             byte[] identity = SHA256.HashData(Encoding.UTF8.GetBytes(FormattableString.Invariant($"MirrorPulse.Coalescing.v1/{plan.PlanId:D}/{ordinal}")));
             steps.Add(new(new Guid(identity.AsSpan(0, 16)), ordinal, kind, path, previous));
         }
-        if (observedContent is not null) Add(MirrorPulseCoalescingStepKind.VerifyUnchanged, plan.FinalPath);
+        if (observedContent is not null)
+        {
+            if (plan.Effect == MirrorPulseCoalescedEffect.MoveAndUpdateFile) Add(MirrorPulseCoalescingStepKind.Move, plan.FinalPath, plan.OriginalPath);
+            else Add(MirrorPulseCoalescingStepKind.VerifyUnchanged, plan.FinalPath);
+        }
         else switch (plan.Effect)
             {
                 case MirrorPulseCoalescedEffect.VerifyRemoteAbsence:
@@ -130,7 +138,8 @@ public static class MirrorPulseJournalCoalescingExecutionPlanner
         if (steps.Any(step => step.OperationId == Guid.Empty || step.OperationId == plan.PlanId ||
             plan.Members.Any(member => member.OperationId == step.OperationId)) || steps.Select(step => step.OperationId).Distinct().Count() != steps.Count)
             throw new InvalidDataException("The coalesced remote-effect identities collide with retained ownership.");
-        return new(observedContent is null ? 1 : 2, plan.PlanId, Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(plan))),
+        return new(observedContent is null ? 1 : plan.Effect == MirrorPulseCoalescedEffect.MoveAndUpdateFile ? 3 : 2,
+            plan.PlanId, Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(plan))),
             expectedRevision, content, steps.AsReadOnly(), Array.Empty<MirrorPulseCoalescingOriginalMutation>())
         { ObservedContent = observedContent };
     }

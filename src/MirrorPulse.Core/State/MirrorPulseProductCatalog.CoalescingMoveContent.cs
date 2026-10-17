@@ -31,7 +31,7 @@ public sealed partial class MirrorPulseProductCatalog
         SqliteTransaction transaction, CancellationToken token)
     {
         var dispatch = new MirrorPulseJournalCoalescingDispatch(original, original.Content, original.Steps);
-        if (plan.Effect != MirrorPulseCoalescedEffect.MoveFile) return dispatch;
+        if (!original.IsMoveOnly) return dispatch;
         MirrorPulseJournalCoalescingRetry? retry = null;
         await using (var query = _connection.CreateCommand())
         {

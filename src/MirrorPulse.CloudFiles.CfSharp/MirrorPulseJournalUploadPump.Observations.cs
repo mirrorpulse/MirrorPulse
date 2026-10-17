@@ -11,7 +11,8 @@ public sealed partial class MirrorPulseJournalUploadPump
     private async Task<MirrorPulseCoalescingObservedContent?> TryObserveAcceptedContentAsync(MirrorPulseJournalCoalescingPlan plan,
         CloudItemSnapshot snapshot, MirrorPulseCoalescingContent content, string baseline, CancellationToken token)
     {
-        if (plan.OriginalPath != plan.FinalPath || !snapshot.Exists || snapshot.IsTombstone || !snapshot.IsPlaceholder ||
+        if (plan.OriginalPath != plan.FinalPath && plan.Effect != MirrorPulseCoalescedEffect.MoveAndUpdateFile ||
+            !snapshot.Exists || snapshot.IsTombstone || !snapshot.IsPlaceholder ||
             snapshot.ItemId != plan.ItemId || snapshot.ContentAvailability != CloudContentAvailability.FullyAvailable ||
             content.UploadBinding.Preparation != MirrorPulseContentPreparation.ReplacePlaceholderIdentity ||
             content.UploadBinding.PreviousPlaceholderIdentity != Convert.ToBase64String(snapshot.PlaceholderIdentity.Span))

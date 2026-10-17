@@ -68,12 +68,14 @@ public sealed partial class MirrorPulseProductCatalog
         if (member.IsDirectory || member.RootId != value.RootId || member.LocalObject != proof.UploadBinding.LocalObject ||
             retained != proof || mutation.State is not (MirrorPulseMutationState.RemoteAccepted or MirrorPulseMutationState.Acknowledged) ||
             mutation.Intent.UploadBinding != proof.UploadBinding || mutation.Intent.IsDirectory ||
-            mutation.Intent.Kind is not (MirrorPulseWorkerChangeKind.Create or MirrorPulseWorkerChangeKind.ContentUpdate) ||
+            mutation.Intent.Kind is not (MirrorPulseWorkerChangeKind.Create or MirrorPulseWorkerChangeKind.ContentUpdate or MirrorPulseWorkerChangeKind.Move) ||
             mutation.Intent.ContentLength != proof.Length ||
             !string.Equals(mutation.Intent.ContentSha256, proof.Sha256, StringComparison.OrdinalIgnoreCase) ||
             mutation.AcceptedRevision != proof.AcceptedRevision || value.Confirmation.ObservedAt < member.RegisteredAt ||
             value.UploadIntentSha256 != Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(mutation.Intent, TopologyJsonOptions))))
             throw new InvalidOperationException("Accepted identity correlation requires the same registered object and durable upload-time proof.");
+        if (mutation.Intent.Kind == MirrorPulseWorkerChangeKind.Move)
+            await RequireObservedMoveContentProofAsync(mutation, proof, transaction, token).ConfigureAwait(false);
         if (proof.UploadBinding.Preparation == MirrorPulseContentPreparation.ConvertRegularFile &&
             (proof.UploadBinding.NamespaceIdentity is not { } uploadIdentity || uploadIdentity.MemberId != value.MemberId ||
                 uploadIdentity.ItemId != value.PreviousItemId || uploadIdentity.RemoteId != value.PreviousRemoteId ||

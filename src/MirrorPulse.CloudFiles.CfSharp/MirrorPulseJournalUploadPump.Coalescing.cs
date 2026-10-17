@@ -82,7 +82,7 @@ public sealed partial class MirrorPulseJournalUploadPump
                     var after = await file.InspectAsync(token).ConfigureAwait(false);
                     if (after.Length != final.Length || await _contentConfirmation.CaptureUploadBindingAsync(file, after, token).ConfigureAwait(false) != binding)
                         throw new InvalidDataException("The guarded coalesced object changed during content capture.");
-                    if (originals.Length == 0 && plan.Effect == MirrorPulseCoalescedEffect.UpdateFile && baseline is not null)
+                    if (originals.Length == 0 && plan.Effect is MirrorPulseCoalescedEffect.UpdateFile or MirrorPulseCoalescedEffect.MoveAndUpdateFile && baseline is not null)
                         observed = await TryObserveAcceptedContentAsync(plan, after, final, baseline, token).ConfigureAwait(false);
                     if (observed is null && originals.Length == 0 && plan.Effect == MirrorPulseCoalescedEffect.UpdateFile &&
                         MirrorPulseJournalContentPolicy.IsAcceptedObservation(after, _router.GetRegistration(plan.InstanceId, plan.RootKey), baseline))

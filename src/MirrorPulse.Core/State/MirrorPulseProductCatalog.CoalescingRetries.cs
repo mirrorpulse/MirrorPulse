@@ -127,7 +127,7 @@ public sealed partial class MirrorPulseProductCatalog
                 }
                 if (!conflicts.Contains(conflictId)) throw new InvalidOperationException("The selected conflict is not the current pending group epoch.");
                 var kind = execution.Steps[ordinal].Kind;
-                bool moveOnly = plan.Effect == MirrorPulseCoalescedEffect.MoveFile && ordinal == 0;
+                bool moveOnly = originalExecution.IsMoveOnly && ordinal == 0;
                 bool moveContent = moveOnly && (content is not null || execution.HasMoveContent);
                 bool followupContent = execution.HasMoveContent && ordinal == 1 && kind == MirrorPulseCoalescingStepKind.Upload;
                 if (content is not null && (!acceptObservedRemoteRevision ||
@@ -224,7 +224,7 @@ public sealed partial class MirrorPulseProductCatalog
             {
                 if (retry.Version == 3 && !retry.AcceptObservedRemoteRevision)
                     throw new InvalidDataException("A move-content suffix requires its original explicit keep-local authorization.");
-                var original = retry.Ordinal == 0 && plan.Effect == MirrorPulseCoalescedEffect.MoveFile
+                var original = retry.Ordinal == 0 && execution.Original.IsMoveOnly
                     ? new MirrorPulseJournalCoalescingDispatch(execution.Original, execution.Original.Content, execution.Original.Steps) : execution;
                 if (!SameIntent(previous.Intent, CoalescingIntent(plan, original, retry.Ordinal, baseline)))
                     throw new InvalidDataException("The first rejected effect lost its original execution baseline or proof.");
@@ -348,17 +348,18 @@ public sealed partial class MirrorPulseProductCatalog
     private static MirrorPulseMutationIntent RetryIntent(MirrorPulseJournalCoalescingPlan plan,
         MirrorPulseJournalCoalescingDispatch execution, int ordinal, string? baseline, int version, MirrorPulseCoalescingContent? content)
     {
-        var original = ordinal == 0 && plan.Effect == MirrorPulseCoalescedEffect.MoveFile
+        var original = ordinal == 0 && execution.Original.IsMoveOnly
             ? new MirrorPulseJournalCoalescingDispatch(execution.Original, execution.Original.Content, execution.Original.Steps) : execution;
         var intent = CoalescingIntent(plan, original, ordinal, baseline);
         if (version == 1)
             return content is null ? intent : throw new InvalidDataException("An original retry cannot replace its retained content.");
         if (version == 3)
         {
-            if (ordinal != 0 || plan.Effect != MirrorPulseCoalescedEffect.MoveFile || execution.Original.Content is not null ||
+            if (ordinal != 0 || !execution.Original.IsMoveOnly || execution.Original.Content is not null ||
                 execution.Original.Steps.Count != 1 || execution.Original.Steps[ordinal].Kind != MirrorPulseCoalescingStepKind.Move || baseline is { Length: 0 })
                 throw new InvalidDataException("Only an original move-only program can acquire a content suffix.");
             ValidateCoalescingDecisionContent(content);
+            intent = intent with { ContentLength = null, ContentSha256 = null, UploadBinding = null };
             return baseline is null ? intent with
             { Kind = MirrorPulseWorkerChangeKind.MetadataUpdate, RelativePath = plan.OriginalPath, PreviousRelativePath = null } : intent;
         }

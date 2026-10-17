@@ -467,7 +467,8 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
                 ?? throw new InvalidDataException("The accepted mutation intent disappeared.");
             if (record.Intent.IsDirectory && record.Intent.Kind == MirrorPulseWorkerChangeKind.Create)
                 await ProjectDirectoryAsync(record, revision, cancellationToken).ConfigureAwait(false);
-            if (!record.Intent.IsDirectory && record.Intent.Kind is MirrorPulseWorkerChangeKind.Create or MirrorPulseWorkerChangeKind.ContentUpdate)
+            if (!record.Intent.IsDirectory && (record.Intent.Kind is MirrorPulseWorkerChangeKind.Create or MirrorPulseWorkerChangeKind.ContentUpdate ||
+                record.Intent.Kind == MirrorPulseWorkerChangeKind.Move && record.Intent.Origin == MirrorPulseMutationOrigin.CoalescedJournal && record.Intent.UploadBinding is not null))
             {
                 if (record.Intent.UploadBinding is null)
                 {

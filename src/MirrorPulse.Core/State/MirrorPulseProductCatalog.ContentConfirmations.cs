@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Data.Sqlite;
+using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.Core.State;
 
@@ -92,6 +93,12 @@ public sealed partial class MirrorPulseProductCatalog
                 !string.Equals(record.Intent.ContentSha256, proof.Sha256, StringComparison.OrdinalIgnoreCase) ||
                 record.AcceptedRevision != proof.AcceptedRevision)
                 throw new InvalidDataException("The proof does not match the durable remote acceptance and upload intent.");
+            if (record.Intent.Kind == MirrorPulseWorkerChangeKind.Move)
+            {
+                using var validation = _connection.BeginTransaction(deferred: true);
+                await RequireObservedMoveContentProofAsync(record, proof, validation, cancellationToken).ConfigureAwait(false);
+                validation.Commit();
+            }
             await using var command = _connection.CreateCommand();
             command.CommandText = """
                 INSERT INTO content_acceptance_proofs(operation_id,payload,receipt)

@@ -11,6 +11,71 @@ namespace MirrorPulse.Core.Tests;
 public sealed partial class MirrorPulseJournalCoalescingExecutorTests
 {
     [TestMethod]
+    public async Task AcceptedBytesKeepTheWholeMoveAndUpdatePlanWhileSelectingOnlyItsNecessaryMove()
+    {
+        using var fixture = new Fixture(MirrorPulseCoalescedEffect.MoveAndUpdateFile); var remote = new FileRemote(fixture);
+        remote.Seed(fixture.Plan.OriginalPath, fixture.Revision!, FinalBytes);
+        await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        var observed = await SeedAcknowledgedObservationAsync(catalog, fixture);
+        string originalPlan = JsonSerializer.Serialize(fixture.Plan), originalWindow = JsonSerializer.Serialize(fixture.Window);
+        var execution = await catalog.PrepareJournalCoalescingObservedExecutionAsync(fixture.Plan, fixture.Window, fixture.Revision!, observed);
+        Assert.AreEqual(3, execution.Version); Assert.IsNull(execution.Content); Assert.HasCount(1, execution.Steps);
+        Assert.AreEqual(MirrorPulseCoalescingStepKind.Move, execution.Steps[0].Kind);
+        Assert.AreEqual(observed, execution.ObservedContent);
+        var result = await Executor(catalog, remote).ExecuteAsync(fixture.Plan.PlanId,
+            (_, _) => throw new AssertFailedException("An accepted unchanged-content move must not upload again."));
+        Assert.HasCount(1, result); Assert.HasCount(1, remote.Writes); Assert.AreEqual("Move", remote.Writes[0].Kind);
+        Assert.AreEqual(observed.Content.UploadBinding, result[0].Intent.UploadBinding);
+        Assert.AreEqual(observed.Content.Sha256, result[0].Intent.ContentSha256);
+        Assert.AreEqual("moved/" + fixture.Revision, result[0].AcceptedRevision);
+        Assert.AreEqual(originalPlan, JsonSerializer.Serialize(await catalog.ReadJournalCoalescingPlanAsync(fixture.Plan.PlanId)));
+        Assert.AreEqual(originalWindow, JsonSerializer.Serialize(fixture.Window));
+        CollectionAssert.AreEqual(FinalBytes, remote.Read(fixture.Plan.FinalPath));
+    }
+
+    [TestMethod]
+    public async Task AnObservedMoveConflictStillRequiresAnExplicitMoveAndContentDecision()
+    {
+        using var fixture = new Fixture(MirrorPulseCoalescedEffect.MoveAndUpdateFile); var remote = new FileRemote(fixture);
+        remote.Seed(fixture.Plan.OriginalPath, "changed", [8, 8]);
+        await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        var observed = await SeedAcknowledgedObservationAsync(catalog, fixture);
+        var execution = await catalog.PrepareJournalCoalescingObservedExecutionAsync(fixture.Plan, fixture.Window, fixture.Revision!, observed);
+        await Assert.ThrowsExactlyAsync<MirrorPulseWorkerMutationConflictException>(() => Executor(catalog, remote).ExecuteAsync(fixture.Plan.PlanId, OpenContent).AsTask());
+        var choice = await AuthorizeVerificationDecisionAsync(catalog, fixture, observed.Content);
+        Assert.AreEqual(3, choice.Version); Assert.IsNotNull(choice.FollowupOperationId);
+        Assert.IsNull(choice.Intent.UploadBinding);
+        var result = await Executor(catalog, remote).ExecuteAsync(fixture.Plan.PlanId, OpenContent);
+        Assert.HasCount(2, result); CollectionAssert.AreEqual(MoveAndUpload, remote.Writes.Select(value => value.Kind).ToArray());
+        Assert.AreEqual("moved/changed", result[1].Intent.ExpectedRevision);
+        Assert.AreEqual(observed.Content.UploadBinding, result[1].Intent.UploadBinding);
+        Assert.AreEqual(JsonSerializer.Serialize(execution), JsonSerializer.Serialize(await catalog.ReadJournalCoalescingExecutionAsync(fixture.Plan.PlanId)));
+    }
+
+    [TestMethod]
+    public async Task OnlyTheOriginalObservedMoveCanConfirmItsUnchangedBytesAtTheActualAcceptedRevision()
+    {
+        using var fixture = new Fixture(MirrorPulseCoalescedEffect.MoveAndUpdateFile); var remote = new FileRemote(fixture);
+        remote.Seed(fixture.Plan.OriginalPath, fixture.Revision!, FinalBytes);
+        await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        var observed = await SeedAcknowledgedObservationAsync(catalog, fixture);
+        var seed = await catalog.ReadContentAcceptanceProofAsync(observed.AcceptanceOperationId);
+        await catalog.PrepareJournalCoalescingObservedExecutionAsync(fixture.Plan, fixture.Window, fixture.Revision!, observed);
+        var results = await Executor(catalog, remote).ExecuteAsync(fixture.Plan.PlanId,
+            (_, _) => throw new AssertFailedException("An observed move must not upload."), async (move, token) =>
+            {
+                var proof = new MirrorPulseContentAcceptanceProof(move.Intent.OperationId, observed.Content.UploadBinding,
+                    observed.ItemId, observed.RemoteId, move.AcceptedRevision, observed.Content.Length, observed.Content.Sha256);
+                await Assert.ThrowsExactlyAsync<InvalidDataException>(() => catalog.SaveContentAcceptanceProofAsync(proof with { RemoteId = "unrelated-target" }, token));
+                await catalog.SaveContentAcceptanceProofAsync(proof, token);
+            });
+        var accepted = (await catalog.ReadContentAcceptanceProofAsync(results[0].Intent.OperationId))!;
+        Assert.AreEqual(results[0].AcceptedRevision, accepted.AcceptedRevision);
+        Assert.AreNotEqual(observed.RemoteRevision, accepted.AcceptedRevision);
+        Assert.AreEqual(seed, await catalog.ReadContentAcceptanceProofAsync(observed.AcceptanceOperationId));
+    }
+
+    [TestMethod]
     public async Task AcceptedCurrentBytesSelectVerificationWithoutChangingAnyOriginalNotificationOrPlan()
     {
         using var fixture = new Fixture(MirrorPulseCoalescedEffect.UpdateFile); var remote = new FileRemote(fixture);

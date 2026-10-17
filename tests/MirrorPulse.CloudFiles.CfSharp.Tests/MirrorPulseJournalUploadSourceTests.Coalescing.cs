@@ -62,6 +62,13 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
     public Task NativeProductionPumpKeepsLocalMoveContentAndRecoversBothEffectsBeforeAcknowledgingOriginals() =>
         RunProductionCoalescingScenarioAsync(resolveConflict: true, verificationEffect: MirrorPulseCoalescedEffect.MoveFile);
 
+    [TestMethod]
+    [DoNotParallelize]
+    [TestCategory("NativeCloudFiles")]
+    [SupportedOSPlatform("windows10.0.26100")]
+    public Task NativeProductionPumpMovesProvenResidentContentWithoutUploadingAndConfirmsItsActualRevision() =>
+        RunProductionCoalescingScenarioAsync(resolveConflict: false, verificationEffect: MirrorPulseCoalescedEffect.MoveFile);
+
     [SupportedOSPlatform("windows10.0.26100")]
     private async Task RunProductionCoalescingScenarioAsync(bool resolveConflict, bool prepareOriginal = false,
         MirrorPulseCoalescedEffect? verificationEffect = null)
@@ -229,8 +236,15 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
                         if (moveOnly)
                         {
                             var ownerPlan = (await catalog.ReadJournalCoalescingOwnerAsync(Guid.Parse(conflicts[1].ChangeId), timeout.Token))!;
-                            Assert.AreEqual(MirrorPulseCoalescedEffect.MoveFile, ownerPlan.Effect,
-                                "The actual complete journal window must select a move-only program; no notification may be removed to obtain it.");
+                            var originalProgram = (await catalog.ReadJournalCoalescingExecutionAsync(ownerPlan.PlanId, timeout.Token))!;
+                            Assert.IsTrue(originalProgram.IsMoveOnly,
+                                "The complete original window must produce a proven move-only execution before KeepLocal adds content.");
+                            if (ownerPlan.Effect == MirrorPulseCoalescedEffect.MoveAndUpdateFile)
+                            {
+                                Assert.AreEqual(3, originalProgram.Version); Assert.IsNotNull(originalProgram.ObservedContent);
+                                Assert.AreEqual(seedAcceptance!.OperationId, originalProgram.ObservedContent.AcceptanceOperationId);
+                            }
+                            else Assert.AreEqual(MirrorPulseCoalescedEffect.MoveFile, ownerPlan.Effect);
                             var dispatch = await catalog.ReadJournalCoalescingDispatchAsync(ownerPlan.PlanId, timeout.Token);
                             Assert.IsTrue(dispatch.HasMoveContent); Assert.HasCount(2, dispatch.Steps);
                         }
@@ -254,6 +268,17 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
                         }
                         Assert.AreEqual(seedAcceptance, await catalog.ReadContentAcceptanceProofAsync(seedAcceptance!.OperationId, timeout.Token));
                         Assert.AreEqual(seedReceipt, await catalog.ReadContentConfirmationReceiptAsync(seedAcceptance.OperationId, timeout.Token));
+                    }
+                    else if (moveOnly)
+                    {
+                        Assert.IsTrue(execution.IsMoveOnly);
+                        if (plan.Effect == MirrorPulseCoalescedEffect.MoveAndUpdateFile)
+                        {
+                            Assert.AreEqual(3, execution.Version); Assert.IsNotNull(execution.ObservedContent);
+                            Assert.AreEqual(seedAcceptance!.OperationId, execution.ObservedContent.AcceptanceOperationId);
+                            Assert.AreEqual(seedAcceptance.Sha256, execution.ObservedContent.Content.Sha256);
+                        }
+                        else Assert.AreEqual(MirrorPulseCoalescedEffect.MoveFile, plan.Effect);
                     }
                     else Assert.AreEqual(verificationEffect ?? MirrorPulseCoalescedEffect.CreateFile, plan.Effect);
                     Assert.HasCount(1, execution.Steps);
@@ -308,15 +333,29 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
                         {
                             Assert.HasCount(1, remote.MovedOperations); Assert.AreEqual(effectId, remote.MovedOperations[0]);
                             var dispatch = await catalog.ReadJournalCoalescingDispatchAsync(plan.PlanId, timeout.Token);
-                            Assert.IsTrue(dispatch.HasMoveContent); Assert.HasCount(2, dispatch.Steps);
-                            var upload = await catalog.PrepareJournalCoalescingMutationAsync(plan.PlanId, 1, timeout.Token);
-                            Assert.AreEqual(MirrorPulseMutationState.Acknowledged, upload.State);
-                            string? uploadBaseline = upload.Intent.ExpectedRevision;
-                            Assert.AreEqual("moved/" + Convert.ToHexString(SHA256.HashData("concurrent remote bytes"u8)), uploadBaseline);
-                            Assert.AreEqual(upload.Intent.OperationId, remote.UploadedOperations[^1]);
-                            Assert.IsTrue((await catalog.ReadContentConfirmationReceiptAsync(upload.Intent.OperationId, timeout.Token))!.MayAcknowledge);
-                            Assert.AreNotEqual(effectId, upload.Intent.OperationId);
-                            Assert.IsFalse(originals.Contains(upload.Intent.OperationId));
+                            if (resolveConflict)
+                            {
+                                Assert.IsTrue(dispatch.HasMoveContent); Assert.HasCount(2, dispatch.Steps);
+                                var upload = await catalog.PrepareJournalCoalescingMutationAsync(plan.PlanId, 1, timeout.Token);
+                                Assert.AreEqual(MirrorPulseMutationState.Acknowledged, upload.State);
+                                string? uploadBaseline = upload.Intent.ExpectedRevision;
+                                Assert.AreEqual("moved/" + Convert.ToHexString(SHA256.HashData("concurrent remote bytes"u8)), uploadBaseline);
+                                Assert.AreEqual(upload.Intent.OperationId, remote.UploadedOperations[^1]);
+                                Assert.IsTrue((await catalog.ReadContentConfirmationReceiptAsync(upload.Intent.OperationId, timeout.Token))!.MayAcknowledge);
+                                Assert.AreNotEqual(effectId, upload.Intent.OperationId);
+                                Assert.IsFalse(originals.Contains(upload.Intent.OperationId));
+                            }
+                            else
+                            {
+                                Assert.IsFalse(dispatch.HasMoveContent); Assert.HasCount(1, dispatch.Steps);
+                                Assert.IsNotNull(execution.ObservedContent);
+                                var moveProof = (await catalog.ReadContentAcceptanceProofAsync(effectId, timeout.Token))!;
+                                Assert.AreEqual(current.AcceptedRevision, moveProof.AcceptedRevision);
+                                Assert.IsTrue((await catalog.ReadContentConfirmationReceiptAsync(effectId, timeout.Token))!.MayAcknowledge);
+                                var actual = await fileSystem.GetFile("Docs/moved.txt").InspectAsync(timeout.Token);
+                                Assert.AreEqual(CloudSynchronizationState.InSync, actual.SynchronizationState);
+                                Assert.AreEqual(current.AcceptedRevision, CloudPlaceholderIdentity.Decode(actual.PlaceholderIdentity.Span).RemoteRevision);
+                            }
                             Assert.AreEqual(seedAcceptance, await catalog.ReadContentAcceptanceProofAsync(seedAcceptance!.OperationId, timeout.Token));
                             Assert.AreEqual(seedReceipt, await catalog.ReadContentConfirmationReceiptAsync(seedAcceptance.OperationId, timeout.Token));
                         }
