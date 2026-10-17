@@ -9,19 +9,21 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 internal enum MirrorPulseRemoteNamespaceBatchCheckpoint { AfterMoveStart, AfterSdkApply }
 
 /// <summary>Admits and settles one original SDK entry before any Adapter cursor can be published.</summary>
-/// <remarks>The managed path supports moves and new explicit-identity upserts. Other entry kinds remain closed until
-/// their birth, replacement and retirement lifecycles are connected. An uncertain native start
+/// <remarks>The managed path supports moves, new explicit-identity upserts and original registered leaf deletes.
+/// Other entry kinds remain closed until their replacement and metadata lifecycles are connected. An uncertain native start
 /// requires fresh original outcome recovery and never grants blind redispatch.</remarks>
 [SupportedOSPlatform("windows10.0.26100")]
 internal sealed class MirrorPulseRemoteNamespaceBatchDriver(
     CloudFileSystem fileSystem, MirrorPulseCfSharpStateSession state, MirrorPulseProductCatalog catalog,
     MirrorPulseRootRouter router, MirrorPulseNamespaceExecutionSession execution, MirrorPulseNamespaceActor actor,
     Func<MirrorPulseRemoteNamespaceBatchCheckpoint, CancellationToken, ValueTask>? checkpoint = null,
-    Func<MirrorPulseRemoteBirthCheckpoint, CancellationToken, ValueTask>? birthCheckpoint = null)
+    Func<MirrorPulseRemoteBirthCheckpoint, CancellationToken, ValueTask>? birthCheckpoint = null,
+    Func<MirrorPulseRemoteRetirementCheckpoint, CancellationToken, ValueTask>? retirementCheckpoint = null)
 {
     private readonly MirrorPulseNamespaceMemberMoveCoordinator _moves = new(fileSystem, state, catalog, router, execution, actor);
     private readonly MirrorPulseNamespaceMemberInspector _members = new(fileSystem, catalog, router, execution, actor);
     private readonly MirrorPulseRemoteBirthBatchCoordinator _births = new(fileSystem, state, catalog, router, execution, actor, birthCheckpoint);
+    private readonly MirrorPulseRemoteRetirementBatchCoordinator _retirements = new(fileSystem, state, catalog, router, execution, actor, retirementCheckpoint);
 
     internal async ValueTask<CloudRemoteApplyResult> ApplyAsync(InstanceId instance, CloudRemoteChangeBatch batch,
         CloudRemoteApplyOptions options, MirrorPulseRemoteConflictProjector? conflicts, CancellationToken token)
@@ -33,16 +35,28 @@ internal sealed class MirrorPulseRemoteNamespaceBatchDriver(
         if (options.ConflictResolver is not null)
             throw new NotSupportedException("Managed remote entries require durable conflicts before an explicit product decision.");
         if (batch.Changes.Count > 65_536) throw new InvalidDataException("The managed remote batch exceeds its entry bound.");
-        if (batch.Changes.Any(change => change.Kind is not (CloudRemoteChangeKind.Move or CloudRemoteChangeKind.FileUpsert or CloudRemoteChangeKind.DirectoryUpsert)))
+        if (batch.Changes.Any(change => change.Kind is not (CloudRemoteChangeKind.Move or CloudRemoteChangeKind.FileUpsert or CloudRemoteChangeKind.DirectoryUpsert or CloudRemoteChangeKind.Delete)))
             throw new NotSupportedException("This managed remote batch requires a replacement, metadata or retirement lifecycle.");
         for (int ordinal = 0; ordinal < batch.Changes.Count; ordinal++)
-            if (batch.Changes[ordinal].Kind != CloudRemoteChangeKind.Move)
+            if (batch.Changes[ordinal].Kind == CloudRemoteChangeKind.Delete)
+                _ = MirrorPulseRemoteRetirementBatchCoordinator.RequireChange(instance, batch, ordinal, options);
+            else if (batch.Changes[ordinal].Kind != CloudRemoteChangeKind.Move)
                 _ = MirrorPulseRemoteBirthBatchCoordinator.RequireChange(instance, batch, ordinal, options);
         int count = await ReadProgressAsync(batch, token).ConfigureAwait(false);
         CloudRemoteApplyResult? recoveredResult = null;
         // No later native entry may overtake an unsettled product entry after a crash.
         for (int ordinal = 0; ordinal < count; ordinal++)
         {
+            if (batch.Changes[ordinal].Kind == CloudRemoteChangeKind.Delete)
+            {
+                var retirement = await catalog.ReadNamespaceRemoteRetirementAsync(instance, batch.BatchId, ordinal, token).ConfigureAwait(false)
+                    ?? throw new InvalidDataException("Applied SDK progress has no original product retirement admission.");
+                MirrorPulseRemoteRetirementBatchCoordinator.RequireOriginal(retirement.Intent, instance, batch, ordinal, options);
+                if (retirement.Phase is MirrorPulseNamespaceRetirementPhase.Completed or MirrorPulseNamespaceRetirementPhase.RemoteRejected) continue;
+                if (ordinal != count - 1) throw new InvalidDataException("A later SDK entry overtook an unsettled product retirement.");
+                await _retirements.SettleRecordedAsync(retirement, instance, batch, ordinal, options, conflicts, token).ConfigureAwait(false);
+                continue;
+            }
             if (batch.Changes[ordinal].Kind != CloudRemoteChangeKind.Move)
             {
                 var birth = await catalog.ReadNamespaceRemoteBirthAsync(instance, batch.BatchId, ordinal, token).ConfigureAwait(false)
@@ -63,6 +77,13 @@ internal sealed class MirrorPulseRemoteNamespaceBatchDriver(
         if (count < batch.Changes.Count)
         {
             var change = batch.Changes[count];
+            if (change.Kind == CloudRemoteChangeKind.Delete)
+            {
+                var appliedRetirement = await _retirements.ApplyAsync(instance, batch, count, options, conflicts, token).ConfigureAwait(false);
+                if (conflicts is not null) await conflicts.CaptureResultAsync(instance, appliedRetirement, token).ConfigureAwait(false);
+                if (checkpoint is not null) await checkpoint(MirrorPulseRemoteNamespaceBatchCheckpoint.AfterSdkApply, token).ConfigureAwait(false);
+                return appliedRetirement;
+            }
             if (change.Kind != CloudRemoteChangeKind.Move)
             {
                 var appliedBirth = await _births.ApplyAsync(instance, batch, count, options, token).ConfigureAwait(false);

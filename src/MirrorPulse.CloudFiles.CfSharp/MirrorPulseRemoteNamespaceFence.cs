@@ -30,7 +30,23 @@ public sealed class MirrorPulseRemoteNamespaceFence(MirrorPulseRootRouter router
         {
             var births = (await catalog.ReadPendingNamespaceRemoteBirthsAsync(root.InstanceId, batch.BatchId, cancellationToken).ConfigureAwait(false))
                 .Where(birth => birth.RootId == root.RootId).ToArray();
-            if (births.Length == 0) return await CanPollAsync(root, cancellationToken).ConfigureAwait(false);
+            if (births.Length == 0)
+            {
+                var retirements = (await catalog.ReadPendingNamespaceRemoteRetirementsAsync(root.InstanceId, batch.BatchId, cancellationToken).ConfigureAwait(false))
+                    .Where(retirement => retirement.Intent.RootId == root.RootId).ToArray();
+                if (retirements.Length == 0) return await CanPollAsync(root, cancellationToken).ConfigureAwait(false);
+                if (retirements.Length != 1) return false;
+                var retirement = retirements[0]; var remoteDelete = retirement.Intent.RemoteEntry!;
+                if (remoteDelete.BatchFingerprint != Convert.ToHexString(batch.Fingerprint.Span) ||
+                    remoteDelete.BatchEntryCount != batch.Changes.Count || remoteDelete.Ordinal >= batch.Changes.Count) return false;
+                var deletion = batch.Changes[remoteDelete.Ordinal];
+                if (deletion.Kind != CloudRemoteChangeKind.Delete || deletion.ChangeId != remoteDelete.ChangeId ||
+                    deletion.ItemId != remoteDelete.ItemId || deletion.RemoteId != remoteDelete.RemoteId ||
+                    deletion.PreviousRemoteRevision != remoteDelete.PreviousRemoteRevision || deletion.RemoteRevision != remoteDelete.RemoteRevision ||
+                    deletion.RelativePath.Replace('\\', '/') != retirement.Intent.RelativePath ||
+                    (deletion.ItemKind == CloudItemKind.Directory) != retirement.Intent.IsDirectory) return false;
+                return await catalog.CanResumeNamespaceRemoteRetirementAsync(retirement.Intent, cancellationToken).ConfigureAwait(false);
+            }
             if (births.Length != 1) return false;
             var birth = births[0]; var original = birth.RemoteEntry!;
             if (original.BatchFingerprint != Convert.ToHexString(batch.Fingerprint.Span) ||

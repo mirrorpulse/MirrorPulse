@@ -53,5 +53,10 @@ required before the complete remote birth lifecycle is delivered.
 The mandatory native fixture covers SDK creation, an interruption after the first
 directory observation, two product/SDK owners under the same role, nested file
 creation, original binding preservation and registration before cursor publication.
-It is compiled locally and awaits clean native CI; managed SQLite/input checks do
-not substitute for executing it.
+On source `792a533bdaeaf7fd8430e08ede83e73efae9f93e`, that fixture passed the
+original x64 native, ARM64 namespace and fresh ordinary-user ARM64 namespace runs
+in [CI 39020999016](https://github.com/mirrorpulse/MirrorPulse/actions/runs/39020999016).
+The original reports were checked against that source's frozen required-case
+catalog. This evidence covers the observed-directory recovery above; unknown
+starts, conflict closure, new roles and complete default Host integration remain
+outside that fixture's scope.

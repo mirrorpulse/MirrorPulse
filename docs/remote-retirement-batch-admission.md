@@ -30,7 +30,23 @@ older records.
 
 Tests use real product SQLite owners, transaction-abort triggers, reopening,
 success and rejection evidence, cross-kind ownership, corruption and an actual
-schema 69 table. They provide catalog-boundary evidence. The managed remote
-batch driver does not yet route deletes through this protocol; SDK execution,
-native cutpoints, recursive remote retirement, new-role recovery and complete
-default Host integration still require implementation and clean native tests.
+schema 69 table. They provide catalog-boundary evidence.
+
+The managed remote batch driver now routes explicit-identity leaf deletes through
+the original SDK batch. It retains the current role, shared actor, original child
+and protected parent, then persists admission and start before SDK dispatch.
+On replay, an existing child must still match the original native binding and
+revision. An absent child requires the original start and exact public item
+projection before the SDK can finish its own durable tombstone recovery. Applied
+SDK prefixes settle their original product entry before any later SDK entry.
+Decoded durable conflicts are matched to the complete original change; their
+records remain available for an explicit conflict decision.
+
+The native fixture covers file and empty-directory deletion interrupted after
+the SDK result or at the actual SDK batch-progress commit, two product/SDK owners
+under the same role, original membership history, tombstone recovery, exact replay,
+and name settlement before Adapter cursor publication. It is compiled locally;
+its clean native execution is still pending. Recursive directory retirement,
+new-role recovery and complete default Host integration remain required. A
+nonempty native directory is rejected before the leaf admission can create a
+pending owner.
