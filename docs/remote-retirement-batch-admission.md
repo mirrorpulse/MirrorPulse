@@ -60,6 +60,12 @@ reading pages cannot replace missing members, positions, identities or metadata
 with current paths. Ordinary controlled retirement cannot execute or complete
 this SDK-owned admission.
 
+Catalog recovery can enumerate at most 64 pending subtree owners for the exact
+instance and original SDK batch. Only the same immutable admission can pass its
+own retirement-batch fence; all other operation fences remain effective. This
+permission is an ownership check and provides no native-start, deletion, SDK
+result or cursor evidence. The runtime recursive route is still pending.
+
 This subtree catalog boundary is preparatory. The managed driver still routes
 only registered leaves. Original SDK recursive dispatch, before-native starts,
 partial deletion/tombstone recovery, descendant settlement, conflicts and cursor

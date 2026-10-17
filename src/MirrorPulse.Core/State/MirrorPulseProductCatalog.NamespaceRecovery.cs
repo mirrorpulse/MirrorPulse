@@ -80,7 +80,7 @@ public sealed partial class MirrorPulseProductCatalog
 
     private async Task<IReadOnlyList<RootId>> ReadNamespaceRootFencesCoreAsync(bool includeUnregisteredBirths,
         SqliteTransaction transaction, CancellationToken cancellationToken, Guid? admittedRemoteMoveId = null, Guid? admittedRemoteBirthId = null,
-        Guid? admittedRemoteRetirementId = null)
+        Guid? admittedRemoteRetirementId = null, Guid? admittedRemoteRetirementTreeId = null)
     {
         HashSet<RootId> roots = (await ReadManagedRootRenamesCoreAsync(cancellationToken, transaction).ConfigureAwait(false))
             .Where(intent => intent.IsPending).Select(intent => intent.RootId).ToHashSet();
@@ -107,7 +107,7 @@ public sealed partial class MirrorPulseProductCatalog
         foreach (var retirement in await ReadPendingNamespaceRetirementsCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
             if (retirement.OperationId != admittedRemoteRetirementId || retirement.Intent.RemoteEntry is null) roots.Add(retirement.Intent.RootId);
         foreach (var batch in await ReadPendingNamespaceRetirementBatchesCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
-            roots.Add(batch.RootId);
+            if (batch.OperationId != admittedRemoteRetirementTreeId || batch.RemoteEntry is null) roots.Add(batch.RootId);
         await AddNamespaceReplacementRootFencesAsync(roots, transaction, cancellationToken).ConfigureAwait(false);
         await AddNamespaceInitializationRootFencesAsync(roots, transaction, cancellationToken).ConfigureAwait(false);
         foreach (var action in await ReadPendingBornMemberRecoveryActionsCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
