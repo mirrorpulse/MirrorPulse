@@ -58,7 +58,10 @@ public sealed partial class MirrorPulseProductCatalog
             await using (SqliteCommand planned = _connection.CreateCommand())
             {
                 planned.Transaction = transaction;
-                planned.CommandText = "SELECT 1 FROM namespace_birth_plans WHERE item_id=$item;";
+                planned.CommandText = """
+                    SELECT 1 FROM namespace_birth_plans WHERE item_id=$item
+                    UNION ALL SELECT 1 FROM namespace_remote_birth_entries WHERE item_id=$item LIMIT 1;
+                    """;
                 planned.Parameters.AddWithValue("$item", identity.ItemId.ToString("D"));
                 if (await planned.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null)
                     throw new InvalidOperationException("An original object cannot adopt a planned birth identity.");

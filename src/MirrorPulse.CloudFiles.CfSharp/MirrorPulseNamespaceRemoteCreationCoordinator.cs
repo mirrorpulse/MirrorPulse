@@ -41,6 +41,8 @@ public sealed class MirrorPulseNamespaceRemoteCreationCoordinator(CloudFileSyste
         if (parentMember.RootId is { } parentRoot ? rootId != parentRoot : !directory || route.RelativePath.Length != 0)
             throw new InvalidDataException("The source identity belongs to another managed root.");
         var retained = await catalog.ReadNamespaceBirthAsync(operationId, token).ConfigureAwait(false);
+        if (retained?.RemoteEntry is not null)
+            throw new InvalidOperationException("The original remote batch owns this birth; source population cannot pre-create its placeholder.");
         var plan = await catalog.ReadNamespaceBirthPlanAsync(operationId, token).ConfigureAwait(false);
         if (retained is not null && (retained.Origin != MirrorPulseNamespaceBirthOrigin.RemotePopulation || retained.RootId != rootId ||
             retained.RelativePath != path || retained.IsDirectory != directory || retained.ParentLocalObject != parentMember.LocalObject) ||

@@ -27,6 +27,10 @@ public sealed record MirrorPulseNamespaceBirthIntent(int Version, Guid Operation
 {
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public MirrorPulseNamespaceBornParent? BornParent { get; init; }
+
+    /// <summary>Present only on version 3 births owned by an immutable public SDK batch entry.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public MirrorPulseNamespaceRemoteBirthReference? RemoteEntry { get; init; }
 }
 
 public sealed partial class MirrorPulseProductCatalog
@@ -53,6 +57,8 @@ public sealed partial class MirrorPulseProductCatalog
             await ValidateNamespaceBirthCurrentParentAsync(intent, transaction, cancellationToken).ConfigureAwait(false);
             await RequireNamespaceMoveRootUnfencedAsync(intent.RootId, null, transaction, cancellationToken).ConfigureAwait(false);
             await RequireNamespaceBirthUnoccupiedMemberNameAsync(intent, transaction, cancellationToken).ConfigureAwait(false);
+            if (intent.RemoteEntry is not null)
+                await ValidateNamespaceRemoteBirthParentAsync(intent, transaction, cancellationToken).ConfigureAwait(false);
             byte[] payload = JsonSerializer.SerializeToUtf8Bytes(intent, TopologyJsonOptions);
             if (payload.Length > 131_072) throw new ArgumentException("The birth admission payload is not bounded.", nameof(intent));
             await using SqliteCommand insert = _connection.CreateCommand();
@@ -76,6 +82,7 @@ public sealed partial class MirrorPulseProductCatalog
             insert.Parameters.AddWithValue("$payload", payload);
             insert.Parameters.AddWithValue("$fingerprint", SHA256.HashData(payload));
             await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            await InsertNamespaceRemoteBirthReferenceAsync(intent, transaction, cancellationToken).ConfigureAwait(false);
             transaction.Commit();
             return intent;
         }
@@ -151,6 +158,7 @@ public sealed partial class MirrorPulseProductCatalog
                 !JsonSerializer.SerializeToUtf8Bytes(intent, TopologyJsonOptions).AsSpan().SequenceEqual(payload))
                 throw new InvalidDataException("The birth admission's index or canonical payload is inconsistent.");
         }
+        await ValidateNamespaceRemoteBirthReferenceIndexAsync(intent, transaction, token).ConfigureAwait(false);
         return intent;
     }
 
@@ -164,13 +172,16 @@ public sealed partial class MirrorPulseProductCatalog
         ValidatePermissionSid(intent.RoleSid, role: true);
         // No child binding exists before native creation. Validate the name without fabricating one.
         ValidatePermissionRelativePath(intent.RelativePath);
-        if (!(intent.Version == 1 && intent.BornParent is null && intent.ParentEvidenceId != Guid.Empty && intent.ParentPermissionOperationId != Guid.Empty ||
-            intent.Version == 2 && intent.ParentEvidenceId == Guid.Empty && intent.ParentPermissionOperationId == Guid.Empty &&
+        if (!((intent.Version == 1 || intent.Version == 3) && intent.BornParent is null && intent.ParentEvidenceId != Guid.Empty && intent.ParentPermissionOperationId != Guid.Empty ||
+            (intent.Version == 2 || intent.Version == 3) && intent.ParentEvidenceId == Guid.Empty && intent.ParentPermissionOperationId == Guid.Empty &&
             intent.BornParent is { BirthOperationId: var parent, ProtectionId: var epoch } && parent != Guid.Empty && epoch != Guid.Empty && parent != intent.OperationId) ||
             intent.OperationId == Guid.Empty || intent.RootId.Value == Guid.Empty ||
             intent.PreparedAt == default || !Enum.IsDefined(intent.Origin) ||
             string.IsNullOrWhiteSpace(intent.RelativePath))
             throw new ArgumentException("The birth admission requires one exact relative child location.", nameof(intent));
+        if ((intent.Version == 3) != (intent.RemoteEntry is not null))
+            throw new ArgumentException("A remote birth requires its explicit versioned original batch owner.", nameof(intent));
+        if (intent.RemoteEntry is not null) ValidateNamespaceRemoteBirthReference(intent);
     }
 
     private async Task ValidateNamespaceBirthCurrentParentAsync(MirrorPulseNamespaceBirthIntent intent,

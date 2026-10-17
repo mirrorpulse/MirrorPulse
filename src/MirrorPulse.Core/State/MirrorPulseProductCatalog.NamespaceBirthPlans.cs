@@ -66,8 +66,12 @@ public sealed partial class MirrorPulseProductCatalog
             await using (SqliteCommand existing = _connection.CreateCommand())
             {
                 existing.Transaction = transaction;
-                existing.CommandText = "SELECT 1 FROM namespace_permission_local_identities WHERE item_id=$item;";
+                existing.CommandText = """
+                    SELECT 1 FROM namespace_permission_local_identities WHERE item_id=$item
+                    UNION ALL SELECT 1 FROM namespace_remote_birth_entries WHERE item_id=$item AND operation_id<>$operation LIMIT 1;
+                    """;
                 existing.Parameters.AddWithValue("$item", plan.ItemId.ToString("D"));
+                existing.Parameters.AddWithValue("$operation", plan.OperationId.ToString("D"));
                 if (await existing.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null)
                     throw new InvalidOperationException("A new birth cannot adopt an original protected file identity.");
             }
@@ -261,6 +265,9 @@ public sealed partial class MirrorPulseProductCatalog
         if (plan.OperationId != birth.OperationId || plan.PreparedAt < birth.PreparedAt ||
             birth.Origin != MirrorPulseNamespaceBirthOrigin.RemotePopulation && plan.RemoteRevision is not null)
             throw new InvalidOperationException("The birth identity plan must follow its original admission without inventing remote acceptance.");
+        if (birth.RemoteEntry is { } remote && (plan.Version != 1 || plan.Content is not null || plan.ItemId != remote.ItemId ||
+            plan.RemoteId != remote.RemoteId || plan.RemoteRevision != remote.RemoteRevision || plan.PreparedAt != birth.PreparedAt))
+            throw new InvalidOperationException("The remote birth plan must retain the identity and time selected in its original entry admission.");
         if (plan.Content is not null && (birth.Origin != MirrorPulseNamespaceBirthOrigin.Import || birth.IsDirectory))
             throw new InvalidOperationException("A content-bearing birth plan requires an admitted file import.");
     }
