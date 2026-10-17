@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using MirrorPulse.Core.Configuration;
 using MirrorPulse.Core.Contracts;
 
@@ -13,7 +14,14 @@ public enum MirrorPulseConflictPreservedSide
 
 internal enum MirrorPulseConflictCopyCheckpoint { StagingFlushed, DataCommitted, ManifestCommitted }
 public sealed record MirrorPulseConflictCopyManifest(int SchemaVersion, Guid ConflictId, string InstanceId,
-    MirrorPulseConflictPreservedSide Side, long Length, string? Sha256, string State, string StageFileName);
+    MirrorPulseConflictPreservedSide Side, long Length, string? Sha256, string State, string StageFileName)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public MirrorPulseConflictRemoteSource? RemoteSource { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? RemoteDecisionId { get; init; }
+}
 
 /// <summary>Preserves one selected side in MP's private data root before a destructive decision.</summary>
 public sealed class MirrorPulseConflictCopyStore
@@ -32,7 +40,7 @@ public sealed class MirrorPulseConflictCopyStore
         MirrorPulseConflictRecord conflict,
         MirrorPulseConflictPreservedSide side,
         Func<CancellationToken, ValueTask<Stream>> openSource,
-        CancellationToken cancellationToken = default) => PreserveCoreAsync(conflict, side, null, openSource, cancellationToken);
+        CancellationToken cancellationToken = default) => PreserveCoreAsync(conflict, side, null, null, openSource, cancellationToken);
 
     /// <summary>Isolates an immutable command's preserved bytes from earlier choices for the same conflict.</summary>
     public Task<string> PreserveDecisionAsync(Guid commandId, MirrorPulseConflictRecord conflict,
@@ -40,11 +48,23 @@ public sealed class MirrorPulseConflictCopyStore
         CancellationToken cancellationToken = default)
     {
         if (commandId == Guid.Empty) throw new ArgumentException("A preservation command ID is required.", nameof(commandId));
-        return PreserveCoreAsync(conflict, side, commandId, openSource, cancellationToken);
+        return PreserveCoreAsync(conflict, side, commandId, null, openSource, cancellationToken);
+    }
+
+    /// <summary>Commits the original remote object/version together with the private copy's byte proof.</summary>
+    public Task<string> PreserveRemoteDecisionAsync(Guid commandId, MirrorPulseConflictRecord conflict,
+        MirrorPulseConflictRemoteSource source, Func<CancellationToken, ValueTask<Stream>> openSource,
+        CancellationToken cancellationToken = default)
+    {
+        if (commandId == Guid.Empty) throw new ArgumentException("A preservation command ID is required.", nameof(commandId));
+        ArgumentNullException.ThrowIfNull(source);
+        source.Validate(conflict);
+        return PreserveCoreAsync(conflict, MirrorPulseConflictPreservedSide.Remote, commandId, source, openSource, cancellationToken);
     }
 
     private async Task<string> PreserveCoreAsync(MirrorPulseConflictRecord conflict, MirrorPulseConflictPreservedSide side,
-        Guid? commandId, Func<CancellationToken, ValueTask<Stream>> openSource, CancellationToken cancellationToken)
+        Guid? commandId, MirrorPulseConflictRemoteSource? remoteSource,
+        Func<CancellationToken, ValueTask<Stream>> openSource, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(conflict);
         ArgumentNullException.ThrowIfNull(openSource);
@@ -68,7 +88,7 @@ public sealed class MirrorPulseConflictCopyStore
             if (File.Exists(manifestPath))
             {
                 MirrorPulseConflictCopyManifest existing = await ReadManifestAsync(manifestPath, cancellationToken).ConfigureAwait(false);
-                await VerifyAsync(conflict, side, destination, existing, "complete", cancellationToken).ConfigureAwait(false);
+                await VerifyAsync(conflict, side, commandId, remoteSource, destination, existing, "complete", cancellationToken).ConfigureAwait(false);
                 File.Delete(pendingPath);
                 return destination;
             }
@@ -83,7 +103,7 @@ public sealed class MirrorPulseConflictCopyStore
         if (File.Exists(pendingPath))
         {
             MirrorPulseConflictCopyManifest intent = await ReadManifestAsync(pendingPath, cancellationToken).ConfigureAwait(false);
-            ValidateIdentity(conflict, side, intent);
+            ValidateIdentity(conflict, side, commandId, remoteSource, intent);
             string fileName = intent.StageFileName;
             if (Path.GetFileName(fileName) != fileName || !fileName.StartsWith(Path.GetFileName(destination) + ".", StringComparison.Ordinal) ||
                 !fileName.EndsWith(".tmp", StringComparison.Ordinal))
@@ -92,7 +112,7 @@ public sealed class MirrorPulseConflictCopyStore
             if (intent.State == "staged" && (File.Exists(destination) || File.Exists(stagePath)))
             {
                 string committed = File.Exists(destination) ? destination : stagePath;
-                await VerifyAsync(conflict, side, committed, intent, "staged", cancellationToken).ConfigureAwait(false);
+                await VerifyAsync(conflict, side, commandId, remoteSource, committed, intent, "staged", cancellationToken).ConfigureAwait(false);
                 if (committed == stagePath) File.Move(stagePath, destination, overwrite: false);
                 await WriteManifestAsync(manifestPath, intent with { State = "complete" }, cancellationToken).ConfigureAwait(false);
                 File.Delete(pendingPath);
@@ -109,8 +129,9 @@ public sealed class MirrorPulseConflictCopyStore
         }
 
         string temporary = destination + "." + Guid.NewGuid().ToString("N") + ".tmp";
-        var manifest = new MirrorPulseConflictCopyManifest(1, conflict.ConflictId, conflict.InstanceId.ToString(),
-            side, 0, null, "copying", Path.GetFileName(temporary));
+        var manifest = new MirrorPulseConflictCopyManifest(remoteSource is null ? 1 : 2,
+            conflict.ConflictId, conflict.InstanceId.ToString(), side, 0, null, "copying", Path.GetFileName(temporary))
+        { RemoteSource = remoteSource, RemoteDecisionId = remoteSource is null ? null : commandId };
         await WriteManifestAsync(pendingPath, manifest, cancellationToken).ConfigureAwait(false);
         try
         {
@@ -130,7 +151,7 @@ public sealed class MirrorPulseConflictCopyStore
                     digest.AppendData(buffer.AsSpan(0, count));
                     length = checked(length + count);
                 }
-                if (expected is { } expectedLength && length != expectedLength)
+                if (expected is { } expectedLength && length != expectedLength || remoteSource is not null && length != remoteSource.Length)
                     throw new InvalidDataException("The conflict source changed length while preserving it.");
                 await target.FlushAsync(cancellationToken).ConfigureAwait(false);
                 target.Flush(flushToDisk: true);
@@ -180,11 +201,14 @@ public sealed class MirrorPulseConflictCopyStore
     }
 
     private async Task VerifyAsync(MirrorPulseConflictRecord conflict, MirrorPulseConflictPreservedSide side,
+        Guid? commandId, MirrorPulseConflictRemoteSource? remoteSource,
         string path, MirrorPulseConflictCopyManifest manifest, string state, CancellationToken cancellationToken)
     {
-        ValidateIdentity(conflict, side, manifest);
+        ValidateIdentity(conflict, side, commandId, remoteSource, manifest);
         if (manifest.State != state || manifest.Length < 0 || manifest.Sha256 is null || manifest.Sha256.Length != 64)
             throw new InvalidDataException("The preserved conflict manifest does not match this conflict.");
+        if (remoteSource is not null && manifest.Length != remoteSource.Length)
+            throw new InvalidDataException("The preserved copy lost its original remote length.");
         EnsureNoReparsePoints(_paths.DataRootPath, path);
         await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read,
             81920, FileOptions.Asynchronous | FileOptions.SequentialScan);
@@ -194,10 +218,11 @@ public sealed class MirrorPulseConflictCopyStore
     }
 
     private static void ValidateIdentity(MirrorPulseConflictRecord conflict, MirrorPulseConflictPreservedSide side,
-        MirrorPulseConflictCopyManifest manifest)
+        Guid? commandId, MirrorPulseConflictRemoteSource? remoteSource, MirrorPulseConflictCopyManifest manifest)
     {
-        if (manifest.SchemaVersion != 1 || manifest.ConflictId != conflict.ConflictId ||
-            manifest.InstanceId != conflict.InstanceId.ToString() || manifest.Side != side)
+        if (manifest.SchemaVersion != (remoteSource is null ? 1 : 2) || manifest.ConflictId != conflict.ConflictId ||
+            manifest.InstanceId != conflict.InstanceId.ToString() || manifest.Side != side || manifest.RemoteSource != remoteSource ||
+            manifest.RemoteDecisionId != (remoteSource is null ? null : commandId))
             throw new InvalidDataException("The preserved conflict manifest belongs to another conflict or side.");
     }
 
