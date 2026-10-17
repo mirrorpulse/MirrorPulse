@@ -295,6 +295,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         : IMirrorPulseCloudRuntime
     {
         private MirrorPulseJournalUploadPump? _uploadPump;
+        private MirrorPulseRetainedRemoteBatchRecoveryPump? _retainedRecovery;
         private MirrorPulseUploadConflictActions? _conflictActions;
         private MirrorPulseRemoteConflictActions? _remoteConflictActions;
         private MirrorPulseCloudProviderDiagnostics? _providerDiagnostics;
@@ -958,36 +959,12 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                 await WithAdmittedInstancesLibraryAsync(router!.Registrations.Select(root => root.InstanceId).Distinct(),
                     BootstrapNamespaceAsync, cancellationToken).ConfigureAwait(false);
             }
-            await ResumeRetainedRemoteBatchesAsync(cancellationToken).ConfigureAwait(false);
-        }
-
-        private async Task ResumeRetainedRemoteBatchesAsync(CancellationToken token)
-        {
-            if (catalog is null || router is null || conflicts is null || notifications is null) return;
-            InstanceId? after = null;
-            while (true)
+            if (catalog is not null && router is not null && conflicts is not null && notifications is not null)
             {
-                var owners = await catalog.ReadRetainedRemoteBatchOwnersAsync(after, token).ConfigureAwait(false);
-                if (owners.Count == 0) return;
-                foreach (var instance in owners)
-                {
-                    token.ThrowIfCancellationRequested();
-                    if (mayDispatch is not null && !mayDispatch(instance)) continue;
-                    try
-                    {
-                        bool completed = await WithInstanceLibraryAsync(instance, current =>
-                            RetainedRemoteBatches(catalog, conflicts, notifications).ResumeAsync(instance, current), token).ConfigureAwait(false);
-                        if (!completed)
-                            await catalog.MarkRetainedRemoteBatchRecoveryPendingAsync(instance, token).ConfigureAwait(false);
-                    }
-                    catch (Exception error) when (error is not OperationCanceledException)
-                    {
-                        // Retain the original envelope and isolate this owner. Do not log batch
-                        // bodies, source metadata or exception text as an ordinary diagnostic.
-                        await catalog.MarkRetainedRemoteBatchRecoveryPendingAsync(instance, token).ConfigureAwait(false);
-                    }
-                }
-                after = owners[^1];
+                _retainedRecovery = new(catalog, mayDispatch, (instance, token) => WithInstanceLibraryAsync(instance,
+                    current => RetainedRemoteBatches(catalog, conflicts, notifications).ResumeAsync(instance, current), token));
+                await _retainedRecovery.RecoverOnceAsync(cancellationToken).ConfigureAwait(false);
+                _retainedRecovery.Start();
             }
         }
 
@@ -1220,6 +1197,8 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             try { await _admissionShutdown.CancelAsync().ConfigureAwait(false); }
             finally
             {
+                // Stop queued recovery before taking any gate that an active recovery may need.
+                if (_retainedRecovery is not null) await _retainedRecovery.DisposeAsync().ConfigureAwait(false);
                 // Recovery drains roots outside the library. Cancel its queued admissions
                 // and await that owner before taking the library for final native disposal.
                 await _recoveryRequests.WaitAsync().ConfigureAwait(false);
