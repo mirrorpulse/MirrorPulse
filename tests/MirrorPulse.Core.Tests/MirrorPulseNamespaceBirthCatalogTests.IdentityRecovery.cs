@@ -69,7 +69,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         Assert.AreEqual(original, await ReadMemberMigrationBytesAsync(fixture.Paths));
         Assert.IsNull(await reopened.ReadNamespaceIdentityAcceptanceAsync(proof.OperationId));
         await using var connection = Connection(fixture.Paths); await connection.OpenAsync(); await using var query = connection.CreateCommand();
-        query.CommandText = "PRAGMA user_version;"; Assert.AreEqual(65L, await query.ExecuteScalarAsync());
+        query.CommandText = "PRAGMA user_version;"; Assert.AreEqual(66L, await query.ExecuteScalarAsync());
         query.CommandText = "PRAGMA foreign_key_check;"; Assert.IsNull(await query.ExecuteScalarAsync());
         Assert.IsFalse(Directory.Exists(fixture.Paths.SyncRootPath));
     }
