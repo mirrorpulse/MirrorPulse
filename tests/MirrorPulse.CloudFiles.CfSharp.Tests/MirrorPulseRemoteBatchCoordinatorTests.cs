@@ -4,6 +4,7 @@ using MirrorPulse.CloudFiles.CfSharp;
 using MirrorPulse.Core.CloudFiles;
 using MirrorPulse.Core.Configuration;
 using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.State;
 
 namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 
@@ -145,6 +146,28 @@ public sealed class MirrorPulseRemoteBatchCoordinatorTests
                 CollectionAssert.AreEqual(Enumerable.Repeat((byte)12, 32).ToArray(), (await coordinator.ReadCursorAsync(instance, rootA.RootId))!.Value.ToArray());
                 CollectionAssert.AreEqual(Enumerable.Repeat((byte)21, 32).ToArray(), (await coordinator.ReadCursorAsync(instance, rootB.RootId))!.Value.ToArray());
                 CollectionAssert.AreEqual(new byte[] { 4 }, (await coordinator.ReadCursorAsync(instance))!.Value.ToArray());
+                var router = new MirrorPulseRootRouter(paths.SyncRootPath, [rootA, rootB]);
+                var incoming = Batch(instance, "retained-after-sdk-commit", new byte[] { 4 }, new byte[] { 5 });
+                await using (var product = await MirrorPulseProductCatalog.OpenAsync(paths))
+                {
+                    var retained = new MirrorPulseRetainedRemoteBatchCoordinator(product, secondState.OpenStore, router,
+                        async (owner, original, policy, token) =>
+                        {
+                            Assert.IsNotNull(await product.ReadRetainedRemoteBatchAsync(owner, token));
+                            _ = await coordinator.ApplyAsync(owner, original, policy, token);
+                            throw new IOException("After the real SDK batch and product cursor committed, before the incoming intent cleared.");
+                        });
+                    await Assert.ThrowsExactlyAsync<IOException>(() => retained.ApplyAsync(instance, incoming, CloudRemoteApplyOptions.Default, default).AsTask());
+                    Assert.IsNotNull(await product.ReadRetainedRemoteBatchAsync(instance));
+                }
+                await using (var reopenedProduct = await MirrorPulseProductCatalog.OpenAsync(paths))
+                {
+                    var retained = new MirrorPulseRetainedRemoteBatchCoordinator(reopenedProduct, secondState.OpenStore, router,
+                        async (owner, original, policy, token) => MirrorPulseRemotePollApplyOutcome.FromResult(await coordinator.ApplyAsync(owner, original, policy, token)));
+                    Assert.IsTrue(await retained.ResumeAsync(instance, default));
+                    Assert.IsNull(await reopenedProduct.ReadRetainedRemoteBatchAsync(instance));
+                    CollectionAssert.AreEqual(new byte[] { 5 }, (await coordinator.ReadCursorAsync(instance))!.Value.ToArray());
+                }
             }
         }
         finally

@@ -94,7 +94,7 @@ public sealed class MirrorPulseUploadConflictQueryTests
         Assert.AreEqual(expected, (await fixture.Catalog.ReadUploadConflictEpochsAsync(expected.InstanceId, Guid.Parse(expected.ChangeId))).Single());
         await using var inspect = await fixture.ConnectAsync();
         await using var version = inspect.CreateCommand(); version.CommandText = "PRAGMA user_version;";
-        Assert.AreEqual(67L, await version.ExecuteScalarAsync());
+        Assert.AreEqual(68L, await version.ExecuteScalarAsync());
         await using var plan = inspect.CreateCommand();
         plan.CommandText = """
             EXPLAIN QUERY PLAN SELECT conflict_id FROM upload_conflicts

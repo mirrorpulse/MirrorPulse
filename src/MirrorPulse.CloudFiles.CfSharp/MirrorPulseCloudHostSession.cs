@@ -958,6 +958,37 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                 await WithAdmittedInstancesLibraryAsync(router!.Registrations.Select(root => root.InstanceId).Distinct(),
                     BootstrapNamespaceAsync, cancellationToken).ConfigureAwait(false);
             }
+            await ResumeRetainedRemoteBatchesAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        private async Task ResumeRetainedRemoteBatchesAsync(CancellationToken token)
+        {
+            if (catalog is null || router is null || conflicts is null || notifications is null) return;
+            InstanceId? after = null;
+            while (true)
+            {
+                var owners = await catalog.ReadRetainedRemoteBatchOwnersAsync(after, token).ConfigureAwait(false);
+                if (owners.Count == 0) return;
+                foreach (var instance in owners)
+                {
+                    token.ThrowIfCancellationRequested();
+                    if (mayDispatch is not null && !mayDispatch(instance)) continue;
+                    try
+                    {
+                        bool completed = await WithInstanceLibraryAsync(instance, current =>
+                            RetainedRemoteBatches(catalog, conflicts, notifications).ResumeAsync(instance, current), token).ConfigureAwait(false);
+                        if (!completed)
+                            await catalog.MarkRetainedRemoteBatchRecoveryPendingAsync(instance, token).ConfigureAwait(false);
+                    }
+                    catch (Exception error) when (error is not OperationCanceledException)
+                    {
+                        // Retain the original envelope and isolate this owner. Do not log batch
+                        // bodies, source metadata or exception text as an ordinary diagnostic.
+                        await catalog.MarkRetainedRemoteBatchRecoveryPendingAsync(instance, token).ConfigureAwait(false);
+                    }
+                }
+                after = owners[^1];
+            }
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
@@ -1109,7 +1140,24 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             MirrorPulseConflictNotificationBridge notifications,
             CloudRemoteApplyOptions? options,
             CancellationToken cancellationToken)
-            => WithCurrentLibraryAsync(token => ApplyRemoteBatchCoreAsync(instanceId, batch, catalog, center, notifications, options, token), cancellationToken);
+            => WithCurrentLibraryAsync(async token =>
+            {
+                if (router is null) return await ApplyRemoteBatchCoreAsync(instanceId, batch, catalog, center, notifications, options, token).ConfigureAwait(false);
+                CloudRemoteApplyResult? result = null;
+                var retained = new MirrorPulseRetainedRemoteBatchCoordinator(catalog, state.OpenStore, router,
+                    async (instance, original, policy, stop) =>
+                    {
+                        result = await ApplyRemoteBatchCoreAsync(instance, original, catalog, center, notifications, policy, stop).ConfigureAwait(false);
+                        return MirrorPulseRemotePollApplyOutcome.FromResult(result);
+                    });
+                await retained.ApplyAsync(instanceId, batch, options ?? CloudRemoteApplyOptions.Default, token).ConfigureAwait(false);
+                return result ?? throw new InvalidDataException("The incoming batch did not reach its admitted apply boundary.");
+            }, cancellationToken);
+
+        private MirrorPulseRetainedRemoteBatchCoordinator RetainedRemoteBatches(MirrorPulseProductCatalog owner,
+            MirrorPulseConflictCenter center, MirrorPulseConflictNotificationBridge notifications) =>
+            new(owner, state.OpenStore, router!, async (instance, batch, policy, token) =>
+                MirrorPulseRemotePollApplyOutcome.FromResult(await ApplyRemoteBatchCoreAsync(instance, batch, owner, center, notifications, policy, token).ConfigureAwait(false)));
 
         private async ValueTask<CloudRemoteApplyResult> ApplyRemoteBatchCoreAsync(InstanceId instanceId,
             CloudRemoteChangeBatch batch, MirrorPulseProductCatalog catalog, MirrorPulseConflictCenter center,

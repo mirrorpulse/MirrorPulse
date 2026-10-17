@@ -137,7 +137,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         Assert.IsNull(await current.ReadPendingNamespaceMemberMoveAsync(setup.Move.RootId));
         await using var connection = Connection(fixture.Paths); await connection.OpenAsync(); await using var query = connection.CreateCommand();
         query.CommandText = "SELECT COUNT(*) FROM namespace_member_moves;"; Assert.AreEqual(0L, await query.ExecuteScalarAsync());
-        query.CommandText = "PRAGMA user_version;"; Assert.AreEqual(67L, await query.ExecuteScalarAsync());
+        query.CommandText = "PRAGMA user_version;"; Assert.AreEqual(68L, await query.ExecuteScalarAsync());
         query.CommandText = "PRAGMA foreign_key_check;"; Assert.IsNull(await query.ExecuteScalarAsync());
     }
 }

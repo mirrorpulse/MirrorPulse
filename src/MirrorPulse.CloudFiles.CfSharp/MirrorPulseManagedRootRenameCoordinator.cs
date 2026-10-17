@@ -35,7 +35,8 @@ public sealed class MirrorPulseManagedRootRenameCoordinator
         RootRegistration root = (await _catalog.ReadAdapterTopologyAsync(cancellationToken).ConfigureAwait(false))
             .Roots.SingleOrDefault(item => item.RootId == rootId)
             ?? throw new FileNotFoundException("The managed root is not registered.");
-        if (await _catalog.ReadPendingRemoteBatchAsync(root.InstanceId, cancellationToken).ConfigureAwait(false) is not null)
+        if (await _catalog.ReadPendingRemoteBatchAsync(root.InstanceId, cancellationToken).ConfigureAwait(false) is not null ||
+            await _catalog.ReadRetainedRemoteBatchAsync(root.InstanceId, cancellationToken).ConfigureAwait(false) is not null)
             throw new InvalidOperationException("The original remote batch must converge before preparing a root rename.");
         MirrorPulseRootRenameIntent intent = await _catalog.PrepareManagedRootRenameAsync(rootId, label, cancellationToken)
             .ConfigureAwait(false);
