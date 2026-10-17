@@ -9,7 +9,11 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 public sealed record MirrorPulsePendingRemotePoll(
     string BatchId, byte[] Fingerprint, string RootDirectoryName,
     IReadOnlyDictionary<string, MirrorPulseRemoteSnapshotEntry> Previous,
-    IReadOnlyDictionary<string, MirrorPulseRemoteSnapshotEntry> Candidate, int ProjectionVersion = 1);
+    IReadOnlyDictionary<string, MirrorPulseRemoteSnapshotEntry> Candidate, int ProjectionVersion = 1)
+{
+    public RootId? RootId { get; init; }
+    public string? RootKey { get; init; }
+}
 
 public interface IMirrorPulseRemotePollPendingStore
 {
@@ -19,11 +23,11 @@ public interface IMirrorPulseRemotePollPendingStore
 }
 
 /// <summary>Stores product replay intent in the Host catalog, without CfSharp private tables.</summary>
-public sealed class MirrorPulseCatalogRemotePollPendingStore : IMirrorPulseRemotePollPendingStore
+public sealed partial class MirrorPulseCatalogRemotePollPendingStore : IMirrorPulseRootRemotePollPendingStore
 {
     private static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web)
     {
-        Converters = { new JsonStringEnumConverter() },
+        Converters = { new JsonStringEnumConverter(), new MirrorPulsePollRootIdConverter() },
     };
     private readonly MirrorPulseProductCatalog _catalog;
     public MirrorPulseCatalogRemotePollPendingStore(MirrorPulseProductCatalog catalog) =>
@@ -33,6 +37,8 @@ public sealed class MirrorPulseCatalogRemotePollPendingStore : IMirrorPulseRemot
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(pending);
+        if (pending.RootId is not null || pending.RootKey is not null || pending.ProjectionVersion == 3)
+            throw new InvalidDataException("A root-scoped intent requires the root-scoped store boundary.");
         Validate(pending);
         byte[] payload = JsonSerializer.SerializeToUtf8Bytes(new Payload(2, pending.BatchId,
             pending.Fingerprint, pending.RootDirectoryName, pending.Previous, pending.ProjectionVersion), Options);
@@ -43,7 +49,7 @@ public sealed class MirrorPulseCatalogRemotePollPendingStore : IMirrorPulseRemot
 
     public async ValueTask<MirrorPulsePendingRemotePoll?> LoadAsync(InstanceId instanceId, CancellationToken cancellationToken)
     {
-        MirrorPulsePendingRemoteBatchRecord? record = await _catalog.ReadPendingRemoteBatchAsync(instanceId, cancellationToken)
+        MirrorPulsePendingRemoteBatchRecord? record = await _catalog.ReadLegacyPendingRemoteBatchAsync(instanceId, cancellationToken)
             .ConfigureAwait(false);
         if (record is null) return null;
         Payload payload = JsonSerializer.Deserialize<Payload>(record.Payload, Options)
@@ -64,7 +70,7 @@ public sealed class MirrorPulseCatalogRemotePollPendingStore : IMirrorPulseRemot
 
     private static void Validate(MirrorPulsePendingRemotePoll pending)
     {
-        if (pending.ProjectionVersion is not (1 or 2) || pending.Fingerprint is null || pending.Fingerprint.Length != 32 ||
+        if (pending.ProjectionVersion is not (1 or 2 or 3) || pending.Fingerprint is null || pending.Fingerprint.Length != 32 ||
             string.IsNullOrWhiteSpace(pending.RootDirectoryName) || pending.RootDirectoryName is "." or ".." ||
             pending.RootDirectoryName.IndexOfAny(['/', '\\', ':']) >= 0)
             throw new InvalidDataException("The pending poll fingerprint or root directory is invalid.");

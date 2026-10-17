@@ -113,7 +113,7 @@ public sealed partial class MirrorPulseActiveRemotePollerTests
             {
                 captured = batch;
                 throw new IOException("fixture retains the captured batch");
-            }, snapshotStore: snapshots, pendingStore: pendingStore))
+            }, snapshotStore: new FaultingSnapshotStore(snapshots, false), pendingStore: pendingStore))
             {
                 source.Set(new FakeEntry("resident", "v1", CloudItemKind.File, "resident.bin", 3));
                 Assert.IsFalse(await first.PollOnceAsync(instance));
@@ -345,7 +345,7 @@ public sealed partial class MirrorPulseActiveRemotePollerTests
     }
 
     [TestMethod]
-    public async Task PollerLeavesMultiRootInstancesForExplicitRemoteRootMapping()
+    public async Task PollerBaselinesEachMappedRootInItsOwnTurn()
     {
         InstanceId instance = InstanceId.New();
         AdapterId adapterId = AdapterId.Parse("example.multi-root");
@@ -353,16 +353,19 @@ public sealed partial class MirrorPulseActiveRemotePollerTests
             adapterId, instance,
             [new AdapterRootDefinition("documents", "Documents", "Documents", false),
              new AdapterRootDefinition("photos", "Photos", "Photos", false)],
-            RootRegistrationState.Active);
+            RootRegistrationState.Active, identityScope: RootIdentityScope.InstanceRoot);
         var adapter = new AdapterInstance(
             adapterId, InstallId.New(), instance, "Multi-root", new Dictionary<string, string>(), [],
             Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"), "files"),
             Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"), "transfers"),
             true, AdapterLifecycleState.Enabled, null, DateTimeOffset.UtcNow);
+        var source = new FakeDirectorySource();
         await using var poller = new MirrorPulseActiveRemotePoller(
-            new FakeDirectorySource(), [adapter], roots, (_, batch, _) => ValueTask.FromResult(new MirrorPulseRemotePollApplyOutcome(true, batch.FinalCursor)));
+            source, [adapter], roots, (_, batch, _) => ValueTask.FromResult(new MirrorPulseRemotePollApplyOutcome(true, batch.FinalCursor)));
 
         Assert.IsFalse(await poller.PollOnceAsync(instance));
+        Assert.IsFalse(await poller.PollOnceAsync(instance));
+        Assert.AreEqual(2, source.Reads);
     }
 
     [TestMethod]
@@ -397,8 +400,8 @@ public sealed partial class MirrorPulseActiveRemotePollerTests
             source.Set(new FakeEntry("file", "v2", CloudItemKind.File, "file.bin", 4));
             if (completed) await Assert.ThrowsExactlyAsync<InvalidDataException>(() => poller.PollOnceAsync(instance).AsTask());
             else Assert.IsFalse(await poller.PollOnceAsync(instance));
-            Assert.AreEqual("v1", (await store.LoadAsync(instance))!["file"].RemoteRevision);
-            MirrorPulsePendingRemotePoll pending = (await pendingStore.LoadAsync(instance, CancellationToken.None))!;
+            Assert.AreEqual("v1", (await store.LoadAsync(root))!["file"].RemoteRevision);
+            MirrorPulsePendingRemotePoll pending = (await pendingStore.LoadAsync(root, CancellationToken.None))!;
             Assert.AreEqual(batches[0].BatchId, pending.BatchId);
             Assert.AreEqual("v2", pending.Candidate["file"].RemoteRevision);
             retry = false;
@@ -406,8 +409,8 @@ public sealed partial class MirrorPulseActiveRemotePollerTests
             Assert.HasCount(2, batches);
             Assert.AreEqual(batches[0].BatchId, batches[1].BatchId);
             CollectionAssert.AreEqual(batches[0].Fingerprint.ToArray(), batches[1].Fingerprint.ToArray());
-            Assert.AreEqual("v2", (await store.LoadAsync(instance))!["file"].RemoteRevision);
-            Assert.IsNull(await pendingStore.LoadAsync(instance, CancellationToken.None));
+            Assert.AreEqual("v2", (await store.LoadAsync(root))!["file"].RemoteRevision);
+            Assert.IsNull(await pendingStore.LoadAsync(root, CancellationToken.None));
         }
         finally { if (Directory.Exists(dataRoot)) Directory.Delete(dataRoot, true); }
     }
@@ -492,10 +495,11 @@ public sealed partial class MirrorPulseActiveRemotePollerTests
                 CollectionAssert.AreEqual(observed[0].FinalCursor.ToArray(), observed[1].FinalCursor.ToArray());
                 Assert.HasCount(1, applied);
                 Assert.IsNull(await pending.LoadAsync(instance, CancellationToken.None));
-                Assert.AreEqual("v2", (await snapshots.LoadAsync(instance))!["file"].RemoteRevision);
+                Assert.AreEqual("v2", (await snapshots.LoadAsync(root))!["file"].RemoteRevision);
                 Assert.IsTrue(await second.PollOnceAsync(instance));
-                CollectionAssert.AreEqual(observed[1].FinalCursor.ToArray(), observed[2].InitialCursor.ToArray());
-                Assert.AreEqual("v3", (await snapshots.LoadAsync(instance))!["file"].RemoteRevision);
+                Assert.IsFalse(observed[1].FinalCursor.Span.SequenceEqual(observed[2].InitialCursor.Span),
+                    "The completed legacy instance cursor is retained; the new root has an independent cursor namespace.");
+                Assert.AreEqual("v3", (await snapshots.LoadAsync(root))!["file"].RemoteRevision);
             }
         }
         finally { Directory.Delete(dataRoot, true); }

@@ -33,7 +33,7 @@ public sealed partial class MirrorPulseActiveRemotePollerTests
             Assert.IsFalse(await poller.PollOnceAsync(root.InstanceId));
             source.Set(new FakeEntry("file", "v2", CloudItemKind.File, "moved.bin", 3));
             await Assert.ThrowsExactlyAsync<IOException>(() => poller.PollOnceAsync(root.InstanceId).AsTask());
-            var original = (await pending.LoadAsync(root.InstanceId, default))!;
+            var original = (await pending.LoadAsync(root, default))!;
             int reads = source.Reads;
             ordinary = false; fail = false;
             source.Set(new FakeEntry("file", "v3", CloudItemKind.File, "newer.bin", 3));
@@ -44,14 +44,14 @@ public sealed partial class MirrorPulseActiveRemotePollerTests
             await using (await admission.BeginRecoveryAsync([root.RootId])) { }
             Assert.IsFalse(await poller.PollOnceAsync(root.InstanceId));
             Assert.IsFalse(admission.IsAdmitted(root.RootId)); Assert.HasCount(1, batches);
-            Assert.AreEqual(original.BatchId, (await pending.LoadAsync(root.InstanceId, default))!.BatchId);
+            Assert.AreEqual(original.BatchId, (await pending.LoadAsync(root, default))!.BatchId);
             await OpenPollAdmissionAsync(admission, root.RootId);
             Assert.IsTrue(await poller.PollOnceAsync(root.InstanceId));
             Assert.HasCount(2, batches); Assert.AreEqual(reads, source.Reads);
             Assert.AreEqual(original.BatchId, batches[1].BatchId);
             CollectionAssert.AreEqual(original.Fingerprint, batches[1].Fingerprint.ToArray());
-            Assert.AreEqual("v2", (await snapshots.LoadAsync(root.InstanceId))!["file"].RemoteRevision);
-            Assert.IsNull(await pending.LoadAsync(root.InstanceId, default));
+            Assert.AreEqual("v2", (await snapshots.LoadAsync(root))!["file"].RemoteRevision);
+            Assert.IsNull(await pending.LoadAsync(root, default));
             Assert.IsFalse(await poller.PollOnceAsync(root.InstanceId));
             Assert.AreEqual(reads, source.Reads); // Ordinary source polling remains fenced.
         }

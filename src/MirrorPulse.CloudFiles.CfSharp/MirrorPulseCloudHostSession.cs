@@ -1115,11 +1115,13 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             CloudRemoteChangeBatch batch, MirrorPulseProductCatalog catalog, MirrorPulseConflictCenter center,
             MirrorPulseConflictNotificationBridge notifications, CloudRemoteApplyOptions? options, CancellationToken cancellationToken)
         {
+            var pollingRoot = MirrorPulseRemotePollBatchScope.RequireCurrentMapping(instanceId, batch, router);
             MirrorPulseNamespaceWorkAdmission.WorkLease? admission = null;
             if (namespaceWork is not null)
             {
                 if (router is null) throw new InvalidOperationException("Remote namespace admission requires current root routing.");
-                var affected = batch.Changes.Count == 0 ? router.Registrations.Where(root => root.InstanceId == instanceId).Select(root => root.RootId) :
+                var affected = batch.Changes.Count == 0 ? pollingRoot is { } selected ? new[] { selected } :
+                    router.Registrations.Where(root => root.InstanceId == instanceId).Select(root => root.RootId) :
                     batch.Changes.SelectMany(change => change.PreviousRelativePath is { } previous ? new[] { change.RelativePath, previous } : [change.RelativePath])
                         .Select(path =>
                         {

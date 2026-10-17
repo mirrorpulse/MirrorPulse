@@ -42,6 +42,17 @@ public sealed class MirrorPulseRemoteBatchCoordinatorTests
             }
             CollectionAssert.AreEqual(new byte[] { 1, 2, 3 }, (await coordinator.ReadCursorAsync(instance))!.Value.ToArray());
             Assert.IsNull(await coordinator.ReadCursorAsync(InstanceId.New()));
+            var first = RootId.New(); var second = RootId.New();
+            Assert.IsNull(await coordinator.ReadCursorAsync(instance, first));
+            await using (var transaction = await store.BeginTransactionAsync())
+            {
+                await transaction.Checkpoints.UpsertAsync(new(MirrorPulseRemoteBatchCoordinator.GetCheckpointName(instance, first), new byte[] { 7 }, DateTimeOffset.UtcNow));
+                await transaction.Checkpoints.UpsertAsync(new(MirrorPulseRemoteBatchCoordinator.GetCheckpointName(instance, second), new byte[] { 8 }, DateTimeOffset.UtcNow));
+                await transaction.CommitAsync();
+            }
+            CollectionAssert.AreEqual(new byte[] { 7 }, (await coordinator.ReadCursorAsync(instance, first))!.Value.ToArray());
+            CollectionAssert.AreEqual(new byte[] { 8 }, (await coordinator.ReadCursorAsync(instance, second))!.Value.ToArray());
+            CollectionAssert.AreEqual(new byte[] { 1, 2, 3 }, (await coordinator.ReadCursorAsync(instance))!.Value.ToArray());
         }
         finally { Directory.Delete(directory, recursive: true); }
     }
@@ -119,6 +130,21 @@ public sealed class MirrorPulseRemoteBatchCoordinatorTests
                 CloudRemoteApplyResult replayed = await coordinator.ApplyAsync(instance, partial);
                 Assert.AreEqual(CloudRemoteBatchStatus.Applied, replayed.Status);
                 CollectionAssert.AreEqual(new byte[] { 4 }, replayed.SafeCursor.ToArray());
+                var rootA = AdapterRootRegistrationMapper.Map(AdapterId.Parse("example.cursor-roots"), instance,
+                    new("a", "A", "A", false), RootRegistrationState.Active, identityScope: RootIdentityScope.InstanceRoot);
+                var rootB = AdapterRootRegistrationMapper.Map(rootA.AdapterId, instance,
+                    new("b", "B", "B", false), RootRegistrationState.Active, identityScope: RootIdentityScope.InstanceRoot);
+                CloudRemoteChangeBatch RootBatch(RootRegistration selected, byte before, byte after)
+                {
+                    byte[] start = Enumerable.Repeat(before, 32).ToArray(), finish = Enumerable.Repeat(after, 32).ToArray();
+                    return new(MirrorPulseRemotePollBatchScope.Prefix(selected) + Convert.ToHexString(start) + "/" + Convert.ToHexString(finish), start, [], finish);
+                }
+                await coordinator.ApplyAsync(instance, RootBatch(rootA, 10, 11));
+                await coordinator.ApplyAsync(instance, RootBatch(rootB, 20, 21));
+                await coordinator.ApplyAsync(instance, RootBatch(rootA, 11, 12));
+                CollectionAssert.AreEqual(Enumerable.Repeat((byte)12, 32).ToArray(), (await coordinator.ReadCursorAsync(instance, rootA.RootId))!.Value.ToArray());
+                CollectionAssert.AreEqual(Enumerable.Repeat((byte)21, 32).ToArray(), (await coordinator.ReadCursorAsync(instance, rootB.RootId))!.Value.ToArray());
+                CollectionAssert.AreEqual(new byte[] { 4 }, (await coordinator.ReadCursorAsync(instance))!.Value.ToArray());
             }
         }
         finally

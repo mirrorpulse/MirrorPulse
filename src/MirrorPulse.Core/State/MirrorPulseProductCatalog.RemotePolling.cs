@@ -5,7 +5,10 @@ namespace MirrorPulse.Core.State;
 
 /// <summary>Opaque product recovery intent; CfSharp still owns apply state and checkpoints.</summary>
 public sealed record MirrorPulsePendingRemoteBatchRecord(
-    InstanceId InstanceId, string BatchId, byte[] Payload, byte[] CandidateSnapshot);
+    InstanceId InstanceId, string BatchId, byte[] Payload, byte[] CandidateSnapshot)
+{
+    public RootId? RootId { get; init; }
+}
 
 public sealed partial class MirrorPulseProductCatalog
 {
@@ -13,6 +16,7 @@ public sealed partial class MirrorPulseProductCatalog
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(record);
+        if (record.RootId is not null) throw new InvalidDataException("Use the root-scoped boundary for a root polling batch.");
         ArgumentException.ThrowIfNullOrWhiteSpace(record.BatchId);
         ArgumentNullException.ThrowIfNull(record.Payload);
         ArgumentNullException.ThrowIfNull(record.CandidateSnapshot);
@@ -49,7 +53,8 @@ public sealed partial class MirrorPulseProductCatalog
         try
         {
             ThrowIfDisposed();
-            return await ReadPendingRemoteBatchCoreAsync(instanceId, cancellationToken).ConfigureAwait(false);
+            return await ReadPendingRemoteBatchCoreAsync(instanceId, cancellationToken).ConfigureAwait(false) ??
+                await ReadAnyRootPendingRemoteBatchCoreAsync(instanceId, cancellationToken).ConfigureAwait(false);
         }
         finally { _gate.Release(); }
     }

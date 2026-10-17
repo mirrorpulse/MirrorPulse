@@ -45,7 +45,8 @@ public sealed class MirrorPulseRemoteBatchCoordinator
             throw new InvalidDataException("A remote batch must be scoped to its Adapter instance.");
         }
 
-        string checkpointName = GetCheckpointName(instanceId);
+        RootId? pollingRoot = MirrorPulseRemotePollBatchScope.Read(instanceId, batch);
+        string checkpointName = pollingRoot is { } root ? GetCheckpointName(instanceId, root) : GetCheckpointName(instanceId);
         await using (ICloudStateTransaction preflight = await _state.OpenStore
             .BeginTransactionAsync(cancellationToken).ConfigureAwait(false))
         {
@@ -101,11 +102,17 @@ public sealed class MirrorPulseRemoteBatchCoordinator
     public async ValueTask<ReadOnlyMemory<byte>?> ReadCursorAsync(
         InstanceId instanceId,
         CancellationToken cancellationToken = default)
+        => await ReadCursorCoreAsync(GetCheckpointName(instanceId), cancellationToken).ConfigureAwait(false);
+
+    public ValueTask<ReadOnlyMemory<byte>?> ReadCursorAsync(InstanceId instanceId, RootId rootId,
+        CancellationToken cancellationToken = default) => ReadCursorCoreAsync(GetCheckpointName(instanceId, rootId), cancellationToken);
+
+    private async ValueTask<ReadOnlyMemory<byte>?> ReadCursorCoreAsync(string name, CancellationToken cancellationToken)
     {
         await using ICloudStateTransaction transaction = await _state.OpenStore
             .BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         CloudStateCheckpoint? checkpoint = await transaction.Checkpoints
-            .GetAsync(GetCheckpointName(instanceId), cancellationToken).ConfigureAwait(false);
+            .GetAsync(name, cancellationToken).ConfigureAwait(false);
         await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
         if (checkpoint is null) return null;
         return new ReadOnlyMemory<byte>(checkpoint.Value.ToArray());
@@ -113,4 +120,7 @@ public sealed class MirrorPulseRemoteBatchCoordinator
 
     public static string GetCheckpointName(InstanceId instanceId) =>
         $"mirrorpulse/adapter/{instanceId}/remote-cursor";
+
+    public static string GetCheckpointName(InstanceId instanceId, RootId rootId) =>
+        $"mirrorpulse/adapter/{instanceId}/roots/{rootId}/poll-cursor";
 }
