@@ -125,3 +125,11 @@ requires one remote upload, retained native confirmation, and acknowledgement of
 every original ID. The normal native, ARM64 and ordinary-user gates require this
 test. Passing the component case does not establish installed Host integration
 or complete conflict-resolution coverage.
+
+The move-only KeepLocal case retains the complete real rename-notification window.
+It requires an original MoveFile plan, a distinct authorized move and upload,
+and the move's actual accepted revision as the upload precondition. It checks
+native content confirmation, retained rejected history and seed proof, and all
+original IDs across a second library owner. An unexpected content notification
+is reported in the original window; the fixture does not remove it to manufacture
+a move-only plan.
