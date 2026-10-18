@@ -112,6 +112,38 @@ explicit tree-retired history and original provenance, without constructing
 post-hoc controlled leaf deletion intents. Inventories without these retirements
 retain their previous serialization shape. This catalog boundary performs no
 native deletion, SDK call, conflict resolution or Adapter cursor publication.
-Runtime recursive routing, live native inventory reconciliation, incomplete SDK
-observations, new execution roles and the full native cut-point matrix remain
-required before this path is a completed product feature.
+The managed runtime routes an existing original tree before native path lookup;
+a new directory containing registered descendants uses the same tree route.
+Before invoking the unchanged SDK directory Delete, it reconciles public native
+enumeration with the sealed registered graph and independently checks each
+binding, identity, protection and public SDK projection. Unknown descendants,
+links and replacements cannot join that inventory. All inspection leases below
+the target are disposed before the SDK operation; the above-target parent guard
+and shared namespace actor remain owned throughout.
+Before every SDK invocation, including an already-started replay, all retained
+members must still match their current catalog names, positions, identities and
+protection. Missing current names fail before SDK mutation. This check belongs
+only to an unconsumed SDK entry; consumed-prefix product settlement separately
+permits members already retired by earlier committed pages.
+
+Only the matching original batch may resume the tree's root fence. An already
+consumed SDK entry settles before any suffix dispatch. Schema 74 accepts the
+explicit `CommittedPrefix` outcome when a lost SDK return can be authenticated
+from its committed public prefix and actual native/projection facts. This is a
+recovery classification, not an invented SDK return status; older Hosts reject
+that newer schema. Schema73 upgrades preserve their existing results and pages.
+
+Each invocation settles at most 64 members. More work yields a typed pending
+exception after committing the page; the original outer batch and Adapter cursor
+remain unchanged. Retrying the original batch continues product settlement
+without a second SDK directory invocation, then permits suffix work and cursor
+publication. Actual failed/incomplete SDK results retain the original start and
+fence. Durable incomplete observations, new execution-role handoff and the full
+native cut-point matrix remain required before complete lifecycle acceptance.
+
+The existing controlled subtree status contract rejects original SDK trees.
+Its `Completed` phase means the complete controlled subtree was deleted; a
+remote tree can finish settlement with its original root retained by a genuine
+conflict. Reusing that mapping would falsely report native deletion. Dedicated
+remote-tree Control/CLI status, with separate root outcome and page progress,
+remains required; clients must not open the Host catalog to obtain it.

@@ -913,8 +913,9 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             CancellationToken cancellationToken)
         {
             if (catalog is null) throw new NotSupportedException("Subtree receipts require the Host catalog.");
-            return await catalog.ReadNamespaceRetirementBatchAsync(operationId, cancellationToken).ConfigureAwait(false)
+            var batch = await catalog.ReadNamespaceRetirementBatchAsync(operationId, cancellationToken).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The retirement batch is not registered.");
+            return MirrorPulseNamespaceRetirementCoordinator.RequireControlledBatchReceipt(batch);
         }
 
         [SupportedOSPlatform("windows10.0.26100")]

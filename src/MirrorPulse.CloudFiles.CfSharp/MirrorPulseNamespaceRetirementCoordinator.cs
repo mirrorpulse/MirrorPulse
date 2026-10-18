@@ -20,6 +20,14 @@ public sealed class MirrorPulseNamespaceRetirementCoordinator(CloudFileSystem fi
     MirrorPulseProductCatalog catalog, MirrorPulseRootRouter router,
     MirrorPulseNamespaceExecutionSession execution, MirrorPulseNamespaceActor actor)
 {
+    internal static MirrorPulseNamespaceRetirementBatch RequireControlledBatchReceipt(MirrorPulseNamespaceRetirementBatch batch)
+    {
+        ArgumentNullException.ThrowIfNull(batch);
+        if (batch.RemoteEntry is not null)
+            throw new NotSupportedException("Original SDK directory outcomes cannot use the controlled retirement status contract.");
+        return batch;
+    }
+
     internal Func<MirrorPulseNamespaceRetirementCheckpoint, ValueTask>? Checkpoint { get; init; }
     internal Func<CloudItemSnapshot, CancellationToken, ValueTask>? BeforeNativeDeletion { get; init; }
 

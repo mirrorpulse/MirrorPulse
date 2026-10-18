@@ -198,13 +198,15 @@ public sealed partial class MirrorPulseProductCatalog
 
     private async Task UpgradeRemoteTreeSettlementOwnersAsync(long previousVersion, CancellationToken token)
     {
-        if (previousVersion >= 73) return;
+        if (previousVersion >= 74) return;
         using var transaction = _connection.BeginTransaction();
         var operations = new List<Guid>();
         await using (var query = _connection.CreateCommand())
         {
             query.Transaction = transaction;
-            query.CommandText = "SELECT operation_id FROM namespace_remote_retirement_tree_starts ORDER BY operation_id LIMIT 1000002;";
+            query.CommandText = previousVersion < 73
+                ? "SELECT operation_id FROM namespace_remote_retirement_tree_starts ORDER BY operation_id LIMIT 1000002;"
+                : "SELECT operation_id FROM namespace_remote_retirement_tree_starts WHERE 0;";
             await using var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
             while (await reader.ReadAsync(token).ConfigureAwait(false)) operations.Add(ParseNamespaceMemberId(reader.GetString(0)));
         }
@@ -219,7 +221,7 @@ public sealed partial class MirrorPulseProductCatalog
             _ = await ReadNamespaceRetirementBatchCoreAsync(operation, transaction, token).ConfigureAwait(false);
         }
         await using var version = _connection.CreateCommand(); version.Transaction = transaction;
-        version.CommandText = "PRAGMA user_version=73;";
+        version.CommandText = "PRAGMA user_version=74;";
         await version.ExecuteNonQueryAsync(token).ConfigureAwait(false); transaction.Commit();
     }
 

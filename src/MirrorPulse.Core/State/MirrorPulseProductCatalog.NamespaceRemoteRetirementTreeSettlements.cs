@@ -4,7 +4,9 @@ using Microsoft.Data.Sqlite;
 
 namespace MirrorPulse.Core.State;
 
-/// <summary>The actual public SDK root result, independently inspected by the Host after invocation.</summary>
+/// <summary>The public SDK root outcome, independently inspected by the Host after invocation.</summary>
+/// <remarks>CommittedPrefix means a lost return was recovered from the authenticated public SDK
+/// prefix and actual objects/projections. It does not claim an invented original return status.</remarks>
 public sealed record MirrorPulseNamespaceRemoteRetirementTreeOutcome(int Version, Guid OperationId,
     string BatchFingerprint, string TreeFingerprint, DateTimeOffset StartedAt, int AppliedEntryCount,
     string LastAppliedChangeId, string SafeCursorFingerprint, bool SdkBatchCompleted, string EntryStatus,
@@ -238,7 +240,7 @@ public sealed partial class MirrorPulseProductCatalog
             outcome.TreeFingerprint != batch.RemoteTreeFingerprint || outcome.StartedAt != start.StartedAt ||
             outcome.AppliedEntryCount != remote.Ordinal + 1 || outcome.LastAppliedChangeId != remote.ChangeId ||
             !IsTreeSettlementFingerprint(outcome.SafeCursorFingerprint) || outcome.SdkBatchCompleted != (outcome.AppliedEntryCount == remote.BatchEntryCount) ||
-            outcome.EntryStatus is not ("Applied" or "AlreadyApplied" or "Conflict") || outcome.VerifiedAt < start.StartedAt)
+            outcome.EntryStatus is not ("Applied" or "AlreadyApplied" or "Conflict" or "CommittedPrefix") || outcome.VerifiedAt < start.StartedAt)
             throw new InvalidOperationException("The actual SDK tree result lost its original start, immutable input or exact public prefix.");
         RequireTreeSettlementVerification(remote.Parent, outcome.Parent, start.StartedAt, outcome.VerifiedAt);
         if (outcome.EntryStatus == "Conflict")

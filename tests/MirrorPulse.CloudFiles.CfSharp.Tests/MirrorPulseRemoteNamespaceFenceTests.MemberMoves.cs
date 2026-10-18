@@ -131,7 +131,7 @@ public sealed partial class MirrorPulseRemoteNamespaceFenceTests
             Parent.OriginId, Parent.ProtectionId, Parent.LocalObject, "Docs/pending.txt", false,
             MirrorPulseNamespaceBirthOrigin.ControlledCreation, Role, DateTimeOffset.UtcNow);
 
-        public static async Task<MoveFixture> OpenAsync()
+        public static async Task<MoveFixture> OpenAsync(bool directoryChild = false)
         {
             var fixture = new MoveFixture();
             try
@@ -175,7 +175,7 @@ public sealed partial class MirrorPulseRemoteNamespaceFenceTests
                     RootId = fixture.Docs.RootId,
                     LocalObject = binding with { LocalFileId = Guid.NewGuid() },
                     RelativePath = "Docs/new.txt",
-                    IsDirectory = false
+                    IsDirectory = directoryChild
                 }, parent.Member.MemberId, itemId);
                 fixture.Child = child.Member;
                 fixture.Move = new(1, Guid.NewGuid(), child.Member.MemberId, child.Intent.OperationId, fixture.Docs.RootId,
@@ -188,13 +188,13 @@ public sealed partial class MirrorPulseRemoteNamespaceFenceTests
         }
 
         private async Task<(MirrorPulseNamespaceMemberRegistration Member, MirrorPulseNamespacePermissionIntent Intent)> RegisterAsync(
-            MirrorPulseNamespacePermissionBaseline original, Guid? parent, Guid? itemId = null)
+            MirrorPulseNamespacePermissionBaseline original, Guid? parent, Guid? itemId = null, string remoteId = "local:first")
         {
             var intent = new MirrorPulseNamespacePermissionIntent(Guid.NewGuid(), original.EvidenceId, original.LocalObject, original.RootId,
                 original.RelativePath, MirrorPulseNamespacePermissionChangeKind.Protect, Role, Original, Protected, DateTimeOffset.UtcNow);
             await Catalog.PrepareNamespacePermissionChangeAsync(original, intent);
-            if (itemId is { } item) await Catalog.PrepareNamespacePermissionLocalIdentityAsync(new(1, original.EvidenceId,
-                intent.OperationId, original.LocalObject, item, "local:first", DateTimeOffset.UtcNow));
+            if (itemId is { } item) await Catalog.PrepareNamespacePermissionLocalIdentityAsync(new(original.IsDirectory ? 2 : 1, original.EvidenceId,
+                intent.OperationId, original.LocalObject, item, remoteId, DateTimeOffset.UtcNow));
             await Catalog.RecordNamespacePermissionApplicationAsync(intent.OperationId, original.LocalObject, DateTimeOffset.UtcNow);
             await Catalog.VerifyNamespacePermissionChangeAsync(intent.OperationId, new(original.LocalObject, Owner, Protected, DateTimeOffset.UtcNow));
             var member = new MirrorPulseNamespaceMemberRegistration(1, Guid.NewGuid(), parent, MirrorPulseNamespaceMemberOrigin.CapturedOriginal,
@@ -202,6 +202,12 @@ public sealed partial class MirrorPulseRemoteNamespaceFenceTests
             return (await Catalog.RegisterNamespaceMemberAsync(member), intent);
         }
         public async Task RestartAsync() { await Catalog.DisposeAsync(); Catalog = await MirrorPulseProductCatalog.OpenAsync(Paths); }
+        public async Task AddTreeChildAsync()
+        {
+            var baseline = new MirrorPulseNamespacePermissionBaseline(Guid.NewGuid(), Docs.RootId,
+                Child.LocalObject with { LocalFileId = Guid.NewGuid() }, Child.RelativePath + "/leaf", false, Owner, Original, DateTimeOffset.UtcNow);
+            _ = await RegisterAsync(baseline, Child.MemberId, Guid.NewGuid(), "local:tree-leaf");
+        }
         private static string Dacl(string value) => new RawSecurityDescriptor(value).GetSddlForm(AccessControlSections.Access);
         public async ValueTask DisposeAsync()
         {

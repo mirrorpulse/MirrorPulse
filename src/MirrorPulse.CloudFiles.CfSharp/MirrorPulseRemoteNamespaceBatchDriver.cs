@@ -9,7 +9,7 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 internal enum MirrorPulseRemoteNamespaceBatchCheckpoint { AfterMoveStart, AfterSdkApply }
 
 /// <summary>Admits and settles one original SDK entry before any Adapter cursor can be published.</summary>
-/// <remarks>The managed path supports moves, new explicit-identity upserts and original registered leaf deletes.
+/// <remarks>The managed path supports moves, new explicit-identity upserts and original registered deletes.
 /// Other entry kinds remain closed until their replacement and metadata lifecycles are connected. An uncertain native start
 /// requires fresh original outcome recovery and never grants blind redispatch.</remarks>
 [SupportedOSPlatform("windows10.0.26100")]
@@ -24,6 +24,7 @@ internal sealed class MirrorPulseRemoteNamespaceBatchDriver(
     private readonly MirrorPulseNamespaceMemberInspector _members = new(fileSystem, catalog, router, execution, actor);
     private readonly MirrorPulseRemoteBirthBatchCoordinator _births = new(fileSystem, state, catalog, router, execution, actor, birthCheckpoint);
     private readonly MirrorPulseRemoteRetirementBatchCoordinator _retirements = new(fileSystem, state, catalog, router, execution, actor, retirementCheckpoint);
+    private readonly MirrorPulseRemoteTreeRetirementCoordinator _treeRetirements = new(fileSystem, state, catalog, router, execution, actor, retirementCheckpoint);
 
     internal async ValueTask<CloudRemoteApplyResult> ApplyAsync(InstanceId instance, CloudRemoteChangeBatch batch,
         CloudRemoteApplyOptions options, MirrorPulseRemoteConflictProjector? conflicts, CancellationToken token)
@@ -49,6 +50,15 @@ internal sealed class MirrorPulseRemoteNamespaceBatchDriver(
         {
             if (batch.Changes[ordinal].Kind == CloudRemoteChangeKind.Delete)
             {
+                var tree = await catalog.ReadNamespaceRemoteRetirementTreeAsync(instance, batch.BatchId, ordinal, token).ConfigureAwait(false);
+                if (tree is not null)
+                {
+                    MirrorPulseRemoteTreeRetirementCoordinator.RequireOriginal(tree, instance, batch, ordinal, options);
+                    if (tree.Phase == MirrorPulseNamespaceRetirementBatchPhase.Completed) continue;
+                    if (ordinal != count - 1) throw new InvalidDataException("A later SDK entry overtook an unsettled original directory tree.");
+                    await _treeRetirements.SettleRecordedAsync(tree, instance, batch, ordinal, options, conflicts, token).ConfigureAwait(false);
+                    continue;
+                }
                 var retirement = await catalog.ReadNamespaceRemoteRetirementAsync(instance, batch.BatchId, ordinal, token).ConfigureAwait(false)
                     ?? throw new InvalidDataException("Applied SDK progress has no original product retirement admission.");
                 MirrorPulseRemoteRetirementBatchCoordinator.RequireOriginal(retirement.Intent, instance, batch, ordinal, options);
@@ -79,7 +89,16 @@ internal sealed class MirrorPulseRemoteNamespaceBatchDriver(
             var change = batch.Changes[count];
             if (change.Kind == CloudRemoteChangeKind.Delete)
             {
-                var appliedRetirement = await _retirements.ApplyAsync(instance, batch, count, options, conflicts, token).ConfigureAwait(false);
+                bool tree = await catalog.ReadNamespaceRemoteRetirementTreeAsync(instance, batch.BatchId, count, token).ConfigureAwait(false) is not null;
+                if (!tree && change.ItemKind == CloudItemKind.Directory &&
+                    await catalog.ReadNamespaceRemoteRetirementAsync(instance, batch.BatchId, count, token).ConfigureAwait(false) is null)
+                {
+                    var member = await _members.InspectAsync(change.RelativePath, true, token).ConfigureAwait(false);
+                    tree = (await catalog.ReadNamespaceMemberTreeAsync(member.MemberId, token).ConfigureAwait(false)).Count > 1;
+                }
+                var appliedRetirement = tree
+                    ? await _treeRetirements.ApplyAsync(instance, batch, count, options, conflicts, token).ConfigureAwait(false)
+                    : await _retirements.ApplyAsync(instance, batch, count, options, conflicts, token).ConfigureAwait(false);
                 if (conflicts is not null) await conflicts.CaptureResultAsync(instance, appliedRetirement, token).ConfigureAwait(false);
                 if (checkpoint is not null) await checkpoint(MirrorPulseRemoteNamespaceBatchCheckpoint.AfterSdkApply, token).ConfigureAwait(false);
                 return appliedRetirement;

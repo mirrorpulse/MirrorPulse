@@ -151,7 +151,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         Assert.AreEqual(setup.Member, await current.ReadNamespaceMemberChildAsync(setup.ParentMember.MemberId, "new.txt"));
         await using var connection = Connection(fixture.Paths); await connection.OpenAsync(); await using var query = connection.CreateCommand();
         query.CommandText = "PRAGMA foreign_key_check;"; Assert.IsNull(await query.ExecuteScalarAsync());
-        query.CommandText = "PRAGMA user_version;"; Assert.AreEqual(73L, await query.ExecuteScalarAsync());
+        query.CommandText = "PRAGMA user_version;"; Assert.AreEqual(74L, await query.ExecuteScalarAsync());
     }
 
     private static async Task StartMoveAsync(MirrorPulseProductCatalog catalog, MoveFixture setup)

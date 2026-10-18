@@ -7,7 +7,7 @@ using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.CloudFiles.CfSharp;
 
-internal enum MirrorPulseRemoteRetirementCheckpoint { AfterAdmission, AfterStart, AfterSdkApply, AfterSettlement }
+internal enum MirrorPulseRemoteRetirementCheckpoint { AfterAdmission, AfterStart, AfterSdkApply, AfterSettlement, AfterTreeOutcome, AfterMemberPage }
 
 /// <summary>Lets the original SDK batch delete a registered leaf, then settles that exact member.</summary>
 [SupportedOSPlatform("windows10.0.26100")]
@@ -161,7 +161,7 @@ internal sealed class MirrorPulseRemoteRetirementBatchCoordinator(CloudFileSyste
         if (checkpoint is not null) await checkpoint(MirrorPulseRemoteRetirementCheckpoint.AfterSettlement, token).ConfigureAwait(false);
     }
 
-    private void RequireCurrentRoute(InstanceId instance, CloudRemoteChange change,
+    internal void RequireCurrentRoute(InstanceId instance, CloudRemoteChange change,
         MirrorPulseNamespaceMemberProtectionSnapshot child, MirrorPulseNamespaceMemberProtectionSnapshot parent)
     {
         var route = router.ResolveCurrentPath(change.RelativePath); var root = router.GetRegistration(route.InstanceId, route.RootKey);
@@ -174,7 +174,7 @@ internal sealed class MirrorPulseRemoteRetirementBatchCoordinator(CloudFileSyste
             throw new InvalidDataException("Remote retirement requires its current active root, original direct parent and protected role.");
     }
 
-    private static async Task<MirrorPulseNamespacePermissionObject> InspectParentAsync(MirrorPulseNamespaceMemberProtectionSnapshot original,
+    internal static async Task<MirrorPulseNamespacePermissionObject> InspectParentAsync(MirrorPulseNamespaceMemberProtectionSnapshot original,
         CloudDirectory item, MirrorPulseWindowsNamespacePermissionLease guard, CancellationToken token)
     {
         var facts = await guard.InspectAsync(token).ConfigureAwait(false);
@@ -184,7 +184,7 @@ internal sealed class MirrorPulseRemoteRetirementBatchCoordinator(CloudFileSyste
         return facts;
     }
 
-    private async Task<MirrorPulseNamespacePermissionVerification> InspectChildAsync(MirrorPulseNamespaceMemberProtectionSnapshot original,
+    internal async Task<MirrorPulseNamespacePermissionVerification> InspectChildAsync(MirrorPulseNamespaceMemberProtectionSnapshot original,
         CloudItem item, string? revision, CancellationToken token, bool requireRevision = true)
     {
         await using var guard = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(item, router, token).ConfigureAwait(false);
@@ -212,7 +212,7 @@ internal sealed class MirrorPulseRemoteRetirementBatchCoordinator(CloudFileSyste
             throw new InvalidDataException("The original retirement object, position, owner, descriptor or single-link constraint changed.");
     }
 
-    private async Task<CloudItemState?> ReadItemAsync(Guid item, CancellationToken token)
+    internal async Task<CloudItemState?> ReadItemAsync(Guid item, CancellationToken token)
     {
         await using var transaction = await state.OpenStore.BeginTransactionAsync(token).ConfigureAwait(false);
         var result = await transaction.Items.GetByItemIdAsync(item, token).ConfigureAwait(false);
@@ -226,7 +226,7 @@ internal sealed class MirrorPulseRemoteRetirementBatchCoordinator(CloudFileSyste
             throw new InvalidDataException("The original SDK delete does not identify its actual public item projection.");
     }
 
-    private async Task RequirePrefixAsync(CloudRemoteChangeBatch batch, int ordinal, bool applied, CancellationToken token)
+    internal async Task RequirePrefixAsync(CloudRemoteChangeBatch batch, int ordinal, bool applied, CancellationToken token)
     {
         await using var transaction = await state.OpenStore.BeginTransactionAsync(token).ConfigureAwait(false);
         var progress = await transaction.RemoteBatches.GetAsync(batch.BatchId, token).ConfigureAwait(false);
@@ -262,17 +262,17 @@ internal sealed class MirrorPulseRemoteRetirementBatchCoordinator(CloudFileSyste
             throw new InvalidDataException("The original remote retirement changed its immutable batch, identity, path or public policy.");
     }
 
-    private static bool Matches(CloudRemoteChangeBatch batch, int ordinal, CloudRemoteChange change)
+    internal static bool Matches(CloudRemoteChangeBatch batch, int ordinal, CloudRemoteChange change)
     {
         if (change.ChangeId != batch.Changes[ordinal].ChangeId) return false;
         var entries = batch.Changes.ToArray(); entries[ordinal] = change;
         return new CloudRemoteChangeBatch(batch.BatchId, batch.InitialCursor, entries, batch.FinalCursor).Fingerprint.Span.SequenceEqual(batch.Fingerprint.Span);
     }
 
-    private static MirrorPulseNamespacePermissionVerification Verification(MirrorPulseNamespacePermissionObject actual) =>
+    internal static MirrorPulseNamespacePermissionVerification Verification(MirrorPulseNamespacePermissionObject actual) =>
         new(actual.LocalObject, actual.OwnerSid, actual.Dacl, actual.ObservedAt);
 
-    private static MirrorPulseNamespaceRemoteRetirementReference Reference(InstanceId instance, CloudRemoteChangeBatch batch,
+    internal static MirrorPulseNamespaceRemoteRetirementReference Reference(InstanceId instance, CloudRemoteChangeBatch batch,
         int ordinal, CloudRemoteApplyOptions options, MirrorPulseNamespaceMemberProtectionSnapshot child,
         MirrorPulseNamespaceMemberProtectionSnapshot parent, string? nativeRevision, string? officialRevision)
     {

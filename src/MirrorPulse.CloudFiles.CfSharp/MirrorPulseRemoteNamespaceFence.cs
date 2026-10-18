@@ -34,7 +34,22 @@ public sealed class MirrorPulseRemoteNamespaceFence(MirrorPulseRootRouter router
             {
                 var retirements = (await catalog.ReadPendingNamespaceRemoteRetirementsAsync(root.InstanceId, batch.BatchId, cancellationToken).ConfigureAwait(false))
                     .Where(retirement => retirement.Intent.RootId == root.RootId).ToArray();
-                if (retirements.Length == 0) return await CanPollAsync(root, cancellationToken).ConfigureAwait(false);
+                if (retirements.Length == 0)
+                {
+                    var trees = (await catalog.ReadPendingNamespaceRemoteRetirementTreesAsync(root.InstanceId, batch.BatchId, cancellationToken).ConfigureAwait(false))
+                        .Where(tree => tree.RootId == root.RootId).ToArray();
+                    if (trees.Length == 0) return await CanPollAsync(root, cancellationToken).ConfigureAwait(false);
+                    if (trees.Length != 1) return false;
+                    var tree = trees[0]; var originalTree = tree.RemoteEntry!;
+                    if (originalTree.BatchFingerprint != Convert.ToHexString(batch.Fingerprint.Span) ||
+                        originalTree.BatchEntryCount != batch.Changes.Count || originalTree.Ordinal >= batch.Changes.Count) return false;
+                    var treeChange = batch.Changes[originalTree.Ordinal];
+                    if (treeChange.Kind != CloudRemoteChangeKind.Delete || treeChange.ItemKind != CloudItemKind.Directory ||
+                        treeChange.ChangeId != originalTree.ChangeId || treeChange.ItemId != originalTree.ItemId || treeChange.RemoteId != originalTree.RemoteId ||
+                        treeChange.PreviousRemoteRevision != originalTree.PreviousRemoteRevision || treeChange.RemoteRevision != originalTree.RemoteRevision ||
+                        treeChange.RelativePath.Replace('\\', '/') != originalTree.Child.Context.Location.RelativePath) return false;
+                    return await catalog.CanResumeNamespaceRemoteRetirementTreeAsync(tree, cancellationToken).ConfigureAwait(false);
+                }
                 if (retirements.Length != 1) return false;
                 var retirement = retirements[0]; var remoteDelete = retirement.Intent.RemoteEntry!;
                 if (remoteDelete.BatchFingerprint != Convert.ToHexString(batch.Fingerprint.Span) ||

@@ -104,7 +104,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                 version.CommandText = "PRAGMA user_version;";
                 currentVersion = (long)(await version.ExecuteScalarAsync(cancellationToken)
                     .ConfigureAwait(false) ?? 0L);
-                if (currentVersion > 73)
+                if (currentVersion > 74)
                 {
                     throw new InvalidDataException("The MP product catalog schema is newer than this Host supports.");
                 }

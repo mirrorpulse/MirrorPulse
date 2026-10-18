@@ -7,7 +7,7 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
 {
     private async Task RemoveKnownRegisteredFixturePlaceholdersForCleanupAsync(string directory, MirrorPulseStoragePaths paths,
-        SecurityIdentifier user, IReadOnlyList<string> directories, IReadOnlyList<string> files)
+        SecurityIdentifier user, string[] directories, string[] files)
     {
         string syncRoot = paths.SyncRootPath;
         if (!Directory.Exists(syncRoot)) return;
@@ -20,7 +20,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         // have drained. Reconnect with the public SDK before restoring or deleting cold
         // placeholders; no source content is available to this cleanup session.
         RestoreRootGuardFixtureForCleanup(directory, syncRoot, user);
-        if (directories.Count > 32 || files.Count > 32)
+        if (directories.Length > 32 || files.Length > 32)
             throw new InvalidOperationException("Registered fixture cleanup exceeds its fixed inventory bound.");
         string root = Path.GetFullPath(syncRoot), prefix = root + Path.DirectorySeparatorChar;
         string Resolve(string relative)
