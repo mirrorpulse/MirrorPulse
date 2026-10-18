@@ -6,6 +6,7 @@ using MirrorPulse.Core.CloudFiles;
 using MirrorPulse.Core.Configuration;
 using MirrorPulse.Core.Conflicts;
 using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.Host;
 using MirrorPulse.Core.State;
 using MirrorPulse.Core.Sync;
 
@@ -1300,6 +1301,8 @@ public sealed class MirrorPulseCloudHostSession : IAsyncDisposable
     public MirrorPulseJournalPumpHealth? JournalHealth => _runtime?.JournalHealth;
     private bool _started;
     private bool _disposed;
+    private readonly object _sessionDisposal = new();
+    private Task? _sessionDisposeTask;
 
     public MirrorPulseCloudHostSession(
         MirrorPulseStoragePaths paths,
@@ -1430,14 +1433,7 @@ public sealed class MirrorPulseCloudHostSession : IAsyncDisposable
         {
             try
             {
-                if (_runtime is not null)
-                {
-                    await _runtime.DisposeAsync().ConfigureAwait(false);
-                }
-
-                _runtime = null;
-                _owner.Dispose();
-                _disposed = true;
+                await DisposeAsync().ConfigureAwait(false);
             }
             catch (Exception cleanupFailure)
             {
@@ -1730,20 +1726,20 @@ public sealed class MirrorPulseCloudHostSession : IAsyncDisposable
         return _runtime.ApplyRemoteConflictAsync(conflictId, action, catalog, cancellationToken);
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        if (_disposed)
-        {
-            return;
-        }
+        lock (_sessionDisposal) return new(_sessionDisposeTask ??= DisposeSessionCoreAsync());
+    }
 
-        if (_runtime is not null)
-        {
-            await _runtime.DisposeAsync().ConfigureAwait(false);
-            _runtime = null;
-        }
-
-        _owner.Dispose();
+    private async Task DisposeSessionCoreAsync()
+    {
         _disposed = true;
+        _started = false;
+        var runtime = _runtime;
+        _runtime = null;
+        await MirrorPulseHostResourceCleanup.RunAsync([
+            () => runtime?.DisposeAsync() ?? ValueTask.CompletedTask,
+            () => { _owner.Dispose(); return ValueTask.CompletedTask; }
+        ]).ConfigureAwait(false);
     }
 }

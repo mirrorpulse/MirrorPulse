@@ -14,6 +14,66 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 public sealed class MirrorPulseCloudHostSessionTests
 {
     [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task RuntimeCleanupFailureReleasesThePersistentRootOwnerAndPreservesStartupFailure(bool failStart)
+    {
+        string root = Path.Combine(Path.GetTempPath(), "MirrorPulse-tests", Guid.NewGuid().ToString("N"));
+        var paths = new MirrorPulseStoragePaths(Path.Combine(root, "sync"), Path.Combine(root, "data"));
+        var owner = new RecordingOwnerLock(); var cleanupFailure = new IOException("Synthetic runtime disposal failure.");
+        var factory = new RecordingRuntimeFactory { FailStart = failStart, Cleanup = () => ValueTask.FromException(cleanupFailure) };
+        var shell = new RecordingShellRegistry(); var cloud = new RecordingCloudRegistry();
+        var session = new MirrorPulseCloudHostSession(paths, new(shell, cloud), factory, new(owner), "S-1-5-21-123", "MirrorPulse");
+        try
+        {
+            if (failStart)
+            {
+                var actual = await Assert.ThrowsExactlyAsync<AggregateException>(() => session.StartAsync().AsTask());
+                Assert.HasCount(2, actual.InnerExceptions); Assert.IsInstanceOfType<InvalidOperationException>(actual.InnerExceptions[0]);
+                Assert.AreSame(cleanupFailure, actual.InnerExceptions[1]);
+            }
+            else
+            {
+                await session.StartAsync(); Assert.IsTrue(owner.IsHeld);
+                Assert.AreSame(cleanupFailure, await Assert.ThrowsExactlyAsync<IOException>(() => session.DisposeAsync().AsTask()));
+            }
+            Assert.IsFalse(owner.IsHeld, "A failed runtime cleanup must still release the persistent sync-root owner.");
+            Assert.AreEqual(1, factory.Runtimes.Single().DisposeCount); Assert.AreEqual(0, shell.UnregisterCount); Assert.AreEqual(0, cloud.UnregisterCount);
+            await Assert.ThrowsExactlyAsync<ObjectDisposedException>(() => session.StartAsync().AsTask());
+        }
+        finally
+        {
+            try { await session.DisposeAsync(); } catch (IOException) { }
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task ConcurrentDisposalAwaitsOneRuntimeDrainBeforeReleasingThePersistentOwner()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "MirrorPulse-tests", Guid.NewGuid().ToString("N"));
+        var paths = new MirrorPulseStoragePaths(Path.Combine(root, "sync"), Path.Combine(root, "data"));
+        var owner = new RecordingOwnerLock(); var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var factory = new RecordingRuntimeFactory { Cleanup = async () => await release.Task };
+        var session = new MirrorPulseCloudHostSession(paths, new(new RecordingShellRegistry(), new RecordingCloudRegistry()),
+            factory, new(owner), "S-1-5-21-123", "MirrorPulse");
+        try
+        {
+            await session.StartAsync(); Task first = session.DisposeAsync().AsTask(), second = session.DisposeAsync().AsTask();
+            Assert.IsFalse(first.IsCompleted); Assert.IsFalse(second.IsCompleted); Assert.IsTrue(owner.IsHeld);
+            try { Assert.AreEqual(1, factory.Runtimes.Single().DisposeCount, "Concurrent callers must share the same actual runtime teardown."); }
+            finally { release.TrySetResult(); }
+            await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(5)); Assert.IsFalse(owner.IsHeld);
+            await session.DisposeAsync(); Assert.AreEqual(1, factory.Runtimes.Single().DisposeCount);
+        }
+        finally
+        {
+            release.TrySetResult(); await session.DisposeAsync();
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
     [SupportedOSPlatform("windows10.0.26100")]
     public async Task ImportCommandsRequireStartedOwnerAndForwardTheOriginalOperation()
     {
@@ -265,18 +325,19 @@ public sealed class MirrorPulseCloudHostSessionTests
     private sealed class RecordingRuntimeFactory : IMirrorPulseCloudRuntimeFactory
     {
         public bool FailStart { get; init; }
+        public Func<ValueTask>? Cleanup { get; init; }
 
         public List<RecordingRuntime> Runtimes { get; } = [];
 
         public IMirrorPulseCloudRuntime Create(MirrorPulseStoragePaths paths)
         {
-            var runtime = new RecordingRuntime(FailStart);
+            var runtime = new RecordingRuntime(FailStart, Cleanup);
             Runtimes.Add(runtime);
             return runtime;
         }
     }
 
-    private sealed class RecordingRuntime(bool failStart) : IMirrorPulseCloudRuntime
+    private sealed class RecordingRuntime(bool failStart, Func<ValueTask>? cleanup = null) : IMirrorPulseCloudRuntime
     {
         public string? ImportSource { get; private set; }
         public string? ImportName { get; private set; }
@@ -341,7 +402,7 @@ public sealed class MirrorPulseCloudHostSessionTests
         public ValueTask DisposeAsync()
         {
             DisposeCount++;
-            return ValueTask.CompletedTask;
+            return cleanup?.Invoke() ?? ValueTask.CompletedTask;
         }
     }
 
