@@ -499,8 +499,15 @@ try {
 }
 catch {
     $primaryFailure = $_
-    try { Write-CliFixtureFailure -Failure $_ -Phase Execution -EvidencePath $EvidencePath -FixtureRoot $runRoot -DataRoot $dataRoot }
+    try { Write-CliFixtureFailure -Failure $primaryFailure -Phase Execution -EvidencePath $EvidencePath -FixtureRoot $runRoot -DataRoot $dataRoot }
     catch { Write-Host "Original fixture failure recording also failed: $($_.Exception.GetType().Name)." }
+    try {
+        Write-CliFixtureStartupObservations -EvidencePath $EvidencePath -HydrationReads $hydrationReads.ToArray() -HydrationAudits $hydrationAudits.ToArray() -NamespaceAudits $namespaceAudits.ToArray() -ReadLifecycle {
+            $text = (& $script:cliExecutable --json --no-start host status 2>&1 | Out-String).Trim()
+            if ($LASTEXITCODE -ne 0) { throw [IO.IOException]::new('The lifecycle observer was unavailable.') }
+            $text | ConvertFrom-Json
+        }
+    } catch { Write-Host "Startup observation recording also failed: $($_.Exception.GetType().Name)." }
     throw $primaryFailure
 }
 finally {

@@ -20,7 +20,8 @@ public sealed record MirrorPulseNamespaceStartupRoot(RootId RootId, Guid? Operat
 [SupportedOSPlatform("windows10.0.26100")]
 internal sealed class MirrorPulseNamespaceStartupCoordinator(CloudFileSystem fileSystem, MirrorPulseProductCatalog catalog,
     MirrorPulseRootRouter router, MirrorPulseNamespaceExecutionSession execution, MirrorPulseNamespaceActor actor,
-    IMirrorPulseInstanceScheduler scheduler, MirrorPulseNamespacePermissionCoordinator permissions, MirrorPulseNamespaceWorkAdmission work)
+    IMirrorPulseInstanceScheduler scheduler, MirrorPulseNamespacePermissionCoordinator permissions, MirrorPulseNamespaceWorkAdmission work,
+    Action<string>? progress = null)
 {
     internal async ValueTask<(MirrorPulseNamespaceAnchorProtection Guard, IReadOnlyList<MirrorPulseNamespaceStartupRoot> Roots)> StartAsync(
         CancellationToken cancellationToken)
@@ -29,6 +30,7 @@ internal sealed class MirrorPulseNamespaceStartupCoordinator(CloudFileSystem fil
         var outcomes = new Dictionary<RootId, MirrorPulseNamespaceStartupRoot>();
         try
         {
+            progress?.Invoke("NamespaceAnchorBegin");
             // Freeze the actual anchor and ancestor names before the first discovery.
             // This retains handles only; existing originals are still captured before ACL writes.
             MirrorPulseWindowsNamespacePermissionLease? entryGuard = null;
@@ -52,7 +54,7 @@ internal sealed class MirrorPulseNamespaceStartupCoordinator(CloudFileSystem fil
                             .InitializeAsync(pending.Intent.OperationId, cancellationToken).ConfigureAwait(false);
                     else
                     {
-                        var coordinator = new MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(fileSystem, catalog, selected, execution, actor, scheduler, permissions);
+                        var coordinator = new MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(fileSystem, catalog, selected, execution, actor, scheduler, permissions) { Progress = progress };
                         result = pending.Intent.Version == 4
                             ? await coordinator.RecoverRootAsync(pending.Intent.OperationId, pending.Intent.Roots[0].RootId, cancellationToken).ConfigureAwait(false)
                             : await coordinator.RecoverAsync(pending.Intent.OperationId, cancellationToken).ConfigureAwait(false);
@@ -93,9 +95,10 @@ internal sealed class MirrorPulseNamespaceStartupCoordinator(CloudFileSystem fil
             // Ordinary first-level creation is now denied by the anchor ACL. Detect any
             // entry inserted during capture before admitting even the first configured root.
             _ = await ReadExistingRootsAsync(configured.Values.ToArray(), cancellationToken).ConfigureAwait(false);
+            progress?.Invoke("NamespaceAnchorCompleted");
             if (configured.Count == 0)
             {
-                var result = await new MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(fileSystem, catalog, router, execution, actor, scheduler, permissions)
+                var result = await new MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(fileSystem, catalog, router, execution, actor, scheduler, permissions) { Progress = progress }
                     .RecoverAsync(Guid.NewGuid(), cancellationToken).ConfigureAwait(false);
                 var prior = guard; guard = result.TransferAnchor(); await prior.DisposeAsync().ConfigureAwait(false);
             }
@@ -107,6 +110,7 @@ internal sealed class MirrorPulseNamespaceStartupCoordinator(CloudFileSystem fil
                 Guid? operationId = null;
                 try
                 {
+                    progress?.Invoke("NamespaceRootBegin");
                     var child = await catalog.ReadNamespaceMemberChildAsync(anchor.MemberId, root.DirectoryName, cancellationToken).ConfigureAwait(false);
                     var pendingOperations = await catalog.ReadNamespacePendingOperationsAsync(root.RootId, cancellationToken).ConfigureAwait(false);
                     if (child is not null && pendingOperations.Count != 0)
@@ -141,11 +145,12 @@ internal sealed class MirrorPulseNamespaceStartupCoordinator(CloudFileSystem fil
                     }
                     operationId = Guid.NewGuid();
                     await using var recovery = await work.BeginRecoveryAsync([root.RootId], cancellationToken).ConfigureAwait(false);
-                    var result = await new MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(fileSystem, catalog, router, execution, actor, scheduler, permissions)
+                    var result = await new MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(fileSystem, catalog, router, execution, actor, scheduler, permissions) { Progress = progress }
                         .RecoverRootAsync(operationId.Value, root.RootId, cancellationToken).ConfigureAwait(false);
                     await result.DisposeAsync().ConfigureAwait(false);
                     recovery.CompleteAfterFreshAudit();
                     outcomes[root.RootId] = new(root.RootId, operationId, true, null);
+                    progress?.Invoke("NamespaceRootCompleted");
                 }
                 catch (Exception error) when (error is IOException or InvalidOperationException or UnauthorizedAccessException or Win32Exception)
                 {

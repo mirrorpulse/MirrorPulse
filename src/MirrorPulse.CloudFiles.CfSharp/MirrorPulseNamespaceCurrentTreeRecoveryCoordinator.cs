@@ -15,6 +15,8 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
     MirrorPulseRootRouter router, MirrorPulseNamespaceExecutionSession execution, MirrorPulseNamespaceActor actor,
     IMirrorPulseInstanceScheduler scheduler, MirrorPulseNamespacePermissionCoordinator permissions)
 {
+    internal Action<string>? Progress { get; init; }
+
     public ValueTask<MirrorPulseNamespaceInitializationResult> RecoverAsync(Guid operationId,
         CancellationToken cancellationToken = default) => RecoverCoreAsync(operationId, null, cancellationToken);
 
@@ -72,13 +74,16 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
                 if (selectedRoot is not null && (member.RootId is not { } root || !selectedIds.Contains(root))) continue;
                 if (member.Origin == MirrorPulseNamespaceMemberOrigin.CapturedOriginal)
                 {
+                    Progress?.Invoke("NamespaceOriginalMemberBegin");
                     var restored = await originals.RecoverAsync(operationId, member.MemberId, cancellationToken).ConfigureAwait(false);
                     if (restored.Permission?.Outcome is not (MirrorPulseNamespacePermissionOutcome.Verified or MirrorPulseNamespacePermissionOutcome.AlreadyVerified) ||
                         restored.Receipt is not { Outcome: CloudProtectedLocalOperationOutcome.Completed, Drained: true })
                         throw new IOException("A registered original requires pending native recovery before the current graph can complete.");
+                    Progress?.Invoke("NamespaceOriginalMemberCompleted");
                 }
                 else
                 {
+                    Progress?.Invoke("NamespaceBornMemberBegin");
                     var child = (await catalog.ReadNamespaceMemberRecoveryLineageAsync(operationId, member.MemberId, cancellationToken).ConfigureAwait(false))[0];
                     var parent = await catalog.ReadNamespaceMemberProtectionSnapshotAsync(child.Location.ParentMemberId!.Value, cancellationToken).ConfigureAwait(false)
                         ?? throw new InvalidDataException("Current born recovery requires its already recovered direct parent.");
@@ -88,10 +93,13 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
                         await catalog.ReadNamespaceBornMemberRecoveryCompletionAsync(latest.ActionId, cancellationToken).ConfigureAwait(false) is null;
                     var restored = await born.RecoverAsync(operationId, resume ? latest!.ActionId : Guid.NewGuid(), member.MemberId, cancellationToken).ConfigureAwait(false);
                     if (restored.Completion is null) throw new IOException("A registered born object requires pending native recovery before the current graph can complete.");
+                    Progress?.Invoke("NamespaceBornMemberCompleted");
                 }
             }
+            Progress?.Invoke("NamespaceAuditBegin");
             var completion = await new MirrorPulseNamespaceCurrentTreeAuditCoordinator(fileSystem, catalog, router, execution, actor, permissions)
                 .CompleteInitializationAsync(operationId, anchorMember.MemberId, anchor, cancellationToken).ConfigureAwait(false);
+            Progress?.Invoke("NamespaceAuditCompleted");
             transferred = true; return new(completion, anchor);
         }
         finally { if (!transferred) await anchor.DisposeAsync().ConfigureAwait(false); }

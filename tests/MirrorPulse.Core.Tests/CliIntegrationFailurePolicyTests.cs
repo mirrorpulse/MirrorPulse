@@ -15,6 +15,8 @@ public sealed class CliIntegrationFailurePolicyTests
     [DataRow("observer")]
     [DataRow("writer")]
     [DataRow("empty-argument")]
+    [DataRow("lifecycle")]
+    [DataRow("lifecycle-observer-failure")]
     public async Task TeardownPreservesTheOriginalFailureAndRecordsItsIndependentCleanupFailure(string scenario)
     {
         string repository = SftpProtocolFixture.FindRepositoryRoot();
@@ -38,7 +40,7 @@ public sealed class CliIntegrationFailurePolicyTests
                     $result | ConvertTo-Json -Compress
                     return
                 }
-                if ($Scenario -eq 'writer') {
+                if ($Scenario -in @('writer','lifecycle','lifecycle-observer-failure')) {
                     $data=Join-Path $FixtureRoot 'data'
                     $evidence=Join-Path $FixtureRoot 'evidence/cli-regression.json'
                     New-Item -ItemType Directory -Path (Join-Path $data 'logs') -Force | Out-Null
@@ -48,6 +50,16 @@ public sealed class CliIntegrationFailurePolicyTests
                     Write-CliFixtureFailure -Failure $original -Phase Execution -EvidencePath $evidence -FixtureRoot $FixtureRoot -DataRoot $data
                     Write-CliFixtureFailure -Failure $secondary -Phase Cleanup -EvidencePath $evidence -FixtureRoot $FixtureRoot -DataRoot $data
                     $originals=Join-Path $FixtureRoot 'evidence/cli-regression.originals'
+                    if ($Scenario -ne 'writer') {
+                        Write-CliFixtureStartupObservations -EvidencePath $evidence -HydrationReads @([ordered]@{phase='Online';binarySha256='verified-fixture'}) -ReadLifecycle {
+                            if ($Scenario -eq 'lifecycle-observer-failure') { throw [IO.IOException]::new('private-password-needle') }
+                            [ordered]@{kind='result';data=[ordered]@{state='Starting';startupPhase='CloudFiles';processId=42;privateField='private-password-needle'}}
+                        }
+                        [ordered]@{execution=(Get-Content -Raw -LiteralPath (Join-Path $originals 'execution.json') | ConvertFrom-Json)
+                            lifecycle=(Get-Content -Raw -LiteralPath (Join-Path $originals 'lifecycle.json') | ConvertFrom-Json)
+                            partial=(Get-Content -Raw -LiteralPath (Join-Path $originals 'partial-observations.json') | ConvertFrom-Json)} | ConvertTo-Json -Compress -Depth 8
+                        return
+                    }
                     [ordered]@{
                         execution=(Get-Content -Raw -LiteralPath (Join-Path $originals 'execution.json') | ConvertFrom-Json)
                         cleanup=(Get-Content -Raw -LiteralPath (Join-Path $originals 'cleanup.json') | ConvertFrom-Json)
@@ -101,6 +113,24 @@ public sealed class CliIntegrationFailurePolicyTests
                     Assert.IsFalse(json.RootElement.GetProperty("execution").GetProperty(field).GetString()!.Contains(directory, StringComparison.OrdinalIgnoreCase));
                 StringAssert.Contains(json.RootElement.GetProperty("execution").GetProperty("message").GetString()!, "<fixture>");
                 StringAssert.Contains(json.RootElement.GetProperty("log").GetString()!, "safe structured diagnostic");
+                return;
+            }
+            if (scenario is "lifecycle" or "lifecycle-observer-failure")
+            {
+                StringAssert.Contains(json.RootElement.GetProperty("execution").GetProperty("message").GetString()!, "Original failure");
+                Assert.IsFalse(jsonLine.Contains("private-password-needle", StringComparison.Ordinal));
+                var partial = json.RootElement.GetProperty("partial");
+                Assert.IsTrue(partial.GetProperty("partial").GetBoolean());
+                Assert.AreEqual(1, partial.GetProperty("hydration").GetProperty("reads").GetArrayLength());
+                Assert.AreEqual(0, partial.GetProperty("namespace").GetProperty("audits").GetArrayLength());
+                var lifecycle = json.RootElement.GetProperty("lifecycle");
+                if (scenario == "lifecycle")
+                {
+                    Assert.AreEqual("Starting", lifecycle.GetProperty("state").GetString());
+                    Assert.AreEqual("CloudFiles", lifecycle.GetProperty("startupPhase").GetString());
+                    Assert.AreEqual(42, lifecycle.GetProperty("processId").GetInt32());
+                }
+                else Assert.IsTrue(lifecycle.GetProperty("observationUnavailable").GetBoolean());
                 return;
             }
             string? actual = json.RootElement.GetProperty("caught").GetString();

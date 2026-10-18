@@ -61,6 +61,14 @@ public sealed class MirrorPulseCloudProviderDiagnostics : IAsyncDisposable
         }
     }
 
+    internal void RecordStartup(string stage, long sequence, long elapsedMilliseconds)
+    {
+        // The bounded observer never delays initialization or copies paths and arbitrary messages.
+        _entries.Writer.TryWrite(new(LogLevel.Information, "CloudFiles.Startup", "CloudFilesStartupProgress", DateTimeOffset.UtcNow,
+            [new("startupStage", stage), new("startupSequence", sequence.ToString(CultureInfo.InvariantCulture)),
+             new("startupElapsedMs", elapsedMilliseconds.ToString(CultureInfo.InvariantCulture))]));
+    }
+
     private async Task DrainAsync()
     {
         await foreach (LogEntry entry in _entries.Reader.ReadAllAsync().ConfigureAwait(false))

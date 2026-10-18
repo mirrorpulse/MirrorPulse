@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.Versioning;
 using System.Text;
 using CfSharp;
@@ -300,6 +301,8 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         private MirrorPulseUploadConflictActions? _conflictActions;
         private MirrorPulseRemoteConflictActions? _remoteConflictActions;
         private MirrorPulseCloudProviderDiagnostics? _providerDiagnostics;
+        private long _startupCheckpoint;
+        private long _startupSequence;
         private readonly MirrorPulseInstanceScheduler _scheduler = scheduler ?? new();
         private readonly bool _ownsScheduler = scheduler is null;
         private readonly MirrorPulseNamespaceExecutionSession? _namespaceExecution = namespaceExecution;
@@ -952,29 +955,46 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         public async ValueTask StartAsync(CancellationToken cancellationToken)
         {
             _providerDiagnostics = new(Path.Combine(dataRootPath, "logs", "cloud-files"));
+            NoteStartup("LibraryStartBegin");
             await StartLibraryAsync(cancellationToken).ConfigureAwait(false);
+            NoteStartup("LibraryStartCompleted");
+            NoteStartup("LibraryServicesBegin");
             await StartLibraryServicesAsync(cancellationToken).ConfigureAwait(false);
+            NoteStartup("LibraryServicesCompleted");
             if (initializeNamespaceOnStart)
             {
                 if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
                     throw new PlatformNotSupportedException("Automatic namespace startup requires Windows 11 24H2 or later.");
+                NoteStartup("NamespaceStartupBegin");
                 await WithAdmittedInstancesLibraryAsync(router!.Registrations.Select(root => root.InstanceId).Distinct(),
                     BootstrapNamespaceAsync, cancellationToken).ConfigureAwait(false);
+                NoteStartup("NamespaceStartupCompleted");
             }
             if (catalog is not null && router is not null && conflicts is not null && notifications is not null)
             {
                 _retainedRecovery = new(catalog, mayDispatch, (instance, token) => WithInstanceLibraryAsync(instance,
                     current => RetainedRemoteBatches(catalog, conflicts, notifications).ResumeAsync(instance, current), token));
+                NoteStartup("RetainedRemoteRecoveryBegin");
                 await _retainedRecovery.RecoverOnceAsync(cancellationToken).ConfigureAwait(false);
+                NoteStartup("RetainedRemoteRecoveryCompleted");
                 _retainedRecovery.Start();
             }
+            NoteStartup("Started");
+        }
+
+        private void NoteStartup(string stage)
+        {
+            long now = Stopwatch.GetTimestamp();
+            long elapsed = _startupCheckpoint == 0 ? 0 : (long)Stopwatch.GetElapsedTime(_startupCheckpoint, now).TotalMilliseconds;
+            _startupCheckpoint = now;
+            _providerDiagnostics?.RecordStartup(stage, ++_startupSequence, elapsed);
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
         private async ValueTask<bool> BootstrapNamespaceAsync(IMirrorPulseInstanceScheduler instances, CancellationToken token)
         {
             var started = await new MirrorPulseNamespaceStartupCoordinator(fileSystem, catalog!, router!, _namespaceExecution!,
-                _namespaceActor!, instances, _permissions!, namespaceWork!).StartAsync(token).ConfigureAwait(false);
+                _namespaceActor!, instances, _permissions!, namespaceWork!, NoteStartup).StartAsync(token).ConfigureAwait(false);
             _startupProtection = started.Guard; NamespaceStartupResults = started.Roots;
             return true;
         }

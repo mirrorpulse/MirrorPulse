@@ -28,10 +28,12 @@ public static class SafeDiagnosticPolicy
         ["ShellRootRegistrationFailed"] = "Windows rejected the Shell root registration.",
         ["JournalReadFailed"] = "The local journal could not be read.",
         ["CloudProviderRequestFailed"] = "A Windows Cloud Files request failed.",
+        ["CloudFilesStartupProgress"] = "The Host reached a Cloud Files initialization boundary.",
         ["JournalCommandFailed"] = "A local journal command failed.",
         ["JournalGroupRecoveryFailed"] = "A retained journal group requires recovery before its user command can complete.",
         ["JournalContentObservation"] = "A retained journal group was checked against previously accepted content.",
         ["ConflictDeletionRecoveryFailed"] = "A retained conflict deletion requires recovery before its original journal can be acknowledged.",
+        ["ConflictKeepBothRecoveryFailed"] = "A retained preservation decision requires recovery before its original journal can be retried.",
         ["JournalDispatchBoundary"] = "A local content command reached a deferred dispatch boundary.",
         ["JournalAcknowledgementFailed"] = "An accepted Worker result could not be acknowledged.",
         ["MutationOutcomeAmbiguous"] = "A remote outcome requires reconciliation before retry.",
@@ -95,7 +97,7 @@ public static class SafeDiagnosticPolicy
             Source(Read("Category")), code, Message(code), Fields(fields));
     }
 
-    private static string Source(string? value) => value is "host" or "worker" or "sync" or "CloudFiles.Upload" or "CloudFiles.Provider" or "diagnostics" ? value : "unknown";
+    private static string Source(string? value) => value is "host" or "worker" or "sync" or "CloudFiles.Upload" or "CloudFiles.Provider" or "CloudFiles.Startup" or "diagnostics" ? value : "unknown";
     private static string Code(string? value) => value == "Transfer complete" ? "TransferComplete" :
         value is not null && Messages.ContainsKey(value) ? value : "UnclassifiedDiagnostic";
     private static string Message(string code) => Messages.GetValueOrDefault(code, LogFieldPolicy.RedactedValue);
@@ -123,6 +125,14 @@ public static class SafeDiagnosticPolicy
                 "workerElapsedMs" or "workerStageElapsedMs" =>
                     int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out int elapsed) && elapsed >= 0
                         ? elapsed.ToString(CultureInfo.InvariantCulture) : null,
+                "startupElapsedMs" or "startupSequence" =>
+                    long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out long startupCount) && startupCount >= 0
+                        ? startupCount.ToString(CultureInfo.InvariantCulture) : null,
+                "startupStage" => value is "LibraryStartBegin" or "LibraryStartCompleted" or "LibraryServicesBegin" or "LibraryServicesCompleted" or
+                    "NamespaceStartupBegin" or "NamespaceStartupCompleted" or "NamespaceAnchorBegin" or "NamespaceAnchorCompleted" or
+                    "NamespaceRootBegin" or "NamespaceRootCompleted" or "NamespaceOriginalMemberBegin" or "NamespaceOriginalMemberCompleted" or
+                    "NamespaceBornMemberBegin" or "NamespaceBornMemberCompleted" or "NamespaceAuditBegin" or "NamespaceAuditCompleted" or
+                    "RetainedRemoteRecoveryBegin" or "RetainedRemoteRecoveryCompleted" or "Started" ? value : null,
                 "workerProcessExitCode" or "workerNativeErrorCode" => int.TryParse(value, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out int exitCode)
                     ? exitCode.ToString(CultureInfo.InvariantCulture) : null,
                 "workerProcessStarted" or "workerProcessStateObserved" or "workerProcessHasExited" or "workerPipeConnected" or "workerDeadlineExpired" =>

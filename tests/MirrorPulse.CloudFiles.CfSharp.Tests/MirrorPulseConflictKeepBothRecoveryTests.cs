@@ -26,6 +26,7 @@ public sealed class MirrorPulseConflictKeepBothRecoveryTests
         Assert.AreEqual(new MirrorPulseJournalPumpHealth(false, 1, "ConflictKeepBothRecoveryFailed"), fixture.Runner.Health);
         string log = await File.ReadAllTextAsync(fixture.Log.FilePath);
         Assert.IsFalse(log.Contains("private-note", StringComparison.Ordinal)); StringAssert.Contains(log, bad.ToString("D"));
+        StringAssert.Contains(log, "ConflictKeepBothRecoveryFailed");
         await fixture.ChangeActionAsync(bad, "keepboth"); await recovery.RepairAsync(default);
         Assert.IsTrue(fixture.Runner.Health.Healthy);
         Assert.IsTrue((await fixture.Catalog.ReadConflictKeepBothAsync(bad))!.OriginalRetriesPrepared);
