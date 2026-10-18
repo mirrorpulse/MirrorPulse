@@ -67,6 +67,20 @@ permission is an ownership check and provides no native-start, deletion, SDK
 result or cursor evidence. The runtime recursive route is still pending.
 
 This subtree catalog boundary is preparatory. The managed driver still routes
-only registered leaves. Original SDK recursive dispatch, before-native starts,
+only registered leaves. Original SDK recursive dispatch through retained starts,
 partial deletion/tombstone recovery, descendant settlement, conflicts and cursor
 publication still require their dedicated execution path and clean native proof.
+
+Schema 72 adds a durable original SDK invocation start. The first start validates
+the original parent, every retained member snapshot in pages of 64, immutable SDK
+and tree fingerprints, and all foreign operation fences in one transaction.
+The start and its owning header reference commit together. Losing either side
+is corruption, which cannot be treated as a fresh never-started admission.
+The original structural graph keeps its 4 MiB bound; its fixed start reference
+has a separate 128-byte header allowance, so starting an admitted tree does not
+consume more of the structural budget or rewrite the original graph.
+Reopening preserves the first timestamp. An upgraded schema71 admission receives
+no invented start; a failed start write grants no permission to invoke the SDK.
+This record means invocation may have begun. The Host still must inspect actual
+native objects and public SDK projections before invoking the unchanged batch,
+then separately settle its actual SDK outcome before publishing an Adapter cursor.

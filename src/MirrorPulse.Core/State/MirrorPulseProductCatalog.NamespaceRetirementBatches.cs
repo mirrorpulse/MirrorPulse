@@ -24,6 +24,9 @@ public sealed record MirrorPulseNamespaceRetirementBatch(int Version, Guid Opera
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? RemoteTreeFingerprint { get; init; }
 
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? RemoteTreeStartFingerprint { get; init; }
+
     /// <summary>Returns the stable operation ID for one leaf step of this sealed batch.</summary>
     public Guid MemberOperationId(Guid memberId)
     {
@@ -96,7 +99,12 @@ public sealed partial class MirrorPulseProductCatalog
     {
         if (operationId == Guid.Empty) throw new ArgumentException("A retirement batch is required.", nameof(operationId));
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try { ThrowIfDisposed(); return await ReadNamespaceRetirementBatchCoreAsync(operationId, null, cancellationToken).ConfigureAwait(false); }
+        try
+        {
+            ThrowIfDisposed(); using var transaction = _connection.BeginTransaction(deferred: true);
+            var batch = await ReadNamespaceRetirementBatchCoreAsync(operationId, transaction, cancellationToken).ConfigureAwait(false);
+            transaction.Commit(); return batch;
+        }
         finally { _gate.Release(); }
     }
 
@@ -166,12 +174,21 @@ public sealed partial class MirrorPulseProductCatalog
         await using SqliteDataReader reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
         if (!await reader.ReadAsync(token).ConfigureAwait(false)) return null;
         byte[] payload = (byte[])reader[3], fingerprint = (byte[])reader[4];
-        if (payload.Length > 4 * 1024 * 1024 || fingerprint.Length != 32 || !CryptographicOperations.FixedTimeEquals(SHA256.HashData(payload), fingerprint))
+        if (payload.Length > 4 * 1024 * 1024 + 128 || fingerprint.Length != 32 || !CryptographicOperations.FixedTimeEquals(SHA256.HashData(payload), fingerprint))
             throw new InvalidDataException("The retirement batch fingerprint is invalid.");
-        var batch = JsonSerializer.Deserialize<MirrorPulseNamespaceRetirementBatch>(payload, TopologyJsonOptions)
+        MirrorPulseNamespaceRetirementBatch batch;
+        try
+        {
+            batch = JsonSerializer.Deserialize<MirrorPulseNamespaceRetirementBatch>(payload, TopologyJsonOptions)
             ?? throw new InvalidDataException("The retirement batch is empty.");
-        if (!(batch.Version == 1 && batch.RemoteEntry is null && batch.RemoteTreeFingerprint is null ||
-            batch.Version == 2 && batch.RemoteEntry is not null && batch.RemoteTreeFingerprint is { Length: 64 }) ||
+        }
+        catch (JsonException error) { throw new InvalidDataException("The retirement batch payload is invalid.", error); }
+        if (payload.Length > 4 * 1024 * 1024 && (batch.RemoteTreeStartFingerprint is null ||
+            JsonSerializer.SerializeToUtf8Bytes(batch with { RemoteTreeStartFingerprint = null }, TopologyJsonOptions).Length > 4 * 1024 * 1024))
+            throw new InvalidDataException("The retirement batch structural header exceeds its original bound.");
+        if (!(batch.Version == 1 && batch.RemoteEntry is null && batch.RemoteTreeFingerprint is null && batch.RemoteTreeStartFingerprint is null ||
+            batch.Version == 2 && batch.RemoteEntry is not null && batch.RemoteTreeFingerprint is { Length: 64 } &&
+            (batch.RemoteTreeStartFingerprint is null || batch.RemoteTreeStartFingerprint is { Length: 64 } && batch.RemoteTreeStartFingerprint.All(char.IsAsciiHexDigitUpper))) ||
             batch.OperationId != operationId || batch.MemberId == Guid.Empty || batch.RootId.Value == Guid.Empty ||
             batch.Entries.Count == 0 || batch.Entries.Count > 65_536 || batch.PreparedAt == default || !Enum.IsDefined(batch.Phase) || reader.GetString(0) != operationId.ToString("D") ||
             reader.GetString(1) != batch.MemberId.ToString("D") || reader.GetString(2) != batch.RootId.ToString() ||
@@ -201,6 +218,7 @@ public sealed partial class MirrorPulseProductCatalog
         }
         await reader.DisposeAsync().ConfigureAwait(false);
         await ValidateRemoteRetirementTreeOwnerAsync(batch, transaction, token).ConfigureAwait(false);
+        _ = await ReadRemoteRetirementTreeStartCoreAsync(operationId, batch, transaction, token).ConfigureAwait(false);
         return batch;
     }
 

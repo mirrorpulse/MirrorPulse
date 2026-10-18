@@ -135,35 +135,42 @@ public sealed partial class MirrorPulseProductCatalog
             ThrowIfDisposed(); using var transaction = _connection.BeginTransaction(deferred: true);
             var batch = await ReadNamespaceRetirementBatchCoreAsync(operationId, transaction, cancellationToken).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The original remote retirement tree is missing.");
-            if (batch.RemoteEntry is null || afterOrdinal >= batch.Entries.Count) throw new ArgumentException("The page requires its original SDK tree and ordinal.");
-            var result = new List<MirrorPulseNamespaceRemoteRetirementTreeEntry>();
-            await using var query = _connection.CreateCommand(); query.Transaction = transaction;
-            query.CommandText = "SELECT ordinal,member_id,payload,fingerprint FROM namespace_remote_retirement_tree_entries WHERE operation_id=$id AND ordinal>$after ORDER BY ordinal LIMIT $limit;";
-            query.Parameters.AddWithValue("$id", operationId.ToString("D")); query.Parameters.AddWithValue("$after", afterOrdinal); query.Parameters.AddWithValue("$limit", limit);
-            await using var reader = await query.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
-            {
-                int ordinal = reader.GetInt32(0); byte[] payload = (byte[])reader[2], hash = (byte[])reader[3];
-                if (ordinal != afterOrdinal + result.Count + 1 || ordinal >= batch.Entries.Count || payload.Length > 131_072 || hash.Length != 32 ||
-                    !CryptographicOperations.FixedTimeEquals(SHA256.HashData(payload), hash)) throw new InvalidDataException("The original remote tree page is corrupt or incomplete.");
-                var entry = JsonSerializer.Deserialize<MirrorPulseNamespaceRemoteRetirementTreeEntry>(payload, TopologyJsonOptions)
-                    ?? throw new InvalidDataException("The original remote tree entry is empty.");
-                ValidateRemoteTreeEntry(entry);
-                var retained = batch.Entries[ordinal];
-                if (entry.Ordinal != ordinal || entry.Depth != retained.Depth || reader.GetString(1) != retained.MemberId.ToString("D") ||
-                    entry.Original.Context.Member.MemberId != retained.MemberId || entry.Original.Context.Member.LocalObject != retained.LocalObject ||
-                    entry.Original.Context.Member.OwnerSid != retained.OwnerSid || entry.Original.Context.Member.IsDirectory != retained.IsDirectory ||
-                    entry.Original.Context.Location.RelativePath != retained.RelativePath || entry.Original.Context.Location.ParentMemberId != retained.ParentMemberId ||
-                    !JsonSerializer.SerializeToUtf8Bytes(entry, TopologyJsonOptions).AsSpan().SequenceEqual(payload))
-                    throw new InvalidDataException("The original remote tree entry changed its sealed member.");
-                result.Add(entry);
-            }
-            if (result.Count != Math.Min(limit, batch.Entries.Count - afterOrdinal - 1)) throw new InvalidDataException("The original remote tree page lost a retained entry.");
-            int last = result.Count == 0 ? afterOrdinal : result[^1].Ordinal;
-            await reader.DisposeAsync().ConfigureAwait(false);
-            transaction.Commit(); return new(result.AsReadOnly(), last, last + 1 < batch.Entries.Count);
+            var result = await ReadRemoteRetirementTreePageCoreAsync(batch, afterOrdinal, limit, transaction, cancellationToken).ConfigureAwait(false);
+            transaction.Commit(); return result;
         }
         finally { _gate.Release(); }
+    }
+
+    private async Task<MirrorPulseNamespaceRemoteRetirementTreePage> ReadRemoteRetirementTreePageCoreAsync(
+        MirrorPulseNamespaceRetirementBatch batch, int afterOrdinal, int limit, SqliteTransaction transaction, CancellationToken cancellationToken)
+    {
+        if (batch.RemoteEntry is null || afterOrdinal >= batch.Entries.Count) throw new ArgumentException("The page requires its original SDK tree and ordinal.");
+        var result = new List<MirrorPulseNamespaceRemoteRetirementTreeEntry>();
+        await using var query = _connection.CreateCommand(); query.Transaction = transaction;
+        query.CommandText = "SELECT ordinal,member_id,payload,fingerprint FROM namespace_remote_retirement_tree_entries WHERE operation_id=$id AND ordinal>$after ORDER BY ordinal LIMIT $limit;";
+        query.Parameters.AddWithValue("$id", batch.OperationId.ToString("D")); query.Parameters.AddWithValue("$after", afterOrdinal); query.Parameters.AddWithValue("$limit", limit);
+        await using var reader = await query.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            int ordinal = reader.GetInt32(0); byte[] payload = (byte[])reader[2], hash = (byte[])reader[3];
+            if (ordinal != afterOrdinal + result.Count + 1 || ordinal >= batch.Entries.Count || payload.Length > 131_072 || hash.Length != 32 ||
+                !CryptographicOperations.FixedTimeEquals(SHA256.HashData(payload), hash)) throw new InvalidDataException("The original remote tree page is corrupt or incomplete.");
+            var entry = JsonSerializer.Deserialize<MirrorPulseNamespaceRemoteRetirementTreeEntry>(payload, TopologyJsonOptions)
+                ?? throw new InvalidDataException("The original remote tree entry is empty.");
+            ValidateRemoteTreeEntry(entry);
+            var retained = batch.Entries[ordinal];
+            if (entry.Ordinal != ordinal || entry.Depth != retained.Depth || reader.GetString(1) != retained.MemberId.ToString("D") ||
+                entry.Original.Context.Member.MemberId != retained.MemberId || entry.Original.Context.Member.LocalObject != retained.LocalObject ||
+                entry.Original.Context.Member.OwnerSid != retained.OwnerSid || entry.Original.Context.Member.IsDirectory != retained.IsDirectory ||
+                entry.Original.Context.Location.RelativePath != retained.RelativePath || entry.Original.Context.Location.ParentMemberId != retained.ParentMemberId ||
+                !JsonSerializer.SerializeToUtf8Bytes(entry, TopologyJsonOptions).AsSpan().SequenceEqual(payload))
+                throw new InvalidDataException("The original remote tree entry changed its sealed member.");
+            result.Add(entry);
+        }
+        if (result.Count != Math.Min(limit, batch.Entries.Count - afterOrdinal - 1)) throw new InvalidDataException("The original remote tree page lost a retained entry.");
+        int last = result.Count == 0 ? afterOrdinal : result[^1].Ordinal;
+        await reader.DisposeAsync().ConfigureAwait(false);
+        return new(result.AsReadOnly(), last, last + 1 < batch.Entries.Count);
     }
 
     private async Task ValidateRemoteRetirementTreeOwnerAsync(MirrorPulseNamespaceRetirementBatch batch, SqliteTransaction? transaction, CancellationToken token)
