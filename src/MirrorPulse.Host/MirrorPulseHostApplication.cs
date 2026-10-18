@@ -23,7 +23,7 @@ namespace MirrorPulse.Host;
 /// <summary>
 /// Owns the complete non-UI Host composition for one current user.
 /// </summary>
-public sealed class MirrorPulseHostApplication : IAsyncDisposable
+public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
 {
     private readonly MirrorPulseStoragePaths _paths;
     private readonly MirrorPulseConfigurationStore _configurationStore;
@@ -511,6 +511,7 @@ public sealed class MirrorPulseHostApplication : IAsyncDisposable
             MirrorPulseControlCommands.NamespaceMemberRetirement, ExecuteNamespaceMemberRetirementAsync);
         dispatcher.Register<NamespaceMemberRetirementStatusArguments, MirrorPulseControlNamespaceMemberRetirementResult>(
             MirrorPulseControlCommands.NamespaceMemberRetirementStatus, ReadNamespaceMemberRetirementAsync);
+        RegisterRemoteRetirementQueries(dispatcher);
         dispatcher.Register<NamespaceMemberMoveStatusArguments, MirrorPulseControlNamespaceMemberMoveStatus>(
             MirrorPulseControlCommands.NamespaceMemberMoveStatus, ReadNamespaceMemberMoveStatusAsync);
         _controlPipe = new MirrorPulseControlPipeServer(dispatcher.DispatchAsync);

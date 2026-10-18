@@ -43,7 +43,7 @@ public static class MirrorPulseCliCommandLine
             ["instance"] = NewSet("list", "create", "configure", "enable", "disable", "select-version"),
             ["operation"] = NewSet("get", "watch", "cancel"),
             ["root"] = NewSet("list", "prepare-rename", "recover"),
-            ["namespace"] = NewSet("member", "birth", "protection"),
+            ["namespace"] = NewSet("member", "birth", "protection", "remote"),
             ["sync"] = NewSet("status", "refresh")
         };
 
@@ -143,7 +143,9 @@ public static class MirrorPulseCliCommandLine
                             token.Equals("initialize", StringComparison.OrdinalIgnoreCase) || token.Equals("recover-current", StringComparison.OrdinalIgnoreCase) ||
                             token.Equals("recover-root", StringComparison.OrdinalIgnoreCase) || token.Equals("initialization-status", StringComparison.OrdinalIgnoreCase) ||
                             token.Equals("initializations", StringComparison.OrdinalIgnoreCase)
-                        : token.Equals("recover", StringComparison.OrdinalIgnoreCase);
+                        : commandPath[1].Equals("remote", StringComparison.OrdinalIgnoreCase)
+                            ? token.Equals("retirement-status", StringComparison.OrdinalIgnoreCase) || token.Equals("retirements", StringComparison.OrdinalIgnoreCase)
+                            : token.Equals("recover", StringComparison.OrdinalIgnoreCase);
                 if (!allowed)
                     return Failure($"Unknown subcommand '{token}' for 'namespace {commandPath[1]}'.", options);
                 commandPath.Add(token);
@@ -254,6 +256,10 @@ public static class MirrorPulseCliHelp
                                          Execute or retry an admitted protected deletion.
           namespace member retirement-status OPERATION_ID [--recursive]
                                          Read a protected deletion receipt.
+          namespace remote retirement-status OPERATION_ID
+                                         Read an original remote directory deletion status.
+          namespace remote retirements ROOT_ID [--after-operation-id OPERATION_ID] [--limit 1..64]
+                                         List original remote directory deletion statuses for one root.
           namespace birth recover RECOVERY_ID
                                          Retry an already retained staged-file recovery.
           conflict list|show|snooze|resolve

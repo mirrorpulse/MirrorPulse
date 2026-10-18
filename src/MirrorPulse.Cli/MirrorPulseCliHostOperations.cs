@@ -274,6 +274,23 @@ public sealed class MirrorPulseCliHostOperations : IMirrorPulseCliHostOperations
                     human = $"Member move committed · {move.OperationId:D} · {move.RelativePath}" +
                         (move.RequiresSubtreeReconciliation ? " · subtree reconciliation pending" : string.Empty);
                     break;
+                case ("namespace", "remote") when command.Path.Count > 2 &&
+                    command.Path[2].Equals("retirement-status", StringComparison.OrdinalIgnoreCase):
+                    if (command.Arguments.Count != 1 || !Guid.TryParse(command.Arguments[0], out Guid remoteStatusOperation) || remoteStatusOperation == Guid.Empty)
+                        throw new ArgumentException("namespace remote retirement-status requires one non-empty operation ID.");
+                    var remoteStatus = await _client.GetNamespaceRemoteRetirementStatusAsync(remoteStatusOperation, cancellationToken).ConfigureAwait(false);
+                    result = remoteStatus; human = MirrorPulseRemoteRetirementCliArguments.FormatStatus(remoteStatus);
+                    break;
+                case ("namespace", "remote") when command.Path.Count > 2 &&
+                    command.Path[2].Equals("retirements", StringComparison.OrdinalIgnoreCase):
+                    var remotePageArguments = MirrorPulseRemoteRetirementCliArguments.ParsePage(command.Arguments);
+                    var remotePage = await _client.GetNamespaceRemoteRetirementsAsync(remotePageArguments.RootId,
+                        remotePageArguments.AfterOperationId, remotePageArguments.Limit, cancellationToken).ConfigureAwait(false);
+                    result = remotePage;
+                    human = remotePage.Entries.Count == 0 ? "No remote directory retirements." :
+                        string.Join(Environment.NewLine, remotePage.Entries.Select(MirrorPulseRemoteRetirementCliArguments.FormatStatus));
+                    if (remotePage.NextOperationId is { } continuation) human += Environment.NewLine + $"Next operation: {continuation:D}";
+                    break;
                 case ("namespace", "member") when command.Path.Count > 2 &&
                     command.Path[2].Equals("move-status", StringComparison.OrdinalIgnoreCase):
                     if (command.Arguments.Count != 1 || !Guid.TryParse(command.Arguments[0], out Guid moveStatusOperation) || moveStatusOperation == Guid.Empty)

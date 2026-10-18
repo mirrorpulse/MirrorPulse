@@ -145,5 +145,18 @@ The existing controlled subtree status contract rejects original SDK trees.
 Its `Completed` phase means the complete controlled subtree was deleted; a
 remote tree can finish settlement with its original root retained by a genuine
 conflict. Reusing that mapping would falsely report native deletion. Dedicated
-remote-tree Control/CLI status, with separate root outcome and page progress,
-remains required; clients must not open the Host catalog to obtain it.
+remote-tree Control/CLI status uses separate root outcome and page progress;
+clients never open the Host catalog to obtain it.
+
+Schema 75 adds an indexed root/operation continuation for historical status.
+`namespace remote retirement-status OPERATION_ID` reports one coherent Host
+catalog snapshot. `namespace remote retirements ROOT_ID` lists up to 64 records;
+`--limit 1..64` and `--after-operation-id OPERATION_ID` select subsequent pages.
+The versioned Control.Client contract carries these read-only queries.
+
+An admission has no deletion observation; an invocation start remains explicitly
+uncertain until its actual root outcome is retained. Root deletion and tombstone
+fields are nullable. Member totals, settled/removed/retained counts, next ordinal
+and completion time are separate. A completed conflicting tree can report its
+root retained with removed descendants. Historical observations never authorize
+a new native action or certify current path contents or Adapter cursor readiness.
