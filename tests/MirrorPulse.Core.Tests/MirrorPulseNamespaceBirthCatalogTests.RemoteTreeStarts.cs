@@ -200,7 +200,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         var original = await PrepareTreeStartFixtureAsync(catalog);
         var start = await catalog.RecordNamespaceRemoteRetirementTreeStartAsync(original.OperationId, original.PreparedAt);
         string hash = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(start)));
-        if (missing == "record") await ExecuteSqlAsync(fixture.Paths, "DELETE FROM namespace_remote_retirement_tree_starts;");
+        if (missing == "record") await ExecuteSqlAsync(fixture.Paths, "PRAGMA foreign_keys=OFF; DELETE FROM namespace_remote_retirement_tree_starts;");
         else await RewriteTreeStartHeaderHashAsync(fixture.Paths, original.OperationId, hash, missing == "header-reference" ? null : new string('B', 64));
         await Assert.ThrowsExactlyAsync<InvalidDataException>(() => catalog.ReadNamespaceRetirementBatchAsync(original.OperationId));
         await Assert.ThrowsExactlyAsync<InvalidDataException>(() => catalog.ReadNamespaceRemoteRetirementTreeStartAsync(original.OperationId));

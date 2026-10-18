@@ -104,7 +104,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                 version.CommandText = "PRAGMA user_version;";
                 currentVersion = (long)(await version.ExecuteScalarAsync(cancellationToken)
                     .ConfigureAwait(false) ?? 0L);
-                if (currentVersion > 72)
+                if (currentVersion > 73)
                 {
                     throw new InvalidDataException("The MP product catalog schema is newer than this Host supports.");
                 }
@@ -419,7 +419,6 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                 }
             }
 
-            await using (SqliteCommand version = connection.CreateCommand())
             {
                 await using SqliteCommand column = connection.CreateCommand();
                 column.CommandText = "SELECT 1 FROM pragma_table_info('worker_requests') WHERE name = 'stable_fingerprint';";
@@ -460,11 +459,12 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                 await EnsureNamespaceRemoteRetirementSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
                 await EnsureNamespaceRemoteRetirementTreeSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
                 await EnsureNamespaceRemoteRetirementTreeStartsSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
-                version.CommandText = "PRAGMA user_version=72;";
-                await version.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                await EnsureRemoteTreeSettlementSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
             }
 
-            return new(owner, connection);
+            var catalog = new MirrorPulseProductCatalog(owner, connection);
+            await catalog.UpgradeRemoteTreeSettlementOwnersAsync(currentVersion, cancellationToken).ConfigureAwait(false);
+            return catalog;
         }
         catch
         {

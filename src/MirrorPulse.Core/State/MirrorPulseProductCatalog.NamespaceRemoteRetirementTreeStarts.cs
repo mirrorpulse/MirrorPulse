@@ -59,6 +59,7 @@ public sealed partial class MirrorPulseProductCatalog
             update.Parameters.AddWithValue("$hash", SHA256.HashData(header));
             if (await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
                 throw new InvalidDataException("The original SDK invocation start lost its owning admission.");
+            await CreateRemoteTreeSettlementOwnerAsync(batch, Convert.ToHexString(fingerprint), transaction, cancellationToken).ConfigureAwait(false);
             transaction.Commit(); return start;
         }
         finally { _gate.Release(); }
@@ -80,7 +81,7 @@ public sealed partial class MirrorPulseProductCatalog
     }
 
     private async Task<MirrorPulseNamespaceRemoteRetirementTreeStart?> ReadRemoteRetirementTreeStartCoreAsync(Guid operationId,
-        MirrorPulseNamespaceRetirementBatch? batch, SqliteTransaction? transaction, CancellationToken token)
+        MirrorPulseNamespaceRetirementBatch? batch, SqliteTransaction? transaction, CancellationToken token, bool requireSettlementOwner = true)
     {
         await using var query = _connection.CreateCommand(); query.Transaction = transaction;
         query.CommandText = "SELECT payload,fingerprint FROM namespace_remote_retirement_tree_starts WHERE operation_id=$id;";
@@ -89,6 +90,8 @@ public sealed partial class MirrorPulseProductCatalog
         if (!await reader.ReadAsync(token).ConfigureAwait(false))
         {
             if (batch?.RemoteTreeStartFingerprint is not null) throw new InvalidDataException("The original SDK tree lost its durable invocation start.");
+            await reader.DisposeAsync().ConfigureAwait(false);
+            await RequireNoOrphanedRemoteTreeSettlementAsync(operationId, transaction, token).ConfigureAwait(false);
             return null;
         }
         byte[] payload = (byte[])reader[0], fingerprint = (byte[])reader[1];
@@ -107,6 +110,8 @@ public sealed partial class MirrorPulseProductCatalog
             start.StartedAt == default || start.StartedAt < batch.PreparedAt ||
             !JsonSerializer.SerializeToUtf8Bytes(start, TopologyJsonOptions).AsSpan().SequenceEqual(payload))
             throw new InvalidDataException("The original SDK tree start changed its immutable owner or chronology.");
+        await reader.DisposeAsync().ConfigureAwait(false);
+        if (requireSettlementOwner) _ = await ReadRemoteTreeSettlementProgressCoreAsync(batch, start, transaction, token).ConfigureAwait(false);
         return start;
     }
 

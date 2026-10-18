@@ -84,3 +84,34 @@ no invented start; a failed start write grants no permission to invoke the SDK.
 This record means invocation may have begun. The Host still must inspect actual
 native objects and public SDK projections before invoking the unchanged batch,
 then separately settle its actual SDK outcome before publishing an Adapter cursor.
+
+Schema 73 adds a separate original-tree settlement ledger. A new invocation start
+and its required ledger owner commit atomically. The one-time schema72 upgrade
+creates only an empty owner for each authenticated original start; it invents no
+SDK result or member disposition. Reopening a current database never backfills a
+missing ledger owner. Missing or contradictory history fails closed.
+
+The Host can retain its actual public SDK root result, exact consumed prefix,
+safe-cursor fingerprint, decoded conflict, root projection and fresh unchanged
+parent observation. A start is not an outcome. A missing root with a conflicting
+SDK result cannot be accepted as an intact-tree rejection; this preserves the
+strict CF-008 failure rather than concealing it.
+
+After that result, at most 64 original members settle in one transaction, in
+reverse admission order. Each member retains an immutable removed-or-retained
+disposition; a removed original releases only its own name in the same
+transaction. Descendant tombstones retain their original SDK revisions instead
+of acquiring the incoming root revision. A genuine root conflict can contain
+removed descendants and unchanged retained members, and a retained descendant
+prevents removing its parent. Exact page replay is historical and idempotent.
+Checksummed contiguous progress detects lost receipts or restored removed names.
+
+The tree fence remains until a separate atomic completion validates all member
+receipts and a fresh parent. Current inventory and retired-member readers keep
+explicit tree-retired history and original provenance, without constructing
+post-hoc controlled leaf deletion intents. Inventories without these retirements
+retain their previous serialization shape. This catalog boundary performs no
+native deletion, SDK call, conflict resolution or Adapter cursor publication.
+Runtime recursive routing, live native inventory reconciliation, incomplete SDK
+observations, new execution roles and the full native cut-point matrix remain
+required before this path is a completed product feature.

@@ -16,6 +16,10 @@ public sealed record MirrorPulseNamespaceCurrentTreeSnapshot(Guid AnchorMemberId
     /// <summary>The explicitly selected root; null retains the complete-inventory contract.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public RootId? ScopeRoot { get; init; }
+
+    /// <summary>Removed original members settled by one SDK directory invocation, without invented leaf intents.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<MirrorPulseNamespaceRemoteRetirementTreeRetiredMember>? RetiredTreeMembers { get; init; }
 }
 
 public sealed partial class MirrorPulseProductCatalog
@@ -68,6 +72,7 @@ public sealed partial class MirrorPulseProductCatalog
         if (memberIds.Count is < 1 or > 1_000_001) throw new InvalidDataException("The current membership inventory is empty or exceeds its bound.");
         var live = new HashSet<Guid>();
         var retired = new List<MirrorPulseNamespaceRetirement>();
+        var retiredTrees = new List<MirrorPulseNamespaceRemoteRetirementTreeRetiredMember>();
         var registrations = new Dictionary<Guid, MirrorPulseNamespaceMemberRegistration>();
         foreach (Guid id in memberIds)
         {
@@ -84,12 +89,19 @@ public sealed partial class MirrorPulseProductCatalog
             }
             var retirement = retirementId is { } operation
                 ? await ReadNamespaceRetirementCoreAsync(operation, transaction, cancellationToken).ConfigureAwait(false) : null;
+            var treeRetirement = await ReadRemovedRemoteTreeMemberCoreAsync(id, transaction, cancellationToken).ConfigureAwait(false);
             if (retirement?.Phase == MirrorPulseNamespaceRetirementPhase.Completed)
             {
+                if (treeRetirement is not null) throw new InvalidDataException("A retired inventory member has competing leaf and tree owners.");
                 if (retirement.Intent.MemberId != id || retirement.Intent.LocalObject != member.LocalObject ||
                     retirement.StartedAt is null || retirement.NativeDeletedAt is null || retirement.CompletedAt is null)
                     throw new InvalidDataException("A retired inventory member lost its correlated deletion receipt.");
                 retired.Add(retirement);
+            }
+            else if (treeRetirement is not null)
+            {
+                if (treeRetirement.Original.Context.Member != member) throw new InvalidDataException("A tree-retired inventory member changed its original provenance.");
+                retiredTrees.Add(treeRetirement);
             }
             else live.Add(id);
         }
@@ -117,6 +129,7 @@ public sealed partial class MirrorPulseProductCatalog
             if (!topRoots.TryGetValue(selected, out int count) || count != 1)
                 throw new InvalidDataException("A selected root has no unique registered first-level member.");
             retired = retired.Where(member => member.Intent.RootId == selected).ToList();
+            retiredTrees = retiredTrees.Where(member => member.Original.Context.Member.RootId == selected).ToList();
         }
         var snapshots = new List<MirrorPulseNamespaceMemberProtectionSnapshot>(graph.Count);
         foreach (var entry in graph)
@@ -132,7 +145,7 @@ public sealed partial class MirrorPulseProductCatalog
         var fences = await ReadNamespaceRootFencesCoreAsync(true, transaction, cancellationToken).ConfigureAwait(false);
         var result = new MirrorPulseNamespaceCurrentTreeSnapshot(anchorMemberId, snapshots.AsReadOnly(), retired.AsReadOnly(),
             scopeRoot is null ? fences : Array.AsReadOnly(fences.Where(root => root == scopeRoot).ToArray()), string.Empty)
-        { ScopeRoot = scopeRoot };
+        { ScopeRoot = scopeRoot, RetiredTreeMembers = retiredTrees.Count == 0 ? null : retiredTrees.AsReadOnly() };
         byte[] payload = JsonSerializer.SerializeToUtf8Bytes(result, TopologyJsonOptions);
         result = result with { Fingerprint = Convert.ToHexString(SHA256.HashData(payload)) };
         return result;

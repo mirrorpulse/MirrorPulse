@@ -62,6 +62,9 @@ public sealed partial class MirrorPulseProductCatalog
                         if ((await ReadNamespaceMemberCoreAsync(retired.Intent.MemberId, transaction, cancellationToken).ConfigureAwait(false))
                             is not { Origin: MirrorPulseNamespaceMemberOrigin.ProtectedBirth })
                             throw new InvalidDataException("Retired originals cannot be hidden below a born-root admission.");
+                    if (current.RetiredTreeMembers?.Any(member => member.Original.Context.Member.RootId == root.RootId &&
+                        member.Original.Context.Member.Origin != MirrorPulseNamespaceMemberOrigin.ProtectedBirth) == true)
+                        throw new InvalidDataException("Tree-retired originals cannot be hidden below a born-root admission.");
                     continue;
                 }
                 var tree = await ReadPermissionTreeCoreAsync(root.ManifestId, cancellationToken, transaction).ConfigureAwait(false)
@@ -75,6 +78,8 @@ public sealed partial class MirrorPulseProductCatalog
                 registered.AddRange(current.Members.Where(member => member.Context.Member.RootId == root.RootId).Select(member => member.Context.Member));
                 foreach (var retired in current.RetiredMembers.Where(member => member.Intent.RootId == root.RootId))
                     registered.Add((await ReadNamespaceMemberCoreAsync(retired.Intent.MemberId, transaction, cancellationToken).ConfigureAwait(false))!);
+                if (current.RetiredTreeMembers is { } treeRetired)
+                    registered.AddRange(treeRetired.Where(member => member.Original.Context.Member.RootId == root.RootId).Select(member => member.Original.Context.Member));
                 var originals = registered.Where(member => member.Origin == MirrorPulseNamespaceMemberOrigin.CapturedOriginal).ToDictionary(member => member.OriginId);
                 if (originals.Count != tree.CapturedMembers)
                     throw new InvalidDataException("The current graph contains original membership outside its retained capture.");

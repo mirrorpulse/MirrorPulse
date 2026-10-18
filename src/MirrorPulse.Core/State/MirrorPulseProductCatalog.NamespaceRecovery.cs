@@ -82,6 +82,7 @@ public sealed partial class MirrorPulseProductCatalog
         SqliteTransaction transaction, CancellationToken cancellationToken, Guid? admittedRemoteMoveId = null, Guid? admittedRemoteBirthId = null,
         Guid? admittedRemoteRetirementId = null, Guid? admittedRemoteRetirementTreeId = null)
     {
+        await RequireRemoteTreeSettlementOwnershipIntegrityAsync(transaction, cancellationToken).ConfigureAwait(false);
         HashSet<RootId> roots = (await ReadManagedRootRenamesCoreAsync(cancellationToken, transaction).ConfigureAwait(false))
             .Where(intent => intent.IsPending).Select(intent => intent.RootId).ToHashSet();
         var moveRoots = new List<RootId>();

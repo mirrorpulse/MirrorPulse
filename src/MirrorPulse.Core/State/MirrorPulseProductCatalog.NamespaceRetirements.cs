@@ -276,7 +276,10 @@ public sealed partial class MirrorPulseProductCatalog
         query.CommandText = "SELECT phase FROM namespace_member_retirements WHERE member_id=$member ORDER BY rowid DESC LIMIT 1;";
         query.Parameters.AddWithValue("$member", memberId.ToString("D"));
         object? value = await query.ExecuteScalarAsync(token).ConfigureAwait(false);
-        return value is long phase && phase == (long)MirrorPulseNamespaceRetirementPhase.Completed;
+        bool leaf = value is long phase && phase == (long)MirrorPulseNamespaceRetirementPhase.Completed;
+        var tree = await ReadRemovedRemoteTreeMemberCoreAsync(memberId, transaction, token).ConfigureAwait(false);
+        if (leaf && tree is not null) throw new InvalidDataException("A retired member has competing original leaf and tree owners.");
+        return leaf || tree is not null;
     }
 
     private static void ValidateNamespaceRetirementIntent(MirrorPulseNamespaceRetirementIntent intent)

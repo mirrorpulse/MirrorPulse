@@ -166,7 +166,7 @@ public sealed partial class MirrorPulseProductCatalog
         intent.OwnerSid == entry.OwnerSid && intent.RelativePath == entry.RelativePath && intent.IsDirectory == entry.IsDirectory && intent.PreparedAt >= batch.PreparedAt;
 
     private async Task<MirrorPulseNamespaceRetirementBatch?> ReadNamespaceRetirementBatchCoreAsync(Guid operationId,
-        SqliteTransaction? transaction, CancellationToken token)
+        SqliteTransaction? transaction, CancellationToken token, bool requireTreeSettlementOwner = true)
     {
         await using SqliteCommand query = _connection.CreateCommand(); query.Transaction = transaction;
         query.CommandText = "SELECT operation_id,member_id,root_id,payload,fingerprint,phase FROM namespace_member_retirement_batches WHERE operation_id=$id;";
@@ -218,7 +218,7 @@ public sealed partial class MirrorPulseProductCatalog
         }
         await reader.DisposeAsync().ConfigureAwait(false);
         await ValidateRemoteRetirementTreeOwnerAsync(batch, transaction, token).ConfigureAwait(false);
-        _ = await ReadRemoteRetirementTreeStartCoreAsync(operationId, batch, transaction, token).ConfigureAwait(false);
+        _ = await ReadRemoteRetirementTreeStartCoreAsync(operationId, batch, transaction, token, requireTreeSettlementOwner).ConfigureAwait(false);
         return batch;
     }
 
