@@ -25,7 +25,10 @@ if (args.Length == 2 && args[0] is "--read-cli-fixture" or "--audit-cli-fixture"
     }
     catch (Exception exception)
     {
-        Console.Error.WriteLine($"Fixture consumer failure: hresult={exception.HResult:X8}; type={exception.GetType().Name}.");
+        string? argument = (exception as ArgumentException)?.ParamName;
+        if (argument is not { Length: > 0 and <= 64 } || !argument.All(character => char.IsAsciiLetterOrDigit(character) || character == '_')) argument = null;
+        Console.Error.WriteLine($"Fixture consumer failure: hresult={exception.HResult:X8}; type={exception.GetType().Name}; " +
+            $"stage={exception.Data["CliFixtureCleanupStage"] ?? "NotAvailable"}; argument={argument ?? "NotAvailable"}.");
         return 1;
     }
 }

@@ -18,6 +18,13 @@ public static partial class CliFixtureProbe
     // No arbitrary path or recursive ACL operation is accepted.
     private static async Task<CliFixtureCleanupResult> CleanupPermissionsAsync(string root, CliFixtureMarker marker)
     {
+        string stage = "CatalogOwnership";
+        try { return await CleanupPermissionsCoreAsync(root, marker, value => stage = value); }
+        catch (Exception failure) { failure.Data["CliFixtureCleanupStage"] = stage; throw; }
+    }
+
+    private static async Task<CliFixtureCleanupResult> CleanupPermissionsCoreAsync(string root, CliFixtureMarker marker, Action<string> setStage)
+    {
         var paths = new MirrorPulseStoragePaths(Path.Combine(root, "sync"), Path.Combine(root, "data"));
         foreach (string path in new[] { paths.DataRootPath, Path.GetDirectoryName(paths.ProductCatalogDatabasePath)!, paths.ProductCatalogDatabasePath })
             if (!Path.Exists(path) || (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
@@ -26,6 +33,7 @@ public static partial class CliFixtureProbe
         // Host's ACLs, even if its control pipe has already stopped responding.
         await using var catalog = await MirrorPulseProductCatalog.OpenAsync(paths);
         var topology = await catalog.ReadAdapterTopologyAsync();
+        setStage("RouteValidation");
         bool anchorOnly = IsAnchorOnlyCleanup(marker);
         RootRegistration[] roots;
         if (anchorOnly)
@@ -50,6 +58,7 @@ public static partial class CliFixtureProbe
         if ((await catalog.ReadNamespacePermissionChangesAsync()).Count == 0 &&
             (await catalog.BeginNamespaceBirthRecoveryScanAsync()).ThroughSequence == 0)
             return new(1, true, 0, 0, ProtectedNamespace: false);
+        setStage("InspectionStore");
         string inspection = Path.Combine(root, "inspection");
         if (Path.Exists(inspection) && (File.GetAttributes(inspection) & FileAttributes.ReparsePoint) != 0)
             throw new InvalidDataException("The fixture inspection directory was redirected.");
@@ -57,8 +66,10 @@ public static partial class CliFixtureProbe
         string database = Path.Combine(inspection, "cfsharp.db");
         if (Path.Exists(database) && (File.GetAttributes(database) & FileAttributes.ReparsePoint) != 0)
             throw new InvalidDataException("The fixture inspection database was redirected.");
+        setStage("SdkConstruction");
         await using var fileSystem = CloudFileSystem.CreateBuilder(paths.SyncRootPath)
             .WithStateStore(new SqliteCloudStateStoreFactory(database)).Build();
+        setStage("SdkStart");
         await fileSystem.StartAsync();
         var router = new MirrorPulseRootRouter(paths.SyncRootPath, roots);
         var allowed = new Dictionary<string, bool>(StringComparer.Ordinal) { [""] = true };
@@ -77,9 +88,11 @@ public static partial class CliFixtureProbe
         {
             while (pending.TryDequeue(out var item))
             {
+                setStage("InventoryValidation");
                 string relative = item.RelativePath.Replace('\\', '/');
                 if (!allowed.TryGetValue(relative, out bool directory) || directory != (item.Kind == CloudItemKind.Directory) || !observed.Add(relative))
                     throw new InvalidDataException("An unexpected namespace entry prevents fixture cleanup.");
+                setStage("PermissionLease");
                 var lease = await MirrorPulseWindowsNamespacePermissionLease.OpenAsync(item, router);
                 leases.Add(lease);
                 var facts = await lease.InspectAsync(CancellationToken.None);
@@ -99,6 +112,7 @@ public static partial class CliFixtureProbe
             // before their parents; all names remain retained until writes finish.
             for (int index = leases.Count - 1; index >= 0; index--)
             {
+                setStage("PermissionRestoration");
                 var facts = await leases[index].InspectAsync(CancellationToken.None);
                 if (facts.OwnerSid != owner || facts.LinkCount != 1)
                     throw new InvalidDataException("A fixture object changed before permission cleanup.");

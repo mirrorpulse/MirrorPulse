@@ -203,6 +203,16 @@ jobs:
           New-Item -ItemType Directory -Path artifacts/evidence -Force | Out-Null
           pwsh ./eng/verify-cli-regression.ps1 -Runtime win-arm64 -PackagePath $package.FullName -EvidencePath artifacts/evidence/cli-regression.json
 
+      - name: Preserve original ARM64 CLI regression results and failures
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: cli-regression-arm64-originals
+          path: |
+            artifacts/evidence/cli-regression.json
+            artifacts/evidence/cli-regression.originals/**
+          if-no-files-found: ignore
+
       - name: Verify signed official packages and native ARM64 Workers
         run: |
           dotnet test tests/MirrorPulse.Core.Tests/MirrorPulse.Core.Tests.csproj --configuration Release --no-restore --filter FullyQualifiedName~SignedPackageProcessTests --logger trx --results-directory artifacts/test-results/signed

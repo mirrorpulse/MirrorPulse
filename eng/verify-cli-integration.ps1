@@ -12,6 +12,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+. (Join-Path $PSScriptRoot 'cli-integration-failure-policy.ps1')
+$primaryFailure = $null
 $runRoot = Join-Path ([IO.Path]::GetTempPath()) "MirrorPulse-cli-integration-$([guid]::NewGuid().ToString('N'))"
 $cliRoot = Join-Path $runRoot "cli"
 $hostRoot = Join-Path $runRoot "host"
@@ -495,7 +497,17 @@ try {
     Wait-MirrorPulseHostStopped
     Write-Output "Verified CLI -> Host -> Worker integration for $Runtime ($instanceId)."
 }
+catch {
+    $primaryFailure = $_
+    try { Write-CliFixtureFailure -Failure $_ -Phase Execution -EvidencePath $EvidencePath -FixtureRoot $runRoot -DataRoot $dataRoot }
+    catch { Write-Host "Original fixture failure recording also failed: $($_.Exception.GetType().Name)." }
+    throw $primaryFailure
+}
 finally {
+    Invoke-CliFixtureTeardown -PrimaryFailure $primaryFailure -RecordFailure {
+        param($failure)
+        Write-CliFixtureFailure -Failure $failure -Phase Cleanup -EvidencePath $EvidencePath -FixtureRoot $runRoot -DataRoot $dataRoot
+    } -Cleanup {
     if ($null -ne $script:cliExecutable -and (Test-Path -LiteralPath $script:cliExecutable)) {
         try {
             & $script:cliExecutable --json --developer-mode host stop 2>$null | Out-Null
@@ -530,6 +542,7 @@ finally {
         }
         Remove-Item -LiteralPath $cleanupRoot -Recurse -Force -ErrorAction Stop
         if (Test-Path -LiteralPath $cleanupRoot) { throw 'The isolated CLI fixture workspace was not removed.' }
+    }
     }
 }
 if ($EvidencePath) {
