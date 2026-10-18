@@ -198,7 +198,7 @@ public sealed partial class MirrorPulseProductCatalog
 
     private async Task UpgradeRemoteTreeSettlementOwnersAsync(long previousVersion, CancellationToken token)
     {
-        if (previousVersion >= 75) return;
+        if (previousVersion >= 76) return;
         using var transaction = _connection.BeginTransaction();
         var operations = new List<Guid>();
         await using (var query = _connection.CreateCommand())
@@ -221,7 +221,7 @@ public sealed partial class MirrorPulseProductCatalog
             _ = await ReadNamespaceRetirementBatchCoreAsync(operation, transaction, token).ConfigureAwait(false);
         }
         await using var version = _connection.CreateCommand(); version.Transaction = transaction;
-        version.CommandText = "PRAGMA user_version=75;";
+        version.CommandText = "PRAGMA user_version=76;";
         await version.ExecuteNonQueryAsync(token).ConfigureAwait(false); transaction.Commit();
     }
 

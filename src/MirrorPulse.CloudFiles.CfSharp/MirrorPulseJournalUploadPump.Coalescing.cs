@@ -105,6 +105,11 @@ public sealed partial class MirrorPulseJournalUploadPump
                 throw new NotSupportedException("The retained coalesced execution requires the production mutation and Cloud Files boundaries.");
             var execution = await _catalog.ReadJournalCoalescingExecutionAsync(plan.PlanId, token).ConfigureAwait(false)
                 ?? throw new MirrorPulseMutationAmbiguousException("The owned journal group has no immutable execution preparation.");
+            var preservationCommands = await _catalog.ReadCurrentCoalescingKeepBothCommandsAsync(plan.PlanId, token).ConfigureAwait(false);
+            if (preservationCommands.Count != 0 && _conflictActions is null)
+                throw new NotSupportedException("Preserved remote choices require the Host's verified private-copy retention boundary.");
+            await using var preservedCopies = preservationCommands.Count == 0 ? null :
+                await _conflictActions!.RetainKeepBothCopiesForEffectsAsync(preservationCommands, token).ConfigureAwait(false);
             var executor = new MirrorPulseJournalCoalescingExecutor(_catalog, _stats, _uploads, _mutations, _readback);
             var results = await executor.ExecuteAsync(plan.PlanId,
                 (content, stop) => OpenCoalescedContentAsync(plan, content, stop),

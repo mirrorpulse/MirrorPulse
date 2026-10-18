@@ -48,6 +48,8 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
     private readonly MirrorPulseJournalCoalescingRecovery _coalescingRecovery;
     private readonly MirrorPulseConflictDeletionRecovery? _deletionRecovery;
     private readonly MirrorPulseConflictDeletionRecovery? _localRemovalRecovery;
+    private readonly MirrorPulseConflictKeepBothRecovery? _keepBothRecovery;
+    private readonly MirrorPulseUploadConflictActions? _conflictActions;
 
     public MirrorPulseJournalPumpHealth Health => _runner.Health;
 
@@ -100,8 +102,10 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
         _syncRootPath = Path.GetFullPath(syncRootPath);
         _log = new LocalRollingLogWriter(Path.Combine(dataRootPath, "logs"));
         _coalescingRecovery = new(catalog, state, _runner, _log);
+        _conflictActions = conflictActions;
         if (conflictActions is not null) _deletionRecovery = new(catalog, conflictActions.ResumeConflictDeletionAsync, router, mayDispatch, _runner, _log);
         if (conflictActions is not null) _localRemovalRecovery = new(catalog, conflictActions.ResumeConflictLocalRemovalAsync, router, mayDispatch, _runner, _log, localOnly: true);
+        if (conflictActions is not null) _keepBothRecovery = new(catalog, conflictActions.ResumeConflictKeepBothAsync, router, mayDispatch, _runner, _log, namespaceWork);
         _completion = completion ?? throw new ArgumentNullException(nameof(completion));
         _source = new MirrorPulseJournalUploadSource(feed, router, catalog, mayDispatch, _completion, namespaceWork);
     }
@@ -149,6 +153,7 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
         _completedCoalescedOriginals.Clear();
         if (_deletionRecovery is not null) await _deletionRecovery.RepairAsync(cancellationToken).ConfigureAwait(false);
         if (_localRemovalRecovery is not null) await _localRemovalRecovery.RepairAsync(cancellationToken).ConfigureAwait(false);
+        if (_keepBothRecovery is not null) await _keepBothRecovery.RepairAsync(cancellationToken).ConfigureAwait(false);
         await _coalescingRecovery.RepairAsync(cancellationToken).ConfigureAwait(false);
         var recovery = new MirrorPulseMutationProjectionRecovery(_catalog);
         IReadOnlyList<Guid> repaired = await recovery.RepairAsync(async (operationId, token) =>

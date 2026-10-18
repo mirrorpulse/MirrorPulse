@@ -85,7 +85,7 @@ public sealed partial class MirrorPulseProductCatalog
             foreach (Guid original in originals)
             {
                 await using var query = _connection.CreateCommand(); query.Transaction = transaction;
-                query.CommandText = "SELECT 1 FROM conflict_deletion_members WHERE original_id=$original UNION ALL SELECT 1 FROM conflict_local_removal_members WHERE original_id=$original LIMIT 1;";
+                query.CommandText = "SELECT 1 FROM conflict_deletion_members WHERE original_id=$original UNION ALL SELECT 1 FROM conflict_local_removal_members WHERE original_id=$original UNION ALL SELECT 1 FROM conflict_keep_both_owners WHERE original_id=$original LIMIT 1;";
                 query.Parameters.AddWithValue("$original", original.ToString("D"));
                 if (await query.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null)
                     throw new InvalidOperationException("An original operation already belongs to a retained deletion decision.");

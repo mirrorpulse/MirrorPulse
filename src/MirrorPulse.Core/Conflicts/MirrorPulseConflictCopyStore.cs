@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using MirrorPulse.Core.Configuration;
 using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.State;
 
 namespace MirrorPulse.Core.Conflicts;
 
@@ -21,6 +22,17 @@ public sealed record MirrorPulseConflictCopyManifest(int SchemaVersion, Guid Con
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Guid? RemoteDecisionId { get; init; }
+}
+
+/// <summary>A verified private remote copy; its handle remains held until retry authorization finishes.</summary>
+public sealed class MirrorPulseConflictRemoteCopyLease : IAsyncDisposable
+{
+    internal MirrorPulseConflictRemoteCopyLease(string path, MirrorPulseConflictKeepBothCopy proof, FileStream data)
+    { Path = path; Proof = proof; Data = data; }
+    public string Path { get; }
+    public MirrorPulseConflictKeepBothCopy Proof { get; }
+    public FileStream Data { get; }
+    public ValueTask DisposeAsync() => Data.DisposeAsync();
 }
 
 /// <summary>Preserves one selected side in MP's private data root before a destructive decision.</summary>
@@ -60,6 +72,31 @@ public sealed class MirrorPulseConflictCopyStore
         ArgumentNullException.ThrowIfNull(source);
         source.Validate(conflict);
         return PreserveCoreAsync(conflict, MirrorPulseConflictPreservedSide.Remote, commandId, source, openSource, cancellationToken);
+    }
+
+    /// <summary>Reopens the original complete remote copy and retains its verified bytes against replacement or writes.</summary>
+    public async Task<MirrorPulseConflictRemoteCopyLease> OpenRemoteDecisionAsync(Guid commandId, MirrorPulseConflictRecord conflict,
+        MirrorPulseConflictRemoteSource source, CancellationToken cancellationToken = default)
+    {
+        if (commandId == Guid.Empty) throw new ArgumentException("The original preservation command is required.", nameof(commandId));
+        ArgumentNullException.ThrowIfNull(source); source.Validate(conflict);
+        string path = Path.Combine(MirrorPulseConflictDirectory.GetPath(_paths, conflict.InstanceId), "remote", commandId.ToString("D"),
+            MirrorPulseConflictFileName.Create(conflict));
+        EnsureNoReparsePoints(_paths.DataRootPath, path);
+        EnsureNoReparsePoints(_paths.DataRootPath, path + ".manifest.json");
+        var manifest = await ReadManifestAsync(path + ".manifest.json", cancellationToken).ConfigureAwait(false);
+        ValidateIdentity(conflict, MirrorPulseConflictPreservedSide.Remote, commandId, source, manifest);
+        if (manifest.State != "complete" || manifest.Length != source.Length || manifest.Sha256 is not { Length: 64 })
+            throw new InvalidDataException("The remote decision copy is not complete.");
+        var data = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        try
+        {
+            if (data.Length != manifest.Length || Convert.ToHexString(await SHA256.HashDataAsync(data, cancellationToken).ConfigureAwait(false)) != manifest.Sha256)
+                throw new InvalidDataException("The retained remote copy failed its complete byte proof.");
+            data.Position = 0;
+            return new(path, new(manifest.Length, manifest.Sha256), data);
+        }
+        catch { await data.DisposeAsync().ConfigureAwait(false); throw; }
     }
 
     private async Task<string> PreserveCoreAsync(MirrorPulseConflictRecord conflict, MirrorPulseConflictPreservedSide side,

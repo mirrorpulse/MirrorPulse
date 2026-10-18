@@ -56,8 +56,9 @@ public sealed partial class MirrorPulseProductCatalog
             await using (var deletion = _connection.CreateCommand())
             {
                 deletion.Transaction = transaction;
-                deletion.CommandText = "SELECT 1 FROM conflict_deletion_members WHERE original_id=$operation UNION ALL SELECT 1 FROM conflict_local_removal_members WHERE original_id=$operation LIMIT 1;";
+                deletion.CommandText = "SELECT 1 FROM conflict_deletion_members WHERE original_id=$operation UNION ALL SELECT 1 FROM conflict_local_removal_members WHERE original_id=$operation UNION ALL SELECT 1 FROM conflict_keep_both_owners WHERE original_id=$operation AND command_id<>$command LIMIT 1;";
                 deletion.Parameters.AddWithValue("$operation", originalOperationId.ToString("D"));
+                deletion.Parameters.AddWithValue("$command", commandId.ToString("D"));
                 if (await deletion.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null)
                     throw new InvalidOperationException("The original group belongs to an explicit deletion decision.");
             }
@@ -76,6 +77,9 @@ public sealed partial class MirrorPulseProductCatalog
                 ?? throw new InvalidDataException("The group lost its immutable execution.");
             var execution = await ReadCoalescingDispatchCoreAsync(plan, originalExecution, transaction, cancellationToken).ConfigureAwait(false);
             await RequireCoalescingRetryCommandAsync(commandId, conflictId, acceptObservedRemoteRevision, transaction, cancellationToken).ConfigureAwait(false);
+            var keepBoth = await ReadConflictKeepBothCoreAsync(commandId, transaction, cancellationToken).ConfigureAwait(false);
+            if (keepBoth is not null && keepBoth.Intent.AuthorizedContent != content)
+                throw new InvalidDataException("KeepBoth must retry the original explicitly retained local-content choice.");
             await using (var replay = _connection.CreateCommand())
             {
                 replay.Transaction = transaction;
@@ -182,6 +186,14 @@ public sealed partial class MirrorPulseProductCatalog
                     resolve.Parameters.AddWithValue("$id", groupConflict.ToString("D"));
                     if (await resolve.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1) throw new InvalidOperationException("The group's conflict status changed before authorization.");
                 }
+                if (keepBoth is not null)
+                {
+                    await using var release = _connection.CreateCommand(); release.Transaction = transaction;
+                    release.CommandText = "DELETE FROM conflict_keep_both_owners WHERE command_id=$id;";
+                    release.Parameters.AddWithValue("$id", commandId.ToString("D"));
+                    if (await release.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != keepBoth.Intent.OriginalOperationIds.Count)
+                        throw new InvalidDataException("KeepBoth lost its original group ownership before retry authorization.");
+                }
                 transaction.Commit(); return retry;
             }
             throw new InvalidOperationException("The complete group has no rejected effect to retry.");
@@ -255,9 +267,19 @@ public sealed partial class MirrorPulseProductCatalog
             authorization.CommandText = "SELECT action,target_id FROM user_commands WHERE command_id=$command;";
             authorization.Parameters.AddWithValue("$command", retry.CommandId.ToString("D"));
             await using var reader = await authorization.ExecuteReaderAsync(token).ConfigureAwait(false);
-            if (!await reader.ReadAsync(token).ConfigureAwait(false) || reader.GetString(0) != (retry.AcceptObservedRemoteRevision ? "keeplocal" : "retry") ||
+            if (!await reader.ReadAsync(token).ConfigureAwait(false) ||
+                reader.GetString(0) != (retry.AcceptObservedRemoteRevision ? "keeplocal" : "retry") && !(retry.AcceptObservedRemoteRevision && reader.GetString(0) == "keepboth") ||
                 reader.GetString(1) != retry.ConflictId.ToString("D"))
                 throw new InvalidDataException("The retry lost its original explicit user authorization.");
+            bool keepBoth = reader.GetString(0) == "keepboth";
+            await reader.DisposeAsync().ConfigureAwait(false);
+            if (keepBoth)
+            {
+                var decision = await ReadConflictKeepBothCoreAsync(retry.CommandId, transaction, token).ConfigureAwait(false);
+                if (decision?.Copy is null || !decision.RetryAuthorized || decision.Intent.PlanId != plan.PlanId || decision.Intent.ConflictId != retry.ConflictId ||
+                    decision.Intent.AuthorizedContent != retry.AuthorizedContent || decision.Intent.RemoteSource.RemoteRevision != retry.Intent.ExpectedRevision)
+                    throw new InvalidDataException("The retained KeepBoth retry lost its original preservation and local-content authorization.");
+            }
         }
         await using (var conflict = _connection.CreateCommand())
         {
@@ -386,8 +408,21 @@ public sealed partial class MirrorPulseProductCatalog
         query.CommandText = "SELECT action,target_id,state FROM user_commands WHERE command_id=$command;";
         query.Parameters.AddWithValue("$command", commandId.ToString("D"));
         await using var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
-        if (!await reader.ReadAsync(token).ConfigureAwait(false) || reader.GetString(0) != (acceptObserved ? "keeplocal" : "retry") ||
-            reader.GetString(1) != conflictId.ToString("D") || reader.GetString(2) != "pending")
+        if (!await reader.ReadAsync(token).ConfigureAwait(false) ||
+            reader.GetString(0) != (acceptObserved ? "keeplocal" : "retry") && !(acceptObserved && reader.GetString(0) == "keepboth") ||
+            reader.GetString(1) != conflictId.ToString("D") ||
+            reader.GetString(2) != "pending" && !(reader.GetString(0) == "keepboth" && reader.GetString(2) is "failed" or "resolved" or "superseded"))
             throw new InvalidOperationException("A matching pending user command must authorize the complete group retry.");
+        bool keepBoth = reader.GetString(0) == "keepboth";
+        string state = reader.GetString(2);
+        await reader.DisposeAsync().ConfigureAwait(false);
+        if (keepBoth)
+        {
+            var decision = await ReadConflictKeepBothCoreAsync(commandId, transaction, token).ConfigureAwait(false);
+            if (decision?.Copy is null || decision.Intent.ConflictId != conflictId)
+                throw new InvalidOperationException("The complete selected remote version must be preserved before KeepBoth authorizes a retry.");
+            if (state is "resolved" or "superseded" && !decision.RetryAuthorized)
+                throw new InvalidOperationException("A completed command cannot authorize a new KeepBoth retry.");
+        }
     }
 }

@@ -24,10 +24,35 @@ the Worker; the remote can subsequently be unavailable or different. A partial
 copy must read only the originally selected source again. An older version 1 copy
 cannot acquire historical source evidence by upgrading its manifest.
 
-This is a preservation boundary for conflict decisions, not a completed
-`KeepBoth` or `KeepRemote` operation. It issues no mutation, changes no conflict
-status and acknowledges no journal ID. The production group decision still needs
-to persist its authorization and original membership, verify preservation before
-authorizing subsequent effects, and settle the complete original group after
-their actual completion. The existing group guards remain until that workflow is
-connected and verified.
+The copy store supplies source and byte verification to conflict decisions.
+The production coalesced file-group `KeepBoth` path retains local content and
+archives the selected remote version. It first persists the complete original
+group, conflict epoch, rejected effect and selected remote source in the Host
+catalog. A verified private copy handle excludes writers until the distinct
+conditional local retry is authorized. The original execution and rejected
+mutation history remain unchanged.
+
+Before dispatching that current retry program, the Host independently reopens
+and verifies its selected private copies again. It retains those handles through
+remote effects, native confirmation, SDK projection and original acknowledgement.
+A missing or modified archive blocks dispatch instead of trusting only its
+earlier catalog receipt.
+
+Preservation leaves the original conflicts pending. Authorizing the retry
+resolves that exact conflict epoch atomically and releases its active decision
+reservation; historical membership and archived bytes remain available across
+later choices. The command stays pending while the existing coalesced executor
+performs actual remote acceptance, native content confirmation, public SDK
+identity projection and whole-group acknowledgement. Only those completed
+boundaries resolve the command.
+
+The upload pump recovers up to 64 retained preservation decisions per scan and
+continues after an individual failure. Disabled instances and roots awaiting
+fresh namespace admission defer source access. Source metadata and range bodies
+run in the normal-user transport context. A durable original-retry preparation
+receipt avoids rereading complete private copies on every subsequent pump cycle.
+
+This path requires an observed existing remote file version. `KeepRemote`,
+single-observation `KeepBoth`, absent-remote variants, directory choices and
+multiple remote occupants retain their separate implementation and acceptance
+requirements; the coalesced file path does not certify those cases.

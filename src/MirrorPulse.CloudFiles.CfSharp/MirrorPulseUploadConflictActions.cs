@@ -32,6 +32,7 @@ public sealed partial class MirrorPulseUploadConflictActions
     private readonly IMirrorPulseWorkerStatTransport? _stats;
     private readonly Func<InstanceId, bool> _mayDispatch;
     private readonly MirrorPulseConflictNotificationBridge? _conflictNotifications;
+    private readonly MirrorPulseConflictRemoteCopyStore? _remoteCopies;
     private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, byte> _announcedDeletionConflicts = new();
 
     public MirrorPulseUploadConflictActions(
@@ -50,7 +51,9 @@ public sealed partial class MirrorPulseUploadConflictActions
         MirrorPulseNamespaceWorkAdmission? namespaceWork = null,
         IMirrorPulseWorkerStatTransport? stats = null,
         Func<InstanceId, bool>? mayDispatch = null,
-        MirrorPulseConflictNotificationBridge? conflictNotifications = null)
+        MirrorPulseConflictNotificationBridge? conflictNotifications = null,
+        IMirrorPulseWorkerRangeTransport? remoteRanges = null,
+        IMirrorPulseWorkerDirectoryPageSource? remoteDirectories = null)
     {
         _catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
         _state = state ?? throw new ArgumentNullException(nameof(state));
@@ -68,6 +71,8 @@ public sealed partial class MirrorPulseUploadConflictActions
         _stats = stats;
         _mayDispatch = mayDispatch ?? (_ => true);
         _conflictNotifications = conflictNotifications;
+        if (stats is not null && remoteRanges is not null && remoteDirectories is not null)
+            _remoteCopies = new(_copies, stats, remoteRanges, remoteDirectories);
         _contentConfirmation = router is null ? null : new(catalog, router, namespaceActor, namespaceExecution);
         if (fileSystem is not null && router is not null && namespaceActor is not null && namespaceExecution is not null &&
             OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
@@ -116,7 +121,8 @@ public sealed partial class MirrorPulseUploadConflictActions
         if (_namespaceWork is null) return new(conflict, root.RootId, null, null);
         bool pending = action == MirrorPulseConflictAction.Retry || Guid.TryParse(conflict.ChangeId, out var original) &&
             (await _catalog.ReadConflictDeletionOwnerAsync(original, token).ConfigureAwait(false) is not null ||
-             await _catalog.ReadConflictLocalRemovalOwnerAsync(original, token).ConfigureAwait(false) is not null);
+             await _catalog.ReadConflictLocalRemovalOwnerAsync(original, token).ConfigureAwait(false) is not null ||
+             await _catalog.ReadConflictKeepBothOwnerAsync(original, token).ConfigureAwait(false) is not null);
         return pending ? new(conflict, root.RootId, null, await _namespaceWork.EnterPendingOperationAsync(root.RootId, token).ConfigureAwait(false)) :
             new(conflict, root.RootId, _namespaceWork.Enter([root.RootId]), null);
     }
@@ -145,6 +151,13 @@ public sealed partial class MirrorPulseUploadConflictActions
         }
         var group = Guid.TryParse(conflict.ChangeId, out Guid originalId) ?
             await _catalog.ReadJournalCoalescingOwnerAsync(originalId, cancellationToken).ConfigureAwait(false) : null;
+        if (originalId != Guid.Empty && await _catalog.ReadConflictKeepBothOwnerAsync(originalId, cancellationToken).ConfigureAwait(false) is { } bothOwner)
+        {
+            if (action != MirrorPulseConflictAction.KeepBoth)
+                throw new InvalidOperationException("This original group already belongs to a retained preservation decision.");
+            if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100)) throw new PlatformNotSupportedException();
+            return await ExecuteKeepBothAdmittedAsync(bothOwner, admittedRoot, cancellationToken).ConfigureAwait(false);
+        }
         if (originalId != Guid.Empty && await _catalog.ReadConflictLocalRemovalOwnerAsync(originalId, cancellationToken).ConfigureAwait(false) is { } localOwner)
         {
             if (action != MirrorPulseConflictAction.DeleteLocal)
@@ -158,7 +171,7 @@ public sealed partial class MirrorPulseUploadConflictActions
                 throw new InvalidOperationException("This conflict already belongs to a retained deletion decision.");
             return await ApplyExistingDeletionAsync(deletionOwner, conflict, admittedRoot, cancellationToken).ConfigureAwait(false);
         }
-        if (group is not null && action is not (MirrorPulseConflictAction.Retry or MirrorPulseConflictAction.KeepLocal or MirrorPulseConflictAction.DeleteRemote or MirrorPulseConflictAction.DeleteLocal))
+        if (group is not null && action is not (MirrorPulseConflictAction.Retry or MirrorPulseConflictAction.KeepLocal or MirrorPulseConflictAction.KeepBoth or MirrorPulseConflictAction.DeleteRemote or MirrorPulseConflictAction.DeleteLocal))
             throw new NotSupportedException("This coalesced decision requires a complete local group operation; no original journal ID was acknowledged.");
 
         string? preservedPath = null;
@@ -169,6 +182,12 @@ public sealed partial class MirrorPulseUploadConflictActions
         await _catalog.SaveUserCommandAsync(new(commandId, actionName, conflictId.ToString("D"), "pending"), cancellationToken).ConfigureAwait(false);
         try
         {
+            if (group is not null && action == MirrorPulseConflictAction.KeepBoth)
+            {
+                if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100)) throw new PlatformNotSupportedException();
+                await PrepareKeepBothAdmittedAsync(commandId, conflict, group, admittedRoot, cancellationToken).ConfigureAwait(false);
+                return await ExecuteKeepBothAdmittedAsync(commandId, admittedRoot, cancellationToken).ConfigureAwait(false);
+            }
             if (action == MirrorPulseConflictAction.DeleteLocal && (_localDeletion is not null || group is not null))
             {
                 await PrepareDeletionAdmittedAsync(commandId, conflict, group, admittedRoot, true, cancellationToken).ConfigureAwait(false);

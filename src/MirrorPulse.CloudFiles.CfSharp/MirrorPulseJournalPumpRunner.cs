@@ -12,6 +12,7 @@ public sealed class MirrorPulseJournalPumpRunner
     private readonly ConcurrentDictionary<Guid, string> _faults = new();
     private readonly ConcurrentDictionary<Guid, string> _coalescingRecoveryFaults = new();
     private readonly ConcurrentDictionary<Guid, string> _conflictDeletionRecoveryFaults = new();
+    private readonly ConcurrentDictionary<Guid, string> _keepBothRecoveryFaults = new();
     private readonly int _maximumCommandsPerCycle;
     private readonly int _maximumCommandsPerRoot;
     private (InstanceId Instance, string Root)? _nextRoute;
@@ -31,9 +32,14 @@ public sealed class MirrorPulseJournalPumpRunner
     internal IReadOnlyList<Guid> ReadConflictDeletionRecoveryFaults(Guid? after) => _conflictDeletionRecoveryFaults.Keys
         .Where(id => after is null || string.CompareOrdinal(id.ToString("D"), after.Value.ToString("D")) > 0)
         .OrderBy(id => id.ToString("D"), StringComparer.Ordinal).Take(64).ToArray();
-    public MirrorPulseJournalPumpHealth Health => new(_faults.IsEmpty && _coalescingRecoveryFaults.IsEmpty && _conflictDeletionRecoveryFaults.IsEmpty,
-        _faults.Count + _coalescingRecoveryFaults.Count + _conflictDeletionRecoveryFaults.Count,
-        _faults.Values.Concat(_coalescingRecoveryFaults.Values).Concat(_conflictDeletionRecoveryFaults.Values).Order(StringComparer.Ordinal).FirstOrDefault());
+    internal void RetainKeepBothRecoveryFault(Guid commandId) => _keepBothRecoveryFaults[commandId] = "ConflictKeepBothRecoveryFailed";
+    internal void ClearKeepBothRecoveryFault(Guid commandId) => _keepBothRecoveryFaults.TryRemove(commandId, out _);
+    internal IReadOnlyList<Guid> ReadKeepBothRecoveryFaults(Guid? after) => _keepBothRecoveryFaults.Keys
+        .Where(id => after is null || string.CompareOrdinal(id.ToString("D"), after.Value.ToString("D")) > 0)
+        .OrderBy(id => id.ToString("D"), StringComparer.Ordinal).Take(64).ToArray();
+    public MirrorPulseJournalPumpHealth Health => new(_faults.IsEmpty && _coalescingRecoveryFaults.IsEmpty && _conflictDeletionRecoveryFaults.IsEmpty && _keepBothRecoveryFaults.IsEmpty,
+        _faults.Count + _coalescingRecoveryFaults.Count + _conflictDeletionRecoveryFaults.Count + _keepBothRecoveryFaults.Count,
+        _faults.Values.Concat(_coalescingRecoveryFaults.Values).Concat(_conflictDeletionRecoveryFaults.Values).Concat(_keepBothRecoveryFaults.Values).Order(StringComparer.Ordinal).FirstOrDefault());
 
     public async ValueTask<bool> RunCycleAsync(
         Func<CancellationToken, ValueTask<MirrorPulseJournalUploadBatch>> read,
