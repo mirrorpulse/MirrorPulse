@@ -220,7 +220,9 @@ public sealed class MirrorPulseCliHostOperations : IMirrorPulseCliHostOperations
                     result = roots;
                     human = roots.Count == 0 ? "No managed roots are configured." : string.Join(Environment.NewLine,
                         roots.Select(root => $"{root.Root.Label} · {root.SyncState} · {root.Root.RootId}" +
-                            (root.PendingRename is { } pending ? $" · {pending.SourceName} -> {pending.TargetName} ({pending.Phase}) · {pending.OperationId}" : string.Empty)));
+                            (root.PendingRename is { } pending ? $" · {pending.SourceName} -> {pending.TargetName} ({pending.Phase}) · {pending.OperationId}" : string.Empty) +
+                            (root.NamespaceReady == false ? $" · {root.NamespaceRecoveryCode ?? "NamespaceRecoveryRequired"}" +
+                                (root.NamespaceRecoveryOperationId is { } recoveryOperation ? $" · {recoveryOperation:D}" : string.Empty) : string.Empty)));
                     break;
                 case ("root", "prepare-rename"):
                     if (command.Arguments.Count != 2 || !Guid.TryParse(command.Arguments[0], out Guid rootId) || rootId == Guid.Empty)

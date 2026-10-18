@@ -118,7 +118,7 @@ if ($IntegrationPath) {
     }
     . (Join-Path $PSScriptRoot 'cli-regression-evidence-policy.ps1')
     Assert-CliRegressionObservations $integration
-    $checks += [ordered]@{name="signed-local-cli-regression";executed=$true;rangeRead=$true;offlineQueueRetained=$true;uploadJournalDrained=$true;conflictPersisted=$true;cursorPersisted=$true;hydration=$integration.hydration}
+    $checks += [ordered]@{name="signed-local-cli-regression";executed=$true;rangeRead=$true;offlineQueueRetained=$true;uploadJournalDrained=$true;conflictPersisted=$true;cursorPersisted=$true;hydration=$integration.hydration;namespace=$integration.namespace}
 } elseif ($Job -eq "official-package-arm64") { throw "The signed Local CLI regression evidence is missing." }
 if ($InstalledPath) {
     $installed = Get-Content -LiteralPath $InstalledPath -Raw | ConvertFrom-Json

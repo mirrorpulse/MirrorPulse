@@ -355,9 +355,26 @@ and shutdown. A root lease alone cannot protect an operation in another root
 when the complete CfSharp instance is replaced. A queued recovery cancelled at
 this gate leaves no initializer or root fence behind. Historical status reads
 remain available while a controlled import waits for its official commit.
-Full default Host bootstrap, pending
-namespace-operation recovery and independent root failure recovery remain
-separate integration work.
+The default Host now supplies one shared admission owner to demand population,
+the runtime upload pump and background polling. It enables automatic local
+namespace startup before Workers and polling start. Existing local original
+trees are captured before parent permissions change; missing configured roots
+are created as protected births. Retained initialization routes are resumed
+without replacing their operation IDs. Each configured root then receives its
+own current native audit; failed roots remain closed and root status exposes a
+safe recovery ID and code. A user with no Adapters still audits the actual anchor.
+Automatic recovery of every partially executed birth, move, retirement and
+replacement, and registration of all remote-apply births, remain integration
+work. An unresolved operation prevents admission instead of being forgotten.
+
+Host shutdown awaits control requests, polling, scheduled instance work and
+namespace callbacks before releasing the library, Workers, captured identities,
+catalog and Host lease. A disposal failure does not skip later resource owners;
+the original failure and any later failures remain observable. Concurrent disposal
+callers await the same teardown. Construction failure applies the same ordered
+cleanup and retains its original startup error. Root status reports nullable
+admission for contract compatibility and an explicit recovery operation/code
+when the current Host has kept a root closed.
 
 Explicit runtime initialization also supports a user with no configured Adapters.
 Version 3 retains an empty root inventory and its chosen recovery route. The

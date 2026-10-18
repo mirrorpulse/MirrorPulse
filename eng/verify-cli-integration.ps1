@@ -23,6 +23,9 @@ $hostProcess = $null
 $fixtureBytes = [Text.Encoding]::ASCII.GetBytes("0123456789ABCDEF-local-fixture")
 $hydrationReads = [Collections.Generic.List[object]]::new()
 $hydrationAudits = [Collections.Generic.List[object]]::new()
+$namespaceAudits = [Collections.Generic.List[object]]::new()
+$script:firstNamespaceMember = $null
+$script:firstAnchorMember = $null
 
 function Invoke-CliFixtureProbe {
     param([Parameter(Mandatory)][ValidateSet('read', 'audit', 'inspect', 'cleanup')][string]$Mode, [Parameter(Mandatory)][string]$Phase)
@@ -115,12 +118,45 @@ function Write-MirrorPulseUploadDiagnostics {
     }
 }
 
+function Assert-CliNamespaceRoot {
+    param([Parameter(Mandatory)][string]$Phase, [Parameter(Mandatory)][string]$ExpectedState)
+    $status = Invoke-MirrorPulseCli @('--json', '--no-start', 'root', 'list')
+    $selected = @($status.data | Where-Object { $_.root.rootId -eq $script:registeredRoot.rootId })
+    if ($selected.Count -ne 1 -or $selected[0].namespaceReady -ne $true -or $selected[0].syncState -cne $ExpectedState -or
+        $null -ne $selected[0].namespaceRecoveryOperationId -or $null -ne $selected[0].namespaceRecoveryCode) {
+        throw "The default Host did not freshly admit its original $ExpectedState root ($Phase)."
+    }
+    $member = Invoke-MirrorPulseCli @('--json', '--no-start', 'namespace', 'member', 'inspect', $script:rootDirectory, '--directory')
+    if ($member.data.rootId -cne $script:registeredRoot.rootId -or [string]::IsNullOrEmpty($member.data.memberId) -or
+        $member.data.actualParentMemberId -cne $script:firstAnchorMember -or
+        ($null -ne $script:firstNamespaceMember -and $member.data.memberId -cne $script:firstNamespaceMember)) {
+        throw "The default Host lost the original protected root member ($Phase)."
+    }
+    if ($null -eq $script:firstNamespaceMember) { $script:firstNamespaceMember = $member.data.memberId }
+    $namespaceAudits.Add([ordered]@{phase=$Phase;anchorMemberId=$script:firstAnchorMember;rootId=$script:registeredRoot.rootId;memberId=$member.data.memberId;state=$ExpectedState;freshAdmission=$true})
+}
+
 try {
     if (-not (Test-Path -LiteralPath $PackagePath -PathType Leaf)) {
         throw "The Adapter package was not found: $PackagePath"
     }
 
     New-Item -ItemType Directory -Path $cliRoot, $hostRoot, $syncRoot, $dataRoot, $sourceRoot -Force | Out-Null
+    # Match the current-user ownership required by every strict namespace fixture.
+    # Elevated runners can otherwise create the empty directory with a group owner.
+    if ((Get-Item -LiteralPath $syncRoot -Force).Attributes.HasFlag([IO.FileAttributes]::ReparsePoint) -or
+        @(Get-ChildItem -LiteralPath $syncRoot -Force).Count -ne 0) {
+        throw 'The fresh CLI fixture anchor must be an empty, unredirected directory.'
+    }
+    $fixtureUser = [Security.Principal.WindowsIdentity]::GetCurrent()
+    try {
+        $fixtureAccess = Get-Acl -LiteralPath $syncRoot
+        $fixtureAccess.SetOwner($fixtureUser.User)
+        Set-Acl -LiteralPath $syncRoot -AclObject $fixtureAccess
+        if ((Get-Acl -LiteralPath $syncRoot).GetOwner([Security.Principal.SecurityIdentifier]).Value -cne $fixtureUser.User.Value) {
+            throw 'The synthetic CLI fixture anchor did not retain its current-user owner.'
+        }
+    } finally { $fixtureUser.Dispose() }
     New-Item -ItemType Directory -Path (Join-Path $sourceRoot "nested") -Force | Out-Null
     [IO.File]::WriteAllBytes((Join-Path $sourceRoot "nested\fixture.txt"), $fixtureBytes)
     if ($Regression) {
@@ -135,12 +171,12 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "CLI publish failed." }
     & dotnet publish $hostProject --configuration $Configuration --runtime $Runtime --self-contained true --no-restore --output $hostRoot
     if ($LASTEXITCODE -ne 0) { throw "Host publish failed." }
-    if ($Regression) {
-        $probeProject = Join-Path $repositoryRoot 'tests\MirrorPulse.CfSharp.CrashProbe\MirrorPulse.CfSharp.CrashProbe.csproj'
-        & dotnet publish $probeProject --configuration $Configuration --self-contained false --no-restore --output $probeRoot
-        if ($LASTEXITCODE -ne 0) { throw 'The test-only external consumer publish failed.' }
-        $script:probeAssembly = Join-Path $probeRoot 'MirrorPulse.CfSharp.CrashProbe.dll'
-    }
+    $probeProject = Join-Path $repositoryRoot 'tests\MirrorPulse.CfSharp.CrashProbe\MirrorPulse.CfSharp.CrashProbe.csproj'
+    & dotnet publish $probeProject --configuration $Configuration --self-contained false --no-restore --output $probeRoot
+    if ($LASTEXITCODE -ne 0) { throw 'The test-only external consumer publish failed.' }
+    $script:probeAssembly = Join-Path $probeRoot 'MirrorPulse.CfSharp.CrashProbe.dll'
+    [ordered]@{schemaVersion=2;instanceId='';rootId='';rootKey='';directoryName=''} |
+        ConvertTo-Json | Set-Content -LiteralPath (Join-Path $runRoot '.mp-cli-fixture.json') -Encoding utf8
 
     $script:cliExecutable = Join-Path $cliRoot "mp.exe"
     $hostExecutable = Join-Path $hostRoot "MirrorPulse.Host.exe"
@@ -173,6 +209,12 @@ try {
     if ($hostStatus.kind -ne "result" -or $hostStatus.data.state -notin @("Running", "Degraded")) {
         throw "The Host did not reach a running state through the CLI."
     }
+    $anchor = Invoke-MirrorPulseCli @('--json', '--no-start', 'namespace', 'member', 'inspect', '', '--directory')
+    if ($anchor.data.relativePath -cne '' -or $null -ne $anchor.data.rootId -or [string]::IsNullOrEmpty($anchor.data.memberId)) {
+        throw 'The default Host did not register and audit its no-Adapter anchor.'
+    }
+    $namespaceAudits.Add([ordered]@{phase='NoAdapters';anchorMemberId=$anchor.data.memberId;freshAdmission=$true})
+    $script:firstAnchorMember = $anchor.data.memberId
 
     $install = Invoke-MirrorPulseCli @("--json", "--developer-mode", "adapter", "install", "--package", (Resolve-Path $PackagePath).Path)
     $installId = $install.data.installedAdapterId
@@ -183,6 +225,12 @@ try {
         "--config", "sourceDirectory=$sourceRoot")
     $instanceId = $instance.data.createdInstanceId
     if ([string]::IsNullOrWhiteSpace($instanceId)) { throw "The CLI create response did not contain an instance ID." }
+    $createdTopology = Invoke-MirrorPulseCli @('--json', '--no-start', 'adapter', 'list')
+    $createdRoots = @($createdTopology.data.roots | Where-Object instanceId -eq $instanceId)
+    if ($createdRoots.Count -ne 1) { throw 'The synthetic CLI instance requires exactly one configured root.' }
+    [ordered]@{schemaVersion=1;instanceId=$instanceId;rootId=$createdRoots[0].rootId
+        rootKey=$createdRoots[0].uniquenessKey;directoryName=$createdRoots[0].directoryName} |
+        ConvertTo-Json | Set-Content -LiteralPath (Join-Path $runRoot '.mp-cli-fixture.json') -Encoding utf8
 
     # A new instance is admitted when the Host is composed on the next start.
     $restart = Invoke-MirrorPulseCli @("--json", "--developer-mode", "host", "restart")
@@ -210,11 +258,15 @@ try {
     $managedRoots = Invoke-MirrorPulseCli @("--json", "--developer-mode", "root", "list")
     $managedRoot = @($managedRoots.data) | Where-Object { $_.root.instanceId -eq $instanceId } | Select-Object -First 1
     $registeredRoot = @($topology.data.roots) | Where-Object { $_.instanceId -eq $instanceId } | Select-Object -First 1
+    [ordered]@{schemaVersion=1;instanceId=$instanceId;rootId=$registeredRoot.rootId
+        rootKey=$registeredRoot.uniquenessKey;directoryName=$rootDirectory} |
+        ConvertTo-Json | Set-Content -LiteralPath (Join-Path $runRoot '.mp-cli-fixture.json') -Encoding utf8
     if ($null -eq $managedRoot -or $managedRoot.root.rootId -ne $registeredRoot.rootId -or
         $managedRoot.root.directoryName -ne $rootDirectory -or $managedRoot.syncState -ne "Active" -or
         $null -ne $managedRoot.pendingRename) {
         throw "The CLI root status did not preserve the configured stable root and availability."
     }
+    Assert-CliNamespaceRoot -Phase InitialRoot -ExpectedState Active
 
     $refresh = Invoke-MirrorPulseCli @("--json", "--developer-mode", "sync", "refresh")
     if ($refresh.kind -ne "result") { throw "The CLI refresh response is invalid." }
@@ -244,9 +296,6 @@ try {
     }
 
     if ($Regression) {
-        [ordered]@{schemaVersion=1;instanceId=$instanceId;rootId=$registeredRoot.rootId
-            rootKey=$registeredRoot.uniquenessKey;directoryName=$rootDirectory} |
-            ConvertTo-Json | Set-Content -LiteralPath (Join-Path $runRoot '.mp-cli-fixture.json') -Encoding utf8
         $onlineRead = Invoke-CliFixtureProbe -Mode read -Phase Online
         $deadline = [DateTime]::UtcNow.AddSeconds(30)
         do {
@@ -274,6 +323,7 @@ try {
             Start-Sleep -Milliseconds 500
         } while ([DateTime]::UtcNow -lt $deadline)
         if ($restartedReadInstance.phase -ne 'Connected') { throw 'The Local Worker did not reconnect for the repeated-read check.' }
+        Assert-CliNamespaceRoot -Phase RestartedRoot -ExpectedState Active
         $restartedRead = Invoke-CliFixtureProbe -Mode read -Phase HostRestarted
         if ($restartedRead.binarySha256 -cne $onlineRead.binarySha256) { throw 'Resident content changed after the Host restarted.' }
 
@@ -321,6 +371,7 @@ try {
         if ($null -eq $offlineInstance -or $offlineInstance.phase -ne "Offline") {
             throw "The disabled Adapter instance did not remain offline after the Host restarted."
         }
+        Assert-CliNamespaceRoot -Phase DisabledRoot -ExpectedState Disabled
         Invoke-CliFixtureProbe -Mode inspect -Phase InstanceDisabled | Out-Null
         $disabledRead = Invoke-CliFixtureProbe -Mode read -Phase InstanceDisabled
         if ($disabledRead.binarySha256 -cne $onlineRead.binarySha256) { throw 'Resident content changed while the Adapter was disabled.' }
@@ -328,7 +379,12 @@ try {
         $baselineStatus = Invoke-MirrorPulseCli @("--json", "--developer-mode", "status")
         $pendingBeforeWrite = $baselineStatus.data.pendingUploads
         $queuedFile = Join-Path $mappedRoot "queued-upload.txt"
-        [IO.File]::WriteAllText($queuedFile, "queued-local-upload")
+        $queuedInput = Join-Path $runRoot "queued-upload-input.txt"
+        [IO.File]::WriteAllText($queuedInput, "queued-local-upload")
+        $managedParent = Invoke-MirrorPulseCli @("--json", "namespace", "member", "inspect", $rootDirectory, "--directory")
+        $preparedImport = Invoke-MirrorPulseCli @("--json", "namespace", "member", "prepare-import",
+            $managedParent.data.memberId, "queued-upload.txt", $queuedInput)
+        Invoke-MirrorPulseCli @("--json", "namespace", "member", "import", $preparedImport.data.operationId) | Out-Null
         $deadline = [DateTime]::UtcNow.AddSeconds(15)
         do {
             Start-Sleep -Milliseconds 250
@@ -348,6 +404,7 @@ try {
             Start-Sleep -Milliseconds 500
             Invoke-MirrorPulseCli @("--json", "--developer-mode", "status") | Out-Null
         }
+        Assert-CliNamespaceRoot -Phase ReenabledRoot -ExpectedState Active
         if (-not (Test-Path -LiteralPath $sourceUpload) -or
             [IO.File]::ReadAllText($sourceUpload) -ne "queued-local-upload") {
             $failedStatus = Invoke-MirrorPulseCli @("--json", "--developer-mode", "status")
@@ -481,5 +538,6 @@ if ($EvidencePath) {
         offlineQueueRetained=$Regression.IsPresent;uploadJournalDrained=$Regression.IsPresent
         conflictPersisted=$Regression.IsPresent;cursorPersisted=$Regression.IsPresent
         hydration=[ordered]@{reads=@($hydrationReads.ToArray());audits=@($hydrationAudits.ToArray())}
+        namespace=[ordered]@{defaultHostIntegrated=$true;audits=@($namespaceAudits.ToArray())}
     } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $EvidencePath -Encoding utf8
 }

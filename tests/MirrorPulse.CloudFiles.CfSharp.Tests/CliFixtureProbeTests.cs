@@ -14,6 +14,41 @@ public sealed class CliFixtureProbeTests
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     [TestMethod]
+    public async Task AnchorOnlyCleanupRequiresAnEmptyOwnedCatalogAndDoesNotRelaxOrdinaryPermissions()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "MirrorPulse-cli-integration-" + Guid.NewGuid().ToString("N"));
+        var paths = new MirrorPulseStoragePaths(Path.Combine(root, "sync"), Path.Combine(root, "data"));
+        Directory.CreateDirectory(paths.SyncRootPath);
+        try
+        {
+            await using (var catalog = await MirrorPulseProductCatalog.OpenAsync(paths)) Assert.IsEmpty((await catalog.ReadAdapterTopologyAsync()).Roots);
+            var marker = new CliFixtureMarker(2, string.Empty, string.Empty, string.Empty, string.Empty);
+            await File.WriteAllTextAsync(Path.Combine(root, CliFixtureProbe.MarkerFileName), JsonSerializer.Serialize(marker, JsonOptions));
+            var result = await RunAsync(root, audit: false, cleanup: true);
+            Assert.AreEqual(0, result.ExitCode, result.Error);
+            var cleanup = JsonSerializer.Deserialize<CliFixtureCleanupResult>(result.Output, JsonOptions)!;
+            Assert.IsTrue(cleanup.ExclusiveCatalogOwner); Assert.IsFalse(cleanup.ProtectedNamespace); Assert.AreEqual(0, cleanup.RestoredObjects);
+            Assert.IsFalse(Directory.Exists(Path.Combine(root, "inspection")));
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [TestMethod]
+    [DataRow("read")]
+    [DataRow("audit")]
+    [DataRow("inspect")]
+    [DataRow("cleanup-with-route")]
+    public async Task AnchorOnlyMarkerCannotAuthorizeAReadAuditInspectionOrConfiguredNamespaceCleanup(string mode)
+    {
+        await using Fixture fixture = await Fixture.CreateAsync();
+        await File.WriteAllTextAsync(Path.Combine(fixture.Root, CliFixtureProbe.MarkerFileName),
+            JsonSerializer.Serialize(new CliFixtureMarker(2, string.Empty, string.Empty, string.Empty, string.Empty), JsonOptions));
+        var result = await RunAsync(fixture.Root, audit: mode == "audit", inspect: mode == "inspect", cleanup: mode == "cleanup-with-route");
+        Assert.AreNotEqual(0, result.ExitCode); Assert.AreEqual(string.Empty, result.Output.Trim());
+        Assert.IsFalse(Directory.Exists(Path.Combine(fixture.Root, "inspection")));
+    }
+
+    [TestMethod]
     [DataRow(MirrorPulseMutationState.Prepared)]
     [DataRow(MirrorPulseMutationState.Executing)]
     [DataRow(MirrorPulseMutationState.RemoteAccepted)]

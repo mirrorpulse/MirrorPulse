@@ -26,12 +26,24 @@ public static partial class CliFixtureProbe
         // Host's ACLs, even if its control pipe has already stopped responding.
         await using var catalog = await MirrorPulseProductCatalog.OpenAsync(paths);
         var topology = await catalog.ReadAdapterTopologyAsync();
-        InstanceId instance = InstanceId.Parse(marker.InstanceId);
-        var registration = topology.Roots.Single(candidate => candidate.RootId == RootId.Parse(marker.RootId));
-        if (topology.Instances.Count != 1 || topology.Roots.Count != 1 || topology.Instances[0].InstanceId != instance ||
-            registration.InstanceId != instance || registration.UniquenessKey != marker.RootKey || registration.DirectoryName != marker.DirectoryName)
-            throw new InvalidDataException("Fixture cleanup requires the exact synthetic route.");
-        // Legacy/default composition has not enabled namespace protection yet.
+        bool anchorOnly = IsAnchorOnlyCleanup(marker);
+        RootRegistration[] roots;
+        if (anchorOnly)
+        {
+            if (topology.Instances.Count != 0 || topology.Roots.Count != 0)
+                throw new InvalidDataException("Anchor-only cleanup cannot include a configured Adapter namespace.");
+            roots = [];
+        }
+        else
+        {
+            InstanceId instance = InstanceId.Parse(marker.InstanceId);
+            var registration = topology.Roots.Single(candidate => candidate.RootId == RootId.Parse(marker.RootId));
+            if (topology.Instances.Count != 1 || topology.Roots.Count != 1 || topology.Instances[0].InstanceId != instance ||
+                registration.InstanceId != instance || registration.UniquenessKey != marker.RootKey || registration.DirectoryName != marker.DirectoryName)
+                throw new InvalidDataException("Fixture cleanup requires the exact synthetic route.");
+            roots = [registration];
+        }
+        // An unprotected fixture requires no permission restoration.
         // Every MP ACL write is preceded by a permission intent or birth intent.
         // With neither present, do not acquire a protected-object lease or rewrite
         // ordinary ACLs. The harness still validates its exact GUID deletion target.
@@ -48,17 +60,14 @@ public static partial class CliFixtureProbe
         await using var fileSystem = CloudFileSystem.CreateBuilder(paths.SyncRootPath)
             .WithStateStore(new SqliteCloudStateStoreFactory(database)).Build();
         await fileSystem.StartAsync();
-        var router = new MirrorPulseRootRouter(paths.SyncRootPath, [registration]);
-        var allowed = new Dictionary<string, bool>(StringComparer.Ordinal)
+        var router = new MirrorPulseRootRouter(paths.SyncRootPath, roots);
+        var allowed = new Dictionary<string, bool>(StringComparer.Ordinal) { [""] = true };
+        if (!anchorOnly)
         {
-            [""] = true,
-            [marker.DirectoryName] = true,
-            [marker.DirectoryName + "/nested"] = true,
-            [marker.DirectoryName + "/nested/fixture.txt"] = false,
-            [marker.DirectoryName + "/nested/fixture.bin"] = false,
-            [marker.DirectoryName + "/cli-roundtrip.txt"] = false,
-            [marker.DirectoryName + "/queued-upload.txt"] = false,
-        };
+            allowed.Add(marker.DirectoryName, true); allowed.Add(marker.DirectoryName + "/nested", true);
+            allowed.Add(marker.DirectoryName + "/nested/fixture.txt", false); allowed.Add(marker.DirectoryName + "/nested/fixture.bin", false);
+            allowed.Add(marker.DirectoryName + "/cli-roundtrip.txt", false); allowed.Add(marker.DirectoryName + "/queued-upload.txt", false);
+        }
         using var user = WindowsIdentity.GetCurrent();
         string owner = user.User?.Value ?? throw new InvalidOperationException("Fixture cleanup requires a Windows user.");
         var leases = new List<MirrorPulseWindowsNamespacePermissionLease>();

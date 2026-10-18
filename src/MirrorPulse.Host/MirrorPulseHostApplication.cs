@@ -35,6 +35,7 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
     private readonly AdapterInstanceProcessSupervisor _workers;
     private readonly MirrorPulseNamespaceExecutionSession _namespaceExecution;
     private readonly MirrorPulseNamespaceActor _namespaceActor;
+    private readonly MirrorPulseNamespaceWorkAdmission _namespaceWork;
     private readonly MirrorPulseCloudHostSession _session;
     private readonly MirrorPulseActiveRemotePoller _remotePoller;
     private readonly MirrorPulseInstanceScheduler _remoteScheduler;
@@ -59,6 +60,7 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
         AdapterInstanceProcessSupervisor workers,
         MirrorPulseNamespaceExecutionSession namespaceExecution,
         MirrorPulseNamespaceActor namespaceActor,
+        MirrorPulseNamespaceWorkAdmission namespaceWork,
         MirrorPulseCloudHostSession session,
         MirrorPulseActiveRemotePoller remotePoller,
         MirrorPulseInstanceScheduler remoteScheduler,
@@ -74,6 +76,7 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
         _workers = workers;
         _namespaceExecution = namespaceExecution;
         _namespaceActor = namespaceActor;
+        _namespaceWork = namespaceWork;
         _session = session;
         _remotePoller = remotePoller;
         _remoteScheduler = remoteScheduler;
@@ -87,7 +90,8 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
     public bool IsRunning => _state is MirrorPulseLifecycleState.Running or MirrorPulseLifecycleState.Degraded;
 
     public MirrorPulseHostStatus GetHostStatus() => new(
-        (_state == MirrorPulseLifecycleState.Running && _session.JournalHealth is { Healthy: false }
+        (_state == MirrorPulseLifecycleState.Running && (_session.JournalHealth is { Healthy: false } ||
+            _topology.Roots.Any(root => root.State is RootRegistrationState.Active or RootRegistrationState.Disabled && !_namespaceWork.IsAdmitted(root.RootId)))
             ? MirrorPulseLifecycleState.Degraded : _state).ToString(),
         Environment.ProcessId,
         MirrorPulseControlPipeNames.CurrentUserV1(),
@@ -115,6 +119,7 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
         AdapterInstanceProcessSupervisor? workers = null;
         MirrorPulseNamespaceExecutionSession? namespaceExecution = null;
         MirrorPulseNamespaceActor? namespaceActor = null;
+        MirrorPulseNamespaceWorkAdmission? namespaceWork = null;
         MirrorPulseCloudHostSession? session = null;
         MirrorPulseActiveRemotePoller? remotePoller = null;
         var remoteScheduler = new MirrorPulseInstanceScheduler();
@@ -185,65 +190,45 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
             // All source RPC and lazy range bodies share this boundary, including polling and rescan.
             namespaceExecution = new MirrorPulseNamespaceExecutionSession();
             namespaceActor = new MirrorPulseNamespaceActor();
+            namespaceWork = new MirrorPulseNamespaceWorkAdmission(rootRouter.Registrations.Select(root => root.RootId));
             var source = new MirrorPulseNormalUserWorkerTransport(namespaceExecution,
                 workers, workers, workers, workers, workers);
             var directorySource = new MirrorPulseAdapterDirectoryPageSource(source);
-            var provider = new MirrorPulseDemandProvider(rootRouter, source, directorySource);
+            var provider = new MirrorPulseDemandProvider(rootRouter, source, directorySource, namespaceWork);
             session = MirrorPulseCloudHostSession.CreateDefault(
                 paths, topology.Instances, topology.Roots, provider, source, source,
                 rootRouter, catalog, instanceId => topology.Instances.Any(instance =>
                     instance.InstanceId == instanceId && instance.Enabled),
-                conflictCenter, conflictNotifications, source, remoteScheduler, namespaceExecution, namespaceActor);
+                conflictCenter, conflictNotifications, source, remoteScheduler, namespaceExecution, namespaceActor,
+                namespaceWork, initializeNamespaceOnStart: true);
             currentSession = session;
             var remoteSnapshotStore = new MirrorPulseFileRemotePollSnapshotStore(paths.DataRootPath);
             remotePoller = new MirrorPulseActiveRemotePoller(
                 directorySource, topology.Instances, topology.Roots, ApplyCloudRemoteBatchAsync,
                 snapshotStore: remoteSnapshotStore,
                 pendingStore: new MirrorPulseCatalogRemotePollPendingStore(catalog), scheduler: remoteScheduler,
-                mayPoll: namespaceFence.CanPollAsync, currentRoots: () => rootRouter.Registrations);
+                mayPoll: namespaceFence.CanPollAsync, currentRoots: () => rootRouter.Registrations, namespaceWork: namespaceWork);
 
             var application = new MirrorPulseHostApplication(
                 paths, configurationStore, configuration, hostLease, catalog, conflictCenter, systemNotifications,
-                workers, namespaceExecution, namespaceActor, session, remotePoller, remoteScheduler, topology);
+                workers, namespaceExecution, namespaceActor, namespaceWork, session, remotePoller, remoteScheduler, topology);
             application.InitializeControlPlane(credentialStore);
             return application;
         }
-        catch
+        catch (Exception startupFailure)
         {
-            if (remotePoller is not null)
-            {
-                await remotePoller.DisposeAsync().ConfigureAwait(false);
-            }
-
-            await remoteScheduler.DisposeAsync().ConfigureAwait(false);
-
-            if (namespaceActor is not null)
-            {
-                await namespaceActor.DisposeAsync().ConfigureAwait(false);
-            }
-
-            if (session is not null)
-            {
-                await session.DisposeAsync().ConfigureAwait(false);
-            }
-
-            if (workers is not null)
-            {
-                await workers.DisposeAsync().ConfigureAwait(false);
-            }
-
-            if (namespaceExecution is not null)
-            {
-                await namespaceExecution.DisposeAsync().ConfigureAwait(false);
-            }
-
-            if (catalog is not null)
-            {
-                await catalog.DisposeAsync().ConfigureAwait(false);
-            }
-
-            systemNotifications?.Dispose();
-            hostLease.Dispose();
+            await MirrorPulseHostResourceCleanup.RunAsync([
+                () => remotePoller?.DisposeAsync() ?? ValueTask.CompletedTask,
+                remoteScheduler.DisposeAsync,
+                () => namespaceActor?.DisposeAsync() ?? ValueTask.CompletedTask,
+                () => session?.DisposeAsync() ?? ValueTask.CompletedTask,
+                () => namespaceWork?.DisposeAsync() ?? ValueTask.CompletedTask,
+                () => workers?.DisposeAsync() ?? ValueTask.CompletedTask,
+                () => namespaceExecution?.DisposeAsync() ?? ValueTask.CompletedTask,
+                () => catalog?.DisposeAsync() ?? ValueTask.CompletedTask,
+                () => { systemNotifications?.Dispose(); return ValueTask.CompletedTask; },
+                () => { hostLease.Dispose(); return ValueTask.CompletedTask; }
+            ], startupFailure).ConfigureAwait(false);
             throw;
         }
     }
@@ -420,8 +405,11 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
             MirrorPulseRootRenameIntent? pending = renames.SingleOrDefault(intent => intent.RootId == id && intent.IsPending);
             var rename = pending is null ? null : new MirrorPulseControlRootRename(pending.OperationId.ToString("D"),
                 pending.SourceName, pending.TargetName, pending.Phase.ToString(), pending.UpdatedAt);
-            return new MirrorPulseControlRootStatus(root, pending is null ? root.State : "NamespaceRecovery",
-                deferred.Contains(id) || pending is not null, rename);
+            bool ready = _namespaceWork.IsAdmitted(id);
+            var startup = _session.NamespaceStartupResults.SingleOrDefault(result => result.RootId == id);
+            return new MirrorPulseControlRootStatus(root, pending is null && ready ? root.State : "NamespaceRecovery",
+                deferred.Contains(id) || pending is not null, rename, ready,
+                ready ? null : startup?.OperationId, ready ? null : startup?.RecoveryCode);
         }).ToArray();
     }
 
@@ -1185,46 +1173,4 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
         return (await ReadStatusAsync(cancellationToken).ConfigureAwait(false)) with { ConflictCommand = command };
     }
 
-    public async ValueTask DisposeAsync()
-    {
-        if (_disposed)
-        {
-            return;
-        }
-
-        _state = MirrorPulseLifecycleState.Stopping;
-        _shutdown.Cancel();
-        if (_serveTask is not null)
-        {
-            try
-            {
-                await _serveTask.ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-            }
-        }
-
-        await _remotePoller.DisposeAsync().ConfigureAwait(false);
-        await _remoteScheduler.DisposeAsync().ConfigureAwait(false);
-        // Reject queued namespace work and drain active callbacks while CfSharp and its store
-        // are still available. The role identity also outlives every admitted callback.
-        await _namespaceActor.DisposeAsync().ConfigureAwait(false);
-        try
-        {
-            await _session.DisposeAsync().ConfigureAwait(false);
-            await _workers.DisposeAsync().ConfigureAwait(false);
-        }
-        finally
-        {
-            // The captured identities outlive normal-user RPC, including source-body disposal.
-            await _namespaceExecution.DisposeAsync().ConfigureAwait(false);
-        }
-        await _catalog.DisposeAsync().ConfigureAwait(false);
-        _systemNotifications.Dispose();
-        _shutdown.Dispose();
-        _hostLease.Dispose();
-        _state = MirrorPulseLifecycleState.Stopped;
-        _disposed = true;
-    }
 }

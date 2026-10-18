@@ -42,15 +42,19 @@ public static partial class CliFixtureProbe
             new FileInfo(markerPath).Length > 4096) return 2;
         CliFixtureMarker marker = JsonSerializer.Deserialize<CliFixtureMarker>(await File.ReadAllTextAsync(markerPath), JsonOptions)
             ?? throw new InvalidDataException("The CLI fixture marker is empty.");
-        if (marker.SchemaVersion != 1 || !Guid.TryParse(marker.InstanceId, out Guid instance) || instance == Guid.Empty ||
+        bool anchorCleanup = cleanup && IsAnchorOnlyCleanup(marker);
+        if (!anchorCleanup && (marker.SchemaVersion != 1 || !Guid.TryParse(marker.InstanceId, out Guid instance) || instance == Guid.Empty ||
             !Guid.TryParse(marker.RootId, out Guid rootId) || rootId == Guid.Empty || string.IsNullOrWhiteSpace(marker.RootKey) ||
             string.IsNullOrWhiteSpace(marker.DirectoryName) || marker.DirectoryName is "." or ".." ||
-            marker.DirectoryName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0) return 2;
+            marker.DirectoryName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)) return 2;
         object result = cleanup ? await CleanupPermissionsAsync(root, marker) :
             inspect ? await InspectAsync(root, marker) : audit ? await AuditAsync(root, marker) : await ReadAsync(root, marker);
         Console.WriteLine(JsonSerializer.Serialize(result, JsonOptions));
         return 0;
     }
+
+    private static bool IsAnchorOnlyCleanup(CliFixtureMarker marker) => marker.SchemaVersion == 2 &&
+        marker.InstanceId == string.Empty && marker.RootId == string.Empty && marker.RootKey == string.Empty && marker.DirectoryName == string.Empty;
 
     private static async Task<CliFixtureInspectionResult> InspectAsync(string root, CliFixtureMarker marker)
     {

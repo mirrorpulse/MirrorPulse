@@ -22,6 +22,18 @@ internal static class CiHydrationEvidenceFixture
             new() { ["schemaVersion"] = 1, ["phase"] = "AfterLocalWrite", ["routeVerified"] = true,
                 ["enumeratedMutations"] = 1, ["readOnlyFileMutations"] = 0, ["queuedFileMutations"] = 1, ["acknowledgedQueuedFileMutations"] = 1 },
         };
+        string anchor = Guid.NewGuid().ToString("D"), root = Guid.NewGuid().ToString("D"), member = Guid.NewGuid().ToString("D");
+        var namespaceAudits = new List<Dictionary<string, object?>>();
+        foreach (string phase in new[] { "NoAdapters", "InitialRoot", "RestartedRoot", "DisabledRoot", "ReenabledRoot" })
+            namespaceAudits.Add(new()
+            {
+                ["phase"] = phase,
+                ["anchorMemberId"] = anchor,
+                ["rootId"] = root,
+                ["memberId"] = member,
+                ["state"] = phase == "DisabledRoot" ? "Disabled" : "Active",
+                ["freshAdmission"] = true
+            });
         var value = new Dictionary<string, object?>
         {
             ["schemaVersion"] = 2,
@@ -35,6 +47,7 @@ internal static class CiHydrationEvidenceFixture
             ["conflictPersisted"] = true,
             ["cursorPersisted"] = true,
             ["hydration"] = new { reads, audits },
+            ["namespace"] = new { defaultHostIntegrated = true, audits = namespaceAudits },
         };
         switch (scenario)
         {
@@ -48,6 +61,10 @@ internal static class CiHydrationEvidenceFixture
             case "no-positive-control": audits[1]["queuedFileMutations"] = 0; audits[1]["acknowledgedQueuedFileMutations"] = 0; break;
             case "incomplete-local-write": audits[1]["acknowledgedQueuedFileMutations"] = 0; break;
             case "unknown-version": value["schemaVersion"] = 1; break;
+            case "default-host-missing": value.Remove("namespace"); break;
+            case "default-host-changed-member": namespaceAudits[2]["memberId"] = Guid.NewGuid().ToString("D"); break;
+            case "default-host-string-admission": namespaceAudits[2]["freshAdmission"] = "true"; break;
+            case "default-host-disabled-active": namespaceAudits[3]["state"] = "Active"; break;
         }
         return value;
     }

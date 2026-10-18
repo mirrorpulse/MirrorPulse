@@ -84,7 +84,10 @@ public sealed record MirrorPulseControlRootRenamePreparation(string OperationId,
     string SourceName, string TargetName, string Phase, DateTimeOffset UpdatedAt);
 
 public sealed record MirrorPulseControlRootStatus(MirrorPulseControlRoot Root, string SyncState,
-    bool RequiresFullRescan, MirrorPulseControlRootRename? PendingRename);
+    bool RequiresFullRescan, MirrorPulseControlRootRename? PendingRename,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? NamespaceReady = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] Guid? NamespaceRecoveryOperationId = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? NamespaceRecoveryCode = null);
 
 public sealed record RootRecoverArguments(Guid OperationId) : IMirrorPulseControlArguments;
 
