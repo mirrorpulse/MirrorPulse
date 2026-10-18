@@ -66,8 +66,11 @@ public sealed class MirrorPulseCliHostOperations : IMirrorPulseCliHostOperations
         });
     }
 
-    public Task EnsureStartedAsync(CancellationToken cancellationToken) =>
-        _startup.EnsureStartedAsync(cancellationToken);
+    public async Task EnsureStartedAsync(CancellationToken cancellationToken)
+    {
+        await _startup.EnsureStartedAsync(cancellationToken).ConfigureAwait(false);
+        _ = await _client.WaitForHostReadyAsync(cancellationToken).ConfigureAwait(false);
+    }
 
     public async Task<int> RunHostCommandAsync(
         string action,

@@ -2,6 +2,7 @@ using MirrorPulse.Core;
 using MirrorPulse.Core.Configuration;
 using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.Diagnostics;
+using MirrorPulse.Core.Host;
 using MirrorPulse.Host;
 
 if (!MirrorPulsePlatform.IsCurrentSupported())
@@ -26,7 +27,7 @@ var paths = new MirrorPulseStoragePaths(syncRoot, dataRoot);
 
 try
 {
-    await using var application = await MirrorPulseHostApplication.CreateAsync(paths);
+    var application = await MirrorPulseHostApplication.CreateAsync(paths);
     using var shutdown = new CancellationTokenSource();
     ConsoleCancelEventHandler cancel = (_, eventArgs) =>
     {
@@ -34,25 +35,29 @@ try
         shutdown.Cancel();
     };
     Console.CancelKeyPress += cancel;
+    Exception? failure = null;
     try
     {
-        await application.StartAsync(shutdown.Token);
-        Console.WriteLine($"{ProductInfo.Name} Cloud Files session started at {paths.SyncRootPath}.");
         if (args.Length == 0)
         {
-            await application.ServeAsync(shutdown.Token);
+            await application.RunAsync(shutdown.Token);
         }
-
-        return 0;
+        else
+        {
+            await application.StartAsync(shutdown.Token);
+            Console.WriteLine($"{ProductInfo.Name} Cloud Files session started at {paths.SyncRootPath}.");
+        }
     }
-    catch (OperationCanceledException) when (shutdown.IsCancellationRequested)
+    catch (OperationCanceledException) when (shutdown.IsCancellationRequested || application.ShutdownRequested)
     {
-        return 0;
     }
+    catch (Exception original) { failure = original; }
     finally
     {
         Console.CancelKeyPress -= cancel;
     }
+    await MirrorPulseHostResourceCleanup.RunAsync([application.DisposeAsync], failure);
+    return 0;
 }
 catch (Exception exception)
 {

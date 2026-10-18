@@ -30,7 +30,8 @@ public sealed record MirrorPulseHostStatus(
     DateTimeOffset StartedAt,
     bool CanStop,
     bool CanRestart,
-    string? RequestedAction = null);
+    string? RequestedAction = null,
+    string? StartupPhase = null);
 
 public sealed record MirrorPulseControlTopology(
     IReadOnlyList<MirrorPulseControlInstallation> Installations,

@@ -47,6 +47,9 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
     private MirrorPulseLifecycleState _state = MirrorPulseLifecycleState.Created;
     private DateTimeOffset _startedAt;
     private string? _requestedAction;
+    private string? _startupPhase;
+    private readonly TaskCompletionSource _startupReady = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private bool _lifetimeDrained;
     private bool _disposed;
 
     private MirrorPulseHostApplication(
@@ -89,6 +92,8 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
 
     public bool IsRunning => _state is MirrorPulseLifecycleState.Running or MirrorPulseLifecycleState.Degraded;
 
+    public bool ShutdownRequested => _shutdown.IsCancellationRequested;
+
     public MirrorPulseHostStatus GetHostStatus() => new(
         (_state == MirrorPulseLifecycleState.Running && (_session.JournalHealth is { Healthy: false } ||
             _topology.Roots.Any(root => root.State is RootRegistrationState.Active or RootRegistrationState.Disabled && !_namespaceWork.IsAdmitted(root.RootId)))
@@ -96,9 +101,10 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
         Environment.ProcessId,
         MirrorPulseControlPipeNames.CurrentUserV1(),
         _startedAt,
-        IsRunning,
-        IsRunning,
-        _requestedAction);
+        IsRunning || _state == MirrorPulseLifecycleState.Starting,
+        IsRunning || _state == MirrorPulseLifecycleState.Starting,
+        _requestedAction,
+        _startupPhase);
 
     public static async Task<MirrorPulseHostApplication> CreateAsync(
         MirrorPulseStoragePaths paths,
@@ -233,25 +239,57 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
         }
     }
 
-    public async Task StartAsync(CancellationToken cancellationToken = default)
+    public Task StartAsync(CancellationToken cancellationToken = default)
+    {
+        BeginStartup();
+        return StartCoreAsync(cancellationToken);
+    }
+
+    /// <summary>Serves lifecycle control throughout initialization without admitting SDK-dependent requests early.</summary>
+    public async Task RunAsync(CancellationToken cancellationToken = default)
+    {
+        BeginStartup();
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _shutdown.Token);
+        try { await MirrorPulseHostStartupLifetime.RunAsync(ServeAsync, StartCoreAsync, stop.Token).ConfigureAwait(false); }
+        finally { _lifetimeDrained = true; }
+    }
+
+    private void BeginStartup()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (_state is MirrorPulseLifecycleState.Starting or MirrorPulseLifecycleState.Running)
+        if (_state != MirrorPulseLifecycleState.Created)
         {
             throw new InvalidOperationException("The MirrorPulse Host is already running.");
         }
 
         _hostLease.EnsureHeld();
         _state = MirrorPulseLifecycleState.Starting;
+        _startedAt = DateTimeOffset.UtcNow;
+        _requestedAction = null;
+        _startupPhase = "CloudFiles";
+    }
+
+    private async Task StartCoreAsync(CancellationToken cancellationToken)
+    {
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _shutdown.Token);
         try
         {
-            await _session.StartAsync(cancellationToken).ConfigureAwait(false);
+            await _session.StartAsync(stop.Token).ConfigureAwait(false);
+            stop.Token.ThrowIfCancellationRequested();
+            if (_state == MirrorPulseLifecycleState.Stopping) return;
+            _startupPhase = "Adapters";
             await _workers.StartAsync(_topology).ConfigureAwait(false);
-            await _remotePoller.StartAsync(cancellationToken).ConfigureAwait(false);
-            _startedAt = DateTimeOffset.UtcNow;
-            _requestedAction = null;
+            stop.Token.ThrowIfCancellationRequested();
+            if (_state == MirrorPulseLifecycleState.Stopping) return;
+            _startupPhase = "RemotePolling";
+            await _remotePoller.StartAsync(stop.Token).ConfigureAwait(false);
+            stop.Token.ThrowIfCancellationRequested();
+            if (_state == MirrorPulseLifecycleState.Stopping) return;
+            _startupPhase = null;
             _state = MirrorPulseLifecycleState.Running;
+            _startupReady.TrySetResult();
         }
+        catch (OperationCanceledException) when (stop.IsCancellationRequested) { _state = MirrorPulseLifecycleState.Stopping; throw; }
         catch
         {
             _state = MirrorPulseLifecycleState.Failed;
@@ -262,7 +300,7 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
     public async Task ServeAsync(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (!IsRunning)
+        if (!IsRunning && _state != MirrorPulseLifecycleState.Starting)
         {
             throw new InvalidOperationException("The MirrorPulse Host must be running before serving control pipes.");
         }
@@ -278,10 +316,20 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
         }
 
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _shutdown.Token);
-        _serveTask = Task.WhenAll(
-            _statusPipe.ServeAsync(linked.Token),
-            _controlPipe.ServeAsync(linked.Token));
+        _serveTask = Task.WhenAll(ServeOwnedAsync(ServeLegacyAsync), ServeOwnedAsync(_controlPipe.ServeAsync));
         await _serveTask.ConfigureAwait(false);
+
+        async Task ServeLegacyAsync(CancellationToken token)
+        {
+            await _startupReady.Task.WaitAsync(token).ConfigureAwait(false);
+            await _statusPipe.ServeAsync(token).ConfigureAwait(false);
+        }
+
+        async Task ServeOwnedAsync(Func<CancellationToken, Task> serve)
+        {
+            try { await serve(linked.Token).ConfigureAwait(false); }
+            catch { await linked.CancelAsync().ConfigureAwait(false); throw; }
+        }
     }
 
     public async Task<MirrorPulseAppStatusResponse> ReadStatusAsync(
@@ -502,7 +550,9 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
         RegisterRemoteRetirementQueries(dispatcher);
         dispatcher.Register<NamespaceMemberMoveStatusArguments, MirrorPulseControlNamespaceMemberMoveStatus>(
             MirrorPulseControlCommands.NamespaceMemberMoveStatus, ReadNamespaceMemberMoveStatusAsync);
-        _controlPipe = new MirrorPulseControlPipeServer(dispatcher.DispatchAsync);
+        _controlPipe = new MirrorPulseControlPipeServer((request, token) =>
+            MirrorPulseControlStartupAdmission.Reject(_state, request) is { } rejection
+                ? ValueTask.FromResult(rejection) : dispatcher.DispatchAsync(request, token));
     }
 
     private async ValueTask<MirrorPulseControlRootRecovery> RecoverRootRenameAsync(RootRecoverArguments arguments,
@@ -928,7 +978,7 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (!IsRunning && _state != MirrorPulseLifecycleState.Stopping)
+        if (!IsRunning && _state is not (MirrorPulseLifecycleState.Starting or MirrorPulseLifecycleState.Stopping))
         {
             throw new InvalidOperationException("The MirrorPulse Host is not running.");
         }

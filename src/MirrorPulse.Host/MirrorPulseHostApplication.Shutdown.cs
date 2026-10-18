@@ -43,7 +43,7 @@ public sealed partial class MirrorPulseHostApplication
 
     private async ValueTask DrainControlAsync()
     {
-        if (_serveTask is null) return;
+        if (_serveTask is null || _lifetimeDrained) return;
         try { await _serveTask.ConfigureAwait(false); }
         catch (OperationCanceledException) when (_shutdown.IsCancellationRequested) { }
     }

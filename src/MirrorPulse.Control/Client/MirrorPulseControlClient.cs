@@ -89,6 +89,32 @@ public sealed class MirrorPulseControlClient
             MirrorPulseControlCommands.NamespaceProtectionRecoverTree, new(manifestId), cancellationToken);
 
     private readonly MirrorPulseControlClientOptions _options;
+
+    /// <summary>Waits within the existing request budget while lifecycle queries and stop remain available.</summary>
+    /// <remarks>A timeout leaves the Host's initialization and durable recovery ownership intact.</remarks>
+    public async Task<MirrorPulseHostStatus> WaitForHostReadyAsync(CancellationToken cancellationToken = default)
+    {
+        using var timeout = new CancellationTokenSource(_options.RequestTimeout);
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
+        try
+        {
+            while (true)
+            {
+                var status = await GetHostStatusAsync(stop.Token).ConfigureAwait(false);
+                if (status.State is "Running" or "Degraded") return status;
+                if (status.State is not ("Created" or "Starting"))
+                    throw new MirrorPulseControlException(new ControlError(MirrorPulseControlErrorCodes.HostStartFailed,
+                        "The Host stopped or failed during initialization.", MirrorPulse.Core.Contracts.ErrorCategory.Native, retryable: true));
+                await Task.Delay(TimeSpan.FromMilliseconds(100), stop.Token).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
+        {
+            throw new MirrorPulseControlException(new ControlError(MirrorPulseControlErrorCodes.RequestTimeout,
+                "The Host has not completed initialization within the request timeout. Its lifecycle status remains available.",
+                MirrorPulse.Core.Contracts.ErrorCategory.Network, retryable: true));
+        }
+    }
     private readonly string _pipeName;
 
     public MirrorPulseControlClient(MirrorPulseControlClientOptions? options = null)

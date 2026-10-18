@@ -4,6 +4,18 @@
 
 `mp host stop` and `mp host restart` return after the previous Host process has exited. A later ordinary command can then start the Host with the updated instance topology.
 
+During initialization, `mp --json --no-start host status` reports `Starting`
+and an optional `startupPhase` (`CloudFiles`, `Adapters`, or `RemotePolling`).
+Lifecycle status and stop remain available while protected roots recover.
+SDK-dependent requests return a retryable `mp.control.hostBusy` until startup
+finishes; each managed root still requires its own fresh namespace admission.
+
+Automatic startup and `mp host start` wait for `Running` or `Degraded` within
+the existing 30-second request budget after the control channel opens. The
+control-channel startup deadline remains 10 seconds. A readiness timeout leaves
+the Host and its retained recovery state running; inspect lifecycle status or
+request a normal stop rather than launching a second Host.
+
 ## Installation and builds
 
 The MSIX package exposes an `mp.exe` app execution alias and carries the architecture-matched Host under `host\MirrorPulse.Host.exe`. Development builds can run the published executable directly:
