@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text.Json;
 using MirrorPulse.CfSharp.CrashProbe;
 using MirrorPulse.Core.Configuration;
@@ -12,6 +14,26 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 public sealed class CliFixtureProbeTests
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+
+    [TestMethod]
+    [DataRow("S-1-5-18", false)]
+    [DataRow("S-1-5-18", true)]
+    [DataRow("S-1-5-21-101-102-103-1001", false)]
+    [DataRow("S-1-5-21-101-102-103-1001", true)]
+    public void CleanupDescriptorRetainsOneOwnerAndPassesTheProductionCanonicalAccessBoundary(string sid, bool directory)
+    {
+        var owner = new SecurityIdentifier(sid);
+        string access = CliFixtureProbe.CreateCleanupAccessDescriptor(owner, directory);
+        Assert.IsTrue(MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(access, access));
+        var descriptor = new RawSecurityDescriptor(access);
+        Assert.IsNull(descriptor.Owner); Assert.IsNull(descriptor.Group); Assert.IsNull(descriptor.SystemAcl);
+        Assert.IsTrue(descriptor.ControlFlags.HasFlag(ControlFlags.DiscretionaryAclProtected));
+        Assert.HasCount(1, descriptor.DiscretionaryAcl!);
+        var ace = (CommonAce)descriptor.DiscretionaryAcl![0];
+        Assert.AreEqual(owner, ace.SecurityIdentifier); Assert.AreEqual(AceQualifier.AccessAllowed, ace.AceQualifier);
+        Assert.AreEqual((int)FileSystemRights.FullControl, ace.AccessMask);
+        Assert.AreEqual(directory ? AceFlags.ContainerInherit | AceFlags.ObjectInherit : AceFlags.None, ace.AceFlags);
+    }
 
     [TestMethod]
     public async Task AnchorOnlyCleanupRequiresAnEmptyOwnedCatalogAndDoesNotRelaxOrdinaryPermissions()

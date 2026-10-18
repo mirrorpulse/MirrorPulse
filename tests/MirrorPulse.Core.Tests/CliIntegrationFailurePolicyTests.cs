@@ -6,6 +6,7 @@ namespace MirrorPulse.Core.Tests;
 [TestClass]
 public sealed class CliIntegrationFailurePolicyTests
 {
+    private static readonly string[] AnchorArguments = ["--json", "--no-start", "namespace", "member", "inspect", "", "--directory"];
     [TestMethod]
     [DataRow("success")]
     [DataRow("primary")]
@@ -13,6 +14,7 @@ public sealed class CliIntegrationFailurePolicyTests
     [DataRow("both")]
     [DataRow("observer")]
     [DataRow("writer")]
+    [DataRow("empty-argument")]
     public async Task TeardownPreservesTheOriginalFailureAndRecordsItsIndependentCleanupFailure(string scenario)
     {
         string repository = SftpProtocolFixture.FindRepositoryRoot();
@@ -25,6 +27,17 @@ public sealed class CliIntegrationFailurePolicyTests
                 param([string]$Repository, [string]$Scenario, [string]$FixtureRoot)
                 $ErrorActionPreference='Stop'
                 . (Join-Path $Repository 'eng/cli-integration-failure-policy.ps1')
+                if ($Scenario -eq 'empty-argument') {
+                    $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $Repository 'eng/verify-cli-integration.ps1'),[ref]$null,[ref]$null)
+                    $function=$ast.Find({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-MirrorPulseCli'},$true)
+                    . ([scriptblock]::Create($function.Extent.Text))
+                    $consumer=Join-Path $FixtureRoot 'argument-consumer.ps1'
+                    '[ordered]@{kind="arguments";data=@($args)} | ConvertTo-Json -Compress' | Set-Content -LiteralPath $consumer
+                    $script:cliExecutable=(Get-Process -Id $PID).Path
+                    $result=Invoke-MirrorPulseCli @('-NoProfile','-File',$consumer,'--json','--no-start','namespace','member','inspect','','--directory')
+                    $result | ConvertTo-Json -Compress
+                    return
+                }
                 if ($Scenario -eq 'writer') {
                     $data=Join-Path $FixtureRoot 'data'
                     $evidence=Join-Path $FixtureRoot 'evidence/cli-regression.json'
@@ -71,6 +84,13 @@ public sealed class CliIntegrationFailurePolicyTests
             Assert.AreEqual(0, process.ExitCode, await error);
             string jsonLine = (await output).Split('\n', StringSplitOptions.RemoveEmptyEntries).Last().Trim();
             using var json = JsonDocument.Parse(jsonLine);
+            if (scenario == "empty-argument")
+            {
+                Assert.AreEqual("arguments", json.RootElement.GetProperty("kind").GetString());
+                var arguments = json.RootElement.GetProperty("data").EnumerateArray().Select(value => value.GetString()).ToArray();
+                CollectionAssert.AreEqual(AnchorArguments, arguments);
+                return;
+            }
             if (scenario == "writer")
             {
                 Assert.AreEqual("Execution", json.RootElement.GetProperty("execution").GetProperty("phase").GetString());

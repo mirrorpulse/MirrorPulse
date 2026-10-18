@@ -72,7 +72,7 @@ function Invoke-CliFixtureProbe {
 }
 
 function Invoke-MirrorPulseCli {
-    param([Parameter(Mandatory = $true)][string[]]$Arguments)
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string[]]$Arguments)
 
     Write-Host "CLI command: $($Arguments -join ' ')"
     $text = (& $script:cliExecutable @Arguments 2>&1 | Out-String).Trim()

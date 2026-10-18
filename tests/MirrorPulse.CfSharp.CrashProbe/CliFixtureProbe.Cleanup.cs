@@ -1,3 +1,4 @@
+using System.Security.AccessControl;
 using System.Security.Principal;
 using CfSharp;
 using CfSharp.Storage.Sqlite;
@@ -116,7 +117,7 @@ public static partial class CliFixtureProbe
                 var facts = await leases[index].InspectAsync(CancellationToken.None);
                 if (facts.OwnerSid != owner || facts.LinkCount != 1)
                     throw new InvalidDataException("A fixture object changed before permission cleanup.");
-                string access = facts.IsDirectory ? "D:P(A;OICI;FA;;;" + owner + ")" : "D:P(A;;FA;;;" + owner + ")";
+                string access = CreateCleanupAccessDescriptor(new SecurityIdentifier(owner), facts.IsDirectory);
                 await leases[index].ApplyDaclAsync(access, CancellationToken.None);
             }
             return new(1, true, observed.Count, leases.Count);
@@ -126,4 +127,8 @@ public static partial class CliFixtureProbe
             for (int index = leases.Count - 1; index >= 0; index--) await leases[index].DisposeAsync();
         }
     }
+
+    public static string CreateCleanupAccessDescriptor(SecurityIdentifier owner, bool isDirectory) =>
+        new RawSecurityDescriptor(isDirectory ? "D:P(A;OICI;FA;;;" + owner.Value + ")" : "D:P(A;;FA;;;" + owner.Value + ")")
+            .GetSddlForm(AccessControlSections.Access);
 }
