@@ -27,6 +27,7 @@ public sealed partial class MirrorPulseProductCatalog
         try
         {
             ThrowIfDisposed(); using var transaction = _connection.BeginTransaction();
+            await RequireRemoteDeleteDecisionOwnershipAsync(intent, transaction, token).ConfigureAwait(false);
             var existing = await ReadRemoteConflictActionCoreAsync(intent.CommandId, transaction, token).ConfigureAwait(false);
             if (existing is not null)
             {
@@ -71,6 +72,16 @@ public sealed partial class MirrorPulseProductCatalog
             var existing = await ReadRemoteConflictActionCoreAsync(receipt.Intent.CommandId, transaction, token).ConfigureAwait(false)
                 ?? throw new InvalidOperationException("An observed SDK result requires its original product decision admission.");
             if (existing.Intent != receipt.Intent) throw new InvalidDataException("The observed SDK return belongs to another retained command or conflict epoch.");
+            var deletion = await ReadRemoteDeleteResolutionCoreAsync(receipt.Intent.CommandId, transaction, token).ConfigureAwait(false);
+            var deletionBatch = await ReadNamespaceRetirementBatchCoreAsync(receipt.Intent.CommandId, transaction, token).ConfigureAwait(false);
+            if (deletion is not null && deletionBatch is null)
+                throw new InvalidDataException("The explicit delete command lost its original protected tree owner.");
+            if (deletion is not null && (deletion.CompletedAt is null || deletion.Plan.Decision != receipt.Intent))
+                throw new InvalidOperationException("The explicit delete command still has unsettled protected members.");
+            if (deletion is not null && (receipt.ObservedAt < deletion.CompletedAt || receipt.Status !=
+                (deletion.Outcome!.Status == MirrorPulseRemoteDeleteResolutionStatus.Applied
+                    ? MirrorPulseRemoteConflictObservedStatus.Applied : MirrorPulseRemoteConflictObservedStatus.AlreadyApplied)))
+                throw new InvalidOperationException("The completed delete command must retain its actual observed or reconciled SDK disposition.");
             if (existing.Receipt is { } retained)
             {
                 if (retained != receipt) throw new InvalidOperationException("An observed remote decision result is immutable.");
@@ -207,7 +218,6 @@ public sealed partial class MirrorPulseProductCatalog
             CREATE TABLE IF NOT EXISTS remote_conflict_actions(command_id TEXT PRIMARY KEY REFERENCES user_commands(command_id),
                 payload BLOB NOT NULL,fingerprint BLOB NOT NULL,outcome_payload BLOB NULL,outcome_fingerprint BLOB NULL,
                 CHECK((outcome_payload IS NULL)=(outcome_fingerprint IS NULL)));
-            PRAGMA user_version=77;
             """;
         await schema.ExecuteNonQueryAsync(token).ConfigureAwait(false); transaction.Commit();
     }

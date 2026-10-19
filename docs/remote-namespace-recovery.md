@@ -31,6 +31,19 @@ does not invent receipts for historical commands. A result lost before this rece
 commits still requires separate reconciliation; the receipt proves neither current
 native state nor completion of a protected member's deletion lifecycle.
 
+The schema 78 explicit-delete storage boundary retains a separate KeepRemote
+decision, its exact SDK input fingerprint and complete protected subtree before
+invocation. It preserves the original poll outcome and package policy. Its own
+batch fence and original member receipts cannot be adopted by controlled deletion
+APIs, another command or a generic resolved-state write. Member settlement requires
+the owned SDK outcome, actual native absence, exact public tombstones and fresh
+protected-parent facts. At most 64 children-first observations commit together with
+their names, retirement receipts and progress. The fence remains until every sealed
+member and the final parent verification are complete. These catalog records do
+not execute an SDK decision; Host dispatch, native verification and startup recovery
+must use the separate lifecycle before this storage boundary becomes a complete
+product KeepRemote operation.
+
 The complete current-tree audit borrows one coherent inventory only for its awaited
 native-inspection callback. The permission coordinator validates the entire current
 catalog fingerprint before and after that callback; the borrowed admission expires

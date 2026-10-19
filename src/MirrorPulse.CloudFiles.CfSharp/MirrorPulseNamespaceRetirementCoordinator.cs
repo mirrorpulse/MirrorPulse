@@ -23,7 +23,7 @@ public sealed class MirrorPulseNamespaceRetirementCoordinator(CloudFileSystem fi
     internal static MirrorPulseNamespaceRetirementBatch RequireControlledBatchReceipt(MirrorPulseNamespaceRetirementBatch batch)
     {
         ArgumentNullException.ThrowIfNull(batch);
-        if (batch.RemoteEntry is not null)
+        if (batch.RemoteEntry is not null || batch.RemoteConflictCommandId is not null)
             throw new NotSupportedException("Original SDK directory outcomes cannot use the controlled retirement status contract.");
         return batch;
     }
@@ -66,7 +66,7 @@ public sealed class MirrorPulseNamespaceRetirementCoordinator(CloudFileSystem fi
         {
             var batch = await catalog.ReadNamespaceRetirementBatchAsync(operationId, token).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The retirement batch is missing.");
-            if (batch.RemoteEntry is not null) throw new InvalidOperationException("The original SDK batch owns this recursive remote deletion.");
+            if (batch.RemoteEntry is not null || batch.RemoteConflictCommandId is not null) throw new InvalidOperationException("The SDK owns this recursive remote deletion.");
             if (batch.Phase == MirrorPulseNamespaceRetirementBatchPhase.Completed) return batch;
             if (batch.Phase != MirrorPulseNamespaceRetirementBatchPhase.Prepared)
                 throw new InvalidOperationException("The retirement batch requires explicit recovery.");

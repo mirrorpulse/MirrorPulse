@@ -27,6 +27,10 @@ public sealed record MirrorPulseNamespaceRetirementBatch(int Version, Guid Opera
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? RemoteTreeStartFingerprint { get; init; }
 
+    /// <summary>A separate explicit conflict-decision owner, never an original poll batch or controlled deletion.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? RemoteConflictCommandId { get; init; }
+
     /// <summary>Returns the stable operation ID for one leaf step of this sealed batch.</summary>
     public Guid MemberOperationId(Guid memberId)
     {
@@ -54,7 +58,7 @@ public sealed partial class MirrorPulseProductCatalog
             var replay = await ReadNamespaceRetirementBatchCoreAsync(operationId, transaction, cancellationToken).ConfigureAwait(false);
             if (replay is not null)
             {
-                if (replay.RemoteEntry is not null) throw new InvalidOperationException("The original SDK tree owner cannot be adopted as a controlled retirement batch.");
+                if (replay.RemoteEntry is not null || replay.RemoteConflictCommandId is not null) throw new InvalidOperationException("An SDK-owned tree cannot be adopted as a controlled retirement batch.");
                 if (replay.MemberId != memberId || replay.RootId != rootId)
                     throw new InvalidOperationException("A retirement batch operation is immutable.");
                 transaction.Commit(); return replay;
@@ -119,7 +123,7 @@ public sealed partial class MirrorPulseProductCatalog
             ThrowIfDisposed(); using SqliteTransaction transaction = _connection.BeginTransaction();
             var batch = await ReadNamespaceRetirementBatchCoreAsync(operationId, transaction, cancellationToken).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The retirement batch is missing.");
-            if (batch.RemoteEntry is not null) throw new InvalidOperationException("An original SDK tree requires its actual remote outcome before membership settlement.");
+            if (batch.RemoteEntry is not null || batch.RemoteConflictCommandId is not null) throw new InvalidOperationException("An SDK-owned tree requires its actual remote outcome before membership settlement.");
             if (batch.Phase == MirrorPulseNamespaceRetirementBatchPhase.Completed) { transaction.Commit(); return batch; }
             if (batch.Phase != MirrorPulseNamespaceRetirementBatchPhase.Prepared)
                 throw new InvalidOperationException("The retirement batch requires explicit recovery.");
@@ -153,7 +157,7 @@ public sealed partial class MirrorPulseProductCatalog
         if (intent.BatchOperationId is not { } operationId) return;
         var batch = await ReadNamespaceRetirementBatchCoreAsync(operationId, transaction, token).ConfigureAwait(false)
             ?? throw new InvalidOperationException("The retirement batch is missing.");
-        if (batch.RemoteEntry is not null) throw new InvalidOperationException("Controlled leaf operations cannot pre-execute an original SDK tree delete.");
+        if (batch.RemoteEntry is not null || batch.RemoteConflictCommandId is not null) throw new InvalidOperationException("Controlled leaf operations cannot pre-execute an SDK-owned tree delete.");
         var entry = batch.Entries.SingleOrDefault(entry => entry.MemberId == intent.MemberId);
         if (batch.Phase != MirrorPulseNamespaceRetirementBatchPhase.Prepared || entry is null || !RetirementMatchesBatchEntry(intent, batch, entry))
             throw new InvalidOperationException("The retirement must follow its sealed batch member and object binding.");
@@ -186,9 +190,12 @@ public sealed partial class MirrorPulseProductCatalog
         if (payload.Length > 4 * 1024 * 1024 && (batch.RemoteTreeStartFingerprint is null ||
             JsonSerializer.SerializeToUtf8Bytes(batch with { RemoteTreeStartFingerprint = null }, TopologyJsonOptions).Length > 4 * 1024 * 1024))
             throw new InvalidDataException("The retirement batch structural header exceeds its original bound.");
-        if (!(batch.Version == 1 && batch.RemoteEntry is null && batch.RemoteTreeFingerprint is null && batch.RemoteTreeStartFingerprint is null ||
+        if (!(batch.Version == 1 && batch.RemoteEntry is null && batch.RemoteTreeFingerprint is null && batch.RemoteTreeStartFingerprint is null && batch.RemoteConflictCommandId is null ||
             batch.Version == 2 && batch.RemoteEntry is not null && batch.RemoteTreeFingerprint is { Length: 64 } &&
-            (batch.RemoteTreeStartFingerprint is null || batch.RemoteTreeStartFingerprint is { Length: 64 } && batch.RemoteTreeStartFingerprint.All(char.IsAsciiHexDigitUpper))) ||
+            batch.RemoteConflictCommandId is null &&
+            (batch.RemoteTreeStartFingerprint is null || batch.RemoteTreeStartFingerprint is { Length: 64 } && batch.RemoteTreeStartFingerprint.All(char.IsAsciiHexDigitUpper)) ||
+            batch.Version == 3 && batch.RemoteConflictCommandId == batch.OperationId && batch.RemoteEntry is null &&
+            batch.RemoteTreeFingerprint is null && batch.RemoteTreeStartFingerprint is null) ||
             batch.OperationId != operationId || batch.MemberId == Guid.Empty || batch.RootId.Value == Guid.Empty ||
             batch.Entries.Count == 0 || batch.Entries.Count > 65_536 || batch.PreparedAt == default || !Enum.IsDefined(batch.Phase) || reader.GetString(0) != operationId.ToString("D") ||
             reader.GetString(1) != batch.MemberId.ToString("D") || reader.GetString(2) != batch.RootId.ToString() ||
@@ -217,6 +224,7 @@ public sealed partial class MirrorPulseProductCatalog
                 throw new InvalidDataException("The retirement batch does not describe one complete connected subtree.");
         }
         await reader.DisposeAsync().ConfigureAwait(false);
+        await ValidateRemoteDeleteResolutionBatchAsync(batch, transaction, token).ConfigureAwait(false);
         await ValidateRemoteRetirementTreeOwnerAsync(batch, transaction, token).ConfigureAwait(false);
         _ = await ReadRemoteRetirementTreeStartCoreAsync(operationId, batch, transaction, token, requireTreeSettlementOwner).ConfigureAwait(false);
         return batch;

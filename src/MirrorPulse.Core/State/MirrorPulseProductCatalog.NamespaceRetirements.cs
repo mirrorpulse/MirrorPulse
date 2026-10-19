@@ -97,6 +97,7 @@ public sealed partial class MirrorPulseProductCatalog
             ThrowIfDisposed(); using SqliteTransaction transaction = _connection.BeginTransaction(deferred: true);
             var retirement = await ReadNamespaceRetirementCoreAsync(operationId, transaction, cancellationToken).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The retirement operation is missing.");
+            await RequireNotRemoteDeleteResolutionMemberAsync(retirement.Intent, transaction, cancellationToken).ConfigureAwait(false);
             if (retirement.Phase is MirrorPulseNamespaceRetirementPhase.Completed or MirrorPulseNamespaceRetirementPhase.RemoteRejected) { transaction.Commit(); return retirement; }
             if (retirement.Phase == MirrorPulseNamespaceRetirementPhase.RecoveryRequired)
                 throw new InvalidOperationException("The retirement requires explicit recovery.");
@@ -155,6 +156,7 @@ public sealed partial class MirrorPulseProductCatalog
             ThrowIfDisposed(); using SqliteTransaction transaction = _connection.BeginTransaction();
             var current = await ReadNamespaceRetirementCoreAsync(operationId, transaction, cancellationToken).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The retirement operation is missing.");
+            await RequireNotRemoteDeleteResolutionMemberAsync(current.Intent, transaction, cancellationToken).ConfigureAwait(false);
             if (current.Intent.RemoteEntry is { } remote && officialItemId != remote.ItemId)
                 throw new InvalidOperationException("An original SDK retirement must retain its exact logical identity before native work.");
             if (current.StartedAt is not null) { transaction.Commit(); return current; }
@@ -176,6 +178,7 @@ public sealed partial class MirrorPulseProductCatalog
             ThrowIfDisposed(); using SqliteTransaction transaction = _connection.BeginTransaction();
             var current = await ReadNamespaceRetirementCoreAsync(operationId, transaction, token).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The retirement operation is missing.");
+            await RequireNotRemoteDeleteResolutionMemberAsync(current.Intent, transaction, token).ConfigureAwait(false);
             if (current.Intent.RemoteEntry is not null)
                 throw new InvalidOperationException("An SDK-owned retirement requires its actual original SDK outcome settlement.");
             if (current.Phase == phase) { transaction.Commit(); return current; }
@@ -199,6 +202,7 @@ public sealed partial class MirrorPulseProductCatalog
             ThrowIfDisposed(); using SqliteTransaction transaction = _connection.BeginTransaction();
             var current = await ReadNamespaceRetirementCoreAsync(operationId, transaction, cancellationToken).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The retirement operation is missing.");
+            await RequireNotRemoteDeleteResolutionMemberAsync(current.Intent, transaction, cancellationToken).ConfigureAwait(false);
             if (current.Intent.RemoteEntry is not null)
                 throw new InvalidOperationException("An SDK-owned retirement cannot use controlled local completion.");
             if (current.Phase == MirrorPulseNamespaceRetirementPhase.Completed) { transaction.Commit(); return current; }
@@ -228,6 +232,7 @@ public sealed partial class MirrorPulseProductCatalog
             reader.GetString(4) != retirement.Intent.MemberId.ToString("D") || reader.GetInt32(3) != (int)retirement.Phase || !Enum.IsDefined(retirement.Phase) ||
             !JsonSerializer.SerializeToUtf8Bytes(retirement, TopologyJsonOptions).AsSpan().SequenceEqual(payload)) throw new InvalidDataException("The namespace retirement index is inconsistent.");
         await reader.DisposeAsync().ConfigureAwait(false);
+        await ValidateRemoteDeleteResolutionMemberAsync(retirement, transaction, token).ConfigureAwait(false);
         await ValidateRemoteRetirementIndexAsync(retirement.Intent, transaction, token).ConfigureAwait(false);
         if (retirement.Intent.RemoteEntry is not null)
         {
