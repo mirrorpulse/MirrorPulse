@@ -136,6 +136,12 @@
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeReplacementContentWriterRetainsFirstBackupAndDirtyCopyAcrossBothObjectStarts"
   ],
   "required": {
+    "cfsharpDelete": [
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeCfSharpOriginalFileDeleteReplayCompletesItsOwnCommittedTombstoneAfterProgressLoss",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeCfSharpOriginalDirectoryDeleteReplayCompletesItsOwnCommittedTombstoneAfterProgressLoss",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeCfSharpPreservedCleanFileDeleteRetainsItsConflictAcrossOwners",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeCfSharpPreservedEmptyDirectoryDeleteRetainsItsConflictAcrossOwners"
+    ],
     "namespace": [
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseNormalUserWorkerTransportTests.WorkerCallsAndLazyRangeBodiesNeverInheritNamespaceRole",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseNormalUserWorkerTransportTests.FailedOrCanceledSourceReadReturnsNoPartialBodyAndRestoresCaller",

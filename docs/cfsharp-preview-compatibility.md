@@ -30,6 +30,12 @@ Historical preview.6 records keep their exact original version, source and polic
 Readers accept the two audited version/source pairs and reject mixed publications;
 this compatibility does not confer native completion or reauthorize a Delete.
 
+Manual ARM64 CI runs the four independent SDK Delete regressions before default
+Host integration and preserves their original TRX separately. This lets SDK
+acceptance be measured while the product's slow namespace startup remains open.
+The full x64 native and ARM64 namespace/ordinary-user requirements remain intact;
+the isolated SDK report cannot replace those product gates.
+
 Preview.6 introduced original file-move preparation and reconciles immutable-batch
 replay before stale-revision checks. Its official SQLite schema is 7. Directory
 remote-batch outcome recovery and legacy preview.5 gaps without original evidence

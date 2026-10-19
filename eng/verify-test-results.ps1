@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$ResultsDirectory,
-    [ValidateSet("managed", "native", "official", "signed", "packaged", "namespace")][string]$Suite = "managed",
+    [ValidateSet("managed", "native", "official", "signed", "packaged", "namespace", "cfsharpDelete")][string]$Suite = "managed",
     [string]$OutputPath
 )
 
@@ -56,8 +56,8 @@ if ($Suite -eq "managed") {
         }
     }
     if ($skipped.Count -ne 0) { throw "The $Suite gate contains skipped tests." }
-    if ($Suite -eq 'namespace' -and $results.Count -ne @($catalog.required.namespace).Count) {
-        throw 'The namespace gate must select exactly the required tests.'
+    if ($Suite -in @('namespace', 'cfsharpDelete') -and $results.Count -ne @($catalog.required.$Suite).Count) {
+        throw "The $Suite gate must select exactly the required tests."
     }
 }
 $categories = @(

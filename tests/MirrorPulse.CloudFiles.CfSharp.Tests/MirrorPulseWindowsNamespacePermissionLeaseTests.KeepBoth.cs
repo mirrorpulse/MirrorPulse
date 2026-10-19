@@ -145,7 +145,23 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     CollectionAssert.AreEqual(expectedLocal, await File.ReadAllBytesAsync(fileSystem.GetFile("Docs/original.bin").FullPath, deadline.Token));
                     CollectionAssert.AreEqual(expectedLocal, await File.ReadAllBytesAsync(remote.Path, deadline.Token));
                     Assert.AreEqual(1, remote.AcceptedUploads); Assert.IsFalse(originalIds.Contains(remote.AcceptedOperation));
-                    Assert.AreEqual(logicalItem, (await fileSystem.GetFile("Docs/original.bin").InspectAsync(deadline.Token)).ItemId);
+                    // The fixture starts with local:original, while remote readback accepts
+                    // remote-object. Public acceptance changes that SDK identity; the
+                    // registered product member and its original native object must survive.
+                    var acceptedIdentity = router.CreateFileIdentity(root.InstanceId, root.UniquenessKey, "remote-object", "accepted-local");
+                    var acceptedSnapshot = await fileSystem.GetFile("Docs/original.bin").InspectAsync(deadline.Token);
+                    Assert.AreEqual(acceptedIdentity.ItemId, acceptedSnapshot.ItemId);
+                    Assert.AreEqual(acceptedIdentity.RemoteId, acceptedSnapshot.RemoteId);
+                    var originalMember = members.Values.Single(value => !value.IsDirectory);
+                    Assert.AreEqual(originalMember, await catalog.ReadNamespaceMemberAsync(originalMember.MemberId, deadline.Token));
+                    var identity = await catalog.ReadNamespaceMemberIdentityAsync(originalMember.MemberId, deadline.Token);
+                    Assert.AreEqual(logicalItem, identity.OriginalItemId);
+                    Assert.AreEqual(acceptedIdentity.ItemId, identity.ItemId);
+                    Assert.AreEqual(acceptedIdentity.RemoteId, identity.RemoteId);
+                    Assert.AreEqual(remote.AcceptedOperation, identity.AcceptanceOperationId);
+                    var inspected = await new MirrorPulseNamespaceMemberInspector(fileSystem, catalog, router, role, actor)
+                        .InspectAsync("Docs/original.bin", false, deadline.Token);
+                    Assert.AreEqual(originalMember.MemberId, inspected.MemberId);
                     await using var pending = await state.OpenStore.BeginTransactionAsync(deadline.Token);
                     foreach (Guid id in originalIds) Assert.IsNull(await pending.Operations.GetAsync(id, deadline.Token));
                     await pending.RollbackAsync(deadline.Token);
