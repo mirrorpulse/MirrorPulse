@@ -19,6 +19,18 @@ state before removing its in-memory conflict. A failed catalog write retains tha
 conflict and its original product projection. If recording failure also fails,
 the original action error and the separate persistence error are both retained.
 
+Schema 77 retains the exact command, conflict epoch, selected side and SDK publication
+before KeepLocal, KeepRemote or KeepBoth execution. An observed terminal SDK return
+and the command's resolved state commit together, even if the caller cancels after
+that return. Replaying that same decision after
+restart returns its original status without repeating the SDK decision. KeepBoth also
+reopens and verifies the original private copy; damage cannot become a successful
+replay or cause a replacement source to be read. A completed receipt cannot change
+its intent or be reset through the generic command store. Upgrading an older catalog
+does not invent receipts for historical commands. A result lost before this receipt
+commits still requires separate reconciliation; the receipt proves neither current
+native state nor completion of a protected member's deletion lifecycle.
+
 The complete current-tree audit borrows one coherent inventory only for its awaited
 native-inspection callback. The permission coordinator validates the entire current
 catalog fingerprint before and after that callback; the borrowed admission expires

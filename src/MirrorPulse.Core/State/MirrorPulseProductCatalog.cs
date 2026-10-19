@@ -104,7 +104,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                 version.CommandText = "PRAGMA user_version;";
                 currentVersion = (long)(await version.ExecuteScalarAsync(cancellationToken)
                     .ConfigureAwait(false) ?? 0L);
-                if (currentVersion > 76)
+                if (currentVersion > 77)
                 {
                     throw new InvalidDataException("The MP product catalog schema is newer than this Host supports.");
                 }
@@ -466,6 +466,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
 
             var catalog = new MirrorPulseProductCatalog(owner, connection);
             await catalog.UpgradeRemoteTreeSettlementOwnersAsync(currentVersion, cancellationToken).ConfigureAwait(false);
+            await EnsureRemoteConflictActionSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
             return catalog;
         }
         catch
@@ -593,7 +594,9 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                 VALUES ($id, $action, $target, $state)
                 ON CONFLICT(command_id) DO UPDATE SET state = excluded.state
                 WHERE user_commands.action = excluded.action
-                  AND user_commands.target_id = excluded.target_id;
+                  AND user_commands.target_id = excluded.target_id
+                  AND NOT EXISTS(SELECT 1 FROM remote_conflict_actions a
+                    WHERE a.command_id=user_commands.command_id AND a.outcome_payload IS NOT NULL AND excluded.state<>'resolved');
                 """;
             insert.Parameters.AddWithValue("$id", command.CommandId.ToString("D"));
             insert.Parameters.AddWithValue("$action", command.Action);

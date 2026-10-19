@@ -372,7 +372,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             query.CommandText = "SELECT hex(payload)||':'||hex(fingerprint) FROM namespace_birth_conversions;";
             Assert.AreEqual(originalBytes, await query.ExecuteScalarAsync());
             query.CommandText = "PRAGMA user_version;";
-            Assert.AreEqual(76L, await query.ExecuteScalarAsync());
+            Assert.AreEqual(77L, await query.ExecuteScalarAsync());
         }
     }
 

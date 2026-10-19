@@ -74,12 +74,6 @@ public sealed class MirrorPulseRemoteConflictActions
             throw new ArgumentException("This action requires a pending CfSharp remote conflict.", nameof(conflict));
         }
 
-        if (action == MirrorPulseConflictAction.KeepLocal && _dismiss is null)
-        {
-            throw new NotSupportedException(
-                "This conflict action requires the CfSharp preview.2 dismissal API.");
-        }
-
         if (action == MirrorPulseConflictAction.KeepBoth && preservedSide is null)
         {
             throw new ArgumentException("KeepBoth requires the side to preserve.", nameof(preservedSide));
@@ -90,19 +84,30 @@ public sealed class MirrorPulseRemoteConflictActions
             throw new ArgumentException("Only KeepBoth may select a preserved side.", nameof(preservedSide));
         }
 
-        if (action == MirrorPulseConflictAction.KeepBoth &&
-            preservedSide == MirrorPulseConflictPreservedSide.Remote && openRemote is null)
-        {
-            throw new ArgumentException(
-                "Preserving the remote side requires an Adapter stream.", nameof(openRemote));
-        }
-
         string actionName = action == MirrorPulseConflictAction.KeepBoth
             ? $"keep-both-{preservedSide!.Value.ToString().ToLowerInvariant()}"
             : action.ToString().ToLowerInvariant();
-        await _catalog.SaveUserCommandAsync(new MirrorPulseUserCommandRecord(
-            commandId, actionName, conflict.ConflictId.ToString("D"), "pending"), cancellationToken)
-            .ConfigureAwait(false);
+        MirrorPulseRemoteConflictActionIntent? intent = action is MirrorPulseConflictAction.KeepLocal or
+            MirrorPulseConflictAction.KeepRemote or MirrorPulseConflictAction.KeepBoth
+            ? new(1, commandId, conflict, action, preservedSide, MirrorPulseRemoteLibraryProvenance.CurrentPackageVersion,
+                MirrorPulseRemoteLibraryProvenance.CurrentSourceCommit) : null;
+        bool missingDismissal = action == MirrorPulseConflictAction.KeepLocal && _dismiss is null;
+        bool missingSource = action == MirrorPulseConflictAction.KeepBoth &&
+            preservedSide == MirrorPulseConflictPreservedSide.Remote && openRemote is null;
+        if ((missingDismissal || missingSource) &&
+            await _catalog.ReadRemoteConflictActionReceiptAsync(commandId, cancellationToken).ConfigureAwait(false) is null)
+        {
+            if (missingDismissal) throw new NotSupportedException("This conflict action requires the CfSharp preview.2 dismissal API.");
+            throw new ArgumentException("Preserving the remote side requires an Adapter stream.", nameof(openRemote));
+        }
+        if (intent is not null)
+        {
+            var receipt = await _catalog.PrepareRemoteConflictActionAsync(intent, cancellationToken).ConfigureAwait(false);
+            if (receipt is not null) return await ReplayObservedAsync(receipt, cancellationToken).ConfigureAwait(false);
+        }
+        else
+            await _catalog.SaveUserCommandAsync(new MirrorPulseUserCommandRecord(
+                commandId, actionName, conflict.ConflictId.ToString("D"), "pending"), cancellationToken).ConfigureAwait(false);
         try
         {
 
@@ -114,9 +119,9 @@ public sealed class MirrorPulseRemoteConflictActions
                     CloudRemoteConflictDismissalStatus.AlreadyDismissed;
                 if (dismissed)
                 {
-                    await _catalog.SaveUserCommandAsync(new MirrorPulseUserCommandRecord(
-                        commandId, actionName, conflict.ConflictId.ToString("D"), "resolved"), cancellationToken)
-                        .ConfigureAwait(false);
+                    await _catalog.RecordRemoteConflictActionReceiptAsync(new(intent!,
+                        dismissal == CloudRemoteConflictDismissalStatus.Dismissed ? MirrorPulseRemoteConflictObservedStatus.Dismissed :
+                            MirrorPulseRemoteConflictObservedStatus.AlreadyDismissed, null, DateTimeOffset.UtcNow), CancellationToken.None).ConfigureAwait(false);
                     _center.Remove(conflict.ConflictId);
                 }
 
@@ -152,9 +157,11 @@ public sealed class MirrorPulseRemoteConflictActions
                 status is CloudRemoteApplyEntryStatus.Applied or CloudRemoteApplyEntryStatus.AlreadyApplied;
             if (resolved)
             {
-                await _catalog.SaveUserCommandAsync(new MirrorPulseUserCommandRecord(
-                    commandId, actionName, conflict.ConflictId.ToString("D"), "resolved"), cancellationToken)
-                    .ConfigureAwait(false);
+                // The SDK already returned this terminal result. A caller cancellation
+                // must not discard known completion while its product receipt commits.
+                await _catalog.RecordRemoteConflictActionReceiptAsync(new(intent!,
+                    status == CloudRemoteApplyEntryStatus.Applied ? MirrorPulseRemoteConflictObservedStatus.Applied :
+                        MirrorPulseRemoteConflictObservedStatus.AlreadyApplied, preservedPath, DateTimeOffset.UtcNow), CancellationToken.None).ConfigureAwait(false);
                 _center.Remove(conflict.ConflictId);
             }
 
@@ -175,6 +182,28 @@ public sealed class MirrorPulseRemoteConflictActions
             }
             throw;
         }
+    }
+
+    private async Task<MirrorPulseRemoteConflictActionOutcome> ReplayObservedAsync(MirrorPulseRemoteConflictActionReceipt receipt,
+        CancellationToken token)
+    {
+        var intent = receipt.Intent;
+        if (intent.PreservedSide is { } side)
+        {
+            string path = await _copies.PreserveAsync(intent.Conflict, side,
+                _ => ValueTask.FromException<Stream>(new InvalidDataException("The observed decision lost its committed preserved copy; do not reopen a replacement source.")), token).ConfigureAwait(false);
+            if (!string.Equals(path, receipt.PreservedPath, StringComparison.Ordinal))
+                throw new InvalidDataException("The observed decision does not identify its original verified copy.");
+        }
+        _center.Remove(intent.Conflict.ConflictId);
+        return receipt.Status switch
+        {
+            MirrorPulseRemoteConflictObservedStatus.Applied => new(true, false, receipt.PreservedPath, CloudRemoteApplyEntryStatus.Applied, CommandId: intent.CommandId),
+            MirrorPulseRemoteConflictObservedStatus.AlreadyApplied => new(true, false, receipt.PreservedPath, CloudRemoteApplyEntryStatus.AlreadyApplied, CommandId: intent.CommandId),
+            MirrorPulseRemoteConflictObservedStatus.Dismissed => new(true, false, null, null, CloudRemoteConflictDismissalStatus.Dismissed, intent.CommandId),
+            MirrorPulseRemoteConflictObservedStatus.AlreadyDismissed => new(true, false, null, null, CloudRemoteConflictDismissalStatus.AlreadyDismissed, intent.CommandId),
+            _ => throw new InvalidDataException("The observed decision has no supported public SDK result."),
+        };
     }
 
     private Task SaveFailedAsync(Guid id, string action, MirrorPulseConflictRecord conflict, CancellationToken cancellationToken) =>
