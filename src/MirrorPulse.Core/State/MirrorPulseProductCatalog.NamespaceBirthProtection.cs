@@ -133,6 +133,9 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task<MirrorPulseNamespaceBirthProtection?> ReadNamespaceBirthProtectionCoreAsync(Guid protectionId,
         SqliteTransaction? transaction, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
+        var history = transaction is null ? null : _namespaceHistoryReads.GetOrCreateValue(transaction);
+        if (history?.UnlocatedBirthProtections.TryGetValue(protectionId, out var verified) == true) return verified;
         var row = await ReadNamespaceBirthProtectionRowAsync(protectionId, transaction, token).ConfigureAwait(false);
         if (row is null) return null;
         var protection = row.Value.Protection;
@@ -153,12 +156,19 @@ public sealed partial class MirrorPulseProductCatalog
         {
             throw new InvalidDataException("The historical birth protection lost its original references.", error);
         }
+        // Reuse only the completed historical proof in this SQLite snapshot. Located
+        // history and every current parent, latest epoch and execution fence keep
+        // their own validation; this entry grants no current namespace authority.
+        if (protection.Placement is null) history?.UnlocatedBirthProtections.Add(protectionId, protection);
         return protection;
     }
 
     private async Task<(long Sequence, MirrorPulseNamespaceBirthProtection Protection)?> ReadNamespaceBirthProtectionRowAsync(
         Guid protectionId, SqliteTransaction? transaction, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
+        var history = transaction is null ? null : _namespaceHistoryReads.GetOrCreateValue(transaction);
+        if (history?.BirthProtectionRows.TryGetValue(protectionId, out var retained) == true) return retained;
         await using SqliteCommand query = _connection.CreateCommand();
         query.Transaction = transaction;
         query.CommandText = """
@@ -192,7 +202,9 @@ public sealed partial class MirrorPulseProductCatalog
             (reader.IsDBNull(8) ? null : reader.GetString(8)) != protection.BornParent?.ProtectionId.ToString("D") ||
             !JsonSerializer.SerializeToUtf8Bytes(protection, TopologyJsonOptions).AsSpan().SequenceEqual(payload))
             throw new InvalidDataException("The birth protection index or canonical payload is inconsistent.");
-        return (reader.GetInt64(0), protection);
+        var result = (Sequence: reader.GetInt64(0), Protection: protection);
+        history?.BirthProtectionRows.Add(protectionId, result);
+        return result;
     }
 
     private async Task<MirrorPulseNamespaceBirthIntent> ValidateNamespaceBirthProtectionReferencesAsync(
