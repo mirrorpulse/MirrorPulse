@@ -2,7 +2,7 @@
 
 The current dependency is CfSharp preview.7. Its default preservation policy retains
 even clean remote Delete targets as durable conflicts; MirrorPulse preserves that
-policy. Explicit product KeepRemote settlement remains pending. Earlier automatic
+policy. Explicit product KeepRemote settlement uses its separate command lifecycle. Earlier automatic
 Delete scenarios below describe the preview.6 baseline, not preview.7 acceptance.
 See [preview compatibility](cfsharp-preview-compatibility.md) for the schema 8
 migration, original-evidence compatibility and separate SDK recovery regressions.
@@ -39,10 +39,38 @@ APIs, another command or a generic resolved-state write. Member settlement requi
 the owned SDK outcome, actual native absence, exact public tombstones and fresh
 protected-parent facts. At most 64 children-first observations commit together with
 their names, retirement receipts and progress. The fence remains until every sealed
-member and the final parent verification are complete. These catalog records do
-not execute an SDK decision; Host dispatch, native verification and startup recovery
-must use the separate lifecycle before this storage boundary becomes a complete
-product KeepRemote operation.
+member and the final parent verification are complete. Host decisions now pass the
+original command to the shared namespace actor and current execution role. They seal
+the complete actual tree before calling the public SDK resolution API, then verify
+native absence, exact public tombstones, conflict removal and the protected parent.
+An owned start can reconcile a lost return only after those actual facts agree.
+Missing conflict identity alone still supplies no successful outcome.
+The runtime rejects trees larger than preview.7's 4096-member native Delete budget
+before creating a product deletion owner. Other protected namespace operation kinds
+require their own product lifecycle and cannot use this Delete executor's role.
+
+The Host reuses an existing Delete command when the user continues that conflict.
+Startup examines a bounded original command before a root's current-tree audit;
+incomplete pages keep the root closed. A new role may reconcile an already deleted
+tree through read-only inspection of its original protected parent and exact SDK
+tombstones. It cannot use an old role to execute another native deletion. Surviving
+members with an unresolved SDK conflict still require their original role or further
+explicit role recovery. These execution paths require fresh disposable native and
+default Host acceptance.
+If all deletion members and the final parent verification already committed, a lost
+outer command receipt is reconstructed from that exact durable disposition. Later
+legitimate parent-role rotation neither authorizes another SDK invocation nor
+invalidates this completed historical operation.
+
+The six preview.6 automatic-delete gap fixtures are replaced by explicit-decision
+scenarios under preview.7: default polling must first preserve the object and durable
+conflict; only an explicit KeepRemote may remove it. They retain physical-absence,
+official tombstone, immutable poll-history, failed-commit and bounded-page assertions.
+Following namespace work and its Adapter cursor stay fenced until the decision's
+members settle. Four additional mandatory fixtures exercise lost-return reconciliation
+under a new role, a subsequent fresh current-tree audit, and recovery of a lost outer
+receipt after legitimate parent-role rotation. Their original test results
+must establish acceptance; successful compilation is insufficient.
 
 The complete current-tree audit borrows one coherent inventory only for its awaited
 native-inspection callback. The permission coordinator validates the entire current

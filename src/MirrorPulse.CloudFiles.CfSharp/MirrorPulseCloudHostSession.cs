@@ -994,9 +994,27 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         private async ValueTask<bool> BootstrapNamespaceAsync(IMirrorPulseInstanceScheduler instances, CancellationToken token)
         {
             var started = await new MirrorPulseNamespaceStartupCoordinator(fileSystem, catalog!, router!, _namespaceExecution!,
-                _namespaceActor!, instances, _permissions!, namespaceWork!, NoteStartup).StartAsync(token).ConfigureAwait(false);
+                _namespaceActor!, instances, _permissions!, namespaceWork!, NoteStartup, RecoverRemoteDeleteBeforeAuditAsync).StartAsync(token).ConfigureAwait(false);
             _startupProtection = started.Guard; NamespaceStartupResults = started.Roots;
             return true;
+        }
+
+        private async ValueTask RecoverRemoteDeleteBeforeAuditAsync(RootRegistration root, CancellationToken token)
+        {
+            var pending = await catalog!.ReadPendingRemoteDeleteResolutionsAsync(root.RootId, limit: 1, token: token).ConfigureAwait(false);
+            if (pending.Count == 0) return;
+            var intent = pending[0].Plan.Decision;
+            try
+            {
+                _ = await (_remoteConflictActions ?? throw new InvalidOperationException("The protected remote conflict service has not started."))
+                    .ApplyAsync(intent.CommandId, intent.Conflict, intent.Action, cancellationToken: token).ConfigureAwait(false);
+            }
+            catch (KeyNotFoundException error)
+            {
+                throw new InvalidDataException("The admitted remote deletion requires its original SDK outcome before startup can continue.", error);
+            }
+            if ((await catalog.ReadPendingRemoteDeleteResolutionsAsync(root.RootId, limit: 1, token: token).ConfigureAwait(false)).Count != 0)
+                throw new IOException("The root still has a bounded explicit Delete recovery page before its current audit.");
         }
 
         private async Task StartLibraryAsync(CancellationToken cancellationToken)
@@ -1053,9 +1071,17 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
 
             if (catalog is not null && conflicts is not null)
             {
+                Func<MirrorPulseRemoteConflictActionIntent, CancellationToken, ValueTask<CloudRemoteApplyEntryStatus>>? resolveOwned = null;
+                if (router is not null && _namespaceExecution is not null && _namespaceActor is not null)
+                {
+                    if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
+                        throw new PlatformNotSupportedException("Protected remote conflict decisions require Windows 11 24H2 or later.");
+                    resolveOwned = new MirrorPulseRemoteDeleteResolutionCoordinator(fileSystem, state, catalog, router,
+                        _namespaceExecution, _namespaceActor).ResolveAsync;
+                }
                 _remoteConflictActions = MirrorPulseRemoteConflictActions.For(fileSystem,
                     new MirrorPulseConflictCopyStore(new MirrorPulseStoragePaths(syncRootPath, dataRootPath)),
-                    catalog, conflicts);
+                    catalog, conflicts, resolveOwned);
             }
         }
 
@@ -1108,19 +1134,27 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                 requestCancellation).ConfigureAwait(false)).SingleOrDefault(item =>
                     item.ConflictId == conflictId) ?? throw new FileNotFoundException(
                         "The remote conflict was not found.");
+            var originalDelete = await catalog.ReadRemoteDeleteResolutionForConflictAsync(conflictId, requestCancellation).ConfigureAwait(false);
+            if (originalDelete is not null && (action != MirrorPulseConflictAction.KeepRemote || originalDelete.Plan.Decision.Conflict != conflict))
+                throw new InvalidOperationException("This conflict already has an original protected Delete decision requiring its own continuation.");
+            Guid commandId = originalDelete?.Plan.Decision.CommandId ?? Guid.NewGuid();
             MirrorPulseNamespaceWorkAdmission.WorkLease? admission = null;
+            IAsyncDisposable? pendingAdmission = null;
             if (namespaceWork is not null)
             {
                 var route = router!.ResolvePath(conflict.RelativePath);
                 if (route.InstanceId != conflict.InstanceId) throw new InvalidDataException("The conflict belongs to another routed instance.");
-                admission = namespaceWork.Enter([router.GetRegistration(route.InstanceId, route.RootKey).RootId]);
+                var rootId = router.GetRegistration(route.InstanceId, route.RootKey).RootId;
+                if (originalDelete is null) admission = namespaceWork.Enter([rootId]);
+                else pendingAdmission = await namespaceWork.EnterPendingOperationAsync(rootId, requestCancellation).ConfigureAwait(false);
             }
             using (admission)
+            await using (pendingAdmission)
                 return await WithInstanceLibraryAsync(conflict.InstanceId, async cancellationToken =>
                 {
                     MirrorPulseRemoteConflictActions actions = _remoteConflictActions ?? throw new InvalidOperationException(
                         "The remote conflict action service has not started.");
-                    return await actions.ApplyAsync(Guid.NewGuid(), conflict, action,
+                    return await actions.ApplyAsync(commandId, conflict, action,
                         action == MirrorPulseConflictAction.KeepBoth
                             ? MirrorPulseConflictPreservedSide.Local
                             : null, cancellationToken: cancellationToken).ConfigureAwait(false);

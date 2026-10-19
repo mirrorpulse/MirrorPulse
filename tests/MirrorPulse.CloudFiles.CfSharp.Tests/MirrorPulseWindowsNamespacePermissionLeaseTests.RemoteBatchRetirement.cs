@@ -13,22 +13,22 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     [TestMethod]
     [DoNotParallelize]
     [TestCategory("NativeCloudFiles")]
-    public Task NativeOriginalRemoteFileDeleteSettlesMemberAfterSdkResultGap() => RunOriginalRemoteDeleteGapAsync(false, false, false);
+    public Task NativeExplicitRemoteFileDeleteSettlesMemberAfterSdkResultGap() => RunExplicitRemoteDeleteAsync(false, 0, false, false);
 
     [TestMethod]
     [DoNotParallelize]
     [TestCategory("NativeCloudFiles")]
-    public Task NativeOriginalRemoteFileDeleteRecoversLostSdkProgressCommit() => RunOriginalRemoteDeleteGapAsync(false, true, false);
+    public Task NativeExplicitRemoteFileDeleteRecoversLostSdkConflictCommit() => RunExplicitRemoteDeleteAsync(false, 0, true, false);
 
     [TestMethod]
     [DoNotParallelize]
     [TestCategory("NativeCloudFiles")]
-    public Task NativeOriginalRemoteEmptyDirectoryDeleteSettlesMemberAfterSdkResultGap() => RunOriginalRemoteDeleteGapAsync(true, false, false);
+    public Task NativeExplicitRemoteEmptyDirectoryDeleteSettlesMemberAfterSdkResultGap() => RunExplicitRemoteDeleteAsync(true, 0, false, false);
 
     [TestMethod]
     [DoNotParallelize]
     [TestCategory("NativeCloudFiles")]
-    public Task NativeOriginalRemoteEmptyDirectoryDeleteRecoversLostSdkProgressCommit() => RunOriginalRemoteDeleteGapAsync(true, true, false);
+    public Task NativeExplicitRemoteEmptyDirectoryDeleteRecoversLostSdkConflictCommit() => RunExplicitRemoteDeleteAsync(true, 0, true, false);
 
     [TestMethod]
     [DoNotParallelize]

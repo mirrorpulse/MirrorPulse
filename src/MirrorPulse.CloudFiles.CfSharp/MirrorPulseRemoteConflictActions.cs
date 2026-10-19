@@ -20,6 +20,7 @@ public sealed class MirrorPulseRemoteConflictActions
     private readonly Func<Guid, CloudRemoteConflictDecision, CancellationToken,
         ValueTask<CloudRemoteApplyEntryStatus>> _resolve;
     private readonly Func<Guid, CancellationToken, ValueTask<CloudRemoteConflictDismissalStatus>>? _dismiss;
+    private readonly Func<MirrorPulseRemoteConflictActionIntent, CancellationToken, ValueTask<CloudRemoteApplyEntryStatus>>? _resolveOwned;
     private readonly MirrorPulseConflictCopyStore _copies;
     private readonly MirrorPulseProductCatalog _catalog;
     private readonly MirrorPulseConflictCenter _center;
@@ -30,10 +31,12 @@ public sealed class MirrorPulseRemoteConflictActions
         MirrorPulseConflictCopyStore copies,
         MirrorPulseProductCatalog catalog,
         MirrorPulseConflictCenter center,
-        Func<Guid, CancellationToken, ValueTask<CloudRemoteConflictDismissalStatus>>? dismiss = null)
+        Func<Guid, CancellationToken, ValueTask<CloudRemoteConflictDismissalStatus>>? dismiss = null,
+        Func<MirrorPulseRemoteConflictActionIntent, CancellationToken, ValueTask<CloudRemoteApplyEntryStatus>>? resolveOwned = null)
     {
         _resolve = resolve ?? throw new ArgumentNullException(nameof(resolve));
         _dismiss = dismiss;
+        _resolveOwned = resolveOwned;
         _copies = copies ?? throw new ArgumentNullException(nameof(copies));
         _catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
         _center = center ?? throw new ArgumentNullException(nameof(center));
@@ -43,7 +46,8 @@ public sealed class MirrorPulseRemoteConflictActions
         CloudFileSystem fileSystem,
         MirrorPulseConflictCopyStore copies,
         MirrorPulseProductCatalog catalog,
-        MirrorPulseConflictCenter center)
+        MirrorPulseConflictCenter center,
+        Func<MirrorPulseRemoteConflictActionIntent, CancellationToken, ValueTask<CloudRemoteApplyEntryStatus>>? resolveOwned = null)
     {
         ArgumentNullException.ThrowIfNull(fileSystem);
         return new(async (id, decision, cancellationToken) =>
@@ -51,7 +55,7 @@ public sealed class MirrorPulseRemoteConflictActions
                 id, new CloudRemoteConflictResolution(decision), cancellationToken)
                 .ConfigureAwait(false)).Status,
             copies, catalog, center,
-            (id, cancellationToken) => fileSystem.DismissRemoteConflictAsync(id, cancellationToken));
+            (id, cancellationToken) => fileSystem.DismissRemoteConflictAsync(id, cancellationToken), resolveOwned);
     }
 
     public async Task<MirrorPulseRemoteConflictActionOutcome> ApplyAsync(
@@ -104,6 +108,16 @@ public sealed class MirrorPulseRemoteConflictActions
         {
             var receipt = await _catalog.PrepareRemoteConflictActionAsync(intent, cancellationToken).ConfigureAwait(false);
             if (receipt is not null) return await ReplayObservedAsync(receipt, cancellationToken).ConfigureAwait(false);
+            var completedDelete = await _catalog.ReadRemoteDeleteResolutionAsync(commandId, cancellationToken).ConfigureAwait(false);
+            if (completedDelete?.CompletedAt is { } completedAt)
+            {
+                // Complete member settlement already retained the owned SDK disposition and
+                // final native verification. Recover only the lost outer command receipt.
+                receipt = new(intent, completedDelete.Outcome!.Status == MirrorPulseRemoteDeleteResolutionStatus.Applied
+                    ? MirrorPulseRemoteConflictObservedStatus.Applied : MirrorPulseRemoteConflictObservedStatus.AlreadyApplied, null, completedAt);
+                await _catalog.RecordRemoteConflictActionReceiptAsync(receipt, CancellationToken.None).ConfigureAwait(false);
+                return await ReplayObservedAsync(receipt, cancellationToken).ConfigureAwait(false);
+            }
         }
         else
             await _catalog.SaveUserCommandAsync(new MirrorPulseUserCommandRecord(
@@ -151,7 +165,9 @@ public sealed class MirrorPulseRemoteConflictActions
                 : CloudRemoteConflictDecision.KeepRemote;
             // A missing SDK conflict proves no outcome for this product command.
             // Preserve an unavailable/ambiguous result instead of inventing AlreadyApplied.
-            CloudRemoteApplyEntryStatus status = await _resolve(conflict.ConflictId, decision, cancellationToken).ConfigureAwait(false);
+            CloudRemoteApplyEntryStatus status = intent is not null && _resolveOwned is not null
+                ? await _resolveOwned(intent, cancellationToken).ConfigureAwait(false)
+                : await _resolve(conflict.ConflictId, decision, cancellationToken).ConfigureAwait(false);
 
             bool resolved = action != MirrorPulseConflictAction.Defer &&
                 status is CloudRemoteApplyEntryStatus.Applied or CloudRemoteApplyEntryStatus.AlreadyApplied;

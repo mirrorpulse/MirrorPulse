@@ -21,7 +21,8 @@ public sealed record MirrorPulseNamespaceStartupRoot(RootId RootId, Guid? Operat
 internal sealed class MirrorPulseNamespaceStartupCoordinator(CloudFileSystem fileSystem, MirrorPulseProductCatalog catalog,
     MirrorPulseRootRouter router, MirrorPulseNamespaceExecutionSession execution, MirrorPulseNamespaceActor actor,
     IMirrorPulseInstanceScheduler scheduler, MirrorPulseNamespacePermissionCoordinator permissions, MirrorPulseNamespaceWorkAdmission work,
-    Action<string>? progress = null)
+    Action<string>? progress = null,
+    Func<RootRegistration, CancellationToken, ValueTask>? recoverRemoteDelete = null)
 {
     internal async ValueTask<(MirrorPulseNamespaceAnchorProtection Guard, IReadOnlyList<MirrorPulseNamespaceStartupRoot> Roots)> StartAsync(
         CancellationToken cancellationToken)
@@ -111,6 +112,8 @@ internal sealed class MirrorPulseNamespaceStartupCoordinator(CloudFileSystem fil
                 try
                 {
                     progress?.Invoke("NamespaceRootBegin");
+                    if (root.State == RootRegistrationState.Active && recoverRemoteDelete is not null)
+                        await recoverRemoteDelete(root, cancellationToken).ConfigureAwait(false);
                     var child = await catalog.ReadNamespaceMemberChildAsync(anchor.MemberId, root.DirectoryName, cancellationToken).ConfigureAwait(false);
                     var pendingOperations = await catalog.ReadNamespacePendingOperationsAsync(root.RootId, cancellationToken).ConfigureAwait(false);
                     if (child is not null && pendingOperations.Count != 0)

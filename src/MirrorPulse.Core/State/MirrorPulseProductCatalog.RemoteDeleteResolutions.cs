@@ -457,6 +457,7 @@ public sealed partial class MirrorPulseProductCatalog
                 payload BLOB NOT NULL,fingerprint BLOB NOT NULL,completed INTEGER NOT NULL CHECK(completed IN (0,1)),
                 FOREIGN KEY(command_id) REFERENCES namespace_member_retirement_batches(operation_id));
             CREATE INDEX IF NOT EXISTS remote_delete_resolutions_pending ON remote_delete_resolutions(instance_id,completed,command_id);
+            CREATE INDEX IF NOT EXISTS remote_delete_resolutions_root ON remote_delete_resolutions(root_id,command_id);
             CREATE TABLE IF NOT EXISTS remote_delete_resolution_members(command_id TEXT NOT NULL REFERENCES remote_delete_resolutions(command_id),
                 ordinal INTEGER NOT NULL,member_id TEXT NOT NULL,payload BLOB NOT NULL,fingerprint BLOB NOT NULL,
                 PRIMARY KEY(command_id,ordinal),UNIQUE(command_id,member_id));

@@ -13,12 +13,12 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     [TestMethod]
     [DoNotParallelize]
     [TestCategory("NativeCloudFiles")]
-    public Task NativeOriginalRemoteTreeDeleteRecoversItsSdkResultBeforeSuffixAndCursor() => RunOriginalRemoteTreeDeleteAsync(false, false);
+    public Task NativeExplicitRemoteTreeDeleteRecoversItsSdkResultBeforeFollowingWorkAndCursor() => RunExplicitRemoteDeleteAsync(true, 1, false, false);
 
     [TestMethod]
     [DoNotParallelize]
     [TestCategory("NativeCloudFiles")]
-    public Task NativeOriginalRemoteTreeDeleteYieldsAfter64MembersAndReopensBeforeCursor() => RunOriginalRemoteTreeDeleteAsync(true, false);
+    public Task NativeExplicitRemoteTreeDeleteYieldsAfter64MembersAndReopensBeforeCommandReceipt() => RunExplicitRemoteDeleteAsync(true, 64, false, true);
 
     [TestMethod]
     [DoNotParallelize]
