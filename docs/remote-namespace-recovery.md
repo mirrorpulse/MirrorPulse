@@ -7,6 +7,18 @@ Delete scenarios below describe the preview.6 baseline, not preview.7 acceptance
 See [preview compatibility](cfsharp-preview-compatibility.md) for the schema 8
 migration, original-evidence compatibility and separate SDK recovery regressions.
 
+Remote conflict commands require an observed public SDK outcome before recording
+successful completion. A missing SDK conflict does not prove that the current
+product command completed, and cannot be converted into `AlreadyApplied`.
+Unavailable outcomes retain the original product conflict and any verified copy.
+An explicit reconciliation path remains necessary when an SDK result was lost
+without an owned terminal receipt; replay cannot manufacture that evidence.
+
+After an actual SDK apply or dismissal, the Host persists the command's terminal
+state before removing its in-memory conflict. A failed catalog write retains that
+conflict and its original product projection. If recording failure also fails,
+the original action error and the separate persistence error are both retained.
+
 CfSharp owns remote batch execution, decoded remote conflicts, native file
 operations, and its official SQLite projection. MirrorPulse retains product
 membership, stable native bindings, current protected locations, and Adapter

@@ -114,10 +114,10 @@ public sealed class MirrorPulseRemoteConflictActions
                     CloudRemoteConflictDismissalStatus.AlreadyDismissed;
                 if (dismissed)
                 {
-                    _center.Remove(conflict.ConflictId);
                     await _catalog.SaveUserCommandAsync(new MirrorPulseUserCommandRecord(
                         commandId, actionName, conflict.ConflictId.ToString("D"), "resolved"), cancellationToken)
                         .ConfigureAwait(false);
+                    _center.Remove(conflict.ConflictId);
                 }
 
                 if (!dismissed) await SaveFailedAsync(commandId, actionName, conflict, cancellationToken).ConfigureAwait(false);
@@ -144,25 +144,18 @@ public sealed class MirrorPulseRemoteConflictActions
             CloudRemoteConflictDecision decision = action == MirrorPulseConflictAction.Defer
                 ? CloudRemoteConflictDecision.Defer
                 : CloudRemoteConflictDecision.KeepRemote;
-            CloudRemoteApplyEntryStatus status;
-            try
-            {
-                status = await _resolve(conflict.ConflictId, decision, cancellationToken).ConfigureAwait(false);
-            }
-            catch (KeyNotFoundException) when (action != MirrorPulseConflictAction.Defer)
-            {
-                // CfSharp removes the conflict only after a successful apply. A retry converges here.
-                status = CloudRemoteApplyEntryStatus.AlreadyApplied;
-            }
+            // A missing SDK conflict proves no outcome for this product command.
+            // Preserve an unavailable/ambiguous result instead of inventing AlreadyApplied.
+            CloudRemoteApplyEntryStatus status = await _resolve(conflict.ConflictId, decision, cancellationToken).ConfigureAwait(false);
 
             bool resolved = action != MirrorPulseConflictAction.Defer &&
                 status is CloudRemoteApplyEntryStatus.Applied or CloudRemoteApplyEntryStatus.AlreadyApplied;
             if (resolved)
             {
-                _center.Remove(conflict.ConflictId);
                 await _catalog.SaveUserCommandAsync(new MirrorPulseUserCommandRecord(
                     commandId, actionName, conflict.ConflictId.ToString("D"), "resolved"), cancellationToken)
                     .ConfigureAwait(false);
+                _center.Remove(conflict.ConflictId);
             }
 
             if (!resolved && action != MirrorPulseConflictAction.Defer)
@@ -171,7 +164,15 @@ public sealed class MirrorPulseRemoteConflictActions
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            await SaveFailedAsync(commandId, actionName, conflict, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await SaveFailedAsync(commandId, actionName, conflict, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception persistenceError)
+            {
+                throw new AggregateException("The remote conflict action and failure-state persistence both failed; retain the original command and conflict.",
+                    exception, persistenceError);
+            }
             throw;
         }
     }

@@ -10,7 +10,7 @@ using MirrorPulse.Core.Sync;
 namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 
 [TestClass]
-public sealed class MirrorPulseRemoteConflictActionsTests
+public sealed partial class MirrorPulseRemoteConflictActionsTests
 {
     [TestMethod]
     public async Task KeepsASelectedCopyOutsideSyncRootBeforeApplyingRemote()
