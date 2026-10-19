@@ -6,7 +6,7 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 public sealed partial class MirrorPulseNamespacePermissionCoordinator
 {
     internal async Task<T> RunCurrentTreeAuditAsync<T>(Guid anchorMemberId,
-        Func<MirrorPulseNamespaceCurrentTreeSnapshot, CancellationToken, Task<T>> work, CancellationToken cancellationToken,
+        Func<MirrorPulseNamespaceCurrentTreeAuditAdmission, CancellationToken, Task<T>> work, CancellationToken cancellationToken,
         Func<T, CancellationToken, Task>? onAudited = null, RootId? scopeRoot = null)
     {
         Task<MirrorPulseNamespaceCurrentTreeSnapshot> ReadAsync() => scopeRoot is null
@@ -22,7 +22,12 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinator
             await _gate.WaitAsync(cancellationToken).ConfigureAwait(false); entered = true;
             var current = await ReadAsync().ConfigureAwait(false);
             if (current.Fingerprint != inventory.Fingerprint) throw new InvalidOperationException("The current graph changed before audit admission.");
-            var result = await work(current, cancellationToken).ConfigureAwait(false);
+            T result;
+            // The complete current graph remains the authority. Borrow its coherent
+            // members only while native inspection runs, then expire the admission
+            // before revalidation and any terminal initialization write.
+            using (var admission = new MirrorPulseNamespaceCurrentTreeAuditAdmission(current))
+                result = await work(admission, cancellationToken).ConfigureAwait(false);
             if ((await ReadAsync().ConfigureAwait(false)).Fingerprint != current.Fingerprint)
                 throw new InvalidOperationException("The current graph or its dispatch fences changed during the native audit.");
             if (onAudited is not null) await onAudited(result, cancellationToken).ConfigureAwait(false);

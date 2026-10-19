@@ -19,6 +19,15 @@ state before removing its in-memory conflict. A failed catalog write retains tha
 conflict and its original product projection. If recording failure also fails,
 the original action error and the separate persistence error are both retained.
 
+The complete current-tree audit borrows one coherent inventory only for its awaited
+native-inspection callback. The permission coordinator validates the entire current
+catalog fingerprint before and after that callback; the borrowed admission expires
+before initialization completion. Every object still receives fresh public identity,
+native binding, owner, descriptor and direct-parent checks, followed by complete
+local enumeration and a final anchor check. Initialization retains its separate
+transactional inventory validation before releasing its owned fences. Standalone
+member registration and directory publication keep their individual catalog checks.
+
 CfSharp owns remote batch execution, decoded remote conflicts, native file
 operations, and its official SQLite projection. MirrorPulse retains product
 membership, stable native bindings, current protected locations, and Adapter

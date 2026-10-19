@@ -72,7 +72,43 @@ public static class MirrorPulseNamespaceMemberRegistrar
     }
 
     // Audit committed locations and their current direct parents without replaying registration
-    // against immutable first-parent facts. The mature object and identity inspector is shared.
+    // against immutable first-parent facts. The permission coordinator revalidates
+    // the entire admitted catalog inventory after these fresh native observations.
+    internal static async Task InspectCurrentAuditAsync(MirrorPulseNamespaceCurrentTreeAuditAdmission admission,
+        MirrorPulseNamespaceMemberProtectionSnapshot current, MirrorPulseNamespaceMemberProtectionSnapshot? currentParent,
+        CloudItem item, CloudDirectory? parent, MirrorPulseRootRouter router, MirrorPulseNamespaceActor namespaceActor,
+        CancellationToken token)
+    {
+        namespaceActor.AssertAccess();
+        admission.RequireSnapshot(current);
+        var proof = MirrorPulseNamespaceProtectionProofReader.FromSnapshot(current);
+        RequireCaller(proof);
+        if (current.Context.Location.ParentMemberId is { } parentId)
+        {
+            if (currentParent is null || parent is null || currentParent.Context.Member.MemberId != parentId ||
+                !currentParent.Context.Member.IsDirectory || currentParent.Context.Protection.RoleSid != proof.RoleSid ||
+                item.Parent is null || !string.Equals(item.Parent.FullPath, parent.FullPath, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("The current audit requires the actual committed direct parent.");
+            admission.RequireSnapshot(currentParent);
+            var parentProof = MirrorPulseNamespaceProtectionProofReader.FromSnapshot(currentParent); RequireCaller(parentProof);
+            await using var parentLease = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(parent, router, token).ConfigureAwait(false);
+            var before = await InspectAuditedSnapshotAsync(admission, currentParent, parentProof, parent, parentLease, token).ConfigureAwait(false);
+            await using var lease = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(item, router, token).ConfigureAwait(false);
+            _ = await InspectAuditedSnapshotAsync(admission, current, proof, item, lease, token).ConfigureAwait(false);
+            MirrorPulseNamespaceBirthProtectionVerifier.RequireUnchangedParent(before, await parentLease.InspectAsync(token).ConfigureAwait(false));
+        }
+        else
+        {
+            if (currentParent is not null || parent is not null || !router.IsSyncRoot(item.FullPath))
+                throw new InvalidDataException("Only the actual sync-root anchor has no current parent.");
+            await using var lease = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(item, router, token).ConfigureAwait(false);
+            _ = await InspectAuditedSnapshotAsync(admission, current, proof, item, lease, token).ConfigureAwait(false);
+        }
+        admission.RequireActive();
+        namespaceActor.AssertAccess();
+    }
+
+    // Directory publication and other standalone callers retain their individual catalog rechecks.
     internal static async Task InspectCurrentAsync(MirrorPulseProductCatalog catalog,
         MirrorPulseNamespaceMemberProtectionSnapshot current, MirrorPulseNamespaceMemberProtectionSnapshot? currentParent,
         CloudItem item, CloudDirectory? parent, MirrorPulseRootRouter router, MirrorPulseNamespaceActor namespaceActor,
@@ -108,6 +144,20 @@ public static class MirrorPulseNamespaceMemberRegistrar
         namespaceActor.AssertAccess();
     }
 
+    private static async Task<MirrorPulseNamespacePermissionObject> InspectAuditedSnapshotAsync(
+        MirrorPulseNamespaceCurrentTreeAuditAdmission admission, MirrorPulseNamespaceMemberProtectionSnapshot current,
+        MirrorPulseNamespaceProtectionProof proof, CloudItem item, MirrorPulseWindowsNamespacePermissionLease lease, CancellationToken token)
+    {
+        admission.RequireSnapshot(current);
+        var facts = await lease.InspectAsync(token).ConfigureAwait(false);
+        var snapshot = await item.InspectAsync(token).ConfigureAwait(false);
+        RequireNativeMemberFacts(current.Context.Member, proof, current.Context.Location.RelativePath, facts, snapshot);
+        MirrorPulseNamespaceBirthProtectionVerifier.RequireRegisteredPublicIdentity(snapshot, current.Identity,
+            current.Context.Member.Origin == MirrorPulseNamespaceMemberOrigin.ProtectedBirth);
+        admission.RequireActive();
+        return facts;
+    }
+
     private static async Task<MirrorPulseNamespacePermissionObject> InspectAsync(MirrorPulseProductCatalog catalog,
         MirrorPulseNamespaceMemberRegistration member, MirrorPulseNamespaceProtectionProof proof, CloudItem item,
         MirrorPulseWindowsNamespacePermissionLease lease, CancellationToken token)
@@ -119,15 +169,7 @@ public static class MirrorPulseNamespaceMemberRegistrar
             throw new InvalidDataException("Native registration lost its immutable member provenance.");
         string path = registered is null ? member.RelativePath :
             (await catalog.ReadNamespaceMemberLocationAsync(member.MemberId, token).ConfigureAwait(false)).RelativePath;
-        if (!snapshot.Exists || snapshot.IsTombstone || snapshot.LocalBinding is not { } binding ||
-            facts.LocalObject != new MirrorPulseLocalFileBinding(binding.VolumeSerialNumber, binding.SyncRootFileId, binding.LocalFileId) ||
-            facts.LocalObject != member.LocalObject || facts.LocalObject != proof.Verification.LocalObject ||
-            facts.OwnerSid != member.OwnerSid || facts.OwnerSid != proof.OwnerSid || facts.OwnerSid != proof.Verification.OwnerSid ||
-            facts.RootId != member.RootId || facts.RootId != proof.RootId || facts.RelativePath != path || facts.RelativePath != proof.RelativePath ||
-            facts.IsDirectory != member.IsDirectory || facts.IsDirectory != proof.IsDirectory ||
-            (snapshot.Kind == CloudItemKind.Directory) != member.IsDirectory || facts.LinkCount != 1 || facts.Dacl != proof.Verification.Dacl ||
-            !MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(proof.ExpectedDacl, facts.Dacl))
-            throw new InvalidDataException("Native member registration requires the original object and its exact current protected location and descriptor.");
+        RequireNativeMemberFacts(member, proof, path, facts, snapshot);
         if (proof.CurrentIdentity is { } identity)
             MirrorPulseNamespaceBirthProtectionVerifier.RequireRegisteredPublicIdentity(snapshot, identity,
                 member.Origin == MirrorPulseNamespaceMemberOrigin.ProtectedBirth);
@@ -145,6 +187,20 @@ public static class MirrorPulseNamespaceMemberRegistrar
                 throw new InvalidDataException("The original member lost its retained public Cloud Files identity.");
         }
         return facts;
+    }
+
+    private static void RequireNativeMemberFacts(MirrorPulseNamespaceMemberRegistration member,
+        MirrorPulseNamespaceProtectionProof proof, string path, MirrorPulseNamespacePermissionObject facts, CloudItemSnapshot snapshot)
+    {
+        if (!snapshot.Exists || snapshot.IsTombstone || snapshot.LocalBinding is not { } binding ||
+            facts.LocalObject != new MirrorPulseLocalFileBinding(binding.VolumeSerialNumber, binding.SyncRootFileId, binding.LocalFileId) ||
+            facts.LocalObject != member.LocalObject || facts.LocalObject != proof.Verification.LocalObject ||
+            facts.OwnerSid != member.OwnerSid || facts.OwnerSid != proof.OwnerSid || facts.OwnerSid != proof.Verification.OwnerSid ||
+            facts.RootId != member.RootId || facts.RootId != proof.RootId || facts.RelativePath != path || facts.RelativePath != proof.RelativePath ||
+            facts.IsDirectory != member.IsDirectory || facts.IsDirectory != proof.IsDirectory ||
+            (snapshot.Kind == CloudItemKind.Directory) != member.IsDirectory || facts.LinkCount != 1 || facts.Dacl != proof.Verification.Dacl ||
+            !MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(proof.ExpectedDacl, facts.Dacl))
+            throw new InvalidDataException("Native member registration requires the original object and its exact current protected location and descriptor.");
     }
 
     private static async Task RequireUnchangedProofAsync(MirrorPulseProductCatalog catalog,

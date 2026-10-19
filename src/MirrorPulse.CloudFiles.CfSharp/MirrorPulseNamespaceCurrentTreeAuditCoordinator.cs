@@ -55,9 +55,10 @@ public sealed class MirrorPulseNamespaceCurrentTreeAuditCoordinator(CloudFileSys
             MirrorPulseNamespaceCurrentTreeAudit result = null!;
             await execution.RunNamespaceOperationAsync(async () =>
             {
-                result = await permissions.RunCurrentTreeAuditAsync(anchorMemberId, async (inventory, stop) =>
+                result = await permissions.RunCurrentTreeAuditAsync(anchorMemberId, async (admission, stop) =>
                 {
                     actor.AssertAccess();
+                    var inventory = admission.Inventory;
                     var members = inventory.Members.ToDictionary(member => member.Context.Member.MemberId);
                     var anchor = members[anchorMemberId];
                     if (members.Values.Any(member => member.Context.Protection.RoleSid != execution.RoleSid.Value ||
@@ -90,7 +91,7 @@ public sealed class MirrorPulseNamespaceCurrentTreeAuditCoordinator(CloudFileSys
                         var location = member.Context.Location;
                         CloudItem item = member.Context.Member.IsDirectory ? fileSystem.GetDirectory(location.RelativePath) : fileSystem.GetFile(location.RelativePath);
                         var parent = location.ParentMemberId is { } parentId ? members[parentId] : null;
-                        await MirrorPulseNamespaceMemberRegistrar.InspectCurrentAsync(catalog, member, parent, item,
+                        await MirrorPulseNamespaceMemberRegistrar.InspectCurrentAuditAsync(admission, member, parent, item,
                             parent is null ? null : fileSystem.GetDirectory(parent.Context.Location.RelativePath), router, actor, stop).ConfigureAwait(false);
                     }
                     foreach (var root in roots)
