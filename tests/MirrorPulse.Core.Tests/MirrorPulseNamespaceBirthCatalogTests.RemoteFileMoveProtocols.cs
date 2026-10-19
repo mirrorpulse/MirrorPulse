@@ -8,10 +8,14 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
     private static MirrorPulseRemoteFileMovePolicy OriginalFileMovePolicy => new(true, true, TimeSpan.FromMinutes(2).Ticks, 1);
 
     [TestMethod]
-    [DataRow(false)]
-    [DataRow(true)]
-    public async Task FileMoveProtocolAdmissionRetainsTheOriginalStartAndPolicyAcrossOwners(bool nullBaseline)
+    [DataRow(false, false)]
+    [DataRow(true, false)]
+    [DataRow(false, true)]
+    [DataRow(true, true)]
+    public async Task FileMoveProtocolAdmissionRetainsTheOriginalStartAndPolicyAcrossOwners(bool nullBaseline, bool preview7)
     {
+        var package = preview7 ? MirrorPulseRemoteLibraryProvenance.CurrentPackageVersion : "0.1.0-preview.6";
+        var source = preview7 ? MirrorPulseRemoteLibraryProvenance.CurrentSourceCommit : ProtocolSource;
         using var fixture = new Fixture(); MoveFixture setup; MirrorPulseRemoteFileMoveProtocolAdmission original;
         await using (var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths))
         {
@@ -20,11 +24,11 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             { OriginalOfficialRemoteRevision = nullBaseline ? null : "actual-before-dispatch" };
             await catalog.RecordNamespaceMemberMoveStartAsync(start);
             original = await catalog.AdmitNamespaceRemoteFileMoveProtocolAsync(setup.Move.OperationId,
-                "0.1.0-preview.6", ProtocolSource, OriginalFileMovePolicy, setup.Move.PreparedAt.AddSeconds(1));
+                package, source, OriginalFileMovePolicy, setup.Move.PreparedAt.AddSeconds(1));
             Assert.AreEqual(start, original.OriginalStart);
             Assert.AreEqual(MirrorPulseProductCatalog.CfSharpRemoteFileMoveProtocol, original.Protocol);
             Assert.AreEqual(original, await catalog.AdmitNamespaceRemoteFileMoveProtocolAsync(setup.Move.OperationId,
-                "0.1.0-preview.6", ProtocolSource, OriginalFileMovePolicy, setup.Move.PreparedAt.AddSeconds(1)));
+                package, source, OriginalFileMovePolicy, setup.Move.PreparedAt.AddSeconds(1)));
             Assert.IsNull(await catalog.ReadNamespaceMemberMoveObservationAsync(setup.Move.OperationId));
             Assert.IsNull(await catalog.ReadNamespaceMemberMoveProjectionAsync(setup.Move.OperationId));
         }
@@ -44,7 +48,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
     [DataRow("suppress")]
     [DataRow("lifetime")]
     [DataRow("observations")]
-    [DataRow("source")]
+    [DataRow("package")]
     public async Task AnExistingFileProtocolCannotReplaceItsOriginalLibraryOrPolicy(string change)
     {
         using var fixture = new Fixture(); await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
@@ -59,7 +63,8 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             _ => OriginalFileMovePolicy
         };
         await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => catalog.AdmitNamespaceRemoteFileMoveProtocolAsync(setup.Move.OperationId,
-            "0.1.0-preview.6", change == "source" ? new string('a', 40) : ProtocolSource, altered, setup.Move.PreparedAt.AddSeconds(1)));
+            change == "package" ? MirrorPulseRemoteLibraryProvenance.CurrentPackageVersion : "0.1.0-preview.6",
+            change == "package" ? MirrorPulseRemoteLibraryProvenance.CurrentSourceCommit : ProtocolSource, altered, setup.Move.PreparedAt.AddSeconds(1)));
         Assert.AreEqual(original, await catalog.ReadNamespaceRemoteFileMoveProtocolAsync(setup.Move.OperationId));
     }
 
@@ -87,6 +92,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
     [DataRow("old-package")]
     [DataRow("unknown-package")]
     [DataRow("source")]
+    [DataRow("mismatched-source")]
     [DataRow("lifetime")]
     [DataRow("observations")]
     [DataRow("time")]
@@ -95,8 +101,8 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         using var fixture = new Fixture(); await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
         var setup = await PrepareProtocolFileAsync(catalog);
         await Assert.ThrowsExactlyAsync<ArgumentException>(() => catalog.AdmitNamespaceRemoteFileMoveProtocolAsync(setup.Move.OperationId,
-            invalid == "old-package" ? "0.1.0-preview.5" : invalid == "unknown-package" ? "0.1.0-preview.7" : "0.1.0-preview.6",
-            invalid == "source" ? "not-a-source-commit" : ProtocolSource,
+            invalid == "old-package" ? "0.1.0-preview.5" : invalid == "unknown-package" ? "0.1.0-preview.8" : "0.1.0-preview.6",
+            invalid == "source" ? "not-a-source-commit" : invalid == "mismatched-source" ? MirrorPulseRemoteLibraryProvenance.CurrentSourceCommit : ProtocolSource,
             invalid == "lifetime" ? OriginalFileMovePolicy with { EchoSuppressionLifetimeTicks = 0 } :
             invalid == "observations" ? OriginalFileMovePolicy with { EchoSuppressionObservationCount = 65 } : OriginalFileMovePolicy,
             invalid == "time" ? setup.Move.PreparedAt.AddTicks(-1) : setup.Move.PreparedAt.AddSeconds(1)));

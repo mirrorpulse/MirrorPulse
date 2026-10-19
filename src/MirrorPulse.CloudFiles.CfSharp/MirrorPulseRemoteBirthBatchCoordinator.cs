@@ -207,7 +207,9 @@ internal sealed class MirrorPulseRemoteBirthBatchCoordinator(CloudFileSystem fil
         var change = RequireChange(instance, batch, ordinal, options);
         if (birth.RemoteEntry is not { } remote || birth.Version != 3 || birth.RelativePath != change.RelativePath.Replace('\\', '/') ||
             birth.IsDirectory != (change.ItemKind == CloudItemKind.Directory) ||
-            remote != Reference(instance, batch, ordinal, options, remote.ParentMemberId, remote.ParentPositionOperationId))
+            !MirrorPulseRemoteLibraryProvenance.IsSupported(remote.PackageVersion, remote.PackageSource) ||
+            remote != (Reference(instance, batch, ordinal, options, remote.ParentMemberId, remote.ParentPositionOperationId) with
+            { PackageVersion = remote.PackageVersion, PackageSource = remote.PackageSource }))
             throw new InvalidDataException("The original remote birth changed its immutable batch, identity, path or public apply policy.");
     }
 
@@ -216,8 +218,8 @@ internal sealed class MirrorPulseRemoteBirthBatchCoordinator(CloudFileSystem fil
     {
         var change = batch.Changes[ordinal];
         return new(1, instance, batch.BatchId, Convert.ToHexString(batch.Fingerprint.Span), batch.Changes.Count, ordinal,
-            change.ChangeId, change.ItemId!.Value, change.RemoteId, change.RemoteRevision, parent, placement, "0.1.0-preview.6",
-            "3caa382e341d260543d3afc05e25fa034fb32e16", new(options.PreserveUnsynchronizedLocalContent, options.SuppressLocalEcho,
+            change.ChangeId, change.ItemId!.Value, change.RemoteId, change.RemoteRevision, parent, placement, MirrorPulseRemoteLibraryProvenance.CurrentPackageVersion,
+            MirrorPulseRemoteLibraryProvenance.CurrentSourceCommit, new(options.PreserveUnsynchronizedLocalContent, options.SuppressLocalEcho,
                 options.EchoSuppressionLifetime.Ticks, options.EchoSuppressionObservationCount));
     }
 }

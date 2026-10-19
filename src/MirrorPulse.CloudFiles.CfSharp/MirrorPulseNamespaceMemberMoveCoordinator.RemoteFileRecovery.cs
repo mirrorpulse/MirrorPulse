@@ -6,8 +6,8 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 
 public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
 {
-    private const string RemoteFilePackageVersion = "0.1.0-preview.6";
-    private const string RemoteFilePackageSource = "3caa382e341d260543d3afc05e25fa034fb32e16";
+    private const string RemoteFilePackageVersion = MirrorPulseRemoteLibraryProvenance.CurrentPackageVersion;
+    private const string RemoteFilePackageSource = MirrorPulseRemoteLibraryProvenance.CurrentSourceCommit;
 
     private static MirrorPulseRemoteFileMovePolicy RemoteFilePolicy(CloudRemoteApplyOptions options) => new(
         options.PreserveUnsynchronizedLocalContent, options.SuppressLocalEcho,
@@ -29,7 +29,7 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
             RequireRemoteRequestReplay(intent, request); RequireActiveRemoteRoute(intent);
             var retained = await _catalog.ReadNamespaceRemoteFileMoveProtocolAsync(operationId, token).ConfigureAwait(false)
                 ?? throw new InvalidDataException("The original SDK protocol admission disappeared.");
-            if (retained != protocol || protocol.PackageVersion != RemoteFilePackageVersion || protocol.PackageSourceCommit != RemoteFilePackageSource ||
+            if (retained != protocol || !MirrorPulseRemoteLibraryProvenance.IsSupported(protocol.PackageVersion, protocol.PackageSourceCommit) ||
                 protocol.Policy != RemoteFilePolicy(options))
                 throw new InvalidDataException("Recovery requires the originally admitted SDK protocol and public apply policy.");
             await RequireRemoteProgressAsync(request, completed: false, token).ConfigureAwait(false);

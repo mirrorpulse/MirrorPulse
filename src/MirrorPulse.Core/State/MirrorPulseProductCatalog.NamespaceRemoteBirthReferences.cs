@@ -101,7 +101,7 @@ public sealed partial class MirrorPulseProductCatalog
             string.IsNullOrWhiteSpace(remote.ChangeId) || remote.ChangeId.Length > 16_384 || remote.ChangeId.Contains('\0') ||
             string.IsNullOrWhiteSpace(remote.RemoteId) || remote.RemoteId.Length > 4096 || remote.RemoteId.Contains('\0') ||
             string.IsNullOrWhiteSpace(remote.RemoteRevision) || remote.RemoteRevision.Length > 4096 || remote.RemoteRevision.Contains('\0') ||
-            remote.PackageVersion != "0.1.0-preview.6" || remote.PackageSource != "3caa382e341d260543d3afc05e25fa034fb32e16" ||
+            !MirrorPulseRemoteLibraryProvenance.IsSupported(remote.PackageVersion, remote.PackageSource) ||
             remote.Policy is not { } policy || policy.EchoSuppressionLifetimeTicks <= 0 ||
             policy.EchoSuppressionLifetimeTicks > TimeSpan.FromHours(1).Ticks || policy.EchoSuppressionObservationCount is < 1 or > 64)
             throw new ArgumentException("Remote birth admission requires its exact original identity, supported SDK protocol and bounded public policy.", nameof(birth));

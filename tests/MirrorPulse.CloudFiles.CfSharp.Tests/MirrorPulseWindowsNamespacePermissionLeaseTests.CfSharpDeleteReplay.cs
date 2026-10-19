@@ -3,6 +3,7 @@ using CfSharp;
 using MirrorPulse.Core.CloudFiles;
 using MirrorPulse.Core.Configuration;
 using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.State;
 
 namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 
@@ -20,7 +21,19 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     public Task NativeCfSharpOriginalDirectoryDeleteReplayCompletesItsOwnCommittedTombstoneAfterProgressLoss() =>
         RunCfSharpDeleteReplayAsync(directoryItem: true);
 
-    private async Task RunCfSharpDeleteReplayAsync(bool directoryItem)
+    [TestMethod]
+    [DoNotParallelize]
+    [TestCategory("NativeCloudFiles")]
+    public Task NativeCfSharpPreservedCleanFileDeleteRetainsItsConflictAcrossOwners() =>
+        RunCfSharpDeleteReplayAsync(directoryItem: false, preserveOnly: true);
+
+    [TestMethod]
+    [DoNotParallelize]
+    [TestCategory("NativeCloudFiles")]
+    public Task NativeCfSharpPreservedEmptyDirectoryDeleteRetainsItsConflictAcrossOwners() =>
+        RunCfSharpDeleteReplayAsync(directoryItem: true, preserveOnly: true);
+
+    private async Task RunCfSharpDeleteReplayAsync(bool directoryItem, bool preserveOnly = false)
     {
         if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
             Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
@@ -46,7 +59,10 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 previousRemoteRevision: "v1", cursorAfter: new byte[] { 2 })], new byte[] { 2 });
         byte[] fingerprint = original.Fingerprint.ToArray();
         var fault = new MirrorPulseRemoteProgressCommitFault(original);
-        var options = new CloudRemoteApplyOptions { MaximumEntries = 1, PreserveUnsynchronizedLocalContent = true };
+        Guid? preservedConflict = null;
+        // Preview.7 retains even clean objects under preservation. This isolated SDK
+        // recovery fixture explicitly authorizes deletion of its disposable original.
+        var options = new CloudRemoteApplyOptions { MaximumEntries = 1, PreserveUnsynchronizedLocalContent = false };
         try
         {
             registry.Register(new(paths.SyncRootPath, "0.1.0", Guid.NewGuid(), [1, 2, 3]));
@@ -66,8 +82,36 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             {
                 var state = new MirrorPulseCfSharpStateSession(paths);
                 await using var sdk = CloudFileSystem.CreateBuilder(paths.SyncRootPath)
-                    .WithStateStore(owner == 0 ? fault.Wrap(state) : state).WithContentProvider(provider).Build();
+                    .WithStateStore(owner == 0 && !preserveOnly ? fault.Wrap(state) : state).WithContentProvider(provider).Build();
                 await sdk.StartAsync(deadline.Token);
+                if (preserveOnly)
+                {
+                    var preservingOptions = options with { PreserveUnsynchronizedLocalContent = true };
+                    if (owner == 0) Assert.IsEmpty((await sdk.ApplyRemoteChangesAsync(birth, preservingOptions, deadline.Token)).ConflictIds);
+                    var retained = await sdk.ApplyRemoteChangesAsync(original, preservingOptions, deadline.Token);
+                    var records = await sdk.ListRemoteConflictsAsync(deadline.Token);
+                    Assert.AreEqual(CloudRemoteBatchStatus.Applied, retained.Status); Assert.IsFalse(retained.RequiresRetry);
+                    Assert.AreEqual(1, retained.AppliedEntryCount);
+                    CollectionAssert.AreEqual(original.FinalCursor.ToArray(), retained.SafeCursor.ToArray());
+                    Assert.HasCount(1, records);
+                    Assert.AreEqual(CloudRemoteConflictReason.Delete, records[0].Conflict.Reason);
+                    if (owner == 0)
+                    {
+                        Assert.AreEqual(CloudRemoteApplyEntryStatus.Conflict, retained.Entries.Single().Status);
+                        preservedConflict = records[0].ConflictId;
+                    }
+                    else Assert.AreEqual(preservedConflict, records[0].ConflictId);
+                    CloudItem preserved = directoryItem ? sdk.GetDirectory("Docs/retire") : sdk.GetFile("Docs/retire");
+                    Assert.IsTrue((await preserved.InspectAsync(deadline.Token)).Exists);
+                    await using var transaction = await state.OpenStore.BeginTransactionAsync(deadline.Token);
+                    var item = (await transaction.Items.GetByItemIdAsync(identity.ItemId, deadline.Token))!;
+                    Assert.IsFalse(item.IsTombstone); Assert.AreEqual("v1", item.RemoteRevision);
+                    await transaction.RollbackAsync(deadline.Token);
+                    Assert.AreEqual(0, fault.Failures); Assert.AreEqual(0, provider.Reads);
+                    Assert.IsFalse(File.Exists(paths.ProductCatalogDatabasePath));
+                    TestContext.WriteLine($"CfSharpPreservedDelete: owner={owner}; directory={directoryItem}; objectRetained=True; durableConflicts=1; sourceReads=0; sdkPackage={MirrorPulseRemoteLibraryProvenance.CurrentPackageVersion}.");
+                    continue;
+                }
                 if (owner == 0)
                 {
                     var created = await sdk.ApplyRemoteChangesAsync(birth, options, deadline.Token);
@@ -100,7 +144,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 TestContext.WriteLine($"CfSharpDeleteReplayActual: directory={directoryItem}; status={replay.Status}; " +
                     $"requiresRetry={replay.RequiresRetry}; appliedEntryCount={replay.AppliedEntryCount}; " +
                     $"safeCursor={Convert.ToHexString(replay.SafeCursor.Span)}; entryStatuses={string.Join(',', replay.Entries.Select(entry => entry.Status))}; " +
-                    $"conflicts={replay.ConflictIds.Count}; sdkPackage=0.1.0-preview.6; originalFingerprint={Convert.ToHexString(original.Fingerprint.Span)}; " +
+                    $"conflicts={replay.ConflictIds.Count}; sdkPackage={MirrorPulseRemoteLibraryProvenance.CurrentPackageVersion}; destructiveAuthorization=True; originalFingerprint={Convert.ToHexString(original.Fingerprint.Span)}; " +
                     $"sourceReads={provider.Reads}; productCatalogCreated={File.Exists(paths.ProductCatalogDatabasePath)}.");
                 foreach (var record in conflicts)
                     TestContext.WriteLine($"CfSharpDeleteReplayConflict: reason={record.Conflict.Reason}; change={record.Conflict.Change.ChangeId}; " +

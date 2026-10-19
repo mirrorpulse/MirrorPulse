@@ -231,7 +231,7 @@ public sealed partial class MirrorPulseProductCatalog
             child.Context.Protection.RoleSid != intent.RoleSid || parent.Context.Protection.RoleSid != intent.RoleSid ||
             child.Identity.ItemId != remote.ItemId || child.Identity.RemoteId != remote.RemoteId ||
             child.Context.Verification.ObservedAt > intent.PreparedAt || parent.Context.Verification.ObservedAt > intent.PreparedAt ||
-            remote.PackageVersion != "0.1.0-preview.6" || remote.PackageSource != "3caa382e341d260543d3afc05e25fa034fb32e16" ||
+            !MirrorPulseRemoteLibraryProvenance.IsSupported(remote.PackageVersion, remote.PackageSource) ||
             remote.Policy is not { PreserveUnsynchronizedLocalContent: true } policy || policy.EchoSuppressionLifetimeTicks <= 0 ||
             policy.EchoSuppressionLifetimeTicks > TimeSpan.FromHours(1).Ticks || policy.EchoSuppressionObservationCount is < 1 or > 64)
             throw new ArgumentException("Remote retirement requires its complete original SDK entry and protected member snapshots.", nameof(intent));

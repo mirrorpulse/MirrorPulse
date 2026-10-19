@@ -31,11 +31,30 @@ public sealed class MirrorPulseRemoteBirthBatchCoordinatorTests
     }
 
     [TestMethod]
-    public void EntryBudgetMayChangeWithoutRewritingTheOriginalBirthPolicy()
+    [DataRow(false)]
+    [DataRow(true)]
+    public void EntryBudgetMayChangeWithoutRewritingTheOriginalBirthPolicy(bool preview7)
     {
         var instance = InstanceId.New(); var batch = Batch(instance, Guid.NewGuid()); var options = CloudRemoteApplyOptions.Default;
         var birth = Birth(instance, batch, options);
+        if (preview7) birth = birth with
+        {
+            RemoteEntry = birth.RemoteEntry! with
+            { PackageVersion = MirrorPulseRemoteLibraryProvenance.CurrentPackageVersion, PackageSource = MirrorPulseRemoteLibraryProvenance.CurrentSourceCommit }
+        };
         MirrorPulseRemoteBirthBatchCoordinator.RequireOriginal(birth, instance, batch, 0, options with { MaximumEntries = 1 });
+    }
+
+    [TestMethod]
+    [DataRow("0.1.0-preview.7", "3caa382e341d260543d3afc05e25fa034fb32e16")]
+    [DataRow("0.1.0-preview.6", "137d6e2a9c1b15f337e8e7ca3566d5e3f29fcdb9")]
+    [DataRow("0.1.0-preview.8", "137d6e2a9c1b15f337e8e7ca3566d5e3f29fcdb9")]
+    public void OriginalBirthCannotAcquireAnotherPublicationsProvenance(string version, string source)
+    {
+        var instance = InstanceId.New(); var batch = Batch(instance, Guid.NewGuid()); var options = CloudRemoteApplyOptions.Default;
+        var birth = Birth(instance, batch, options);
+        birth = birth with { RemoteEntry = birth.RemoteEntry! with { PackageVersion = version, PackageSource = source } };
+        Assert.ThrowsExactly<InvalidDataException>(() => MirrorPulseRemoteBirthBatchCoordinator.RequireOriginal(birth, instance, batch, 0, options));
     }
 
     [TestMethod]

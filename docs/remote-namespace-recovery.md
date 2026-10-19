@@ -1,5 +1,12 @@
 # Remote namespace recovery
 
+The current dependency is CfSharp preview.7. Its default preservation policy retains
+even clean remote Delete targets as durable conflicts; MirrorPulse preserves that
+policy. Explicit product KeepRemote settlement remains pending. Earlier automatic
+Delete scenarios below describe the preview.6 baseline, not preview.7 acceptance.
+See [preview compatibility](cfsharp-preview-compatibility.md) for the schema 8
+migration, original-evidence compatibility and separate SDK recovery regressions.
+
 CfSharp owns remote batch execution, decoded remote conflicts, native file
 operations, and its official SQLite projection. MirrorPulse retains product
 membership, stable native bindings, current protected locations, and Adapter

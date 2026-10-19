@@ -36,9 +36,12 @@ supported protocol before its first dispatch under that protocol. The original
 start still remains immutable. Foreign keys and the product schema fence prevent
 older Hosts from silently ignoring these new facts.
 
-The preview.6 runtime records this admission under its fresh before-dispatch
+The preview.7 runtime records this admission under its fresh before-dispatch
 guards and uses it to select original-batch file recovery. Missing admission
 retains the existing unmoved-source route; a moved target cannot invent one.
+New admissions identify preview.7 source `137d6e2a9c1b15f337e8e7ca3566d5e3f29fcdb9`.
+Original preview.6 admissions remain readable with their original source and policy;
+the upgrade cannot rewrite them as preview.7 admissions.
 Native acceptance of the revised production-driver fixtures is still required
 before automatic recovery can be claimed. Directory movement, execution-role
 handoff and default Host composition retain their separate requirements.

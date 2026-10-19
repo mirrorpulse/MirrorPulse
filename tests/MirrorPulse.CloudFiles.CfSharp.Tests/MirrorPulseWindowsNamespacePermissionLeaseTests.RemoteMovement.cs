@@ -232,8 +232,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         if (!directoryMove && !legacyProtocolStart)
                         {
                             Assert.IsNotNull(firstProtocol);
-                            Assert.AreEqual("0.1.0-preview.6", firstProtocol.PackageVersion);
-                            Assert.AreEqual("3caa382e341d260543d3afc05e25fa034fb32e16", firstProtocol.PackageSourceCommit);
+                            Assert.AreEqual(MirrorPulseRemoteLibraryProvenance.CurrentPackageVersion, firstProtocol.PackageVersion);
+                            Assert.AreEqual(MirrorPulseRemoteLibraryProvenance.CurrentSourceCommit, firstProtocol.PackageSourceCommit);
                             Assert.AreEqual(originalStart, firstProtocol.OriginalStart);
                         }
                         if (legacyProtocolStart) Assert.IsNull(firstProtocol);
@@ -372,7 +372,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                             Assert.AreEqual(0, provider.Reads);
                             TestContext.WriteLine($"LegacyRemoteProductStart: caseOnly={caseOnly}; originalStartWithoutProtocol=True; " +
                                 "twoSdkOwners=True; movedTargetNotAdopted=True; originalSdkProgressUnchanged=True; " +
-                                "newProtocolInvented=False; adapterCursorPublished=False; hydration=False; sdkVersion=preview.6; preview5BinaryMigration=False.");
+                                $"newProtocolInvented=False; adapterCursorPublished=False; hydration=False; sdkVersion={MirrorPulseRemoteLibraryProvenance.CurrentPackageVersion}; preview5BinaryMigration=False.");
                             continue;
                         }
                     }

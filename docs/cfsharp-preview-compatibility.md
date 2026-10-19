@@ -1,16 +1,36 @@
 # CfSharp Preview Compatibility Report
 
-MirrorPulse pins `CfSharp` and `CfSharp.Storage.Sqlite` to `0.1.0-preview.6` from
+MirrorPulse pins `CfSharp` and `CfSharp.Storage.Sqlite` to `0.1.0-preview.7` from
 NuGet.org. The integration project owns CfSharp types and lifecycle; Core exposes
 MirrorPulse contracts to Adapters and the product UI.
 
 The core, SQLite provider and native NuGet publications identify the same source
-commit, `3caa382e341d260543d3afc05e25fa034fb32e16`. Package and lock updates do
+commit, `137d6e2a9c1b15f337e8e7ca3566d5e3f29fcdb9`. Package and lock updates do
 not establish native acceptance. The native evidence described below was obtained
-with earlier previews; preview.6 integration and its original-batch recovery need
-their own validation on the exact MirrorPulse source.
+with earlier previews; preview.7 requires validation on the exact MirrorPulse source.
 
-Preview.6 retains an original file-move preparation and reconciles immutable-batch
+Preview.7 introduces authenticated original Delete preparation, sealed inventories,
+native acceptance and item-projection receipts, and atomic batch-outcome recovery.
+The official SQLite provider upgrades to schema 8 and fences older runtimes.
+This migration does not manufacture missing evidence for preview.6 deletion gaps:
+retain the original batch and reconcile unresolved legacy work explicitly.
+
+The default preservation policy now retains even clean files and empty directories
+as durable Delete conflicts. Only explicit `KeepRemote` or disabled preservation
+authorizes destructive deletion. MirrorPulse keeps its preservation policy and
+does not automatically force these conflicts. Product KeepRemote execution remains
+separate S06 work. Earlier product native tests that require automatic clean deletion
+are not acceptance evidence for preview.7. The isolated SDK-only lost-progress
+regressions explicitly authorize deletion of their disposable originals; additional
+native cases require default preservation to retain one conflict across store owners.
+See the [upstream Delete contract](https://github.com/mirrorpulse/cfsharp/blob/137d6e2a9c1b15f337e8e7ca3566d5e3f29fcdb9/docs/remote-change-application.md).
+
+New product birth, retirement and file-move admissions record preview.7 provenance.
+Historical preview.6 records keep their exact original version, source and policy.
+Readers accept the two audited version/source pairs and reject mixed publications;
+this compatibility does not confer native completion or reauthorize a Delete.
+
+Preview.6 introduced original file-move preparation and reconciles immutable-batch
 replay before stale-revision checks. Its official SQLite schema is 7. Directory
 remote-batch outcome recovery and legacy preview.5 gaps without original evidence
 remain conservative under the documented SDK contract. MirrorPulse separately
@@ -60,7 +80,7 @@ transaction rolled back and `PRAGMA integrity_check` returned `ok`.
 The earlier `CF-001`, `API-001`, and `API-002` gaps were retested after pinning
 preview.2. MirrorPulse uses the public CfSharp batch and conflict contracts and
 does not read or mutate CfSharp's private SQLite tables or conflict payload
-format. Preview.5 remains a prerelease dependency until CfSharp 1.0.0 is published
+format. Preview.7 remains a prerelease dependency until CfSharp 1.0.0 is published
 and validated for the release candidate.
 
 Preview.2 also exposes a confirmation limitation: coordination USNs can be zero,

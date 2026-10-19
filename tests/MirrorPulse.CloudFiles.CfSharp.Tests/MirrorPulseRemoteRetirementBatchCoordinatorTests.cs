@@ -32,10 +32,34 @@ public sealed class MirrorPulseRemoteRetirementBatchCoordinatorTests
     }
 
     [TestMethod]
-    public void OriginalRemoteDeleteAllowsAChangedTurnBudgetWithoutReplacingItsDurablePolicy()
+    [DataRow(false)]
+    [DataRow(true)]
+    public void OriginalRemoteDeleteAllowsAChangedTurnBudgetWithoutReplacingItsDurablePolicy(bool preview7)
     {
         var instance = InstanceId.New(); var batch = Batch(instance, Guid.NewGuid()); var options = CloudRemoteApplyOptions.Default;
-        MirrorPulseRemoteRetirementBatchCoordinator.RequireOriginal(Original(instance, batch, options), instance, batch, 0, options with { MaximumEntries = 1 });
+        var original = Original(instance, batch, options);
+        if (preview7) original = original with
+        {
+            RemoteEntry = original.RemoteEntry! with
+            { PackageVersion = MirrorPulseRemoteLibraryProvenance.CurrentPackageVersion, PackageSource = MirrorPulseRemoteLibraryProvenance.CurrentSourceCommit }
+        };
+        MirrorPulseRemoteRetirementBatchCoordinator.RequireOriginal(original, instance, batch, 0, options with { MaximumEntries = 1 });
+        var current = MirrorPulseRemoteRetirementBatchCoordinator.Reference(instance, batch, 0, options, original.RemoteEntry!.Child,
+            original.RemoteEntry.Parent, original.RemoteEntry.NativeRemoteRevision, original.RemoteEntry.OfficialRemoteRevision);
+        Assert.AreEqual(MirrorPulseRemoteLibraryProvenance.CurrentPackageVersion, current.PackageVersion);
+        Assert.AreEqual(MirrorPulseRemoteLibraryProvenance.CurrentSourceCommit, current.PackageSource);
+    }
+
+    [TestMethod]
+    [DataRow("0.1.0-preview.7", "3caa382e341d260543d3afc05e25fa034fb32e16")]
+    [DataRow("0.1.0-preview.6", "137d6e2a9c1b15f337e8e7ca3566d5e3f29fcdb9")]
+    [DataRow("0.1.0-preview.8", "137d6e2a9c1b15f337e8e7ca3566d5e3f29fcdb9")]
+    public void OriginalRetirementCannotAcquireAnotherPublicationsProvenance(string version, string source)
+    {
+        var instance = InstanceId.New(); var batch = Batch(instance, Guid.NewGuid()); var options = CloudRemoteApplyOptions.Default;
+        var original = Original(instance, batch, options);
+        original = original with { RemoteEntry = original.RemoteEntry! with { PackageVersion = version, PackageSource = source } };
+        Assert.ThrowsExactly<InvalidDataException>(() => MirrorPulseRemoteRetirementBatchCoordinator.RequireOriginal(original, instance, batch, 0, options));
     }
 
     [TestMethod]

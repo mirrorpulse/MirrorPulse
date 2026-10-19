@@ -130,8 +130,7 @@ public sealed partial class MirrorPulseProductCatalog
     private static void ValidateRemoteFileMoveLibrary(string packageVersion, string sourceCommit, MirrorPulseRemoteFileMovePolicy policy)
     {
         ArgumentNullException.ThrowIfNull(policy);
-        if (packageVersion != "0.1.0-preview.6" || sourceCommit is not { Length: 40 } ||
-            sourceCommit.Any(character => character is not (>= '0' and <= '9') and not (>= 'a' and <= 'f')) ||
+        if (!MirrorPulseRemoteLibraryProvenance.IsSupported(packageVersion, sourceCommit) ||
             policy.EchoSuppressionLifetimeTicks is <= 0 or > TimeSpan.TicksPerHour ||
             policy.EchoSuppressionObservationCount is < 1 or > 64)
             throw new ArgumentException("The selected SDK package and bounded original apply policy must support the file-move recovery protocol.");
