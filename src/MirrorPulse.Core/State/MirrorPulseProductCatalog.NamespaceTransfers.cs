@@ -42,7 +42,15 @@ public sealed record MirrorPulseNamespaceTransferPlan(int Version, Guid Operatio
 
 /// <summary>A durable copy start is uncertainty until the original upload receipt is saved.</summary>
 public sealed record MirrorPulseNamespaceTransferCopy(MirrorPulseNamespaceTransferPlan Plan,
-    DateTimeOffset? CopyStartedAt, string? AcceptedRevision, DateTimeOffset? CopyAcceptedAt);
+    DateTimeOffset? CopyStartedAt, string? AcceptedRevision, DateTimeOffset? CopyAcceptedAt)
+{
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public MirrorPulseTransferTargetVerification? TargetVerification { get; init; }
+}
+
+/// <summary>Whole target content and identity observed at the original accepted revision, not source retirement authority.</summary>
+public sealed record MirrorPulseTransferTargetVerification(int Version, Guid OperationId, string AcceptedRevision,
+    string RemoteId, long Length, string Sha256, DateTimeOffset VerifiedAt);
 
 public sealed partial class MirrorPulseProductCatalog
 {

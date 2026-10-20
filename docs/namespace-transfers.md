@@ -61,3 +61,28 @@ retirement nor journal acknowledgement. There is deliberately no generic
 open until Host/Control/CLI integration, retained staging, target verification,
 source retirement, directory manifests and every restart boundary are completed
 and verified on clean Windows users.
+
+## Original target verification
+
+The transfer verifier requires the durable original upload acceptance before any
+remote read. A matching file at the target cannot provide a lost upload receipt.
+It first rechecks the admitted topology, scopes and protected member snapshots,
+then checks the exact accepted target revision, enumerates the complete bounded
+parent directory and captures its unique remote ID, type and length. Every
+bounded content read carries the original accepted revision on the negotiated V2
+channel. Legacy channels reject a pinned read before emitting a frame; ordinary
+hydration requests keep their previous wire shape.
+
+The complete SHA256 must match the retained source proof. A second metadata and
+revision check must retain the same target ID and accepted revision. Short or
+excess ranges, duplicate target entries, missing targets, cyclic or oversized
+pages and changed identities cannot produce a saved verification. Empty files
+require the exact zero length and SHA256 of empty content. The optional
+verification fact is canonical and immutable, survives catalog owners, and keeps
+both root fences. A failed verification save permits another readback, without
+reuploading or deleting anything.
+
+The target verification is historical. It does not promise that the target can
+never change later, refresh source-native authorization, publish the destination
+to CfSharp, delete the source or acknowledge original journal entries. Those
+steps require the remaining original transfer lifecycle and current guards.

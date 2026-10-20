@@ -25,6 +25,7 @@ public sealed partial class MirrorPulseProductCatalog
                     value.CopyAcceptedAt is { } accepted && (value.CopyStartedAt is null || accepted < value.CopyStartedAt ||
                         InvalidRemoteUpdateText(value.AcceptedRevision, 4096)))
                     throw new ArgumentException("Transfer copy progress lost its original start or receipt chronology.");
+                if (value.TargetVerification is { } verification) ValidateNamespaceTransferTargetVerification(value, verification);
             });
             var plan = copy.Plan;
             if (plan.OperationId != id || reader.GetString(0) != plan.SourceRoute.RootId.ToString() ||

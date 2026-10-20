@@ -10,7 +10,11 @@ public sealed record MirrorPulseWorkerReadRangeRequest(
     ReadOnlyMemory<byte> FileIdentity,
     long Offset,
     long Length,
-    string? RootKey = null);
+    string? RootKey = null)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ExpectedRevision { get; init; }
+}
 
 public interface IMirrorPulseWorkerRangeTransport
 {

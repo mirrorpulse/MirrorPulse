@@ -35,6 +35,7 @@ public sealed class AdapterWorkerReadRangeClientTests
         Assert.AreEqual("ReadRange", command.MessageType);
         Assert.AreEqual("notes.txt", command.Payload.GetProperty("path").GetString());
         Assert.AreEqual(3L, command.Payload.GetProperty("offset").GetInt64());
+        Assert.IsFalse(command.Payload.TryGetProperty("expectedRevision", out _));
         Guid streamId = Guid.NewGuid();
         Task<byte[]> responseBytes = LengthPrefixedFrameReader.ReadAsync(server, timeout.Token).AsTask();
         await worker.SendAsync("ReadRangeReady", command.RequestId, true,
