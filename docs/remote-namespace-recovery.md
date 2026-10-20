@@ -105,6 +105,17 @@ indexes and payload; member lineage, current location, name ownership and curren
 protection checks still run. Missing rows are never retained, and later transactions
 read the original rows again.
 
+The product catalog also retains an existing-object remote update independently
+of birth and local replacement. Its original batch entry, SDK policy, child and
+direct-parent snapshots, native and official revisions, and before-write start
+remain immutable. Settlement records actual SDK-return or retained-progress
+evidence, fresh same-object observations, and either the exact incoming revision
+or the unchanged revisions and durable conflict. The outcome and release of its
+own root fence commit together. Historical reads retain earlier identities and
+protection epochs after later role changes. These catalog APIs do not authorize
+native work or advance an Adapter cursor; the production update coordinator still
+needs to connect and validate those boundaries.
+
 CfSharp owns remote batch execution, decoded remote conflicts, native file
 operations, and its official SQLite projection. MirrorPulse retains product
 membership, stable native bindings, current protected locations, and Adapter

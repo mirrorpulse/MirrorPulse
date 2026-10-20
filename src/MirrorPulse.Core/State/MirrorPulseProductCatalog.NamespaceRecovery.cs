@@ -80,12 +80,16 @@ public sealed partial class MirrorPulseProductCatalog
 
     private async Task<IReadOnlyList<RootId>> ReadNamespaceRootFencesCoreAsync(bool includeUnregisteredBirths,
         SqliteTransaction transaction, CancellationToken cancellationToken, Guid? admittedRemoteMoveId = null, Guid? admittedRemoteBirthId = null,
-        Guid? admittedRemoteRetirementId = null, Guid? admittedRemoteRetirementTreeId = null, Guid? admittedRemoteResolutionId = null)
+        Guid? admittedRemoteRetirementId = null, Guid? admittedRemoteRetirementTreeId = null, Guid? admittedRemoteResolutionId = null,
+        Guid? admittedRemoteUpdateId = null)
     {
         await RequireRemoteTreeSettlementOwnershipIntegrityAsync(transaction, cancellationToken).ConfigureAwait(false);
         await RequireRemoteDeleteResolutionOwnershipIntegrityAsync(transaction, cancellationToken).ConfigureAwait(false);
+        var updates = await ReadPendingRemoteUpdatesCoreAsync(transaction, cancellationToken).ConfigureAwait(false);
         HashSet<RootId> roots = (await ReadManagedRootRenamesCoreAsync(cancellationToken, transaction).ConfigureAwait(false))
             .Where(intent => intent.IsPending).Select(intent => intent.RootId).ToHashSet();
+        foreach (var update in updates)
+            if (update.Plan.OperationId != admittedRemoteUpdateId) roots.Add(update.Plan.Child.Context.Member.RootId!.Value);
         var moveRoots = new List<RootId>();
         await using (SqliteCommand query = _connection.CreateCommand())
         {

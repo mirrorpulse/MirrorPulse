@@ -155,6 +155,9 @@ public sealed partial class MirrorPulseProductCatalog
             UNION ALL SELECT operation_id FROM namespace_remote_retirement_tree_owners
             WHERE instance_id=$instance AND batch_id=$batch
               AND (batch_fingerprint<>$hash OR entry_count<>$count OR ordinal=$ordinal OR change_id=$change)
+            UNION ALL SELECT operation_id FROM namespace_remote_updates
+            WHERE instance_id=$instance AND batch_id=$batch
+              AND (batch_fingerprint<>$hash OR entry_count<>$count OR ordinal=$ordinal OR change_id=$change)
             LIMIT 1;
             """;
         AddNamespaceRemoteBirthParameters(previous, birth);
@@ -207,6 +210,9 @@ public sealed partial class MirrorPulseProductCatalog
               (batch_fingerprint<>$hash OR entry_count<>$count OR ordinal=$ordinal OR change_id=$change)
             UNION ALL SELECT operation_id FROM namespace_remote_retirement_tree_owners WHERE instance_id=$instance AND batch_id=$batch
               AND (operation_id<>$operation OR $kind<>3) AND
+              (batch_fingerprint<>$hash OR entry_count<>$count OR ordinal=$ordinal OR change_id=$change)
+            UNION ALL SELECT operation_id FROM namespace_remote_updates WHERE instance_id=$instance AND batch_id=$batch
+              AND (operation_id<>$operation OR $kind<>4) AND
               (batch_fingerprint<>$hash OR entry_count<>$count OR ordinal=$ordinal OR change_id=$change)
             LIMIT 1;
             """;

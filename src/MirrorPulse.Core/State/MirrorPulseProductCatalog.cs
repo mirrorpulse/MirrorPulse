@@ -104,7 +104,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                 version.CommandText = "PRAGMA user_version;";
                 currentVersion = (long)(await version.ExecuteScalarAsync(cancellationToken)
                     .ConfigureAwait(false) ?? 0L);
-                if (currentVersion > 78)
+                if (currentVersion > 79)
                 {
                     throw new InvalidDataException("The MP product catalog schema is newer than this Host supports.");
                 }
@@ -465,10 +465,12 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
             }
 
             var catalog = new MirrorPulseProductCatalog(owner, connection);
+            await EnsureNamespaceRemoteUpdateSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
             await EnsureRemoteDeleteResolutionSchemaAsync(connection, cancellationToken, stampVersion: false).ConfigureAwait(false);
             await catalog.UpgradeRemoteTreeSettlementOwnersAsync(currentVersion, cancellationToken).ConfigureAwait(false);
             await EnsureRemoteConflictActionSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
-            await EnsureRemoteDeleteResolutionSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+            await EnsureRemoteDeleteResolutionSchemaAsync(connection, cancellationToken, stampVersion: currentVersion < 78).ConfigureAwait(false);
+            await EnsureNamespaceRemoteUpdateSchemaAsync(connection, cancellationToken, stampVersion: currentVersion < 79).ConfigureAwait(false);
             return catalog;
         }
         catch
