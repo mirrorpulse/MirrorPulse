@@ -206,7 +206,8 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
                 rootRouter, catalog, instanceId => topology.Instances.Any(instance =>
                     instance.InstanceId == instanceId && instance.Enabled),
                 conflictCenter, conflictNotifications, source, remoteScheduler, namespaceExecution, namespaceActor,
-                namespaceWork, initializeNamespaceOnStart: true);
+                namespaceWork, initializeNamespaceOnStart: true,
+                transfers: new(source, source, source, source, workers.GetConnectedProtocolVersion));
             currentSession = session;
             var remoteSnapshotStore = new MirrorPulseFileRemotePollSnapshotStore(paths.DataRootPath);
             remotePoller = new MirrorPulseActiveRemotePoller(

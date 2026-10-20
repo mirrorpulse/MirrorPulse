@@ -73,10 +73,15 @@ public sealed class MirrorPulseNamespaceWorkAdmission : IAsyncDisposable
     /// execution drains earlier work and remains closed afterwards; completion is not a fresh audit.
     /// New preparation and ordinary synchronization must continue using Enter.</remarks>
     public async ValueTask<IAsyncDisposable> EnterPendingOperationAsync(RootId root, CancellationToken cancellationToken = default)
+        => await EnterPendingOperationAsync([root], cancellationToken).ConfigureAwait(false);
+
+    /// <summary>Retains all roots of one original operation atomically, without partial admission or reopening a closed root.</summary>
+    public async ValueTask<IAsyncDisposable> EnterPendingOperationAsync(IEnumerable<RootId> roots, CancellationToken cancellationToken = default)
     {
+        RootId[] requested = Normalize(roots, allowEmpty: false);
         cancellationToken.ThrowIfCancellationRequested();
-        if (TryEnter([root], out var work)) return new PendingOperationLease(work!, null);
-        return new PendingOperationLease(null, await BeginRecoveryAsync([root], cancellationToken).ConfigureAwait(false));
+        if (TryEnter(requested, out var work)) return new PendingOperationLease(work!, null);
+        return new PendingOperationLease(null, await BeginRecoveryAsync(requested, cancellationToken).ConfigureAwait(false));
     }
 
     private sealed class PendingOperationLease(WorkLease? work, RecoveryLease? recovery) : IAsyncDisposable

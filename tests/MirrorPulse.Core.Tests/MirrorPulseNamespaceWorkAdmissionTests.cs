@@ -7,6 +7,40 @@ namespace MirrorPulse.Core.Tests;
 public sealed class MirrorPulseNamespaceWorkAdmissionTests
 {
     [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task PendingTransferOwnsBothRootsAtomicallyAndNeverReopensAMixedClosedInventory(bool cancelDrain)
+    {
+        RootId first = RootId.New(), second = RootId.New(), third = RootId.New();
+        await using var admission = new MirrorPulseNamespaceWorkAdmission([first, second, third]);
+        await OpenAsync(admission, first, third);
+        var existing = admission.Enter([first]);
+        using var cancellation = new CancellationTokenSource();
+        var entering = admission.EnterPendingOperationAsync(new[] { first, second }, cancellation.Token).AsTask();
+        Assert.IsFalse(entering.IsCompleted); Assert.IsFalse(admission.IsAdmitted(first)); Assert.IsFalse(admission.IsAdmitted(second));
+        Assert.AreEqual(29, await admission.RunAsync(third, _ => ValueTask.FromResult(29)));
+        if (cancelDrain)
+        {
+            await cancellation.CancelAsync(); await Assert.ThrowsAsync<OperationCanceledException>(async () => await entering);
+            existing.Dispose();
+        }
+        else
+        {
+            existing.Dispose(); await using var owned = await entering.WaitAsync(TimeSpan.FromSeconds(5));
+            await Assert.ThrowsExactlyAsync<InvalidOperationException>(async () => await admission.EnterPendingOperationAsync(first));
+            await Assert.ThrowsExactlyAsync<InvalidOperationException>(async () => await admission.EnterPendingOperationAsync(second));
+        }
+        Assert.IsFalse(admission.IsAdmitted(first)); Assert.IsFalse(admission.IsAdmitted(second));
+        await OpenAsync(admission, first, second);
+        await using (var ready = await admission.EnterPendingOperationAsync(new[] { first, second }))
+        {
+            var recovering = admission.BeginRecoveryAsync([first, second]).AsTask(); Assert.IsFalse(recovering.IsCompleted);
+            await ready.DisposeAsync(); await using var recovery = await recovering.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        Assert.IsFalse(admission.IsAdmitted(first)); Assert.IsFalse(admission.IsAdmitted(second));
+    }
+
+    [TestMethod]
     public async Task PendingOperationOnClosedRootStaysClosedAndDoesNotBlockAnotherRoot()
     {
         RootId first = RootId.New(), second = RootId.New();

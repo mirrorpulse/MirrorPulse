@@ -86,3 +86,35 @@ The target verification is historical. It does not promise that the target can
 never change later, refresh source-native authorization, publish the destination
 to CfSharp, delete the source or acknowledge original journal entries. Those
 steps require the remaining original transfer lifecycle and current guards.
+
+## Host preparation and copy boundary
+
+The production Host supplies its normal-user Worker transports and the actual
+connected channel versions. Preparation requires ordinary work admission for
+both roots. Cold content is materialized before acquiring the ordered instance
+gates, so hydration can use its own provider admission. Under the shared actor,
+the Host rechecks the exact current role, members, public source projection,
+native bindings and direct-parent permissions. The destination must be absent.
+Both current catalog scopes and the actual target protocol are checked before
+any cold source materialization; a positive startup dispatch snapshot cannot
+authorize access to a subsequently disabled instance or inactive root.
+
+Complete input is flushed and independently reopened under the private
+`state/transfer-inputs` directory. Its content ID remains distinct from the
+operation ID and from import/replacement storage. Reopening a catalog owner does
+not discard these bytes. A damaged or missing input cannot start an upload;
+neither copy acceptance nor target verification reclaims the private content.
+
+The Host runtime exposes separate prepare, copy, target-verification and history
+methods. Copy rechecks the current local source against the prepared whole
+content before claiming its first upload. Pending execution admits both roots
+atomically, including a mixed ready/closed inventory, and never reopens a root
+without a fresh audit. Worker calls execute in the normal Host user context.
+Historical accepted stages remain readable after a new role or offline instance;
+they perform no Worker call and cannot refresh native authority.
+
+These runtime phases are not yet a completed move or a Control/CLI transfer
+contract. Both root fences remain. Local read sharing does not establish the
+final writer/mapping protection needed for source deletion. Native target birth,
+SDK publication/confirmation, source retirement, journal acknowledgement,
+directory manifests and their fault/recovery matrices remain required.

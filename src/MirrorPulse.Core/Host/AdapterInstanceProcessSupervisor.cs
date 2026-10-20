@@ -71,6 +71,11 @@ public sealed class AdapterInstanceProcessSupervisor :
         return ReadRangeCoreAsync(request, cancellationToken);
     }
 
+    /// <summary>Returns the actual connected channel version; a manifest claim cannot substitute for negotiation.</summary>
+    public int GetConnectedProtocolVersion(InstanceId instanceId) =>
+        _connected.TryGetValue(instanceId, out var channel) ? channel.ProtocolVersion :
+            throw new AdapterWorkerOperationException("Offline");
+
     public ValueTask<string> UploadAsync(
         MirrorPulseWorkerUploadRequest request,
         CancellationToken cancellationToken)
