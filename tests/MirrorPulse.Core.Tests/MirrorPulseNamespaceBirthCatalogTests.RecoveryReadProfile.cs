@@ -48,7 +48,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         finally { SQLitePCL.raw.sqlite3_trace(connection.Handle!, (SQLitePCL.strdelegate_trace)null!, null); GC.KeepAlive(trace); }
         Console.WriteLine($"RegisteredRecoveryReadProfile: history=5; statements={statements.Values.Sum()}; distinct={statements.Count}; nativeExecuted=False.");
         foreach (string table in new[] { "namespace_birth_protections", "namespace_birth_observations", "namespace_birth_intents", "namespace_members",
-            "namespace_born_member_recovery_actions", "namespace_born_member_recovery_completions", "namespace_permission_changes" })
+            "namespace_born_member_recovery_actions", "namespace_born_member_recovery_completions", "namespace_permission_changes", "namespace_permission_baselines" })
             Console.WriteLine($"RegisteredRecoveryTableReads: table={table}; statements={statements.Where(entry => entry.Key.Contains("FROM " + table, StringComparison.Ordinal)).Sum(entry => entry.Value)}.");
         Assert.IsFalse(File.Exists(fixture.Paths.CfSharpStateDatabasePath)); Assert.IsFalse(Directory.Exists(fixture.Paths.SyncRootPath));
         Assert.AreEqual(1, statements.Where(entry => entry.Key.Contains("FROM namespace_birth_observations WHERE operation_id=", StringComparison.Ordinal)).Sum(entry => entry.Value),
@@ -61,5 +61,9 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             $"{statements.Where(entry => entry.Key.Contains("FROM namespace_permission_changes", StringComparison.Ordinal) && entry.Key.Contains("ORDER BY c.rowid DESC", StringComparison.Ordinal)).Sum(entry => entry.Value)}.");
         // This member retains two captured originals: its direct parent and the anchor.
         Assert.AreEqual(2, historicalPermissionReads, "Each verified historical permission row should be read once; current-head queries must still run.");
+        Assert.AreEqual(3, statements.Where(entry => entry.Key.Contains("FROM namespace_members WHERE member_id=", StringComparison.Ordinal)).Sum(entry => entry.Value),
+            "The born member, its parent and the anchor each have one immutable registration; current locations and names still require their own queries.");
+        Assert.AreEqual(2, statements.Where(entry => entry.Key.Contains("FROM namespace_permission_baselines WHERE evidence_id=", StringComparison.Ordinal)).Sum(entry => entry.Value),
+            "Each captured original has one immutable permission baseline; current permission queries must still run.");
     }
 }

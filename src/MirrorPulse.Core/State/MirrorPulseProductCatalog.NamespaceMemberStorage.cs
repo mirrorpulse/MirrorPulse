@@ -175,6 +175,9 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task<MirrorPulseNamespaceMemberRegistration?> ReadNamespaceMemberRowAsync(Guid id,
         SqliteTransaction transaction, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
+        var history = _namespaceHistoryReads.GetOrCreateValue(transaction);
+        if (history.MemberRegistrations.TryGetValue(id, out var retained)) return retained;
         await using SqliteCommand query = _connection.CreateCommand();
         query.Transaction = transaction;
         query.CommandText = """
@@ -205,6 +208,7 @@ public sealed partial class MirrorPulseProductCatalog
             reader.GetString(8) != member.LocalObject.SyncRootFileId.ToString("D") || reader.GetString(9) != member.LocalObject.LocalFileId.ToString("D") ||
             !JsonSerializer.SerializeToUtf8Bytes(member, TopologyJsonOptions).AsSpan().SequenceEqual(payload))
             throw new InvalidDataException("The member provenance index or canonical payload is inconsistent.");
+        history.MemberRegistrations.Add(id, member);
         return member;
 
         string? Text(int index) => reader.IsDBNull(index) ? null : reader.GetString(index);

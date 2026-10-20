@@ -99,6 +99,11 @@ Historical permission reads by operation ID also reuse only a fully verified row
 within that transaction. Prepared, applied, recovery-required and missing records
 remain uncached. Current-head queries and replacement-projection validation still
 run, and any permission write invalidates that operation's transaction entry.
+Validated immutable member registrations and original permission baselines are
+also reused only within that transaction. Their first read checks the retained
+indexes and payload; member lineage, current location, name ownership and current
+protection checks still run. Missing rows are never retained, and later transactions
+read the original rows again.
 
 CfSharp owns remote batch execution, decoded remote conflicts, native file
 operations, and its official SQLite projection. MirrorPulse retains product

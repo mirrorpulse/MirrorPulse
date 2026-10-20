@@ -374,13 +374,18 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task<MirrorPulseNamespacePermissionBaseline?> ReadPermissionBaselineCoreAsync(Guid evidenceId,
         CancellationToken token, SqliteTransaction? transaction = null)
     {
+        token.ThrowIfCancellationRequested();
+        var history = transaction is null ? null : _namespaceHistoryReads.GetOrCreateValue(transaction);
+        if (history?.PermissionBaselines.TryGetValue(evidenceId, out var retained) == true) return retained;
         await using SqliteCommand query = _connection.CreateCommand();
         query.Transaction = transaction;
         query.CommandText = "SELECT payload, volume_serial, sync_root_file_id, local_file_id FROM namespace_permission_baselines WHERE evidence_id=$id;";
         query.Parameters.AddWithValue("$id", evidenceId.ToString("D"));
         await using SqliteDataReader reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
         if (!await reader.ReadAsync(token).ConfigureAwait(false)) return null;
-        return ReadPermissionBaseline(reader, evidenceId, 0);
+        var baseline = ReadPermissionBaseline(reader, evidenceId, 0);
+        history?.PermissionBaselines.Add(evidenceId, baseline);
+        return baseline;
     }
 
     private static MirrorPulseNamespacePermissionBaseline ReadPermissionBaseline(SqliteDataReader reader, Guid evidenceId, int offset)
