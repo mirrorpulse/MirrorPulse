@@ -11,8 +11,11 @@ public sealed class NamespaceNonAdminControllerTests
     [DataRow("allowed", 56)]
     [DataRow("allowed", 66)]
     [DataRow("allowed", 100)]
+    [DataRow("allowed", 101)]
+    [DataRow("allowed", 104)]
+    [DataRow("allowed", 112)]
     [DataRow("rejected", 0)]
-    [DataRow("rejected", 101)]
+    [DataRow("rejected", 113)]
     [DataRow("rejected", int.MaxValue)]
     public Task ControllerBudgetCoversTheGrowingCatalogAndRejectsAnUnboundedSelection(string expectation, int count) =>
         RunAsync("budget-" + expectation, count);
@@ -50,7 +53,7 @@ public sealed class NamespaceNonAdminControllerTests
                         if ($Count -eq 56 -and $budget -le (Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 52)) {
                             throw 'New required cases did not receive execution budget.'
                         }
-                        if ($stepMinutes -lt 15 -or $stepMinutes -gt 32 -or $stepMinutes*60000 - $budget -lt 300000) {
+                        if ($stepMinutes -lt 15 -or $stepMinutes -gt 35 -or $stepMinutes*60000 - $budget -lt 300000) {
                             throw 'The workflow can terminate the controller before its child timeout and diagnostic cleanup.'
                         }
                     }
@@ -99,6 +102,16 @@ public sealed class NamespaceNonAdminControllerTests
             Assert.AreEqual(0, process.ExitCode, await output + await error);
         }
         finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [TestMethod]
+    public async Task ControllerAdmitsTheActualRequiredNamespaceCatalogWithinTheExistingChildBound()
+    {
+        string catalog = await File.ReadAllTextAsync(Path.Combine(SftpProtocolFixture.FindRepositoryRoot(), "eng", "test-suites.json"));
+        using var document = System.Text.Json.JsonDocument.Parse(catalog);
+        int count = document.RootElement.GetProperty("required").GetProperty("namespace").GetArrayLength();
+        Assert.IsGreaterThan(0, count);
+        await RunAsync("budget-allowed", count);
     }
 
     [TestMethod]

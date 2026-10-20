@@ -1,13 +1,14 @@
 function Get-OrdinaryUserNamespaceBudgetMilliseconds {
-    param([Parameter(Mandatory)][ValidateRange(1, 100)][int]$TestCount)
+    param([Parameter(Mandatory)][ValidateRange(1, 112)][int]$TestCount)
     # The full suite now exceeds the original ten-minute envelope once process
     # startup is included. Budget the whole selected catalog, with a fixed upper
-    # bound; every test retains its own existing native-operation deadline.
+    # bound of 30 minutes (120000 + 112 * 15000). Every test retains its
+    # existing native-operation deadline; the current required catalog has 104.
     return [Math]::Max(600000, 120000 + $TestCount * 15000)
 }
 
 function Get-OrdinaryUserNamespaceStepTimeoutMinutes {
-    param([Parameter(Mandatory)][ValidateRange(1, 100)][int]$TestCount)
+    param([Parameter(Mandatory)][ValidateRange(1, 112)][int]$TestCount)
     # The workflow must let the existing child budget expire and allow the
     # controller to preserve diagnostics and remove its disposable user/profile.
     $childMilliseconds = Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $TestCount
