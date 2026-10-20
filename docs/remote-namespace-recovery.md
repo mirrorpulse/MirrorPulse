@@ -125,6 +125,20 @@ keeps its original root closed and never triggers blind redispatch. Kind replace
 different-object collisions and explicit non-Delete conflict choices retain their
 separate lifecycle requirements. These paths require fresh native acceptance.
 
+`namespace remote updates ROOT_ID` lists the root's pending original update owner.
+`namespace remote update-status OPERATION_ID` retains the original batch, entry,
+member and package provenance after restart. `Prepared` has no recorded invocation;
+`InvocationMayHaveBegun` has a durable start but no proven outcome. `ProductSettled`
+reports either `Applied` or `Conflict` and its `SdkReturn` or `RetainedSdkProgress`
+evidence source. Product settlement does not establish publication of an Adapter
+cursor or completion of a fresh root audit.
+`namespace remote recover-update OPERATION_ID` only reconciles the original retained
+SDK progress and fresh same-object observations through the Host namespace actor.
+It never invokes the SDK update again. Prepared and already settled operations return
+their original state; an uncertain start without matching evidence remains fenced
+and reports the recovery failure. All three commands use the versioned Control.Client
+pipe contract; clients never inspect the Host databases or select a replacement entry.
+
 CfSharp owns remote batch execution, decoded remote conflicts, native file
 operations, and its official SQLite projection. MirrorPulse retains product
 membership, stable native bindings, current protected locations, and Adapter

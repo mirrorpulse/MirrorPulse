@@ -146,7 +146,8 @@ public static class MirrorPulseCliCommandLine
                         : commandPath[1].Equals("remote", StringComparison.OrdinalIgnoreCase)
                             ? token.Equals("retirement-status", StringComparison.OrdinalIgnoreCase) || token.Equals("retirements", StringComparison.OrdinalIgnoreCase) ||
                                 token.Equals("delete-status", StringComparison.OrdinalIgnoreCase) || token.Equals("deletes", StringComparison.OrdinalIgnoreCase) ||
-                                token.Equals("recover-delete", StringComparison.OrdinalIgnoreCase)
+                                token.Equals("recover-delete", StringComparison.OrdinalIgnoreCase) || token.Equals("update-status", StringComparison.OrdinalIgnoreCase) ||
+                                token.Equals("updates", StringComparison.OrdinalIgnoreCase) || token.Equals("recover-update", StringComparison.OrdinalIgnoreCase)
                             : token.Equals("recover", StringComparison.OrdinalIgnoreCase);
                 if (!allowed)
                     return Failure($"Unknown subcommand '{token}' for 'namespace {commandPath[1]}'.", options);
@@ -264,6 +265,12 @@ public static class MirrorPulseCliHelp
                                          List original remote directory deletion statuses for one root.
           namespace remote delete-status COMMAND_ID
                                          Read an explicit KeepRemote deletion and its command progress.
+          namespace remote update-status OPERATION_ID
+                                         Show original remote update observations and product settlement.
+          namespace remote updates ROOT_ID
+                                         List the root's pending original remote update.
+          namespace remote recover-update OPERATION_ID
+                                         Reconcile an original SDK outcome without invoking the update again.
           namespace remote deletes ROOT_ID [--after-command-id COMMAND_ID] [--limit 1..64]
                                          List pending explicit Delete commands for one root.
           namespace remote recover-delete COMMAND_ID

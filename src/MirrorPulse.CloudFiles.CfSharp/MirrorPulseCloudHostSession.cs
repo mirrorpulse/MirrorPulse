@@ -205,6 +205,9 @@ public interface IMirrorPulseCloudRuntime : IAsyncDisposable
 
     ValueTask<MirrorPulseRemoteDeleteResolution> RecoverRemoteDeleteResolutionAsync(Guid commandId, CancellationToken cancellationToken) =>
         ValueTask.FromException<MirrorPulseRemoteDeleteResolution>(new NotSupportedException("This runtime does not recover explicit remote deletions."));
+
+    ValueTask<MirrorPulseNamespaceRemoteUpdate> RecoverRemoteUpdateAsync(Guid operationId, CancellationToken cancellationToken) =>
+        ValueTask.FromException<MirrorPulseNamespaceRemoteUpdate>(new NotSupportedException("This runtime does not recover original remote updates."));
 }
 
 public interface IMirrorPulseCloudRuntimeFactory
@@ -1166,6 +1169,30 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             }, cancellationToken).ConfigureAwait(false);
         }
 
+        public async ValueTask<MirrorPulseNamespaceRemoteUpdate> RecoverRemoteUpdateAsync(Guid operationId, CancellationToken cancellationToken)
+        {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
+            if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
+                throw new PlatformNotSupportedException("Protected remote update recovery requires Windows 11 24H2 or later.");
+            RequireImportBoundary();
+            var retained = await catalog!.ReadNamespaceRemoteUpdateAsync(operationId, cancellationToken).ConfigureAwait(false)
+                ?? throw new FileNotFoundException("The original remote update operation is not registered.");
+            if (retained.Outcome is not null || retained.StartedAt is null) return retained;
+            var root = retained.Plan.Child.Context.Member.RootId!.Value;
+            await using var admission = namespaceWork is null ? null : await namespaceWork.EnterPendingOperationAsync(root, cancellationToken).ConfigureAwait(false);
+            return await WithInstanceLibraryAsync(retained.Plan.InstanceId, async token =>
+            {
+                if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
+                    throw new PlatformNotSupportedException("Protected remote update recovery requires Windows 11 24H2 or later.");
+                var projector = conflicts is null || notifications is null ? null :
+                    new MirrorPulseRemoteConflictProjector(fileSystem, catalog, conflicts, notifications);
+                await new MirrorPulseRemoteUpdateCoordinator(fileSystem, state, catalog, router!, _namespaceExecution!, _namespaceActor!)
+                    .SettleRecordedAsync(retained, projector, token).ConfigureAwait(false);
+                return await catalog.ReadNamespaceRemoteUpdateAsync(operationId, token).ConfigureAwait(false)
+                    ?? throw new InvalidDataException("The recovered remote update lost its original operation.");
+            }, cancellationToken).ConfigureAwait(false);
+        }
+
         public async ValueTask<MirrorPulseRemoteConflictActionOutcome> ApplyRemoteConflictAsync(
             Guid conflictId,
             MirrorPulseConflictAction action,
@@ -1829,6 +1856,13 @@ public sealed class MirrorPulseCloudHostSession : IAsyncDisposable
     {
         if (!_started || _runtime is null) throw new InvalidOperationException("The Cloud Files Host session has not started.");
         return _runtime.RecoverRemoteDeleteResolutionAsync(commandId, cancellationToken);
+    }
+
+    public ValueTask<MirrorPulseNamespaceRemoteUpdate> RecoverRemoteUpdateAsync(Guid operationId,
+        CancellationToken cancellationToken = default)
+    {
+        if (!_started || _runtime is null) throw new InvalidOperationException("The Cloud Files Host session has not started.");
+        return _runtime.RecoverRemoteUpdateAsync(operationId, cancellationToken);
     }
 
     public ValueTask DisposeAsync()

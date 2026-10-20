@@ -399,6 +399,21 @@ public sealed class MirrorPulseControlClient
         SendAsync<NamespaceRemoteDeleteStatusArguments, MirrorPulseControlRemoteDeleteStatus>(
             MirrorPulseControlCommands.NamespaceRemoteDeleteStatus, new(commandId), cancellationToken);
 
+    public Task<MirrorPulseControlRemoteUpdateStatus> GetNamespaceRemoteUpdateStatusAsync(Guid operationId,
+        CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceRemoteUpdateStatusArguments, MirrorPulseControlRemoteUpdateStatus>(
+            MirrorPulseControlCommands.NamespaceRemoteUpdateStatus, new(operationId), cancellationToken);
+
+    public Task<MirrorPulseControlRemoteUpdates> GetNamespaceRemoteUpdatesAsync(Guid rootId,
+        CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceRemoteUpdatesArguments, MirrorPulseControlRemoteUpdates>(
+            MirrorPulseControlCommands.NamespaceRemoteUpdates, new(rootId), cancellationToken);
+
+    public Task<MirrorPulseControlRemoteUpdateStatus> RecoverNamespaceRemoteUpdateAsync(Guid operationId,
+        CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceRemoteUpdateRecoverArguments, MirrorPulseControlRemoteUpdateStatus>(
+            MirrorPulseControlCommands.NamespaceRemoteUpdateRecover, new(operationId), cancellationToken);
+
     public Task<MirrorPulseControlRemoteDeletePage> GetNamespaceRemoteDeletesAsync(Guid rootId, Guid? afterCommandId = null,
         int limit = 64, CancellationToken cancellationToken = default) =>
         SendAsync<NamespaceRemoteDeletesArguments, MirrorPulseControlRemoteDeletePage>(

@@ -289,6 +289,20 @@ public sealed class MirrorPulseCliHostOperations : IMirrorPulseCliHostOperations
                     result = deleteStatus; human = MirrorPulseRemoteDeleteCliArguments.Format(deleteStatus);
                     break;
                 case ("namespace", "remote") when command.Path.Count > 2 &&
+                    (command.Path[2].Equals("update-status", StringComparison.OrdinalIgnoreCase) ||
+                    command.Path[2].Equals("recover-update", StringComparison.OrdinalIgnoreCase)):
+                    Guid updateOperation = MirrorPulseRemoteUpdateCliArguments.ParseId(command.Arguments, "operation");
+                    var updateStatus = command.Path[2].Equals("recover-update", StringComparison.OrdinalIgnoreCase)
+                        ? await _client.RecoverNamespaceRemoteUpdateAsync(updateOperation, cancellationToken).ConfigureAwait(false)
+                        : await _client.GetNamespaceRemoteUpdateStatusAsync(updateOperation, cancellationToken).ConfigureAwait(false);
+                    result = updateStatus; human = MirrorPulseRemoteUpdateCliArguments.Format(updateStatus); break;
+                case ("namespace", "remote") when command.Path.Count > 2 && command.Path[2].Equals("updates", StringComparison.OrdinalIgnoreCase):
+                    Guid updateRoot = MirrorPulseRemoteUpdateCliArguments.ParseId(command.Arguments, "root");
+                    var updates = await _client.GetNamespaceRemoteUpdatesAsync(updateRoot, cancellationToken).ConfigureAwait(false);
+                    result = updates; human = updates.Entries.Count == 0 ? "No pending original remote updates." :
+                        string.Join(Environment.NewLine, updates.Entries.Select(MirrorPulseRemoteUpdateCliArguments.Format));
+                    break;
+                case ("namespace", "remote") when command.Path.Count > 2 &&
                     command.Path[2].Equals("deletes", StringComparison.OrdinalIgnoreCase):
                     var deletePageArguments = MirrorPulseRemoteDeleteCliArguments.ParsePage(command.Arguments);
                     var deletePage = await _client.GetNamespaceRemoteDeletesAsync(deletePageArguments.RootId, deletePageArguments.AfterCommandId,
