@@ -57,6 +57,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 cursorAfter: new byte[] { 2 })], new byte[] { 2 });
         var progressFault = new MirrorPulseRemoteProgressCommitFault(update);
         MirrorPulseNamespaceMemberRegistration firstMember = null!; MirrorPulseNamespaceRemoteUpdatePlan original = null!;
+        int dirtySetupReads = 0;
         MirrorPulseNamespaceExecutionSession? sharedRole = rotateRole ? null : new(); string? firstRole = null;
         try
         {
@@ -94,7 +95,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     var originalBirth = (await catalog.ReadNamespaceRemoteBirthAsync(root.InstanceId, birth.BatchId, 0, deadline.Token))!;
                     firstMember = (await catalog.ReadNamespaceMemberAsync(originalBirth.OperationId, deadline.Token))!;
                     firstRole = execution.RoleSid.Value;
-                    if (hydrate)
+                    if (hydrate || dirty)
                     {
                         byte[] before = await File.ReadAllBytesAsync(item.FullPath, deadline.Token);
                         CollectionAssert.AreEqual(OriginalUpdateContent.Bytes("v1"), before);
@@ -102,9 +103,27 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     }
                     if (dirty)
                     {
-                        await execution.RunNormalUserOperationAsync(async () => await File.WriteAllBytesAsync(item.FullPath, OriginalUpdateContent.Bytes("local"), deadline.Token));
-                        await execution.RunNamespaceOperationAsync(async () => await item.SetInSyncAsync(false, cancellationToken: deadline.Token));
-                        Assert.AreEqual(CloudSynchronizationState.NotInSync, (await item.InspectAsync(deadline.Token)).SynchronizationState);
+                        // Edit the resident original through an existing-object handle.
+                        // Create/truncate can revert a placeholder before the actual test.
+                        await execution.RunNormalUserOperationAsync(async () =>
+                        {
+                            await using var writer = new FileStream(item.FullPath, FileMode.Open, FileAccess.Write, FileShare.Read,
+                                bufferSize: 4096, FileOptions.Asynchronous);
+                            Assert.AreEqual((long)OriginalUpdateContent.Length, writer.Length);
+                            await writer.WriteAsync(OriginalUpdateContent.Bytes("local"), deadline.Token);
+                            await writer.FlushAsync(deadline.Token);
+                        });
+                        var edited = await item.InspectAsync(deadline.Token);
+                        Assert.IsTrue(edited.IsPlaceholder); Assert.IsNotNull(edited.LocalBinding);
+                        Assert.AreEqual(firstMember.LocalObject.VolumeSerialNumber, edited.LocalBinding.VolumeSerialNumber);
+                        Assert.AreEqual(firstMember.LocalObject.SyncRootFileId, edited.LocalBinding.SyncRootFileId);
+                        Assert.AreEqual(firstMember.LocalObject.LocalFileId, edited.LocalBinding.LocalFileId);
+                        var editedIdentity = CloudPlaceholderIdentity.Decode(edited.PlaceholderIdentity.Span);
+                        Assert.AreEqual(identity.ItemId, editedIdentity.ItemId); Assert.AreEqual(identity.RemoteId, editedIdentity.RemoteId);
+                        Assert.AreEqual("v1", editedIdentity.RemoteRevision);
+                        Assert.AreEqual(CloudSynchronizationState.NotInSync, edited.SynchronizationState);
+                        CollectionAssert.AreEqual(OriginalUpdateContent.Bytes("local"), await File.ReadAllBytesAsync(item.FullPath, deadline.Token));
+                        dirtySetupReads = provider.Reads;
                     }
                     await Assert.ThrowsExactlyAsync<IOException>(() => coordinator.ApplyAsync(root.InstanceId, update, cancellationToken: deadline.Token).AsTask());
                     var pending = (await catalog.ReadNamespaceRemoteUpdateAsync(root.InstanceId, update.BatchId, 0, deadline.Token))!;
@@ -159,8 +178,11 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     Assert.AreEqual(CloudRemoteBatchStatus.Applied, (await coordinator.ApplyAsync(root.InstanceId, update, cancellationToken: deadline.Token)).Status);
                     Assert.AreEqual(terminal, await catalog.ReadNamespaceRemoteUpdateAsync(root.InstanceId, update.BatchId, 0, deadline.Token));
                 }
-                if (!hydrate) Assert.AreEqual(0, provider.Reads);
+                if (dirty) Assert.AreEqual(dirtySetupReads, provider.Reads, "Remote conflict execution and recovery must not read or hydrate source content.");
+                else if (!hydrate) Assert.AreEqual(0, provider.Reads);
             }
+            if (dirty) TestContext.WriteLine($"OriginalRemoteDirtyUpdate: fixtureHydrationReads={dirtySetupReads}; updateSourceReads={provider.Reads - dirtySetupReads}; " +
+                "samePlaceholderAndBinding=True; originalRevisionRetained=True; naturallyNotInSync=True; localBytesPreservedAcrossOwners=True.");
             TestContext.WriteLine($"OriginalRemoteUpdate: directory={directoryItem}; dirtyBytes={dirty}; hydratedRevisionReadback={hydrate}; " +
                 $"newRoleReconciliation={rotateRole}; uncertainGap={uncertainGap}; originalBinding=True; sdkOwnsUpdate=True; " +
                 $"originalEntryAndPolicy=True; outcomeBeforeCursor=True; wholeLifecyclePassed=False; sourceReads={provider.Reads}; " +
