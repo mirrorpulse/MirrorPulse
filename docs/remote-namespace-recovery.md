@@ -90,6 +90,12 @@ local enumeration and a final anchor check. Initialization retains its separate
 transactional inventory validation before releasing its owned fences. Standalone
 member registration and directory publication keep their individual catalog checks.
 
+Within a single owned SQLite transaction, repeated historical checks reuse only
+already decoded, fingerprint-checked immutable birth admission and first-observation
+rows. Remote admission indexes and referenced proof validation still run. Missing
+rows, current heads, names, fences and native facts are not retained by this cache;
+each new transaction starts empty, including after role changes or corruption.
+
 CfSharp owns remote batch execution, decoded remote conflicts, native file
 operations, and its official SQLite projection. MirrorPulse retains product
 membership, stable native bindings, current protected locations, and Adapter

@@ -121,6 +121,13 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task<MirrorPulseNamespaceBirthIntent?> ReadNamespaceBirthRowAsync(Guid operationId,
         SqliteTransaction? transaction, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
+        var history = transaction is null ? null : _namespaceHistoryReads.GetOrCreateValue(transaction);
+        if (history?.BirthIntentRows.TryGetValue(operationId, out var retained) == true)
+        {
+            await ValidateNamespaceRemoteBirthReferenceIndexAsync(retained, transaction, token).ConfigureAwait(false);
+            return retained;
+        }
         MirrorPulseNamespaceBirthIntent intent;
         await using (SqliteCommand query = _connection.CreateCommand())
         {
@@ -159,6 +166,7 @@ public sealed partial class MirrorPulseProductCatalog
                 throw new InvalidDataException("The birth admission's index or canonical payload is inconsistent.");
         }
         await ValidateNamespaceRemoteBirthReferenceIndexAsync(intent, transaction, token).ConfigureAwait(false);
+        history?.BirthIntentRows.Add(operationId, intent);
         return intent;
     }
 
