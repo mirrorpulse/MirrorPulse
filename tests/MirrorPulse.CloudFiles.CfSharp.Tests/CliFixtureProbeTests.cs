@@ -188,6 +188,7 @@ public sealed class CliFixtureProbeTests
         Assert.AreEqual(0, result.ExitCode, result.Error);
         var cleanup = JsonSerializer.Deserialize<CliFixtureCleanupResult>(result.Output, JsonOptions)!;
         Assert.IsTrue(cleanup.ExclusiveCatalogOwner); Assert.IsFalse(cleanup.ProtectedNamespace);
+        Assert.IsFalse(cleanup.CloudRootUnregistered, "An ordinary unprotected fixture must not invoke Cloud Files registration APIs.");
         Assert.AreEqual(0, cleanup.ValidatedObjects); Assert.AreEqual(0, cleanup.RestoredObjects);
         Assert.IsFalse(Directory.Exists(Path.Combine(fixture.Root, "inspection")));
         Assert.AreEqual("ordinary fixture bytes", await File.ReadAllTextAsync(sentinel));

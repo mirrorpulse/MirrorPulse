@@ -47,6 +47,26 @@ function Write-CliFixtureFailure {
     }
 }
 
+function Write-CliFixtureExecutionObservations {
+    param(
+        [AllowNull()][string]$EvidencePath,
+        [AllowEmptyCollection()][object[]]$HydrationReads = @(),
+        [AllowEmptyCollection()][object[]]$HydrationAudits = @(),
+        [AllowEmptyCollection()][object[]]$NamespaceAudits = @()
+    )
+    if ([string]::IsNullOrEmpty($EvidencePath)) { return }
+    $directory = Join-Path ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($EvidencePath))) 'cli-regression.originals'
+    New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    # Snapshot completed assertions before teardown can remove their fixture or
+    # fail independently. The final successful report still requires cleanup.
+    [ordered]@{
+        schemaVersion=1;sourceSha=$env:GITHUB_SHA;runId=$env:GITHUB_RUN_ID
+        executionCompleted=$true;teardownCompleted=$false
+        hydration=[ordered]@{reads=@($HydrationReads);audits=@($HydrationAudits)}
+        namespace=[ordered]@{audits=@($NamespaceAudits)}
+    } | ConvertTo-Json -Depth 7 | Set-Content -LiteralPath (Join-Path $directory 'completed-execution.json') -Encoding utf8
+}
+
 function Write-CliFixtureStartupObservations {
     param(
         [Parameter(Mandatory)][scriptblock]$ReadLifecycle,

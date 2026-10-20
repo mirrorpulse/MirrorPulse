@@ -495,6 +495,8 @@ try {
 
     Invoke-MirrorPulseCli @("--json", "--developer-mode", "host", "stop") | Out-Null
     Wait-MirrorPulseHostStopped
+    Write-CliFixtureExecutionObservations -EvidencePath $EvidencePath -HydrationReads $hydrationReads.ToArray() `
+        -HydrationAudits $hydrationAudits.ToArray() -NamespaceAudits $namespaceAudits.ToArray()
     Write-Output "Verified CLI -> Host -> Worker integration for $Runtime ($instanceId)."
 }
 catch {
@@ -541,7 +543,7 @@ finally {
             $cleanup = Invoke-CliFixtureProbe -Mode cleanup -Phase Teardown
             if ($cleanup.exclusiveCatalogOwner -ne $true -or
                 ($cleanup.protectedNamespace -eq $true -and ($cleanup.validatedObjects -lt 1 -or
-                    $cleanup.restoredObjects -ne $cleanup.validatedObjects)) -or
+                    $cleanup.restoredObjects -ne $cleanup.validatedObjects -or $cleanup.cloudRootUnregistered -ne $true)) -or
                 ($cleanup.protectedNamespace -eq $false -and ($cleanup.validatedObjects -ne 0 -or $cleanup.restoredObjects -ne 0)) -or
                 $null -eq $cleanup.protectedNamespace) {
                 throw 'The isolated fixture permission cleanup was incomplete.'

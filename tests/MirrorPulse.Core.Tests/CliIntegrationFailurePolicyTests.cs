@@ -7,6 +7,66 @@ namespace MirrorPulse.Core.Tests;
 public sealed class CliIntegrationFailurePolicyTests
 {
     private static readonly string[] AnchorArguments = ["--json", "--no-start", "namespace", "member", "inspect", "", "--directory"];
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task CompletedExecutionObservationsSurviveCleanupFailureWithoutClaimingFinalSuccess(bool failCleanup)
+    {
+        string repository = SftpProtocolFixture.FindRepositoryRoot();
+        string directory = Path.Combine(Path.GetTempPath(), "MirrorPulse-completed-execution-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            string script = Path.Combine(directory, "exercise.ps1");
+            await File.WriteAllTextAsync(script, """
+                param([string]$Repository,[string]$Fixture,[string]$FailCleanup)
+                $ErrorActionPreference='Stop'
+                . (Join-Path $Repository 'eng/cli-integration-failure-policy.ps1')
+                $evidence=Join-Path $Fixture 'evidence/cli-regression.json'
+                $data=Join-Path $Fixture 'data'
+                $sentinel=Join-Path $Fixture 'retained.txt'
+                'original fixture bytes' | Set-Content -LiteralPath $sentinel
+                Write-CliFixtureExecutionObservations -EvidencePath $evidence -HydrationReads @([ordered]@{phase='Online';wholeFileReads=6;rangeReads=21}) `
+                    -HydrationAudits @([ordered]@{phase='AfterLocalWrite';queuedFileMutations=1;acknowledgedQueuedFileMutations=1}) `
+                    -NamespaceAudits @([ordered]@{phase='ReenabledRoot';freshAdmission=$true})
+                $original=Join-Path $Fixture 'evidence/cli-regression.originals/completed-execution.json'
+                $before=(Get-FileHash -LiteralPath $original).Hash
+                $caught=$null
+                try {
+                    Invoke-CliFixtureTeardown -PrimaryFailure $null -Cleanup {
+                        if ($FailCleanup -ceq 'True') { throw [IO.IOException]::new('Independent cleanup failure.') }
+                    } -RecordFailure {
+                        param($failure)
+                        Write-CliFixtureFailure -Failure $failure -Phase Cleanup -EvidencePath $evidence -FixtureRoot $Fixture -DataRoot $data
+                    }
+                    [ordered]@{executionCompleted=$true;teardownCompleted=$true} | ConvertTo-Json | Set-Content -LiteralPath $evidence
+                } catch { $caught=$_.Exception.Message }
+                [ordered]@{caught=$caught;finalExists=(Test-Path -LiteralPath $evidence);unchanged=($before -ceq (Get-FileHash -LiteralPath $original).Hash)
+                    sentinel=(Get-Content -Raw -LiteralPath $sentinel).Trim();completed=(Get-Content -Raw -LiteralPath $original | ConvertFrom-Json)
+                    cleanupExists=(Test-Path -LiteralPath (Join-Path $Fixture 'evidence/cli-regression.originals/cleanup.json'))} | ConvertTo-Json -Compress -Depth 8
+                """);
+            var start = new ProcessStartInfo("pwsh") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
+            foreach (string argument in new[] { "-NoProfile", "-File", script, repository, directory, failCleanup.ToString() }) start.ArgumentList.Add(argument);
+            using var process = Process.Start(start)!;
+            Task<string> output = process.StandardOutput.ReadToEndAsync(), error = process.StandardError.ReadToEndAsync();
+            try { await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30)); }
+            finally { if (!process.HasExited) { process.Kill(entireProcessTree: true); await process.WaitForExitAsync(); } }
+            Assert.AreEqual(0, process.ExitCode, await error);
+            using var json = JsonDocument.Parse((await output).Split('\n', StringSplitOptions.RemoveEmptyEntries).Last().Trim());
+            var result = json.RootElement;
+            Assert.AreEqual(failCleanup ? "Independent cleanup failure." : null, result.GetProperty("caught").GetString());
+            Assert.AreEqual(!failCleanup, result.GetProperty("finalExists").GetBoolean()); Assert.AreEqual(failCleanup, result.GetProperty("cleanupExists").GetBoolean());
+            Assert.IsTrue(result.GetProperty("unchanged").GetBoolean()); Assert.AreEqual("original fixture bytes", result.GetProperty("sentinel").GetString());
+            var completed = result.GetProperty("completed");
+            Assert.IsTrue(completed.GetProperty("executionCompleted").GetBoolean()); Assert.IsFalse(completed.GetProperty("teardownCompleted").GetBoolean());
+            Assert.AreEqual(6, completed.GetProperty("hydration").GetProperty("reads")[0].GetProperty("wholeFileReads").GetInt32());
+            Assert.AreEqual(1, completed.GetProperty("hydration").GetProperty("audits")[0].GetProperty("acknowledgedQueuedFileMutations").GetInt32());
+            Assert.IsTrue(completed.GetProperty("namespace").GetProperty("audits")[0].GetProperty("freshAdmission").GetBoolean());
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
     [TestMethod]
     [DataRow("success")]
     [DataRow("primary")]

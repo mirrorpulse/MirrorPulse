@@ -1,5 +1,14 @@
 # Test boundaries
 
+The disposable CLI integration fixture preserves completed execution observations
+before teardown, separately from its final successful report. Cleanup failure remains
+a gate failure and retains its own original error. After authenticating the entire
+bounded temporary namespace and restoring its permissions, the cleanup probe disposes
+all object leases and its SDK session, then unregisters that synthetic Cloud Files
+root before ordinary recursive deletion. Unprotected managed fixtures do not invoke
+Cloud Files registration APIs. This teardown is restricted to the exact temporary
+fixture and never applies to a user's registered sync root.
+
 Prepare the isolated SFTP fixture with `pwsh ./eng/setup-test-environment.ps1`
 before running the managed solution tests. Environment-dependent tests report
 inconclusive results when prerequisites are absent. `eng/verify-test-results.ps1`
