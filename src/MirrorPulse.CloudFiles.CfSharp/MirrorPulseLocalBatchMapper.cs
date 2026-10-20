@@ -14,6 +14,9 @@ public sealed record MirrorPulseLocalBatchPlan(
 {
     /// <summary>All routable observations, including held namespace and metadata dependencies.</summary>
     public IReadOnlyList<MirrorPulseWorkerChangeCommand>? CompleteWindow { get; init; }
+
+    /// <summary>Routable blocked originals still fence their affected names, even when another observation is unregistered.</summary>
+    public IReadOnlyList<MirrorPulseWorkerChangeCommand> RoutedBlockedCommands { get; init; } = [];
 }
 
 /// <summary>Copies only public feed observations for product routing policy.</summary>
@@ -66,7 +69,8 @@ public static class MirrorPulseLocalBatchMapper
             }
             MirrorPulseWorkerChangeCommand? command = Enum.IsDefined(change.Kind) ? new(
                 change.OperationId, change.Sequence, current.InstanceId, current.RootKey, ToWorkerKind(change.Kind),
-                current.RelativePath, previous?.RootKey, previous?.RelativePath, change.IsDirectory, change.ItemId, change.ObservedAt) : null;
+                current.RelativePath, previous?.RootKey, previous?.RelativePath, change.IsDirectory, change.ItemId, change.ObservedAt)
+            { PreviousInstanceId = previous is not null && previous.InstanceId != current.InstanceId ? previous.InstanceId : null } : null;
             if (command is not null) complete.Add(command); else completeRouting = false;
             // CfSharp filters its proved remote-creation/application echoes. An
             // unfiltered metadata observation cannot prove that a source accepted
@@ -101,8 +105,12 @@ public static class MirrorPulseLocalBatchMapper
             commands.Add(command!);
         }
 
+        var blockedIds = blocked.Select(operation => operation.OperationId).ToHashSet();
         return new(commands.AsReadOnly(), directoryMetadata.AsReadOnly(), false, blocked.AsReadOnly())
-        { CompleteWindow = completeRouting ? complete.AsReadOnly() : null };
+        {
+            CompleteWindow = completeRouting ? complete.AsReadOnly() : null,
+            RoutedBlockedCommands = Array.AsReadOnly(complete.Where(command => blockedIds.Contains(command.OperationId)).ToArray())
+        };
 
         void Block(MirrorPulseLocalChangeObservation change, InstanceId? instance, MirrorPulseLocalOperationBlockReason reason) =>
             blocked.Add(new(change.OperationId, instance, change.RelativePath, reason, change.ObservedAt));

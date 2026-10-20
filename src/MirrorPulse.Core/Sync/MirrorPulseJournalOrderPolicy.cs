@@ -1,3 +1,5 @@
+using MirrorPulse.Core.Contracts;
+
 namespace MirrorPulse.Core.Sync;
 
 /// <summary>Preserves official journal order for objects and their affected directory subtrees.</summary>
@@ -7,11 +9,10 @@ public static class MirrorPulseJournalOrderPolicy
     {
         ArgumentNullException.ThrowIfNull(later);
         ArgumentNullException.ThrowIfNull(earlier);
-        if (later.InstanceId != earlier.InstanceId) return false;
-        foreach ((string root, string path) in Paths(later))
-            foreach ((string previousRoot, string previousPath) in Paths(earlier))
+        foreach ((InstanceId instance, string root, string path) in Paths(later))
+            foreach ((InstanceId previousInstance, string previousRoot, string previousPath) in Paths(earlier))
             {
-                if (root != previousRoot) continue;
+                if (instance != previousInstance || root != previousRoot) continue;
                 if (string.Equals(path, previousPath, StringComparison.OrdinalIgnoreCase) ||
                     earlier.IsDirectory && IsChild(path, previousPath) || later.IsDirectory && IsChild(previousPath, path))
                     return true;
@@ -19,11 +20,12 @@ public static class MirrorPulseJournalOrderPolicy
         return false;
     }
 
-    private static IEnumerable<(string Root, string Path)> Paths(MirrorPulseWorkerChangeCommand command)
+    private static IEnumerable<(InstanceId Instance, string Root, string Path)> Paths(MirrorPulseWorkerChangeCommand command)
     {
-        yield return (command.RootKey, command.RelativePath.Replace('\\', '/').TrimEnd('/'));
+        yield return (command.InstanceId, command.RootKey, command.RelativePath.Replace('\\', '/').TrimEnd('/'));
         if (command.PreviousRelativePath is not null)
-            yield return (command.PreviousRootKey ?? command.RootKey, command.PreviousRelativePath.Replace('\\', '/').TrimEnd('/'));
+            yield return (command.PreviousInstanceId ?? command.InstanceId, command.PreviousRootKey ?? command.RootKey,
+                command.PreviousRelativePath.Replace('\\', '/').TrimEnd('/'));
     }
 
     private static bool IsChild(string path, string parent) =>

@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using MirrorPulse.Core.Contracts;
 
 namespace MirrorPulse.Core.Sync;
@@ -26,4 +27,9 @@ public sealed record MirrorPulseWorkerChangeCommand(
     string? PreviousRelativePath,
     bool IsDirectory,
     Guid? ItemId,
-    DateTimeOffset ObservedAt);
+    DateTimeOffset ObservedAt)
+{
+    /// <summary>The original source instance of a cross-instance move; absent legacy values use InstanceId.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public InstanceId? PreviousInstanceId { get; init; }
+}

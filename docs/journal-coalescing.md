@@ -11,6 +11,12 @@ IDs; it does not create another local journal.
   dependencies. An unregistered observation disables new planning for that scan.
 - Every member must be dispatchable. Disabled roots, pending conflicts, namespace
   recovery and earlier dependent work retain their original IDs.
+- A cross-instance observation retains both source and destination instance/root
+  pairs. A blocked routable move still holds later work at either affected name or
+  subtree, even if another unregistered observation makes the planning window
+  incomplete. Equal root keys in unrelated instances remain independent. Ordinary
+  coalescing cannot adopt a cross-instance move; its persistent transfer lifecycle
+  must first prove the copy and preserve the source through any uncertain result.
 - A new plan cannot adopt a previously prepared mutation. Explicit transfer of
   proven never-started intent is a separate catalog operation.
 - The original IDs, final content proof, upload-time native binding and remote

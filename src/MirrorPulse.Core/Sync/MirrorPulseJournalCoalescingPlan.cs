@@ -31,6 +31,7 @@ public static class MirrorPulseJournalCoalescingPlanner
             command.Kind == MirrorPulseWorkerChangeKind.MetadataUpdate)) return null;
         MirrorPulseWorkerChangeCommand first = chain[0];
         if (chain.Any(command => command.InstanceId != first.InstanceId || command.RootKey != first.RootKey ||
+            command.PreviousInstanceId is { } previousInstance && previousInstance != first.InstanceId ||
             command.PreviousRootKey is not null && command.PreviousRootKey != first.RootKey)) return null;
         if (first.Kind == MirrorPulseWorkerChangeKind.Move && first.PreviousRelativePath is null) return null;
         string original = first.Kind == MirrorPulseWorkerChangeKind.Move ? first.PreviousRelativePath! : first.RelativePath;

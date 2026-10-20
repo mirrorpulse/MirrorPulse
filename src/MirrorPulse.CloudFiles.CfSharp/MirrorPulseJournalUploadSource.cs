@@ -134,6 +134,7 @@ public sealed class MirrorPulseJournalUploadSource
                 new CloudLocalChangeAcknowledgement(operation.OperationId, null)), cancellationToken).ConfigureAwait(false);
             acceptedMetadata.UnionWith(rootMetadata.Select(operation => operation.OperationId));
         }
+        held.AddRange(plan.RoutedBlockedCommands.Where(command => !acceptedMetadata.Contains(command.OperationId)));
         foreach (MirrorPulseWorkerChangeCommand command in plan.Commands.OrderBy(command => command.Sequence))
         {
             RootRegistration root = _router.GetRegistration(command.InstanceId, command.RootKey);
@@ -174,7 +175,7 @@ public sealed class MirrorPulseJournalUploadSource
                     .ConfigureAwait(false) &&
                 (retryAfter is null || retryAfter <= DateTimeOffset.UtcNow))
             {
-                if (held.Any(earlier => MirrorPulseJournalOrderPolicy.DependsOn(command, earlier)))
+                if (held.Any(earlier => earlier.Sequence < command.Sequence && MirrorPulseJournalOrderPolicy.DependsOn(command, earlier)))
                 {
                     held.Add(command);
                     deferred++;
