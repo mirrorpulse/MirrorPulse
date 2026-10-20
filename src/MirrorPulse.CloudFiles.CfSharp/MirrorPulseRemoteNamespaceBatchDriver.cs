@@ -18,13 +18,15 @@ internal sealed class MirrorPulseRemoteNamespaceBatchDriver(
     MirrorPulseRootRouter router, MirrorPulseNamespaceExecutionSession execution, MirrorPulseNamespaceActor actor,
     Func<MirrorPulseRemoteNamespaceBatchCheckpoint, CancellationToken, ValueTask>? checkpoint = null,
     Func<MirrorPulseRemoteBirthCheckpoint, CancellationToken, ValueTask>? birthCheckpoint = null,
-    Func<MirrorPulseRemoteRetirementCheckpoint, CancellationToken, ValueTask>? retirementCheckpoint = null)
+    Func<MirrorPulseRemoteRetirementCheckpoint, CancellationToken, ValueTask>? retirementCheckpoint = null,
+    Func<MirrorPulseRemoteUpdateCheckpoint, CancellationToken, ValueTask>? updateCheckpoint = null)
 {
     private readonly MirrorPulseNamespaceMemberMoveCoordinator _moves = new(fileSystem, state, catalog, router, execution, actor);
     private readonly MirrorPulseNamespaceMemberInspector _members = new(fileSystem, catalog, router, execution, actor);
     private readonly MirrorPulseRemoteBirthBatchCoordinator _births = new(fileSystem, state, catalog, router, execution, actor, birthCheckpoint);
     private readonly MirrorPulseRemoteRetirementBatchCoordinator _retirements = new(fileSystem, state, catalog, router, execution, actor, retirementCheckpoint);
     private readonly MirrorPulseRemoteTreeRetirementCoordinator _treeRetirements = new(fileSystem, state, catalog, router, execution, actor, retirementCheckpoint);
+    private readonly MirrorPulseRemoteUpdateCoordinator _updates = new(fileSystem, state, catalog, router, execution, actor, updateCheckpoint);
 
     internal async ValueTask<CloudRemoteApplyResult> ApplyAsync(InstanceId instance, CloudRemoteChangeBatch batch,
         CloudRemoteApplyOptions options, MirrorPulseRemoteConflictProjector? conflicts, CancellationToken token)
@@ -42,7 +44,7 @@ internal sealed class MirrorPulseRemoteNamespaceBatchDriver(
             if (batch.Changes[ordinal].Kind == CloudRemoteChangeKind.Delete)
                 _ = MirrorPulseRemoteRetirementBatchCoordinator.RequireChange(instance, batch, ordinal, options);
             else if (batch.Changes[ordinal].Kind != CloudRemoteChangeKind.Move)
-                _ = MirrorPulseRemoteBirthBatchCoordinator.RequireChange(instance, batch, ordinal, options);
+                _ = MirrorPulseRemoteUpdateCoordinator.RequireChange(instance, batch, ordinal, options);
         int count = await ReadProgressAsync(batch, token).ConfigureAwait(false);
         CloudRemoteApplyResult? recoveredResult = null;
         // No later native entry may overtake an unsettled product entry after a crash.
@@ -69,6 +71,15 @@ internal sealed class MirrorPulseRemoteNamespaceBatchDriver(
             }
             if (batch.Changes[ordinal].Kind != CloudRemoteChangeKind.Move)
             {
+                var update = await catalog.ReadNamespaceRemoteUpdateAsync(instance, batch.BatchId, ordinal, token).ConfigureAwait(false);
+                if (update is not null)
+                {
+                    MirrorPulseRemoteUpdateCoordinator.RequireOriginal(update.Plan, instance, batch, ordinal, options);
+                    if (update.Outcome is not null) continue;
+                    if (ordinal != count - 1) throw new InvalidDataException("A later SDK entry overtook an unsettled original update.");
+                    await _updates.SettleRecordedAsync(update, instance, batch, ordinal, options, conflicts, token).ConfigureAwait(false);
+                    continue;
+                }
                 var birth = await catalog.ReadNamespaceRemoteBirthAsync(instance, batch.BatchId, ordinal, token).ConfigureAwait(false)
                     ?? throw new InvalidDataException("Applied SDK progress has no original product birth admission.");
                 MirrorPulseRemoteBirthBatchCoordinator.RequireOriginal(birth, instance, batch, ordinal, options);
@@ -105,6 +116,13 @@ internal sealed class MirrorPulseRemoteNamespaceBatchDriver(
             }
             if (change.Kind != CloudRemoteChangeKind.Move)
             {
+                if (await IsExistingUpdateAsync(instance, batch, count, token).ConfigureAwait(false))
+                {
+                    var appliedUpdate = await _updates.ApplyAsync(instance, batch, count, options, conflicts, token).ConfigureAwait(false);
+                    if (conflicts is not null) await conflicts.CaptureResultAsync(instance, appliedUpdate, token).ConfigureAwait(false);
+                    if (checkpoint is not null) await checkpoint(MirrorPulseRemoteNamespaceBatchCheckpoint.AfterSdkApply, token).ConfigureAwait(false);
+                    return appliedUpdate;
+                }
                 var appliedBirth = await _births.ApplyAsync(instance, batch, count, options, token).ConfigureAwait(false);
                 if (conflicts is not null) await conflicts.CaptureResultAsync(instance, appliedBirth, token).ConfigureAwait(false);
                 if (checkpoint is not null) await checkpoint(MirrorPulseRemoteNamespaceBatchCheckpoint.AfterSdkApply, token).ConfigureAwait(false);
@@ -178,6 +196,18 @@ internal sealed class MirrorPulseRemoteNamespaceBatchDriver(
         // Reuse the coordinator's full public-change/reference validation, including terminal history.
         return await _moves.PrepareRemoteAsync(intent.OperationId, intent.MemberId, intent.Target.ParentMemberId,
             name, instance, batch, ordinal, token).ConfigureAwait(false);
+    }
+
+    private async Task<bool> IsExistingUpdateAsync(InstanceId instance, CloudRemoteChangeBatch batch, int ordinal, CancellationToken token)
+    {
+        if (await catalog.ReadNamespaceRemoteUpdateAsync(instance, batch.BatchId, ordinal, token).ConfigureAwait(false) is not null) return true;
+        if (await catalog.ReadNamespaceRemoteBirthAsync(instance, batch.BatchId, ordinal, token).ConfigureAwait(false) is not null) return false;
+        var change = batch.Changes[ordinal];
+        if (change.PreviousRemoteRevision is not null) return true;
+        await using var transaction = await state.OpenStore.BeginTransactionAsync(token).ConfigureAwait(false);
+        var existing = await transaction.Items.GetByItemIdAsync(change.ItemId!.Value, token).ConfigureAwait(false);
+        await transaction.RollbackAsync(token).ConfigureAwait(false);
+        return existing is not null;
     }
 
     private async ValueTask<bool> IsSettledAsync(Guid operation, CancellationToken token) =>

@@ -996,6 +996,19 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         [SupportedOSPlatform("windows10.0.26100")]
         private async ValueTask<bool> BootstrapNamespaceAsync(IMirrorPulseInstanceScheduler instances, CancellationToken token)
         {
+            // Reconcile already committed SDK update outcomes before rotating the old
+            // coherent role graph. Uncertain starts retain their original closed root.
+            var updateRecovery = new MirrorPulseRemoteUpdateCoordinator(fileSystem, state, catalog!, router!, _namespaceExecution!, _namespaceActor!);
+            foreach (var root in router!.Registrations)
+                foreach (var update in await catalog!.ReadPendingNamespaceRemoteUpdatesAsync(root.RootId, token).ConfigureAwait(false))
+                {
+                    try { await updateRecovery.SettleRecordedAsync(update, null, token).ConfigureAwait(false); }
+                    catch (Exception error) when (error is IOException or InvalidOperationException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+                    {
+                        // Startup's validated pending-operation discovery leaves this root
+                        // closed without replacing its owner with a new initializer.
+                    }
+                }
             var started = await new MirrorPulseNamespaceStartupCoordinator(fileSystem, catalog!, router!, _namespaceExecution!,
                 _namespaceActor!, instances, _permissions!, namespaceWork!, NoteStartup, RecoverRemoteDeleteBeforeAuditAsync).StartAsync(token).ConfigureAwait(false);
             _startupProtection = started.Guard; NamespaceStartupResults = started.Roots;

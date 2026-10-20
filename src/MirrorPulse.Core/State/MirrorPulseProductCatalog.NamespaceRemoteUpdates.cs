@@ -5,8 +5,8 @@ namespace MirrorPulse.Core.State;
 
 /// <summary>Original ownership of one same-object SDK upsert, separate from a new birth or local replacement.</summary>
 public sealed record MirrorPulseNamespaceRemoteUpdatePlan(int Version, Guid OperationId, InstanceId InstanceId,
-    string BatchId, string BatchFingerprint, int BatchEntryCount, int Ordinal, string ChangeId,
-    Guid ItemId, string RemoteId, string PreviousRemoteRevision, string RemoteRevision,
+    string BatchId, string BatchFingerprint, int BatchEntryCount, int Ordinal, string ChangeId, string ChangeFingerprint,
+    Guid ItemId, string RemoteId, string? PreviousRemoteRevision, string RemoteRevision,
     string? NativeRemoteRevision, string? OfficialRemoteRevision, bool NativeIsPlaceholder,
     MirrorPulseNamespaceMemberProtectionSnapshot Child, MirrorPulseNamespaceMemberProtectionSnapshot Parent,
     MirrorPulseNamespacePermissionVerification ChildBefore, MirrorPulseNamespacePermissionVerification ParentBefore,
@@ -111,6 +111,21 @@ public sealed partial class MirrorPulseProductCatalog
                 updates.Add(await ReadRemoteUpdateCoreAsync(id, transaction, token).ConfigureAwait(false)
                     ?? throw new InvalidDataException("A pending remote update lost its original entry."));
             transaction.Commit(); return updates.AsReadOnly();
+        }
+        finally { _gate.Release(); }
+    }
+
+    public async Task<IReadOnlyList<MirrorPulseNamespaceRemoteUpdate>> ReadPendingNamespaceRemoteUpdatesAsync(RootId rootId,
+        CancellationToken token = default)
+    {
+        if (rootId.Value == Guid.Empty) throw new ArgumentException("A stable root is required.", nameof(rootId));
+        await _gate.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed(); using var transaction = _connection.BeginTransaction(deferred: true);
+            var pending = await ReadPendingRemoteUpdatesCoreAsync(transaction, token).ConfigureAwait(false);
+            var result = pending.Where(update => update.Plan.Child.Context.Member.RootId == rootId).ToArray();
+            transaction.Commit(); return Array.AsReadOnly(result);
         }
         finally { _gate.Release(); }
     }

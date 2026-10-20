@@ -113,8 +113,17 @@ evidence, fresh same-object observations, and either the exact incoming revision
 or the unchanged revisions and durable conflict. The outcome and release of its
 own root fence commit together. Historical reads retain earlier identities and
 protection epochs after later role changes. These catalog APIs do not authorize
-native work or advance an Adapter cursor; the production update coordinator still
-needs to connect and validate those boundaries.
+native work or advance an Adapter cursor. The production update coordinator now
+holds the namespace actor, current role and original child/parent metadata handles,
+then invokes the original public SDK batch with one entry. It validates retained SDK
+progress, the exact public entry digest, decoded conflicts and fresh native/public
+projection observations before product settlement and cursor publication. A declared
+null predecessor remains null; actual before revisions are retained separately.
+Startup may reconcile an already committed original outcome under the current user
+before rotating the old role graph. An uncertain start with no matching SDK progress
+keeps its original root closed and never triggers blind redispatch. Kind replacement,
+different-object collisions and explicit non-Delete conflict choices retain their
+separate lifecycle requirements. These paths require fresh native acceptance.
 
 CfSharp owns remote batch execution, decoded remote conflicts, native file
 operations, and its official SQLite projection. MirrorPulse retains product

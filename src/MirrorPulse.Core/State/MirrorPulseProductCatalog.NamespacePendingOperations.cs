@@ -2,7 +2,7 @@ using MirrorPulse.Core.Contracts;
 
 namespace MirrorPulse.Core.State;
 
-public enum MirrorPulseNamespacePendingOperationKind { Birth, Move, Retirement, RetirementBatch, Replacement, BornMemberRecovery }
+public enum MirrorPulseNamespacePendingOperationKind { Birth, Move, Retirement, RetirementBatch, Replacement, BornMemberRecovery, RemoteUpdate }
 
 /// <summary>A safe reference to retained local recovery work; it carries no native authority.</summary>
 public sealed record MirrorPulseNamespacePendingOperation(Guid OperationId, RootId RootId, MirrorPulseNamespacePendingOperationKind Kind);
@@ -24,6 +24,9 @@ public sealed partial class MirrorPulseProductCatalog
             // not turn a query for another root into a false declaration of readiness.
             _ = await ReadNamespaceRootFencesCoreAsync(true, transaction, cancellationToken).ConfigureAwait(false);
             var result = new List<MirrorPulseNamespacePendingOperation>();
+            foreach (var update in await ReadPendingRemoteUpdatesCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
+                if (update.Plan.Child.Context.Member.RootId == rootId)
+                    result.Add(new(update.Plan.OperationId, rootId, MirrorPulseNamespacePendingOperationKind.RemoteUpdate));
             if (await ReadPendingNamespaceMemberMoveCoreAsync(rootId, transaction, cancellationToken).ConfigureAwait(false) is { } move)
                 result.Add(new(move.OperationId, rootId, MirrorPulseNamespacePendingOperationKind.Move));
             foreach (var retirement in await ReadPendingNamespaceRetirementsCoreAsync(transaction, cancellationToken).ConfigureAwait(false))

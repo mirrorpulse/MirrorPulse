@@ -25,6 +25,18 @@ public sealed class MirrorPulseRemoteNamespaceFence(MirrorPulseRootRouter router
         RootRegistration current = router.GetRegistration(root.InstanceId, root.UniquenessKey);
         if (current.RootId != root.RootId || current.DirectoryName != root.DirectoryName || current.State != RootRegistrationState.Active)
             return false;
+        var updates = (await catalog.ReadPendingNamespaceRemoteUpdatesAsync(root.InstanceId, batch.BatchId, cancellationToken).ConfigureAwait(false))
+            .Where(update => update.Plan.Child.Context.Member.RootId == root.RootId).ToArray();
+        if (updates.Length != 0)
+        {
+            if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100)) return false;
+            if (updates.Length != 1) return false;
+            var plan = updates[0].Plan;
+            if (plan.Ordinal >= batch.Changes.Count || plan.BatchFingerprint != Convert.ToHexString(batch.Fingerprint.Span) ||
+                plan.BatchEntryCount != batch.Changes.Count || MirrorPulseRemoteUpdateCoordinator.ChangeFingerprint(batch.Changes[plan.Ordinal]) != plan.ChangeFingerprint)
+                return false;
+            return await catalog.CanResumeNamespaceRemoteUpdateAsync(plan, cancellationToken).ConfigureAwait(false);
+        }
         var move = await catalog.ReadPendingNamespaceMemberMoveAsync(root.RootId, cancellationToken).ConfigureAwait(false);
         if (move is null)
         {

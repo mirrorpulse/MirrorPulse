@@ -11,8 +11,9 @@ public sealed partial class MirrorPulseProductCatalog
         if (plan.Version != 1 || plan.OperationId == Guid.Empty || plan.ItemId == Guid.Empty || plan.PreparedAt == default ||
             plan.BatchEntryCount is < 1 or > 65_536 || plan.Ordinal >= plan.BatchEntryCount ||
             plan.BatchFingerprint is not { Length: 64 } || plan.BatchFingerprint.Any(character => !char.IsAsciiHexDigitUpper(character)) ||
+            plan.ChangeFingerprint is not { Length: 64 } || plan.ChangeFingerprint.Any(character => !char.IsAsciiHexDigitUpper(character)) ||
             InvalidRemoteUpdateText(plan.ChangeId, 16_384) || InvalidRemoteUpdateText(plan.RemoteId, 4096) ||
-            InvalidRemoteUpdateText(plan.PreviousRemoteRevision, 4096) || InvalidRemoteUpdateText(plan.RemoteRevision, 4096) ||
+            plan.PreviousRemoteRevision is { } previous && InvalidRemoteUpdateText(previous, 4096) || InvalidRemoteUpdateText(plan.RemoteRevision, 4096) ||
             new[] { plan.NativeRemoteRevision, plan.OfficialRemoteRevision }.Any(value => value is not null && InvalidRemoteUpdateText(value, 4096)) ||
             !MirrorPulseRemoteLibraryProvenance.IsSupported(plan.PackageVersion, plan.PackageSource) ||
             plan.Policy is not { PreserveUnsynchronizedLocalContent: true } policy || policy.EchoSuppressionObservationCount is < 1 or > 64 ||
@@ -68,7 +69,7 @@ public sealed partial class MirrorPulseProductCatalog
         if (outcome.Disposition == MirrorPulseNamespaceRemoteUpdateDisposition.Applied)
         {
             if (outcome.ConflictId is not null || outcome.ConflictDetectedAt is not null || !outcome.NativeIsPlaceholder || !outcome.NativeIsInSync ||
-                plan.OfficialRemoteRevision != plan.PreviousRemoteRevision || outcome.NativeRemoteRevision != plan.RemoteRevision ||
+                plan.PreviousRemoteRevision is { } previous && plan.OfficialRemoteRevision != previous || outcome.NativeRemoteRevision != plan.RemoteRevision ||
                 outcome.OfficialRemoteRevision != plan.RemoteRevision)
                 throw new InvalidOperationException("An applied update requires the exact incoming native and official revision, in-sync state and no conflict.");
         }
