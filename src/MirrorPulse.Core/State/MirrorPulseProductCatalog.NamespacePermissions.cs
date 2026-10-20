@@ -399,6 +399,13 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task<MirrorPulseNamespacePermissionChange?> ReadPermissionChangeCoreAsync(Guid operationId,
         CancellationToken token, SqliteTransaction? transaction = null)
     {
+        token.ThrowIfCancellationRequested();
+        var history = transaction is null ? null : _namespaceHistoryReads.GetOrCreateValue(transaction);
+        if (history?.VerifiedPermissionRows.TryGetValue(operationId, out var retained) == true)
+        {
+            await ValidateReplacementPermissionProjectionAsync(retained, transaction, token).ConfigureAwait(false);
+            return retained;
+        }
         await using SqliteCommand query = _connection.CreateCommand();
         query.Transaction = transaction;
         query.CommandText = PermissionChangeQuery + " WHERE c.operation_id=$id;";
@@ -407,6 +414,7 @@ public sealed partial class MirrorPulseProductCatalog
         var change = await reader.ReadAsync(token).ConfigureAwait(false) ? ReadPermissionChange(reader) : null;
         await reader.DisposeAsync().ConfigureAwait(false);
         if (change is not null) await ValidateReplacementPermissionProjectionAsync(change, transaction, token).ConfigureAwait(false);
+        if (change?.Phase == MirrorPulseNamespacePermissionPhase.Verified) history?.VerifiedPermissionRows.Add(operationId, change);
         return change;
     }
 
@@ -464,6 +472,8 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task WritePermissionChangeCoreAsync(MirrorPulseNamespacePermissionChange change, CancellationToken token,
         SqliteTransaction? transaction = null, bool insert = false)
     {
+        if (transaction is not null && _namespaceHistoryReads.TryGetValue(transaction, out var history))
+            history.VerifiedPermissionRows.Remove(change.Intent.OperationId);
         await using SqliteCommand command = _connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = insert

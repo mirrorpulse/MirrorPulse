@@ -95,6 +95,10 @@ already decoded, fingerprint-checked immutable birth admission and first-observa
 rows. Remote admission indexes and referenced proof validation still run. Missing
 rows, current heads, names, fences and native facts are not retained by this cache;
 each new transaction starts empty, including after role changes or corruption.
+Historical permission reads by operation ID also reuse only a fully verified row
+within that transaction. Prepared, applied, recovery-required and missing records
+remain uncached. Current-head queries and replacement-projection validation still
+run, and any permission write invalidates that operation's transaction entry.
 
 CfSharp owns remote batch execution, decoded remote conflicts, native file
 operations, and its official SQLite projection. MirrorPulse retains product

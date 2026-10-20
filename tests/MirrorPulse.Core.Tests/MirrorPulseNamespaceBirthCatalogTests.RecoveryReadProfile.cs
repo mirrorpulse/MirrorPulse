@@ -55,5 +55,11 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             "One transaction must read each immutable first observation only once while preserving reference checks.");
         Assert.AreEqual(1, statements.Where(entry => entry.Key.Contains("FROM namespace_birth_intents WHERE operation_id=", StringComparison.Ordinal)).Sum(entry => entry.Value),
             "One transaction must read each immutable birth admission only once while preserving its index checks.");
+        int historicalPermissionReads = statements.Where(entry => entry.Key.Contains("FROM namespace_permission_changes", StringComparison.Ordinal) &&
+            entry.Key.Contains("WHERE c.operation_id=", StringComparison.Ordinal)).Sum(entry => entry.Value);
+        Console.WriteLine($"VerifiedPermissionReadBudget: historicalOperationReads={historicalPermissionReads}; latestHeadReads=" +
+            $"{statements.Where(entry => entry.Key.Contains("FROM namespace_permission_changes", StringComparison.Ordinal) && entry.Key.Contains("ORDER BY c.rowid DESC", StringComparison.Ordinal)).Sum(entry => entry.Value)}.");
+        // This member retains two captured originals: its direct parent and the anchor.
+        Assert.AreEqual(2, historicalPermissionReads, "Each verified historical permission row should be read once; current-head queries must still run.");
     }
 }

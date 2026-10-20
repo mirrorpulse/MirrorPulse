@@ -15,6 +15,7 @@ public sealed partial class MirrorPulseProductCatalog
         internal Dictionary<Guid, (long Sequence, MirrorPulseNamespaceBirthProtection Protection)> BirthProtectionRows { get; } = new();
         internal Dictionary<Guid, MirrorPulseNamespaceBirthIntent> BirthIntentRows { get; } = new();
         internal Dictionary<Guid, MirrorPulseNamespaceBirthObservation> BirthObservationRows { get; } = new();
+        internal Dictionary<Guid, MirrorPulseNamespacePermissionChange> VerifiedPermissionRows { get; } = new();
         internal Dictionary<Guid, MirrorPulseNamespaceBirthProtection> UnlocatedBirthProtections { get; } = new();
         internal Dictionary<Guid, MirrorPulseNamespaceMemberMoveIntent> Moves { get; } = new();
         internal HashSet<Guid> MoveChains { get; } = new();
