@@ -104,6 +104,10 @@ also reused only within that transaction. Their first read checks the retained
 indexes and payload; member lineage, current location, name ownership and current
 protection checks still run. Missing rows are never retained, and later transactions
 read the original rows again.
+After every queued reference in a located protection graph has passed its historical
+validation, the transaction may reuse that exact complete epoch value. An unfinished
+graph never populates this reuse set. Current placement, latest protection, name
+ownership, execution fences and fresh native observations remain separately checked.
 
 The product catalog also retains an existing-object remote update independently
 of birth and local replacement. Its original batch entry, SDK policy, child and

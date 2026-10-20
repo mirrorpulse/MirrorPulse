@@ -31,9 +31,12 @@ public sealed partial class MirrorPulseProductCatalog
         }
         var pending = new Queue<MirrorPulseNamespaceBirthProtection>(seeds);
         var visited = new HashSet<Guid>();
+        var history = _namespaceHistoryReads.GetOrCreateValue(transaction);
+        var validated = new List<MirrorPulseNamespaceBirthProtection>();
         while (pending.TryDequeue(out var epoch))
         {
             token.ThrowIfCancellationRequested();
+            if (history.LocatedBirthGraphs.TryGetValue(epoch.ProtectionId, out var verified) && verified == epoch) continue;
             if (!visited.Add(epoch.ProtectionId)) continue;
             var placement = epoch.Placement ?? throw new InvalidDataException("The located protection reference is missing.");
             var birth = await ReadNamespaceBirthRowAsync(epoch.BirthOperationId, transaction, token).ConfigureAwait(false)
@@ -87,7 +90,13 @@ public sealed partial class MirrorPulseProductCatalog
             _ = await ValidateNamespaceBirthLineageAsync(birth, previous.Protection, false, null, transaction, token, collected).ConfigureAwait(false);
             if (previous.Protection.Placement is not null) pending.Enqueue(previous.Protection);
             foreach (var reference in collected) pending.Enqueue(reference);
+            validated.Add(epoch);
         }
+        // Publish only after the entire queued historical graph passed, never a
+        // partially visited seed. Match the complete immutable value, not just its ID.
+        // Current placement, latest protection, names, fences and native observations
+        // keep their separate checks; a later transaction starts with no entries.
+        foreach (var epoch in validated) history.LocatedBirthGraphs[epoch.ProtectionId] = epoch;
     }
 
     private async Task ValidateNamespaceLocatedBirthMemberAsync(MirrorPulseNamespaceMemberRegistration member,
