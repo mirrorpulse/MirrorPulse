@@ -72,6 +72,15 @@ under a new role, a subsequent fresh current-tree audit, and recovery of a lost 
 receipt after legitimate parent-role rotation. Their original test results
 must establish acceptance; successful compilation is insufficient.
 
+Explicit decisions remain discoverable by their product command even after the SDK
+conflict has disappeared. `namespace remote deletes ROOT_ID` pages pending commands;
+`namespace remote delete-status COMMAND_ID` distinguishes an unknown SDK outcome,
+remaining member pages, completed member settlement and the final command receipt.
+`namespace remote recover-delete COMMAND_ID` continues at most one member page using
+the original command, including on a closed root. It accepts no new conflict choice
+or replacement target, and completion does not grant root readiness without its fresh
+current-tree audit. Clients use the versioned Host pipe contract for all three commands.
+
 The complete current-tree audit borrows one coherent inventory only for its awaited
 native-inspection callback. The permission coordinator validates the entire current
 catalog fingerprint before and after that callback; the borrowed admission expires

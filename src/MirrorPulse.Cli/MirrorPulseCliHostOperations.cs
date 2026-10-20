@@ -280,6 +280,24 @@ public sealed class MirrorPulseCliHostOperations : IMirrorPulseCliHostOperations
                         (move.RequiresSubtreeReconciliation ? " · subtree reconciliation pending" : string.Empty);
                     break;
                 case ("namespace", "remote") when command.Path.Count > 2 &&
+                    (command.Path[2].Equals("delete-status", StringComparison.OrdinalIgnoreCase) ||
+                    command.Path[2].Equals("recover-delete", StringComparison.OrdinalIgnoreCase)):
+                    Guid deleteCommand = MirrorPulseRemoteDeleteCliArguments.ParseCommand(command.Arguments);
+                    var deleteStatus = command.Path[2].Equals("recover-delete", StringComparison.OrdinalIgnoreCase)
+                        ? await _client.RecoverNamespaceRemoteDeleteAsync(deleteCommand, cancellationToken).ConfigureAwait(false)
+                        : await _client.GetNamespaceRemoteDeleteStatusAsync(deleteCommand, cancellationToken).ConfigureAwait(false);
+                    result = deleteStatus; human = MirrorPulseRemoteDeleteCliArguments.Format(deleteStatus);
+                    break;
+                case ("namespace", "remote") when command.Path.Count > 2 &&
+                    command.Path[2].Equals("deletes", StringComparison.OrdinalIgnoreCase):
+                    var deletePageArguments = MirrorPulseRemoteDeleteCliArguments.ParsePage(command.Arguments);
+                    var deletePage = await _client.GetNamespaceRemoteDeletesAsync(deletePageArguments.RootId, deletePageArguments.AfterCommandId,
+                        deletePageArguments.Limit, cancellationToken).ConfigureAwait(false);
+                    result = deletePage; human = deletePage.Entries.Count == 0 ? "No pending explicit Delete commands." :
+                        string.Join(Environment.NewLine, deletePage.Entries.Select(MirrorPulseRemoteDeleteCliArguments.Format));
+                    if (deletePage.NextCommandId is { } nextDelete) human += Environment.NewLine + $"Next command: {nextDelete:D}";
+                    break;
+                case ("namespace", "remote") when command.Path.Count > 2 &&
                     command.Path[2].Equals("retirement-status", StringComparison.OrdinalIgnoreCase):
                     if (command.Arguments.Count != 1 || !Guid.TryParse(command.Arguments[0], out Guid remoteStatusOperation) || remoteStatusOperation == Guid.Empty)
                         throw new ArgumentException("namespace remote retirement-status requires one non-empty operation ID.");

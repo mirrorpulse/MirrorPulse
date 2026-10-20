@@ -144,7 +144,9 @@ public static class MirrorPulseCliCommandLine
                             token.Equals("recover-root", StringComparison.OrdinalIgnoreCase) || token.Equals("initialization-status", StringComparison.OrdinalIgnoreCase) ||
                             token.Equals("initializations", StringComparison.OrdinalIgnoreCase)
                         : commandPath[1].Equals("remote", StringComparison.OrdinalIgnoreCase)
-                            ? token.Equals("retirement-status", StringComparison.OrdinalIgnoreCase) || token.Equals("retirements", StringComparison.OrdinalIgnoreCase)
+                            ? token.Equals("retirement-status", StringComparison.OrdinalIgnoreCase) || token.Equals("retirements", StringComparison.OrdinalIgnoreCase) ||
+                                token.Equals("delete-status", StringComparison.OrdinalIgnoreCase) || token.Equals("deletes", StringComparison.OrdinalIgnoreCase) ||
+                                token.Equals("recover-delete", StringComparison.OrdinalIgnoreCase)
                             : token.Equals("recover", StringComparison.OrdinalIgnoreCase);
                 if (!allowed)
                     return Failure($"Unknown subcommand '{token}' for 'namespace {commandPath[1]}'.", options);
@@ -260,6 +262,12 @@ public static class MirrorPulseCliHelp
                                          Read an original remote directory deletion status.
           namespace remote retirements ROOT_ID [--after-operation-id OPERATION_ID] [--limit 1..64]
                                          List original remote directory deletion statuses for one root.
+          namespace remote delete-status COMMAND_ID
+                                         Read an explicit KeepRemote deletion and its command progress.
+          namespace remote deletes ROOT_ID [--after-command-id COMMAND_ID] [--limit 1..64]
+                                         List pending explicit Delete commands for one root.
+          namespace remote recover-delete COMMAND_ID
+                                         Continue one admitted Delete page using its original command.
           namespace birth recover RECOVERY_ID
                                          Retry an already retained staged-file recovery.
           conflict list|show|snooze|resolve

@@ -202,6 +202,9 @@ public interface IMirrorPulseCloudRuntime : IAsyncDisposable
         CancellationToken cancellationToken) =>
         ValueTask.FromException<MirrorPulseRemoteConflictActionOutcome>(
             new NotSupportedException("This Cloud Files runtime does not resolve remote conflicts."));
+
+    ValueTask<MirrorPulseRemoteDeleteResolution> RecoverRemoteDeleteResolutionAsync(Guid commandId, CancellationToken cancellationToken) =>
+        ValueTask.FromException<MirrorPulseRemoteDeleteResolution>(new NotSupportedException("This runtime does not recover explicit remote deletions."));
 }
 
 public interface IMirrorPulseCloudRuntimeFactory
@@ -1123,6 +1126,33 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                     .ApplyRetainedAsync(admission, action, token), cancellationToken).ConfigureAwait(false);
         }
 
+        public async ValueTask<MirrorPulseRemoteDeleteResolution> RecoverRemoteDeleteResolutionAsync(Guid commandId, CancellationToken cancellationToken)
+        {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
+            if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
+                throw new PlatformNotSupportedException("Protected remote deletion recovery requires Windows 11 24H2 or later.");
+            RequireImportBoundary();
+            var retained = await catalog!.ReadRemoteDeleteResolutionAsync(commandId, cancellationToken).ConfigureAwait(false)
+                ?? throw new FileNotFoundException("The original explicit Delete command is not registered.");
+            var intent = retained.Plan.Decision;
+            var root = retained.Plan.Entries[0].Original.Context.Member.RootId!.Value;
+            await using var admission = namespaceWork is null ? null : await namespaceWork.EnterPendingOperationAsync(root, cancellationToken).ConfigureAwait(false);
+            return await WithInstanceLibraryAsync(intent.Conflict.InstanceId, async token =>
+            {
+                try
+                {
+                    _ = await (_remoteConflictActions ?? throw new InvalidOperationException("The remote conflict action service has not started."))
+                        .ApplyAsync(intent.CommandId, intent.Conflict, intent.Action, cancellationToken: token).ConfigureAwait(false);
+                }
+                catch (MirrorPulseRemoteTreeSettlementPendingException pending) when (pending.OperationId == commandId)
+                {
+                    // One actual member page committed; return its retained progress to the caller.
+                }
+                return await catalog.ReadRemoteDeleteResolutionAsync(commandId, token).ConfigureAwait(false)
+                    ?? throw new InvalidDataException("The continued explicit Delete lost its original command.");
+            }, cancellationToken).ConfigureAwait(false);
+        }
+
         public async ValueTask<MirrorPulseRemoteConflictActionOutcome> ApplyRemoteConflictAsync(
             Guid conflictId,
             MirrorPulseConflictAction action,
@@ -1779,6 +1809,13 @@ public sealed class MirrorPulseCloudHostSession : IAsyncDisposable
         }
 
         return _runtime.ApplyRemoteConflictAsync(conflictId, action, catalog, cancellationToken);
+    }
+
+    public ValueTask<MirrorPulseRemoteDeleteResolution> RecoverRemoteDeleteResolutionAsync(Guid commandId,
+        CancellationToken cancellationToken = default)
+    {
+        if (!_started || _runtime is null) throw new InvalidOperationException("The Cloud Files Host session has not started.");
+        return _runtime.RecoverRemoteDeleteResolutionAsync(commandId, cancellationToken);
     }
 
     public ValueTask DisposeAsync()

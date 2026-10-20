@@ -394,6 +394,21 @@ public sealed class MirrorPulseControlClient
         SendAsync<NamespaceRemoteRetirementsArguments, MirrorPulseControlRemoteRetirementPage>(
             MirrorPulseControlCommands.NamespaceRemoteRetirements, new(rootId, afterOperationId, limit), cancellationToken);
 
+    public Task<MirrorPulseControlRemoteDeleteStatus> GetNamespaceRemoteDeleteStatusAsync(Guid commandId,
+        CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceRemoteDeleteStatusArguments, MirrorPulseControlRemoteDeleteStatus>(
+            MirrorPulseControlCommands.NamespaceRemoteDeleteStatus, new(commandId), cancellationToken);
+
+    public Task<MirrorPulseControlRemoteDeletePage> GetNamespaceRemoteDeletesAsync(Guid rootId, Guid? afterCommandId = null,
+        int limit = 64, CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceRemoteDeletesArguments, MirrorPulseControlRemoteDeletePage>(
+            MirrorPulseControlCommands.NamespaceRemoteDeletes, new(rootId, afterCommandId, limit), cancellationToken);
+
+    public Task<MirrorPulseControlRemoteDeleteStatus> RecoverNamespaceRemoteDeleteAsync(Guid commandId,
+        CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceRemoteDeleteRecoverArguments, MirrorPulseControlRemoteDeleteStatus>(
+            MirrorPulseControlCommands.NamespaceRemoteDeleteRecover, new(commandId), cancellationToken);
+
     public Task<MirrorPulseControlNamespaceBirthRecoveryResult> ExecuteNamespaceBirthRecoveryAsync(Guid recoveryId,
         CancellationToken cancellationToken = default) =>
         SendAsync<NamespaceBirthRecoverArguments, MirrorPulseControlNamespaceBirthRecoveryResult>(
