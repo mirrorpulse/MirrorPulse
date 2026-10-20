@@ -9,6 +9,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot 'installed-startup-diagnostics.ps1')
 if (-not $IsWindows) {
     throw "MSIX Cloud Files verification requires Windows."
 }
@@ -27,6 +28,9 @@ $installed = $null
 $uninstallFailed = $false
 $aliasPath = $null
 $packageName = "0B72358D-6DC9-479D-8C28-F0232B42A0B3"
+$verificationPhase = 'Build'
+$hostAttemptedAt = $null
+$statusExitCode = $null
 
 if (Get-AppxPackage -Name $packageName | Select-Object -First 1) {
     throw "The verification user already has MirrorPulse installed; use a clean test user."
@@ -124,8 +128,11 @@ try {
     if ($versionOutput -notmatch "MirrorPulse mp") {
         throw "The registered mp.exe alias did not return the CLI version: $versionOutput"
     }
+    $verificationPhase = 'HostAutoStart'
+    $hostAttemptedAt = [DateTimeOffset]::UtcNow
     $statusOutput = (& $mpCommand.Source --json status 2>&1 | Out-String).Trim()
-    if ($LASTEXITCODE -ne 0) {
+    $statusExitCode = $LASTEXITCODE
+    if ($statusExitCode -ne 0) {
         throw "The installed CLI did not auto-start its packaged Host: $statusOutput"
     }
     $status = $statusOutput | ConvertFrom-Json
@@ -133,6 +140,7 @@ try {
         throw "The packaged CLI status result is invalid."
     }
     & $mpCommand.Source --json host stop 2>$null | Out-Null
+    $verificationPhase = 'Shell'
 
     if ($VerifyShell) {
         $resultPath = Join-Path $packageRoot "packaged-shell-probe.result"
@@ -167,6 +175,31 @@ try {
     }
 
     Write-Output "Verified installed MSIX $($installed.PackageFullName), mp.exe alias, packaged Host auto-start, Cloud Files, and .mpadapter identities."
+}
+catch {
+    if ($verificationPhase -eq 'HostAutoStart' -and $EvidencePath -and $null -ne $hostAttemptedAt) {
+        try {
+            $roots=[Collections.Generic.List[string]]::new()
+            if ($env:MIRRORPULSE_DATA_ROOT) { $roots.Add([IO.Path]::GetFullPath($env:MIRRORPULSE_DATA_ROOT)) }
+            $local=[Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
+            $roots.Add((Join-Path $local 'MirrorPulse'))
+            if ($null -ne $installed) {
+                $packageData=Join-Path (Join-Path $local 'Packages') $installed.PackageFamilyName
+                $roots.Add((Join-Path $packageData 'LocalCache/Local/MirrorPulse'))
+                $roots.Add((Join-Path $packageData 'LocalState/MirrorPulse'))
+                $processes=@(Get-InstalledHostExitObservation -ExpectedExecutable (Join-Path $installed.InstallLocation 'host/MirrorPulse.Host.exe'))
+            } else { $processes=@() }
+            $diagnostics=Get-InstalledHostStartupDiagnostics -DataRoots $roots.ToArray() -Since $hostAttemptedAt
+            $directory=[IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($EvidencePath))
+            New-Item -ItemType Directory -Path $directory -Force|Out-Null
+            [ordered]@{schemaVersion=1;sourceSha=$env:GITHUB_SHA;runId=$env:GITHUB_RUN_ID;runtime=$Runtime;
+                phase='HostAutoStart';verified=$false;hostAutoStart=$false;cliExitCode=$statusExitCode;
+                attemptedAt=$hostAttemptedAt.ToString('O');processes=$processes;diagnostics=$diagnostics}|
+                ConvertTo-Json -Depth 7|Set-Content -LiteralPath (Join-Path $directory 'installed-startup-failure.json') -Encoding utf8
+            Write-Host "Installed startup diagnostics retained: $($diagnostics.records.Count) bounded Host records."
+        } catch { Write-Host 'Installed startup diagnostics were unavailable; the original verification failure is retained.' }
+    }
+    throw
 }
 finally {
     if ($null -ne $installed) {
