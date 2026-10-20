@@ -54,6 +54,7 @@ public sealed partial class MirrorPulseProductCatalog
         }
         if (intent.OperationId == intent.MemberId)
             throw new InvalidOperationException("Replacement cannot reuse a member's identity.");
+        await RequireNotNamespaceTransferOwnerAsync(intent.OperationId, transaction, cancellationToken).ConfigureAwait(false);
         await RequireReplacementIdAvailableCoreAsync(intent.OperationId, transaction, cancellationToken).ConfigureAwait(false);
         await RequireNamespaceMoveRootUnfencedAsync(intent.RootId, null, transaction, cancellationToken).ConfigureAwait(false);
         var births = new HashSet<RootId>();

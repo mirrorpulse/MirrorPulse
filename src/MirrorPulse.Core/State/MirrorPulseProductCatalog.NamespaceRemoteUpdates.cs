@@ -45,6 +45,7 @@ public sealed partial class MirrorPulseProductCatalog
                 if (replay.Plan != plan) throw new InvalidOperationException("A remote update cannot replace its original entry, object, policy or role.");
                 transaction.Commit(); return replay;
             }
+            await RequireNotNamespaceTransferOwnerAsync(plan.OperationId, transaction, token).ConfigureAwait(false);
             await RequireRemoteUpdateCurrentAsync(plan, transaction, token).ConfigureAwait(false);
             var root = plan.Child.Context.Member.RootId!.Value;
             if ((await ReadNamespaceRootFencesCoreAsync(true, transaction, token).ConfigureAwait(false)).Contains(root))

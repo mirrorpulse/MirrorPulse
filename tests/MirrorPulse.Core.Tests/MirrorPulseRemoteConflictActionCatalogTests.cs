@@ -128,7 +128,7 @@ public sealed class MirrorPulseRemoteConflictActionCatalogTests
             await Assert.ThrowsExactlyAsync<InvalidDataException>(() => catalog.PrepareRemoteConflictActionAsync(intent));
             Assert.AreEqual(command, await catalog.ReadUserCommandAsync(command.CommandId));
             Assert.AreEqual(0L, await fixture.ScalarAsync("SELECT count(*) FROM remote_conflict_actions;"));
-            Assert.AreEqual(79L, await fixture.ScalarAsync("PRAGMA user_version;"));
+            Assert.AreEqual(80L, await fixture.ScalarAsync("PRAGMA user_version;"));
         }
     }
 

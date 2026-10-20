@@ -45,6 +45,7 @@ public sealed partial class MirrorPulseProductCatalog
             var replay = await ReadNamespaceRetirementCoreAsync(intent.OperationId, transaction, cancellationToken).ConfigureAwait(false);
             if (replay is not null)
             { if (replay.Intent != intent) throw new InvalidOperationException("A retirement operation is immutable."); transaction.Commit(); return replay; }
+            await RequireNotNamespaceTransferOwnerAsync(intent.OperationId, transaction, cancellationToken).ConfigureAwait(false);
             var member = await ReadNamespaceMemberCoreAsync(intent.MemberId, transaction, cancellationToken).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The namespace member is not registered.");
             if (member.RootId != intent.RootId || member.LocalObject != intent.LocalObject || member.IsDirectory != intent.IsDirectory || member.OwnerSid != intent.OwnerSid)

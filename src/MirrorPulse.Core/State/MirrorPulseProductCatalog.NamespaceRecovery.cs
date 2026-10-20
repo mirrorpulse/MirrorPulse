@@ -81,7 +81,7 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task<IReadOnlyList<RootId>> ReadNamespaceRootFencesCoreAsync(bool includeUnregisteredBirths,
         SqliteTransaction transaction, CancellationToken cancellationToken, Guid? admittedRemoteMoveId = null, Guid? admittedRemoteBirthId = null,
         Guid? admittedRemoteRetirementId = null, Guid? admittedRemoteRetirementTreeId = null, Guid? admittedRemoteResolutionId = null,
-        Guid? admittedRemoteUpdateId = null)
+        Guid? admittedRemoteUpdateId = null, Guid? admittedTransferId = null)
     {
         await RequireRemoteTreeSettlementOwnershipIntegrityAsync(transaction, cancellationToken).ConfigureAwait(false);
         await RequireRemoteDeleteResolutionOwnershipIntegrityAsync(transaction, cancellationToken).ConfigureAwait(false);
@@ -90,6 +90,12 @@ public sealed partial class MirrorPulseProductCatalog
             .Where(intent => intent.IsPending).Select(intent => intent.RootId).ToHashSet();
         foreach (var update in updates)
             if (update.Plan.OperationId != admittedRemoteUpdateId) roots.Add(update.Plan.Child.Context.Member.RootId!.Value);
+        foreach (var transfer in await ReadPendingNamespaceTransfersCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
+            if (transfer.Plan.OperationId != admittedTransferId)
+            {
+                roots.Add(transfer.Plan.SourceRoute.RootId);
+                roots.Add(transfer.Plan.TargetRoute.RootId);
+            }
         var moveRoots = new List<RootId>();
         await using (SqliteCommand query = _connection.CreateCommand())
         {

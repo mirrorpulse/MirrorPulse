@@ -158,6 +158,9 @@ public sealed partial class MirrorPulseProductCatalog
         SqliteTransaction transaction, CancellationToken token, Guid? allowedRetirement = null, Guid? allowedBatch = null, Guid? allowedReplacement = null,
         Guid? allowedBornRecoveryInitialization = null, Guid? allowedRemoteUpdate = null)
     {
+        foreach (var transfer in await ReadPendingNamespaceTransfersCoreAsync(transaction, token).ConfigureAwait(false))
+            if (transfer.Plan.SourceRoute.RootId == rootId || transfer.Plan.TargetRoute.RootId == rootId)
+                throw new InvalidOperationException("An unresolved persistent transfer has fenced this managed root.");
         foreach (var update in await ReadPendingRemoteUpdatesCoreAsync(transaction, token).ConfigureAwait(false))
             if (update.Plan.Child.Context.Member.RootId == rootId && update.Plan.OperationId != allowedRemoteUpdate)
                 throw new InvalidOperationException("An unresolved original remote update has fenced this managed root.");

@@ -63,6 +63,7 @@ public sealed partial class MirrorPulseProductCatalog
                     throw new InvalidOperationException("A retirement batch operation is immutable.");
                 transaction.Commit(); return replay;
             }
+            await RequireNotNamespaceTransferOwnerAsync(operationId, transaction, cancellationToken).ConfigureAwait(false);
             await RequireNamespaceMoveRootUnfencedAsync(rootId, null, transaction, cancellationToken).ConfigureAwait(false);
             if (await ReadPendingNamespaceRetirementBatchCoreAsync(rootId, transaction, cancellationToken).ConfigureAwait(false) is not null)
                 throw new InvalidOperationException("Another controlled subtree retirement already fences this root.");

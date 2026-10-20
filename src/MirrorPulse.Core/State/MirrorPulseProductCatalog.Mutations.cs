@@ -130,6 +130,7 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task<MirrorPulseMutationRecord> PrepareMutationCoreAsync(MirrorPulseMutationIntent intent, byte[] payload,
         CancellationToken cancellationToken, SqliteTransaction? transaction = null)
     {
+        await RequireNotNamespaceTransferOwnerAsync(intent.OperationId, transaction, cancellationToken).ConfigureAwait(false);
         await using var command = _connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """

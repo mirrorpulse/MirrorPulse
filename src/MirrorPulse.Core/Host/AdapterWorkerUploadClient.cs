@@ -44,6 +44,8 @@ public sealed class AdapterWorkerUploadClient
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(request.Content);
+        if (request.RequireConditionalTargetSupport && _channel.ProtocolVersion != 2)
+            throw new NotSupportedException("This upload requires negotiated Worker V2 conditional target support before dispatch.");
         if (request.InstanceId != _instanceId || request.Length < 0 ||
             !request.Content.CanRead || request.Content.Length - request.Content.Position < request.Length)
         {

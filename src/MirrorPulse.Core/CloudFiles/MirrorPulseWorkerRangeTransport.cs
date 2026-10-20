@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using MirrorPulse.Core.Contracts;
 
 namespace MirrorPulse.Core.CloudFiles;
@@ -27,7 +28,12 @@ public sealed record MirrorPulseWorkerUploadRequest(
     Guid? OperationId = null,
     string? ExpectedContentSha256 = null,
     string? RootKey = null,
-    bool DestinationMustBeAbsent = true);
+    bool DestinationMustBeAbsent = true)
+{
+    /// <summary>Requires negotiated conditional targets before any upload frame may be sent.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool RequireConditionalTargetSupport { get; init; }
+}
 
 public interface IMirrorPulseWorkerUploadTransport
 {

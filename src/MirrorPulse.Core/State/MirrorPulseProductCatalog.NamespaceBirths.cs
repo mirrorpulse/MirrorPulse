@@ -54,6 +54,7 @@ public sealed partial class MirrorPulseProductCatalog
                 transaction.Commit();
                 return retained;
             }
+            await RequireNotNamespaceTransferOwnerAsync(intent.OperationId, transaction, cancellationToken).ConfigureAwait(false);
             await ValidateNamespaceBirthCurrentParentAsync(intent, transaction, cancellationToken).ConfigureAwait(false);
             await RequireNamespaceMoveRootUnfencedAsync(intent.RootId, null, transaction, cancellationToken).ConfigureAwait(false);
             await RequireNamespaceBirthUnoccupiedMemberNameAsync(intent, transaction, cancellationToken).ConfigureAwait(false);
