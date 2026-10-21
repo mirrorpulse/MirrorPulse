@@ -118,6 +118,7 @@ public sealed partial class MirrorPulseProductCatalog
         }
         foreach (var retirement in await ReadPendingNamespaceRetirementsCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
             if (!(retirement.OperationId == admittedRemoteRetirementId && retirement.Intent.RemoteEntry is not null) &&
+                !(admittedTransferId is not null && retirement.Intent.TransferEntry?.OperationId == admittedTransferId) &&
                 !(retirement.Intent.BatchOperationId == admittedRemoteResolutionId && admittedRemoteResolutionId is not null &&
                     await IsRemoteDeleteResolutionBatchAsync(admittedRemoteResolutionId.Value, transaction, cancellationToken).ConfigureAwait(false))) roots.Add(retirement.Intent.RootId);
         foreach (var batch in await ReadPendingNamespaceRetirementBatchesCoreAsync(transaction, cancellationToken).ConfigureAwait(false))

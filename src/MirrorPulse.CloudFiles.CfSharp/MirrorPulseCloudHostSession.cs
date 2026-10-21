@@ -34,6 +34,9 @@ public interface IMirrorPulseCloudRuntime : IAsyncDisposable
     [SupportedOSPlatform("windows10.0.26100")]
     ValueTask<MirrorPulseNamespaceTransferCopy> DeleteNamespaceTransferSourceAsync(Guid operationId, CancellationToken token) =>
         ValueTask.FromException<MirrorPulseNamespaceTransferCopy>(new NotSupportedException("This runtime does not delete original transfer sources."));
+    [SupportedOSPlatform("windows10.0.26100")]
+    ValueTask<MirrorPulseNamespaceRetirement> RetireNamespaceTransferSourceAsync(Guid operationId, CancellationToken token) =>
+        ValueTask.FromException<MirrorPulseNamespaceRetirement>(new NotSupportedException("This runtime does not retire original transfer sources."));
     ValueTask<MirrorPulseNamespaceTransferCopy> ReadNamespaceTransferAsync(Guid operationId, CancellationToken token) =>
         ValueTask.FromException<MirrorPulseNamespaceTransferCopy>(new NotSupportedException("This runtime does not read original file transfers."));
 
@@ -450,6 +453,20 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                 new[] { copy.Plan.SourceRoute.RootId, copy.Plan.TargetRoute.RootId }, token).ConfigureAwait(false);
             return await WithAdmittedInstancesLibraryAsync(new[] { copy.Plan.SourceRoute.InstanceId, copy.Plan.TargetRoute.InstanceId }.Distinct(),
                 (_, stop) => TransferCoordinator().DeleteSourceAsync(operationId, transfers!, stop), token).ConfigureAwait(false);
+        }
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        public async ValueTask<MirrorPulseNamespaceRetirement> RetireNamespaceTransferSourceAsync(Guid operationId, CancellationToken token)
+        {
+            RequireImportBoundary();
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
+            var copy = await ReadNamespaceTransferAsync(operationId, token).ConfigureAwait(false);
+            var retained = await catalog!.ReadNamespaceRetirementAsync(copy.Plan.DeleteOperationId, token).ConfigureAwait(false);
+            if (retained?.Phase == MirrorPulseNamespaceRetirementPhase.Completed) return retained;
+            await using var admission = namespaceWork is null ? null : await namespaceWork.EnterPendingOperationAsync(
+                new[] { copy.Plan.SourceRoute.RootId, copy.Plan.TargetRoute.RootId }, token).ConfigureAwait(false);
+            return await WithAdmittedInstancesLibraryAsync(new[] { copy.Plan.SourceRoute.InstanceId, copy.Plan.TargetRoute.InstanceId }.Distinct(),
+                (_, stop) => TransferCoordinator().RetireSourceAsync(operationId, transfers!, stop), token).ConfigureAwait(false);
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
@@ -1767,6 +1784,13 @@ public sealed class MirrorPulseCloudHostSession : IAsyncDisposable
     {
         if (!_started || _runtime is null) throw new InvalidOperationException("The Cloud Files Host session has not started.");
         return _runtime.DeleteNamespaceTransferSourceAsync(operationId, token);
+    }
+
+    [SupportedOSPlatform("windows10.0.26100")]
+    public ValueTask<MirrorPulseNamespaceRetirement> RetireNamespaceTransferSourceAsync(Guid operationId, CancellationToken token = default)
+    {
+        if (!_started || _runtime is null) throw new InvalidOperationException("The Cloud Files Host session has not started.");
+        return _runtime.RetireNamespaceTransferSourceAsync(operationId, token);
     }
 
     public ValueTask<MirrorPulseNamespaceTransferCopy> ReadNamespaceTransferAsync(Guid operationId, CancellationToken token = default)

@@ -18,6 +18,9 @@ public sealed record MirrorPulseNamespaceRetirementIntent(int Version, Guid Oper
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public MirrorPulseNamespaceRemoteRetirementReference? RemoteEntry { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public MirrorPulseNamespaceTransferRetirementReference? TransferEntry { get; init; }
 }
 
 /// <summary>Durable native and membership settlement facts for a controlled deletion.</summary>
@@ -29,6 +32,9 @@ public sealed record MirrorPulseNamespaceRetirement(Guid OperationId, MirrorPuls
     public DateTimeOffset? StartedAt { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Guid? StartedItemId { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public MirrorPulseNamespaceTransferRetirementReceipt? TransferReceipt { get; init; }
 }
 
 public sealed partial class MirrorPulseProductCatalog
@@ -38,6 +44,7 @@ public sealed partial class MirrorPulseProductCatalog
         MirrorPulseNamespaceRetirementIntent intent, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(intent); ValidateNamespaceRetirementIntent(intent);
+        RejectGenericTransferRetirement(intent);
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -98,6 +105,7 @@ public sealed partial class MirrorPulseProductCatalog
             ThrowIfDisposed(); using SqliteTransaction transaction = _connection.BeginTransaction(deferred: true);
             var retirement = await ReadNamespaceRetirementCoreAsync(operationId, transaction, cancellationToken).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The retirement operation is missing.");
+            RejectGenericTransferRetirement(retirement.Intent);
             await RequireNotRemoteDeleteResolutionMemberAsync(retirement.Intent, transaction, cancellationToken).ConfigureAwait(false);
             if (retirement.Phase is MirrorPulseNamespaceRetirementPhase.Completed or MirrorPulseNamespaceRetirementPhase.RemoteRejected) { transaction.Commit(); return retirement; }
             if (retirement.Phase == MirrorPulseNamespaceRetirementPhase.RecoveryRequired)
@@ -157,6 +165,7 @@ public sealed partial class MirrorPulseProductCatalog
             ThrowIfDisposed(); using SqliteTransaction transaction = _connection.BeginTransaction();
             var current = await ReadNamespaceRetirementCoreAsync(operationId, transaction, cancellationToken).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The retirement operation is missing.");
+            RejectGenericTransferRetirement(current.Intent);
             await RequireNotRemoteDeleteResolutionMemberAsync(current.Intent, transaction, cancellationToken).ConfigureAwait(false);
             if (current.Intent.RemoteEntry is { } remote && officialItemId != remote.ItemId)
                 throw new InvalidOperationException("An original SDK retirement must retain its exact logical identity before native work.");
@@ -179,6 +188,7 @@ public sealed partial class MirrorPulseProductCatalog
             ThrowIfDisposed(); using SqliteTransaction transaction = _connection.BeginTransaction();
             var current = await ReadNamespaceRetirementCoreAsync(operationId, transaction, token).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The retirement operation is missing.");
+            RejectGenericTransferRetirement(current.Intent);
             await RequireNotRemoteDeleteResolutionMemberAsync(current.Intent, transaction, token).ConfigureAwait(false);
             if (current.Intent.RemoteEntry is not null)
                 throw new InvalidOperationException("An SDK-owned retirement requires its actual original SDK outcome settlement.");
@@ -203,6 +213,7 @@ public sealed partial class MirrorPulseProductCatalog
             ThrowIfDisposed(); using SqliteTransaction transaction = _connection.BeginTransaction();
             var current = await ReadNamespaceRetirementCoreAsync(operationId, transaction, cancellationToken).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The retirement operation is missing.");
+            RejectGenericTransferRetirement(current.Intent);
             await RequireNotRemoteDeleteResolutionMemberAsync(current.Intent, transaction, cancellationToken).ConfigureAwait(false);
             if (current.Intent.RemoteEntry is not null)
                 throw new InvalidOperationException("An SDK-owned retirement cannot use controlled local completion.");
@@ -233,6 +244,7 @@ public sealed partial class MirrorPulseProductCatalog
             reader.GetString(4) != retirement.Intent.MemberId.ToString("D") || reader.GetInt32(3) != (int)retirement.Phase || !Enum.IsDefined(retirement.Phase) ||
             !JsonSerializer.SerializeToUtf8Bytes(retirement, TopologyJsonOptions).AsSpan().SequenceEqual(payload)) throw new InvalidDataException("The namespace retirement index is inconsistent.");
         await reader.DisposeAsync().ConfigureAwait(false);
+        await ValidateTransferRetirementReferencesAsync(retirement, transaction, token).ConfigureAwait(false);
         await ValidateRemoteDeleteResolutionMemberAsync(retirement, transaction, token).ConfigureAwait(false);
         await ValidateRemoteRetirementIndexAsync(retirement.Intent, transaction, token).ConfigureAwait(false);
         if (retirement.Intent.RemoteEntry is not null)
@@ -291,7 +303,9 @@ public sealed partial class MirrorPulseProductCatalog
     private static void ValidateNamespaceRetirementIntent(MirrorPulseNamespaceRetirementIntent intent)
     {
         ValidatePermissionBinding(intent.LocalObject); ValidatePermissionRelativePath(intent.RelativePath); ValidatePermissionSid(intent.OwnerSid, role: false); ValidatePermissionSid(intent.RoleSid, role: true);
-        if (!(intent.Version == 1 && intent.RemoteEntry is null || intent.Version == 2 && intent.RemoteEntry is not null && intent.BatchOperationId is null) ||
+        if (!(intent.Version == 1 && intent.RemoteEntry is null && intent.TransferEntry is null ||
+            intent.Version == 2 && intent.RemoteEntry is not null && intent.TransferEntry is null && intent.BatchOperationId is null ||
+            intent.Version == 3 && intent.TransferEntry is not null && intent.RemoteEntry is null && intent.BatchOperationId is null) ||
             intent.OperationId == Guid.Empty || intent.MemberId == Guid.Empty || intent.RootId.Value == Guid.Empty || intent.PreparedAt == default || intent.RelativePath.Length == 0 || intent.RelativePath.Contains("..", StringComparison.Ordinal) || intent.BatchOperationId == Guid.Empty) throw new ArgumentException("The namespace retirement intent is incomplete.", nameof(intent));
         if (intent.RemoteEntry is not null) ValidateRemoteRetirementReference(intent);
     }
