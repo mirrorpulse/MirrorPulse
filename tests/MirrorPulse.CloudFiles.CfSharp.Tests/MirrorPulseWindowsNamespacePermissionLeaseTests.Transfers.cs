@@ -1,4 +1,5 @@
 using System.Security.AccessControl;
+using System.Security.Cryptography;
 using System.Security.Principal;
 using CfSharp;
 using MirrorPulse.CloudFiles.CfSharp;
@@ -100,7 +101,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     new(source, source, source, source, id => id == targetRoot.InstanceId ? targetProtocol : 2);
                 MirrorPulseTransferPublicationCheckpoint? publicationCut = null; int publicationFaults = 0;
                 var projectionFault = new MirrorPulseTransferProjectionCommitFault(role.RoleSid);
-                var factory = new CfSharpMirrorPulseCloudRuntimeFactory(router: router, catalog: catalog, mayDispatch: _ => true,
+                var factory = new CfSharpMirrorPulseCloudRuntimeFactory(provider: new MirrorPulseDemandProvider(router, transport, namespaceWork: work),
+                    router: router, catalog: catalog, mayDispatch: _ => true,
                     scheduler: scheduler, namespaceExecution: role, namespaceActor: actor, namespaceWork: work, transfers: Services(transport))
                 {
                     StateStoreDecorator = projectionFault.Wrap,
@@ -172,7 +174,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                             Assert.HasCount(2, await catalog.ReadNamespaceDispatchFencedRootsAsync(deadline.Token));
                             await runtime.DisposeAsync();
                             recoveryWork = new([sourceRoot.RootId, targetRoot.RootId]);
-                            var recoveryFactory = new CfSharpMirrorPulseCloudRuntimeFactory(router: router, catalog: catalog, mayDispatch: _ => true,
+                            var recoveryFactory = new CfSharpMirrorPulseCloudRuntimeFactory(
+                                provider: new MirrorPulseDemandProvider(router, transport, namespaceWork: recoveryWork), router: router, catalog: catalog, mayDispatch: _ => true,
                                 scheduler: scheduler, namespaceExecution: role, namespaceActor: actor, namespaceWork: recoveryWork, transfers: Services(transport))
                             { TransferPublicationCheckpoint = factory.TransferPublicationCheckpoint, StateStoreDecorator = projectionFault.Wrap };
                             secondPublisher = recoveryFactory.Create(paths); publishing = secondPublisher; await publishing.StartAsync(deadline.Token);
@@ -197,6 +200,30 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         Assert.AreEqual(targetIdentity.ItemId, verified.TargetPublication.ItemId);
                         Assert.AreNotEqual(member.LocalObject, verified.TargetPublication.LocalObject);
                         Assert.AreEqual(verified, await publishing.PublishNamespaceTransferTargetAsync(operation, deadline.Token));
+                        string nativeTarget = Path.Combine(paths.SyncRootPath, "Archive", "moved.bin");
+                        var targetBefore = await publishing.InspectNamespaceMemberAsync("Archive/moved.bin", false, deadline.Token);
+                        var protection = await catalog.ReadNamespaceMemberProtectionSnapshotAsync(verified.TargetPublication.MemberId, deadline.Token);
+                        Assert.IsNotNull(protection);
+                        int beforeHydration = Volatile.Read(ref worker.RangeReads);
+                        // Read outside the actor and instance gates: the real SDK callback must be able
+                        // to reach the normal-user Worker range transport. Empty files need no fetch.
+                        byte[] nativeBytes = await File.ReadAllBytesAsync(nativeTarget, deadline.Token);
+                        CollectionAssert.AreEqual(bytes, nativeBytes);
+                        Assert.AreEqual(verified.Plan.Sha256, Convert.ToHexString(SHA256.HashData(nativeBytes)));
+                        if (bytes.Length != 0) Assert.IsGreaterThan(beforeHydration, Volatile.Read(ref worker.RangeReads));
+                        else
+                        {
+                            Assert.AreEqual(beforeHydration, Volatile.Read(ref worker.RangeReads));
+                            Assert.IsFalse(recoveryWork!.IsAdmitted(targetRoot.RootId), "An empty-file read cannot reopen the recovered root.");
+                        }
+                        var targetAfter = await publishing.InspectNamespaceMemberAsync("Archive/moved.bin", false, deadline.Token);
+                        Assert.AreEqual(targetBefore.MemberId, targetAfter.MemberId); Assert.AreEqual(verified.TargetPublication.MemberId, targetAfter.MemberId);
+                        Assert.AreEqual(targetBefore.ActualParentMemberId, targetAfter.ActualParentMemberId);
+                        Assert.AreEqual(targetBefore.NativeItemId, targetAfter.NativeItemId); Assert.AreEqual(targetIdentity.ItemId, targetAfter.NativeItemId);
+                        Assert.AreEqual(protection, await catalog.ReadNamespaceMemberProtectionSnapshotAsync(targetAfter.MemberId, deadline.Token));
+                        string actualDacl = new FileInfo(nativeTarget).GetAccessControl(AccessControlSections.Access).GetSecurityDescriptorSddlForm(AccessControlSections.Access);
+                        Assert.IsTrue(MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(protection.ExpectedDacl, actualDacl));
+                        Assert.AreEqual(verified, await publishing.PublishNamespaceTransferTargetAsync(operation, deadline.Token));
                     }
                     finally
                     {
@@ -220,8 +247,14 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 var nextFactory = new CfSharpMirrorPulseCloudRuntimeFactory(router: router, catalog: nextCatalog, mayDispatch: _ => false,
                     scheduler: scheduler, namespaceExecution: nextRole, namespaceActor: actor, namespaceWork: work, transfers: Services(nextTransport));
                 await using var reopened = nextFactory.Create(paths); await reopened.StartAsync(deadline.Token);
-                byte[] later = [7, 8, 9]; await File.WriteAllBytesAsync(sourcePath, later, deadline.Token);
+                int beforeOfflineRead = Volatile.Read(ref worker.RangeReads);
                 string publishedTarget = Path.Combine(paths.SyncRootPath, "Archive", "moved.bin");
+                CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(publishedTarget, deadline.Token));
+                Assert.AreEqual(beforeOfflineRead, Volatile.Read(ref worker.RangeReads), "A restarted offline Host must retain all original target bytes.");
+                var reopenedTarget = await reopened.InspectNamespaceMemberAsync("Archive/moved.bin", false, deadline.Token);
+                Assert.AreEqual(verified.TargetPublication!.MemberId, reopenedTarget.MemberId);
+                Assert.AreEqual(verified.TargetPublication.ItemId, reopenedTarget.NativeItemId);
+                byte[] later = [7, 8, 9]; await File.WriteAllBytesAsync(sourcePath, later, deadline.Token);
                 byte[] targetLater = [11, 12, 13, 14]; await File.WriteAllBytesAsync(publishedTarget, targetLater, deadline.Token);
                 Assert.AreEqual(verified, await reopened.PrepareNamespaceTransferAsync(operation, member.MemberId, target.MemberId, "moved.bin", deadline.Token));
                 Assert.AreEqual(verified, await reopened.CopyNamespaceTransferAsync(operation, deadline.Token));
@@ -233,7 +266,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 CollectionAssert.AreEqual(later, await File.ReadAllBytesAsync(sourcePath, deadline.Token));
                 CollectionAssert.AreEqual(targetLater, await File.ReadAllBytesAsync(publishedTarget, deadline.Token));
                 Assert.HasCount(2, await nextCatalog.ReadNamespaceDispatchFencedRootsAsync(deadline.Token));
-                TestContext.WriteLine($"HostTransfer: sameInstance={sameInstance}; originalBinding=True; privateWholeBytes=True; originalCopyReceipt=True; targetWholeReadback=True; distinctTargetBirthPrepared=True; nativeTargetPublished=True; onlineOnlyPublication=True; nativeTargetContentHydrated=False; namespaceDeleteDenied=True; sdkProjectionFailure={projectionFault.Failures}; knownBindingRecovery=True; registrationResponseLoss={sameInstance}; publicationWriteFailure={sameInstance}; normalUserRpc=True; sourceRetired=False; bothFences=True; newRoleHistoricalReplay=True; laterSourceAndTargetEditsRetained=True; actualWorkerProcess=False; controlCliIntegrated=False.");
+                TestContext.WriteLine($"HostTransfer: sameInstance={sameInstance}; originalBinding=True; privateWholeBytes=True; originalCopyReceipt=True; targetWholeReadback=True; distinctTargetBirthPrepared=True; nativeTargetPublished=True; onlineOnlyPublication=True; nativeTargetWholeBytesVerified=True; targetRangeRpcReads={Volatile.Read(ref worker.RangeReads)}; offlineReopenWholeBytes=True; nativeIdentityAndDaclRetained=True; closedRootReopened=False; namespaceDeleteDenied=True; sdkProjectionFailure={projectionFault.Failures}; knownBindingRecovery=True; registrationResponseLoss={sameInstance}; publicationWriteFailure={sameInstance}; normalUserRpc=True; sourceRetired=False; bothFences=True; newRoleHistoricalReplay=True; laterSourceAndTargetEditsRetained=True; actualWorkerProcess=False; controlCliIntegrated=False.");
             }
             finally
             {
@@ -272,6 +305,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         internal MirrorPulseNamespaceTransferPlan? Plan;
         internal int Uploads;
         internal int Deletes;
+        internal int RangeReads;
         private void RequireNormalUser(InstanceId instance, string? root, string path)
         {
             using var identity = WindowsIdentity.GetCurrent();
@@ -291,6 +325,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         public ValueTask<Stream> ReadRangeAsync(MirrorPulseWorkerReadRangeRequest request, CancellationToken token)
         {
             RequireNormalUser(request.InstanceId, request.RootKey, request.NormalizedPath); Assert.AreEqual("target-v1", request.ExpectedRevision);
+            Interlocked.Increment(ref RangeReads);
             return ValueTask.FromResult<Stream>(new MemoryStream(bytes.AsSpan(checked((int)request.Offset), checked((int)request.Length)).ToArray(), writable: false));
         }
         public ValueTask<MirrorPulseWorkerDirectoryPage> ReadDirectoryPageAsync(MirrorPulseWorkerDirectoryPageRequest request, CancellationToken token)
