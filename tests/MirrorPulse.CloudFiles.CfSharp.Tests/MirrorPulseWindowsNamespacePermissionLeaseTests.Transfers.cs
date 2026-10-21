@@ -117,7 +117,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 var target = members.Values.Single(item => item.RelativePath == "Archive");
                 if (deleteSource)
                     await PrepareTransferAcceptedSourceAsync(fileSystem.GetFile("Docs/original.bin"), catalog, router, role, actor,
-                        sourceRoot, bytes, deadline.Token);
+                        sourceRoot, bytes, deadline.Token, message => TestContext.WriteLine(message));
                 var nativeBefore = await fileSystem.GetFile("Docs/original.bin").InspectAsync(deadline.Token);
                 long? originalOfficialFileId = null;
                 if (retireLocal)
@@ -480,7 +480,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
 
     private static async Task PrepareTransferAcceptedSourceAsync(CloudFile file, MirrorPulseProductCatalog catalog,
         MirrorPulseRootRouter router, MirrorPulseNamespaceExecutionSession role, MirrorPulseNamespaceActor actor,
-        RootRegistration root, byte[] bytes, CancellationToken token)
+        RootRegistration root, byte[] bytes, CancellationToken token, Action<string>? report = null)
     {
         var confirmation = new MirrorPulseNamespaceContentConfirmation(catalog, router, actor, role);
         var before = await file.InspectAsync(token);
@@ -497,8 +497,26 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         var proof = new MirrorPulseContentAcceptanceProof(intent.OperationId, binding, identity.ItemId, identity.RemoteId,
             "source-v1", bytes.LongLength, intent.ContentSha256!);
         await catalog.SaveContentAcceptanceProofAsync(proof, token);
-        var receipt = await confirmation.ConfirmAsync(file, proof, token);
-        Assert.IsTrue(receipt.MayAcknowledge, $"Source confirmation requires its actual native/public acceptance: {receipt.Outcome}.");
+        MirrorPulseContentConfirmationReceipt receipt = null!;
+        for (int attempt = 1; attempt <= 3; attempt++)
+        {
+            // A lost public protection reference discards the SDK's accumulated digest.
+            // The fixture requires an accepted source. Replay ONLY the same durable
+            // proof after checking the original object and complete bytes, within the same deadline.
+            var current = await file.InspectAsync(token);
+            Assert.AreEqual(binding.LocalObject, MirrorPulseContentConfirmation.CaptureUploadBinding(current).LocalObject);
+            Assert.IsTrue(!current.IsPlaceholder || current.ContentAvailability == CloudContentAvailability.FullyAvailable);
+            if (current.IsPlaceholder)
+                Assert.IsTrue(Convert.ToBase64String(current.PlaceholderIdentity.Span) == binding.PreviousPlaceholderIdentity ||
+                    current.PlaceholderIdentity.Span.SequenceEqual(identity.Encode()));
+            byte[] actual = await File.ReadAllBytesAsync(file.FullPath, token);
+            Assert.AreEqual(proof.Length, actual.LongLength);
+            Assert.AreEqual(proof.Sha256, Convert.ToHexString(SHA256.HashData(actual)));
+            receipt = await confirmation.ConfirmAsync(file, proof, token);
+            report?.Invoke($"TransferSourceConfirmation: attempt={attempt}; outcome={receipt.Outcome}; stage={receipt.Stage}; nativeStage={receipt.NativeStage}; bytes={receipt.BytesVerified}; nativeApplied={receipt.NativeApplied}; nativeVerified={receipt.NativeConfirmationVerified}; projected={receipt.DurableProjectionCommitted}; preparationHResult={receipt.PreparationHResult?.ToString("X8", System.Globalization.CultureInfo.InvariantCulture) ?? "none"}; markHResult={receipt.NativeMarkHResult?.ToString("X8", System.Globalization.CultureInfo.InvariantCulture) ?? "none"}; nativeHResult={receipt.NativeErrorHResult?.ToString("X8", System.Globalization.CultureInfo.InvariantCulture) ?? "none"}; projectionHResult={receipt.ProjectionErrorHResult?.ToString("X8", System.Globalization.CultureInfo.InvariantCulture) ?? "none"}.");
+            if (receipt.MayAcknowledge || receipt.Outcome is not (MirrorPulseContentConfirmationOutcome.Busy or MirrorPulseContentConfirmationOutcome.ProtectionLost)) break;
+        }
+        Assert.IsTrue(receipt.MayAcknowledge, $"Source confirmation requires its actual native/public acceptance: {receipt.Outcome}, stage={receipt.Stage}, nativeStage={receipt.NativeStage}, nativeHResult={receipt.NativeErrorHResult?.ToString("X8", System.Globalization.CultureInfo.InvariantCulture) ?? "none"}.");
         await catalog.TransitionMutationAsync(intent.OperationId, MirrorPulseMutationState.RemoteAccepted, MirrorPulseMutationState.Acknowledged, cancellationToken: token);
     }
 
