@@ -263,12 +263,12 @@ public sealed partial class MirrorPulseProductCatalog
     private static void ValidateNamespaceBirthPlanReference(MirrorPulseNamespaceBirthPlan plan, MirrorPulseNamespaceBirthIntent birth)
     {
         if (plan.OperationId != birth.OperationId || plan.PreparedAt < birth.PreparedAt ||
-            birth.Origin != MirrorPulseNamespaceBirthOrigin.RemotePopulation && plan.RemoteRevision is not null)
+            birth.Origin is not (MirrorPulseNamespaceBirthOrigin.RemotePopulation or MirrorPulseNamespaceBirthOrigin.TransferTarget) && plan.RemoteRevision is not null)
             throw new InvalidOperationException("The birth identity plan must follow its original admission without inventing remote acceptance.");
         if (birth.RemoteEntry is { } remote && (plan.Version != 1 || plan.Content is not null || plan.ItemId != remote.ItemId ||
             plan.RemoteId != remote.RemoteId || plan.RemoteRevision != remote.RemoteRevision || plan.PreparedAt != birth.PreparedAt))
             throw new InvalidOperationException("The remote birth plan must retain the identity and time selected in its original entry admission.");
-        if (plan.Content is not null && (birth.Origin != MirrorPulseNamespaceBirthOrigin.Import || birth.IsDirectory))
+        if (plan.Content is not null && (birth.Origin is not (MirrorPulseNamespaceBirthOrigin.Import or MirrorPulseNamespaceBirthOrigin.TransferTarget) || birth.IsDirectory))
             throw new InvalidOperationException("A content-bearing birth plan requires an admitted file import.");
     }
 

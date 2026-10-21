@@ -6,7 +6,7 @@ using MirrorPulse.Core.Contracts;
 
 namespace MirrorPulse.Core.State;
 
-public enum MirrorPulseNamespaceBirthOrigin { ControlledCreation, Import, RemotePopulation }
+public enum MirrorPulseNamespaceBirthOrigin { ControlledCreation, Import, RemotePopulation, TransferTarget }
 
 /// <summary>The stable direct-parent birth and the separate protection epoch used at admission.</summary>
 public sealed record MirrorPulseNamespaceBornParent(Guid BirthOperationId, Guid ProtectionId);
@@ -31,6 +31,10 @@ public sealed record MirrorPulseNamespaceBirthIntent(int Version, Guid Operation
     /// <summary>Present only on version 3 births owned by an immutable public SDK batch entry.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public MirrorPulseNamespaceRemoteBirthReference? RemoteEntry { get; init; }
+
+    /// <summary>Present only on version4 target births atomically owned by an accepted and verified transfer.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public MirrorPulseNamespaceTransferBirthReference? TransferEntry { get; init; }
 }
 
 public sealed partial class MirrorPulseProductCatalog
@@ -42,6 +46,8 @@ public sealed partial class MirrorPulseProductCatalog
     {
         ArgumentNullException.ThrowIfNull(intent);
         ValidateNamespaceBirth(intent);
+        if (intent.TransferEntry is not null)
+            throw new InvalidOperationException("A transfer target birth requires its atomic original transfer admission.");
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -127,6 +133,7 @@ public sealed partial class MirrorPulseProductCatalog
         if (history?.BirthIntentRows.TryGetValue(operationId, out var retained) == true)
         {
             await ValidateNamespaceRemoteBirthReferenceIndexAsync(retained, transaction, token).ConfigureAwait(false);
+            await ValidateNamespaceTransferBirthReferenceIndexAsync(retained, transaction, token).ConfigureAwait(false);
             return retained;
         }
         MirrorPulseNamespaceBirthIntent intent;
@@ -167,6 +174,7 @@ public sealed partial class MirrorPulseProductCatalog
                 throw new InvalidDataException("The birth admission's index or canonical payload is inconsistent.");
         }
         await ValidateNamespaceRemoteBirthReferenceIndexAsync(intent, transaction, token).ConfigureAwait(false);
+        await ValidateNamespaceTransferBirthReferenceIndexAsync(intent, transaction, token).ConfigureAwait(false);
         history?.BirthIntentRows.Add(operationId, intent);
         return intent;
     }
@@ -181,8 +189,8 @@ public sealed partial class MirrorPulseProductCatalog
         ValidatePermissionSid(intent.RoleSid, role: true);
         // No child binding exists before native creation. Validate the name without fabricating one.
         ValidatePermissionRelativePath(intent.RelativePath);
-        if (!((intent.Version == 1 || intent.Version == 3) && intent.BornParent is null && intent.ParentEvidenceId != Guid.Empty && intent.ParentPermissionOperationId != Guid.Empty ||
-            (intent.Version == 2 || intent.Version == 3) && intent.ParentEvidenceId == Guid.Empty && intent.ParentPermissionOperationId == Guid.Empty &&
+        if (!((intent.Version is 1 or 3 or 4) && intent.BornParent is null && intent.ParentEvidenceId != Guid.Empty && intent.ParentPermissionOperationId != Guid.Empty ||
+            (intent.Version is 2 or 3 or 4) && intent.ParentEvidenceId == Guid.Empty && intent.ParentPermissionOperationId == Guid.Empty &&
             intent.BornParent is { BirthOperationId: var parent, ProtectionId: var epoch } && parent != Guid.Empty && epoch != Guid.Empty && parent != intent.OperationId) ||
             intent.OperationId == Guid.Empty || intent.RootId.Value == Guid.Empty ||
             intent.PreparedAt == default || !Enum.IsDefined(intent.Origin) ||
@@ -191,6 +199,11 @@ public sealed partial class MirrorPulseProductCatalog
         if ((intent.Version == 3) != (intent.RemoteEntry is not null))
             throw new ArgumentException("A remote birth requires its explicit versioned original batch owner.", nameof(intent));
         if (intent.RemoteEntry is not null) ValidateNamespaceRemoteBirthReference(intent);
+        if ((intent.Version == 4) != (intent.TransferEntry is not null) ||
+            (intent.Origin == MirrorPulseNamespaceBirthOrigin.TransferTarget) != (intent.TransferEntry is not null) ||
+            intent.TransferEntry is { } transfer && (transfer.Version != 1 || transfer.OperationId == Guid.Empty || transfer.OperationId == intent.OperationId ||
+                transfer.TargetVerificationSha256 is not { Length: 64 } || transfer.TargetVerificationSha256.Any(character => !char.IsAsciiHexDigitUpper(character)) || intent.IsDirectory))
+            throw new ArgumentException("A transfer target requires its explicit original verified-copy owner.", nameof(intent));
     }
 
     private async Task ValidateNamespaceBirthCurrentParentAsync(MirrorPulseNamespaceBirthIntent intent,

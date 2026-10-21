@@ -120,6 +120,35 @@ public sealed class MirrorPulseNamespaceTransferCoordinator(CloudFileSystem file
             .VerifyAsync(operationId, token), token).ConfigureAwait(false);
     }
 
+    /// <summary>Selects the separate target birth and SDK identity before any native creation.</summary>
+    public async ValueTask<MirrorPulseNamespaceTransferCopy> PrepareTargetBirthAsync(Guid operationId, CancellationToken token)
+    {
+        var copy = await ReadAsync(operationId, token).ConfigureAwait(false);
+        if (copy.TargetBirth is not null) return copy;
+        if (copy.TargetVerification is null)
+            throw new MirrorPulseMutationAmbiguousException("A target birth requires the original accepted and whole-verified copy.");
+        return await ExecuteGuardedAsync(copy.Plan, async file =>
+        {
+            // Another request may have selected the immutable birth while waiting for the shared actor.
+            var current = await ReadAsync(operationId, token).ConfigureAwait(false);
+            if (current.TargetBirth is not null) return current;
+            var verification = current.TargetVerification!; var parent = current.Plan.TargetParent;
+            var identity = router.CreateFileIdentity(current.Plan.TargetRoute.InstanceId, current.Plan.TargetRoute.RootKey,
+                verification.RemoteId, current.AcceptedRevision);
+            _ = identity.Encode();
+            Guid birthId = Guid.NewGuid(); var preparedAt = DateTimeOffset.UtcNow;
+            var birth = new MirrorPulseNamespaceBirthIntent(4, birthId, current.Plan.TargetRoute.RootId,
+                parent.BornParent is null ? parent.Context.Member.OriginId : Guid.Empty,
+                parent.BornParent is null ? parent.PermissionOperationId : Guid.Empty, parent.Context.Member.LocalObject,
+                current.Plan.TargetRelativePath, false, MirrorPulseNamespaceBirthOrigin.TransferTarget,
+                parent.Context.Protection.RoleSid, preparedAt)
+            { BornParent = parent.BornParent, TransferEntry = MirrorPulseNamespaceTransferBirthReference.Create(current) };
+            var plan = new MirrorPulseNamespaceBirthPlan(2, birthId, identity.ItemId, identity.RemoteId, identity.RemoteRevision, preparedAt)
+            { Content = new(current.Plan.Length, current.Plan.Sha256) };
+            return await catalog.PrepareNamespaceTransferTargetBirthAsync(new(1, operationId, birth, plan), token).ConfigureAwait(false);
+        }, token).ConfigureAwait(false);
+    }
+
     private async Task<MirrorPulseNamespaceTransferCopy> ExecuteGuardedAsync(MirrorPulseNamespaceTransferPlan plan,
         Func<CloudFile, Task<MirrorPulseNamespaceTransferCopy>> operation, CancellationToken token) =>
         await actor.RunAsync(async stop => await WithGuardsAsync(plan.Source, plan.SourceParent, plan.TargetParent,

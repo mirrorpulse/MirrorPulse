@@ -17,16 +17,7 @@ public sealed partial class MirrorPulseProductCatalog
             query.Parameters.AddWithValue("$id", id.ToString("D"));
             await using var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
             if (!await reader.ReadAsync(token).ConfigureAwait(false)) return null;
-            copy = ReadNamespaceMovePayload<MirrorPulseNamespaceTransferCopy>((byte[])reader[5], (byte[])reader[6], 2_097_152, value =>
-            {
-                ValidateNamespaceTransferPlan(value.Plan);
-                if (value.CopyStartedAt is { } start && start < value.Plan.PreparedAt ||
-                    (value.AcceptedRevision is null) != (value.CopyAcceptedAt is null) ||
-                    value.CopyAcceptedAt is { } accepted && (value.CopyStartedAt is null || accepted < value.CopyStartedAt ||
-                        InvalidRemoteUpdateText(value.AcceptedRevision, 4096)))
-                    throw new ArgumentException("Transfer copy progress lost its original start or receipt chronology.");
-                if (value.TargetVerification is { } verification) ValidateNamespaceTransferTargetVerification(value, verification);
-            });
+            copy = ReadNamespaceMovePayload<MirrorPulseNamespaceTransferCopy>((byte[])reader[5], (byte[])reader[6], 2_097_152, ValidateNamespaceTransferCopyProgress);
             var plan = copy.Plan;
             if (plan.OperationId != id || reader.GetString(0) != plan.SourceRoute.RootId.ToString() ||
                 reader.GetString(1) != plan.TargetRoute.RootId.ToString() || reader.GetString(2) != plan.CopyOperationId.ToString("D") ||
@@ -52,7 +43,7 @@ public sealed partial class MirrorPulseProductCatalog
         }
         foreach (var snapshot in new[] { original.Source, original.SourceParent, original.TargetParent })
             await RequireRemoteUpdateHistoricalSnapshotAsync(snapshot, original.PreparedAt, transaction, token).ConfigureAwait(false);
-        return copy;
+        return copy with { TargetBirth = await ReadNamespaceTransferTargetBirthCoreAsync(copy, transaction, token).ConfigureAwait(false) };
     }
 
     private async Task<IReadOnlyList<MirrorPulseNamespaceTransferCopy>> ReadPendingNamespaceTransfersCoreAsync(
@@ -65,7 +56,8 @@ public sealed partial class MirrorPulseProductCatalog
             query.CommandText = """
                 SELECT operation_id FROM namespace_transfers
                 UNION SELECT operation_id FROM namespace_transfer_roots
-                UNION SELECT operation_id FROM namespace_transfer_effects ORDER BY operation_id LIMIT 4097;
+                UNION SELECT operation_id FROM namespace_transfer_effects
+                UNION SELECT transfer_id FROM namespace_transfer_target_births ORDER BY operation_id LIMIT 4097;
                 """;
             await using var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
             while (await reader.ReadAsync(token).ConfigureAwait(false)) ids.Add(ParseNamespaceMemberId(reader.GetString(0)));
@@ -105,7 +97,7 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task RequireNotNamespaceTransferOwnerAsync(Guid id, SqliteTransaction? transaction, CancellationToken token)
     {
         await using var query = _connection.CreateCommand(); query.Transaction = transaction;
-        query.CommandText = "SELECT 1 FROM namespace_transfers WHERE operation_id=$id UNION ALL SELECT 1 FROM namespace_transfer_effects WHERE effect_id=$id LIMIT 1;";
+        query.CommandText = "SELECT 1 FROM namespace_transfers WHERE operation_id=$id UNION ALL SELECT 1 FROM namespace_transfer_effects WHERE effect_id=$id UNION ALL SELECT 1 FROM namespace_transfer_target_births WHERE birth_id=$id LIMIT 1;";
         query.Parameters.AddWithValue("$id", id.ToString("D"));
         if (await query.ExecuteScalarAsync(token).ConfigureAwait(false) is not null)
             throw new InvalidOperationException("An original transfer owns this operation or effect ID.");

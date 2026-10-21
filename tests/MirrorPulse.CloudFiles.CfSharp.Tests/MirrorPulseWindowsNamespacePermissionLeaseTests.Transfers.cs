@@ -115,6 +115,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     worker.Plan = prepared.Plan;
                     Assert.AreEqual(nativeBefore.LocalBinding!.LocalFileId, prepared.Plan.Source.Context.Member.LocalObject.LocalFileId);
                     Assert.IsNull(prepared.CopyStartedAt); Assert.AreEqual(bytes.LongLength, prepared.Plan.Length);
+                    await Assert.ThrowsExactlyAsync<MirrorPulseMutationAmbiguousException>(async () =>
+                        await runtime.PrepareNamespaceTransferTargetBirthAsync(operation, deadline.Token));
                     await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() => File.Delete(sourcePath), deadline.Token));
                     if (sameInstance)
                     {
@@ -127,6 +129,15 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     Assert.AreEqual("target-v1", accepted.AcceptedRevision);
                     verified = await runtime.VerifyNamespaceTransferTargetAsync(operation, deadline.Token);
                     Assert.IsNotNull(verified.TargetVerification); Assert.AreEqual("target:original", verified.TargetVerification.RemoteId);
+                    verified = await runtime.PrepareNamespaceTransferTargetBirthAsync(operation, deadline.Token);
+                    Assert.IsNotNull(verified.TargetBirth);
+                    var targetIdentity = router.CreateFileIdentity(targetRoot.InstanceId, targetRoot.UniquenessKey, "target:original", "target-v1");
+                    Assert.AreEqual(targetIdentity.ItemId, verified.TargetBirth.Plan.ItemId);
+                    Assert.AreEqual(targetIdentity.RemoteId, verified.TargetBirth.Plan.RemoteId);
+                    Assert.AreNotEqual(prepared.Plan.Source.Identity.ItemId, verified.TargetBirth.Plan.ItemId);
+                    Assert.AreEqual(MirrorPulseNamespaceBirthOrigin.TransferTarget, verified.TargetBirth.Birth.Origin);
+                    Assert.IsNull(await catalog.ReadNamespaceBirthStartAsync(verified.TargetBirth.Birth.OperationId, deadline.Token));
+                    Assert.AreEqual(verified, await runtime.PrepareNamespaceTransferTargetBirthAsync(operation, deadline.Token));
                     Assert.AreEqual(1, worker.Uploads); Assert.AreEqual(0, worker.Deletes); Assert.AreEqual(0, provider.Reads);
                     CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(sourcePath, deadline.Token));
                     Assert.IsFalse(File.Exists(Path.Combine(paths.SyncRootPath, "Archive", "moved.bin")));
@@ -145,11 +156,12 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 Assert.AreEqual(verified, await reopened.PrepareNamespaceTransferAsync(operation, member.MemberId, target.MemberId, "moved.bin", deadline.Token));
                 Assert.AreEqual(verified, await reopened.CopyNamespaceTransferAsync(operation, deadline.Token));
                 Assert.AreEqual(verified, await reopened.VerifyNamespaceTransferTargetAsync(operation, deadline.Token));
+                Assert.AreEqual(verified, await reopened.PrepareNamespaceTransferTargetBirthAsync(operation, deadline.Token));
                 Assert.AreEqual(verified, await reopened.ReadNamespaceTransferAsync(operation, deadline.Token));
                 Assert.AreEqual(1, worker.Uploads); Assert.AreEqual(0, worker.Deletes);
                 CollectionAssert.AreEqual(later, await File.ReadAllBytesAsync(sourcePath, deadline.Token));
                 Assert.HasCount(2, await nextCatalog.ReadNamespaceDispatchFencedRootsAsync(deadline.Token));
-                TestContext.WriteLine($"HostTransfer: sameInstance={sameInstance}; originalBinding=True; privateWholeBytes=True; originalCopyReceipt=True; targetWholeReadback=True; normalUserRpc=True; sourceRetired=False; nativeTargetPublished=False; bothFences=True; owners=2; newRoleHistoricalReplay=True; actualWorkerProcess=False; controlCliIntegrated=False.");
+                TestContext.WriteLine($"HostTransfer: sameInstance={sameInstance}; originalBinding=True; privateWholeBytes=True; originalCopyReceipt=True; targetWholeReadback=True; distinctTargetBirthPrepared=True; nativeBirthStarted=False; normalUserRpc=True; sourceRetired=False; nativeTargetPublished=False; bothFences=True; owners=2; newRoleHistoricalReplay=True; actualWorkerProcess=False; controlCliIntegrated=False.");
             }
             finally
             {

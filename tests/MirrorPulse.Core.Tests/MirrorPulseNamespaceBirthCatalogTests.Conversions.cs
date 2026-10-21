@@ -246,7 +246,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
     {
         using var fixture = new Fixture();
         await using (var first = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths)) { }
-        await ExecuteSqlAsync(fixture.Paths, "PRAGMA user_version=81;");
+        await ExecuteSqlAsync(fixture.Paths, "PRAGMA user_version=82;");
         MirrorPulseProductCatalog? unexpected = null;
         try
         {
@@ -255,7 +255,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         finally { if (unexpected is not null) await unexpected.DisposeAsync(); }
         await using var connection = Connection(fixture.Paths); await connection.OpenAsync();
         await using var query = connection.CreateCommand(); query.CommandText = "PRAGMA user_version;";
-        Assert.AreEqual(81L, await query.ExecuteScalarAsync());
+        Assert.AreEqual(82L, await query.ExecuteScalarAsync());
     }
 
     private static MirrorPulseNamespaceBirthConversionPreparation Conversion(MirrorPulseNamespaceBirthIntent birth,
