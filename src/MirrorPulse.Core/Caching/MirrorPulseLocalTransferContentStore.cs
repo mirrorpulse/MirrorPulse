@@ -32,7 +32,7 @@ public sealed class MirrorPulseLocalTransferContentStore
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(plan);
-        if (plan.Version != 1 || plan.OperationId == Guid.Empty || plan.PrivateContentId == Guid.Empty || plan.OperationId == plan.PrivateContentId)
+        if (plan.Version is not (1 or 2) || plan.OperationId == Guid.Empty || plan.PrivateContentId == Guid.Empty || plan.OperationId == plan.PrivateContentId)
             throw new ArgumentException("Retained transfer bytes require their distinct original operation and content identities.", nameof(plan));
         var content = new MirrorPulseNamespaceImportContent(plan.Length, plan.Sha256);
         return new(plan.OperationId, plan.PrivateContentId, content,

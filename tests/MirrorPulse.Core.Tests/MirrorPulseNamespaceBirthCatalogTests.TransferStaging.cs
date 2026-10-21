@@ -47,15 +47,18 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
     }
 
     [TestMethod]
-    [DataRow(false)]
-    [DataRow(true)]
-    public async Task OriginalTransferContentSurvivesCatalogAndStorageOwnersWithoutSharingImportInputs(bool sameInstance)
+    [DataRow(false, 1)]
+    [DataRow(true, 1)]
+    [DataRow(false, 2)]
+    [DataRow(true, 2)]
+    public async Task OriginalTransferContentSurvivesCatalogAndStorageOwnersWithoutSharingImportInputs(bool sameInstance, int planVersion)
     {
         using var fixture = new Fixture(); MirrorPulseNamespaceTransferPlan plan;
         string sourcePath = Path.Combine(fixture.Paths.DataRootPath, "source.bin");
         await using (var first = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths))
         {
             plan = (await PrepareTransferFixtureAsync(first, sameInstance)).Plan;
+            if (planVersion == 2) plan = WithTransferCommandOrigin(plan);
             await File.WriteAllBytesAsync(sourcePath, TransferBytes);
             await using var source = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read);
             source.Position = 17;
@@ -90,13 +93,17 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
     }
 
     [TestMethod]
-    [DataRow("length")]
-    [DataRow("hash")]
-    [DataRow("missing")]
-    public async Task DamagedOriginalTransferStagingCannotReachTheFirstWorkerInvocation(string damage)
+    [DataRow("length", 1)]
+    [DataRow("hash", 1)]
+    [DataRow("missing", 1)]
+    [DataRow("length", 2)]
+    [DataRow("hash", 2)]
+    [DataRow("missing", 2)]
+    public async Task DamagedOriginalTransferStagingCannotReachTheFirstWorkerInvocation(string damage, int planVersion)
     {
         using var fixture = new Fixture(); await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
         var plan = (await PrepareTransferFixtureAsync(catalog)).Plan;
+        if (planVersion == 2) plan = WithTransferCommandOrigin(plan);
         string sourcePath = Path.Combine(fixture.Paths.DataRootPath, "source.bin"); await File.WriteAllBytesAsync(sourcePath, TransferBytes);
         await using (var source = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read))
             await new MirrorPulseLocalTransferContentStore(fixture.Paths).StageRetainedAsync(plan.PrivateContentId, source);
@@ -114,6 +121,22 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         Assert.IsNull((await catalog.ReadNamespaceTransferAsync(plan.OperationId))!.CopyStartedAt);
         Assert.HasCount(2, await catalog.ReadNamespaceDispatchFencedRootsAsync());
         CollectionAssert.AreEqual(TransferBytes, await File.ReadAllBytesAsync(sourcePath));
+    }
+
+    [TestMethod]
+    public async Task FutureTransferPlanCannotBorrowOriginalRetainedBytes()
+    {
+        using var fixture = new Fixture(); await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        var plan = WithTransferCommandOrigin((await PrepareTransferFixtureAsync(catalog)).Plan);
+        string sourcePath = Path.Combine(fixture.Paths.DataRootPath, "source.bin"); await File.WriteAllBytesAsync(sourcePath, TransferBytes);
+        var inputs = new MirrorPulseLocalTransferContentStore(fixture.Paths);
+        await using (var source = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+            await inputs.StageRetainedAsync(plan.PrivateContentId, source);
+        await catalog.PrepareNamespaceTransferAsync(plan);
+        await Assert.ThrowsExactlyAsync<ArgumentException>(() => inputs.OpenLeaseAsync(plan with { Version = 3 }));
+        Assert.IsNull((await catalog.ReadNamespaceTransferAsync(plan.OperationId))!.CopyStartedAt);
+        CollectionAssert.AreEqual(TransferBytes, await File.ReadAllBytesAsync(TransferInputPath(fixture, plan)));
+        Assert.HasCount(2, await catalog.ReadNamespaceDispatchFencedRootsAsync());
     }
 
     [TestMethod]
