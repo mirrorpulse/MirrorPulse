@@ -30,7 +30,16 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     public Task NativeHostTransferRetiresOriginalSourceThroughTheSdkAndKeepsPrivateBytesAndBothFences() =>
         RunNativeHostTransferAsync(deleteSource: true, retireLocal: true);
 
-    private async Task RunNativeHostTransferAsync(bool deleteSource, bool retireLocal = false)
+    [TestMethod]
+    [DoNotParallelize]
+    [TestCategory("NativeCloudFiles")]
+    public async Task NativeHostTransferSourceRetirementResumesOriginalNativeAndReceiptBoundariesAcrossStoreOwners()
+    {
+        foreach (string fault in new[] { "before-native", "after-native", "after-receipt", "native-receipt-write", "name-settlement-write" })
+            await RunNativeHostTransferAsync(deleteSource: true, retireLocal: true, retirementFault: fault);
+    }
+
+    private async Task RunNativeHostTransferAsync(bool deleteSource, bool retireLocal = false, string? retirementFault = null)
     {
         if (!OperatingSystem.IsWindows() || Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
             Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
@@ -126,11 +135,42 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     new(source, source, source, source, id => id == targetRoot.InstanceId ? targetProtocol : 2, source);
                 MirrorPulseTransferPublicationCheckpoint? publicationCut = null; int publicationFaults = 0;
                 var projectionFault = new MirrorPulseTransferProjectionCommitFault(role.RoleSid);
+                int retirementFaults = 0, nativeDeleteCalls = 0; bool sqlFaultArmed = false;
+                async ValueTask RetirementCheckpoint(MirrorPulseTransferSourceRetirementCheckpoint checkpoint, CancellationToken stop)
+                {
+                    if (checkpoint == MirrorPulseTransferSourceRetirementCheckpoint.BeforeNativeDeletion)
+                    {
+                        Assert.AreEqual(1, worker.Deletes); Assert.IsTrue(worker.SourceDeleted);
+                        Assert.ThrowsExactly<IOException>(() =>
+                        { using var late = new FileStream(sourcePath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete); });
+                        if (!sqlFaultArmed && retirementFault is "native-receipt-write" or "name-settlement-write")
+                        {
+                            sqlFaultArmed = true;
+                            int phase = retirementFault == "native-receipt-write" ? 1 : 2;
+                            await ExecuteTransferPublicationFixtureSqlAsync(paths,
+                                $"CREATE TRIGGER fail_transfer_retirement_boundary BEFORE UPDATE ON namespace_member_retirements WHEN NEW.phase={phase} BEGIN SELECT RAISE(ABORT,'owned-transfer-retirement-gap'); END;", stop);
+                        }
+                    }
+                    bool selected = retirementFault switch
+                    {
+                        "before-native" => checkpoint == MirrorPulseTransferSourceRetirementCheckpoint.BeforeNativeDeletion,
+                        "after-native" => checkpoint == MirrorPulseTransferSourceRetirementCheckpoint.AfterNativeDeletion,
+                        "after-receipt" => checkpoint == MirrorPulseTransferSourceRetirementCheckpoint.AfterNativeReceipt,
+                        _ => false,
+                    };
+                    if (selected && retirementFaults == 0)
+                    {
+                        retirementFaults++;
+                        throw new InvalidOperationException("Synthetic interruption at the original transfer source retirement boundary.");
+                    }
+                    if (checkpoint == MirrorPulseTransferSourceRetirementCheckpoint.BeforeNativeDeletion) nativeDeleteCalls++;
+                }
                 var factory = new CfSharpMirrorPulseCloudRuntimeFactory(provider: new MirrorPulseDemandProvider(router, transport, namespaceWork: work),
                     router: router, catalog: catalog, mayDispatch: _ => true,
                     scheduler: scheduler, namespaceExecution: role, namespaceActor: actor, namespaceWork: work, transfers: Services(transport))
                 {
                     StateStoreDecorator = projectionFault.Wrap,
+                    TransferSourceRetirementCheckpoint = retireLocal ? RetirementCheckpoint : null,
                     TransferPublicationCheckpoint = (checkpoint, _) =>
                     {
                         if (checkpoint != publicationCut) return ValueTask.CompletedTask;
@@ -276,7 +316,45 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                             worker.LoseDeleteReply = sameInstance && !retireLocal;
                             if (retireLocal)
                             {
+                                MirrorPulseNamespaceRetirement? interrupted = null;
+                                if (retirementFault is not null)
+                                {
+                                    if (retirementFault is "native-receipt-write" or "name-settlement-write")
+                                        await Assert.ThrowsExactlyAsync<Microsoft.Data.Sqlite.SqliteException>(async () => await publishing.RetireNamespaceTransferSourceAsync(operation, deadline.Token));
+                                    else
+                                        await Assert.ThrowsExactlyAsync<InvalidOperationException>(async () => await publishing.RetireNamespaceTransferSourceAsync(operation, deadline.Token));
+                                    interrupted = await catalog.ReadNamespaceRetirementAsync(verified.Plan.DeleteOperationId, deadline.Token);
+                                    Assert.IsNotNull(interrupted); Assert.IsNotNull(interrupted.StartedAt);
+                                    Assert.AreEqual(nativeBefore.ItemId, interrupted.StartedItemId);
+                                    bool receiptPersisted = retirementFault is "after-receipt" or "name-settlement-write";
+                                    Assert.AreEqual(receiptPersisted ? MirrorPulseNamespaceRetirementPhase.NativeDeleted : MirrorPulseNamespaceRetirementPhase.Prepared, interrupted.Phase);
+                                    Assert.AreEqual(receiptPersisted, interrupted.TransferReceipt is not null);
+                                    Assert.AreEqual(member, await catalog.ReadNamespaceMemberChildAsync(verified.Plan.SourceParent.Context.Member.MemberId, "original.bin", deadline.Token));
+                                    Assert.HasCount(2, await catalog.ReadNamespaceDispatchFencedRootsAsync(deadline.Token));
+                                    Assert.AreEqual(1, worker.Deletes); Assert.AreEqual(1, worker.Uploads);
+                                    if (retirementFault == "before-native") CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(sourcePath, deadline.Token));
+                                    else Assert.IsFalse(File.Exists(sourcePath));
+                                    if (sqlFaultArmed)
+                                    {
+                                        retirementFaults++;
+                                        await ExecuteTransferPublicationFixtureSqlAsync(paths, "DROP TRIGGER fail_transfer_retirement_boundary;", deadline.Token);
+                                    }
+                                    await publishing.DisposeAsync();
+                                    recoveryWork = new([sourceRoot.RootId, targetRoot.RootId]);
+                                    var recoveryFactory = new CfSharpMirrorPulseCloudRuntimeFactory(
+                                        provider: new MirrorPulseDemandProvider(router, transport, namespaceWork: recoveryWork), router: router, catalog: catalog, mayDispatch: _ => true,
+                                        scheduler: scheduler, namespaceExecution: role, namespaceActor: actor, namespaceWork: recoveryWork, transfers: Services(transport))
+                                    { TransferSourceRetirementCheckpoint = RetirementCheckpoint };
+                                    secondPublisher = recoveryFactory.Create(paths); publishing = secondPublisher; await publishing.StartAsync(deadline.Token);
+                                }
                                 retired = await publishing.RetireNamespaceTransferSourceAsync(operation, deadline.Token);
+                                Assert.AreEqual(1, nativeDeleteCalls); Assert.AreEqual(retirementFault is null ? 0 : 1, retirementFaults);
+                                if (interrupted is not null)
+                                {
+                                    Assert.AreEqual(interrupted.StartedAt, retired.StartedAt);
+                                    Assert.AreEqual(interrupted.StartedItemId, retired.StartedItemId);
+                                    if (interrupted.TransferReceipt is not null) Assert.AreEqual(interrupted.TransferReceipt, retired.TransferReceipt);
+                                }
                                 Assert.AreEqual(MirrorPulseNamespaceRetirementPhase.Completed, retired.Phase);
                                 Assert.AreEqual(retired, await publishing.RetireNamespaceTransferSourceAsync(operation, deadline.Token));
                                 verified = (await catalog.ReadNamespaceTransferAsync(operation, deadline.Token))!;
@@ -371,6 +449,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 if (!retireLocal) TestContext.WriteLine($"HostTransfer: sameInstance={sameInstance}; originalBinding=True; privateWholeBytes=True; originalCopyReceipt=True; targetWholeReadback=True; distinctTargetBirthPrepared=True; nativeTargetPublished=True; onlineOnlyPublication=True; nativeTargetWholeBytesVerified=True; targetRangeRpcReads={Volatile.Read(ref worker.RangeReads)}; offlineReopenWholeBytes=True; nativeIdentityAndDaclRetained=True; closedRootReopened=False; namespaceDeleteDenied=True; sdkProjectionFailure={projectionFault.Failures}; knownBindingRecovery={!deleteSource}; registrationResponseLoss={sameInstance && !deleteSource}; publicationWriteFailure={sameInstance && !deleteSource}; normalUserRpc=True; sourceRetired=False; bothFences=True; newRoleHistoricalReplay=True; laterSourceAndTargetEditsRetained=True; actualWorkerProcess=False; controlCliIntegrated=False.");
                 if (deleteSource && !retireLocal) TestContext.WriteLine($"HostTransferSourceDelete: sameInstance={sameInstance}; originalConditionalRevision=True; existingWriterRejected=True; writableMappingInputClosedRejected=True; queuedWriterRejectedDuringRpc=True; remoteDeleted=True; acceptanceRetained={!sameInstance}; unknownOutcomeNotRedispatched={sameInstance}; localSourceRetired=False; originalJournalAcknowledged=False; bothFences=True; normalUserRpc=True; actualWorkerProcess=False; controlCliIntegrated=False.");
                 if (retireLocal) TestContext.WriteLine($"HostTransferSourceRetirement: sameInstance={sameInstance}; originalSdkItemTombstone=True; originalNativeBinding=True; sameDataGuardThroughRemoteAndLocalDelete=True; originalSourceNameSettled=True; privateWholeBytesRetained=True; targetWholeBytesRetained=True; existingWriterAndMappingRejected=True; queuedWriterRejectedDuringRpc=True; remoteDeleteCalls=1; newRoleOfflineCompletedReplay=True; laterTargetEditsRetained=True; bothFences=True; originalJournalAcknowledged=False; actualWorkerProcess=False; controlCliIntegrated=False.");
+                if (retirementFault is not null) TestContext.WriteLine($"HostTransferSourceRetirementRecovery: fault={retirementFault}; sameInstance={sameInstance}; originalStartAndItemRetained=True; nativeDeleteCalls={nativeDeleteCalls}; remoteDeleteCalls={worker.Deletes}; nameAndBothFencesRetainedBeforeSettlement=True; firstReceiptImmutable=True; sameRoleStoreOwnerReopened=True; unfinishedRoleRotated=False; privateWholeBytesRetained=True; originalJournalAcknowledged=False.");
             }
             finally
             {

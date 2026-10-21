@@ -260,6 +260,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
     private readonly MirrorPulseTransferWorkerServices? _transfers;
     internal Func<ICloudStateStoreFactory, ICloudStateStoreFactory>? StateStoreDecorator { get; init; }
     internal Func<MirrorPulseTransferPublicationCheckpoint, CancellationToken, ValueTask>? TransferPublicationCheckpoint { get; init; }
+    internal Func<MirrorPulseTransferSourceRetirementCheckpoint, CancellationToken, ValueTask>? TransferSourceRetirementCheckpoint { get; init; }
 
     public CfSharpMirrorPulseCloudRuntimeFactory(
         ICloudDemandProvider? provider = null,
@@ -307,7 +308,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             .WithContentProvider(provider)
             .Build(), state, provider, StateStoreDecorator, paths.SyncRootPath, paths.DataRootPath, _uploads, _stats, _mutations, _router, _catalog,
             _mayDispatch, _conflicts, _notifications, _scheduler, _namespaceExecution, _namespaceActor, _namespaceWork, _initializeNamespaceOnStart, _transfers,
-            TransferPublicationCheckpoint);
+            TransferPublicationCheckpoint, TransferSourceRetirementCheckpoint);
     }
 
     private sealed class CfSharpRuntime(
@@ -331,7 +332,8 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         MirrorPulseNamespaceWorkAdmission? namespaceWork,
         bool initializeNamespaceOnStart,
         MirrorPulseTransferWorkerServices? transfers,
-        Func<MirrorPulseTransferPublicationCheckpoint, CancellationToken, ValueTask>? transferPublicationCheckpoint)
+        Func<MirrorPulseTransferPublicationCheckpoint, CancellationToken, ValueTask>? transferPublicationCheckpoint,
+        Func<MirrorPulseTransferSourceRetirementCheckpoint, CancellationToken, ValueTask>? transferSourceRetirementCheckpoint)
         : IMirrorPulseCloudRuntime
     {
         private MirrorPulseJournalUploadPump? _uploadPump;
@@ -367,7 +369,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             if (transfers is null) throw new NotSupportedException("Transfers require the Host's connected Worker boundary.");
             return new(fileSystem, state, catalog!, router!, _namespaceExecution!, _namespaceActor!,
                 new MirrorPulseLocalTransferContentStore(new(syncRootPath, dataRootPath)), mayDispatch ?? (_ => false), transfers.ProtocolVersion)
-            { TargetPublicationCheckpoint = transferPublicationCheckpoint };
+            { TargetPublicationCheckpoint = transferPublicationCheckpoint, SourceRetirementCheckpoint = transferSourceRetirementCheckpoint };
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
