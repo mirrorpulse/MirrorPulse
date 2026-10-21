@@ -28,6 +28,9 @@ public interface IMirrorPulseCloudRuntime : IAsyncDisposable
     [SupportedOSPlatform("windows10.0.26100")]
     ValueTask<MirrorPulseNamespaceTransferCopy> PrepareNamespaceTransferTargetBirthAsync(Guid operationId, CancellationToken token) =>
         ValueTask.FromException<MirrorPulseNamespaceTransferCopy>(new NotSupportedException("This runtime does not prepare original transfer target births."));
+    [SupportedOSPlatform("windows10.0.26100")]
+    ValueTask<MirrorPulseNamespaceTransferCopy> PublishNamespaceTransferTargetAsync(Guid operationId, CancellationToken token) =>
+        ValueTask.FromException<MirrorPulseNamespaceTransferCopy>(new NotSupportedException("This runtime does not publish original transfer targets."));
     ValueTask<MirrorPulseNamespaceTransferCopy> ReadNamespaceTransferAsync(Guid operationId, CancellationToken token) =>
         ValueTask.FromException<MirrorPulseNamespaceTransferCopy>(new NotSupportedException("This runtime does not read original file transfers."));
 
@@ -250,6 +253,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
     private readonly bool _initializeNamespaceOnStart;
     private readonly MirrorPulseTransferWorkerServices? _transfers;
     internal Func<ICloudStateStoreFactory, ICloudStateStoreFactory>? StateStoreDecorator { get; init; }
+    internal Func<MirrorPulseTransferPublicationCheckpoint, CancellationToken, ValueTask>? TransferPublicationCheckpoint { get; init; }
 
     public CfSharpMirrorPulseCloudRuntimeFactory(
         ICloudDemandProvider? provider = null,
@@ -296,7 +300,8 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             .WithStateStore(StateStoreDecorator?.Invoke(state) ?? state)
             .WithContentProvider(provider)
             .Build(), state, provider, StateStoreDecorator, paths.SyncRootPath, paths.DataRootPath, _uploads, _stats, _mutations, _router, _catalog,
-            _mayDispatch, _conflicts, _notifications, _scheduler, _namespaceExecution, _namespaceActor, _namespaceWork, _initializeNamespaceOnStart, _transfers);
+            _mayDispatch, _conflicts, _notifications, _scheduler, _namespaceExecution, _namespaceActor, _namespaceWork, _initializeNamespaceOnStart, _transfers,
+            TransferPublicationCheckpoint);
     }
 
     private sealed class CfSharpRuntime(
@@ -319,7 +324,8 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         MirrorPulseNamespaceActor? namespaceActor,
         MirrorPulseNamespaceWorkAdmission? namespaceWork,
         bool initializeNamespaceOnStart,
-        MirrorPulseTransferWorkerServices? transfers)
+        MirrorPulseTransferWorkerServices? transfers,
+        Func<MirrorPulseTransferPublicationCheckpoint, CancellationToken, ValueTask>? transferPublicationCheckpoint)
         : IMirrorPulseCloudRuntime
     {
         private MirrorPulseJournalUploadPump? _uploadPump;
@@ -354,7 +360,8 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             RequireImportBoundary();
             if (transfers is null) throw new NotSupportedException("Transfers require the Host's connected Worker boundary.");
             return new(fileSystem, state, catalog!, router!, _namespaceExecution!, _namespaceActor!,
-                new MirrorPulseLocalTransferContentStore(new(syncRootPath, dataRootPath)), mayDispatch ?? (_ => false), transfers.ProtocolVersion);
+                new MirrorPulseLocalTransferContentStore(new(syncRootPath, dataRootPath)), mayDispatch ?? (_ => false), transfers.ProtocolVersion)
+            { TargetPublicationCheckpoint = transferPublicationCheckpoint };
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
@@ -413,6 +420,19 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                 new[] { copy.Plan.SourceRoute.RootId, copy.Plan.TargetRoute.RootId }, token).ConfigureAwait(false);
             return await WithAdmittedInstancesLibraryAsync(new[] { copy.Plan.SourceRoute.InstanceId, copy.Plan.TargetRoute.InstanceId }.Distinct(),
                 (_, stop) => TransferCoordinator().PrepareTargetBirthAsync(operationId, stop), token).ConfigureAwait(false);
+        }
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        public async ValueTask<MirrorPulseNamespaceTransferCopy> PublishNamespaceTransferTargetAsync(Guid operationId, CancellationToken token)
+        {
+            RequireImportBoundary();
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
+            var copy = await ReadNamespaceTransferAsync(operationId, token).ConfigureAwait(false);
+            if (copy.TargetPublication is not null) return copy;
+            await using var admission = namespaceWork is null ? null : await namespaceWork.EnterPendingOperationAsync(
+                new[] { copy.Plan.SourceRoute.RootId, copy.Plan.TargetRoute.RootId }, token).ConfigureAwait(false);
+            return await WithAdmittedInstancesLibraryAsync(new[] { copy.Plan.SourceRoute.InstanceId, copy.Plan.TargetRoute.InstanceId }.Distinct(),
+                (_, stop) => TransferCoordinator().PublishTargetAsync(operationId, stop), token).ConfigureAwait(false);
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
@@ -1716,6 +1736,13 @@ public sealed class MirrorPulseCloudHostSession : IAsyncDisposable
     {
         if (!_started || _runtime is null) throw new InvalidOperationException("The Cloud Files Host session has not started.");
         return _runtime.PrepareNamespaceTransferTargetBirthAsync(operationId, token);
+    }
+
+    [SupportedOSPlatform("windows10.0.26100")]
+    public ValueTask<MirrorPulseNamespaceTransferCopy> PublishNamespaceTransferTargetAsync(Guid operationId, CancellationToken token = default)
+    {
+        if (!_started || _runtime is null) throw new InvalidOperationException("The Cloud Files Host session has not started.");
+        return _runtime.PublishNamespaceTransferTargetAsync(operationId, token);
     }
 
     public ValueTask<MirrorPulseNamespaceTransferCopy> ReadNamespaceTransferAsync(Guid operationId, CancellationToken token = default)

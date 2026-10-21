@@ -34,7 +34,8 @@ public static class MirrorPulseNamespaceBirthObserver
             facts.LocalObject != new MirrorPulseLocalFileBinding(binding.VolumeSerialNumber, binding.SyncRootFileId, binding.LocalFileId) ||
             facts.RootId != birth.RootId || facts.RelativePath != birth.RelativePath || facts.IsDirectory != birth.IsDirectory ||
             (snapshot.Kind == CloudItemKind.Directory) != birth.IsDirectory || facts.LinkCount is not { } linkCount ||
-            birth.Origin != MirrorPulseNamespaceBirthOrigin.RemotePopulation && snapshot.SynchronizationState == CloudSynchronizationState.InSync ||
+            birth.Origin is not (MirrorPulseNamespaceBirthOrigin.RemotePopulation or MirrorPulseNamespaceBirthOrigin.TransferTarget) &&
+                snapshot.SynchronizationState == CloudSynchronizationState.InSync ||
             !snapshot.PlaceholderIdentity.Span.SequenceEqual(expectedIdentity))
             throw new InvalidDataException("The retained native object does not match the original birth plan.");
         var observation = new MirrorPulseNamespaceBirthObservation(1, operationId, birth.RootId,

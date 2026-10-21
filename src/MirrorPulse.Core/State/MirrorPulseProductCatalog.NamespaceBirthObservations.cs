@@ -168,7 +168,8 @@ public sealed partial class MirrorPulseProductCatalog
             observation.LocalObject.SyncRootFileId != birth.ParentLocalObject.SyncRootFileId ||
             observation.LocalObject.LocalFileId == birth.ParentLocalObject.LocalFileId ||
             observation.LocalObject.LocalFileId == birth.ParentLocalObject.SyncRootFileId ||
-            birth.Origin != MirrorPulseNamespaceBirthOrigin.RemotePopulation && observation.IsInSync)
+            birth.Origin is not (MirrorPulseNamespaceBirthOrigin.RemotePopulation or MirrorPulseNamespaceBirthOrigin.TransferTarget) && observation.IsInSync ||
+            birth.Origin == MirrorPulseNamespaceBirthOrigin.TransferTarget && !observation.IsInSync)
             throw new InvalidOperationException("The actual birth must match its original parent, location, identity and start without inventing acceptance.");
         var conversion = await ReadNamespaceBirthConversionRowAsync(observation.OperationId, transaction, token).ConfigureAwait(false);
         if (conversion is not null) ValidateNamespaceBirthConversionReference(conversion, birth, start, parentOwnerSid);
@@ -176,7 +177,9 @@ public sealed partial class MirrorPulseProductCatalog
             observation.OwnerSid != conversion.OwnerSid || observation.IsDirectory != conversion.IsDirectory ||
             observation.ObservedAt < conversion.PreparedAt))
             throw new InvalidOperationException("The placeholder must retain the actual object prepared before conversion.");
-        if (plan.Content is not null)
+        // An accepted transfer placeholder refers to the original whole-verified remote copy.
+        // It is not an ordinary import and must not invent a second local-copy receipt.
+        if (plan.Content is not null && birth.Origin != MirrorPulseNamespaceBirthOrigin.TransferTarget)
         {
             var content = await ReadNamespaceBirthContentCompletionCoreAsync(observation.OperationId, transaction, token).ConfigureAwait(false)
                 ?? throw new InvalidOperationException("A content-bearing import requires its original completed local copy before birth observation.");

@@ -54,8 +54,26 @@ public sealed partial class MirrorPulseProductCatalog
                 transaction.Commit();
                 return replay;
             }
+            MirrorPulseNamespaceBirthIntent? birth = null;
+            Guid? allowedTransfer = null;
+            if (member.Origin == MirrorPulseNamespaceMemberOrigin.ProtectedBirth)
+            {
+                birth = await ReadNamespaceBirthCoreAsync(member.OriginId, transaction, cancellationToken).ConfigureAwait(false)
+                    ?? throw new FileNotFoundException("The original birth admission is missing.");
+                if (birth.TransferEntry is { } transfer)
+                {
+                    var copy = await ReadNamespaceTransferCoreAsync(transfer.OperationId, transaction, cancellationToken).ConfigureAwait(false)
+                        ?? throw new FileNotFoundException("The original target transfer is missing.");
+                    if (copy.TargetBirth?.Birth != birth || member.MemberId != birth.OperationId)
+                        throw new InvalidOperationException("A target registration requires its exact original transfer and stable birth member ID.");
+                    await RequireCurrentNamespaceTransferAsync(copy.Plan, transaction, cancellationToken, admitted: true,
+                        targetBirth: copy.TargetBirth).ConfigureAwait(false);
+                    allowedTransfer = transfer.OperationId;
+                }
+            }
             if (member.RootId is { } rootId)
-                await RequireNamespaceMoveRootUnfencedAsync(rootId, null, transaction, cancellationToken).ConfigureAwait(false);
+                await RequireNamespaceMoveRootUnfencedAsync(rootId, null, transaction, cancellationToken,
+                    allowedTransfer: allowedTransfer).ConfigureAwait(false);
             var proof = await ReadNamespaceMemberProofAsync(member, false, transaction, cancellationToken).ConfigureAwait(false);
             var current = await ReadNamespaceMemberProofAsync(member, true, transaction, cancellationToken).ConfigureAwait(false);
             if (current.ProtectionId != member.ProtectionId)
@@ -77,10 +95,9 @@ public sealed partial class MirrorPulseProductCatalog
                         context.PositionVerification is { } position && member.RegisteredAt < position.ObservedAt)
                         throw new InvalidOperationException("Membership requires current protection throughout its actual parent lineage.");
             }
-            MirrorPulseNamespaceBirthIntent? birth = null;
             if (member.Origin == MirrorPulseNamespaceMemberOrigin.ProtectedBirth)
             {
-                birth = await ReadNamespaceBirthCoreAsync(member.OriginId, transaction, cancellationToken).ConfigureAwait(false)
+                birth ??= await ReadNamespaceBirthCoreAsync(member.OriginId, transaction, cancellationToken).ConfigureAwait(false)
                     ?? throw new FileNotFoundException("The original birth admission is missing.");
                 await RequireNamespaceBirthReservationAsync(birth, transaction, cancellationToken).ConfigureAwait(false);
                 var parent = await ReadNamespaceMemberRowAsync(member.ParentMemberId!.Value, transaction, cancellationToken).ConfigureAwait(false)

@@ -144,7 +144,7 @@ public sealed partial class MirrorPulseProductCatalog
     private static void ValidateNamespaceBirthConversionReference(MirrorPulseNamespaceBirthConversionPreparation preparation,
         MirrorPulseNamespaceBirthIntent birth, MirrorPulseNamespaceBirthStart start, string parentOwnerSid)
     {
-        if (birth.Origin == MirrorPulseNamespaceBirthOrigin.RemotePopulation || preparation.IsDirectory != birth.IsDirectory ||
+        if (birth.Origin is MirrorPulseNamespaceBirthOrigin.RemotePopulation or MirrorPulseNamespaceBirthOrigin.TransferTarget || preparation.IsDirectory != birth.IsDirectory ||
             preparation.OwnerSid != parentOwnerSid || preparation.PreparedAt < start.StartedAt ||
             preparation.LocalObject.VolumeSerialNumber != birth.ParentLocalObject.VolumeSerialNumber ||
             preparation.LocalObject.SyncRootFileId != birth.ParentLocalObject.SyncRootFileId ||

@@ -43,7 +43,14 @@ public sealed partial class MirrorPulseProductCatalog
         }
         foreach (var snapshot in new[] { original.Source, original.SourceParent, original.TargetParent })
             await RequireRemoteUpdateHistoricalSnapshotAsync(snapshot, original.PreparedAt, transaction, token).ConfigureAwait(false);
-        return copy with { TargetBirth = await ReadNamespaceTransferTargetBirthCoreAsync(copy, transaction, token).ConfigureAwait(false) };
+        copy = copy with { TargetBirth = await ReadNamespaceTransferTargetBirthCoreAsync(copy, transaction, token).ConfigureAwait(false) };
+        if (copy.TargetPublication is { } publication)
+        {
+            try { await ValidateNamespaceTransferPublicationReferencesAsync(copy, publication, transaction, token).ConfigureAwait(false); }
+            catch (Exception error) when (error is ArgumentException or InvalidOperationException or FileNotFoundException)
+            { throw new InvalidDataException("The transfer lost its original native target publication references.", error); }
+        }
+        return copy;
     }
 
     private async Task<IReadOnlyList<MirrorPulseNamespaceTransferCopy>> ReadPendingNamespaceTransfersCoreAsync(

@@ -51,8 +51,12 @@ public sealed partial class MirrorPulseProductCatalog
     }
 
     private async Task RequireCurrentNamespaceTransferAsync(MirrorPulseNamespaceTransferPlan plan,
-        SqliteTransaction transaction, CancellationToken token, bool admitted = false)
+        SqliteTransaction transaction, CancellationToken token, bool admitted = false,
+        MirrorPulseNamespaceTransferTargetBirth? targetBirth = null)
     {
+        if (targetBirth is not null && (!admitted || targetBirth.OperationId != plan.OperationId ||
+            await ReadNamespaceTransferTargetBirthRowAsync(plan.OperationId, null, transaction, token).ConfigureAwait(false) != targetBirth))
+            throw new InvalidOperationException("A transfer continuation cannot bypass another target birth or its original owner.");
         foreach (var snapshot in new[] { plan.Source, plan.SourceParent, plan.TargetParent })
         {
             if (await ReadNamespaceMemberProtectionSnapshotCoreAsync(snapshot.Context.Member.MemberId, transaction, token).ConfigureAwait(false) != snapshot)
@@ -61,7 +65,8 @@ public sealed partial class MirrorPulseProductCatalog
                 plan.PreparedAt, transaction, token).ConfigureAwait(false);
         }
         var roots = await ReadNamespaceRootFencesCoreAsync(true, transaction, token,
-            admittedTransferId: admitted ? plan.OperationId : null).ConfigureAwait(false);
+            admittedTransferId: admitted ? plan.OperationId : null,
+            admittedTransferBirthId: admitted ? targetBirth?.Birth.OperationId : null).ConfigureAwait(false);
         if (roots.Contains(plan.SourceRoute.RootId) || roots.Contains(plan.TargetRoute.RootId))
             throw new InvalidOperationException("Another original namespace owner prevents this transfer.");
         await using var query = _connection.CreateCommand(); query.Transaction = transaction;
@@ -80,11 +85,19 @@ public sealed partial class MirrorPulseProductCatalog
                 throw new InvalidOperationException("The transfer backend, version or root configuration changed.");
         }
         query.Parameters.Clear();
-        query.CommandText = "SELECT 1 FROM namespace_member_names WHERE parent_member_id=$parent AND child_name_key=$name;";
+        query.CommandText = "SELECT member_id FROM namespace_member_names WHERE parent_member_id=$parent AND child_name_key=$name;";
         query.Parameters.AddWithValue("$parent", plan.TargetParent.Context.Member.MemberId.ToString("D"));
         query.Parameters.AddWithValue("$name", NamespaceMemberNameKey(plan.TargetRelativePath));
-        if (await query.ExecuteScalarAsync(token).ConfigureAwait(false) is not null)
-            throw new InvalidOperationException("An existing member owns the transfer destination.");
+        if (await query.ExecuteScalarAsync(token).ConfigureAwait(false) is string occupied)
+        {
+            if (targetBirth is null || targetBirth.OperationId != plan.OperationId || occupied != targetBirth.Birth.OperationId.ToString("D"))
+                throw new InvalidOperationException("An existing member owns the transfer destination.");
+            var member = await ReadNamespaceMemberCoreAsync(targetBirth.Birth.OperationId, transaction, token).ConfigureAwait(false);
+            if (member is null || member.Origin != MirrorPulseNamespaceMemberOrigin.ProtectedBirth || member.OriginId != targetBirth.Birth.OperationId ||
+                member.ParentMemberId != plan.TargetParent.Context.Member.MemberId || member.RootId != plan.TargetRoute.RootId ||
+                member.RelativePath != plan.TargetRelativePath)
+                throw new InvalidDataException("The occupied transfer destination lost its exact original target birth.");
+        }
     }
 
     private async Task RequireNamespaceTransferIdAvailableAsync(Guid id, SqliteTransaction transaction, CancellationToken token)

@@ -200,7 +200,7 @@ public sealed partial class MirrorPulseProductCatalog
         while (true)
         {
             if (!seen.Add(current.RecoveryId) || current.BirthOperationId != birth.OperationId ||
-                birth.IsDirectory || birth.Origin == MirrorPulseNamespaceBirthOrigin.RemotePopulation ||
+                birth.IsDirectory || birth.Origin is MirrorPulseNamespaceBirthOrigin.RemotePopulation or MirrorPulseNamespaceBirthOrigin.TransferTarget ||
                 current.LocalObject != original.LocalObject || current.OwnerSid != original.OwnerSid || current.PreparedAt < original.PreparedAt)
                 throw new InvalidOperationException("Recovery requires the original staged local file, owner, binding and time.");
             _ = await ValidateNamespaceBirthLineageAsync(birth, null, false, RecoveryParentClaim(current), transaction, token).ConfigureAwait(false);

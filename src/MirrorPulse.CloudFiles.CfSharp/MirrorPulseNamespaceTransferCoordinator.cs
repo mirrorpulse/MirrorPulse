@@ -14,9 +14,10 @@ public sealed record MirrorPulseTransferWorkerServices(IMirrorPulseWorkerUploadT
     IMirrorPulseWorkerStatTransport Stats, IMirrorPulseWorkerRangeTransport Ranges,
     IMirrorPulseWorkerDirectoryPageSource Directories, Func<InstanceId, int> ProtocolVersion);
 
-/// <summary>Prepares, copies and reads back an original file transfer through the Host namespace boundary.</summary>
+/// <summary>Prepares, copies, verifies and publishes an original transfer target through the Host namespace boundary.</summary>
 /// <remarks>The caller retains both root work leases and ordered instance admissions. These phases keep
-/// both durable fences; they neither publish a native destination nor retire or acknowledge the source.
+/// both durable fences. Target publication creates its separate protected online placeholder; no phase
+/// here retires the source or acknowledges its original journal.
 /// A local read handle prevents ordinary competing opens; it is not a final deletion guard against
 /// existing writable mappings. Source retirement requires its own complete protected protocol.</remarks>
 [SupportedOSPlatform("windows10.0.26100")]
@@ -25,6 +26,8 @@ public sealed class MirrorPulseNamespaceTransferCoordinator(CloudFileSystem file
     MirrorPulseNamespaceActor actor, MirrorPulseLocalTransferContentStore inputs, Func<InstanceId, bool> mayDispatch,
     Func<InstanceId, int> protocolVersion)
 {
+    internal Func<MirrorPulseTransferPublicationCheckpoint, CancellationToken, ValueTask>? TargetPublicationCheckpoint { get; init; }
+
     /// <summary>Materializes a cold source before taking the instance gates needed by its hydration provider.</summary>
     public Task MaterializeSourceAsync(MirrorPulseNamespaceMemberProtectionSnapshot original,
         MirrorPulseNamespaceMemberProtectionSnapshot targetParent, CancellationToken token) =>
@@ -149,6 +152,29 @@ public sealed class MirrorPulseNamespaceTransferCoordinator(CloudFileSystem file
         }, token).ConfigureAwait(false);
     }
 
+    public async ValueTask<MirrorPulseNamespaceTransferCopy> PublishTargetAsync(Guid operationId, CancellationToken token)
+    {
+        var copy = await ReadAsync(operationId, token).ConfigureAwait(false);
+        if (copy.TargetPublication is not null) return copy;
+        return await actor.RunAsync(async stop =>
+        {
+            var current = await catalog.ValidateNamespaceTransferTargetPublicationAsync(operationId, stop).ConfigureAwait(false);
+            if (current.TargetPublication is not null) return current;
+            if (protocolVersion(current.Plan.SourceRoute.InstanceId) != current.Plan.SourceRoute.ProtocolVersion ||
+                protocolVersion(current.Plan.TargetRoute.InstanceId) != current.Plan.TargetRoute.ProtocolVersion)
+                throw new InvalidOperationException("The negotiated transfer protocol changed before target publication.");
+            return await WithGuardsAsync(current.Plan.Source, current.Plan.SourceParent, current.Plan.TargetParent,
+                current.Plan.TargetRelativePath, async file =>
+                {
+                    var projection = await ReadSourceProjectionAsync(file, current.Plan.Source, stop).ConfigureAwait(false);
+                    if (projection.RemoteRevision != current.Plan.SourceRemoteRevision)
+                        throw new InvalidDataException("The original transfer source projection changed before target publication.");
+                    return await new MirrorPulseNamespaceTransferTargetPublisher(fileSystem, state, catalog, router, actor, TargetPublicationCheckpoint)
+                        .PublishUnderActorAsync(current, stop).ConfigureAwait(false);
+                }, stop, allowOwnedTargetBirth: true).ConfigureAwait(false);
+        }, token).ConfigureAwait(false);
+    }
+
     private async Task<MirrorPulseNamespaceTransferCopy> ExecuteGuardedAsync(MirrorPulseNamespaceTransferPlan plan,
         Func<CloudFile, Task<MirrorPulseNamespaceTransferCopy>> operation, CancellationToken token) =>
         await actor.RunAsync(async stop => await WithGuardsAsync(plan.Source, plan.SourceParent, plan.TargetParent,
@@ -165,7 +191,7 @@ public sealed class MirrorPulseNamespaceTransferCoordinator(CloudFileSystem file
 
     private async Task<T> WithGuardsAsync<T>(MirrorPulseNamespaceMemberProtectionSnapshot source,
         MirrorPulseNamespaceMemberProtectionSnapshot sourceParent, MirrorPulseNamespaceMemberProtectionSnapshot targetParent,
-        string targetPath, Func<CloudFile, Task<T>> operation, CancellationToken token)
+        string targetPath, Func<CloudFile, Task<T>> operation, CancellationToken token, bool allowOwnedTargetBirth = false)
     {
         actor.AssertAccess(); T result = default!;
         await execution.RunNamespaceOperationAsync(async () =>
@@ -189,13 +215,13 @@ public sealed class MirrorPulseNamespaceTransferCoordinator(CloudFileSystem file
             RequireNative(parentBefore, sourceParent); RequireNative(targetBefore, targetParent);
             RequireNative(await childLease.InspectAsync(token).ConfigureAwait(false), source);
             RequireBinding(await file.InspectAsync(token).ConfigureAwait(false), source);
-            if ((await destination.InspectAsync(token).ConfigureAwait(false)).Exists)
+            if (!allowOwnedTargetBirth && (await destination.InspectAsync(token).ConfigureAwait(false)).Exists)
                 throw new IOException("An existing native object occupies the transfer destination.");
             result = await operation(file).ConfigureAwait(false);
             RequireNative(await childLease.InspectAsync(token).ConfigureAwait(false), source);
             MirrorPulseNamespaceBirthProtectionVerifier.RequireUnchangedParent(parentBefore, await parentLease.InspectAsync(token).ConfigureAwait(false));
             MirrorPulseNamespaceBirthProtectionVerifier.RequireUnchangedParent(targetBefore, await targetLease.InspectAsync(token).ConfigureAwait(false));
-            if ((await destination.InspectAsync(token).ConfigureAwait(false)).Exists)
+            if (!allowOwnedTargetBirth && (await destination.InspectAsync(token).ConfigureAwait(false)).Exists)
                 throw new IOException("The native transfer destination changed during the original operation.");
         }).ConfigureAwait(false);
         return result;

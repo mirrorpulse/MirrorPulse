@@ -81,7 +81,7 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task<IReadOnlyList<RootId>> ReadNamespaceRootFencesCoreAsync(bool includeUnregisteredBirths,
         SqliteTransaction transaction, CancellationToken cancellationToken, Guid? admittedRemoteMoveId = null, Guid? admittedRemoteBirthId = null,
         Guid? admittedRemoteRetirementId = null, Guid? admittedRemoteRetirementTreeId = null, Guid? admittedRemoteResolutionId = null,
-        Guid? admittedRemoteUpdateId = null, Guid? admittedTransferId = null)
+        Guid? admittedRemoteUpdateId = null, Guid? admittedTransferId = null, Guid? admittedTransferBirthId = null)
     {
         await RequireRemoteTreeSettlementOwnershipIntegrityAsync(transaction, cancellationToken).ConfigureAwait(false);
         await RequireRemoteDeleteResolutionOwnershipIntegrityAsync(transaction, cancellationToken).ConfigureAwait(false);
@@ -129,13 +129,15 @@ public sealed partial class MirrorPulseProductCatalog
             roots.Add(action.Child.Member.RootId!.Value);
         if (includeUnregisteredBirths)
         {
-            await AddUnregisteredBirthRootFencesAsync(roots, transaction, cancellationToken, admittedRemoteBirthId).ConfigureAwait(false);
+            await AddUnregisteredBirthRootFencesAsync(roots, transaction, cancellationToken, admittedRemoteBirthId,
+                admittedTransferId, admittedTransferBirthId).ConfigureAwait(false);
         }
         return Array.AsReadOnly(roots.OrderBy(root => root.Value).ToArray());
     }
 
     private async Task AddUnregisteredBirthRootFencesAsync(HashSet<RootId> roots,
-        SqliteTransaction transaction, CancellationToken token, Guid? admittedRemoteBirthId = null)
+        SqliteTransaction transaction, CancellationToken token, Guid? admittedRemoteBirthId = null,
+        Guid? admittedTransferId = null, Guid? admittedTransferBirthId = null)
     {
         var operations = new List<Guid>();
         await using (SqliteCommand query = _connection.CreateCommand())
@@ -174,7 +176,10 @@ public sealed partial class MirrorPulseProductCatalog
             {
                 throw new InvalidDataException("The pending birth lost its original name reservation.", exception);
             }
-            if (operation != admittedRemoteBirthId || birth.RemoteEntry is null) roots.Add(birth.RootId);
+            bool ownRemote = operation == admittedRemoteBirthId && birth.RemoteEntry is not null;
+            bool ownTransfer = operation == admittedTransferBirthId && admittedTransferId is not null &&
+                birth.TransferEntry?.OperationId == admittedTransferId;
+            if (!ownRemote && !ownTransfer) roots.Add(birth.RootId);
         }
     }
 }
