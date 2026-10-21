@@ -12,6 +12,9 @@ function Get-InstalledHostStartupDiagnostics {
     $categories = @('IO','InvalidData','Authorization','Cancelled','Internal','MutationAmbiguous','WorkerOffline','WorkerDisconnected','WorkerRejected')
     $stages = @('LibraryStartBegin','LibraryStartCompleted','LibraryServicesBegin','LibraryServicesCompleted',
         'NamespaceStartupBegin','NamespaceStartupCompleted','NamespaceAnchorBegin','NamespaceAnchorCompleted',
+        'NamespaceAnchorEntryGuardBegin','NamespaceAnchorEntryGuardCompleted','NamespaceAnchorDiscoveryBegin','NamespaceAnchorDiscoveryCompleted',
+        'NamespaceAnchorInitializationBegin','NamespaceAnchorInitializationCompleted','NamespaceAnchorProtectionBegin','NamespaceAnchorProtectionCompleted',
+        'NamespaceAnchorRegistrationBegin','NamespaceAnchorRegistrationCompleted','NamespaceEmptyInventoryRecoveryBegin','NamespaceEmptyInventoryRecoveryCompleted',
         'NamespaceRootBegin','NamespaceRootCompleted','NamespaceOriginalMemberBegin','NamespaceOriginalMemberCompleted',
         'NamespaceBornMemberBegin','NamespaceBornMemberCompleted','NamespaceAuditBegin','NamespaceAuditCompleted',
         'RetainedRemoteRecoveryBegin','RetainedRemoteRecoveryCompleted','Started')

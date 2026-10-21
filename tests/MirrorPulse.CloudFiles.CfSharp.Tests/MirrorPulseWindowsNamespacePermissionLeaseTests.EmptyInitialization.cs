@@ -12,6 +12,57 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     [TestMethod]
     [DoNotParallelize]
     [TestCategory("NativeCloudFiles")]
+    public async Task NativeAutomaticStartupProtectsACompletelyEmptyRootWithoutASetupLibraryOrAdapter()
+    {
+        if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
+            Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
+        MirrorPulseNamespaceExecutionSessionTests.AssertExpectedArchitecture();
+        string directory = Path.Combine(Path.GetTempPath(), "MirrorPulse-native-tests", Guid.NewGuid().ToString("N"));
+        var paths = new MirrorPulseStoragePaths(Path.Combine(directory, "sync"), Path.Combine(directory, "data"));
+        var router = new MirrorPulseRootRouter(paths.SyncRootPath, []);
+        var registry = new CfSharpMirrorPulseCloudRootRegistry(); using var user = WindowsIdentity.GetCurrent();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+        MirrorPulseNamespaceMemberRegistration? original = null; string? firstRole = null;
+        try
+        {
+            registry.Register(new(paths.SyncRootPath, "0.1.0", Guid.NewGuid(), [1, 2, 3]));
+            await File.WriteAllTextAsync(Path.Combine(directory, ".mp-permission-fixture"), string.Empty, timeout.Token);
+            for (int owner = 0; owner < 2; owner++)
+            {
+                await using var execution = new MirrorPulseNamespaceExecutionSession(); await using var actor = new MirrorPulseNamespaceActor();
+                await using var scheduler = new MirrorPulseInstanceScheduler(); await using var work = new MirrorPulseNamespaceWorkAdmission([]);
+                await using var catalog = await MirrorPulseProductCatalog.OpenAsync(paths, timeout.Token);
+                var worker = new MirrorPulseNormalUserWorkerTransportTests.IdentityProbeWorker(execution);
+                var source = new MirrorPulseNormalUserWorkerTransport(execution, worker, worker, worker, worker, worker);
+                var provider = new MirrorPulseDemandProvider(router, source, new MirrorPulseAdapterDirectoryPageSource(source), work);
+                var factory = new CfSharpMirrorPulseCloudRuntimeFactory(provider: provider, router: router, catalog: catalog,
+                    namespaceExecution: execution, namespaceActor: actor, scheduler: scheduler, namespaceWork: work, initializeNamespaceOnStart: true);
+                await using var runtime = factory.Create(paths); await runtime.StartAsync(timeout.Token);
+                Assert.IsEmpty(runtime.NamespaceStartupResults);
+                var actual = await runtime.InspectNamespaceMemberAsync(string.Empty, true, timeout.Token);
+                var member = await catalog.ReadNamespaceMemberAsync(actual.MemberId, timeout.Token); Assert.IsNotNull(member);
+                var current = await catalog.ReadNamespaceMemberProtectionSnapshotAsync(actual.MemberId, timeout.Token); Assert.IsNotNull(current);
+                Assert.AreEqual(execution.RoleSid.Value, current.Context.Protection.RoleSid);
+                Assert.IsNull(member.RootId); Assert.IsNull(member.ParentMemberId);
+                Assert.HasCount(1, await catalog.ReadNamespaceMemberTreeAsync(member.MemberId, timeout.Token));
+                Assert.IsEmpty(await catalog.ReadNamespaceDispatchFencedRootsAsync(timeout.Token)); Assert.IsEmpty(worker.Calls);
+                if (owner == 0) { original = member; firstRole = execution.RoleSid.Value; }
+                else { Assert.AreEqual(original, member); Assert.AreNotEqual(firstRole, execution.RoleSid.Value); }
+                await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() =>
+                    Directory.CreateDirectory(Path.Combine(paths.SyncRootPath, "unowned")), timeout.Token));
+                TestContext.WriteLine($"EmptyAutomaticStartup: owner={owner}; warmedSetupLibrary=False; adapterRoots=0; actualAnchor=True; currentRole=True; immutableAnchorMember=True; normalCreationDenied=True; sourceCalls=0; defaultHostStartup=True.");
+            }
+        }
+        finally
+        {
+            registry.Unregister(paths.SyncRootPath);
+            RestoreRootGuardFixtureForCleanup(directory, paths.SyncRootPath, user.User!); DeleteFixture(directory);
+        }
+    }
+
+    [TestMethod]
+    [DoNotParallelize]
+    [TestCategory("NativeCloudFiles")]
     public async Task NativeRuntimeProtectsAnEmptyAdapterInventoryAndRecoversItsActualAnchorAcrossOwners()
     {
         if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")

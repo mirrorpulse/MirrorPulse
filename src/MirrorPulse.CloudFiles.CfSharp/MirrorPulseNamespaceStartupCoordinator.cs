@@ -35,11 +35,15 @@ internal sealed class MirrorPulseNamespaceStartupCoordinator(CloudFileSystem fil
             // Freeze the actual anchor and ancestor names before the first discovery.
             // This retains handles only; existing originals are still captured before ACL writes.
             MirrorPulseWindowsNamespacePermissionLease? entryGuard = null;
+            progress?.Invoke("NamespaceAnchorEntryGuardBegin");
             await execution.RunNamespaceOperationAsync(async () =>
                 entryGuard = await MirrorPulseWindowsNamespacePermissionLease.OpenAsync(fileSystem.Root, router, cancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
+            progress?.Invoke("NamespaceAnchorEntryGuardCompleted");
             await using var retainedEntryGuard = entryGuard;
             var configured = router.Registrations.ToDictionary(root => root.RootId);
+            progress?.Invoke("NamespaceAnchorDiscoveryBegin");
             var existing = await ReadExistingRootsAsync(configured.Values.ToArray(), cancellationToken).ConfigureAwait(false);
+            progress?.Invoke("NamespaceAnchorDiscoveryCompleted");
             foreach (var pending in await catalog.ReadPendingNamespaceInitializationsAsync(cancellationToken).ConfigureAwait(false))
             {
                 if (pending.Intent.RequestedInventoryKind is null || pending.Intent.Roots.Any(root => !configured.ContainsKey(root.RootId)))
@@ -82,26 +86,34 @@ internal sealed class MirrorPulseNamespaceStartupCoordinator(CloudFileSystem fil
             {
                 if (outcomes.Count != 0) throw new IOException("Original namespace initialization requires its retained recovery before anchor registration.");
                 var existingRouter = new MirrorPulseRootRouter(fileSystem.Root.FullPath, existing);
+                progress?.Invoke("NamespaceAnchorInitializationBegin");
                 var initialized = await new MirrorPulseNamespaceInitializationCoordinator(fileSystem, catalog, existingRouter,
                     execution, actor, scheduler, permissions).InitializeAsync(Guid.NewGuid(), cancellationToken).ConfigureAwait(false);
+                progress?.Invoke("NamespaceAnchorInitializationCompleted");
                 var prior = guard; guard = initialized.TransferAnchor();
                 if (prior is not null) await prior.DisposeAsync().ConfigureAwait(false);
             }
             var previousGuard = guard;
+            progress?.Invoke("NamespaceAnchorProtectionBegin");
             guard = await new MirrorPulseNamespaceAnchorProtectionCoordinator(fileSystem, catalog, router, execution, actor, permissions)
                 .ProtectAsync(cancellationToken).ConfigureAwait(false);
+            progress?.Invoke("NamespaceAnchorProtectionCompleted");
             if (previousGuard is not null) await previousGuard.DisposeAsync().ConfigureAwait(false);
+            progress?.Invoke("NamespaceAnchorRegistrationBegin");
             anchor = await new MirrorPulseNamespaceOriginalTreeRegistration(fileSystem, catalog, router, execution, actor, scheduler)
                 .RegisterAnchorAsync(guard, cancellationToken).ConfigureAwait(false);
+            progress?.Invoke("NamespaceAnchorRegistrationCompleted");
             // Ordinary first-level creation is now denied by the anchor ACL. Detect any
             // entry inserted during capture before admitting even the first configured root.
             _ = await ReadExistingRootsAsync(configured.Values.ToArray(), cancellationToken).ConfigureAwait(false);
             progress?.Invoke("NamespaceAnchorCompleted");
             if (configured.Count == 0)
             {
+                progress?.Invoke("NamespaceEmptyInventoryRecoveryBegin");
                 var result = await new MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(fileSystem, catalog, router, execution, actor, scheduler, permissions) { Progress = progress }
                     .RecoverAsync(Guid.NewGuid(), cancellationToken).ConfigureAwait(false);
                 var prior = guard; guard = result.TransferAnchor(); await prior.DisposeAsync().ConfigureAwait(false);
+                progress?.Invoke("NamespaceEmptyInventoryRecoveryCompleted");
             }
 
             var births = await ReadUnregisteredBirthsAsync(cancellationToken).ConfigureAwait(false);

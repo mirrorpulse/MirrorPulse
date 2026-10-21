@@ -132,6 +132,9 @@ public static class SafeDiagnosticPolicy
                         ? startupCount.ToString(CultureInfo.InvariantCulture) : null,
                 "startupStage" => value is "LibraryStartBegin" or "LibraryStartCompleted" or "LibraryServicesBegin" or "LibraryServicesCompleted" or
                     "NamespaceStartupBegin" or "NamespaceStartupCompleted" or "NamespaceAnchorBegin" or "NamespaceAnchorCompleted" or
+                    "NamespaceAnchorEntryGuardBegin" or "NamespaceAnchorEntryGuardCompleted" or "NamespaceAnchorDiscoveryBegin" or "NamespaceAnchorDiscoveryCompleted" or
+                    "NamespaceAnchorInitializationBegin" or "NamespaceAnchorInitializationCompleted" or "NamespaceAnchorProtectionBegin" or "NamespaceAnchorProtectionCompleted" or
+                    "NamespaceAnchorRegistrationBegin" or "NamespaceAnchorRegistrationCompleted" or "NamespaceEmptyInventoryRecoveryBegin" or "NamespaceEmptyInventoryRecoveryCompleted" or
                     "NamespaceRootBegin" or "NamespaceRootCompleted" or "NamespaceOriginalMemberBegin" or "NamespaceOriginalMemberCompleted" or
                     "NamespaceBornMemberBegin" or "NamespaceBornMemberCompleted" or "NamespaceAuditBegin" or "NamespaceAuditCompleted" or
                     "RetainedRemoteRecoveryBegin" or "RetainedRemoteRecoveryCompleted" or "Started" ? value : null,

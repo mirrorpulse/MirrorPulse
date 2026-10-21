@@ -10,6 +10,27 @@ namespace MirrorPulse.Core.Tests;
 public sealed class SafeDiagnosticPolicyTests
 {
     [TestMethod]
+    public void AnchorStartupSubBoundariesRetainOnlyClosedProgressWithoutPathsOrIdentity()
+    {
+        string[] stages = ["NamespaceAnchorEntryGuardBegin", "NamespaceAnchorEntryGuardCompleted",
+            "NamespaceAnchorDiscoveryBegin", "NamespaceAnchorDiscoveryCompleted", "NamespaceAnchorInitializationBegin", "NamespaceAnchorInitializationCompleted",
+            "NamespaceAnchorProtectionBegin", "NamespaceAnchorProtectionCompleted", "NamespaceAnchorRegistrationBegin", "NamespaceAnchorRegistrationCompleted",
+            "NamespaceEmptyInventoryRecoveryBegin", "NamespaceEmptyInventoryRecoveryCompleted"];
+        foreach (string stage in stages)
+        {
+            var safe = SafeDiagnosticPolicy.Sanitize(new LogEntry(LogLevel.Information, "CloudFiles.Startup", "CloudFilesStartupProgress", DateTimeOffset.UtcNow,
+                [new("startupStage", stage), new("startupSequence", "7"), new("startupElapsedMs", "42"),
+                 new("ownerSid", "identity-private-needle"), new("path", "path-private-needle")]));
+            Assert.AreEqual(stage, safe.Fields["startupStage"]);
+            Assert.IsFalse(JsonSerializer.Serialize(safe).Contains("needle", StringComparison.Ordinal));
+        }
+        var rejected = SafeDiagnosticPolicy.Sanitize(new LogEntry(LogLevel.Information, "CloudFiles.Startup", "CloudFilesStartupProgress", DateTimeOffset.UtcNow,
+            [new("startupStage", "path-private-needle"), new("startupSequence", "token-private-needle")]));
+        Assert.IsFalse(rejected.Fields.ContainsKey("startupStage")); Assert.IsFalse(rejected.Fields.ContainsKey("startupSequence"));
+        Assert.IsFalse(JsonSerializer.Serialize(rejected).Contains("needle", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
     [DataRow("NamespaceAnchorOwnerMismatch")]
     [DataRow("NamespaceAnchorBindingMismatch")]
     public async Task AnchorStartupFailuresPersistRegisteredReasonsWithoutNativeIdentityOrUserData(string code)

@@ -10,6 +10,7 @@ public sealed class InstalledStartupDiagnosticsTests
     [DataRow("mixed")]
     [DataRow("bounded")]
     [DataRow("linked")]
+    [DataRow("anchor-stages")]
     public async Task InstalledFailureEvidenceRetainsOnlyOriginalBoundedCloudStartupBoundaries(string scenario)
     {
         string prefix = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "MirrorPulse-installed-diagnostics-tests"));
@@ -36,6 +37,13 @@ public sealed class InstalledStartupDiagnosticsTests
                 if ($Scenario -eq 'bounded') {
                     1..130|ForEach-Object {(New-Record $since.AddMilliseconds($_) 'NamespaceRootBegin' ([string]$_))|ConvertTo-Json -Depth 4 -Compress}|
                         Set-Content -LiteralPath $log
+                } elseif ($Scenario -eq 'anchor-stages') {
+                    @(
+                        ((New-Record $since.AddSeconds(1) 'NamespaceAnchorEntryGuardBegin' '6')|ConvertTo-Json -Depth 4 -Compress)
+                        ((New-Record $since.AddSeconds(2) 'NamespaceAnchorInitializationBegin' '8')|ConvertTo-Json -Depth 4 -Compress)
+                        ((New-Record $since.AddSeconds(3) 'NamespaceEmptyInventoryRecoveryBegin' '10')|ConvertTo-Json -Depth 4 -Compress)
+                        ((New-Record $since.AddSeconds(4) 'PRIVATE_TEST_SENTINEL' '11')|ConvertTo-Json -Depth 4 -Compress)
+                    )|Set-Content -LiteralPath $log
                 } elseif ($Scenario -eq 'mixed') {
                     @(
                         'not-json'
@@ -47,14 +55,17 @@ public sealed class InstalledStartupDiagnosticsTests
                     )|Set-Content -LiteralPath $log
                 } else {(New-Record $since.AddSeconds(1))|ConvertTo-Json -Depth 4 -Compress|Set-Content -LiteralPath $log}
                 # Preserve the original failing Host fact independently of progress volume.
-                [ordered]@{OccurredAt=$since.AddSeconds(5).ToString('O');Level='Error';Category='host';Code='NamespaceAnchorOwnerMismatch';
-                    Fields=@{failureCategory='InvalidData';hresult='80131501'}}|ConvertTo-Json -Depth 4 -Compress|
+                $failureCode=if($Scenario -eq 'anchor-stages'){'HostStartupFailed'}else{'NamespaceAnchorOwnerMismatch'}
+                $failureCategory=if($Scenario -eq 'anchor-stages'){'IO'}else{'InvalidData'}
+                $failureHResult=if($Scenario -eq 'anchor-stages'){'80070002'}else{'80131501'}
+                [ordered]@{OccurredAt=$since.AddSeconds(5).ToString('O');Level='Error';Category='host';Code=$failureCode;
+                    Fields=@{failureCategory=$failureCategory;hresult=$failureHResult}}|ConvertTo-Json -Depth 4 -Compress|
                     Set-Content -LiteralPath (Join-Path $logs 'mirrorpulse.log')
                 try {
                 $result=Get-InstalledHostStartupDiagnostics -DataRoots @($root) -Since $since
                 $json=$result|ConvertTo-Json -Depth 6 -Compress
                 if ($json.Contains('PRIVATE_TEST_SENTINEL') -or $json.Contains($root)) {throw 'Private fields or paths escaped.'}
-                if ($result.records.Count -ne 1 -or $result.records[0].code -cne 'NamespaceAnchorOwnerMismatch') {throw 'The original Host failure was lost.'}
+                if ($result.records.Count -ne 1 -or $result.records[0].code -cne $failureCode -or $result.records[0].hresult -cne $failureHResult) {throw 'The original Host failure was lost.'}
                 if ($Scenario -eq 'linked') {
                     if ($result.startupProgress.Count -ne 0 -or @($result.sources|Where-Object {$_.variant -ceq 'cloud-files/mirrorpulse.log' -and $_.state -ceq 'Linked'}).Count -ne 1) {
                         throw 'A linked progress directory was read.'
@@ -62,6 +73,11 @@ public sealed class InstalledStartupDiagnosticsTests
                 } elseif ($Scenario -eq 'bounded') {
                     if ($result.startupProgress.Count -ne 64 -or $result.startupProgress[0].sequence -ne 67 -or $result.startupProgress[-1].sequence -ne 130) {
                         throw 'The latest original bounded progress sequence was not retained.'
+                    }
+                } elseif ($Scenario -eq 'anchor-stages') {
+                    $expected=@('NamespaceAnchorEntryGuardBegin','NamespaceAnchorInitializationBegin','NamespaceEmptyInventoryRecoveryBegin')
+                    if ($result.startupProgress.Count -ne 3 -or @(Compare-Object $expected @($result.startupProgress|ForEach-Object stage)).Count) {
+                        throw 'The original anchor initialization sub-boundaries were lost or untyped progress was adopted.'
                     }
                 } elseif ($result.startupProgress.Count -ne 1 -or $result.startupProgress[0].stage -cne 'NamespaceAnchorBegin' -or
                     $result.startupProgress[0].sequence -ne 5 -or $result.startupProgress[0].elapsedMs -ne 123) {throw 'Untyped or stale startup progress was adopted.'}
