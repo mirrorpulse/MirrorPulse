@@ -19,6 +19,8 @@ public static class SafeDiagnosticPolicy
     private static readonly Dictionary<string, string> Messages = new(StringComparer.Ordinal)
     {
         ["HostStartupFailed"] = "The Host could not start.",
+        ["NamespaceAnchorOwnerMismatch"] = "The sync-root anchor owner does not match the current Host user.",
+        ["NamespaceAnchorBindingMismatch"] = "The sync-root anchor does not satisfy the required native binding policy.",
         ["WorkerSessionFailed"] = "The Adapter Worker session ended after a failure.",
         ["ShellRootPolicyMismatch"] = "The actual Shell root policy does not match content synchronization.",
         ["CloudRootMetadataMismatch"] = "The actual Cloud Files registration does not match the product root.",

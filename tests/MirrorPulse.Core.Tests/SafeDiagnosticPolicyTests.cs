@@ -10,6 +10,27 @@ namespace MirrorPulse.Core.Tests;
 public sealed class SafeDiagnosticPolicyTests
 {
     [TestMethod]
+    [DataRow("NamespaceAnchorOwnerMismatch")]
+    [DataRow("NamespaceAnchorBindingMismatch")]
+    public async Task AnchorStartupFailuresPersistRegisteredReasonsWithoutNativeIdentityOrUserData(string code)
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "MirrorPulse-safe-diagnostics", Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var writer = new LocalRollingLogWriter(directory);
+            await writer.WriteAsync(new(LogLevel.Error, "host", code, DateTimeOffset.UtcNow,
+                [new("failureCategory", "InvalidData"), new("hresult", "80131501"),
+                 new("ownerSid", "private-owner-needle"), new("path", "private-path-needle")]));
+            string json = await File.ReadAllTextAsync(writer.FilePath);
+            using var stored = JsonDocument.Parse(json);
+            Assert.AreEqual(code, stored.RootElement.GetProperty("Code").GetString());
+            Assert.AreEqual("InvalidData", stored.RootElement.GetProperty("Fields").GetProperty("failureCategory").GetString());
+            Assert.IsFalse(json.Contains("needle", StringComparison.Ordinal));
+        }
+        finally { if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true); }
+    }
+
+    [TestMethod]
     public void ContentObservationDiagnosticUsesAClosedDecisionAndDoesNotExposeArbitraryData()
     {
         var safe = SafeDiagnosticPolicy.Sanitize(new LogEntry(LogLevel.Information, "CloudFiles.Upload", "JournalContentObservation", DateTimeOffset.UtcNow,

@@ -41,9 +41,11 @@ public sealed class MirrorPulseNamespaceAnchorProtectionCoordinator(CloudFileSys
                 {
                     var observed = await guard.InspectAsync(token).ConfigureAwait(false);
                     if (observed.RootId is not null || observed.RelativePath.Length != 0 || !observed.IsDirectory ||
-                        observed.OwnerSid != execution.OwnerSid.Value || observed.LinkCount != 1 ||
+                        observed.LinkCount != 1 ||
                         observed.LocalObject.LocalFileId != observed.LocalObject.SyncRootFileId)
                         throw new InvalidDataException("Anchor protection requires the actual single-link current-user sync-root directory.");
+                    if (observed.OwnerSid != execution.OwnerSid.Value)
+                        throw new InvalidDataException("The sync-root anchor owner does not match the current Host user.");
                     var original = await catalog.ReadNamespacePermissionBaselineByBindingAsync(observed.LocalObject, token).ConfigureAwait(false);
                     if (original is null && (await catalog.ReadNamespacePermissionChangesAsync(token).ConfigureAwait(false))
                         .Any(change => change.Intent.RootId is null))

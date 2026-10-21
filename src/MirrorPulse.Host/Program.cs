@@ -71,6 +71,8 @@ catch (Exception exception)
             "The existing Cloud Files registration belongs to another root identity." => "CloudRootIdentityMismatch",
             "The existing Shell registration belongs to another provider." => "ShellRootOwnershipMismatch",
             "The MirrorPulse Shell registration belongs to another sync root." => "ShellRootPathMismatch",
+            "Anchor protection requires the actual single-link current-user sync-root directory." => "NamespaceAnchorBindingMismatch",
+            "The sync-root anchor owner does not match the current Host user." => "NamespaceAnchorOwnerMismatch",
             _ when exception.Message.StartsWith("Shell sync-root registration failed with HRESULT", StringComparison.Ordinal) => "ShellRootRegistrationFailed",
             _ => "HostStartupFailed",
         };
