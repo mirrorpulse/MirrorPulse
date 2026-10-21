@@ -177,9 +177,7 @@ public sealed class MirrorPulseNamespaceTransferCoordinator(CloudFileSystem file
     {
         var projection = await MirrorPulseNamespaceMemberLocator.ResolveAsync(catalog, state.OpenStore,
             source.Context.Member.MemberId, actor, token).ConfigureAwait(false);
-        if (projection.State != MirrorPulseNamespaceMemberLocationState.Projected || projection.ItemId != source.Identity.ItemId ||
-            projection.RemoteId != source.Identity.RemoteId || projection.RelativePath != source.Context.Location.RelativePath)
-            throw new InvalidDataException("The transfer source lost its original public SDK projection.");
+        RequireSourceProjection(source, projection);
         var snapshot = await file.InspectAsync(token).ConfigureAwait(false); RequireBinding(snapshot, source);
         if (snapshot.IsPlaceholder)
         {
@@ -189,6 +187,14 @@ public sealed class MirrorPulseNamespaceTransferCoordinator(CloudFileSystem file
                 throw new InvalidDataException("The native transfer source disagrees with its official public identity.");
         }
         return projection;
+    }
+
+    internal static void RequireSourceProjection(MirrorPulseNamespaceMemberProtectionSnapshot source,
+        MirrorPulseNamespaceMemberLocationCandidate projection)
+    {
+        if (projection.State != MirrorPulseNamespaceMemberLocationState.Projected || projection.ItemId != source.Identity.ItemId ||
+            projection.RemoteId != source.Identity.RemoteId || projection.RelativePath?.Replace('\\', '/') != source.Context.Location.RelativePath)
+            throw new InvalidDataException("The transfer source lost its original public SDK projection.");
     }
 
     private MirrorPulseTransferRoute CaptureRoute(MirrorPulseAdapterTopology topology, MirrorPulseNamespaceMemberProtectionSnapshot member)
