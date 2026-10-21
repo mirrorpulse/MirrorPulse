@@ -43,31 +43,32 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
         string directory = Path.Combine(Path.GetTempPath(), "MirrorPulse-tests", Guid.NewGuid().ToString("N"));
         var paths = new MirrorPulseStoragePaths(Path.Combine(directory, "sync"), Path.Combine(directory, "data"));
         Guid original = Guid.NewGuid(), item = Guid.NewGuid(), unrelated = Guid.NewGuid();
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        // This checks repository semantics, not storage latency under concurrent CI load.
+        CancellationToken observationToken = TestContext.CancellationToken;
         try
         {
             Directory.CreateDirectory(paths.SyncRootPath);
-            await using var store = await MirrorPulseCfSharpStateStoreFactory.Create(paths).OpenAsync(new(paths.SyncRootPath), deadline.Token);
-            Assert.IsFalse(await ReenableJournalContainsAsync(store, [original], [item], deadline.Token));
-            await using (var transaction = await store.BeginTransactionAsync(deadline.Token))
+            await using var store = await MirrorPulseCfSharpStateStoreFactory.Create(paths).OpenAsync(new(paths.SyncRootPath), observationToken);
+            Assert.IsFalse(await ReenableJournalContainsAsync(store, [original], [item], observationToken));
+            await using (var transaction = await store.BeginTransactionAsync(observationToken))
             {
-                await transaction.Operations.EnqueueAsync(new(original, CloudStateOperationKind.MetadataUpdate, null, [1], DateTimeOffset.UtcNow, 0, null, 0), deadline.Token);
-                await transaction.Operations.EnqueueAsync(new(unrelated, CloudStateOperationKind.MetadataUpdate, null, [1], DateTimeOffset.UtcNow, 0, null, 0), deadline.Token);
-                await transaction.CommitAsync(deadline.Token);
+                await transaction.Operations.EnqueueAsync(new(original, CloudStateOperationKind.MetadataUpdate, null, [1], DateTimeOffset.UtcNow, 0, null, 0), observationToken);
+                await transaction.Operations.EnqueueAsync(new(unrelated, CloudStateOperationKind.MetadataUpdate, null, [1], DateTimeOffset.UtcNow, 0, null, 0), observationToken);
+                await transaction.CommitAsync(observationToken);
             }
-            Assert.IsTrue(await ReenableJournalContainsAsync(store, [original], [item], deadline.Token));
-            await using (var transaction = await store.BeginTransactionAsync(deadline.Token))
+            Assert.IsTrue(await ReenableJournalContainsAsync(store, [original], [item], observationToken));
+            await using (var transaction = await store.BeginTransactionAsync(observationToken))
             {
-                await transaction.Operations.RemoveAsync(original, deadline.Token); await transaction.CommitAsync(deadline.Token);
+                await transaction.Operations.RemoveAsync(original, observationToken); await transaction.CommitAsync(observationToken);
             }
-            Assert.IsFalse(await ReenableJournalContainsAsync(store, [original], [item], deadline.Token));
-            await using (var transaction = await store.BeginTransactionAsync(deadline.Token))
+            Assert.IsFalse(await ReenableJournalContainsAsync(store, [original], [item], observationToken));
+            await using (var transaction = await store.BeginTransactionAsync(observationToken))
             {
-                await transaction.Items.UpsertAsync(new(item, "source:item", "Docs/reenabled.txt", CloudItemKind.File, "base", 42, false, DateTimeOffset.UtcNow), deadline.Token);
-                await transaction.Operations.EnqueueAsync(new(Guid.NewGuid(), CloudStateOperationKind.ContentUpdate, item, [1], DateTimeOffset.UtcNow, 0, null, 0), deadline.Token);
-                await transaction.CommitAsync(deadline.Token);
+                await transaction.Items.UpsertAsync(new(item, "source:item", "Docs/reenabled.txt", CloudItemKind.File, "base", 42, false, DateTimeOffset.UtcNow), observationToken);
+                await transaction.Operations.EnqueueAsync(new(Guid.NewGuid(), CloudStateOperationKind.ContentUpdate, item, [1], DateTimeOffset.UtcNow, 0, null, 0), observationToken);
+                await transaction.CommitAsync(observationToken);
             }
-            Assert.IsTrue(await ReenableJournalContainsAsync(store, [original], [item], deadline.Token));
+            Assert.IsTrue(await ReenableJournalContainsAsync(store, [original], [item], observationToken));
         }
         finally { if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true); }
     }
