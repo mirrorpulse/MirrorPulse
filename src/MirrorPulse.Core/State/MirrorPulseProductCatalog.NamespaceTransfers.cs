@@ -38,7 +38,16 @@ public sealed record MirrorPulseNamespaceTransferPlan(int Version, Guid Operatio
     MirrorPulseTransferRoute SourceRoute, MirrorPulseTransferRoute TargetRoute,
     MirrorPulseNamespaceMemberProtectionSnapshot Source, MirrorPulseNamespaceMemberProtectionSnapshot SourceParent,
     MirrorPulseNamespaceMemberProtectionSnapshot TargetParent, string TargetRelativePath, string? SourceRemoteRevision,
-    Guid PrivateContentId, long Length, string Sha256, Guid CopyOperationId, Guid DeleteOperationId, DateTimeOffset PreparedAt);
+    Guid PrivateContentId, long Length, string Sha256, Guid CopyOperationId, Guid DeleteOperationId, DateTimeOffset PreparedAt)
+{
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public MirrorPulseNamespaceTransferCommandOrigin? CommandOrigin { get; init; }
+}
+
+/// <summary>The original controlled Host request, retained before its first remote effect.</summary>
+/// <remarks>This origin is not a journal ID, an acknowledgement claim or permission to release either root.</remarks>
+public sealed record MirrorPulseNamespaceTransferCommandOrigin(int Version, Guid CommandId, Guid SourceMemberId,
+    Guid TargetParentMemberId, string TargetName, DateTimeOffset RequestedAt);
 
 /// <summary>A durable copy start is uncertainty until the original upload receipt is saved.</summary>
 public sealed record MirrorPulseNamespaceTransferCopy(MirrorPulseNamespaceTransferPlan Plan,

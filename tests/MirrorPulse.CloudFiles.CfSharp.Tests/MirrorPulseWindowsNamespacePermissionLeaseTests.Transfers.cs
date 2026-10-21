@@ -190,6 +190,12 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     Assert.IsNull(await catalog.ReadNamespaceTransferAsync(operation, deadline.Token));
                     Assert.IsEmpty(await catalog.ReadNamespaceDispatchFencedRootsAsync(deadline.Token)); targetProtocol = 2;
                     var prepared = await runtime.PrepareNamespaceTransferAsync(operation, member.MemberId, target.MemberId, "moved.bin", deadline.Token);
+                    Assert.AreEqual(2, prepared.Plan.Version); Assert.IsNotNull(prepared.Plan.CommandOrigin);
+                    Assert.AreEqual(operation, prepared.Plan.CommandOrigin.CommandId);
+                    Assert.AreEqual(member.MemberId, prepared.Plan.CommandOrigin.SourceMemberId);
+                    Assert.AreEqual(target.MemberId, prepared.Plan.CommandOrigin.TargetParentMemberId);
+                    Assert.AreEqual("moved.bin", prepared.Plan.CommandOrigin.TargetName);
+                    Assert.IsTrue(prepared.Plan.CommandOrigin.RequestedAt <= prepared.Plan.PreparedAt);
                     worker.Plan = prepared.Plan;
                     Assert.AreEqual(nativeBefore.LocalBinding!.LocalFileId, prepared.Plan.Source.Context.Member.LocalObject.LocalFileId);
                     Assert.IsNull(prepared.CopyStartedAt); Assert.AreEqual(bytes.LongLength, prepared.Plan.Length);

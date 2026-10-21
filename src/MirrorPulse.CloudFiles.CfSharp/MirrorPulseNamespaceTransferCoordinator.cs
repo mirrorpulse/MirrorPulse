@@ -61,6 +61,8 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator(CloudFileSys
             throw new ArgumentException("A transfer requires an operation, source file and target directory.");
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         if (name.Contains('/') || name.Contains('\\')) throw new ArgumentException("A transfer requires one direct child name.", nameof(name));
+        var command = new MirrorPulseNamespaceTransferCommandOrigin(1, operationId, original.Context.Member.MemberId,
+            targetParent.Context.Member.MemberId, name, DateTimeOffset.UtcNow);
         // CfSharp validates the direct child name before any private input or catalog admission.
         string targetPath = fileSystem.GetDirectory(targetParent.Context.Location.RelativePath).GetFile(name).RelativePath.Replace('\\', '/');
         return await actor.RunAsync(async stop =>
@@ -87,9 +89,10 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator(CloudFileSys
                     await using var source = OpenSource(file);
                     return await inputs.StageRetainedAsync(contentId, source, stop).ConfigureAwait(false);
                 }).ConfigureAwait(false);
-                var plan = new MirrorPulseNamespaceTransferPlan(1, operationId, sourceRoute, targetRoute,
+                var plan = new MirrorPulseNamespaceTransferPlan(2, operationId, sourceRoute, targetRoute,
                     original, parent, targetParent, targetPath, projection.RemoteRevision, contentId,
-                    content.Length, content.Sha256, Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow);
+                    content.Length, content.Sha256, Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow)
+                { CommandOrigin = command };
                 return await catalog.PrepareNamespaceTransferAsync(plan, stop).ConfigureAwait(false);
             }, stop).ConfigureAwait(false);
         }, token).ConfigureAwait(false);

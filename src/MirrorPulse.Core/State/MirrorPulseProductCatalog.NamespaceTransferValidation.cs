@@ -8,7 +8,7 @@ public sealed partial class MirrorPulseProductCatalog
     private static void ValidateNamespaceTransferPlan(MirrorPulseNamespaceTransferPlan plan)
     {
         ArgumentNullException.ThrowIfNull(plan);
-        if (plan.Version != 1 || plan.OperationId == Guid.Empty || plan.PrivateContentId == Guid.Empty ||
+        if (plan.Version is not (1 or 2) || plan.OperationId == Guid.Empty || plan.PrivateContentId == Guid.Empty ||
             plan.CopyOperationId == Guid.Empty || plan.DeleteOperationId == Guid.Empty ||
             new[] { plan.OperationId, plan.PrivateContentId, plan.CopyOperationId, plan.DeleteOperationId }.Distinct().Count() != 4 ||
             plan.PreparedAt == default || plan.Length < 0 || plan.Sha256 is not { Length: 64 } ||
@@ -28,6 +28,12 @@ public sealed partial class MirrorPulseProductCatalog
             plan.Source.Identity is not { ItemId: not null, RemoteId: not null } ||
             plan.SourceRemoteRevision is { } revision && InvalidRemoteUpdateText(revision, 4096))
             throw new ArgumentException("A file transfer requires distinct original roots, protected members, stable effects and complete content identity.", nameof(plan));
+        if (plan.Version == 1 && plan.CommandOrigin is not null || plan.Version == 2 &&
+            (plan.CommandOrigin is not { Version: 1 } command || command.CommandId != plan.OperationId ||
+                command.SourceMemberId != child.Member.MemberId || command.TargetParentMemberId != target.Member.MemberId ||
+                command.TargetName != plan.TargetRelativePath[(plan.TargetRelativePath.LastIndexOf('/') + 1)..] ||
+                command.RequestedAt == default || command.RequestedAt > plan.PreparedAt))
+            throw new ArgumentException("A controlled transfer must retain its original command, members, direct target name and request time.", nameof(plan));
         if (plan.TargetRoute.ProtocolVersion != 2)
             throw new ArgumentException("The first transfer copy requires explicit Worker V2 conditional target support.", nameof(plan));
         foreach (var route in new[] { plan.SourceRoute, plan.TargetRoute })
