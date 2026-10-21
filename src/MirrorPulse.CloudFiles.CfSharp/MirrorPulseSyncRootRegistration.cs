@@ -77,7 +77,7 @@ public sealed class MirrorPulseSyncRootRegistrationService
     public MirrorPulseSyncRootRegistrationResult Register(MirrorPulseSyncRootDefinition definition)
     {
         ArgumentNullException.ThrowIfNull(definition);
-        Directory.CreateDirectory(definition.Path);
+        MirrorPulseSyncRootDirectory.EnsureExists(definition.Path);
 
         var options = SyncRootRegistrationOptions.CreateBuilder(ProviderName, definition.ProviderVersion)
             .WithProviderId(definition.ProviderId)

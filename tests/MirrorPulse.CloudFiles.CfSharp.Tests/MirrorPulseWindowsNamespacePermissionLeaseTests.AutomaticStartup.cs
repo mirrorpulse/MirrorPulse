@@ -36,6 +36,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         try
         {
             registry.Register(new(paths.SyncRootPath, "0.1.0", Guid.NewGuid(), [1, 2, 3]));
+            Assert.AreEqual(user.User, new DirectoryInfo(paths.SyncRootPath).GetAccessControl(AccessControlSections.Owner).GetOwner(typeof(SecurityIdentifier)));
             await File.WriteAllTextAsync(Path.Combine(directory, ".mp-permission-fixture"), string.Empty, timeout.Token);
             var setupState = new MirrorPulseCfSharpStateSession(paths);
             await using (var setup = new MirrorPulseCloudFileSystemBuilder(paths).WithStateStore(setupState)
@@ -47,7 +48,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     new(paths.SyncRootPath, [existingRoot]), timeout.Token)).ThrowIfAnyFailed();
                 await setup.GetDirectory("Existing").SetPopulationStateAsync(CloudDirectoryPopulationState.Complete, cancellationToken: timeout.Token);
                 await File.WriteAllTextAsync(note, "original bytes", timeout.Token);
-                foreach (CloudItem item in new CloudItem[] { setup.Root, setup.GetDirectory("Existing"), setup.GetFile("Existing/note.txt") })
+                foreach (CloudItem item in new CloudItem[] { setup.GetDirectory("Existing"), setup.GetFile("Existing/note.txt") })
                     SetProtectedFixtureUserOwner(item, user.User!);
             }
             for (int owner = 0; owner < 2; owner++)
@@ -97,7 +98,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 Assert.AreEqual("latest user bytes", await File.ReadAllTextAsync(note, timeout.Token));
                 Assert.IsEmpty(worker.Calls);
                 Assert.IsEmpty(await catalog.ReadNamespaceDispatchFencedRootsAsync(timeout.Token));
-                TestContext.WriteLine($"AutomaticStartup: owner={owner}; existingOriginalCapture=True; newProtectedBirths=True; offlineSourceCalls=0; " +
+                TestContext.WriteLine($"AutomaticStartup: owner={owner}; existingOriginalCapture=True; newRootUserOwnerAtCreation=True; newProtectedBirths=True; offlineSourceCalls=0; " +
                     "freshPerRootNativeAudit=True; busyRootIsolation=True; sameOperationRecovery=True; originalMembersAndBytesPreserved=True; remoteAcceptance=False.");
             }
         }

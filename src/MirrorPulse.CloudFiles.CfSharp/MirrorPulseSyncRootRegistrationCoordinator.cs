@@ -120,7 +120,7 @@ public sealed class MirrorPulseSyncRootRegistrationCoordinator
     {
         ValidatePair(definition, profile);
         cancellationToken.ThrowIfCancellationRequested();
-        Directory.CreateDirectory(definition.Path);
+        MirrorPulseSyncRootDirectory.EnsureExists(definition.Path);
         _cloud.EnsureCompatible(definition);
 
         bool shellAlreadyExisted = await _shell.RegisterAsync(profile, cancellationToken).ConfigureAwait(false);
