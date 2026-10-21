@@ -25,12 +25,22 @@ public sealed class MirrorPulseTransferTargetVerifier(MirrorPulseProductCatalog 
         if (copy.CopyAcceptedAt is null || copy.AcceptedRevision is null)
             throw new MirrorPulseMutationAmbiguousException("Target readback cannot recover a missing original upload receipt.");
         copy = await _catalog.ValidateNamespaceTransferTargetReadAsync(operationId, token).ConfigureAwait(false);
-        string acceptedRevision = copy.AcceptedRevision ?? throw new InvalidDataException("The validated copy lost its original acceptance receipt.");
+        var verification = await ReadCurrentAsync(copy, token).ConfigureAwait(false);
+        return await _catalog.RecordNamespaceTransferTargetVerificationAsync(verification, token).ConfigureAwait(false);
+    }
+
+    /// <summary>Reads current whole bytes and metadata at the original receipt, without substituting historical verification.</summary>
+    public async Task<MirrorPulseTransferTargetVerification> ReadCurrentAsync(MirrorPulseNamespaceTransferCopy copy,
+        CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(copy);
+        if (copy.CopyAcceptedAt is null || copy.AcceptedRevision is not { } acceptedRevision)
+            throw new MirrorPulseMutationAmbiguousException("Current readback requires the original correlated copy acceptance.");
         var plan = copy.Plan; var route = plan.TargetRoute;
         string path = plan.TargetRelativePath[(route.DirectoryName.Length + 1)..];
         if (await _stats.StatAsync(new(route.InstanceId, path, route.RootKey), token).ConfigureAwait(false) != copy.AcceptedRevision)
             throw new IOException("The transfer target no longer has its original accepted revision.");
-        var before = await ReadTargetMetadataAsync(copy, path, token).ConfigureAwait(false);
+        var before = await ReadMetadataAsync(route, path, plan.Length, acceptedRevision, token).ConfigureAwait(false);
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         long offset = 0;
         while (offset < plan.Length)
@@ -48,18 +58,20 @@ public sealed class MirrorPulseTransferTargetVerifier(MirrorPulseProductCatalog 
         }
         if (Convert.ToHexString(hash.GetHashAndReset()) != plan.Sha256)
             throw new IOException("Target bytes differ from the complete original transfer content.");
-        var after = await ReadTargetMetadataAsync(copy, path, token).ConfigureAwait(false);
+        var after = await ReadMetadataAsync(route, path, plan.Length, acceptedRevision, token).ConfigureAwait(false);
         if (after.RemoteId != before.RemoteId ||
             await _stats.StatAsync(new(route.InstanceId, path, route.RootKey), token).ConfigureAwait(false) != copy.AcceptedRevision)
             throw new IOException("Target identity or revision changed during whole-content readback.");
-        return await _catalog.RecordNamespaceTransferTargetVerificationAsync(new(1, operationId, acceptedRevision,
-            before.RemoteId, plan.Length, plan.Sha256, _time.GetUtcNow()), token).ConfigureAwait(false);
+        if (copy.TargetVerification is { } original && before.RemoteId != original.RemoteId)
+            throw new IOException("The original accepted transfer target was replaced by another remote identity.");
+        return new(1, plan.OperationId, acceptedRevision, before.RemoteId, plan.Length, plan.Sha256, _time.GetUtcNow());
     }
 
-    private async Task<MirrorPulseWorkerDirectoryEntry> ReadTargetMetadataAsync(MirrorPulseNamespaceTransferCopy copy,
-        string path, CancellationToken token)
+    /// <summary>Reads one current opaque file identity at an original conditional revision through bounded Worker pages.</summary>
+    public async Task<MirrorPulseWorkerDirectoryEntry> ReadMetadataAsync(MirrorPulseTransferRoute route,
+        string path, long? expectedLength, string expectedRevision, CancellationToken token)
     {
-        var route = copy.Plan.TargetRoute; int separator = path.LastIndexOf('/');
+        int separator = path.LastIndexOf('/');
         string parent = separator < 0 ? string.Empty : path[..separator];
         ReadOnlyMemory<byte> cursor = ReadOnlyMemory<byte>.Empty;
         var seen = new HashSet<string>(StringComparer.Ordinal); MirrorPulseWorkerDirectoryEntry? found = null;
@@ -73,7 +85,7 @@ public sealed class MirrorPulseTransferTargetVerifier(MirrorPulseProductCatalog 
                 if (entry is null) throw new InvalidDataException("Target metadata contains an empty entry.");
                 if (entry.RelativePath != path) continue;
                 if (found is not null) throw new InvalidDataException("More than one remote entry claims the transfer destination.");
-                if (entry.IsDeleted || entry.ItemKind != "File" || entry.Length != copy.Plan.Length || entry.RemoteRevision != copy.AcceptedRevision ||
+                if (entry.IsDeleted || entry.ItemKind != "File" || expectedLength is { } length && entry.Length != length || entry.RemoteRevision != expectedRevision ||
                     string.IsNullOrWhiteSpace(entry.RemoteId) || entry.RemoteId.Length > 4096 || entry.RemoteId.Contains('\0'))
                     throw new IOException("The target is not the original accepted file with the complete expected length.");
                 found = entry;

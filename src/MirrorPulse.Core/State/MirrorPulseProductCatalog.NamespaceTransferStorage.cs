@@ -50,6 +50,7 @@ public sealed partial class MirrorPulseProductCatalog
             catch (Exception error) when (error is ArgumentException or InvalidOperationException or FileNotFoundException)
             { throw new InvalidDataException("The transfer lost its original native target publication references.", error); }
         }
+        await ValidateNamespaceTransferSourceDeletionReferencesAsync(copy, transaction, token).ConfigureAwait(false);
         return copy;
     }
 

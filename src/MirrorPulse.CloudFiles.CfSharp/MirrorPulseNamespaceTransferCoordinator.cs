@@ -12,7 +12,8 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 /// <summary>The Host's normal-user Worker transports and actual connected protocol inventory.</summary>
 public sealed record MirrorPulseTransferWorkerServices(IMirrorPulseWorkerUploadTransport Uploads,
     IMirrorPulseWorkerStatTransport Stats, IMirrorPulseWorkerRangeTransport Ranges,
-    IMirrorPulseWorkerDirectoryPageSource Directories, Func<InstanceId, int> ProtocolVersion);
+    IMirrorPulseWorkerDirectoryPageSource Directories, Func<InstanceId, int> ProtocolVersion,
+    IMirrorPulseWorkerMutationTransport? Mutations = null);
 
 /// <summary>Prepares, copies, verifies and publishes an original transfer target through the Host namespace boundary.</summary>
 /// <remarks>The caller retains both root work leases and ordered instance admissions. These phases keep
@@ -21,7 +22,7 @@ public sealed record MirrorPulseTransferWorkerServices(IMirrorPulseWorkerUploadT
 /// A local read handle prevents ordinary competing opens; it is not a final deletion guard against
 /// existing writable mappings. Source retirement requires its own complete protected protocol.</remarks>
 [SupportedOSPlatform("windows10.0.26100")]
-public sealed class MirrorPulseNamespaceTransferCoordinator(CloudFileSystem fileSystem, MirrorPulseCfSharpStateSession state,
+public sealed partial class MirrorPulseNamespaceTransferCoordinator(CloudFileSystem fileSystem, MirrorPulseCfSharpStateSession state,
     MirrorPulseProductCatalog catalog, MirrorPulseRootRouter router, MirrorPulseNamespaceExecutionSession execution,
     MirrorPulseNamespaceActor actor, MirrorPulseLocalTransferContentStore inputs, Func<InstanceId, bool> mayDispatch,
     Func<InstanceId, int> protocolVersion)

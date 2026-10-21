@@ -172,10 +172,10 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
     }
 
     private static async Task<MirrorPulseNamespaceTransferPlan> PrepareAcceptedTransferTargetAsync(MirrorPulseProductCatalog catalog,
-        byte[] bytes, bool sameInstance = false)
+        byte[] bytes, bool sameInstance = false, bool localOnlySource = false)
     {
         var plan = (await PrepareTransferFixtureAsync(catalog, sameInstance)).Plan with
-        { Length = bytes.LongLength, Sha256 = Convert.ToHexString(SHA256.HashData(bytes)) };
+        { Length = bytes.LongLength, Sha256 = Convert.ToHexString(SHA256.HashData(bytes)), SourceRemoteRevision = localOnlySource ? null : "source-v1" };
         await catalog.PrepareNamespaceTransferAsync(plan);
         await catalog.StartNamespaceTransferCopyAsync(plan.OperationId, plan.PreparedAt.AddSeconds(1));
         // The original successful Worker upload is the premise; the production verifier and durable readback are tested here.
@@ -200,7 +200,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         {
             Pages++; Assert.AreEqual(Plan.TargetRoute.InstanceId, request.InstanceId); Assert.AreEqual(Plan.TargetRoute.RootKey, request.RootKey);
             Assert.AreEqual(string.Empty, request.NormalizedPath); Assert.AreEqual(512, request.PageSize);
-            var entry = new MirrorPulseWorkerDirectoryEntry(Failure == "remote-id" ? "" : Failure == "changed-id" && Pages > 1 ? "another-target-id" : "original-target-id",
+            var entry = new MirrorPulseWorkerDirectoryEntry(Failure == "remote-id" ? "" : Failure == "replaced-id" || Failure == "changed-id" && Pages > 1 ? "another-target-id" : "original-target-id",
                 Failure == "revision" ? "another-version" : "accepted-target-v1", Failure == "type" ? "Directory" : "File", "moved.txt",
                 Failure == "length" ? bytes.LongLength + 1 : bytes.LongLength, null, null, Failure == "deleted");
             MirrorPulseWorkerDirectoryEntry[] entries = Failure switch

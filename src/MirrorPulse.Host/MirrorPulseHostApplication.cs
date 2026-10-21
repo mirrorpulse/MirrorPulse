@@ -207,7 +207,7 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
                     instance.InstanceId == instanceId && instance.Enabled),
                 conflictCenter, conflictNotifications, source, remoteScheduler, namespaceExecution, namespaceActor,
                 namespaceWork, initializeNamespaceOnStart: true,
-                transfers: new(source, source, source, source, workers.GetConnectedProtocolVersion));
+                transfers: new(source, source, source, source, workers.GetConnectedProtocolVersion, source));
             currentSession = session;
             var remoteSnapshotStore = new MirrorPulseFileRemotePollSnapshotStore(paths.DataRootPath);
             remotePoller = new MirrorPulseActiveRemotePoller(

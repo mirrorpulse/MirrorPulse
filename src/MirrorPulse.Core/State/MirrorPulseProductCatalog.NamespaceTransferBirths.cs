@@ -202,6 +202,7 @@ public sealed partial class MirrorPulseProductCatalog
         if (copy.TargetBirthOperationId is not null && copy.TargetVerification is null)
             throw new ArgumentException("A transfer birth cannot precede the original whole-target verification.");
         if (copy.TargetPublication is { } publication) ValidateNamespaceTransferPublicationShape(copy, publication);
+        if (copy.SourceDeletion is { } deletion) ValidateNamespaceTransferSourceDeletion(copy, deletion);
     }
 
     private static async Task EnsureNamespaceTransferBirthSchemaAsync(SqliteConnection connection, bool requireExisting, bool stampVersion, CancellationToken token)
