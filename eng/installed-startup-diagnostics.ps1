@@ -10,6 +10,9 @@ function Get-InstalledHostStartupDiagnostics {
         'ShellRootOwnershipMismatch','ShellRootPathMismatch','ShellRootRegistrationFailed','NamespaceAnchorOwnerMismatch',
         'NamespaceAnchorBindingMismatch','UnclassifiedDiagnostic')
     $categories = @('IO','InvalidData','Authorization','Cancelled','Internal','MutationAmbiguous','WorkerOffline','WorkerDisconnected','WorkerRejected')
+    $sites = @('Unknown','InitializationRead','InitializationAdmission','InitializationInventory','InitializationAnchorProtection',
+        'InitializationAnchorRegistration','InitializationAudit','AnchorGuard','AnchorHistory','AnchorPermissionPreparation','AnchorProtectedPermission','AnchorVerification')
+    $kinds = @('FileNotFound','DirectoryNotFound','DllNotFound','Native','Other')
     $stages = @('LibraryStartBegin','LibraryStartCompleted','LibraryServicesBegin','LibraryServicesCompleted',
         'NamespaceStartupBegin','NamespaceStartupCompleted','NamespaceAnchorBegin','NamespaceAnchorCompleted',
         'NamespaceAnchorEntryGuardBegin','NamespaceAnchorEntryGuardCompleted','NamespaceAnchorDiscoveryBegin','NamespaceAnchorDiscoveryCompleted',
@@ -58,9 +61,11 @@ function Get-InstalledHostStartupDiagnostics {
                             if ($entry.Category -cne 'host' -or $entry.Level -cne 'Error' -or $entry.Code -cnotin $codes) { continue }
                             $category=if ([string]$entry.Fields.failureCategory -cin $categories) { [string]$entry.Fields.failureCategory } else { $null }
                             $hresult=if ([string]$entry.Fields.hresult -cmatch '\A[0-9A-Fa-f]{8}\z') { ([string]$entry.Fields.hresult).ToUpperInvariant() } else { $null }
+                            $site=if ([string]$entry.Fields.failureSite -cin $sites) { [string]$entry.Fields.failureSite } else { $null }
+                            $kind=if ([string]$entry.Fields.failureKind -cin $kinds) { [string]$entry.Fields.failureKind } else { $null }
                             # Never copy arbitrary messages, fields, paths, configuration or credential values.
                             $records.Add([ordered]@{sourceIndex=$index;occurredAt=$at.ToUniversalTime().ToString('O');code=[string]$entry.Code;
-                                failureCategory=$category;hresult=$hresult})
+                                failureCategory=$category;hresult=$hresult;failureSite=$site;failureKind=$kind})
                         }
                     }
                 }

@@ -1,5 +1,6 @@
 using System.Runtime.Versioning;
 using CfSharp;
+using MirrorPulse.Core.Diagnostics;
 using MirrorPulse.Core.State;
 using MirrorPulse.Core.Sync;
 
@@ -33,69 +34,84 @@ public sealed class MirrorPulseNamespaceAnchorProtectionCoordinator(CloudFileSys
         actor.RunAsync(async token =>
         {
             actor.AssertAccess(); MirrorPulseNamespaceAnchorProtection result = null!;
-            await execution.RunNamespaceOperationAsync(async () =>
+            var site = MirrorPulseStartupFailureSite.AnchorGuard;
+            try
             {
-                var guard = await MirrorPulseWindowsNamespacePermissionLease.OpenAsync(fileSystem.Root, router, token).ConfigureAwait(false);
-                bool transferred = false;
-                try
+                await execution.RunNamespaceOperationAsync(async () =>
                 {
-                    var observed = await guard.InspectAsync(token).ConfigureAwait(false);
-                    if (observed.RootId is not null || observed.RelativePath.Length != 0 || !observed.IsDirectory ||
-                        observed.LinkCount != 1 ||
-                        observed.LocalObject.LocalFileId != observed.LocalObject.SyncRootFileId)
-                        throw new InvalidDataException("Anchor protection requires the actual single-link current-user sync-root directory.");
-                    if (observed.OwnerSid != execution.OwnerSid.Value)
-                        throw new InvalidDataException("The sync-root anchor owner does not match the current Host user.");
-                    var original = await catalog.ReadNamespacePermissionBaselineByBindingAsync(observed.LocalObject, token).ConfigureAwait(false);
-                    if (original is null && (await catalog.ReadNamespacePermissionChangesAsync(token).ConfigureAwait(false))
-                        .Any(change => change.Intent.RootId is null))
-                        throw new InvalidDataException("The sync-root has retained permission history for a different or missing original binding.");
-                    var latest = original is null ? null : await catalog.ReadLatestNamespacePermissionChangeAsync(original.EvidenceId, token).ConfigureAwait(false)
-                        ?? throw new InvalidDataException("The original sync-root permissions lost their owned intent.");
-                    if (original is not null && (original.RootId is not null || original.RelativePath.Length != 0 ||
-                        !original.IsDirectory || original.OwnerSid != observed.OwnerSid))
-                        throw new InvalidDataException("The anchor cannot adopt another object's original permissions.");
-                    original ??= new(Guid.NewGuid(), null, observed.LocalObject, string.Empty, true,
-                        observed.OwnerSid, observed.Dacl, observed.ObservedAt);
-                    MirrorPulseProtectedNamespacePermissionResult applied = null!;
-                    if (latest is not null)
+                    var guard = await MirrorPulseWindowsNamespacePermissionLease.OpenAsync(fileSystem.Root, router, token).ConfigureAwait(false);
+                    bool transferred = false;
+                    try
                     {
-                        applied = await permissions.ApplyProtectedAsync(latest.Intent.OperationId, fileSystem.Root, router,
-                            cancellationToken: token).ConfigureAwait(false);
-                        if (!Verified(applied)) { Transfer(); return; }
-                        latest = await catalog.ReadNamespacePermissionChangeAsync(latest.Intent.OperationId, token).ConfigureAwait(false)
-                            ?? throw new InvalidDataException("The recovered anchor intent disappeared.");
-                    }
-                    if (latest is null || latest.Intent.Kind == MirrorPulseNamespacePermissionChangeKind.Restore || latest.Intent.RoleSid != execution.RoleSid.Value)
-                    {
-                        latest = await catalog.PrepareNamespacePermissionChangeAsync(original, new(Guid.NewGuid(), original.EvidenceId,
-                            original.LocalObject, null, string.Empty, latest is null || latest.Intent.Kind == MirrorPulseNamespacePermissionChangeKind.Restore
-                                ? MirrorPulseNamespacePermissionChangeKind.Protect : MirrorPulseNamespacePermissionChangeKind.RotateRole,
-                            execution.RoleSid.Value, latest?.Verification!.Dacl ?? original.OriginalDacl,
-                            MirrorPulseNamespacePermissionPolicy.CreateProtectedDacl(execution, true), DateTimeOffset.UtcNow), token).ConfigureAwait(false);
-                        applied = await permissions.ApplyProtectedAsync(latest.Intent.OperationId, fileSystem.Root, router,
-                            cancellationToken: token).ConfigureAwait(false);
-                        latest = await catalog.ReadNamespacePermissionChangeAsync(latest.Intent.OperationId, token).ConfigureAwait(false)
-                            ?? throw new InvalidDataException("The current anchor intent disappeared.");
-                    }
-                    var final = await guard.InspectAsync(token).ConfigureAwait(false);
-                    if (Verified(applied) && (final.LocalObject != original.LocalObject || final.OwnerSid != original.OwnerSid ||
-                        !MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(MirrorPulseNamespacePermissionPolicy.CreateProtectedDacl(execution, true), final.Dacl)))
-                        applied = applied with
+                        var observed = await guard.InspectAsync(token).ConfigureAwait(false);
+                        if (observed.RootId is not null || observed.RelativePath.Length != 0 || !observed.IsDirectory ||
+                            observed.LinkCount != 1 ||
+                            observed.LocalObject.LocalFileId != observed.LocalObject.SyncRootFileId)
+                            throw new InvalidDataException("Anchor protection requires the actual single-link current-user sync-root directory.");
+                        if (observed.OwnerSid != execution.OwnerSid.Value)
+                            throw new InvalidDataException("The sync-root anchor owner does not match the current Host user.");
+                        site = MirrorPulseStartupFailureSite.AnchorHistory;
+                        var original = await catalog.ReadNamespacePermissionBaselineByBindingAsync(observed.LocalObject, token).ConfigureAwait(false);
+                        if (original is null && (await catalog.ReadNamespacePermissionChangesAsync(token).ConfigureAwait(false))
+                            .Any(change => change.Intent.RootId is null))
+                            throw new InvalidDataException("The sync-root has retained permission history for a different or missing original binding.");
+                        var latest = original is null ? null : await catalog.ReadLatestNamespacePermissionChangeAsync(original.EvidenceId, token).ConfigureAwait(false)
+                            ?? throw new InvalidDataException("The original sync-root permissions lost their owned intent.");
+                        if (original is not null && (original.RootId is not null || original.RelativePath.Length != 0 ||
+                            !original.IsDirectory || original.OwnerSid != observed.OwnerSid))
+                            throw new InvalidDataException("The anchor cannot adopt another object's original permissions.");
+                        original ??= new(Guid.NewGuid(), null, observed.LocalObject, string.Empty, true,
+                            observed.OwnerSid, observed.Dacl, observed.ObservedAt);
+                        MirrorPulseProtectedNamespacePermissionResult applied = null!;
+                        if (latest is not null)
                         {
-                            Permission = new(latest!.Intent.OperationId,
-                            MirrorPulseNamespacePermissionOutcome.RecoveryRequired, MirrorPulseNamespacePermissionRecoveryReason.DaclChanged)
-                        };
-                    Transfer();
+                            site = MirrorPulseStartupFailureSite.AnchorProtectedPermission;
+                            applied = await permissions.ApplyProtectedAsync(latest.Intent.OperationId, fileSystem.Root, router,
+                                cancellationToken: token).ConfigureAwait(false);
+                            if (!Verified(applied)) { Transfer(); return; }
+                            site = MirrorPulseStartupFailureSite.AnchorHistory;
+                            latest = await catalog.ReadNamespacePermissionChangeAsync(latest.Intent.OperationId, token).ConfigureAwait(false)
+                                ?? throw new InvalidDataException("The recovered anchor intent disappeared.");
+                        }
+                        if (latest is null || latest.Intent.Kind == MirrorPulseNamespacePermissionChangeKind.Restore || latest.Intent.RoleSid != execution.RoleSid.Value)
+                        {
+                            site = MirrorPulseStartupFailureSite.AnchorPermissionPreparation;
+                            latest = await catalog.PrepareNamespacePermissionChangeAsync(original, new(Guid.NewGuid(), original.EvidenceId,
+                                original.LocalObject, null, string.Empty, latest is null || latest.Intent.Kind == MirrorPulseNamespacePermissionChangeKind.Restore
+                                    ? MirrorPulseNamespacePermissionChangeKind.Protect : MirrorPulseNamespacePermissionChangeKind.RotateRole,
+                                execution.RoleSid.Value, latest?.Verification!.Dacl ?? original.OriginalDacl,
+                                MirrorPulseNamespacePermissionPolicy.CreateProtectedDacl(execution, true), DateTimeOffset.UtcNow), token).ConfigureAwait(false);
+                            site = MirrorPulseStartupFailureSite.AnchorProtectedPermission;
+                            applied = await permissions.ApplyProtectedAsync(latest.Intent.OperationId, fileSystem.Root, router,
+                                cancellationToken: token).ConfigureAwait(false);
+                            site = MirrorPulseStartupFailureSite.AnchorHistory;
+                            latest = await catalog.ReadNamespacePermissionChangeAsync(latest.Intent.OperationId, token).ConfigureAwait(false)
+                                ?? throw new InvalidDataException("The current anchor intent disappeared.");
+                        }
+                        site = MirrorPulseStartupFailureSite.AnchorVerification;
+                        var final = await guard.InspectAsync(token).ConfigureAwait(false);
+                        if (Verified(applied) && (final.LocalObject != original.LocalObject || final.OwnerSid != original.OwnerSid ||
+                            !MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(MirrorPulseNamespacePermissionPolicy.CreateProtectedDacl(execution, true), final.Dacl)))
+                            applied = applied with
+                            {
+                                Permission = new(latest!.Intent.OperationId,
+                                MirrorPulseNamespacePermissionOutcome.RecoveryRequired, MirrorPulseNamespacePermissionRecoveryReason.DaclChanged)
+                            };
+                        Transfer();
 
-                    void Transfer()
-                    {
-                        result = new(guard, original, latest!, applied); transferred = true;
+                        void Transfer()
+                        {
+                            result = new(guard, original, latest!, applied); transferred = true;
+                        }
                     }
-                }
-                finally { if (!transferred) await guard.DisposeAsync().ConfigureAwait(false); }
-            }).ConfigureAwait(false);
-            return result;
+                    finally { if (!transferred) await guard.DisposeAsync().ConfigureAwait(false); }
+                }).ConfigureAwait(false);
+                return result;
+            }
+            catch (Exception error) when (error is not OutOfMemoryException)
+            {
+                MirrorPulseStartupFailureTrace.Record(error, site); throw;
+            }
         }, cancellationToken);
 
     private static bool Verified(MirrorPulseProtectedNamespacePermissionResult result) =>

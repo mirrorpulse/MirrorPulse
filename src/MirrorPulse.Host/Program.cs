@@ -64,6 +64,7 @@ catch (Exception exception)
     try
     {
         using var log = new LocalRollingLogWriter(Path.Combine(paths.DataRootPath, "logs"));
+        Exception originalStartupFailure = MirrorPulseStartupFailureTrace.ReadOriginalException(exception);
         string code = exception.Message switch
         {
             "The actual Shell root policy does not match content synchronization." => "ShellRootPolicyMismatch",
@@ -77,8 +78,10 @@ catch (Exception exception)
             _ => "HostStartupFailed",
         };
         await log.WriteAsync(new LogEntry(LogLevel.Error, "host", code, DateTimeOffset.UtcNow,
-            [new("failureCategory", SafeDiagnosticPolicy.ClassifyFailure(exception)),
-                new("hresult", exception.GetBaseException().HResult.ToString("X8", System.Globalization.CultureInfo.InvariantCulture))]));
+            [new("failureCategory", SafeDiagnosticPolicy.ClassifyFailure(originalStartupFailure)),
+                new("failureSite", MirrorPulseStartupFailureTrace.ReadSite(exception).ToString()),
+                new("failureKind", MirrorPulseStartupFailureTrace.ReadKind(exception)),
+                new("hresult", originalStartupFailure.HResult.ToString("X8", System.Globalization.CultureInfo.InvariantCulture))]));
     }
     catch (Exception logFailure) when (logFailure is not OutOfMemoryException)
     {

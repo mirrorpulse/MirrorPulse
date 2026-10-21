@@ -10,6 +10,25 @@ namespace MirrorPulse.Core.Tests;
 public sealed class SafeDiagnosticPolicyTests
 {
     [TestMethod]
+    public void StartupFailureSitesAcceptOnlyDefinedNamesAndNeverNumericAliasesOrPrivateValues()
+    {
+        foreach (var site in Enum.GetValues<MirrorPulseStartupFailureSite>())
+        {
+            var safe = SafeDiagnosticPolicy.Sanitize(new LogEntry(LogLevel.Error, "host", "HostStartupFailed", DateTimeOffset.UtcNow,
+                [new("failureSite", site.ToString()), new("failureKind", "FileNotFound"), new("path", "PRIVATE_PATH")]));
+            Assert.AreEqual(site.ToString(), safe.Fields["failureSite"]); Assert.AreEqual("FileNotFound", safe.Fields["failureKind"]);
+            Assert.IsFalse(JsonSerializer.Serialize(safe).Contains("PRIVATE", StringComparison.Ordinal));
+        }
+        foreach (string value in new[] { "1", "InitializationRead, AnchorGuard", "PRIVATE_PATH", "AnchorProtectedPermission/private" })
+        {
+            var rejected = SafeDiagnosticPolicy.Sanitize(new LogEntry(LogLevel.Error, "host", "HostStartupFailed", DateTimeOffset.UtcNow,
+                [new("failureSite", value), new("failureKind", "PRIVATE_TYPE")]));
+            Assert.IsFalse(rejected.Fields.ContainsKey("failureSite")); Assert.IsFalse(rejected.Fields.ContainsKey("failureKind"));
+            Assert.IsFalse(JsonSerializer.Serialize(rejected).Contains("PRIVATE", StringComparison.Ordinal));
+        }
+    }
+
+    [TestMethod]
     public void AnchorStartupSubBoundariesRetainOnlyClosedProgressWithoutPathsOrIdentity()
     {
         string[] stages = ["NamespaceAnchorEntryGuardBegin", "NamespaceAnchorEntryGuardCompleted",

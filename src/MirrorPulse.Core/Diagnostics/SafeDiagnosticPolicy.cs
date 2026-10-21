@@ -120,6 +120,8 @@ public static class SafeDiagnosticPolicy
                     long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out long count) && count >= 0
                         ? count.ToString(CultureInfo.InvariantCulture) : null,
                 "failureCategory" => value is "IO" or "InvalidData" or "Authorization" or "Cancelled" or "Internal" or "MutationAmbiguous" or "WorkerOffline" or "WorkerDisconnected" or "WorkerRejected" ? value : null,
+                "failureSite" => Enum.TryParse(value, out MirrorPulseStartupFailureSite site) && Enum.IsDefined(site) && value == site.ToString() ? value : null,
+                "failureKind" => value is "FileNotFound" or "DirectoryNotFound" or "DllNotFound" or "Native" or "Other" ? value : null,
                 "contentObservation" => value is "Unavailable" or "NoAcceptedProof" or "ContentChanged" or "IdentityChanged" or "Selected" ? value : null,
                 "cloudRequestKind" => value is "FetchData" or "FetchPlaceholders" or "ValidateData" or "Dehydrate" or "Delete" or "Rename" or "CompletionNotification" or "Other" ? value : null,
                 "workerFailureCode" => value is "Offline" or "Disconnected" or "InvalidRequest" or "AccessDenied" or "SourceUnavailable" or "CapabilityUnavailable" or "LocalIoFailure" or "RetryableTransferFailure" or "RemoteConflict" or "UncorrelatedResponse" or "InvalidConfiguration" or "WorkerFailure" or "Unknown" ? value : null,
