@@ -279,6 +279,17 @@ public sealed class MirrorPulseCliHostOperations : IMirrorPulseCliHostOperations
                     human = $"Member move committed · {move.OperationId:D} · {move.RelativePath}" +
                         (move.RequiresSubtreeReconciliation ? " · subtree reconciliation pending" : string.Empty);
                     break;
+                case ("namespace", "transfer") when command.Path.Count > 2 && command.Path[2].Equals("status", StringComparison.OrdinalIgnoreCase):
+                    Guid transferOperation = MirrorPulseTransferCliArguments.ParseId(command.Arguments, "operation");
+                    var transferStatus = await _client.GetNamespaceTransferStatusAsync(transferOperation, cancellationToken).ConfigureAwait(false);
+                    result = transferStatus; human = MirrorPulseTransferCliArguments.Format(transferStatus);
+                    break;
+                case ("namespace", "transfer") when command.Path.Count > 2 && command.Path[2].Equals("list", StringComparison.OrdinalIgnoreCase):
+                    Guid transferRoot = MirrorPulseTransferCliArguments.ParseId(command.Arguments, "root");
+                    var transfers = await _client.GetNamespaceTransfersAsync(transferRoot, cancellationToken).ConfigureAwait(false);
+                    result = transfers; human = transfers.Entries.Count == 0 ? "No pending transfers." :
+                        string.Join(Environment.NewLine, transfers.Entries.Select(MirrorPulseTransferCliArguments.Format));
+                    break;
                 case ("namespace", "remote") when command.Path.Count > 2 &&
                     (command.Path[2].Equals("delete-status", StringComparison.OrdinalIgnoreCase) ||
                     command.Path[2].Equals("recover-delete", StringComparison.OrdinalIgnoreCase)):

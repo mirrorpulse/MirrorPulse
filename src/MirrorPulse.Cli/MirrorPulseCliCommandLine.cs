@@ -43,7 +43,7 @@ public static class MirrorPulseCliCommandLine
             ["instance"] = NewSet("list", "create", "configure", "enable", "disable", "select-version"),
             ["operation"] = NewSet("get", "watch", "cancel"),
             ["root"] = NewSet("list", "prepare-rename", "recover"),
-            ["namespace"] = NewSet("member", "birth", "protection", "remote"),
+            ["namespace"] = NewSet("member", "birth", "protection", "remote", "transfer"),
             ["sync"] = NewSet("status", "refresh")
         };
 
@@ -148,7 +148,9 @@ public static class MirrorPulseCliCommandLine
                                 token.Equals("delete-status", StringComparison.OrdinalIgnoreCase) || token.Equals("deletes", StringComparison.OrdinalIgnoreCase) ||
                                 token.Equals("recover-delete", StringComparison.OrdinalIgnoreCase) || token.Equals("update-status", StringComparison.OrdinalIgnoreCase) ||
                                 token.Equals("updates", StringComparison.OrdinalIgnoreCase) || token.Equals("recover-update", StringComparison.OrdinalIgnoreCase)
-                            : token.Equals("recover", StringComparison.OrdinalIgnoreCase);
+                            : commandPath[1].Equals("transfer", StringComparison.OrdinalIgnoreCase)
+                                ? token.Equals("status", StringComparison.OrdinalIgnoreCase) || token.Equals("list", StringComparison.OrdinalIgnoreCase)
+                                : token.Equals("recover", StringComparison.OrdinalIgnoreCase);
                 if (!allowed)
                     return Failure($"Unknown subcommand '{token}' for 'namespace {commandPath[1]}'.", options);
                 commandPath.Add(token);
@@ -267,6 +269,10 @@ public static class MirrorPulseCliHelp
                                          Read an explicit KeepRemote deletion and its command progress.
           namespace remote update-status OPERATION_ID
                                          Show original remote update observations and product settlement.
+          namespace transfer status OPERATION_ID
+                                         Show transfer progress, journal acknowledgement, and retained fences.
+          namespace transfer list ROOT_ID
+                                         List the root's pending transfers, as source or destination.
           namespace remote updates ROOT_ID
                                          List the root's pending original remote update.
           namespace remote recover-update OPERATION_ID

@@ -404,6 +404,16 @@ public sealed class MirrorPulseControlClient
         SendAsync<NamespaceRemoteUpdateStatusArguments, MirrorPulseControlRemoteUpdateStatus>(
             MirrorPulseControlCommands.NamespaceRemoteUpdateStatus, new(operationId), cancellationToken);
 
+    public Task<MirrorPulseControlTransferStatus> GetNamespaceTransferStatusAsync(Guid operationId,
+        CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceTransferStatusArguments, MirrorPulseControlTransferStatus>(
+            MirrorPulseControlCommands.NamespaceTransferStatus, new(operationId), cancellationToken);
+
+    public Task<MirrorPulseControlTransfers> GetNamespaceTransfersAsync(Guid rootId,
+        CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceTransfersArguments, MirrorPulseControlTransfers>(
+            MirrorPulseControlCommands.NamespaceTransfers, new(rootId), cancellationToken);
+
     public Task<MirrorPulseControlRemoteUpdates> GetNamespaceRemoteUpdatesAsync(Guid rootId,
         CancellationToken cancellationToken = default) =>
         SendAsync<NamespaceRemoteUpdatesArguments, MirrorPulseControlRemoteUpdates>(

@@ -551,6 +551,7 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
         RegisterRemoteRetirementQueries(dispatcher);
         RegisterRemoteDeleteRecovery(dispatcher);
         RegisterRemoteUpdateRecovery(dispatcher);
+        RegisterTransferQueries(dispatcher);
         dispatcher.Register<NamespaceMemberMoveStatusArguments, MirrorPulseControlNamespaceMemberMoveStatus>(
             MirrorPulseControlCommands.NamespaceMemberMoveStatus, ReadNamespaceMemberMoveStatusAsync);
         _controlPipe = new MirrorPulseControlPipeServer((request, token) =>
