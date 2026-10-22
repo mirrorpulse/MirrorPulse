@@ -87,6 +87,15 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             Assert.AreEqual(originalReads, Volatile.Read(ref worker.RangeReads));
             CollectionAssert.AreEqual(TransferAcknowledgementLaterTarget,
                 await File.ReadAllBytesAsync(Path.Combine(paths.SyncRootPath, "Archive", "moved.bin"), token));
+            var restoredTarget = await catalog.ReadNamespaceMemberProtectionSnapshotAsync(completed.TargetPublication!.MemberId, token);
+            Assert.IsNotNull(restoredTarget); Assert.AreEqual(completed.TargetPublication.ItemId, restoredTarget.Identity.ItemId);
+            Assert.IsTrue(File.GetAttributes(Path.Combine(paths.SyncRootPath, "Archive", "moved.bin")).HasFlag(FileAttributes.ReparsePoint));
+            var restoredActions = await catalog.ReadNamespaceBornMemberRecoveryActionsAsync(completed.TargetPublication.MemberId, token);
+            Assert.IsGreaterThan(0, restoredActions.Count);
+            var restoredAction = restoredActions[^1];
+            Assert.IsNotNull(await catalog.ReadNamespaceBornMemberRecoveryCompletionAsync(restoredAction.ActionId, token));
+            Assert.IsNotNull(await catalog.ReadNamespaceInitializationCompletionAsync(restoredAction.InitializationOperationId, token));
+            TestContext.WriteLine($"HostTransferCurrentRecovery: targetPlaceholderRestored=True; laterBytesRetained=True; originalHistoryRetained=True; durableBornAction=True; freshRootInitialization=True; historicalRangeReadsUnchanged=True.");
             Assert.AreEqual(completed, await publishing.CompleteNamespaceTransferAsync(operation, token));
             Guid lateDelete = await WaitForRetiredTransferDeleteAsync(journal(), prepared.Plan.Source.Identity.ItemId!.Value, token);
             await ExecuteTransferPublicationFixtureSqlAsync(paths,

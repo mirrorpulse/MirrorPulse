@@ -96,6 +96,29 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         baseline.RelativePath, MirrorPulseNamespacePermissionChangeKind.Protect, role.RoleSid.Value, baseline.OriginalDacl,
                         MirrorPulseNamespacePermissionPolicy.CreateProtectedDacl(role, baseline.IsDirectory), DateTimeOffset.UtcNow)));
                 }
+                if (completeOriginals)
+                {
+                    // Current-tree recovery requires the same sealed before-write captures
+                    // as a real Host. Keep the original anchor evidence and capture each
+                    // actual root before applying any fixture protection descriptor.
+                    var captured = new List<MirrorPulseNamespacePermissionPreparation>
+                    { originals.Single(original => original.Baseline.RootId is null) };
+                    await using var capturePermissions = new MirrorPulseNamespacePermissionCoordinator(catalog);
+                    var capture = new MirrorPulseNamespaceInitialTreeCapture(fileSystem, catalog, router, role, actor, scheduler, capturePermissions);
+                    foreach (var root in new[] { sourceRoot, targetRoot })
+                    {
+                        var tree = await capture.CaptureAsync(root.RootId, Guid.NewGuid(), deadline.Token);
+                        Assert.AreEqual(MirrorPulseNamespacePermissionTreePhase.Sealed, tree.Phase);
+                        int after = -1;
+                        while (true)
+                        {
+                            var page = await catalog.ReadNamespacePermissionTreeMembersAsync(tree.Definition.ManifestId, after, 256, deadline.Token);
+                            if (page.Count == 0) break;
+                            captured.AddRange(page.Select(entry => entry.Preparation)); after = page[^1].Sequence;
+                        }
+                    }
+                    Assert.HasCount(4, captured); originals = captured;
+                }
                 await catalog.PrepareNamespacePermissionChangesAsync(originals, deadline.Token);
                 await using (var permissions = new MirrorPulseNamespacePermissionCoordinator(catalog))
                     await role.RunNamespaceOperationAsync(async () =>

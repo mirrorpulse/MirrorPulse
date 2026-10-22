@@ -502,16 +502,22 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             var roots = new[] { copy.Plan.SourceRoute.RootId, copy.Plan.TargetRoute.RootId };
             await using var recovery = await namespaceWork.BeginRecoveryAsync(roots, token).ConfigureAwait(false);
             return await WithAdmittedInstancesLibraryAsync(new[] { copy.Plan.SourceRoute.InstanceId, copy.Plan.TargetRoute.InstanceId }.Distinct(),
-                async (_, stop) =>
+                async (instances, stop) =>
                 {
                     var completed = await TransferCoordinator().AcknowledgeAsync(operationId, transfers!, stop).ConfigureAwait(false);
-                    _scopedAnchorProtection ??= await new MirrorPulseNamespaceAnchorProtectionCoordinator(fileSystem, catalog!, router!,
-                        _namespaceExecution!, _namespaceActor!, _permissions!).ProtectAsync(stop).ConfigureAwait(false);
-                    var anchor = await catalog!.ReadNamespaceMemberByBindingAsync(_scopedAnchorProtection.Original.LocalObject, stop).ConfigureAwait(false)
-                        ?? throw new InvalidDataException("Transfer completion requires its registered protected sync-root anchor.");
-                    var audit = new MirrorPulseNamespaceCurrentTreeAuditCoordinator(fileSystem, catalog, router!, _namespaceExecution!, _namespaceActor!, _permissions!);
+                    // A later ordinary create/truncate write can leave the same protected
+                    // target as a local file. Its completed copy/ACK is historical evidence,
+                    // not current namespace admission. Restore the current registered graph
+                    // through durable recovery actions before each independent fresh audit.
+                    // Reuse the already admitted instance lease to avoid reacquiring it.
+                    var coordinator = new MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(fileSystem, catalog!, router!,
+                        _namespaceExecution!, _namespaceActor!, instances, _permissions!);
                     foreach (var root in roots)
-                        await audit.AuditRootAsync(anchor.MemberId, _scopedAnchorProtection, root, stop).ConfigureAwait(false);
+                    {
+                        await using var restored = await coordinator.RecoverRootAsync(Guid.NewGuid(), root, stop).ConfigureAwait(false);
+                        var prior = _scopedAnchorProtection; _scopedAnchorProtection = restored.TransferAnchor();
+                        if (prior is not null) await prior.DisposeAsync().ConfigureAwait(false);
+                    }
                     recovery.CompleteAfterFreshAudit();
                     return completed;
                 }, token).ConfigureAwait(false);
