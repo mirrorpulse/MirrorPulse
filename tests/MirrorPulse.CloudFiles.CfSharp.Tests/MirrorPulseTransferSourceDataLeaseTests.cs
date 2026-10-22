@@ -63,6 +63,16 @@ public sealed class MirrorPulseTransferSourceDataLeaseTests
         CollectionAssert.AreEqual(fixture.Bytes, await File.ReadAllBytesAsync(fixture.Path));
     }
 
+    [TestMethod]
+    public async Task SourceDataGuardRetainsTheCompleteZeroByteOriginalForAnEmptyTransfer()
+    {
+        using var fixture = new SourceFixture(); await File.WriteAllBytesAsync(fixture.Path, []);
+        await using var guard = MirrorPulseTransferSourceDataLease.Open(fixture.Path);
+        await guard.VerifyAsync(0, Convert.ToHexString(SHA256.HashData(Array.Empty<byte>())), CancellationToken.None);
+        Assert.ThrowsExactly<IOException>(() =>
+        { using var writer = new FileStream(fixture.Path, FileMode.Open, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete); });
+    }
+
     private sealed class SourceFixture : IDisposable
     {
         private readonly string _directory = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "MirrorPulse-source-data-tests", Guid.NewGuid().ToString("N"));

@@ -1,5 +1,4 @@
 using System.Runtime.Versioning;
-using System.Security.Cryptography;
 using CfSharp;
 using MirrorPulse.Core.Caching;
 using MirrorPulse.Core.CloudFiles;
@@ -27,6 +26,7 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator(CloudFileSys
     Func<InstanceId, int> protocolVersion)
 {
     internal Func<MirrorPulseTransferPublicationCheckpoint, CancellationToken, ValueTask>? TargetPublicationCheckpoint { get; init; }
+    internal CloudLocalChangeFeed? JournalFeed { get; init; }
 
     /// <summary>Materializes a cold source before taking the instance gates needed by its hydration provider.</summary>
     public Task MaterializeSourceAsync(MirrorPulseNamespaceMemberProtectionSnapshot original,
@@ -107,10 +107,18 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator(CloudFileSys
             throw new MirrorPulseMutationAmbiguousException("The original transfer copy has no durable acceptance receipt.");
         return await ExecuteGuardedAsync(copy.Plan, async file =>
         {
-            await using var source = OpenSource(file);
-            if (source.Length != copy.Plan.Length || Convert.ToHexString(await SHA256.HashDataAsync(source, token).ConfigureAwait(false)) != copy.Plan.Sha256)
-                throw new IOException("The local source changed after the original transfer preparation.");
+            await using var source = MirrorPulseTransferSourceDataLease.Open(file.FullPath);
+            await source.VerifyAsync(copy.Plan.Length, copy.Plan.Sha256, token).ConfigureAwait(false);
             await using var input = await inputs.OpenLeaseAsync(copy.Plan, token).ConfigureAwait(false);
+            if (copy.JournalClaim is null)
+            {
+                if (copy.Plan.CommandOrigin is null)
+                    throw new InvalidOperationException("A legacy transfer cannot acquire retrospective journal ownership.");
+                var journal = JournalFeed ?? throw new InvalidOperationException("The Host's running original journal is unavailable.");
+                var claim = await new MirrorPulseTransferJournalCapture(journal).CaptureAsync(copy.Plan, token).ConfigureAwait(false);
+                copy = await catalog.PrepareNamespaceTransferJournalClaimAsync(claim, token).ConfigureAwait(false);
+            }
+            await source.VerifyAsync(copy.Plan.Length, copy.Plan.Sha256, token).ConfigureAwait(false);
             return await new MirrorPulseTransferCopyExecutor(catalog, uploads).CopyAsync(operationId, input.Data, token).ConfigureAwait(false);
         }, token).ConfigureAwait(false);
     }

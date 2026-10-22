@@ -165,11 +165,15 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     }
                     if (checkpoint == MirrorPulseTransferSourceRetirementCheckpoint.BeforeNativeDeletion) nativeDeleteCalls++;
                 }
+                CloudLocalChangeFeed? originalJournal = null, currentJournal = null;
+                void ObserveJournal(CloudLocalChangeFeed feed)
+                { Assert.IsTrue(feed.IsStarted); originalJournal ??= feed; currentJournal = feed; }
                 var factory = new CfSharpMirrorPulseCloudRuntimeFactory(provider: new MirrorPulseDemandProvider(router, transport, namespaceWork: work),
                     router: router, catalog: catalog, mayDispatch: _ => true,
                     scheduler: scheduler, namespaceExecution: role, namespaceActor: actor, namespaceWork: work, transfers: Services(transport))
                 {
                     StateStoreDecorator = projectionFault.Wrap,
+                    TransferJournalReady = ObserveJournal,
                     TransferSourceRetirementCheckpoint = retireLocal ? RetirementCheckpoint : null,
                     TransferPublicationCheckpoint = (checkpoint, _) =>
                     {
@@ -182,6 +186,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 await using (var runtime = factory.Create(paths))
                 {
                     await runtime.StartAsync(deadline.Token);
+                    CloudLocalChangeFeed journal = originalJournal ?? throw new AssertFailedException("The transfer-only Host did not start its original public journal.");
                     await Assert.ThrowsExactlyAsync<InvalidOperationException>(async () =>
                         await runtime.PrepareNamespaceTransferAsync(operation, member.MemberId, target.MemberId, "moved.bin", deadline.Token));
                     await using (var ready = await work.BeginRecoveryAsync([sourceRoot.RootId, targetRoot.RootId], deadline.Token)) ready.CompleteAfterFreshAudit();
@@ -189,6 +194,9 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         await runtime.PrepareNamespaceTransferAsync(operation, member.MemberId, target.MemberId, "moved.bin", deadline.Token));
                     Assert.IsNull(await catalog.ReadNamespaceTransferAsync(operation, deadline.Token));
                     Assert.IsEmpty(await catalog.ReadNamespaceDispatchFencedRootsAsync(deadline.Token)); targetProtocol = 2;
+                    await File.WriteAllBytesAsync(sourcePath, [31], deadline.Token);
+                    await File.WriteAllBytesAsync(sourcePath, bytes, deadline.Token);
+                    var originalContentIds = await WaitForTransferOriginalContentJournalAsync(journal, nativeBefore.ItemId!.Value, deadline.Token);
                     var prepared = await runtime.PrepareNamespaceTransferAsync(operation, member.MemberId, target.MemberId, "moved.bin", deadline.Token);
                     Assert.AreEqual(2, prepared.Plan.Version); Assert.IsNotNull(prepared.Plan.CommandOrigin);
                     Assert.AreEqual(operation, prepared.Plan.CommandOrigin.CommandId);
@@ -196,6 +204,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     Assert.AreEqual(target.MemberId, prepared.Plan.CommandOrigin.TargetParentMemberId);
                     Assert.AreEqual("moved.bin", prepared.Plan.CommandOrigin.TargetName);
                     Assert.IsTrue(prepared.Plan.CommandOrigin.RequestedAt <= prepared.Plan.PreparedAt);
+                    Assert.IsNull(prepared.JournalClaim);
                     worker.Plan = prepared.Plan;
                     Assert.AreEqual(nativeBefore.LocalBinding!.LocalFileId, prepared.Plan.Source.Context.Member.LocalObject.LocalFileId);
                     Assert.IsNull(prepared.CopyStartedAt); Assert.AreEqual(bytes.LongLength, prepared.Plan.Length);
@@ -209,8 +218,28 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         Assert.AreEqual(0, worker.Uploads); Assert.IsNull((await catalog.ReadNamespaceTransferAsync(operation, deadline.Token))!.CopyStartedAt);
                         await File.WriteAllBytesAsync(sourcePath, bytes, deadline.Token);
                     }
+                    using (var mappingInput = new FileStream(sourcePath, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite | FileShare.Delete))
+                    using (var mapping = MemoryMappedFile.CreateFromFile(mappingInput, null, Math.Max(1, bytes.Length), MemoryMappedFileAccess.ReadWrite,
+                        HandleInheritability.None, leaveOpen: true))
+                    using (var view = mapping.CreateViewAccessor())
+                    {
+                        mappingInput.Dispose();
+                        await Assert.ThrowsExactlyAsync<IOException>(async () => await runtime.CopyNamespaceTransferAsync(operation, deadline.Token));
+                        Assert.AreEqual(0, worker.Uploads);
+                        var unchanged = (await catalog.ReadNamespaceTransferAsync(operation, deadline.Token))!;
+                        Assert.IsNull(unchanged.CopyStartedAt); Assert.IsNull(unchanged.JournalClaim);
+                    }
+                    await File.WriteAllBytesAsync(sourcePath, bytes, deadline.Token);
                     var accepted = await runtime.CopyNamespaceTransferAsync(operation, deadline.Token);
                     Assert.AreEqual("target-v1", accepted.AcceptedRevision);
+                    Assert.IsNotNull(accepted.JournalClaim);
+                    Assert.IsGreaterThanOrEqualTo(originalContentIds.Count, accepted.JournalClaim.Members.Count);
+                    foreach (Guid originalId in originalContentIds)
+                    {
+                        Assert.IsTrue(accepted.JournalClaim.Members.Any(change => change.OperationId == originalId));
+                        Assert.AreEqual(operation, await catalog.ReadNamespaceTransferJournalOwnerAsync(originalId, deadline.Token));
+                    }
+                    Assert.IsTrue(accepted.JournalClaim.CapturedAt <= accepted.CopyStartedAt);
                     verified = await runtime.VerifyNamespaceTransferTargetAsync(operation, deadline.Token);
                     Assert.IsNotNull(verified.TargetVerification); Assert.AreEqual("target:original", verified.TargetVerification.RemoteId);
                     verified = await runtime.PrepareNamespaceTransferTargetBirthAsync(operation, deadline.Token);
@@ -249,7 +278,11 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                             var recoveryFactory = new CfSharpMirrorPulseCloudRuntimeFactory(
                                 provider: new MirrorPulseDemandProvider(router, transport, namespaceWork: recoveryWork), router: router, catalog: catalog, mayDispatch: _ => true,
                                 scheduler: scheduler, namespaceExecution: role, namespaceActor: actor, namespaceWork: recoveryWork, transfers: Services(transport))
-                            { TransferPublicationCheckpoint = factory.TransferPublicationCheckpoint, StateStoreDecorator = projectionFault.Wrap };
+                            {
+                                TransferPublicationCheckpoint = factory.TransferPublicationCheckpoint,
+                                StateStoreDecorator = projectionFault.Wrap,
+                                TransferJournalReady = ObserveJournal
+                            };
                             secondPublisher = recoveryFactory.Create(paths); publishing = secondPublisher; await publishing.StartAsync(deadline.Token);
                             publicationCut = MirrorPulseTransferPublicationCheckpoint.AfterRegistration;
                             await Assert.ThrowsExactlyAsync<IOException>(async () => await publishing.PublishNamespaceTransferTargetAsync(operation, deadline.Token));
@@ -350,7 +383,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                                     var recoveryFactory = new CfSharpMirrorPulseCloudRuntimeFactory(
                                         provider: new MirrorPulseDemandProvider(router, transport, namespaceWork: recoveryWork), router: router, catalog: catalog, mayDispatch: _ => true,
                                         scheduler: scheduler, namespaceExecution: role, namespaceActor: actor, namespaceWork: recoveryWork, transfers: Services(transport))
-                                    { TransferSourceRetirementCheckpoint = RetirementCheckpoint };
+                                    { TransferSourceRetirementCheckpoint = RetirementCheckpoint, TransferJournalReady = ObserveJournal };
                                     secondPublisher = recoveryFactory.Create(paths); publishing = secondPublisher; await publishing.StartAsync(deadline.Token);
                                 }
                                 retired = await publishing.RetireNamespaceTransferSourceAsync(operation, deadline.Token);
@@ -389,6 +422,10 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                                 Assert.IsNull(await catalog.ReadNamespaceRetirementAsync(verified.Plan.DeleteOperationId, deadline.Token));
                             }
                         }
+                        var pendingOriginals = await ReadTransferOriginalJournalIdsAsync(currentJournal ??
+                            throw new AssertFailedException("The active transfer owner lost its public journal."), deadline.Token);
+                        foreach (Guid originalId in originalContentIds) Assert.IsTrue(pendingOriginals.Contains(originalId));
+                        Assert.AreEqual(accepted.JournalClaim, (await catalog.ReadNamespaceTransferAsync(operation, deadline.Token))!.JournalClaim);
                     }
                     finally
                     {
@@ -407,6 +444,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     await using var input = await new MirrorPulseLocalTransferContentStore(paths).OpenLeaseAsync(prepared.Plan, deadline.Token);
                     CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(input.Data.Name, deadline.Token));
                 }
+                Assert.IsNotNull(originalJournal); Assert.IsFalse(originalJournal.IsStarted);
                 if (retireLocal)
                 {
                     await using var official = await MirrorPulseCfSharpStateStoreFactory.Create(paths).OpenAsync(new(paths.SyncRootPath), deadline.Token);
@@ -464,6 +502,39 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 RestoreTransferArchiveForCleanup(paths.SyncRootPath, caller.User!);
                 DeleteFixture(directory);
             }
+        }
+    }
+
+    private static async Task<IReadOnlyList<Guid>> WaitForTransferOriginalContentJournalAsync(CloudLocalChangeFeed feed,
+        Guid sourceItemId, CancellationToken token)
+    {
+        while (true)
+        {
+            var scan = await feed.BeginScanAsync(token); Assert.IsFalse(scan.RequiresFullRescan);
+            var ids = new List<Guid>(); long after = 0;
+            while (true)
+            {
+                var page = await feed.ReadPageAsync(scan, after, 64, token); Assert.IsFalse(page.RequiresFullRescan);
+                ids.AddRange(page.Changes.Where(change => change.ItemId == sourceItemId &&
+                    change.Kind is CloudLocalChangeKind.Create or CloudLocalChangeKind.ContentUpdate).Select(change => change.OperationId));
+                if (!page.HasMore) break;
+                Assert.IsGreaterThan(after, page.LastScannedSequence); after = page.LastScannedSequence;
+            }
+            if (ids.Count != 0) return ids.AsReadOnly();
+            await Task.Delay(10, token);
+        }
+    }
+
+    private static async Task<IReadOnlyList<Guid>> ReadTransferOriginalJournalIdsAsync(CloudLocalChangeFeed feed, CancellationToken token)
+    {
+        var scan = await feed.BeginScanAsync(token); Assert.IsFalse(scan.RequiresFullRescan);
+        var ids = new List<Guid>(); long after = 0;
+        while (true)
+        {
+            var page = await feed.ReadPageAsync(scan, after, 64, token); Assert.IsFalse(page.RequiresFullRescan);
+            ids.AddRange(page.Changes.Select(change => change.OperationId));
+            if (!page.HasMore) return ids.AsReadOnly();
+            Assert.IsGreaterThan(after, page.LastScannedSequence); after = page.LastScannedSequence;
         }
     }
 

@@ -261,6 +261,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
     internal Func<ICloudStateStoreFactory, ICloudStateStoreFactory>? StateStoreDecorator { get; init; }
     internal Func<MirrorPulseTransferPublicationCheckpoint, CancellationToken, ValueTask>? TransferPublicationCheckpoint { get; init; }
     internal Func<MirrorPulseTransferSourceRetirementCheckpoint, CancellationToken, ValueTask>? TransferSourceRetirementCheckpoint { get; init; }
+    internal Action<CloudLocalChangeFeed>? TransferJournalReady { get; init; }
 
     public CfSharpMirrorPulseCloudRuntimeFactory(
         ICloudDemandProvider? provider = null,
@@ -308,7 +309,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             .WithContentProvider(provider)
             .Build(), state, provider, StateStoreDecorator, paths.SyncRootPath, paths.DataRootPath, _uploads, _stats, _mutations, _router, _catalog,
             _mayDispatch, _conflicts, _notifications, _scheduler, _namespaceExecution, _namespaceActor, _namespaceWork, _initializeNamespaceOnStart, _transfers,
-            TransferPublicationCheckpoint, TransferSourceRetirementCheckpoint);
+            TransferPublicationCheckpoint, TransferSourceRetirementCheckpoint, TransferJournalReady);
     }
 
     private sealed class CfSharpRuntime(
@@ -333,10 +334,13 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         bool initializeNamespaceOnStart,
         MirrorPulseTransferWorkerServices? transfers,
         Func<MirrorPulseTransferPublicationCheckpoint, CancellationToken, ValueTask>? transferPublicationCheckpoint,
-        Func<MirrorPulseTransferSourceRetirementCheckpoint, CancellationToken, ValueTask>? transferSourceRetirementCheckpoint)
+        Func<MirrorPulseTransferSourceRetirementCheckpoint, CancellationToken, ValueTask>? transferSourceRetirementCheckpoint,
+        Action<CloudLocalChangeFeed>? transferJournalReady)
         : IMirrorPulseCloudRuntime
     {
         private MirrorPulseJournalUploadPump? _uploadPump;
+        private CloudLocalChangeFeed? _transferJournal;
+        private bool _ownsTransferJournal;
         private MirrorPulseRetainedRemoteBatchRecoveryPump? _retainedRecovery;
         private MirrorPulseUploadConflictActions? _conflictActions;
         private MirrorPulseRemoteConflictActions? _remoteConflictActions;
@@ -369,7 +373,11 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             if (transfers is null) throw new NotSupportedException("Transfers require the Host's connected Worker boundary.");
             return new(fileSystem, state, catalog!, router!, _namespaceExecution!, _namespaceActor!,
                 new MirrorPulseLocalTransferContentStore(new(syncRootPath, dataRootPath)), mayDispatch ?? (_ => false), transfers.ProtocolVersion)
-            { TargetPublicationCheckpoint = transferPublicationCheckpoint, SourceRetirementCheckpoint = transferSourceRetirementCheckpoint };
+            {
+                TargetPublicationCheckpoint = transferPublicationCheckpoint,
+                SourceRetirementCheckpoint = transferSourceRetirementCheckpoint,
+                JournalFeed = _transferJournal
+            };
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
@@ -630,11 +638,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         {
             // Application leases do not cover the native transfer and official projection
             // after FetchChildren returns. Public disposal drains that complete library tail.
-            if (_uploadPump is not null)
-            {
-                await _uploadPump.DisposeAsync().ConfigureAwait(false);
-                _uploadPump = null;
-            }
+            await StopJournalServicesAsync().ConfigureAwait(false);
             _conflictActions = null; _remoteConflictActions = null; _rootRenames = null;
             await fileSystem.DisposeAsync().ConfigureAwait(false);
             token.ThrowIfCancellationRequested();
@@ -1233,19 +1237,29 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             if (catalog is not null && conflicts is not null && notifications is not null)
                 await new MirrorPulseRemoteConflictProjector(fileSystem, catalog, conflicts, notifications)
                     .RestoreAsync(cancellationToken).ConfigureAwait(false);
-            if (uploads is not null && stats is not null && router is not null &&
-                catalog is not null && mayDispatch is not null)
+            bool ordinaryUploads = uploads is not null && stats is not null && router is not null &&
+                catalog is not null && mayDispatch is not null;
+            if (ordinaryUploads || transfers is not null && router is not null && catalog is not null && mayDispatch is not null)
             {
-                CloudLocalChangeFeed feed = fileSystem.CreateLocalChangeFeed();
+                // Transfer-only sessions also observe the actual native journal before admission.
+                // The pump and controlled transfers share this one running public feed.
+                var feed = fileSystem.CreateLocalChangeFeed(); _transferJournal = feed;
+                _ownsTransferJournal = !feed.IsStarted;
+                if (_ownsTransferJournal) await feed.StartAsync(cancellationToken).ConfigureAwait(false);
+                transferJournalReady?.Invoke(feed);
+            }
+            if (ordinaryUploads)
+            {
+                CloudLocalChangeFeed feed = _transferJournal ?? throw new InvalidOperationException("The Host journal did not start.");
                 var completion = new MirrorPulseJournalUploadCompletion(
                     feed, state, new BackoffPolicy(TimeSpan.FromSeconds(2), TimeSpan.FromMinutes(5)));
-                _conflictActions = new MirrorPulseUploadConflictActions(catalog, state, feed,
+                _conflictActions = new MirrorPulseUploadConflictActions(catalog!, state, feed,
                     new BackoffPolicy(TimeSpan.FromSeconds(2), TimeSpan.FromMinutes(5)),
-                    new MirrorPulseStoragePaths(syncRootPath, dataRootPath), router, mutations, conflicts, _scheduler,
+                    new MirrorPulseStoragePaths(syncRootPath, dataRootPath), router!, mutations, conflicts, _scheduler,
                     fileSystem, _namespaceActor, _namespaceExecution, namespaceWork, stats, mayDispatch, notifications,
                     uploads as IMirrorPulseWorkerRangeTransport, uploads as IMirrorPulseWorkerDirectoryPageSource);
-                _uploadPump = new MirrorPulseJournalUploadPump(feed, router, catalog, uploads, stats, state,
-                    syncRootPath, dataRootPath, mayDispatch, completion, conflicts, notifications, mutations,
+                _uploadPump = new MirrorPulseJournalUploadPump(feed, router!, catalog!, uploads!, stats!, state,
+                    syncRootPath, dataRootPath, mayDispatch!, completion, conflicts, notifications, mutations,
                     uploads as IMirrorPulseWorkerRangeTransport, uploads as IMirrorPulseWorkerDirectoryPageSource, fileSystem, _scheduler,
                     _namespaceActor, _namespaceExecution, namespaceWork, _conflictActions);
                 await _uploadPump.StartAsync(cancellationToken).ConfigureAwait(false);
@@ -1477,6 +1491,14 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             }
         }
 
+        private async Task StopJournalServicesAsync()
+        {
+            var pump = _uploadPump; var feed = _transferJournal; bool owned = _ownsTransferJournal;
+            _uploadPump = null; _transferJournal = null; _ownsTransferJournal = false;
+            try { if (pump is not null) await pump.DisposeAsync().ConfigureAwait(false); }
+            finally { if (owned && feed is not null) await feed.DisposeAsync().ConfigureAwait(false); }
+        }
+
         public ValueTask DisposeAsync()
         {
             lock (_disposal) return new(_disposeTask ??= DisposeCoreAsync());
@@ -1505,7 +1527,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                         {
                             try
                             {
-                                if (_uploadPump is not null) await _uploadPump.DisposeAsync().ConfigureAwait(false);
+                                await StopJournalServicesAsync().ConfigureAwait(false);
                             }
                             finally { if (_ownsScheduler) await _scheduler.DisposeAsync().ConfigureAwait(false); }
                         }
