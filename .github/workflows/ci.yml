@@ -253,7 +253,7 @@ jobs:
         run: |
           . ./eng/namespace-nonadmin-controller.ps1
           $catalog = Get-Content ./eng/test-suites.json -Raw | ConvertFrom-Json
-          $minutes = Get-OrdinaryUserNamespaceStepTimeoutMinutes -TestCount @($catalog.required.namespace).Count
+          $minutes = Get-OrdinaryUserNamespaceStepTimeoutMinutes -TestCount @($catalog.required.namespace).Count -TestNames @($catalog.required.namespace)
           "timeout_minutes=$minutes" >> $env:GITHUB_OUTPUT
 
       - name: Verify strict Cloud Files ACLs as a fresh non-administrator user

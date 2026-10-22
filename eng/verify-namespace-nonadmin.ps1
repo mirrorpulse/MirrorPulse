@@ -23,7 +23,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $payload $assemblyName) -PathType Le
 }
 $catalog = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'test-suites.json') -Raw | ConvertFrom-Json
 . (Join-Path $PSScriptRoot 'namespace-nonadmin-controller.ps1')
-$childBudgetMilliseconds = Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount @($catalog.required.namespace).Count
+$childBudgetMilliseconds = Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount @($catalog.required.namespace).Count -TestNames @($catalog.required.namespace)
 Write-Output ("Ordinary-user catalog: selected={0}; controllerBudgetSeconds={1}; nativeCaseDeadlinesUnchanged=True." -f @($catalog.required.namespace).Count, ($childBudgetMilliseconds / 1000))
 $filter = (@($catalog.required.namespace) | ForEach-Object { 'FullyQualifiedName=' + $_ }) -join '|'
 $evidenceDirectory = Join-Path $repository ('artifacts/test-results/namespace-nonadmin-' + $ExpectedArchitecture.ToLowerInvariant())

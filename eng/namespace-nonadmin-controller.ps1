@@ -1,17 +1,36 @@
 function Get-OrdinaryUserNamespaceBudgetMilliseconds {
-    param([Parameter(Mandatory)][ValidateRange(1, 112)][int]$TestCount)
-    # The full suite now exceeds the original ten-minute envelope once process
-    # startup is included. Budget the whole selected catalog, with a fixed upper
-    # bound of 30 minutes (120000 + 112 * 15000). Every test retains its
-    # existing native-operation deadline; the current required catalog has 104.
-    return [Math]::Max(600000, 120000 + $TestCount * 15000)
+    param([Parameter(Mandatory)][ValidateRange(1, 112)][int]$TestCount, [string[]]$TestNames)
+    $executions = $TestCount
+    if ($PSBoundParameters.ContainsKey('TestNames')) {
+        if ($TestNames.Count -ne $TestCount) { throw 'The namespace budget must describe the exact selected catalog.' }
+        $selected = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+        $repeated = [Collections.Generic.Dictionary[string, int]]::new([StringComparer]::Ordinal)
+        $prefix = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.'
+        $repeated.Add($prefix + 'NativeHostTransferRetainsSourceAndBothFencesAfterOriginalCopyAndWholeTargetVerification', 2)
+        $repeated.Add($prefix + 'NativeHostTransferDeletesOnlyOriginalRemoteSourceWhileRetainingGuardedLocalBytes', 2)
+        $repeated.Add($prefix + 'NativeHostTransferRetiresOriginalSourceThroughTheSdkAndKeepsPrivateBytesAndBothFences', 2)
+        $repeated.Add($prefix + 'NativeHostTransferSourceRetirementResumesOriginalNativeAndReceiptBoundariesAcrossStoreOwners', 10)
+        foreach ($name in $TestNames) {
+            if ([string]::IsNullOrWhiteSpace($name) -or $name.Length -gt 512 -or $name -cnotmatch '^[A-Za-z0-9_.]+$' -or -not $selected.Add($name)) {
+                throw 'The namespace budget requires distinct, bounded test names.'
+            }
+            if ($repeated.ContainsKey($name)) { $executions += $repeated[$name] - 1 }
+        }
+    }
+    # Count the same/cross-instance executions inside the four selected transfer
+    # methods, including five retirement cutpoints in both scopes. Their native
+    # deadlines remain unchanged. At most 112 names plus 12 repeated executions
+    # gives a bounded 33-minute child envelope; count-only callers retain 30 minutes.
+    return [Math]::Max(600000, 120000 + $executions * 15000)
 }
 
 function Get-OrdinaryUserNamespaceStepTimeoutMinutes {
-    param([Parameter(Mandatory)][ValidateRange(1, 112)][int]$TestCount)
+    param([Parameter(Mandatory)][ValidateRange(1, 112)][int]$TestCount, [string[]]$TestNames)
     # The workflow must let the existing child budget expire and allow the
     # controller to preserve diagnostics and remove its disposable user/profile.
-    $childMilliseconds = Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $TestCount
+    $parameters = @{ TestCount = $TestCount }
+    if ($PSBoundParameters.ContainsKey('TestNames')) { $parameters.TestNames = $TestNames }
+    $childMilliseconds = Get-OrdinaryUserNamespaceBudgetMilliseconds @parameters
     return [int][Math]::Ceiling($childMilliseconds / 60000.0) + 5
 }
 

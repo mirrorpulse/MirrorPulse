@@ -21,6 +21,21 @@ public sealed class NamespaceNonAdminControllerTests
         RunAsync("budget-" + expectation, count);
 
     [TestMethod]
+    [DataRow("NativeHostTransferRetainsSourceAndBothFencesAfterOriginalCopyAndWholeTargetVerification", 2)]
+    [DataRow("NativeHostTransferDeletesOnlyOriginalRemoteSourceWhileRetainingGuardedLocalBytes", 2)]
+    [DataRow("NativeHostTransferRetiresOriginalSourceThroughTheSdkAndKeepsPrivateBytesAndBothFences", 2)]
+    [DataRow("NativeHostTransferSourceRetirementResumesOriginalNativeAndReceiptBoundariesAcrossStoreOwners", 10)]
+    public Task ControllerIncludesEverySelectedTransferScopeAndRetirementCutpoint(string method, int executions) =>
+        RunAsync("bundle-" + method, executions);
+
+    [TestMethod]
+    [DataRow("mismatch")]
+    [DataRow("duplicate")]
+    [DataRow("empty")]
+    [DataRow("malformed")]
+    public Task ControllerRejectsSelectionsWhoseNamesCannotDescribeTheExecutedCatalog(string damage) => RunAsync("selection-" + damage, 109);
+
+    [TestMethod]
     [DataRow("copy")]
     [DataRow("wrong-marker")]
     [DataRow("nested-evidence")]
@@ -38,22 +53,54 @@ public sealed class NamespaceNonAdminControllerTests
                 param([string]$Policy,[string]$Directory,[string]$Scenario,[int]$Count)
                 $ErrorActionPreference='Stop'
                 . $Policy
+                if ($Scenario -like 'bundle-*') {
+                    $names=@(1..108 | ForEach-Object { 'Fixture.Case' + $_ })
+                    $names+='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.'+$Scenario.Substring(7)
+                    $old=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 109
+                    $actual=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 109 -TestNames $names
+                    if ($actual -ne $old+($Count-1)*15000) { throw 'A selected transfer execution or cutpoint has no controller budget.' }
+                    exit 0
+                }
+                if ($Scenario -like 'selection-*') {
+                    $names=@(1..$Count | ForEach-Object { 'Fixture.Case' + $_ })
+                    switch ($Scenario) {
+                        'selection-mismatch' { $names=$names[1..($Count-1)] }
+                        'selection-duplicate' { $names[1]=$names[0] }
+                        'selection-empty' { $names[0]='' }
+                        'selection-malformed' { $names[0]="Fixture.`nCase" }
+                    }
+                    $rejected=$false
+                    try { Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $Count -TestNames $names | Out-Null }
+                    catch { $rejected=$true }
+                    if (-not $rejected) { throw 'An invalid catalog selection was accepted.' }
+                    exit 0
+                }
                 if ($Scenario -like 'budget-*') {
                     $rejected=$false
                     try {
-                        $budget=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $Count
-                        $stepMinutes=Get-OrdinaryUserNamespaceStepTimeoutMinutes -TestCount $Count
+                        $parameters=@{TestCount=$Count}
+                        if ($Scenario -eq 'budget-catalog') {
+                            $catalog=Get-Content -Raw (Join-Path (Split-Path $Policy -Parent) 'test-suites.json') | ConvertFrom-Json
+                            $parameters.TestNames=@($catalog.required.namespace)
+                        }
+                        $budget=Get-OrdinaryUserNamespaceBudgetMilliseconds @parameters
+                        $stepMinutes=Get-OrdinaryUserNamespaceStepTimeoutMinutes @parameters
                     }
                     catch { $rejected=$true }
                     if ($Scenario -eq 'budget-rejected') {
                         if (-not $rejected) { throw 'An invalid or unbounded selection was accepted.' }
                     } else {
-                        if ($rejected -or $budget -lt 600000 -or $budget -gt 1800000) { throw 'The whole-suite envelope is missing or unbounded.' }
+                        $maximum=if ($Scenario -eq 'budget-catalog') {1980000} else {1800000}
+                        if ($rejected -or $budget -lt 600000 -or $budget -gt $maximum) { throw 'The whole-suite envelope is missing or unbounded.' }
+                        if ($Scenario -eq 'budget-catalog' -and $budget -ne 120000+($Count+12)*15000) {
+                            throw 'The actual catalog lost a same/cross-instance transfer or one of its five retirement cutpoints.'
+                        }
                         if ($Count -ge 52 -and $budget -le 600000) { throw 'The growing suite still has the obsolete fixed ten-minute envelope.' }
                         if ($Count -eq 56 -and $budget -le (Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 52)) {
                             throw 'New required cases did not receive execution budget.'
                         }
-                        if ($stepMinutes -lt 15 -or $stepMinutes -gt 35 -or $stepMinutes*60000 - $budget -lt 300000) {
+                        $maximumMinutes=if ($Scenario -eq 'budget-catalog') {38} else {35}
+                        if ($stepMinutes -lt 15 -or $stepMinutes -gt $maximumMinutes -or $stepMinutes*60000 - $budget -lt 300000) {
                             throw 'The workflow can terminate the controller before its child timeout and diagnostic cleanup.'
                         }
                     }
@@ -111,7 +158,7 @@ public sealed class NamespaceNonAdminControllerTests
         using var document = System.Text.Json.JsonDocument.Parse(catalog);
         int count = document.RootElement.GetProperty("required").GetProperty("namespace").GetArrayLength();
         Assert.IsGreaterThan(0, count);
-        await RunAsync("budget-allowed", count);
+        await RunAsync("budget-catalog", count);
     }
 
     [TestMethod]
