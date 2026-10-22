@@ -187,7 +187,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         {
             var proof = FreshTransferRetirementTarget(target);
             await catalog.PrepareNamespaceTransferSourceRetirementAsync(target.Copy.Plan.OperationId, proof, target.Protection.ProtectionId, proof.VerifiedAt);
-            await catalog.StartNamespaceTransferSourceRetirementAsync(target.Copy.Plan.OperationId, proof.VerifiedAt.AddSeconds(1));
+            await catalog.StartNamespaceTransferSourceRetirementAsync(target.Copy.Plan.OperationId, TransferSourceProjection(target, proof.VerifiedAt.AddSeconds(1)), proof.VerifiedAt.AddSeconds(1));
             await catalog.RecordNamespaceTransferSourceRetiredAsync(target.Copy.Plan.OperationId, TransferRetirementReceipt(target, proof.VerifiedAt.AddSeconds(2)));
             await catalog.CompleteNamespaceTransferSourceRetirementAsync(target.Copy.Plan.OperationId, proof.VerifiedAt.AddSeconds(3));
         }

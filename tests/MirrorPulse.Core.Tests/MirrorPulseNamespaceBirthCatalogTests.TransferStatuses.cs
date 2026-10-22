@@ -58,7 +58,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             if (cut >= 2) await catalog.StartNamespaceTransferSourceDeleteAsync(id, deletionProof, target.Protection.ProtectionId, deletionProof.VerifiedAt);
             if (cut >= 3) await catalog.RecordNamespaceTransferSourceDeleteAcceptedAsync(id, null, deletionProof.VerifiedAt.AddSeconds(1));
             if (cut >= 4) await catalog.PrepareNamespaceTransferSourceRetirementAsync(id, retirementProof, target.Protection.ProtectionId, retirementProof.VerifiedAt);
-            if (cut >= 5) await catalog.StartNamespaceTransferSourceRetirementAsync(id, retirementProof.VerifiedAt.AddSeconds(1));
+            if (cut >= 5) await catalog.StartNamespaceTransferSourceRetirementAsync(id, TransferSourceProjection(target, retirementProof.VerifiedAt.AddSeconds(1)), retirementProof.VerifiedAt.AddSeconds(1));
             if (cut >= 6) await catalog.RecordNamespaceTransferSourceRetiredAsync(id, TransferRetirementReceipt(target, retirementProof.VerifiedAt.AddSeconds(2)));
             if (cut >= 7) await catalog.CompleteNamespaceTransferSourceRetirementAsync(id, retirementProof.VerifiedAt.AddSeconds(3));
         }

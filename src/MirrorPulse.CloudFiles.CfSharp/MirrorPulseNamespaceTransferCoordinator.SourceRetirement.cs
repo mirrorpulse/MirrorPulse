@@ -37,9 +37,9 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
             retained.Intent.TransferEntry.TargetProtectionId != target.Context.Protection.ProtectionId ||
             retained.Phase != MirrorPulseNamespaceRetirementPhase.Prepared)
             throw new InvalidDataException("The current source retirement no longer owns its original target and pending source.");
-        _ = await ReadSourceProjectionAsync(file, copy.Plan.Source, token).ConfigureAwait(false);
+        var projection = await CaptureOriginalSourceProjectionAsync(copy, file, token).ConfigureAwait(false);
         await data.VerifyAsync(copy.Plan.Length, copy.Plan.Sha256, token).ConfigureAwait(false);
-        retained = await catalog.StartNamespaceTransferSourceRetirementAsync(copy.Plan.OperationId, DateTimeOffset.UtcNow, token).ConfigureAwait(false);
+        retained = await catalog.StartNamespaceTransferSourceRetirementAsync(copy.Plan.OperationId, projection, DateTimeOffset.UtcNow, token).ConfigureAwait(false);
         if (SourceRetirementCheckpoint is not null)
             await SourceRetirementCheckpoint(MirrorPulseTransferSourceRetirementCheckpoint.BeforeNativeDeletion, token).ConfigureAwait(false);
         // Only this child metadata lease denies delete sharing. Both parent chains and the SAME
@@ -104,6 +104,14 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
         var native = await fileSystem.GetFile(copy.Plan.Source.Context.Location.RelativePath).InspectAsync(token).ConfigureAwait(false);
         if (retained.StartedAt is null || retained.StartedItemId is not { } originalItem || native.Exists || !native.IsTombstone || native.ItemId != originalItem)
             throw new InvalidDataException("The original started source deletion has no owned public SDK tombstone; preserve private bytes and fences for explicit recovery.");
+        var projection = retained.TransferSourceProjection
+            ?? throw new InvalidDataException("A legacy start cannot adopt a pre-deletion SDK generation after source removal.");
+        await using (var read = await state.OpenStore.BeginTransactionAsync(token).ConfigureAwait(false))
+        {
+            var row = await read.Items.GetByItemIdAsync(originalItem, token).ConfigureAwait(false);
+            RequireOriginalSourceProjection(projection, row, tombstone: true);
+            await read.RollbackAsync(token).ConfigureAwait(false);
+        }
         await using var parent = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(
             fileSystem.GetDirectory(copy.Plan.SourceParent.Context.Location.RelativePath), router, token).ConfigureAwait(false);
         var facts = await parent.InspectAsync(token).ConfigureAwait(false); RequireNative(facts, copy.Plan.SourceParent);

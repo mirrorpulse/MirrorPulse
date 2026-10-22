@@ -35,6 +35,9 @@ public sealed record MirrorPulseNamespaceRetirement(Guid OperationId, MirrorPuls
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public MirrorPulseNamespaceTransferRetirementReceipt? TransferReceipt { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public MirrorPulseNamespaceTransferSourceProjection? TransferSourceProjection { get; init; }
 }
 
 public sealed partial class MirrorPulseProductCatalog
@@ -267,6 +270,7 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task WriteNamespaceRetirementCoreAsync(MirrorPulseNamespaceRetirement retirement, SqliteTransaction transaction, CancellationToken token)
     {
         byte[] payload = JsonSerializer.SerializeToUtf8Bytes(retirement, TopologyJsonOptions);
+        if (payload.Length > 131_072) throw new ArgumentException("The complete retirement history must remain within its persistent read bound.", nameof(retirement));
         await using SqliteCommand update = _connection.CreateCommand(); update.Transaction = transaction; update.CommandText = "UPDATE namespace_member_retirements SET payload=$payload,fingerprint=$fingerprint,phase=$phase WHERE operation_id=$id;";
         update.Parameters.AddWithValue("$id", retirement.OperationId.ToString("D")); update.Parameters.AddWithValue("$payload", payload); update.Parameters.AddWithValue("$fingerprint", SHA256.HashData(payload)); update.Parameters.AddWithValue("$phase", (int)retirement.Phase);
         if (await update.ExecuteNonQueryAsync(token).ConfigureAwait(false) != 1) throw new InvalidDataException("The retirement receipt could not be retained.");

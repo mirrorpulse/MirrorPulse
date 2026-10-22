@@ -31,7 +31,7 @@ public sealed partial class MirrorPulseProductCatalog
             ThrowIfDisposed(); using var transaction = _connection.BeginTransaction();
             var copy = await ReadNamespaceTransferCoreAsync(operationId, transaction, token).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The original transfer is missing.");
-            var reference = new MirrorPulseNamespaceTransferRetirementReference(1, operationId, copy.Plan.DeleteOperationId,
+            var reference = new MirrorPulseNamespaceTransferRetirementReference(2, operationId, copy.Plan.DeleteOperationId,
                 copy.SourceDeletion?.AcceptedAt ?? throw new InvalidOperationException("Source retirement requires its owned conditional delete acceptance."),
                 targetProtectionId, freshTarget);
             var source = copy.Plan.Source;
@@ -66,14 +66,23 @@ public sealed partial class MirrorPulseProductCatalog
 
     /// <summary>Retains the original public source item before the first guarded SDK deletion.</summary>
     public async Task<MirrorPulseNamespaceRetirement> StartNamespaceTransferSourceRetirementAsync(Guid operationId,
-        DateTimeOffset startedAt, CancellationToken token = default)
+        MirrorPulseNamespaceTransferSourceProjection projection, DateTimeOffset startedAt, CancellationToken token = default)
     {
+        ArgumentNullException.ThrowIfNull(projection);
         await _gate.WaitAsync(token).ConfigureAwait(false);
         try
         {
             ThrowIfDisposed(); using var transaction = _connection.BeginTransaction();
             var (copy, retirement) = await ReadTransferRetirementAsync(operationId, transaction, token).ConfigureAwait(false);
-            if (retirement.StartedAt is not null) { transaction.Commit(); return retirement; }
+            ValidateTransferSourceProjection(copy, retirement, projection, startedAt);
+            if (retirement.StartedAt is not null)
+            {
+                if (retirement.TransferSourceProjection is not { } original || original != (projection with { CapturedAt = original.CapturedAt }))
+                    throw new InvalidOperationException("The original pre-deletion SDK projection cannot be replaced or adopted after a legacy start.");
+                transaction.Commit(); return retirement;
+            }
+            if (retirement.Intent.TransferEntry!.Version != 2)
+                throw new InvalidOperationException("A legacy retirement requires explicit recovery; its original admission cannot be rewritten.");
             if (retirement.Phase != MirrorPulseNamespaceRetirementPhase.Prepared || startedAt < retirement.Intent.PreparedAt)
                 throw new InvalidOperationException("The original local retirement start must follow admission.");
             var target = await RequireCurrentTransferSourceDeletionAsync(copy, transaction, token).ConfigureAwait(false);
@@ -82,6 +91,7 @@ public sealed partial class MirrorPulseProductCatalog
             var started = retirement with
             {
                 StartedAt = startedAt,
+                TransferSourceProjection = projection,
                 StartedItemId = copy.Plan.Source.Identity.ItemId
                 ?? throw new InvalidDataException("Source retirement requires the original public logical item.")
             };
@@ -168,13 +178,22 @@ public sealed partial class MirrorPulseProductCatalog
     {
         if (retirement.Intent.TransferEntry is not { } reference)
         {
-            if (retirement.TransferReceipt is not null) throw new InvalidDataException("A non-transfer retirement borrowed a transfer receipt.");
+            if (retirement.TransferReceipt is not null || retirement.TransferSourceProjection is not null)
+                throw new InvalidDataException("A non-transfer retirement borrowed transfer generation evidence.");
             return;
         }
         var copy = ownedTransfer ?? await ReadNamespaceTransferCoreAsync(reference.OperationId,
             transaction ?? throw new InvalidDataException("Transfer retirement validation requires a consistent transaction."), token).ConfigureAwait(false)
             ?? throw new InvalidDataException("Source retirement lost its original transfer.");
         ValidateTransferRetirementReference(copy, retirement.Intent);
+        if (retirement.TransferSourceProjection is { } projection)
+        {
+            if (reference.Version != 2 || retirement.StartedAt is not { } startedAt)
+                throw new InvalidDataException("An unstarted retirement cannot claim an original SDK projection.");
+            ValidateTransferSourceProjection(copy, retirement, projection, startedAt);
+        }
+        else if (reference.Version == 2 && retirement.StartedAt is not null)
+            throw new InvalidDataException("The original retirement start lost its pre-deletion SDK generation.");
         var protection = await ReadNamespaceBirthProtectionCoreAsync(reference.TargetProtectionId, transaction, token).ConfigureAwait(false)
             ?? throw new InvalidDataException("Source retirement lost its original target protection epoch.");
         if (protection.BirthOperationId != copy.TargetBirth!.Birth.OperationId ||
@@ -199,7 +218,7 @@ public sealed partial class MirrorPulseProductCatalog
     private static void ValidateTransferRetirementReference(MirrorPulseNamespaceTransferCopy copy, MirrorPulseNamespaceRetirementIntent intent)
     {
         var reference = intent.TransferEntry!; var source = copy.Plan.Source;
-        if (reference.Version != 1 || reference.OperationId != copy.Plan.OperationId || reference.DeleteOperationId != copy.Plan.DeleteOperationId ||
+        if (reference.Version is not (1 or 2) || reference.OperationId != copy.Plan.OperationId || reference.DeleteOperationId != copy.Plan.DeleteOperationId ||
             copy.SourceDeletion?.AcceptedAt is not { } accepted || reference.SourceDeleteAcceptedAt != accepted || copy.TargetPublication is null ||
             copy.TargetBirth is null || source.Identity.ItemId is null || reference.TargetProtectionId == Guid.Empty || reference.TargetAtStart is null ||
             reference.TargetAtStart.RemoteId != copy.TargetVerification!.RemoteId || reference.TargetAtStart.VerifiedAt < accepted ||

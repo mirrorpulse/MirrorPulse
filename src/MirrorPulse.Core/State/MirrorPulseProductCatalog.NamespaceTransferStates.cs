@@ -76,6 +76,13 @@ public sealed partial class MirrorPulseProductCatalog
             schema.CommandText = "PRAGMA user_version=83;";
             await schema.ExecuteNonQueryAsync(token).ConfigureAwait(false);
         }
+        if (originalVersion < 84)
+        {
+            // Older Hosts must not write late observations without the original retirement generation.
+            if (originalVersion == 83) _ = await ReadPendingNamespaceTransfersCoreAsync(transaction, token).ConfigureAwait(false);
+            schema.CommandText = "PRAGMA user_version=84;";
+            await schema.ExecuteNonQueryAsync(token).ConfigureAwait(false);
+        }
         transaction.Commit();
     }
 }

@@ -17,7 +17,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
                 target.Protection.ProtectionId, proof.VerifiedAt);
             Assert.AreEqual(target.Copy.Plan.DeleteOperationId, prepared.OperationId);
             Assert.IsNull(prepared.StartedAt); Assert.IsNull(prepared.TransferReceipt);
-            var started = await first.StartNamespaceTransferSourceRetirementAsync(target.Copy.Plan.OperationId, proof.VerifiedAt.AddSeconds(1));
+            var started = await first.StartNamespaceTransferSourceRetirementAsync(target.Copy.Plan.OperationId, TransferSourceProjection(target, proof.VerifiedAt.AddSeconds(1)), proof.VerifiedAt.AddSeconds(1));
             Assert.AreEqual(target.Copy.Plan.Source.Identity.ItemId, started.StartedItemId);
             deleted = await first.RecordNamespaceTransferSourceRetiredAsync(target.Copy.Plan.OperationId,
                 TransferRetirementReceipt(target, started.StartedAt!.Value.AddSeconds(1)));
@@ -117,7 +117,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         using var fixture = new Fixture(); await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
         var target = await PrepareAcceptedTransferSourceRetirementAsync(catalog); var proof = FreshTransferRetirementTarget(target);
         var prepared = await catalog.PrepareNamespaceTransferSourceRetirementAsync(target.Copy.Plan.OperationId, proof, target.Protection.ProtectionId, proof.VerifiedAt);
-        if (failure != "no-start") await catalog.StartNamespaceTransferSourceRetirementAsync(target.Copy.Plan.OperationId, proof.VerifiedAt.AddSeconds(1));
+        if (failure != "no-start") await catalog.StartNamespaceTransferSourceRetirementAsync(target.Copy.Plan.OperationId, TransferSourceProjection(target, proof.VerifiedAt.AddSeconds(1)), proof.VerifiedAt.AddSeconds(1));
         var receipt = TransferRetirementReceipt(target, proof.VerifiedAt.AddSeconds(2));
         receipt = failure switch
         {
@@ -141,7 +141,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         using var fixture = new Fixture(); await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
         var target = await PrepareAcceptedTransferSourceRetirementAsync(catalog); var proof = FreshTransferRetirementTarget(target);
         await catalog.PrepareNamespaceTransferSourceRetirementAsync(target.Copy.Plan.OperationId, proof, target.Protection.ProtectionId, proof.VerifiedAt);
-        await catalog.StartNamespaceTransferSourceRetirementAsync(target.Copy.Plan.OperationId, proof.VerifiedAt.AddSeconds(1));
+        await catalog.StartNamespaceTransferSourceRetirementAsync(target.Copy.Plan.OperationId, TransferSourceProjection(target, proof.VerifiedAt.AddSeconds(1)), proof.VerifiedAt.AddSeconds(1));
         var deleted = await catalog.RecordNamespaceTransferSourceRetiredAsync(target.Copy.Plan.OperationId, TransferRetirementReceipt(target, proof.VerifiedAt.AddSeconds(2)));
         await ExecuteSqlAsync(fixture.Paths, "CREATE TRIGGER fail_transfer_settlement BEFORE UPDATE ON namespace_member_retirements BEGIN SELECT RAISE(ABORT,'transfer-settlement-gap'); END;");
         await Assert.ThrowsExactlyAsync<SqliteException>(() => catalog.CompleteNamespaceTransferSourceRetirementAsync(target.Copy.Plan.OperationId, proof.VerifiedAt.AddSeconds(3)));
@@ -156,7 +156,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         using var fixture = new Fixture(); await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
         var target = await PrepareAcceptedTransferSourceRetirementAsync(catalog); var proof = FreshTransferRetirementTarget(target);
         await catalog.PrepareNamespaceTransferSourceRetirementAsync(target.Copy.Plan.OperationId, proof, target.Protection.ProtectionId, proof.VerifiedAt);
-        var started = await catalog.StartNamespaceTransferSourceRetirementAsync(target.Copy.Plan.OperationId, proof.VerifiedAt.AddSeconds(1));
+        var started = await catalog.StartNamespaceTransferSourceRetirementAsync(target.Copy.Plan.OperationId, TransferSourceProjection(target, proof.VerifiedAt.AddSeconds(1)), proof.VerifiedAt.AddSeconds(1));
         var receipt = TransferRetirementReceipt(target, proof.VerifiedAt.AddSeconds(2));
         await ExecuteSqlAsync(fixture.Paths, "CREATE TRIGGER fail_transfer_native_receipt BEFORE UPDATE ON namespace_member_retirements BEGIN SELECT RAISE(ABORT,'transfer-native-receipt-gap'); END;");
         await Assert.ThrowsExactlyAsync<SqliteException>(() => catalog.RecordNamespaceTransferSourceRetiredAsync(target.Copy.Plan.OperationId, receipt));

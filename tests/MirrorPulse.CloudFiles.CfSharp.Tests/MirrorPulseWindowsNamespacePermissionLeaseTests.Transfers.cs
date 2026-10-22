@@ -120,11 +120,13 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         sourceRoot, bytes, deadline.Token, message => TestContext.WriteLine(message));
                 var nativeBefore = await fileSystem.GetFile("Docs/original.bin").InspectAsync(deadline.Token);
                 long? originalOfficialFileId = null;
+                CloudItemState? originalOfficialSource = null;
                 if (retireLocal)
                 {
                     await using var read = await state.OpenStore.BeginTransactionAsync(deadline.Token);
                     var originalItem = await read.Items.GetByItemIdAsync(nativeBefore.ItemId!.Value, deadline.Token);
                     Assert.IsNotNull(originalItem); originalOfficialFileId = originalItem.LocalFileId;
+                    originalOfficialSource = originalItem;
                     await read.RollbackAsync(deadline.Token);
                 }
                 await fileSystem.DisposeAsync();
@@ -365,6 +367,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                                     interrupted = await catalog.ReadNamespaceRetirementAsync(verified.Plan.DeleteOperationId, deadline.Token);
                                     Assert.IsNotNull(interrupted); Assert.IsNotNull(interrupted.StartedAt);
                                     Assert.AreEqual(nativeBefore.ItemId, interrupted.StartedItemId);
+                                    AssertOriginalTransferSourceProjection(interrupted, originalOfficialSource!, member.LocalObject);
                                     bool receiptPersisted = retirementFault is "after-receipt" or "name-settlement-write";
                                     Assert.AreEqual(receiptPersisted ? MirrorPulseNamespaceRetirementPhase.NativeDeleted : MirrorPulseNamespaceRetirementPhase.Prepared, interrupted.Phase);
                                     Assert.AreEqual(receiptPersisted, interrupted.TransferReceipt is not null);
@@ -392,6 +395,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                                 {
                                     Assert.AreEqual(interrupted.StartedAt, retired.StartedAt);
                                     Assert.AreEqual(interrupted.StartedItemId, retired.StartedItemId);
+                                    Assert.AreEqual(interrupted.TransferSourceProjection, retired.TransferSourceProjection);
                                     if (interrupted.TransferReceipt is not null) Assert.AreEqual(interrupted.TransferReceipt, retired.TransferReceipt);
                                 }
                                 Assert.AreEqual(MirrorPulseNamespaceRetirementPhase.Completed, retired.Phase);
@@ -399,6 +403,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                                 verified = (await catalog.ReadNamespaceTransferAsync(operation, deadline.Token))!;
                                 Assert.IsFalse(File.Exists(sourcePath));
                                 Assert.IsNotNull(retired.TransferReceipt); Assert.AreEqual(nativeBefore.ItemId, retired.StartedItemId);
+                                AssertOriginalTransferSourceProjection(retired, originalOfficialSource!, member.LocalObject);
                                 Assert.IsNull(await catalog.ReadNamespaceMemberChildAsync(verified.Plan.SourceParent.Context.Member.MemberId, "original.bin", deadline.Token));
                             }
                             else if (sameInstance)
@@ -453,6 +458,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     Assert.IsNotNull(originalItem); Assert.IsTrue(originalItem.IsTombstone);
                     Assert.AreEqual(nativeBefore.ItemId, originalItem.ItemId);
                     Assert.AreEqual(originalOfficialFileId, originalItem.LocalFileId);
+                    MirrorPulseNamespaceTransferCoordinator.RequireOriginalSourceProjection(retired.TransferSourceProjection!, originalItem, tombstone: true);
                     var originalBinding = nativeBefore.LocalBinding ?? throw new AssertFailedException("The original native source binding was missing.");
                     Assert.AreEqual(new MirrorPulseLocalFileBinding(originalBinding.VolumeSerialNumber,
                         originalBinding.SyncRootFileId, originalBinding.LocalFileId), retired.TransferReceipt.LocalObject);
@@ -503,6 +509,16 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 DeleteFixture(directory);
             }
         }
+    }
+
+    private static void AssertOriginalTransferSourceProjection(MirrorPulseNamespaceRetirement retirement,
+        CloudItemState original, MirrorPulseLocalFileBinding localObject)
+    {
+        var projection = retirement.TransferSourceProjection; Assert.IsNotNull(projection);
+        Assert.AreEqual(original.ItemId, projection.ItemId); Assert.AreEqual(original.RemoteId, projection.RemoteId);
+        Assert.AreEqual(original.RelativePath, projection.RelativePath); Assert.AreEqual(original.RemoteRevision, projection.RemoteRevision);
+        Assert.AreEqual(original.LocalFileId, projection.OfficialLocalFileId); Assert.AreEqual(localObject, projection.LocalObject);
+        Assert.IsTrue(retirement.Intent.PreparedAt <= projection.CapturedAt && projection.CapturedAt <= retirement.StartedAt);
     }
 
     private static async Task<IReadOnlyList<Guid>> WaitForTransferOriginalContentJournalAsync(CloudLocalChangeFeed feed,
