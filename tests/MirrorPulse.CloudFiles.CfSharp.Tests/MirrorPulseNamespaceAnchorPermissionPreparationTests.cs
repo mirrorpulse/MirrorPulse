@@ -1,4 +1,5 @@
 using System.Runtime.Versioning;
+using System.Security.AccessControl;
 using System.Security.Principal;
 using Microsoft.Data.Sqlite;
 using MirrorPulse.CloudFiles.CfSharp;
@@ -12,6 +13,16 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 [SupportedOSPlatform("windows10.0.26100")]
 public sealed class MirrorPulseNamespaceAnchorPermissionPreparationTests
 {
+    [TestMethod]
+    [DataRow("S-1-1-0", "D:(A;;FA;;;WD)")]
+    [DataRow("S-1-5-18", "D:(A;;FA;;;SY)")]
+    public void OriginalOwnerDaclRetainsWindowsCanonicalSidAliases(string owner, string expected)
+    {
+        string descriptor = OriginalOwnerDacl(new SecurityIdentifier(owner));
+        Assert.AreEqual(expected, descriptor);
+        Assert.AreEqual(descriptor, new RawSecurityDescriptor(descriptor).GetSddlForm(AccessControlSections.Access));
+    }
+
     [TestMethod]
     public async Task AnchorIntentIsBuiltAndPersistedAsHostOwnerBeforeReturningToNamespaceRole()
     {
@@ -90,8 +101,11 @@ public sealed class MirrorPulseNamespaceAnchorPermissionPreparationTests
     {
         Guid anchor = Guid.NewGuid();
         return new(Guid.NewGuid(), null, new(1, anchor, anchor), string.Empty, true,
-            execution.OwnerSid.Value, $"D:(A;;FA;;;{execution.OwnerSid.Value})", DateTimeOffset.UtcNow);
+            execution.OwnerSid.Value, OriginalOwnerDacl(execution.OwnerSid), DateTimeOffset.UtcNow);
     }
+
+    private static string OriginalOwnerDacl(SecurityIdentifier owner) =>
+        new RawSecurityDescriptor($"D:(A;;FA;;;{owner.Value})").GetSddlForm(AccessControlSections.Access);
 
     private static MirrorPulseNamespacePermissionIntent IntentAsHostOwner(MirrorPulseNamespaceExecutionSession execution,
         MirrorPulseNamespacePermissionBaseline baseline)
