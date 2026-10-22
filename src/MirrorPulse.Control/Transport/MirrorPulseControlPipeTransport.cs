@@ -106,6 +106,7 @@ public sealed class MirrorPulseControlPipeServer
     }
 
     public string PipeName => _pipeName;
+    internal Func<CancellationToken, Task>? BeforeAccept { get; init; }
 
     public async Task ServeAsync(CancellationToken cancellationToken)
     {
@@ -126,7 +127,22 @@ public sealed class MirrorPulseControlPipeServer
                     foreach (Task task in completed) connections.Remove(task);
                 }
 
-                await listener.WaitForConnectionAsync(cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    if (BeforeAccept is not null) await BeforeAccept(cancellationToken).ConfigureAwait(false);
+                    await listener.WaitForConnectionAsync(cancellationToken).ConfigureAwait(false);
+                }
+                catch (IOException error) when (error.HResult == unchecked((int)0x800700E8))
+                {
+                    if (cancellationToken.IsCancellationRequested) break;
+                    // A probe can connect and close before the asynchronous accept begins.
+                    // Retain the old handle until its replacement owns the pipe name; an
+                    // aborted connection is not a failure of the Host initialization.
+                    var disconnected = listener; listener = null;
+                    try { listener = CreateListener(firstInstance: false); }
+                    finally { await disconnected.DisposeAsync().ConfigureAwait(false); }
+                    continue;
+                }
                 NamedPipeServerStream pipe = listener;
                 listener = null;
                 // Keep the pipe name owned throughout handover, even if a request completes immediately.
