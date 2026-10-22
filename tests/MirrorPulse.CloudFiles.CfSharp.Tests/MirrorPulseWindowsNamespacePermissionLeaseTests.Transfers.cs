@@ -195,6 +195,18 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         return ValueTask.FromException(new IOException("Synthetic transfer publication cut after durable native facts."));
                     }
                 };
+                IMirrorPulseCloudRuntime CreateAcknowledgementRecoveryOwner(MirrorPulseNamespaceWorkAdmission admission) =>
+                    new CfSharpMirrorPulseCloudRuntimeFactory(
+                        provider: new MirrorPulseDemandProvider(router, transport, namespaceWork: admission),
+                        router: router, catalog: catalog, mayDispatch: _ => true, scheduler: scheduler,
+                        namespaceExecution: role, namespaceActor: actor, namespaceWork: admission, transfers: Services(transport))
+                    {
+                        StateStoreDecorator = projectionFault.Wrap,
+                        TransferJournalReady = ObserveJournal,
+                        TransferJournalSourceReady = source => currentJournalSource = source,
+                        TransferSourceRetirementCheckpoint = RetirementCheckpoint,
+                        TransferAcknowledgementCheckpoint = acknowledgementFault.CheckpointAsync
+                    }.Create(paths);
                 Guid operation = Guid.NewGuid(); MirrorPulseNamespaceTransferCopy verified; MirrorPulseNamespaceRetirement? retired = null;
                 await using (var runtime = factory.Create(paths))
                 {
@@ -452,7 +464,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         Assert.AreEqual(accepted.JournalClaim, (await catalog.ReadNamespaceTransferAsync(operation, deadline.Token))!.JournalClaim);
                         if (completeOriginals)
                         {
-                            (verified, secondPublisher) = await CompleteNativeTransferWithRecoveryAsync(publishing, factory, catalog, paths,
+                            (verified, secondPublisher) = await CompleteNativeTransferWithRecoveryAsync(publishing, CreateAcknowledgementRecoveryOwner, catalog, paths,
                                 verified, () => currentJournal!, () => currentJournalSource!, work, worker, acknowledgementFault, deadline.Token);
                             publishing = secondPublisher;
                         }

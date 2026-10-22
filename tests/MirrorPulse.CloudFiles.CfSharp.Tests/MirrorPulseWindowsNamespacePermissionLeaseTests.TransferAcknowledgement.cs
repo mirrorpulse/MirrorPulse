@@ -10,8 +10,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
 {
     private static readonly byte[] TransferAcknowledgementLaterTarget = [42, 41, 40, 39, 38];
 
-    private static async Task<(MirrorPulseNamespaceTransferCopy Copy, IMirrorPulseCloudRuntime Runtime)> CompleteNativeTransferWithRecoveryAsync(
-        IMirrorPulseCloudRuntime publishing, CfSharpMirrorPulseCloudRuntimeFactory factory, MirrorPulseProductCatalog catalog,
+    private async Task<(MirrorPulseNamespaceTransferCopy Copy, IMirrorPulseCloudRuntime Runtime)> CompleteNativeTransferWithRecoveryAsync(
+        IMirrorPulseCloudRuntime publishing, Func<MirrorPulseNamespaceWorkAdmission, IMirrorPulseCloudRuntime> createOwner, MirrorPulseProductCatalog catalog,
         MirrorPulseStoragePaths paths, MirrorPulseNamespaceTransferCopy prepared, Func<CloudLocalChangeFeed> journal,
         Func<MirrorPulseJournalUploadSource> source,
         MirrorPulseNamespaceWorkAdmission work, TransferNativeWorker worker, TransferNativeAcknowledgementFault fault, CancellationToken token)
@@ -20,10 +20,22 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         MirrorPulseNamespaceTransferAcknowledgement? firstStart = null;
         int originalReads = -1;
         IMirrorPulseCloudRuntime? replacement = null; bool transferred = false;
+        async Task ReopenOwnerAsync()
+        {
+            // Runtime shutdown owns and disposes its admission. A new store owner
+            // must start with fresh closed roots, never the previous Host's object.
+            await publishing.DisposeAsync();
+            work = new([prepared.Plan.SourceRoute.RootId, prepared.Plan.TargetRoute.RootId]);
+            replacement = createOwner(work); publishing = replacement;
+            await publishing.StartAsync(token);
+            Assert.IsFalse(work.IsAdmitted(prepared.Plan.SourceRoute.RootId));
+            Assert.IsFalse(work.IsAdmitted(prepared.Plan.TargetRoute.RootId));
+        }
         try
         {
             for (int cut = 0; cut < 3; cut++)
             {
+                TestContext.WriteLine($"HostTransferOriginalAckCut: cut={cut}; currentAdmissionOwner=True.");
                 try
                 {
                     if (cut < 2)
@@ -55,9 +67,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 else Assert.AreEqual(originalReads, Volatile.Read(ref worker.RangeReads), "An accepted ACK retry must not reread or recopy historical target content.");
                 if (cut == 1)
                     await File.WriteAllBytesAsync(Path.Combine(paths.SyncRootPath, "Archive", "moved.bin"), TransferAcknowledgementLaterTarget, token);
-                await publishing.DisposeAsync();
-                replacement = factory.Create(paths); publishing = replacement;
-                await publishing.StartAsync(token);
+                await ReopenOwnerAsync();
             }
             var completed = await publishing.CompleteNamespaceTransferAsync(operation, token);
             Assert.IsNotNull(completed.Acknowledgement?.AcknowledgedAt);
@@ -78,8 +88,15 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             var lateStart = await catalog.ReadRetiredTransferObservationAcknowledgementAsync(lateDelete, token);
             Assert.IsNotNull(lateStart); Assert.IsNull(lateStart.AcknowledgedAt);
             Assert.IsFalse((await ReadTransferOriginalJournalIdsAsync(journal(), token)).Contains(lateDelete));
-            await publishing.DisposeAsync(); replacement = factory.Create(paths); publishing = replacement;
-            await publishing.StartAsync(token);
+            await ReopenOwnerAsync();
+            Assert.AreEqual(completed, await publishing.CompleteNamespaceTransferAsync(operation, token));
+            Assert.IsFalse(work.IsAdmitted(prepared.Plan.SourceRoute.RootId), "Completed history cannot reopen this new admission owner.");
+            Guid recoveryOperation = Guid.NewGuid();
+            Assert.IsNull(await catalog.ReadNamespaceInitializationCompletionAsync(recoveryOperation, token));
+            var sourceRecovery = await publishing.RecoverNamespaceRootAsync(recoveryOperation, prepared.Plan.SourceRoute.RootId, token);
+            Assert.AreEqual(recoveryOperation, sourceRecovery.OperationId);
+            Assert.IsTrue(work.IsAdmitted(prepared.Plan.SourceRoute.RootId));
+            Assert.IsFalse(work.IsAdmitted(prepared.Plan.TargetRoute.RootId), "Recovering the source cannot admit its unrelated target root.");
             var batch = await source().ReadPendingAsync(token);
             var lateCompleted = await catalog.ReadRetiredTransferObservationAcknowledgementAsync(lateDelete, token);
             Assert.IsNotNull(lateCompleted?.AcknowledgedAt); Assert.AreEqual(lateStart, lateCompleted with { AcknowledgedAt = null });
