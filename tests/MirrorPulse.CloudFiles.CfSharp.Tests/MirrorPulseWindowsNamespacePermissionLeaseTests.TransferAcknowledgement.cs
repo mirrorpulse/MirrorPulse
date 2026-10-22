@@ -66,7 +66,15 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 if (cut == 0) originalReads = Volatile.Read(ref worker.RangeReads);
                 else Assert.AreEqual(originalReads, Volatile.Read(ref worker.RangeReads), "An accepted ACK retry must not reread or recopy historical target content.");
                 if (cut == 1)
-                    await File.WriteAllBytesAsync(Path.Combine(paths.SyncRootPath, "Archive", "moved.bin"), TransferAcknowledgementLaterTarget, token);
+                {
+                    string laterTarget = Path.Combine(paths.SyncRootPath, "Archive", "moved.bin");
+                    bool beforeWrite = File.GetAttributes(laterTarget).HasFlag(FileAttributes.ReparsePoint);
+                    Assert.IsTrue(beforeWrite, "The published target must still have its native placeholder reparse point before the later write.");
+                    // Observe the original write without another open, hydration or edit.
+                    await File.WriteAllBytesAsync(laterTarget, TransferAcknowledgementLaterTarget, token);
+                    bool afterCreateWrite = File.GetAttributes(laterTarget).HasFlag(FileAttributes.ReparsePoint);
+                    TestContext.WriteLine($"HostTransferLaterWrite: beforeReparse={beforeWrite}; afterCreateWriteReparse={afterCreateWrite}; originalCreateWriteRetained=True.");
+                }
                 await ReopenOwnerAsync();
             }
             var completed = await publishing.CompleteNamespaceTransferAsync(operation, token);

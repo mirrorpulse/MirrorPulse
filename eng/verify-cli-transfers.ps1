@@ -241,6 +241,31 @@ try {
         Write-TransferOriginal -Name 'execution-failure' -Value ([ordered]@{phase=$phase;sourceSha=$sourceSha;runId=$env:GITHUB_RUN_ID
             type=$_.Exception.GetType().Name;hresult=$_.Exception.HResult.ToString('X8');message=$_.Exception.Message.Replace($fixture, '<fixture>');completedCases=$cases.ToArray()})
     } catch { Write-Host 'The original transfer failure observer was unavailable.' }
+    try {
+        # Keep the first attempt's private synthetic diagnostics before authenticated
+        # cleanup. Observation must never start another Host or replace the failure.
+        $startup = [ordered]@{sourceSha=$sourceSha;runId=$env:GITHUB_RUN_ID;phase=$phase;observationUnavailable=$true}
+        if ($null -ne $script:transferCli -and (Test-Path -LiteralPath $script:transferCli)) {
+            $observed = (& $script:transferCli --json --developer-mode --no-start host status 2>$null | Out-String).Trim()
+            $observedExit = $LASTEXITCODE
+            if ($observedExit -eq 0) {
+                $lifecycle = $observed | ConvertFrom-Json
+                if ($lifecycle.kind -ceq 'result' -and $lifecycle.data.state -cmatch '\A(?:Created|Starting|Running|Degraded|Stopping|Stopped|Failed)\z' -and
+                    ($lifecycle.data.processId -is [int] -or $lifecycle.data.processId -is [long]) -and $lifecycle.data.processId -gt 0) {
+                    $startup.observationUnavailable = $false
+                    $startup.state = $lifecycle.data.state; $startup.processId = $lifecycle.data.processId
+                }
+            }
+        }
+        Write-TransferOriginal -Name 'startup-observations' -Value $startup
+        foreach ($relative in @('logs/mirrorpulse.log', 'logs/cloud-files/mirrorpulse.log', 'logs/workers/mirrorpulse.log')) {
+            $log = Join-Path $data $relative
+            if ((Test-Path -LiteralPath $log -PathType Leaf) -and -not (Get-Item -LiteralPath $log -Force).Attributes.HasFlag([IO.FileAttributes]::ReparsePoint)) {
+                Get-Content -LiteralPath $log -Tail 32 | ForEach-Object { $_.Replace($fixture, '<fixture>') } |
+                    Set-Content -LiteralPath (Join-Path $originals ('startup-' + $relative.Replace('/', '-'))) -Encoding utf8
+            }
+        }
+    } catch { Write-Host 'The original transfer startup observer was unavailable.' }
     throw $primaryFailure
 } finally {
     try {
