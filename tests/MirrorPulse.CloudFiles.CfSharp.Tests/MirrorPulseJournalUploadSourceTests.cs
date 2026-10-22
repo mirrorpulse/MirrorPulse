@@ -20,7 +20,14 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
     [TestMethod]
     [DoNotParallelize]
     [TestCategory("NativeCloudFiles")]
-    public async Task NativeBoundedJournalKeepsDeferredHeadAndLaterActiveOperationsDurable()
+    public Task NativeBoundedJournalKeepsDeferredHeadAndLaterActiveOperationsDurable() => RunBoundedJournalFairnessAsync(8);
+
+    [TestMethod]
+    [DoNotParallelize]
+    [TestCategory("NativeCloudFiles")]
+    public Task NativeJournalWindowYieldsBeforePlanningAndRetainsTheCompleteOriginalBoundary() => RunBoundedJournalFairnessAsync(1);
+
+    private async Task RunBoundedJournalFairnessAsync(int scanPagesPerRead)
     {
         if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
             Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
@@ -64,10 +71,31 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
             await File.WriteAllTextAsync(Path.Combine(paths.SyncRootPath, "Docs", "later.txt"), "active", timeout.Token);
             Guid later = await WaitForJournalAsync("Docs/later.txt");
             await using var catalog = await MirrorPulseProductCatalog.OpenAsync(paths, timeout.Token);
-            var source = new MirrorPulseJournalUploadSource(feed, router, catalog, _ => true);
+            var source = new MirrorPulseJournalUploadSource(feed, router, catalog, _ => true, scanPagesPerRead: scanPagesPerRead);
             for (int pass = 0; pass < 4; pass++)
             {
-                MirrorPulseJournalUploadBatch batch = await source.ReadPendingAsync(timeout.Token);
+                MirrorPulseJournalUploadBatch batch; int pendingTurns = 0; long? originalBoundary = null;
+                do
+                {
+                    batch = await source.ReadPendingAsync(timeout.Token);
+                    originalBoundary ??= batch.WindowUpperSequence;
+                    Assert.AreEqual(originalBoundary.Value, batch.WindowUpperSequence);
+                    if (batch.ScanInProgress)
+                    {
+                        pendingTurns++; Assert.IsEmpty(batch.ReadyCommands); Assert.IsNull(batch.CompleteWindow);
+                        Assert.IsFalse(batch.RequiresFullRescan);
+                        if (pass == 0) Assert.IsNull(await catalog.ReadWorkerRequestAsync(later, timeout.Token), "A partial scan cannot acquire ordinary dispatch ownership.");
+                        await using var retained = await state.OpenStore.BeginTransactionAsync(timeout.Token);
+                        Assert.IsNotNull(await retained.Operations.GetAsync(firstDeferred, timeout.Token));
+                        Assert.IsNotNull(await retained.Operations.GetAsync(later, timeout.Token));
+                        await retained.RollbackAsync(timeout.Token);
+                    }
+                } while (batch.ScanInProgress);
+                if (scanPagesPerRead == 1)
+                {
+                    Assert.IsGreaterThan(0, pendingTurns);
+                    TestContext.WriteLine($"PublicJournalWindowBudget: pagesPerRead=1; pageSize=64; pendingTurns={pendingTurns}; originalBoundary={originalBoundary}; noPartialOwnership=True; originalIdsRetained=True.");
+                }
                 Assert.IsTrue(batch.ReadyCommands.Any(command => command.OperationId == later && command.RootKey == "docs"));
                 Assert.IsFalse(batch.ReadyCommands.Any(command => command.RootKey == "offline"));
                 Assert.IsFalse(batch.RequiresFullRescan);
@@ -94,6 +122,13 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
             // Readiness alone is not acceptance. Start the real production pump on
             // a fresh feed and require remote bytes, native confirmation and the
             // original active journal acknowledgement while every deferred ID stays.
+            if (scanPagesPerRead == 1)
+            {
+                var unfinished = await source.ReadPendingAsync(timeout.Token);
+                Assert.IsTrue(unfinished.ScanInProgress); Assert.IsEmpty(unfinished.ReadyCommands);
+                Assert.IsNull(unfinished.CompleteWindow);
+                TestContext.WriteLine($"PublicJournalWindowRestart: oldFeedUpperSequence={unfinished.WindowUpperSequence}; oldWindowIncomplete=True; noPartialDispatch=True.");
+            }
             await feed.DisposeAsync();
             string remoteRoot = Path.Combine(root, "accepted-source");
             Directory.CreateDirectory(remoteRoot);

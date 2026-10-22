@@ -15,6 +15,7 @@ public sealed record MirrorPulseJournalUploadBatch(
 {
     public IReadOnlyList<MirrorPulseWorkerChangeCommand>? CompleteWindow { get; init; }
     public long WindowUpperSequence { get; init; }
+    public bool ScanInProgress { get; init; }
 }
 
 /// <summary>
@@ -24,8 +25,8 @@ public sealed record MirrorPulseJournalUploadBatch(
 [SupportedOSPlatform("windows10.0.16299")]
 public sealed class MirrorPulseJournalUploadSource
 {
-    private const int ScanPageSize = 64;
     private readonly CloudLocalChangeFeed _feed;
+    private readonly MirrorPulseJournalWindowReader<CloudLocalChangeScan> _windowReader;
     private readonly MirrorPulseRootRouter _router;
     private readonly MirrorPulseProductCatalog _catalog;
     private readonly Func<InstanceId, bool> _mayDispatch;
@@ -33,7 +34,7 @@ public sealed class MirrorPulseJournalUploadSource
     private readonly MirrorPulseNamespaceWorkAdmission? _namespaceWork;
     private readonly IMirrorPulseRetiredTransferObservationHandler? _retiredSources;
     public bool RequiresFullRescan { get; private set; }
-    public void ClearFullRescanRequest() => RequiresFullRescan = false;
+    public void ClearFullRescanRequest() { _windowReader.Reset(); RequiresFullRescan = false; }
 
     public MirrorPulseJournalUploadSource(
         CloudLocalChangeFeed feed,
@@ -42,13 +43,22 @@ public sealed class MirrorPulseJournalUploadSource
         Func<InstanceId, bool> mayDispatch,
         MirrorPulseJournalUploadCompletion? completion = null,
         MirrorPulseNamespaceWorkAdmission? namespaceWork = null,
-        IMirrorPulseRetiredTransferObservationHandler? retiredSources = null)
+        IMirrorPulseRetiredTransferObservationHandler? retiredSources = null,
+        int scanPagesPerRead = 8)
     {
         ArgumentNullException.ThrowIfNull(feed);
         ArgumentNullException.ThrowIfNull(router);
         ArgumentNullException.ThrowIfNull(catalog);
         ArgumentNullException.ThrowIfNull(mayDispatch);
         _feed = feed;
+        _windowReader = new(feed.BeginScanAsync, scan => scan.ThroughSequence, scan => scan.RequiresFullRescan,
+            async (scan, after, limit, token) =>
+            {
+                var page = await feed.ReadPageAsync(scan, after, limit, token).ConfigureAwait(false);
+                return new(page.Changes.Select(change => new MirrorPulseLocalChangeObservation(change.OperationId,
+                    change.Sequence, change.Kind, change.ItemId, change.RelativePath, change.PreviousRelativePath,
+                    change.IsDirectory, change.ObservedAt)).ToArray(), page.LastScannedSequence, page.HasMore, page.RequiresFullRescan);
+            }, pagesPerRead: scanPagesPerRead);
         _router = router;
         _catalog = catalog;
         _mayDispatch = mayDispatch;
@@ -63,45 +73,33 @@ public sealed class MirrorPulseJournalUploadSource
         if (_retiredSources is not null) await _retiredSources.RecoverPendingAsync(cancellationToken).ConfigureAwait(false);
         // Preserve the feed's wait-for-notification behavior when the journal is
         // empty. This head is only a wake-up observation, never the planning window.
-        CloudLocalChangeBatch head = await _feed.ReadBatchAsync(cancellationToken).ConfigureAwait(false);
-        if (head.RequiresFullRescan)
+        if (!_windowReader.HasPendingScan)
         {
-            RequiresFullRescan = true;
-            return new([], 0, true);
+            CloudLocalChangeBatch head = await _feed.ReadBatchAsync(cancellationToken).ConfigureAwait(false);
+            if (head.RequiresFullRescan)
+            {
+                _windowReader.Reset(); RequiresFullRescan = true;
+                return new([], 0, true);
+            }
         }
 
         // A legacy batch always starts at the earliest pending row. Retaining a
         // disabled root's head must not make unrelated active roots unreachable.
-        // Read the finite public scan completely before planning so dependencies
-        // on earlier pages survive page boundaries. No cursor is persisted, and
-        // scanning never acknowledges or replaces an official journal record.
-        CloudLocalChangeScan scan = await _feed.BeginScanAsync(cancellationToken).ConfigureAwait(false);
-        if (scan.RequiresFullRescan)
+        // Read the finite public window completely before planning, over bounded
+        // turns so a large backlog does not monopolize one scheduling call. The
+        // continuation is ephemeral; the official journal remains the authority.
+        var readWindow = await _windowReader.ReadAsync(cancellationToken).ConfigureAwait(false);
+        if (readWindow.RequiresFullRescan)
         {
             RequiresFullRescan = true;
             return new([], 0, true);
         }
 
-        var observations = new List<MirrorPulseLocalChangeObservation>();
-        long afterSequence = 0;
-        while (true)
+        if (readWindow.ScanInProgress)
         {
-            CloudLocalChangePage page = await _feed.ReadPageAsync(scan, afterSequence, ScanPageSize,
-                cancellationToken).ConfigureAwait(false);
-            if (page.RequiresFullRescan)
-            {
-                RequiresFullRescan = true;
-                return new([], 0, true);
-            }
-
-            foreach (CloudLocalChange change in page.Changes)
-                observations.Add(new(change.OperationId, change.Sequence, change.Kind, change.ItemId,
-                    change.RelativePath, change.PreviousRelativePath, change.IsDirectory, change.ObservedAt));
-            if (!page.HasMore) break;
-            if (page.LastScannedSequence <= afterSequence || page.LastScannedSequence > scan.ThroughSequence)
-                throw new InvalidDataException("The public journal scan did not advance inside its captured boundary.");
-            afterSequence = page.LastScannedSequence;
+            return new([], 0, false) { ScanInProgress = true, WindowUpperSequence = readWindow.UpperSequence };
         }
+        var observations = new List<MirrorPulseLocalChangeObservation>(readWindow.Observations!);
 
         HashSet<RootId> pendingRoots = (await _catalog.ReadNamespaceDispatchFencedRootsAsync(cancellationToken).ConfigureAwait(false)).ToHashSet();
         var retiredHeld = await SettleRetiredSourcesAsync(observations, pendingRoots, cancellationToken).ConfigureAwait(false);
@@ -205,7 +203,7 @@ public sealed class MirrorPulseJournalUploadSource
         {
             CompleteWindow = plan.CompleteWindow is { } window ?
                 Array.AsReadOnly(window.Where(command => !acceptedMetadata.Contains(command.OperationId)).ToArray()) : null,
-            WindowUpperSequence = scan.ThroughSequence,
+            WindowUpperSequence = readWindow.UpperSequence,
         };
     }
 
