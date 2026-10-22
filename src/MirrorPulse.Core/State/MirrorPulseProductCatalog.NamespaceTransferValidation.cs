@@ -75,6 +75,26 @@ public sealed partial class MirrorPulseProductCatalog
             admittedTransferBirthId: admitted ? targetBirth?.Birth.OperationId : null).ConfigureAwait(false);
         if (roots.Contains(plan.SourceRoute.RootId) || roots.Contains(plan.TargetRoute.RootId))
             throw new InvalidOperationException("Another original namespace owner prevents this transfer.");
+        await RequireNamespaceTransferRoutesAsync(plan, transaction, token).ConfigureAwait(false);
+        await using var query = _connection.CreateCommand(); query.Transaction = transaction;
+        query.CommandText = "SELECT member_id FROM namespace_member_names WHERE parent_member_id=$parent AND child_name_key=$name;";
+        query.Parameters.AddWithValue("$parent", plan.TargetParent.Context.Member.MemberId.ToString("D"));
+        query.Parameters.AddWithValue("$name", NamespaceMemberNameKey(plan.TargetRelativePath));
+        if (await query.ExecuteScalarAsync(token).ConfigureAwait(false) is string occupied)
+        {
+            if (targetBirth is null || targetBirth.OperationId != plan.OperationId || occupied != targetBirth.Birth.OperationId.ToString("D"))
+                throw new InvalidOperationException("An existing member owns the transfer destination.");
+            var member = await ReadNamespaceMemberCoreAsync(targetBirth.Birth.OperationId, transaction, token).ConfigureAwait(false);
+            if (member is null || member.Origin != MirrorPulseNamespaceMemberOrigin.ProtectedBirth || member.OriginId != targetBirth.Birth.OperationId ||
+                member.ParentMemberId != plan.TargetParent.Context.Member.MemberId || member.RootId != plan.TargetRoute.RootId ||
+                member.RelativePath != plan.TargetRelativePath)
+                throw new InvalidDataException("The occupied transfer destination lost its exact original target birth.");
+        }
+    }
+
+    private async Task RequireNamespaceTransferRoutesAsync(MirrorPulseNamespaceTransferPlan plan,
+        SqliteTransaction transaction, CancellationToken token)
+    {
         await using var query = _connection.CreateCommand(); query.Transaction = transaction;
         query.CommandText = "SELECT payload FROM adapter_topology WHERE id=1;";
         var payload = await query.ExecuteScalarAsync(token).ConfigureAwait(false) as string
@@ -89,20 +109,6 @@ public sealed partial class MirrorPulseProductCatalog
             if (MirrorPulseTransferRoute.Capture(instance, root, route.ProtocolVersion) != route ||
                 route.ProtocolVersion == 1 && topology.Roots.Count(item => item.InstanceId == route.InstanceId) != 1)
                 throw new InvalidOperationException("The transfer backend, version or root configuration changed.");
-        }
-        query.Parameters.Clear();
-        query.CommandText = "SELECT member_id FROM namespace_member_names WHERE parent_member_id=$parent AND child_name_key=$name;";
-        query.Parameters.AddWithValue("$parent", plan.TargetParent.Context.Member.MemberId.ToString("D"));
-        query.Parameters.AddWithValue("$name", NamespaceMemberNameKey(plan.TargetRelativePath));
-        if (await query.ExecuteScalarAsync(token).ConfigureAwait(false) is string occupied)
-        {
-            if (targetBirth is null || targetBirth.OperationId != plan.OperationId || occupied != targetBirth.Birth.OperationId.ToString("D"))
-                throw new InvalidOperationException("An existing member owns the transfer destination.");
-            var member = await ReadNamespaceMemberCoreAsync(targetBirth.Birth.OperationId, transaction, token).ConfigureAwait(false);
-            if (member is null || member.Origin != MirrorPulseNamespaceMemberOrigin.ProtectedBirth || member.OriginId != targetBirth.Birth.OperationId ||
-                member.ParentMemberId != plan.TargetParent.Context.Member.MemberId || member.RootId != plan.TargetRoute.RootId ||
-                member.RelativePath != plan.TargetRelativePath)
-                throw new InvalidDataException("The occupied transfer destination lost its exact original target birth.");
         }
     }
 

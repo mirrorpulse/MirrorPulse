@@ -52,7 +52,11 @@ public sealed partial class MirrorPulseProductCatalog
         var retirement = await ReadNamespaceRetirementCoreAsync(copy.Plan.DeleteOperationId, transaction, token).ConfigureAwait(false);
         if (retirement is not null && retirement.Intent.TransferEntry?.OperationId != copy.Plan.OperationId)
             throw new InvalidDataException("The transfer source retirement belongs to a different original operation.");
-        string stage = retirement?.CompletedAt is not null ? "SourceNameSettled" :
+        bool completed = copy.Acknowledgement?.AcknowledgedAt is not null;
+        bool journalAcknowledged = completed && copy.Acknowledgement!.Kind == MirrorPulseTransferAcknowledgementKind.OriginalJournal;
+        string stage = completed ? journalAcknowledged ? "Completed" : "CompletedCommandWithoutCapturedNotifications" :
+            copy.Acknowledgement is not null ? "OriginalAcknowledgementMayHaveBegun" :
+            retirement?.CompletedAt is not null ? "SourceNameSettled" :
             retirement?.NativeDeletedAt is not null ? "SourceNativeRetired" :
             retirement?.StartedAt is not null ? "SourceRetirementMayHaveBegun" :
             retirement is not null ? "SourceRetirementPrepared" :
@@ -62,13 +66,11 @@ public sealed partial class MirrorPulseProductCatalog
             copy.TargetBirth is not null ? "TargetBirthPrepared" :
             copy.TargetVerification is not null ? "TargetVerified" :
             copy.CopyAcceptedAt is not null ? "CopyAccepted" : copy.CopyStartedAt is not null ? "CopyMayHaveBegun" : "Prepared";
-        // The existing reader requires BOTH exact durable fences. No final journal
-        // settlement protocol exists yet, so source name settlement cannot imply either ACK or completion.
         var plan = copy.Plan;
         return new(plan.OperationId, plan.SourceRoute.RootId, plan.TargetRoute.RootId, plan.SourceRoute.InstanceId,
             plan.TargetRoute.InstanceId, plan.Source.Context.Member.MemberId, copy.TargetPublication?.MemberId,
             plan.Source.Context.Location.RelativePath, plan.TargetRelativePath, stage, plan.PreparedAt,
             copy.CopyStartedAt, copy.CopyAcceptedAt, copy.SourceDeletion?.StartedAt, copy.SourceDeletion?.AcceptedAt,
-            retirement?.NativeDeletedAt, retirement?.CompletedAt, RootsFenced: true, JournalAcknowledged: false, Completed: false);
+            retirement?.NativeDeletedAt, retirement?.CompletedAt, RootsFenced: !completed, JournalAcknowledged: journalAcknowledged, Completed: completed);
     }
 }

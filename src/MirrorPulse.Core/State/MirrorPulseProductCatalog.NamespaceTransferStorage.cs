@@ -32,8 +32,10 @@ public sealed partial class MirrorPulseProductCatalog
             var roots = new List<string>();
             await using (var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false))
                 while (await reader.ReadAsync(token).ConfigureAwait(false)) roots.Add(reader.GetString(0));
-            if (!roots.SequenceEqual(new[] { original.SourceRoute.RootId.ToString(), original.TargetRoute.RootId.ToString() }.Order(StringComparer.Ordinal)))
-                throw new InvalidDataException("A pending transfer must retain both exact root fences.");
+            IEnumerable<string> expectedRoots = copy.Acknowledgement?.AcknowledgedAt is null
+                ? new[] { original.SourceRoute.RootId.ToString(), original.TargetRoute.RootId.ToString() }.Order(StringComparer.Ordinal) : [];
+            if (!roots.SequenceEqual(expectedRoots))
+                throw new InvalidDataException("Transfer fences disagree with the original pending or completed acknowledgement.");
             query.CommandText = "SELECT effect_id,kind FROM namespace_transfer_effects WHERE operation_id=$id ORDER BY kind;";
             var effects = new List<(string, int)>();
             await using (var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false))
@@ -52,22 +54,21 @@ public sealed partial class MirrorPulseProductCatalog
         }
         await ValidateNamespaceTransferSourceDeletionReferencesAsync(copy, transaction, token).ConfigureAwait(false);
         await ValidateNamespaceTransferJournalIndexesAsync(copy, transaction, token).ConfigureAwait(false);
+        await ValidateNamespaceTransferStateAsync(copy, transaction, token).ConfigureAwait(false);
+        await ValidateNamespaceTransferAcknowledgementReferencesAsync(copy, transaction, token).ConfigureAwait(false);
         return copy;
     }
 
     private async Task<IReadOnlyList<MirrorPulseNamespaceTransferCopy>> ReadPendingNamespaceTransfersCoreAsync(
         SqliteTransaction transaction, CancellationToken token)
     {
+        await RequireNamespaceTransferStateIntegrityAsync(transaction, token).ConfigureAwait(false);
         var ids = new List<Guid>();
         await using (var query = _connection.CreateCommand())
         {
             query.Transaction = transaction;
             query.CommandText = """
-                SELECT operation_id FROM namespace_transfers
-                UNION SELECT operation_id FROM namespace_transfer_roots
-                UNION SELECT operation_id FROM namespace_transfer_effects
-                UNION SELECT transfer_id FROM namespace_transfer_target_births
-                UNION SELECT transfer_id FROM namespace_transfer_journal_members ORDER BY operation_id LIMIT 4097;
+                SELECT operation_id FROM namespace_transfer_states WHERE completed=0 ORDER BY operation_id LIMIT 4097;
                 """;
             await using var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
             while (await reader.ReadAsync(token).ConfigureAwait(false)) ids.Add(ParseNamespaceMemberId(reader.GetString(0)));
@@ -102,6 +103,15 @@ public sealed partial class MirrorPulseProductCatalog
         }
         if (await write.ExecuteNonQueryAsync(token).ConfigureAwait(false) != 1)
             throw new InvalidDataException("The original transfer could not be retained.");
+        await using var state = _connection.CreateCommand(); state.Transaction = transaction;
+        state.CommandText = """
+            INSERT INTO namespace_transfer_states(operation_id,completed,payload_fingerprint) VALUES($id,$completed,$hash)
+            ON CONFLICT(operation_id) DO UPDATE SET completed=$completed,payload_fingerprint=$hash;
+            """;
+        state.Parameters.AddWithValue("$id", copy.Plan.OperationId.ToString("D"));
+        state.Parameters.AddWithValue("$completed", copy.Acknowledgement?.AcknowledgedAt is null ? 0 : 1);
+        state.Parameters.AddWithValue("$hash", SHA256.HashData(payload));
+        await state.ExecuteNonQueryAsync(token).ConfigureAwait(false);
     }
 
     private async Task RequireNotNamespaceTransferOwnerAsync(Guid id, SqliteTransaction? transaction, CancellationToken token)

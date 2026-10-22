@@ -164,14 +164,14 @@ public sealed partial class MirrorPulseProductCatalog
     }
 
     private async Task ValidateTransferRetirementReferencesAsync(MirrorPulseNamespaceRetirement retirement,
-        SqliteTransaction? transaction, CancellationToken token)
+        SqliteTransaction? transaction, CancellationToken token, MirrorPulseNamespaceTransferCopy? ownedTransfer = null)
     {
         if (retirement.Intent.TransferEntry is not { } reference)
         {
             if (retirement.TransferReceipt is not null) throw new InvalidDataException("A non-transfer retirement borrowed a transfer receipt.");
             return;
         }
-        var copy = await ReadNamespaceTransferCoreAsync(reference.OperationId,
+        var copy = ownedTransfer ?? await ReadNamespaceTransferCoreAsync(reference.OperationId,
             transaction ?? throw new InvalidDataException("Transfer retirement validation requires a consistent transaction."), token).ConfigureAwait(false)
             ?? throw new InvalidDataException("Source retirement lost its original transfer.");
         ValidateTransferRetirementReference(copy, retirement.Intent);

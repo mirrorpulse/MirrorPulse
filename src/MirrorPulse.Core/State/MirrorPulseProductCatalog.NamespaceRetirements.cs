@@ -229,7 +229,8 @@ public sealed partial class MirrorPulseProductCatalog
         finally { _gate.Release(); }
     }
 
-    private async Task<MirrorPulseNamespaceRetirement?> ReadNamespaceRetirementCoreAsync(Guid operationId, SqliteTransaction? transaction, CancellationToken token)
+    private async Task<MirrorPulseNamespaceRetirement?> ReadNamespaceRetirementCoreAsync(Guid operationId, SqliteTransaction? transaction,
+        CancellationToken token, MirrorPulseNamespaceTransferCopy? ownedTransfer = null)
     {
         await using SqliteCommand query = _connection.CreateCommand(); query.Transaction = transaction; query.CommandText = "SELECT operation_id,payload,fingerprint,phase,member_id FROM namespace_member_retirements WHERE operation_id=$id;"; query.Parameters.AddWithValue("$id", operationId.ToString("D"));
         await using SqliteDataReader reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false); if (!await reader.ReadAsync(token).ConfigureAwait(false)) return null;
@@ -244,7 +245,7 @@ public sealed partial class MirrorPulseProductCatalog
             reader.GetString(4) != retirement.Intent.MemberId.ToString("D") || reader.GetInt32(3) != (int)retirement.Phase || !Enum.IsDefined(retirement.Phase) ||
             !JsonSerializer.SerializeToUtf8Bytes(retirement, TopologyJsonOptions).AsSpan().SequenceEqual(payload)) throw new InvalidDataException("The namespace retirement index is inconsistent.");
         await reader.DisposeAsync().ConfigureAwait(false);
-        await ValidateTransferRetirementReferencesAsync(retirement, transaction, token).ConfigureAwait(false);
+        await ValidateTransferRetirementReferencesAsync(retirement, transaction, token, ownedTransfer).ConfigureAwait(false);
         await ValidateRemoteDeleteResolutionMemberAsync(retirement, transaction, token).ConfigureAwait(false);
         await ValidateRemoteRetirementIndexAsync(retirement.Intent, transaction, token).ConfigureAwait(false);
         if (retirement.Intent.RemoteEntry is not null)

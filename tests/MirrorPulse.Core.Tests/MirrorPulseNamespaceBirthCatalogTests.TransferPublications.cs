@@ -206,9 +206,9 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         MirrorPulseNamespaceBirthProtection Protection, MirrorPulseNamespaceMemberRegistration Member, MirrorPulseNamespaceTransferTargetPublication Publication);
 
     private static async Task<TransferPublicationFixture> PrepareTransferPublicationFixtureAsync(MirrorPulseProductCatalog catalog,
-        bool sameInstance = false, string? stopAt = null, bool localOnlySource = false)
+        bool sameInstance = false, string? stopAt = null, bool localOnlySource = false, bool captureOriginalJournal = false, bool emptyJournal = false)
     {
-        var verified = await PrepareVerifiedTransferBirthAsync(catalog, sameInstance, localOnlySource); var target = TransferBirth(verified);
+        var verified = await PrepareVerifiedTransferBirthAsync(catalog, sameInstance, localOnlySource, captureOriginalJournal, emptyJournal); var target = TransferBirth(verified);
         var copy = await catalog.PrepareNamespaceTransferTargetBirthAsync(target);
         Assert.AreEqual(copy, await catalog.ValidateNamespaceTransferTargetPublicationAsync(copy.Plan.OperationId));
         var start = Start(target.Plan); var observation = Observation(target.Birth, target.Plan, start) with { IsInSync = true };

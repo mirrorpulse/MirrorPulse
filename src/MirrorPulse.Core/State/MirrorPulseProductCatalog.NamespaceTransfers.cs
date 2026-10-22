@@ -70,6 +70,9 @@ public sealed record MirrorPulseNamespaceTransferCopy(MirrorPulseNamespaceTransf
 
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public MirrorPulseNamespaceTransferJournalClaim? JournalClaim { get; init; }
+
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public MirrorPulseNamespaceTransferAcknowledgement? Acknowledgement { get; init; }
 }
 
 /// <summary>Whole target content and identity observed at the original accepted revision, not source retirement authority.</summary>

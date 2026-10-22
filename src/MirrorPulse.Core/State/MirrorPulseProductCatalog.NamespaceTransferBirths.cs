@@ -206,6 +206,7 @@ public sealed partial class MirrorPulseProductCatalog
         if (copy.JournalClaim is { } claim) ValidateNamespaceTransferJournalClaim(copy.Plan, claim);
         if (copy.JournalClaim is { } originalClaim && copy.CopyStartedAt < originalClaim.CapturedAt)
             throw new ArgumentException("The original journal reservation must precede the first copy invocation.");
+        if (copy.Acknowledgement is { } acknowledgement) ValidateNamespaceTransferAcknowledgement(copy, acknowledgement);
     }
 
     private static async Task EnsureNamespaceTransferBirthSchemaAsync(SqliteConnection connection, bool requireExisting, bool stampVersion, CancellationToken token)

@@ -172,11 +172,17 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
     }
 
     private static async Task<MirrorPulseNamespaceTransferPlan> PrepareAcceptedTransferTargetAsync(MirrorPulseProductCatalog catalog,
-        byte[] bytes, bool sameInstance = false, bool localOnlySource = false)
+        byte[] bytes, bool sameInstance = false, bool localOnlySource = false, bool captureOriginalJournal = false, bool emptyJournal = false)
     {
         var plan = (await PrepareTransferFixtureAsync(catalog, sameInstance)).Plan with
         { Length = bytes.LongLength, Sha256 = Convert.ToHexString(SHA256.HashData(bytes)), SourceRemoteRevision = localOnlySource ? null : "source-v1" };
+        if (captureOriginalJournal) plan = WithTransferCommandOrigin(plan with { SourceRoute = plan.SourceRoute with { ProtocolVersion = 2 } });
         await catalog.PrepareNamespaceTransferAsync(plan);
+        if (captureOriginalJournal)
+        {
+            var claim = TransferJournalClaim(plan) with { CapturedAt = plan.PreparedAt.AddMilliseconds(500) };
+            await catalog.PrepareNamespaceTransferJournalClaimAsync(emptyJournal ? claim with { Members = [] } : claim);
+        }
         await catalog.StartNamespaceTransferCopyAsync(plan.OperationId, plan.PreparedAt.AddSeconds(1));
         // The original successful Worker upload is the premise; the production verifier and durable readback are tested here.
         await catalog.RecordNamespaceTransferCopyAcceptedAsync(plan.OperationId, "accepted-target-v1", plan.PreparedAt.AddSeconds(2));

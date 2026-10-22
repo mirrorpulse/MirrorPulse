@@ -215,9 +215,10 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         Assert.IsFalse(Directory.Exists(fixture.Paths.SyncRootPath));
     }
 
-    private static async Task<MirrorPulseNamespaceTransferCopy> PrepareVerifiedTransferBirthAsync(MirrorPulseProductCatalog catalog, bool sameInstance = false, bool localOnlySource = false)
+    private static async Task<MirrorPulseNamespaceTransferCopy> PrepareVerifiedTransferBirthAsync(MirrorPulseProductCatalog catalog, bool sameInstance = false,
+        bool localOnlySource = false, bool captureOriginalJournal = false, bool emptyJournal = false)
     {
-        var plan = await PrepareAcceptedTransferTargetAsync(catalog, TransferBytes, sameInstance, localOnlySource);
+        var plan = await PrepareAcceptedTransferTargetAsync(catalog, TransferBytes, sameInstance, localOnlySource, captureOriginalJournal, emptyJournal);
         return await catalog.RecordNamespaceTransferTargetVerificationAsync(new(1, plan.OperationId, "accepted-target-v1", "original-target-id",
             plan.Length, plan.Sha256, plan.PreparedAt.AddSeconds(3)));
     }

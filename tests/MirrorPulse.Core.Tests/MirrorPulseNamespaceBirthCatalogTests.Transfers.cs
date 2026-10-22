@@ -351,6 +351,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
     [TestMethod]
     [DataRow("roots")]
     [DataRow("effects")]
+    [DataRow("states")]
     [DataRow("all")]
     public async Task CurrentSchemaDoesNotRecreateMissingTransferOwnershipTables(string missing)
     {
@@ -361,7 +362,8 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         {
             "roots" => "DROP TABLE namespace_transfer_roots;",
             "effects" => "DROP TABLE namespace_transfer_effects;",
-            _ => "DROP TABLE namespace_transfer_effects; DROP TABLE namespace_transfer_roots; DROP TABLE namespace_transfers;"
+            "states" => "DROP TABLE namespace_transfer_states;",
+            _ => "DROP TABLE namespace_transfer_states; DROP TABLE namespace_transfer_effects; DROP TABLE namespace_transfer_roots; DROP TABLE namespace_transfers;"
         };
         await ExecuteSqlAsync(fixture.Paths, sql);
         await Assert.ThrowsExactlyAsync<InvalidDataException>(() => MirrorPulseProductCatalog.OpenAsync(fixture.Paths));
@@ -399,7 +401,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         Assert.IsNull(await reopened.ReadNamespaceTransferAsync(Guid.NewGuid())); Assert.IsEmpty(await reopened.ReadNamespaceDispatchFencedRootsAsync());
         await using var connection = Connection(fixture.Paths); await connection.OpenAsync();
         await using var version = connection.CreateCommand(); version.CommandText = "PRAGMA user_version;";
-        Assert.AreEqual(82L, await version.ExecuteScalarAsync());
+        Assert.AreEqual(83L, await version.ExecuteScalarAsync());
     }
 
     private static readonly byte[] TransferBytes = Enumerable.Range(0, 131_089).Select(value => (byte)(value * 37)).ToArray();
