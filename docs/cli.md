@@ -112,6 +112,17 @@ Global options must precede the command. Scalar command options accept `--name v
 
 See the [capability baseline](cli-capabilities.md) for limitations. Operation watch currently reads one snapshot, and cancel does not stop the underlying work. Startup and developer-mode commands persist settings but do not yet register Windows startup or allow unsigned packages. A conflict response does not prove the queued action completed.
 
+`mp namespace transfer move OPERATION_ID SOURCE_MEMBER_ID TARGET_PARENT_ID NAME`
+starts one Host-owned file transfer between distinct managed roots. Use a unique
+operation ID and retain it for `mp namespace transfer resume OPERATION_ID`.
+`namespace transfer status OPERATION_ID` and `namespace transfer list ROOT_ID`
+read retained progress. Completion requires accepted copy and whole-target
+verification, protected target publication, original conditional source deletion,
+native retirement and the actual original acknowledgement receipt. An ambiguous
+remote result stays pending. The current path requires a V2 source with its
+original non-null revision; directory, local-only, legacy-protocol and unfinished
+new-role recovery remain separate requirements. See [namespace transfers](namespace-transfers.md).
+
 Root recovery never moves an Adapter source directory or captures a replacement
 object as an old rename proof. Runtime startup attempts the same historical
 recovery before starting uploads. Pending or incomplete reconciliation returns

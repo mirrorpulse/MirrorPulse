@@ -8,6 +8,7 @@ param(
     [string]$AdapterDirectory,
     [string]$AdapterReleaseLockPath,
     [string]$IntegrationPath,
+    [string]$TransferIntegrationPath,
     [string]$InstalledPath,
     [string]$RejectedPath,
     [string]$NamespaceNonAdminPath,
@@ -120,6 +121,13 @@ if ($IntegrationPath) {
     Assert-CliRegressionObservations $integration
     $checks += [ordered]@{name="signed-local-cli-regression";executed=$true;rangeRead=$true;offlineQueueRetained=$true;uploadJournalDrained=$true;conflictPersisted=$true;cursorPersisted=$true;hydration=$integration.hydration;namespace=$integration.namespace}
 } elseif ($Job -eq "official-package-arm64") { throw "The signed Local CLI regression evidence is missing." }
+if ($TransferIntegrationPath) {
+    $transfers = Get-Content -LiteralPath $TransferIntegrationPath -Raw | ConvertFrom-Json
+    if ($transfers.runtime -cne $Runtime -or $transfers.sourceSha -cne $sourceSha) { throw 'The signed CLI transfer evidence belongs to another source or runtime.' }
+    . (Join-Path $PSScriptRoot 'cli-transfer-evidence-policy.ps1')
+    Assert-CliTransferObservations $transfers
+    $checks += [ordered]@{name='signed-local-cli-transfers';executed=$true;observations=$transfers}
+}
 if ($InstalledPath) {
     $installed = Get-Content -LiteralPath $InstalledPath -Raw | ConvertFrom-Json
     if ($installed.schemaVersion -ne 1 -or $installed.runtime -ne $Runtime -or $installed.installedIdentity -ne $true -or

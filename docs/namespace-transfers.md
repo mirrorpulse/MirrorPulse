@@ -165,3 +165,20 @@ The additive clean Windows test covers same-instance and cross-instance original
 ACK interruption, receipt rollback and late Delete recovery. Until that source's
 native CI and signed Worker/CLI paths pass, managed tests and compilation alone
 do not establish full transfer or S06 acceptance.
+
+The manual ARM64 workflow also runs `eng/verify-cli-transfers.ps1` against the
+same frozen signed Local V2 package. This separate disposable fixture uses two
+real Worker processes, two instances and three roots. It exercises typed CLI
+move/resume, whole source and destination bytes, a later distinct source
+generation, later target edits, current root admission and Host restart. The
+stopped-Host test oracle acquires the actual exclusive catalog lease before
+reading original completion receipts and independently verifying retained private
+bytes. An empty captured claim must report command completion without claiming
+that original notifications were acknowledged.
+
+`cli-transfers-arm64-originals` retains the source-bound report, completed
+execution observations and independent execution/cleanup failures. The report
+requires authenticated bounded permission cleanup and root unregistration before
+the GUID fixture directory is removed. Its route/name allowlist is separate from
+the existing single-root hydration regression fixture. Run this native verifier
+only with `MIRRORPULSE_NATIVE_TEST=1` in the disposable Windows verification user.

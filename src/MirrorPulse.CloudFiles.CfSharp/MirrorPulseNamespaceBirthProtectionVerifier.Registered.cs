@@ -138,7 +138,11 @@ public static partial class MirrorPulseNamespaceBirthProtectionVerifier
         MirrorPulseNamespaceMemberIdentity identity, bool requirePlaceholder)
     {
         if (requirePlaceholder && (!snapshot.IsPlaceholder || snapshot.PlaceholderIdentity.IsEmpty || identity.ItemId is null || identity.RemoteId is null))
-            throw new InvalidDataException("The registered born object requires its retained current public identity.");
+            // Report only closed native/catalog facts, never paths or public identity bytes.
+            // These independent failures require different recovery; none authorizes adoption.
+            throw new InvalidDataException($"The registered born object requires its retained current public identity: " +
+                $"nativePlaceholder={snapshot.IsPlaceholder}; nativeIdentityPresent={!snapshot.PlaceholderIdentity.IsEmpty}; " +
+                $"retainedItemPresent={identity.ItemId is not null}; retainedRemotePresent={identity.RemoteId is not null}; kind={snapshot.Kind}.");
         if (identity.ItemId is not { } itemId) return;
         if (!snapshot.IsPlaceholder || snapshot.PlaceholderIdentity.IsEmpty)
             throw new InvalidDataException("A known registered identity requires an actual placeholder.");

@@ -16,10 +16,12 @@ if (args.Length == 4 && args[0] == "--namespace-source-consumer")
     }
 }
 
-if (args.Length == 2 && args[0] is "--read-cli-fixture" or "--audit-cli-fixture" or "--inspect-cli-fixture" or "--cleanup-cli-fixture")
+if (args.Length == 2 && args[0] is "--read-cli-fixture" or "--audit-cli-fixture" or "--inspect-cli-fixture" or "--cleanup-cli-fixture" or "--cleanup-cli-transfer-fixture" or "--audit-cli-transfer-fixture")
 {
     try
     {
+        if (args[0] == "--cleanup-cli-transfer-fixture") return await CliFixtureProbe.RunTransferCleanupAsync(args[1]);
+        if (args[0] == "--audit-cli-transfer-fixture") return await CliFixtureProbe.RunTransferAuditAsync(args[1]);
         return await CliFixtureProbe.RunAsync(args[1], audit: args[0] == "--audit-cli-fixture",
             inspect: args[0] == "--inspect-cli-fixture", cleanup: args[0] == "--cleanup-cli-fixture");
     }

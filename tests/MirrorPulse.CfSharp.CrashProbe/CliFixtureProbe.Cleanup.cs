@@ -52,6 +52,20 @@ public static partial class CliFixtureProbe
                 throw new InvalidDataException("Fixture cleanup requires the exact synthetic route.");
             roots = [registration];
         }
+        var allowed = new Dictionary<string, bool>(StringComparer.Ordinal) { [""] = true };
+        if (!anchorOnly)
+        {
+            allowed.Add(marker.DirectoryName, true); allowed.Add(marker.DirectoryName + "/nested", true);
+            allowed.Add(marker.DirectoryName + "/nested/fixture.txt", false); allowed.Add(marker.DirectoryName + "/nested/fixture.bin", false);
+            allowed.Add(marker.DirectoryName + "/cli-roundtrip.txt", false); allowed.Add(marker.DirectoryName + "/queued-upload.txt", false);
+        }
+        return await CleanupAuthenticatedInventoryAsync(root, paths, catalog, roots, allowed, setStage);
+    }
+
+    private static async Task<CliFixtureCleanupResult> CleanupAuthenticatedInventoryAsync(string root,
+        MirrorPulseStoragePaths paths, MirrorPulseProductCatalog catalog, IReadOnlyList<RootRegistration> roots,
+        IReadOnlyDictionary<string, bool> allowed, Action<string> setStage)
+    {
         // An unprotected fixture requires no permission restoration.
         // Every MP ACL write is preceded by a permission intent or birth intent.
         // With neither present, do not acquire a protected-object lease or rewrite
@@ -75,13 +89,6 @@ public static partial class CliFixtureProbe
             setStage("SdkStart");
             await fileSystem.StartAsync();
             var router = new MirrorPulseRootRouter(paths.SyncRootPath, roots);
-            var allowed = new Dictionary<string, bool>(StringComparer.Ordinal) { [""] = true };
-            if (!anchorOnly)
-            {
-                allowed.Add(marker.DirectoryName, true); allowed.Add(marker.DirectoryName + "/nested", true);
-                allowed.Add(marker.DirectoryName + "/nested/fixture.txt", false); allowed.Add(marker.DirectoryName + "/nested/fixture.bin", false);
-                allowed.Add(marker.DirectoryName + "/cli-roundtrip.txt", false); allowed.Add(marker.DirectoryName + "/queued-upload.txt", false);
-            }
             using var user = WindowsIdentity.GetCurrent();
             string owner = user.User?.Value ?? throw new InvalidOperationException("Fixture cleanup requires a Windows user.");
             var leases = new List<MirrorPulseWindowsNamespacePermissionLease>();

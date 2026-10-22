@@ -126,8 +126,12 @@ Ordinary managed, explicit native, signed-package and installed-MSIX tests are
 different gates. A successful ordinary run does not prove native or Explorer
 tests executed. Missing environment prerequisites must produce skipped results.
 
-The ARM64 signed Local CLI gate covers real Host/Worker/CfSharp transfer,
-offline replay, conflicts and cursor/catalog persistence. FTP/SFTP process
+The ARM64 signed Local CLI regression gate covers real Host/Worker/CfSharp uploads,
+offline replay, conflicts and cursor/catalog persistence. A separate manual
+`verify-cli-transfers.ps1` gate exercises same-instance cross-root and cross-instance
+typed move/resume, complete bytes, original receipts, later generations and Host
+restart through the signed Local V2 Workers. Read that source's actual original
+report before treating this matrix as passed. FTP/SFTP process
 tests and WebDAV/SMB fixtures establish their documented boundaries, not all
 servers or complete offline Explorer workflows.
 
