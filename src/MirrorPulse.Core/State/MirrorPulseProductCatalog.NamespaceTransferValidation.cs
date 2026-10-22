@@ -112,7 +112,10 @@ public sealed partial class MirrorPulseProductCatalog
         query.CommandText = """
             SELECT 1 FROM namespace_transfers WHERE operation_id=$id
             UNION ALL SELECT 1 FROM namespace_transfer_effects WHERE effect_id=$id
+            UNION ALL SELECT 1 FROM namespace_transfer_target_births WHERE birth_id=$id
+            UNION ALL SELECT 1 FROM namespace_transfer_journal_members WHERE operation_id=$id
             UNION ALL SELECT 1 FROM mutation_intents WHERE operation_id=$id
+            UNION ALL SELECT 1 FROM worker_requests WHERE operation_id=$id
             UNION ALL SELECT 1 FROM namespace_member_moves WHERE operation_id=$id
             UNION ALL SELECT 1 FROM namespace_birth_intents WHERE operation_id=$id
             UNION ALL SELECT 1 FROM namespace_remote_updates WHERE operation_id=$id
@@ -123,6 +126,9 @@ public sealed partial class MirrorPulseProductCatalog
             UNION ALL SELECT 1 FROM journal_coalescing_members WHERE operation_id=$id
             UNION ALL SELECT 1 FROM journal_coalescing_steps WHERE operation_id=$id
             UNION ALL SELECT 1 FROM journal_coalescing_retries WHERE operation_id=$id OR followup_operation_id=$id
+            UNION ALL SELECT 1 FROM conflict_deletion_members WHERE original_id=$id
+            UNION ALL SELECT 1 FROM conflict_local_removal_members WHERE original_id=$id
+            UNION ALL SELECT 1 FROM conflict_keep_both_members WHERE original_id=$id
             LIMIT 1;
             """;
         query.Parameters.AddWithValue("$id", id.ToString("D"));

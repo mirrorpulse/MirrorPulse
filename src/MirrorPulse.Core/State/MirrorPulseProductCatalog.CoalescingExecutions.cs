@@ -90,6 +90,7 @@ public sealed partial class MirrorPulseProductCatalog
 
     private async Task RequireUnownedCoalescingEffectAsync(Guid operationId, SqliteTransaction transaction, CancellationToken cancellationToken)
     {
+        await RequireNotNamespaceTransferOwnerAsync(operationId, transaction, cancellationToken).ConfigureAwait(false);
         await using SqliteCommand ownership = _connection.CreateCommand();
         ownership.Transaction = transaction;
         ownership.CommandText = """

@@ -203,6 +203,9 @@ public sealed partial class MirrorPulseProductCatalog
             throw new ArgumentException("A transfer birth cannot precede the original whole-target verification.");
         if (copy.TargetPublication is { } publication) ValidateNamespaceTransferPublicationShape(copy, publication);
         if (copy.SourceDeletion is { } deletion) ValidateNamespaceTransferSourceDeletion(copy, deletion);
+        if (copy.JournalClaim is { } claim) ValidateNamespaceTransferJournalClaim(copy.Plan, claim);
+        if (copy.JournalClaim is { } originalClaim && copy.CopyStartedAt < originalClaim.CapturedAt)
+            throw new ArgumentException("The original journal reservation must precede the first copy invocation.");
     }
 
     private static async Task EnsureNamespaceTransferBirthSchemaAsync(SqliteConnection connection, bool requireExisting, bool stampVersion, CancellationToken token)

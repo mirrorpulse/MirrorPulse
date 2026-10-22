@@ -163,8 +163,10 @@ public sealed partial class MirrorPulseProductCatalog
                 return plan;
             }
             using SqliteTransaction transaction = _connection.BeginTransaction();
+            await RequireNotNamespaceTransferOwnerAsync(plan.PlanId, transaction, cancellationToken).ConfigureAwait(false);
             foreach (var member in plan.Members)
             {
+                await RequireNotNamespaceTransferOwnerAsync(member.OperationId, transaction, cancellationToken).ConfigureAwait(false);
                 await using var deletion = _connection.CreateCommand(); deletion.Transaction = transaction;
                 deletion.CommandText = "SELECT 1 FROM conflict_deletion_members WHERE original_id=$operation UNION ALL SELECT 1 FROM conflict_local_removal_members WHERE original_id=$operation LIMIT 1;";
                 deletion.Parameters.AddWithValue("$operation", member.OperationId.ToString("D"));

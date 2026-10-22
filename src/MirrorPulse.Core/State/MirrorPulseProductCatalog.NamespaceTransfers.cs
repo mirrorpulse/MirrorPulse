@@ -67,6 +67,9 @@ public sealed record MirrorPulseNamespaceTransferCopy(MirrorPulseNamespaceTransf
 
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public MirrorPulseNamespaceTransferSourceDeletion? SourceDeletion { get; init; }
+
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public MirrorPulseNamespaceTransferJournalClaim? JournalClaim { get; init; }
 }
 
 /// <summary>Whole target content and identity observed at the original accepted revision, not source retirement authority.</summary>
@@ -136,7 +139,8 @@ public sealed partial class MirrorPulseProductCatalog
                 ?? throw new FileNotFoundException("The original transfer is missing.");
             if (copy.CopyStartedAt is not null)
                 throw new InvalidOperationException("The original copy may already have executed; another invocation is not authorized.");
-            if (startedAt < copy.Plan.PreparedAt) throw new ArgumentException("Copy start must follow its original admission.", nameof(startedAt));
+            if (startedAt < copy.Plan.PreparedAt || copy.JournalClaim is { } claim && startedAt < claim.CapturedAt)
+                throw new ArgumentException("Copy start must follow its original admission and retained journal reservation.", nameof(startedAt));
             await RequireCurrentNamespaceTransferAsync(copy.Plan, transaction, token, admitted: true).ConfigureAwait(false);
             copy = copy with { CopyStartedAt = startedAt };
             await WriteNamespaceTransferCoreAsync(copy, transaction, token).ConfigureAwait(false);

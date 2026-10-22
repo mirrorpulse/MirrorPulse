@@ -104,7 +104,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                 version.CommandText = "PRAGMA user_version;";
                 currentVersion = (long)(await version.ExecuteScalarAsync(cancellationToken)
                     .ConfigureAwait(false) ?? 0L);
-                if (currentVersion > 81)
+                if (currentVersion > 82)
                 {
                     throw new InvalidDataException("The MP product catalog schema is newer than this Host supports.");
                 }
@@ -466,6 +466,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
 
             await EnsureNamespaceTransferSchemaAsync(connection, stampVersion: false, requireExisting: currentVersion >= 80, cancellationToken).ConfigureAwait(false);
             await EnsureNamespaceTransferBirthSchemaAsync(connection, requireExisting: currentVersion >= 81, stampVersion: false, cancellationToken).ConfigureAwait(false);
+            await EnsureNamespaceTransferJournalSchemaAsync(connection, requireExisting: currentVersion >= 82, stampVersion: false, cancellationToken).ConfigureAwait(false);
             var catalog = new MirrorPulseProductCatalog(owner, connection);
             await EnsureNamespaceRemoteUpdateSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
             await EnsureRemoteDeleteResolutionSchemaAsync(connection, cancellationToken, stampVersion: false).ConfigureAwait(false);
@@ -475,6 +476,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
             await EnsureNamespaceRemoteUpdateSchemaAsync(connection, cancellationToken, stampVersion: currentVersion < 79).ConfigureAwait(false);
             await EnsureNamespaceTransferSchemaAsync(connection, stampVersion: currentVersion < 80, requireExisting: false, cancellationToken).ConfigureAwait(false);
             await EnsureNamespaceTransferBirthSchemaAsync(connection, requireExisting: false, stampVersion: currentVersion < 81, cancellationToken).ConfigureAwait(false);
+            await EnsureNamespaceTransferJournalSchemaAsync(connection, requireExisting: false, stampVersion: currentVersion < 82, cancellationToken).ConfigureAwait(false);
             return catalog;
         }
         catch
