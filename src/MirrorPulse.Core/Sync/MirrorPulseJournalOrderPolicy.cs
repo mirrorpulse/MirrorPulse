@@ -20,7 +20,7 @@ public static class MirrorPulseJournalOrderPolicy
         return false;
     }
 
-    private static IEnumerable<(InstanceId Instance, string Root, string Path)> Paths(MirrorPulseWorkerChangeCommand command)
+    internal static IEnumerable<(InstanceId Instance, string Root, string Path)> Paths(MirrorPulseWorkerChangeCommand command)
     {
         yield return (command.InstanceId, command.RootKey, command.RelativePath.Replace('\\', '/').TrimEnd('/'));
         if (command.PreviousRelativePath is not null)

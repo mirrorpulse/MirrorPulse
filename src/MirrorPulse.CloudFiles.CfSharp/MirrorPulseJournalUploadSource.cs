@@ -149,7 +149,7 @@ public sealed class MirrorPulseJournalUploadSource
         }
 
         var ready = new List<MirrorPulseWorkerChangeCommand>(plan.Commands.Count);
-        var held = new List<MirrorPulseWorkerChangeCommand>();
+        var held = new MirrorPulseJournalOrderIndex();
         int deferred = plan.BlockedOperations?.Count ?? 0;
         foreach (MirrorPulseBlockedLocalOperation blocked in plan.BlockedOperations ?? [])
             if (!retiredHeld.Contains(blocked.OperationId)) await _catalog.SaveBlockedLocalOperationAsync(blocked, cancellationToken).ConfigureAwait(false);
@@ -176,7 +176,8 @@ public sealed class MirrorPulseJournalUploadSource
                 new CloudLocalChangeAcknowledgement(operation.OperationId, null)), cancellationToken).ConfigureAwait(false);
             acceptedMetadata.UnionWith(rootMetadata.Select(operation => operation.OperationId));
         }
-        held.AddRange(plan.RoutedBlockedCommands.Where(command => !acceptedMetadata.Contains(command.OperationId)));
+        foreach (var command in plan.RoutedBlockedCommands)
+            if (!acceptedMetadata.Contains(command.OperationId)) held.Add(command);
         foreach (MirrorPulseWorkerChangeCommand command in plan.Commands.OrderBy(command => command.Sequence))
         {
             RootRegistration root = _router.GetRegistration(command.InstanceId, command.RootKey);
@@ -223,7 +224,7 @@ public sealed class MirrorPulseJournalUploadSource
                     .ConfigureAwait(false) &&
                 (retryAfter is null || retryAfter <= DateTimeOffset.UtcNow))
             {
-                if (held.Any(earlier => earlier.Sequence < command.Sequence && MirrorPulseJournalOrderPolicy.DependsOn(command, earlier)))
+                if (held.HasEarlierDependency(command))
                 {
                     held.Add(command);
                     deferred++;
