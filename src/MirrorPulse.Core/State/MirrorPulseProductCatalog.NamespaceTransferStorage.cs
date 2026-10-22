@@ -117,7 +117,7 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task RequireNotNamespaceTransferOwnerAsync(Guid id, SqliteTransaction? transaction, CancellationToken token)
     {
         await using var query = _connection.CreateCommand(); query.Transaction = transaction;
-        query.CommandText = "SELECT 1 FROM namespace_transfers WHERE operation_id=$id UNION ALL SELECT 1 FROM namespace_transfer_effects WHERE effect_id=$id UNION ALL SELECT 1 FROM namespace_transfer_target_births WHERE birth_id=$id UNION ALL SELECT 1 FROM namespace_transfer_journal_members WHERE operation_id=$id LIMIT 1;";
+        query.CommandText = "SELECT 1 FROM namespace_transfers WHERE operation_id=$id UNION ALL SELECT 1 FROM namespace_transfer_effects WHERE effect_id=$id UNION ALL SELECT 1 FROM namespace_transfer_target_births WHERE birth_id=$id UNION ALL SELECT 1 FROM namespace_transfer_journal_members WHERE operation_id=$id UNION ALL SELECT 1 FROM retired_transfer_observations WHERE operation_id=$id LIMIT 1;";
         query.Parameters.AddWithValue("$id", id.ToString("D"));
         if (await query.ExecuteScalarAsync(token).ConfigureAwait(false) is not null)
             throw new InvalidOperationException("An original transfer owns this operation or effect ID.");

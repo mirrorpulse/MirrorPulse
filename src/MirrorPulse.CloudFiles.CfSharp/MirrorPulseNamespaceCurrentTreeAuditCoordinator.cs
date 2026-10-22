@@ -21,6 +21,14 @@ public sealed class MirrorPulseNamespaceCurrentTreeAuditCoordinator(CloudFileSys
     public ValueTask<MirrorPulseNamespaceCurrentTreeAudit> AuditAsync(Guid anchorMemberId, MirrorPulseNamespaceAnchorProtection anchorGuard,
         CancellationToken cancellationToken = default) => AuditAdmittedAsync(anchorMemberId, anchorGuard, null, cancellationToken);
 
+    /// <summary>Audits the complete current membership and actual native inventory of one configured root.</summary>
+    public ValueTask<MirrorPulseNamespaceCurrentTreeAudit> AuditRootAsync(Guid anchorMemberId, MirrorPulseNamespaceAnchorProtection anchorGuard,
+        RootId rootId, CancellationToken cancellationToken = default)
+    {
+        if (rootId.Value == Guid.Empty) throw new ArgumentException("A configured root identity is required.", nameof(rootId));
+        return AuditAdmittedAsync(anchorMemberId, anchorGuard, null, cancellationToken, rootId);
+    }
+
     /// <summary>Completes the initializer inside the same shared actor, role and permission admission as its fresh audit.</summary>
     /// <remarks>A historical receipt does not supply a new native audit or authorize this Host's source dispatch.</remarks>
     public async ValueTask<MirrorPulseNamespaceInitializationCompletion> CompleteInitializationAsync(Guid operationId, Guid anchorMemberId,

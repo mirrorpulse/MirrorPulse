@@ -1,3 +1,4 @@
+using Microsoft.Data.Sqlite;
 using MirrorPulse.Core.State;
 
 namespace MirrorPulse.Core.Tests;
@@ -92,7 +93,14 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             await catalog.RecordNamespaceRetirementNativeDeletedAsync(intent.OperationId, intent.PreparedAt.AddSeconds(1));
             await catalog.CompleteNamespaceRetirementAsync(intent.OperationId, intent.PreparedAt.AddSeconds(2));
             Assert.HasCount(1, (await catalog.ReadNamespaceCurrentTreeSnapshotAsync(anchor)).RetiredMembers);
-            await ExecuteSqlAsync(fixture.Paths, "UPDATE namespace_member_retirements SET payload=X'00';");
+            // The source-generation expression index rejects malformed JSON during the write.
+            // That rejection must leave the original retirement and inventory intact.
+            var rejected = await Assert.ThrowsExactlyAsync<SqliteException>(() =>
+                ExecuteSqlAsync(fixture.Paths, "UPDATE namespace_member_retirements SET payload=X'00';"));
+            Assert.AreEqual(1, rejected.SqliteErrorCode);
+            Assert.HasCount(1, (await catalog.ReadNamespaceCurrentTreeSnapshotAsync(anchor)).RetiredMembers);
+            // Valid JSON can still contradict the retained canonical bytes and phase index.
+            await ExecuteSqlAsync(fixture.Paths, "UPDATE namespace_member_retirements SET payload=X'7B7D';");
         }
         await using var reopened = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
         await Assert.ThrowsExactlyAsync<InvalidDataException>(() => reopened.ReadNamespaceCurrentTreeSnapshotAsync(anchor));

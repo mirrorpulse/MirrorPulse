@@ -14,6 +14,54 @@ public sealed class MirrorPulseCliTransferTests
     private static readonly string[] JsonOptions = ["--json"];
 
     [TestMethod]
+    [DataRow("move")]
+    [DataRow("resume")]
+    public async Task TransferCommandsKeepTheirOriginalIdentityAcrossTheTypedPipeAndRejectMalformedRequests(string verb)
+    {
+        var value = Status("Completed") with { RootsFenced = false, JournalAcknowledged = true, Completed = true };
+        Guid parent = Guid.NewGuid(); int calls = 0; var dispatcher = new MirrorPulseControlDispatcher();
+        dispatcher.Register<NamespaceTransferMoveArguments, MirrorPulseControlTransferStatus>(MirrorPulseControlCommands.NamespaceTransferMove, (arguments, _) =>
+        {
+            Assert.AreEqual(value.OperationId, arguments.OperationId); Assert.AreEqual(value.SourceMemberId, arguments.SourceMemberId);
+            Assert.AreEqual(parent, arguments.TargetParentMemberId); Assert.AreEqual("moved.bin", arguments.TargetName);
+            calls++; return ValueTask.FromResult(value);
+        });
+        dispatcher.Register<NamespaceTransferResumeArguments, MirrorPulseControlTransferStatus>(MirrorPulseControlCommands.NamespaceTransferResume, (arguments, _) =>
+        { Assert.AreEqual(value.OperationId, arguments.OperationId); calls++; return ValueTask.FromResult(value); });
+        string pipe = "MirrorPulse-transfer-command-" + Guid.NewGuid().ToString("N");
+        using var shutdown = new CancellationTokenSource(); Task serve = new MirrorPulseControlPipeServer(dispatcher.DispatchAsync, pipe).ServeAsync(shutdown.Token);
+        var client = new MirrorPulseControlClient(new MirrorPulseControlClientOptions { PipeName = pipe });
+        await using var operations = new MirrorPulseCliHostOperations(new MirrorPulseHostStartupOptions(), client);
+        string[] arguments = verb == "move" ? [value.OperationId.ToString("D"), value.SourceMemberId.ToString("D"), parent.ToString("D"), "moved.bin"] : [value.OperationId.ToString("D")];
+        try
+        {
+            using var output = new StringWriter(); using var error = new StringWriter();
+            Assert.AreEqual(0, await RunAsync(operations, true, verb, arguments, output, error));
+            using var document = JsonDocument.Parse(output.ToString()); var status = document.RootElement.GetProperty("data");
+            Assert.IsTrue(status.GetProperty("completed").GetBoolean()); Assert.IsTrue(status.GetProperty("journalAcknowledged").GetBoolean());
+            Assert.IsFalse(status.GetProperty("rootsFenced").GetBoolean()); Assert.AreEqual(value.OperationId, status.GetProperty("operationId").GetGuid());
+            List<string[]> invalid = [[], ["invalid"], [Guid.Empty.ToString("D")], [.. arguments, "extra"]];
+            if (verb == "move")
+            {
+                invalid.Add([arguments[0], "invalid", arguments[2], arguments[3]]);
+                invalid.Add([arguments[0], arguments[1], Guid.Empty.ToString("D"), arguments[3]]);
+                invalid.Add([arguments[0], arguments[1], arguments[2], "../other"]);
+                invalid.Add([arguments[0], arguments[1], arguments[2], " "]);
+            }
+            foreach (var malformed in invalid)
+            {
+                using var rejectedOutput = new StringWriter(); using var rejectedError = new StringWriter();
+                Assert.AreEqual(2, await RunAsync(operations, true, verb, malformed, rejectedOutput, rejectedError));
+                Assert.AreEqual(string.Empty, rejectedOutput.ToString());
+            }
+            Assert.AreEqual(1, calls);
+            Assert.IsTrue(MirrorPulseControlCommands.Catalog.Single(item => item.Name == (verb == "move" ?
+                MirrorPulseControlCommands.NamespaceTransferMove : MirrorPulseControlCommands.NamespaceTransferResume)).Mutating);
+        }
+        finally { shutdown.Cancel(); await serve; }
+    }
+
+    [TestMethod]
     [DataRow("CopyMayHaveBegun")]
     [DataRow("SourceDeleteMayHaveBegun")]
     [DataRow("SourceNativeRetired")]

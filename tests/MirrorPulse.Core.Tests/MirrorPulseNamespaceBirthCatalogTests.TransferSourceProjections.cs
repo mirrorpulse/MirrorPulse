@@ -147,6 +147,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         {
             row["Intent"]!["TransferEntry"]!["Version"] = 1;
             row.AsObject().Remove("TransferSourceProjection");
+            row.AsObject().Remove("TransferSourceNameEpoch");
         });
         await ExecuteSqlAsync(fixture.Paths, "PRAGMA user_version=83;");
         var originalBytes = await ReadTransferRetirementBytesAsync(fixture.Paths);
@@ -159,7 +160,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         Assert.AreEqual(originalBytes, await ReadTransferRetirementBytesAsync(fixture.Paths));
         await using var connection = Connection(fixture.Paths); await connection.OpenAsync();
         await using var version = connection.CreateCommand(); version.CommandText = "PRAGMA user_version;";
-        Assert.AreEqual(84L, await version.ExecuteScalarAsync());
+        Assert.AreEqual(85L, await version.ExecuteScalarAsync());
         Assert.HasCount(2, await migrated.ReadNamespaceDispatchFencedRootsAsync());
     }
 

@@ -37,6 +37,9 @@ public interface IMirrorPulseCloudRuntime : IAsyncDisposable
     [SupportedOSPlatform("windows10.0.26100")]
     ValueTask<MirrorPulseNamespaceRetirement> RetireNamespaceTransferSourceAsync(Guid operationId, CancellationToken token) =>
         ValueTask.FromException<MirrorPulseNamespaceRetirement>(new NotSupportedException("This runtime does not retire original transfer sources."));
+    [SupportedOSPlatform("windows10.0.26100")]
+    ValueTask<MirrorPulseNamespaceTransferCopy> CompleteNamespaceTransferAsync(Guid operationId, CancellationToken token) =>
+        ValueTask.FromException<MirrorPulseNamespaceTransferCopy>(new NotSupportedException("This runtime does not complete original file transfers."));
     ValueTask<MirrorPulseNamespaceTransferCopy> ReadNamespaceTransferAsync(Guid operationId, CancellationToken token) =>
         ValueTask.FromException<MirrorPulseNamespaceTransferCopy>(new NotSupportedException("This runtime does not read original file transfers."));
 
@@ -261,7 +264,9 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
     internal Func<ICloudStateStoreFactory, ICloudStateStoreFactory>? StateStoreDecorator { get; init; }
     internal Func<MirrorPulseTransferPublicationCheckpoint, CancellationToken, ValueTask>? TransferPublicationCheckpoint { get; init; }
     internal Func<MirrorPulseTransferSourceRetirementCheckpoint, CancellationToken, ValueTask>? TransferSourceRetirementCheckpoint { get; init; }
+    internal Func<MirrorPulseTransferAcknowledgementCheckpoint, CancellationToken, ValueTask>? TransferAcknowledgementCheckpoint { get; init; }
     internal Action<CloudLocalChangeFeed>? TransferJournalReady { get; init; }
+    internal Action<MirrorPulseJournalUploadSource>? TransferJournalSourceReady { get; init; }
 
     public CfSharpMirrorPulseCloudRuntimeFactory(
         ICloudDemandProvider? provider = null,
@@ -309,7 +314,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             .WithContentProvider(provider)
             .Build(), state, provider, StateStoreDecorator, paths.SyncRootPath, paths.DataRootPath, _uploads, _stats, _mutations, _router, _catalog,
             _mayDispatch, _conflicts, _notifications, _scheduler, _namespaceExecution, _namespaceActor, _namespaceWork, _initializeNamespaceOnStart, _transfers,
-            TransferPublicationCheckpoint, TransferSourceRetirementCheckpoint, TransferJournalReady);
+            TransferPublicationCheckpoint, TransferSourceRetirementCheckpoint, TransferAcknowledgementCheckpoint, TransferJournalReady, TransferJournalSourceReady);
     }
 
     private sealed class CfSharpRuntime(
@@ -335,11 +340,14 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         MirrorPulseTransferWorkerServices? transfers,
         Func<MirrorPulseTransferPublicationCheckpoint, CancellationToken, ValueTask>? transferPublicationCheckpoint,
         Func<MirrorPulseTransferSourceRetirementCheckpoint, CancellationToken, ValueTask>? transferSourceRetirementCheckpoint,
-        Action<CloudLocalChangeFeed>? transferJournalReady)
+        Func<MirrorPulseTransferAcknowledgementCheckpoint, CancellationToken, ValueTask>? transferAcknowledgementCheckpoint,
+        Action<CloudLocalChangeFeed>? transferJournalReady,
+        Action<MirrorPulseJournalUploadSource>? transferJournalSourceReady)
         : IMirrorPulseCloudRuntime
     {
         private MirrorPulseJournalUploadPump? _uploadPump;
         private CloudLocalChangeFeed? _transferJournal;
+        private IMirrorPulseRetiredTransferObservationHandler? _retiredSourceObservations;
         private bool _ownsTransferJournal;
         private MirrorPulseRetainedRemoteBatchRecoveryPump? _retainedRecovery;
         private MirrorPulseUploadConflictActions? _conflictActions;
@@ -376,7 +384,9 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             {
                 TargetPublicationCheckpoint = transferPublicationCheckpoint,
                 SourceRetirementCheckpoint = transferSourceRetirementCheckpoint,
-                JournalFeed = _transferJournal
+                AcknowledgementCheckpoint = transferAcknowledgementCheckpoint,
+                JournalFeed = _transferJournal,
+                RetiredSourceObservations = _retiredSourceObservations
             };
         }
 
@@ -477,6 +487,34 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                 new[] { copy.Plan.SourceRoute.RootId, copy.Plan.TargetRoute.RootId }, token).ConfigureAwait(false);
             return await WithAdmittedInstancesLibraryAsync(new[] { copy.Plan.SourceRoute.InstanceId, copy.Plan.TargetRoute.InstanceId }.Distinct(),
                 (_, stop) => TransferCoordinator().RetireSourceAsync(operationId, transfers!, stop), token).ConfigureAwait(false);
+        }
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        public async ValueTask<MirrorPulseNamespaceTransferCopy> CompleteNamespaceTransferAsync(Guid operationId, CancellationToken token)
+        {
+            RequireImportBoundary();
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
+            var copy = await ReadNamespaceTransferAsync(operationId, token).ConfigureAwait(false);
+            // Completed history is readable without granting readiness to this Host from an old audit.
+            if (copy.Acknowledgement?.AcknowledgedAt is not null) return copy;
+            if (namespaceWork is null || _retiredSourceObservations is null)
+                throw new NotSupportedException("Transfer completion requires Host root admissions and late-observation protection.");
+            var roots = new[] { copy.Plan.SourceRoute.RootId, copy.Plan.TargetRoute.RootId };
+            await using var recovery = await namespaceWork.BeginRecoveryAsync(roots, token).ConfigureAwait(false);
+            return await WithAdmittedInstancesLibraryAsync(new[] { copy.Plan.SourceRoute.InstanceId, copy.Plan.TargetRoute.InstanceId }.Distinct(),
+                async (_, stop) =>
+                {
+                    var completed = await TransferCoordinator().AcknowledgeAsync(operationId, transfers!, stop).ConfigureAwait(false);
+                    _scopedAnchorProtection ??= await new MirrorPulseNamespaceAnchorProtectionCoordinator(fileSystem, catalog!, router!,
+                        _namespaceExecution!, _namespaceActor!, _permissions!).ProtectAsync(stop).ConfigureAwait(false);
+                    var anchor = await catalog!.ReadNamespaceMemberByBindingAsync(_scopedAnchorProtection.Original.LocalObject, stop).ConfigureAwait(false)
+                        ?? throw new InvalidDataException("Transfer completion requires its registered protected sync-root anchor.");
+                    var audit = new MirrorPulseNamespaceCurrentTreeAuditCoordinator(fileSystem, catalog, router!, _namespaceExecution!, _namespaceActor!, _permissions!);
+                    foreach (var root in roots)
+                        await audit.AuditRootAsync(anchor.MemberId, _scopedAnchorProtection, root, stop).ConfigureAwait(false);
+                    recovery.CompleteAfterFreshAudit();
+                    return completed;
+                }, token).ConfigureAwait(false);
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
@@ -1247,6 +1285,15 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                 _ownsTransferJournal = !feed.IsStarted;
                 if (_ownsTransferJournal) await feed.StartAsync(cancellationToken).ConfigureAwait(false);
                 transferJournalReady?.Invoke(feed);
+                if (_namespaceExecution is not null && _namespaceActor is not null && namespaceWork is not null)
+                {
+                    if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
+                        throw new PlatformNotSupportedException("Retired source observation settlement requires Windows 11 24H2 or later.");
+                    _retiredSourceObservations = new MirrorPulseRetiredTransferObservationHandler(fileSystem, feed, state, catalog!, router!,
+                        _namespaceExecution, _namespaceActor, namespaceWork, mayDispatch!);
+                }
+                transferJournalSourceReady?.Invoke(new MirrorPulseJournalUploadSource(feed, router!, catalog!, mayDispatch!,
+                    namespaceWork: namespaceWork, retiredSources: _retiredSourceObservations));
             }
             if (ordinaryUploads)
             {
@@ -1261,7 +1308,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                 _uploadPump = new MirrorPulseJournalUploadPump(feed, router!, catalog!, uploads!, stats!, state,
                     syncRootPath, dataRootPath, mayDispatch!, completion, conflicts, notifications, mutations,
                     uploads as IMirrorPulseWorkerRangeTransport, uploads as IMirrorPulseWorkerDirectoryPageSource, fileSystem, _scheduler,
-                    _namespaceActor, _namespaceExecution, namespaceWork, _conflictActions);
+                    _namespaceActor, _namespaceExecution, namespaceWork, _conflictActions, _retiredSourceObservations);
                 await _uploadPump.StartAsync(cancellationToken).ConfigureAwait(false);
             }
 
@@ -1494,7 +1541,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         private async Task StopJournalServicesAsync()
         {
             var pump = _uploadPump; var feed = _transferJournal; bool owned = _ownsTransferJournal;
-            _uploadPump = null; _transferJournal = null; _ownsTransferJournal = false;
+            _uploadPump = null; _transferJournal = null; _ownsTransferJournal = false; _retiredSourceObservations = null;
             try { if (pump is not null) await pump.DisposeAsync().ConfigureAwait(false); }
             finally { if (owned && feed is not null) await feed.DisposeAsync().ConfigureAwait(false); }
         }
@@ -1815,6 +1862,13 @@ public sealed class MirrorPulseCloudHostSession : IAsyncDisposable
     {
         if (!_started || _runtime is null) throw new InvalidOperationException("The Cloud Files Host session has not started.");
         return _runtime.RetireNamespaceTransferSourceAsync(operationId, token);
+    }
+
+    [SupportedOSPlatform("windows10.0.26100")]
+    public ValueTask<MirrorPulseNamespaceTransferCopy> CompleteNamespaceTransferAsync(Guid operationId, CancellationToken token = default)
+    {
+        if (!_started || _runtime is null) throw new InvalidOperationException("The Cloud Files Host session has not started.");
+        return _runtime.CompleteNamespaceTransferAsync(operationId, token);
     }
 
     public ValueTask<MirrorPulseNamespaceTransferCopy> ReadNamespaceTransferAsync(Guid operationId, CancellationToken token = default)

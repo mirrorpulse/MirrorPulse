@@ -39,7 +39,14 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             await RunNativeHostTransferAsync(deleteSource: true, retireLocal: true, retirementFault: fault);
     }
 
-    private async Task RunNativeHostTransferAsync(bool deleteSource, bool retireLocal = false, string? retirementFault = null)
+    [TestMethod]
+    [DoNotParallelize]
+    [TestCategory("NativeCloudFiles")]
+    public Task NativeHostTransferAcknowledgesOriginalClaimAndRecoversSdkReturnBeforeReceiptAcrossStoreOwners() =>
+        RunNativeHostTransferAsync(deleteSource: true, retireLocal: true, completeOriginals: true);
+
+    private async Task RunNativeHostTransferAsync(bool deleteSource, bool retireLocal = false, string? retirementFault = null,
+        bool completeOriginals = false)
     {
         if (!OperatingSystem.IsWindows() || Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
             Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
@@ -137,6 +144,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     new(source, source, source, source, id => id == targetRoot.InstanceId ? targetProtocol : 2, source);
                 MirrorPulseTransferPublicationCheckpoint? publicationCut = null; int publicationFaults = 0;
                 var projectionFault = new MirrorPulseTransferProjectionCommitFault(role.RoleSid);
+                var acknowledgementFault = new TransferNativeAcknowledgementFault(paths);
                 int retirementFaults = 0, nativeDeleteCalls = 0; bool sqlFaultArmed = false;
                 async ValueTask RetirementCheckpoint(MirrorPulseTransferSourceRetirementCheckpoint checkpoint, CancellationToken stop)
                 {
@@ -168,6 +176,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     if (checkpoint == MirrorPulseTransferSourceRetirementCheckpoint.BeforeNativeDeletion) nativeDeleteCalls++;
                 }
                 CloudLocalChangeFeed? originalJournal = null, currentJournal = null;
+                MirrorPulseJournalUploadSource? currentJournalSource = null;
                 void ObserveJournal(CloudLocalChangeFeed feed)
                 { Assert.IsTrue(feed.IsStarted); originalJournal ??= feed; currentJournal = feed; }
                 var factory = new CfSharpMirrorPulseCloudRuntimeFactory(provider: new MirrorPulseDemandProvider(router, transport, namespaceWork: work),
@@ -176,7 +185,9 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 {
                     StateStoreDecorator = projectionFault.Wrap,
                     TransferJournalReady = ObserveJournal,
+                    TransferJournalSourceReady = source => currentJournalSource = source,
                     TransferSourceRetirementCheckpoint = retireLocal ? RetirementCheckpoint : null,
+                    TransferAcknowledgementCheckpoint = completeOriginals ? acknowledgementFault.CheckpointAsync : null,
                     TransferPublicationCheckpoint = (checkpoint, _) =>
                     {
                         if (checkpoint != publicationCut) return ValueTask.CompletedTask;
@@ -207,6 +218,14 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     Assert.AreEqual("moved.bin", prepared.Plan.CommandOrigin.TargetName);
                     Assert.IsTrue(prepared.Plan.CommandOrigin.RequestedAt <= prepared.Plan.PreparedAt);
                     Assert.IsNull(prepared.JournalClaim);
+                    var fenced = await new MirrorPulseJournalUploadSource(journal, router, catalog, _ => true).ReadPendingAsync(deadline.Token);
+                    Assert.IsEmpty(fenced.ReadyCommands); Assert.IsFalse(fenced.RequiresFullRescan);
+                    Assert.IsGreaterThan(0, fenced.DeferredCount);
+                    foreach (Guid originalId in originalContentIds)
+                        Assert.IsNull(await catalog.ReadWorkerRequestAsync(originalId, deadline.Token),
+                            "A durable transfer fence must prevent ordinary ownership before the pre-copy claim exists.");
+                    var stillPending = await ReadTransferOriginalJournalIdsAsync(journal, deadline.Token);
+                    foreach (Guid originalId in originalContentIds) Assert.IsTrue(stillPending.Contains(originalId));
                     worker.Plan = prepared.Plan;
                     Assert.AreEqual(nativeBefore.LocalBinding!.LocalFileId, prepared.Plan.Source.Context.Member.LocalObject.LocalFileId);
                     Assert.IsNull(prepared.CopyStartedAt); Assert.AreEqual(bytes.LongLength, prepared.Plan.Length);
@@ -431,6 +450,12 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                             throw new AssertFailedException("The active transfer owner lost its public journal."), deadline.Token);
                         foreach (Guid originalId in originalContentIds) Assert.IsTrue(pendingOriginals.Contains(originalId));
                         Assert.AreEqual(accepted.JournalClaim, (await catalog.ReadNamespaceTransferAsync(operation, deadline.Token))!.JournalClaim);
+                        if (completeOriginals)
+                        {
+                            (verified, secondPublisher) = await CompleteNativeTransferWithRecoveryAsync(publishing, factory, catalog, paths,
+                                verified, () => currentJournal!, () => currentJournalSource!, work, worker, acknowledgementFault, deadline.Token);
+                            publishing = secondPublisher;
+                        }
                     }
                     finally
                     {
@@ -442,10 +467,11 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     if (retireLocal) Assert.IsFalse(File.Exists(sourcePath));
                     else CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(sourcePath, deadline.Token));
                     string targetPath = Path.Combine(paths.SyncRootPath, "Archive", "moved.bin");
-                    Assert.IsTrue(File.Exists(targetPath)); Assert.AreEqual(bytes.LongLength, new FileInfo(targetPath).Length);
+                    Assert.IsTrue(File.Exists(targetPath)); Assert.AreEqual(completeOriginals ? TransferAcknowledgementLaterTarget.LongLength : bytes.LongLength,
+                        new FileInfo(targetPath).Length);
                     await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() => File.Delete(targetPath), deadline.Token));
                     Assert.AreEqual(member, await catalog.ReadNamespaceMemberAsync(member.MemberId, deadline.Token));
-                    Assert.HasCount(2, await catalog.ReadNamespaceDispatchFencedRootsAsync(deadline.Token));
+                    Assert.HasCount(completeOriginals ? 0 : 2, await catalog.ReadNamespaceDispatchFencedRootsAsync(deadline.Token));
                     await using var input = await new MirrorPulseLocalTransferContentStore(paths).OpenLeaseAsync(prepared.Plan, deadline.Token);
                     CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(input.Data.Name, deadline.Token));
                 }
@@ -467,12 +493,14 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 await catalog.DisposeAsync();
                 await using var nextCatalog = await MirrorPulseProductCatalog.OpenAsync(paths, deadline.Token);
                 var nextTransport = new MirrorPulseNormalUserWorkerTransport(nextRole, worker, worker, worker, worker, worker);
+                await using var nextWork = new MirrorPulseNamespaceWorkAdmission([sourceRoot.RootId, targetRoot.RootId]);
                 var nextFactory = new CfSharpMirrorPulseCloudRuntimeFactory(router: router, catalog: nextCatalog, mayDispatch: _ => false,
-                    scheduler: scheduler, namespaceExecution: nextRole, namespaceActor: actor, namespaceWork: work, transfers: Services(nextTransport));
+                    scheduler: scheduler, namespaceExecution: nextRole, namespaceActor: actor, namespaceWork: completeOriginals ? nextWork : work,
+                    transfers: Services(nextTransport));
                 await using var reopened = nextFactory.Create(paths); await reopened.StartAsync(deadline.Token);
                 int beforeOfflineRead = Volatile.Read(ref worker.RangeReads);
                 string publishedTarget = Path.Combine(paths.SyncRootPath, "Archive", "moved.bin");
-                CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(publishedTarget, deadline.Token));
+                CollectionAssert.AreEqual(completeOriginals ? TransferAcknowledgementLaterTarget : bytes, await File.ReadAllBytesAsync(publishedTarget, deadline.Token));
                 Assert.AreEqual(beforeOfflineRead, Volatile.Read(ref worker.RangeReads), "A restarted offline Host must retain all original target bytes.");
                 var reopenedTarget = await reopened.InspectNamespaceMemberAsync("Archive/moved.bin", false, deadline.Token);
                 Assert.AreEqual(verified.TargetPublication!.MemberId, reopenedTarget.MemberId);
@@ -491,14 +519,20 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     else if (sameInstance) await Assert.ThrowsExactlyAsync<MirrorPulseMutationAmbiguousException>(async () => await reopened.DeleteNamespaceTransferSourceAsync(operation, deadline.Token));
                     else Assert.AreEqual(verified, await reopened.DeleteNamespaceTransferSourceAsync(operation, deadline.Token));
                 }
+                if (completeOriginals)
+                {
+                    Assert.AreEqual(verified, await reopened.CompleteNamespaceTransferAsync(operation, deadline.Token));
+                    Assert.IsFalse(nextWork.IsAdmitted(sourceRoot.RootId)); Assert.IsFalse(nextWork.IsAdmitted(targetRoot.RootId));
+                }
                 Assert.AreEqual(1, worker.Uploads); Assert.AreEqual(deleteSource ? 1 : 0, worker.Deletes);
                 if (retireLocal) Assert.IsFalse(File.Exists(sourcePath));
                 else CollectionAssert.AreEqual(later, await File.ReadAllBytesAsync(sourcePath, deadline.Token));
                 CollectionAssert.AreEqual(targetLater, await File.ReadAllBytesAsync(publishedTarget, deadline.Token));
-                Assert.HasCount(2, await nextCatalog.ReadNamespaceDispatchFencedRootsAsync(deadline.Token));
+                Assert.HasCount(completeOriginals ? 0 : 2, await nextCatalog.ReadNamespaceDispatchFencedRootsAsync(deadline.Token));
                 if (!retireLocal) TestContext.WriteLine($"HostTransfer: sameInstance={sameInstance}; originalBinding=True; privateWholeBytes=True; originalCopyReceipt=True; targetWholeReadback=True; distinctTargetBirthPrepared=True; nativeTargetPublished=True; onlineOnlyPublication=True; nativeTargetWholeBytesVerified=True; targetRangeRpcReads={Volatile.Read(ref worker.RangeReads)}; offlineReopenWholeBytes=True; nativeIdentityAndDaclRetained=True; closedRootReopened=False; namespaceDeleteDenied=True; sdkProjectionFailure={projectionFault.Failures}; knownBindingRecovery={!deleteSource}; registrationResponseLoss={sameInstance && !deleteSource}; publicationWriteFailure={sameInstance && !deleteSource}; normalUserRpc=True; sourceRetired=False; bothFences=True; newRoleHistoricalReplay=True; laterSourceAndTargetEditsRetained=True; actualWorkerProcess=False; controlCliIntegrated=False.");
                 if (deleteSource && !retireLocal) TestContext.WriteLine($"HostTransferSourceDelete: sameInstance={sameInstance}; originalConditionalRevision=True; existingWriterRejected=True; writableMappingInputClosedRejected=True; queuedWriterRejectedDuringRpc=True; remoteDeleted=True; acceptanceRetained={!sameInstance}; unknownOutcomeNotRedispatched={sameInstance}; localSourceRetired=False; originalJournalAcknowledged=False; bothFences=True; normalUserRpc=True; actualWorkerProcess=False; controlCliIntegrated=False.");
-                if (retireLocal) TestContext.WriteLine($"HostTransferSourceRetirement: sameInstance={sameInstance}; originalSdkItemTombstone=True; originalNativeBinding=True; sameDataGuardThroughRemoteAndLocalDelete=True; originalSourceNameSettled=True; privateWholeBytesRetained=True; targetWholeBytesRetained=True; existingWriterAndMappingRejected=True; queuedWriterRejectedDuringRpc=True; remoteDeleteCalls=1; newRoleOfflineCompletedReplay=True; laterTargetEditsRetained=True; bothFences=True; originalJournalAcknowledged=False; actualWorkerProcess=False; controlCliIntegrated=False.");
+                if (retireLocal && !completeOriginals) TestContext.WriteLine($"HostTransferSourceRetirement: sameInstance={sameInstance}; originalSdkItemTombstone=True; originalNativeBinding=True; sameDataGuardThroughRemoteAndLocalDelete=True; originalSourceNameSettled=True; privateWholeBytesRetained=True; targetWholeBytesRetained=True; existingWriterAndMappingRejected=True; queuedWriterRejectedDuringRpc=True; remoteDeleteCalls=1; newRoleOfflineCompletedReplay=True; laterTargetEditsRetained=True; bothFences=True; originalJournalAcknowledged=False; actualWorkerProcess=False; controlCliIntegrated=False.");
+                if (completeOriginals) TestContext.WriteLine($"HostTransferOriginalAcknowledgement: sameInstance={sameInstance}; originalSdkApiActuallyInvoked=True; sourceRevisionNull=True; firstStartImmutable=True; beforeSdkInterrupted=True; afterSdkReturnInterrupted=True; productReceiptRollback=True; storeOwnersReopened=4; bothDurableFencesReleased=True; freshRootAudits=True; lateOriginalDeleteSdkAck=True; lateSdkReturnReceiptRecovered=True; laterTargetEditRetained=True; noWorkerRedispatch=True; historicalReplayDoesNotGrantReadiness=True; actualWorkerProcess=False; controlCliIntegrated=False.");
                 if (retirementFault is not null) TestContext.WriteLine($"HostTransferSourceRetirementRecovery: fault={retirementFault}; sameInstance={sameInstance}; originalStartAndItemRetained=True; nativeDeleteCalls={nativeDeleteCalls}; remoteDeleteCalls={worker.Deletes}; nameAndBothFencesRetainedBeforeSettlement=True; firstReceiptImmutable=True; sameRoleStoreOwnerReopened=True; unfinishedRoleRotated=False; privateWholeBytesRetained=True; originalJournalAcknowledged=False.");
             }
             finally

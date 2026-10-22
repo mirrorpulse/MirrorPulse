@@ -140,6 +140,6 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         await using var connection = Connection(fixture.Paths); await connection.OpenAsync(); await using var query = connection.CreateCommand();
         query.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='namespace_retirement_batches_root_operation';";
         Assert.AreEqual(1L, await query.ExecuteScalarAsync());
-        query.CommandText = "PRAGMA user_version;"; Assert.AreEqual(84L, await query.ExecuteScalarAsync());
+        query.CommandText = "PRAGMA user_version;"; Assert.AreEqual(85L, await query.ExecuteScalarAsync());
     }
 }

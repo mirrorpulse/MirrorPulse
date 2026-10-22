@@ -10,6 +10,7 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
         $repeated.Add($prefix + 'NativeHostTransferDeletesOnlyOriginalRemoteSourceWhileRetainingGuardedLocalBytes', 2)
         $repeated.Add($prefix + 'NativeHostTransferRetiresOriginalSourceThroughTheSdkAndKeepsPrivateBytesAndBothFences', 2)
         $repeated.Add($prefix + 'NativeHostTransferSourceRetirementResumesOriginalNativeAndReceiptBoundariesAcrossStoreOwners', 10)
+        $repeated.Add($prefix + 'NativeHostTransferAcknowledgesOriginalClaimAndRecoversSdkReturnBeforeReceiptAcrossStoreOwners', 2)
         foreach ($name in $TestNames) {
             if ([string]::IsNullOrWhiteSpace($name) -or $name.Length -gt 512 -or $name -cnotmatch '^[A-Za-z0-9_.]+$' -or -not $selected.Add($name)) {
                 throw 'The namespace budget requires distinct, bounded test names.'
@@ -17,10 +18,10 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
             if ($repeated.ContainsKey($name)) { $executions += $repeated[$name] - 1 }
         }
     }
-    # Count the same/cross-instance executions inside the four selected transfer
-    # methods, including five retirement cutpoints in both scopes. Their native
-    # deadlines remain unchanged. At most 112 names plus 12 repeated executions
-    # gives a bounded 33-minute child envelope; count-only callers retain 30 minutes.
+    # Count both scopes inside the five selected transfer methods, including the
+    # retirement matrix and ACK retries inside their original native deadlines.
+    # At most 112 names plus 13 repeated executions gives a bounded 33m15s child
+    # envelope; count-only callers retain 30 minutes.
     return [Math]::Max(600000, 120000 + $executions * 15000)
 }
 

@@ -279,6 +279,17 @@ public sealed class MirrorPulseCliHostOperations : IMirrorPulseCliHostOperations
                     human = $"Member move committed · {move.OperationId:D} · {move.RelativePath}" +
                         (move.RequiresSubtreeReconciliation ? " · subtree reconciliation pending" : string.Empty);
                     break;
+                case ("namespace", "transfer") when command.Path.Count > 2 && command.Path[2].Equals("move", StringComparison.OrdinalIgnoreCase):
+                    var transferMove = MirrorPulseTransferCliArguments.ParseMove(command.Arguments);
+                    var movedTransfer = await _client.MoveNamespaceTransferAsync(transferMove.OperationId, transferMove.SourceMemberId,
+                        transferMove.TargetParentMemberId, transferMove.TargetName, cancellationToken).ConfigureAwait(false);
+                    result = movedTransfer; human = MirrorPulseTransferCliArguments.Format(movedTransfer);
+                    break;
+                case ("namespace", "transfer") when command.Path.Count > 2 && command.Path[2].Equals("resume", StringComparison.OrdinalIgnoreCase):
+                    var resumedTransfer = await _client.ResumeNamespaceTransferAsync(MirrorPulseTransferCliArguments.ParseId(command.Arguments, "operation"),
+                        cancellationToken).ConfigureAwait(false);
+                    result = resumedTransfer; human = MirrorPulseTransferCliArguments.Format(resumedTransfer);
+                    break;
                 case ("namespace", "transfer") when command.Path.Count > 2 && command.Path[2].Equals("status", StringComparison.OrdinalIgnoreCase):
                     Guid transferOperation = MirrorPulseTransferCliArguments.ParseId(command.Arguments, "operation");
                     var transferStatus = await _client.GetNamespaceTransferStatusAsync(transferOperation, cancellationToken).ConfigureAwait(false);

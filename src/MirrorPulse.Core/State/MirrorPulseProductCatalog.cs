@@ -104,7 +104,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                 version.CommandText = "PRAGMA user_version;";
                 currentVersion = (long)(await version.ExecuteScalarAsync(cancellationToken)
                     .ConfigureAwait(false) ?? 0L);
-                if (currentVersion > 84)
+                if (currentVersion > 85)
                 {
                     throw new InvalidDataException("The MP product catalog schema is newer than this Host supports.");
                 }
@@ -467,6 +467,8 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
             await EnsureNamespaceTransferSchemaAsync(connection, stampVersion: false, requireExisting: currentVersion >= 80, cancellationToken).ConfigureAwait(false);
             await EnsureNamespaceTransferBirthSchemaAsync(connection, requireExisting: currentVersion >= 81, stampVersion: false, cancellationToken).ConfigureAwait(false);
             await EnsureNamespaceTransferJournalSchemaAsync(connection, requireExisting: currentVersion >= 82, stampVersion: false, cancellationToken).ConfigureAwait(false);
+            await EnsureNamespaceNameEpochSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
+            await EnsureRetiredTransferObservationSchemaAsync(connection, currentVersion, stampVersion: false, cancellationToken).ConfigureAwait(false);
             var catalog = new MirrorPulseProductCatalog(owner, connection);
             await EnsureNamespaceRemoteUpdateSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
             await EnsureRemoteDeleteResolutionSchemaAsync(connection, cancellationToken, stampVersion: false).ConfigureAwait(false);
@@ -478,6 +480,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
             await EnsureNamespaceTransferBirthSchemaAsync(connection, requireExisting: false, stampVersion: currentVersion < 81, cancellationToken).ConfigureAwait(false);
             await EnsureNamespaceTransferJournalSchemaAsync(connection, requireExisting: false, stampVersion: currentVersion < 82, cancellationToken).ConfigureAwait(false);
             await catalog.EnsureNamespaceTransferStateSchemaAsync(currentVersion, cancellationToken).ConfigureAwait(false);
+            await EnsureRetiredTransferObservationSchemaAsync(connection, currentVersion, stampVersion: true, cancellationToken).ConfigureAwait(false);
             return catalog;
         }
         catch
@@ -519,6 +522,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
         try
         {
             ThrowIfDisposed();
+            await RequireNotNamespaceTransferOwnerAsync(operationId, null, cancellationToken).ConfigureAwait(false);
             await RequirePreparedCoalescingFollowupAsync(operationId, instanceId, cancellationToken).ConfigureAwait(false);
             await using SqliteCommand insert = _connection.CreateCommand();
             insert.CommandText = """

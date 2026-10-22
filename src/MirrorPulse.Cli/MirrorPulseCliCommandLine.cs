@@ -149,7 +149,8 @@ public static class MirrorPulseCliCommandLine
                                 token.Equals("recover-delete", StringComparison.OrdinalIgnoreCase) || token.Equals("update-status", StringComparison.OrdinalIgnoreCase) ||
                                 token.Equals("updates", StringComparison.OrdinalIgnoreCase) || token.Equals("recover-update", StringComparison.OrdinalIgnoreCase)
                             : commandPath[1].Equals("transfer", StringComparison.OrdinalIgnoreCase)
-                                ? token.Equals("status", StringComparison.OrdinalIgnoreCase) || token.Equals("list", StringComparison.OrdinalIgnoreCase)
+                                ? token.Equals("status", StringComparison.OrdinalIgnoreCase) || token.Equals("list", StringComparison.OrdinalIgnoreCase) ||
+                                    token.Equals("move", StringComparison.OrdinalIgnoreCase) || token.Equals("resume", StringComparison.OrdinalIgnoreCase)
                                 : token.Equals("recover", StringComparison.OrdinalIgnoreCase);
                 if (!allowed)
                     return Failure($"Unknown subcommand '{token}' for 'namespace {commandPath[1]}'.", options);
@@ -273,6 +274,10 @@ public static class MirrorPulseCliHelp
                                          Show transfer progress, journal acknowledgement, and retained fences.
           namespace transfer list ROOT_ID
                                          List the root's pending transfers, as source or destination.
+          namespace transfer move OPERATION_ID SOURCE_MEMBER_ID TARGET_PARENT_ID NAME
+                                         Move a file between enabled roots and retain its recovery identity.
+          namespace transfer resume OPERATION_ID
+                                         Resume the original transfer without repeating an ambiguous remote effect.
           namespace remote updates ROOT_ID
                                          List the root's pending original remote update.
           namespace remote recover-update OPERATION_ID

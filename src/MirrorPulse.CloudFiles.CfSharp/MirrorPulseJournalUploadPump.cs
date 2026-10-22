@@ -74,7 +74,8 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
         MirrorPulseNamespaceActor? namespaceActor = null,
         MirrorPulseNamespaceExecutionSession? namespaceExecution = null,
         MirrorPulseNamespaceWorkAdmission? namespaceWork = null,
-        MirrorPulseUploadConflictActions? conflictActions = null)
+        MirrorPulseUploadConflictActions? conflictActions = null,
+        IMirrorPulseRetiredTransferObservationHandler? retiredSources = null)
     {
         _feed = feed ?? throw new ArgumentNullException(nameof(feed));
         _router = router ?? throw new ArgumentNullException(nameof(router));
@@ -107,7 +108,7 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
         if (conflictActions is not null) _localRemovalRecovery = new(catalog, conflictActions.ResumeConflictLocalRemovalAsync, router, mayDispatch, _runner, _log, localOnly: true);
         if (conflictActions is not null) _keepBothRecovery = new(catalog, conflictActions.ResumeConflictKeepBothAsync, router, mayDispatch, _runner, _log, namespaceWork);
         _completion = completion ?? throw new ArgumentNullException(nameof(completion));
-        _source = new MirrorPulseJournalUploadSource(feed, router, catalog, mayDispatch, _completion, namespaceWork);
+        _source = new MirrorPulseJournalUploadSource(feed, router, catalog, mayDispatch, _completion, namespaceWork, retiredSources);
     }
 
     public async ValueTask StartAsync(CancellationToken cancellationToken = default)

@@ -113,8 +113,55 @@ without a fresh audit. Worker calls execute in the normal Host user context.
 Historical accepted stages remain readable after a new role or offline instance;
 they perform no Worker call and cannot refresh native authority.
 
-These runtime phases are not yet a completed move or a Control/CLI transfer
-contract. Both root fences remain. Local read sharing does not establish the
-final writer/mapping protection needed for source deletion. Native target birth,
-SDK publication/confirmation, source retirement, journal acknowledgement,
-directory manifests and their fault/recovery matrices remain required.
+## Controlled file move and recovery
+
+`mp namespace transfer move OPERATION_ID SOURCE_MEMBER_ID TARGET_PARENT_ID NAME`
+starts one retained file transfer. Choose a unique operation ID and preserve it
+for `mp namespace transfer resume OPERATION_ID`. Status and list remain read-only.
+The CLI sends typed requests over the versioned Control pipe; only the Host opens
+the product catalog or the official CfSharp SQLite store. The Host drives copy,
+whole-target verification, protected destination publication, conditional source
+deletion, local source retirement and original journal acknowledgement. An
+ambiguous copy or delete remains pending for explicit reconciliation; resume
+does not authorize another remote effect from matching target bytes.
+
+The current remote-source completion requires negotiated V2 conditional source
+deletion and the original non-null revision. Local-only sources, directory
+manifests, legacy protocols and unfinished transfers under a different protection
+role still require separate recovery. These commands do not complete those
+broader transfer requirements.
+
+Source retirement retains its exact pre-deletion public SDK generation, native
+binding and actual tombstone receipt before releasing the old product name.
+Schema 85 also retains the transactional name epoch. A legacy retirement cannot
+invent that evidence after deletion. An immutable pre-copy notification claim
+is retained before upload; completion acknowledges exactly those IDs through
+the same running public SDK feed, with a null **source** revision. An empty claim
+settles only the explicit command and reports `journalAcknowledged: false`.
+
+The first acknowledgement invocation is durable before calling the SDK. Only
+the actual successful return permits the atomic product completion receipt and
+removal of exactly both owned root fences. A crash after the SDK commits replays
+the same invocation, even when the rows are already absent. Queue absence alone
+cannot replace a receipt. Once accepted, retry does not reread old Worker target
+content or overwrite later user edits. Private source bytes remain retained.
+
+The Host keeps both roots closed until fresh current membership and native
+inventory audits pass. A historical completed result does not reopen a root in a
+new Host. If completion was persisted but its fresh audit was interrupted, use
+the current root recovery command before expecting ordinary sync to resume.
+
+Late notifications are independent of the immutable pre-copy claim. Before
+ordinary upload admission, the Host proves the original retired generation,
+current parent and source-name epoch, and any distinct registered replacement.
+It retains each accepted late notification's first SDK invocation and return.
+Pending accepted starts recover before waiting for a new feed head. Unassigned,
+ambiguous or intervening generations remain pending for reconciliation; a path,
+timestamp or nullable SDK file identifier cannot substitute for ownership.
+The indexed source lookup and bounded rotating late-ACK recovery do not establish
+a performance bound for all existing lifetime-history queries.
+
+The additive clean Windows test covers same-instance and cross-instance original
+ACK interruption, receipt rollback and late Delete recovery. Until that source's
+native CI and signed Worker/CLI paths pass, managed tests and compilation alone
+do not establish full transfer or S06 acceptance.

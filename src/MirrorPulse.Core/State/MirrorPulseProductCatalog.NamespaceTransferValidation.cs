@@ -120,6 +120,7 @@ public sealed partial class MirrorPulseProductCatalog
             UNION ALL SELECT 1 FROM namespace_transfer_effects WHERE effect_id=$id
             UNION ALL SELECT 1 FROM namespace_transfer_target_births WHERE birth_id=$id
             UNION ALL SELECT 1 FROM namespace_transfer_journal_members WHERE operation_id=$id
+            UNION ALL SELECT 1 FROM retired_transfer_observations WHERE operation_id=$id
             UNION ALL SELECT 1 FROM mutation_intents WHERE operation_id=$id
             UNION ALL SELECT 1 FROM worker_requests WHERE operation_id=$id
             UNION ALL SELECT 1 FROM namespace_member_moves WHERE operation_id=$id

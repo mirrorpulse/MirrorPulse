@@ -38,6 +38,9 @@ public sealed record MirrorPulseNamespaceRetirement(Guid OperationId, MirrorPuls
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public MirrorPulseNamespaceTransferSourceProjection? TransferSourceProjection { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? TransferSourceNameEpoch { get; init; }
 }
 
 public sealed partial class MirrorPulseProductCatalog
