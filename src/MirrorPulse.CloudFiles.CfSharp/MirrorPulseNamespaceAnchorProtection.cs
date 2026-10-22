@@ -76,10 +76,11 @@ public sealed class MirrorPulseNamespaceAnchorProtectionCoordinator(CloudFileSys
                         if (latest is null || latest.Intent.Kind == MirrorPulseNamespacePermissionChangeKind.Restore || latest.Intent.RoleSid != execution.RoleSid.Value)
                         {
                             site = MirrorPulseStartupFailureSite.AnchorPermissionPreparation;
-                            latest = await catalog.PrepareNamespacePermissionChangeAsync(original, new(Guid.NewGuid(), original.EvidenceId,
-                                original.LocalObject, null, string.Empty, latest is null || latest.Intent.Kind == MirrorPulseNamespacePermissionChangeKind.Restore
+                            var previous = latest;
+                            latest = await PrepareInHostOwnerAsync(catalog, execution, original, () => new(Guid.NewGuid(), original.EvidenceId,
+                                original.LocalObject, null, string.Empty, previous is null || previous.Intent.Kind == MirrorPulseNamespacePermissionChangeKind.Restore
                                     ? MirrorPulseNamespacePermissionChangeKind.Protect : MirrorPulseNamespacePermissionChangeKind.RotateRole,
-                                execution.RoleSid.Value, latest?.Verification!.Dacl ?? original.OriginalDacl,
+                                execution.RoleSid.Value, previous?.Verification!.Dacl ?? original.OriginalDacl,
                                 MirrorPulseNamespacePermissionPolicy.CreateProtectedDacl(execution, true), DateTimeOffset.UtcNow), token).ConfigureAwait(false);
                             site = MirrorPulseStartupFailureSite.AnchorProtectedPermission;
                             applied = await permissions.ApplyProtectedAsync(latest.Intent.OperationId, fileSystem.Root, router,
@@ -113,6 +114,27 @@ public sealed class MirrorPulseNamespaceAnchorProtectionCoordinator(CloudFileSys
                 MirrorPulseStartupFailureTrace.Record(error, site); throw;
             }
         }, cancellationToken);
+
+    // The Host owns policy construction and its product catalog. Keep the native guard
+    // retained while temporarily leaving the namespace role, then restore that role
+    // before the actual protected permission write.
+    internal static Task<MirrorPulseNamespacePermissionChange> PrepareInHostOwnerAsync(MirrorPulseProductCatalog catalog,
+        MirrorPulseNamespaceExecutionSession execution, MirrorPulseNamespacePermissionBaseline original,
+        Func<MirrorPulseNamespacePermissionIntent> createIntent, CancellationToken token) =>
+        execution.RunNormalUserOperationAsync(async () =>
+        {
+            var site = MirrorPulseStartupFailureSite.AnchorPermissionPolicy;
+            try
+            {
+                var intent = createIntent();
+                site = MirrorPulseStartupFailureSite.AnchorPermissionCatalog;
+                return await catalog.PrepareNamespacePermissionChangeAsync(original, intent, token).ConfigureAwait(false);
+            }
+            catch (Exception error) when (error is not OutOfMemoryException)
+            {
+                MirrorPulseStartupFailureTrace.Record(error, site); throw;
+            }
+        });
 
     private static bool Verified(MirrorPulseProtectedNamespacePermissionResult result) =>
         result.Permission?.Outcome is MirrorPulseNamespacePermissionOutcome.Verified or MirrorPulseNamespacePermissionOutcome.AlreadyVerified &&

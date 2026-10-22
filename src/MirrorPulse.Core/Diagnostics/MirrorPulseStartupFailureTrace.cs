@@ -7,7 +7,7 @@ public enum MirrorPulseStartupFailureSite
 {
     Unknown, InitializationRead, InitializationAdmission, InitializationInventory, InitializationAnchorProtection,
     InitializationAnchorRegistration, InitializationAudit, AnchorGuard, AnchorHistory, AnchorPermissionPreparation,
-    AnchorProtectedPermission, AnchorVerification
+    AnchorProtectedPermission, AnchorVerification, AnchorPermissionPolicy, AnchorPermissionCatalog
 }
 
 /// <summary>Retains only the first closed startup call boundary without wrapping or changing the original exception.</summary>
