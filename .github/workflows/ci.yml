@@ -288,14 +288,10 @@ jobs:
         shell: pwsh
         timeout-minutes: 10
         env:
+          GITHUB_TOKEN: ${{ github.token }}
           MIRRORPULSE_NATIVE_TEST: '1'
         run: |
-          pwsh ./eng/aggregate-official-adapters.ps1 -ReleaseLockPath artifacts/official-adapter-releases.json -AdapterIds com.mirrorpulse.adapter.webdav -OutputDirectory artifacts/official-transfer-webdav
-          if ($LASTEXITCODE -ne 0) { throw 'The exact frozen signed WebDAV package is required.' }
-          $local = @(Get-ChildItem -LiteralPath artifacts/official-local -Recurse -Filter '*.mpadapter' -File)
-          $webdav = @(Get-ChildItem -LiteralPath artifacts/official-transfer-webdav -Recurse -Filter '*.mpadapter' -File)
-          if ($local.Count -ne 1 -or $webdav.Count -ne 1) { throw 'Exactly one frozen package per backend is required.' }
-          pwsh ./eng/verify-cli-transfers.ps1 -Runtime win-arm64 -PackagePath $local[0].FullName -WebDavPackagePath $webdav[0].FullName -EvidencePath artifacts/evidence/cli-cross-package.json
+          pwsh ./eng/verify-cli-cross-package.ps1 -Runtime win-arm64 -ReleaseLockPath artifacts/official-adapter-releases.json -LocalPackageDirectory artifacts/official-local -WebDavPackageDirectory artifacts/official-transfer-webdav -EvidencePath artifacts/evidence/cli-cross-package.json
           if ($LASTEXITCODE -ne 0) { throw 'The real signed cross-package CLI transfer matrix failed.' }
 
       - name: Preserve original signed ARM64 cross-package transfer results and failures

@@ -57,6 +57,17 @@ source-bound native matrix, both transfer directions, later generations, restart
 private-byte oracle and authenticated cleanup to pass together. Same-instance
 multi-root transfers remain a separate post-S06 requirement.
 
+`eng/verify-cli-cross-package.ps1` owns CI package preparation before invoking
+the same native verifier. Its CI step supplies the workflow's read-only token
+to the frozen release aggregator. A package download or inventory failure is
+recorded in `cli-cross-package.originals/verification-failure.json` even when
+the native fixture never starts. That record contains only the source, run,
+runtime, closed stage and HRESULT; it preserves the original exception and
+cannot count as successful verification. A final report must match the exact
+source/run/runtime and satisfy the full schema 3 byte, receipt and cleanup
+policy. An Actions step conclusion affected by `continue-on-error` is never a
+substitute for that original report.
+
 Remote polling diagnostics expose only a closed failure boundary and named poll
 stage, preserving the original exception and retry state. They export no remote
 IDs, paths, exception text or stacks. `Unknown` remains an unclassified failure;
