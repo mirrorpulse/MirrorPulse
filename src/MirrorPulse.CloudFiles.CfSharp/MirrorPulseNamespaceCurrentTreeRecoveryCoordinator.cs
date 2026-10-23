@@ -81,7 +81,8 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
                         throw new IOException($"A registered original requires pending native recovery before the current graph can complete. " +
                             $"Directory={member.IsDirectory}; permission={restored.Permission?.Outcome.ToString() ?? "none"}; " +
                             $"reason={restored.Permission?.RecoveryReason?.ToString() ?? "none"}; " +
-                            $"scope={restored.Receipt?.Outcome.ToString() ?? "none"}; drained={restored.Receipt?.Drained.ToString() ?? "none"}.");
+                            $"scope={restored.Receipt?.Outcome.ToString() ?? "none"}; drained={restored.Receipt?.Drained.ToString() ?? "none"}; " +
+                            $"nativeObservation={restored.FailureDiagnostic ?? "unavailable"}");
                     Progress?.Invoke("NamespaceOriginalMemberCompleted");
                 }
                 else

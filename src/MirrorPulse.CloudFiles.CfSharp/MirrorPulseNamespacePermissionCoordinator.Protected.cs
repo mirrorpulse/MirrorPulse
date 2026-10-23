@@ -11,7 +11,10 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 /// Callers must retain both facts and independently audit the whole tree before enabling it.
 /// </remarks>
 public sealed record MirrorPulseProtectedNamespacePermissionResult(MirrorPulseNamespacePermissionResult? Permission,
-    CloudProtectedLocalOperationResult? Receipt);
+    CloudProtectedLocalOperationResult? Receipt)
+{
+    internal string? FailureDiagnostic { get; init; }
+}
 
 internal sealed record MirrorPulseProtectedLocalIdentityObservation(Guid? ItemId, string? RemoteId,
     bool IsPlaceholder, CloudPlaceholderIdentity? PlaceholderIdentity);
@@ -60,14 +63,28 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinator
             return new MirrorPulseProtectedNamespacePermissionResult(
                 new(change.Intent.OperationId, MirrorPulseNamespacePermissionOutcome.RecoveryRequired, change.RecoveryReason), null);
         MirrorPulseNamespacePermissionResult? permission = null;
+        string? failureDiagnostic = null;
         CloudProtectedLocalOperationResult receipt = await MirrorPulseWindowsNamespacePermissionLease.RunOwnedProtectedAsync(
             item, router, baseline.LocalObject, async (lease, token) =>
             {
                 permission = await ApplyWithinProtectionAsync(change, baseline, lease, initialLocalIdentity, token).ConfigureAwait(false);
+                if (baseline.IsDirectory && permission.Outcome == MirrorPulseNamespacePermissionOutcome.RecoveryRequired)
+                {
+                    // Closed presence/equality facts from the same retained native scope;
+                    // never include paths, item IDs, remote IDs or descriptor contents.
+                    var local = await lease.InspectLocalIdentityAsync(token).ConfigureAwait(false);
+                    var retained = await _catalog.ReadNamespacePermissionLocalIdentityAsync(baseline.EvidenceId, token).ConfigureAwait(false);
+                    var member = await _catalog.ReadNamespaceMemberByBindingAsync(baseline.LocalObject, token).ConfigureAwait(false);
+                    var current = member is null ? null : await _catalog.ReadNamespaceMemberIdentityAsync(member.MemberId, token).ConfigureAwait(false);
+                    failureDiagnostic = $"placeholder={local.IsPlaceholder}; officialItem={local.ItemId is not null}; " +
+                        $"officialRemote={local.RemoteId is not null}; retained={retained is not null}; " +
+                        $"currentItem={current?.ItemId is not null}; currentRemote={current?.RemoteId is not null}; " +
+                        $"officialMatchesCurrent={local.ItemId == current?.ItemId && local.RemoteId == current?.RemoteId}.";
+                }
             }, stop).ConfigureAwait(false);
         if (receipt.Outcome == CloudProtectedLocalOperationOutcome.LocalObjectMismatch)
             permission = await FenceAsync(change, MirrorPulseNamespacePermissionRecoveryReason.ObjectChanged).ConfigureAwait(false);
-        return new(permission, receipt);
+        return new(permission, receipt) { FailureDiagnostic = failureDiagnostic };
     }
 
     /// <summary>Runs only inside admitted product work and one library-owned protected callback.</summary>
