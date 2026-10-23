@@ -37,7 +37,7 @@ public sealed partial class MirrorPulseCatalogRemotePollPendingStore : IMirrorPu
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(pending);
-        if (pending.RootId is not null || pending.RootKey is not null || pending.ProjectionVersion == 3)
+        if (pending.RootId is not null || pending.RootKey is not null || pending.ProjectionVersion >= 3)
             throw new InvalidDataException("A root-scoped intent requires the root-scoped store boundary.");
         Validate(pending);
         byte[] payload = JsonSerializer.SerializeToUtf8Bytes(new Payload(2, pending.BatchId,
@@ -70,7 +70,7 @@ public sealed partial class MirrorPulseCatalogRemotePollPendingStore : IMirrorPu
 
     private static void Validate(MirrorPulsePendingRemotePoll pending)
     {
-        if (pending.ProjectionVersion is not (1 or 2 or 3) || pending.Fingerprint is null || pending.Fingerprint.Length != 32 ||
+        if (pending.ProjectionVersion is not (1 or 2 or 3 or 4) || pending.Fingerprint is null || pending.Fingerprint.Length != 32 ||
             string.IsNullOrWhiteSpace(pending.RootDirectoryName) || pending.RootDirectoryName is "." or ".." ||
             pending.RootDirectoryName.IndexOfAny(['/', '\\', ':']) >= 0)
             throw new InvalidDataException("The pending poll fingerprint or root directory is invalid.");
@@ -78,6 +78,9 @@ public sealed partial class MirrorPulseCatalogRemotePollPendingStore : IMirrorPu
         ArgumentNullException.ThrowIfNull(pending.Candidate);
         MirrorPulseFileRemotePollSnapshotStore.Validate(pending.Previous);
         MirrorPulseFileRemotePollSnapshotStore.Validate(pending.Candidate);
+        if (pending.ProjectionVersion < 4 && pending.Previous.Values.Concat(pending.Candidate.Values).Any(entry => entry.PublicIdentity is not null) ||
+            pending.ProjectionVersion == 4 && pending.Candidate.Values.Any(entry => entry.PublicIdentity is null))
+            throw new InvalidDataException("The poll projection must retain exactly its original identity format.");
     }
 
     private sealed record Payload(int SchemaVersion, string BatchId, byte[] Fingerprint, string RootDirectoryName,
