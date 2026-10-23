@@ -14,10 +14,17 @@ public sealed record MirrorPulsePlaceholderIdentity(
     string? RemoteRevision)
 {
     public string? RootKey { get; init; }
+    public RootId? StableRootId { get; init; }
+    public Guid? Generation { get; init; }
 
     public CloudPlaceholderIdentity ToCfSharp()
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(RemoteId);
+        if (Generation is not null || StableRootId is not null)
+            return MirrorPulseGenerationalPlaceholderIdentity.Create(InstanceId,
+                StableRootId ?? throw new InvalidDataException("A generation requires its stable root."),
+                RootKey ?? throw new InvalidDataException("A generation requires its root key."), RemoteId,
+                Generation ?? throw new InvalidDataException("A generation is required."), RemoteRevision);
         if (RootKey is null) return new(CreateItemId(InstanceId, RemoteId), RemoteId.Trim(), RemoteRevision?.Trim());
         ArgumentException.ThrowIfNullOrWhiteSpace(RootKey);
         string scoped = "mp2:" + InstanceId.Value.ToString("N") + ":" + EncodePart(RootKey) + ":" + EncodePart(RemoteId.Trim());
@@ -35,6 +42,9 @@ public sealed record MirrorPulsePlaceholderIdentity(
     public static MirrorPulsePlaceholderIdentity Decode(InstanceId instanceId, ReadOnlySpan<byte> encoded)
     {
         var identity = CloudPlaceholderIdentity.Decode(encoded);
+        if (MirrorPulseGenerationalPlaceholderIdentity.TryDecode(instanceId, identity, out var generation))
+            return new(instanceId, generation!.RemoteId, generation.RemoteRevision)
+            { RootKey = generation.RootKey, StableRootId = generation.RootId, Generation = generation.Generation };
         if (TryReadScoped(instanceId, identity.RemoteId, out string? rootKey, out string? remoteId))
         {
             var scoped = Create(instanceId, remoteId!, identity.RemoteRevision) with { RootKey = rootKey };
@@ -57,6 +67,8 @@ public sealed record MirrorPulsePlaceholderIdentity(
     {
         ArgumentNullException.ThrowIfNull(root);
         ArgumentNullException.ThrowIfNull(identity);
+        if (MirrorPulseGenerationalPlaceholderIdentity.TryDecode(root.InstanceId, identity, out var generation))
+            return generation!.RootId == root.RootId && generation.RootKey == root.UniquenessKey;
         if (root.IdentityScope == RootIdentityScope.LegacyInstance)
             return identity.ItemId == Create(root.InstanceId, identity.RemoteId, identity.RemoteRevision).ToCfSharp().ItemId;
         if (!TryReadScoped(root.InstanceId, identity.RemoteId, out string? rootKey, out string? remoteId) || rootKey != root.UniquenessKey)
@@ -66,6 +78,8 @@ public sealed record MirrorPulsePlaceholderIdentity(
 
     public static bool BelongsToInstance(InstanceId instance, CloudPlaceholderIdentity identity, string? rootKey = null)
     {
+        if (MirrorPulseGenerationalPlaceholderIdentity.TryDecode(instance, identity, out var generation))
+            return rootKey is null || generation!.RootKey == rootKey;
         if (TryReadScoped(instance, identity.RemoteId, out string? encodedRoot, out string? remoteId))
             return (rootKey is null || encodedRoot == rootKey) && identity.ItemId ==
                 (Create(instance, remoteId!, identity.RemoteRevision) with { RootKey = encodedRoot }).ToCfSharp().ItemId;

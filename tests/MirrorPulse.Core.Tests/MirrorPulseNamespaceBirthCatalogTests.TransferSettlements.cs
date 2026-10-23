@@ -176,9 +176,10 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
     }
 
     private static async Task<TransferPublicationFixture> PrepareSettledTransferAsync(MirrorPulseProductCatalog catalog,
-        bool sameInstance = true, bool emptyJournal = false, bool stopBeforeRetirement = false, bool legacy = false)
+        bool sameInstance = true, bool emptyJournal = false, bool stopBeforeRetirement = false, bool legacy = false,
+        MirrorPulseNamespaceTransferPlan? originalPlan = null)
     {
-        var target = await PrepareTransferPublicationFixtureAsync(catalog, sameInstance, captureOriginalJournal: !legacy, emptyJournal: emptyJournal);
+        var target = await PrepareTransferPublicationFixtureAsync(catalog, sameInstance, captureOriginalJournal: !legacy, emptyJournal: emptyJournal, originalPlan: originalPlan);
         await catalog.RecordNamespaceTransferTargetPublicationAsync(target.Publication);
         var sourceProof = FreshSourceDeleteTarget(target);
         await catalog.StartNamespaceTransferSourceDeleteAsync(target.Copy.Plan.OperationId, sourceProof, target.Protection.ProtectionId, sourceProof.VerifiedAt);

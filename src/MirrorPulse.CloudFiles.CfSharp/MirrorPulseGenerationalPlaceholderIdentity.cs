@@ -12,10 +12,18 @@ internal sealed record MirrorPulseGenerationalPlaceholderIdentity(InstanceId Ins
     internal static CloudPlaceholderIdentity Create(RootRegistration root, string remoteId, Guid generation, string? revision = null)
     {
         ArgumentNullException.ThrowIfNull(root);
+        return Create(root.InstanceId, root.RootId, root.UniquenessKey, remoteId, generation, revision);
+    }
+
+    internal static CloudPlaceholderIdentity Create(InstanceId instanceId, RootId rootId, string rootKey,
+        string remoteId, Guid generation, string? revision)
+    {
+        if (instanceId.Value == Guid.Empty || rootId.Value == Guid.Empty) throw new ArgumentException("A stable instance and root are required.");
+        ArgumentException.ThrowIfNullOrWhiteSpace(rootKey);
         ArgumentException.ThrowIfNullOrWhiteSpace(remoteId);
         if (generation == Guid.Empty) throw new ArgumentException("A selected generation must be nonempty.", nameof(generation));
-        string scoped = string.Join(':', "mp3", root.InstanceId.Value.ToString("N"), root.RootId.Value.ToString("N"),
-            EncodePart(root.UniquenessKey), generation.ToString("N"), EncodePart(remoteId));
+        string scoped = string.Join(':', "mp3", instanceId.Value.ToString("N"), rootId.Value.ToString("N"),
+            EncodePart(rootKey), generation.ToString("N"), EncodePart(remoteId));
         return new(CreateItemId(scoped), scoped, revision);
     }
 

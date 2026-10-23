@@ -172,10 +172,12 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
     }
 
     private static async Task<MirrorPulseNamespaceTransferPlan> PrepareAcceptedTransferTargetAsync(MirrorPulseProductCatalog catalog,
-        byte[] bytes, bool sameInstance = false, bool localOnlySource = false, bool captureOriginalJournal = false, bool emptyJournal = false)
+        byte[] bytes, bool sameInstance = false, bool localOnlySource = false, bool captureOriginalJournal = false, bool emptyJournal = false,
+        MirrorPulseNamespaceTransferPlan? originalPlan = null)
     {
-        var plan = (await PrepareTransferFixtureAsync(catalog, sameInstance)).Plan with
-        { Length = bytes.LongLength, Sha256 = Convert.ToHexString(SHA256.HashData(bytes)), SourceRemoteRevision = localOnlySource ? null : "source-v1" };
+        var original = originalPlan ?? (await PrepareTransferFixtureAsync(catalog, sameInstance)).Plan;
+        var plan = original with
+        { Length = bytes.LongLength, Sha256 = Convert.ToHexString(SHA256.HashData(bytes)), SourceRemoteRevision = originalPlan is null ? localOnlySource ? null : "source-v1" : original.SourceRemoteRevision };
         if (captureOriginalJournal) plan = WithTransferCommandOrigin(plan with { SourceRoute = plan.SourceRoute with { ProtocolVersion = 2 } });
         await catalog.PrepareNamespaceTransferAsync(plan);
         if (captureOriginalJournal)
