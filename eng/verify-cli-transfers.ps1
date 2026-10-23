@@ -395,6 +395,14 @@ try {
             }
         }
     } finally {
+        # The regular teardown stops this owned child gracefully. If an earlier
+        # Host cleanup step failed, release it here without masking that failure.
+        if ($null -ne $script:webDavProcess) {
+            try {
+                if (-not $script:webDavProcess.HasExited) { $script:webDavProcess.Kill($true); $script:webDavProcess.WaitForExit() }
+            } catch { Write-Host 'The owned WebDAV fixture requires cleanup after the original teardown failure.' }
+            finally { $script:webDavProcess.Dispose(); $script:webDavProcess = $null }
+        }
         foreach ($name in $savedEnvironment.Keys) { [Environment]::SetEnvironmentVariable($name, $savedEnvironment[$name], 'Process') }
     }
 }
