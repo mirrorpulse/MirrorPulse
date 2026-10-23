@@ -141,8 +141,9 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
                 .ConfigureAwait(false);
             MirrorPulseAdapterTopology topology = await catalog.ReadAdapterTopologyAsync(cancellationToken)
                 .ConfigureAwait(false);
+            var identityResolver = new MirrorPulseRemoteIdentityResolver(catalog);
             var rootRouter = new MirrorPulseRootRouter(paths.SyncRootPath, topology.Roots,
-                await catalog.ReadManagedRootNamesAsync(cancellationToken).ConfigureAwait(false));
+                await catalog.ReadManagedRootNamesAsync(cancellationToken).ConfigureAwait(false), identityResolver);
             var namespaceFence = new MirrorPulseRemoteNamespaceFence(rootRouter, catalog);
             var conflictCenter = new MirrorPulseConflictCenter();
             systemNotifications = new MirrorPulseSystemNotificationPublisher();
@@ -184,9 +185,13 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
                     // A streamed batch must not overtake the immutable polling intent.
                     if (await catalog.ReadPendingRemoteBatchAsync(instanceId, token).ConfigureAwait(false) is not null)
                         throw new InvalidOperationException("A remote polling batch must converge before streamed changes apply.");
-                    CloudRemoteChangeBatch batch = MirrorPulseAdapterRemoteBatchMapper.Map(
-                        instanceId, rootRouter.Registrations, adapterBatch);
-                    return await ApplyCloudRemoteBatchAsync(instanceId, batch, token).ConfigureAwait(false);
+                    CloudRemoteApplyResult result = await (currentSession ??
+                        throw new InvalidOperationException("The Cloud Files session has not started."))
+                        .ApplyAdapterRemoteBatchAsync(instanceId, adapterBatch, catalog, conflictCenter, conflictNotifications,
+                            cancellationToken: token).ConfigureAwait(false);
+                    if (result.RequiresRetry)
+                        await catalog.SaveInstanceRuntimeStateAsync(new(instanceId, "Remote retry", false, null, "RemoteBatchRetry"), token).ConfigureAwait(false);
+                    return MirrorPulseRemotePollApplyOutcome.FromResult(result);
                 }, batchCancellationToken).ConfigureAwait(false);
             }
 
@@ -215,7 +220,7 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
                 snapshotStore: remoteSnapshotStore,
                 pendingStore: new MirrorPulseCatalogRemotePollPendingStore(catalog), scheduler: remoteScheduler,
                 mayPoll: namespaceFence.CanPollAsync, currentRoots: () => rootRouter.Registrations, namespaceWork: namespaceWork,
-                diagnosticsDirectory: Path.Combine(paths.DataRootPath, "logs", "remote-poll"));
+                diagnosticsDirectory: Path.Combine(paths.DataRootPath, "logs", "remote-poll"), identityResolver: identityResolver);
 
             var application = new MirrorPulseHostApplication(
                 paths, configurationStore, configuration, hostLease, catalog, conflictCenter, systemNotifications,

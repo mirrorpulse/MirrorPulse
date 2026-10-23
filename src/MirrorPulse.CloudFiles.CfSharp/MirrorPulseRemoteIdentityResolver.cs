@@ -11,6 +11,16 @@ public sealed class MirrorPulseRemoteIdentityResolver(MirrorPulseProductCatalog 
     private readonly MirrorPulseProductCatalog _catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
     private readonly TimeProvider _clock = timeProvider ?? TimeProvider.System;
 
+    /// <summary>Reads the selected address without treating a delete or historical retry as a new observation.</summary>
+    public async ValueTask<CloudPlaceholderIdentity> ReadCurrentAsync(RootRegistration root, string remoteId,
+        string? revision = null, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(root); ArgumentException.ThrowIfNullOrWhiteSpace(remoteId);
+        var original = MirrorPulsePlaceholderIdentity.CreateForRoot(root, remoteId, revision).ToCfSharp();
+        var selected = await _catalog.ReadRemoteIdentityGenerationAsync(root.RootId, original.ItemId, token).ConfigureAwait(false);
+        return selected is null ? original : ValidateCurrent(root, remoteId, revision, original, selected);
+    }
+
     /// <summary>Rejects callbacks for retired generations without allocating a successor from a stale callback.</summary>
     public async ValueTask RequireCurrentAsync(RootRegistration root, CloudPlaceholderIdentity identity, CancellationToken token = default)
     {

@@ -170,6 +170,8 @@ internal sealed class MirrorPulseRetainedRemoteBatchCoordinator(MirrorPulseProdu
         { throw new InvalidDataException("The retained public batch cannot be reconstructed safely.", error); }
     }
 
+    internal static CloudRemoteChangeBatch ReadOriginalBatch(MirrorPulseRetainedRemoteBatch retained) => Decode(retained).Batch;
+
     private static CloudPlaceholderMetadata? Metadata(MirrorPulseRemoteSnapshotMetadata? source)
     {
         if (source is null) return null;

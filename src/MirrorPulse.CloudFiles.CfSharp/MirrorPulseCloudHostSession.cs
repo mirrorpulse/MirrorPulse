@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Runtime.Versioning;
 using System.Text;
 using CfSharp;
+using MirrorPulse.Adapter.Sdk;
 using MirrorPulse.Core.Caching;
 using MirrorPulse.Core.CloudFiles;
 using MirrorPulse.Core.Configuration;
@@ -215,6 +216,11 @@ public interface IMirrorPulseCloudRuntime : IAsyncDisposable
         CancellationToken cancellationToken) =>
         ValueTask.FromException<CloudRemoteApplyResult>(
             new NotSupportedException("This Cloud Files runtime does not apply remote batches."));
+
+    ValueTask<CloudRemoteApplyResult> ApplyAdapterRemoteBatchAsync(InstanceId instanceId, AdapterRemoteChangeBatch batch,
+        MirrorPulseProductCatalog catalog, MirrorPulseConflictCenter center, MirrorPulseConflictNotificationBridge notifications,
+        CloudRemoteApplyOptions? options, CancellationToken cancellationToken) => ValueTask.FromException<CloudRemoteApplyResult>(
+            new NotSupportedException("This Cloud Files runtime does not project incoming Adapter batches."));
 
     ValueTask<MirrorPulseConflictResolution> ApplyUploadConflictAsync(
         Guid conflictId,
@@ -1475,19 +1481,38 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             MirrorPulseConflictNotificationBridge notifications,
             CloudRemoteApplyOptions? options,
             CancellationToken cancellationToken)
-            => WithCurrentLibraryAsync(async token =>
-            {
-                if (router is null) return await ApplyRemoteBatchCoreAsync(instanceId, batch, catalog, center, notifications, options, token).ConfigureAwait(false);
-                CloudRemoteApplyResult? result = null;
-                var retained = new MirrorPulseRetainedRemoteBatchCoordinator(catalog, state.OpenStore, router,
-                    async (instance, original, policy, stop) =>
-                    {
-                        result = await ApplyRemoteBatchCoreAsync(instance, original, catalog, center, notifications, policy, stop).ConfigureAwait(false);
-                        return MirrorPulseRemotePollApplyOutcome.FromResult(result);
-                    });
-                await retained.ApplyAsync(instanceId, batch, options ?? CloudRemoteApplyOptions.Default, token).ConfigureAwait(false);
-                return result ?? throw new InvalidDataException("The incoming batch did not reach its admitted apply boundary.");
-            }, cancellationToken);
+            => WithCurrentLibraryAsync(async token => await ApplyRetainedRemoteBatchAsync(instanceId, batch, catalog, center,
+                notifications, options, token).ConfigureAwait(false), cancellationToken);
+
+        public ValueTask<CloudRemoteApplyResult> ApplyAdapterRemoteBatchAsync(InstanceId instanceId, AdapterRemoteChangeBatch batch,
+            MirrorPulseProductCatalog catalog, MirrorPulseConflictCenter center, MirrorPulseConflictNotificationBridge notifications,
+            CloudRemoteApplyOptions? options, CancellationToken cancellationToken) => WithCurrentLibraryAsync(async token =>
+        {
+            if (router is null) throw new InvalidOperationException("Incoming projection requires current stable root routing.");
+            var pending = await catalog.ReadRetainedRemoteBatchAsync(instanceId, token).ConfigureAwait(false);
+            if (pending is not null && pending.BatchId != instanceId + "/" + batch.BatchId &&
+                !await RetainedRemoteBatches(catalog, center, notifications).ResumeAsync(instanceId, token).ConfigureAwait(false))
+                throw new InvalidOperationException("The original incoming batch must converge before another projection.");
+            var projected = await new MirrorPulseAdapterRemoteBatchProjector(catalog, state.OpenStore, router, new(catalog))
+                .ProjectAsync(instanceId, batch, token).ConfigureAwait(false);
+            return await ApplyRetainedRemoteBatchAsync(instanceId, projected, catalog, center, notifications, options, token).ConfigureAwait(false);
+        }, cancellationToken);
+
+        private async ValueTask<CloudRemoteApplyResult> ApplyRetainedRemoteBatchAsync(InstanceId instanceId, CloudRemoteChangeBatch batch,
+            MirrorPulseProductCatalog catalog, MirrorPulseConflictCenter center, MirrorPulseConflictNotificationBridge notifications,
+            CloudRemoteApplyOptions? options, CancellationToken token)
+        {
+            if (router is null) return await ApplyRemoteBatchCoreAsync(instanceId, batch, catalog, center, notifications, options, token).ConfigureAwait(false);
+            CloudRemoteApplyResult? result = null;
+            var retained = new MirrorPulseRetainedRemoteBatchCoordinator(catalog, state.OpenStore, router,
+                async (instance, original, policy, stop) =>
+                {
+                    result = await ApplyRemoteBatchCoreAsync(instance, original, catalog, center, notifications, policy, stop).ConfigureAwait(false);
+                    return MirrorPulseRemotePollApplyOutcome.FromResult(result);
+                });
+            await retained.ApplyAsync(instanceId, batch, options ?? CloudRemoteApplyOptions.Default, token).ConfigureAwait(false);
+            return result ?? throw new InvalidDataException("The incoming batch did not reach its admitted apply boundary.");
+        }
 
         private MirrorPulseRetainedRemoteBatchCoordinator RetainedRemoteBatches(MirrorPulseProductCatalog owner,
             MirrorPulseConflictCenter center, MirrorPulseConflictNotificationBridge notifications) =>
@@ -2124,6 +2149,14 @@ public sealed class MirrorPulseCloudHostSession : IAsyncDisposable
 
         return _runtime.ApplyRemoteBatchAsync(instanceId, batch, catalog, center, notifications,
             options, cancellationToken);
+    }
+
+    public ValueTask<CloudRemoteApplyResult> ApplyAdapterRemoteBatchAsync(InstanceId instanceId, AdapterRemoteChangeBatch batch,
+        MirrorPulseProductCatalog catalog, MirrorPulseConflictCenter center, MirrorPulseConflictNotificationBridge notifications,
+        CloudRemoteApplyOptions? options = null, CancellationToken cancellationToken = default)
+    {
+        if (!_started || _runtime is null) throw new InvalidOperationException("The Cloud Files Host session has not started.");
+        return _runtime.ApplyAdapterRemoteBatchAsync(instanceId, batch, catalog, center, notifications, options, cancellationToken);
     }
 
     public ValueTask<MirrorPulseConflictResolution> ApplyUploadConflictAsync(
