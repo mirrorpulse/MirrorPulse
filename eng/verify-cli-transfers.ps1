@@ -78,7 +78,7 @@ function Wait-TransferHash {
         if ((Test-Path -LiteralPath $Path -PathType Leaf) -and (Read-TransferHash $Path) -ieq $Expected) { return }
         Start-Sleep -Milliseconds 100
     } while ([DateTimeOffset]::UtcNow -lt $deadline)
-    throw 'The actual transfer or later user write did not produce its expected complete source bytes.'
+    throw ('The actual transfer or later user write did not produce its expected complete source bytes. Phase=' + $phase + '; exists=' + (Test-Path -LiteralPath $Path) + '.')
 }
 
 function Assert-TransferRootsReady {
@@ -189,6 +189,8 @@ try {
     }
     if ($workerIds.Count -ne 2) { throw 'Exactly two actual signed Worker processes must run from the verified installation.' }
     $beforeRestart = (Invoke-TransferCli @('--json', '--no-start', 'host', 'status')).data.processId
+    $phase = 'InitialRemoteRefresh'
+    Invoke-TransferCli @('--json', '--no-start', 'sync', 'refresh') | Out-Null
     $phase = 'TransferCommands'
     for ($index = 0; $index -lt 2; $index++) {
         $forward = $index -eq 0; $scope = 'CrossInstance'; $direction = if ($forward) { 'Forward' } else { 'Reverse' }
@@ -201,29 +203,38 @@ try {
         $sourceLocal = Join-Path $sync ($source.directoryName + '/' + $sourceName)
         $sourceRemote = Join-Path $fixture ('source/' + $sourceSide + '/' + $sourceName)
         $sourceHash = Read-TransferHash $sourceRemote
+        $phase = 'TransferCommands.' + $direction + '.SourceRead'
         Wait-TransferHash $sourceLocal $sourceHash
+        $phase = 'TransferCommands.' + $direction + '.InspectAndMove'
         $member = (Invoke-TransferCli @('--json', '--no-start', 'namespace', 'member', 'inspect', ($source.directoryName + '/' + $sourceName))).data
         $parent = (Invoke-TransferCli @('--json', '--no-start', 'namespace', 'member', 'inspect', $target.directoryName, '--directory')).data
         $moved = (Invoke-TransferCli @('--json', '--no-start', 'namespace', 'transfer', 'move', $operations[$index], $member.memberId, $parent.memberId, $targetName)).data
         $targetLocal = Join-Path $sync ($target.directoryName + '/' + $targetName)
         $targetRemote = Join-Path $fixture ('source/' + $targetSide + '/' + $targetName)
-        Wait-TransferHash $targetRemote $sourceHash; Wait-TransferHash $targetLocal $sourceHash
+        $phase = 'TransferCommands.' + $direction + '.TargetRemoteRead'
+        Wait-TransferHash $targetRemote $sourceHash
+        $phase = 'TransferCommands.' + $direction + '.TargetLocalRead'
+        Wait-TransferHash $targetLocal $sourceHash
         $published = (Invoke-TransferCli @('--json', '--no-start', 'namespace', 'member', 'inspect', ($target.directoryName + '/' + $targetName))).data
         Assert-TransferRootsReady
         $case = [ordered]@{scope=$scope;direction=$direction;operationId=$operations[$index];status=$moved;sourceItemId=$member.nativeItemId;targetItemId=$published.nativeItemId
             sourceSha256=$sourceHash;targetLocalSha256=(Read-TransferHash $targetLocal);targetRemoteSha256=(Read-TransferHash $targetRemote)
             sourceLocalMissing=(-not (Test-Path -LiteralPath $sourceLocal));sourceRemoteMissing=(-not (Test-Path -LiteralPath $sourceRemote));freshRootsAfterMove=$true}
+        Write-TransferOriginal -Name ('move-' + $direction) -Value $case
+        $phase = 'TransferCommands.' + $direction + '.LaterTargetUpload'
         $laterBytes = [Text.Encoding]::UTF8.GetBytes('later target edit ' + $direction)
         [IO.File]::WriteAllBytes($targetLocal, $laterBytes); $case.laterTargetSha256 = Read-TransferHash $targetLocal
         Wait-TransferHash $targetRemote $case.laterTargetSha256
         [IO.File]::WriteAllBytes($sourceRemote, [Text.Encoding]::UTF8.GetBytes('later remote source ' + $direction))
         $case.laterSourceSha256 = Read-TransferHash $sourceRemote
+        $phase = 'TransferCommands.' + $direction + '.LaterSourceRefresh'
         Invoke-TransferCli @('--json', '--no-start', 'sync', 'refresh') | Out-Null
         Wait-TransferHash $sourceLocal $case.laterSourceSha256
         $newSource = (Invoke-TransferCli @('--json', '--no-start', 'namespace', 'member', 'inspect', ($source.directoryName + '/' + $sourceName))).data
         $case.laterSourceMemberId = $newSource.memberId; $case.laterSourceItemId = $newSource.nativeItemId
         $case.laterSourcePublicIdentityReused = $newSource.nativeItemId -ceq $member.nativeItemId
         Assert-TransferRootsReady
+        $phase = 'TransferCommands.' + $direction + '.HistoricalResume'
         $case.resumedStatus = (Invoke-TransferCli @('--json', '--no-start', 'namespace', 'transfer', 'resume', $operations[$index])).data
         $case.resumedSourceSha256 = Read-TransferHash $sourceRemote; $case.laterRemoteSourcePreserved = $case.laterSourceSha256 -ieq $case.resumedSourceSha256
         $cases.Add($case); Write-TransferOriginal -Name ('case-' + $direction) -Value $case
