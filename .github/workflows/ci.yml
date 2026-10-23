@@ -202,6 +202,28 @@ jobs:
           path: artifacts/test-results/cfsharp-delete-arm64/**
           if-no-files-found: ignore
 
+      - name: Verify ARM64 SDK explicit identities at retired paths
+        id: sdk-recreation
+        if: (success() || failure()) && github.event_name == 'workflow_dispatch'
+        continue-on-error: true
+        shell: pwsh
+        timeout-minutes: 8
+        env:
+          MIRRORPULSE_NATIVE_TEST: '1'
+        run: |
+          pwsh ./eng/prepare-native-ci-volume.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'The disposable SDK test volume is unavailable.' }
+          pwsh ./eng/verify-cfsharp-recreation.ps1 -ExpectedArchitecture Arm64
+          if ($LASTEXITCODE -ne 0) { throw 'The independent SDK recreation matrix failed.' }
+
+      - name: Preserve original ARM64 SDK recreation results
+        if: always() && github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: cfsharp-recreation-arm64-originals
+          path: artifacts/test-results/cfsharp-recreation-arm64/**
+          if-no-files-found: ignore
+
       - name: Verify ARM64 CLI through signed Local Adapter and Cloud Files
         shell: pwsh
         timeout-minutes: 10
@@ -348,6 +370,11 @@ jobs:
           name: installed-msix-arm64-originals
           path: artifacts/evidence/installed.json
           if-no-files-found: ignore
+
+      - name: Report independent ARM64 SDK recreation failure after verification
+        if: always() && steps.sdk-recreation.outcome == 'failure'
+        shell: pwsh
+        run: throw 'The independent SDK recreation matrix failed; actual original results are retained.'
 
       - name: Report signed ARM64 CLI transfer failure after verification
         if: always() && steps.cli-transfers.outcome == 'failure'
