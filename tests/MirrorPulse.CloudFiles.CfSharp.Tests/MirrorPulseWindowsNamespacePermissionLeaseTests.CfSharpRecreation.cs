@@ -64,9 +64,11 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 SetProtectedFixtureUserOwner(sdk.GetDirectory("Docs"), caller.User!);
                 var created = await sdk.ApplyRemoteChangesAsync(birth, options, deadline.Token);
                 Assert.AreEqual(CloudRemoteBatchStatus.Applied, created.Status); Assert.IsEmpty(created.ConflictIds);
+                CloudItem originalReference = directoryItem ? sdk.GetDirectory(relativePath) : sdk.GetFile(relativePath);
+                var originalSnapshot = await originalReference.InspectAsync(deadline.Token);
+                Assert.AreEqual(previous.ItemId, CloudPlaceholderIdentity.Decode(originalSnapshot.PlaceholderIdentity.Span).ItemId);
                 var deleted = await sdk.ApplyRemoteChangesAsync(deletion, options, deadline.Token);
                 Assert.AreEqual(CloudRemoteBatchStatus.Applied, deleted.Status); Assert.IsEmpty(deleted.ConflictIds);
-                CloudItem originalReference = directoryItem ? sdk.GetDirectory(relativePath) : sdk.GetFile(relativePath);
                 Assert.IsFalse((await originalReference.InspectAsync(deadline.Token)).Exists);
                 await using var transaction = await originalState.OpenStore.BeginTransactionAsync(deadline.Token);
                 var tombstone = (await transaction.Items.GetByItemIdAsync(previous.ItemId, deadline.Token))!;
@@ -86,12 +88,12 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 await using var transaction = await state.OpenStore.BeginTransactionAsync(deadline.Token);
                 var oldItem = await transaction.Items.GetByItemIdAsync(previous.ItemId, deadline.Token);
                 var newItem = await transaction.Items.GetByItemIdAsync(next.ItemId, deadline.Token);
-                var byPath = await transaction.Items.GetByRelativePathAsync(relativePath, deadline.Token);
+                var byPath = await transaction.Items.GetByRelativePathAsync(recreation.Changes[0].RelativePath, deadline.Token);
                 var originalProgress = await transaction.RemoteBatches.GetAsync(deletion.BatchId, deadline.Token);
                 bool deleteFingerprintPreserved = originalProgress is not null && originalProgress.Fingerprint.Span.SequenceEqual(deletion.Fingerprint.Span);
                 TestContext.WriteLine($"CfSharpExplicitRecreation: directory={directoryItem}; sdkPackage={MirrorPulseRemoteLibraryProvenance.CurrentPackageVersion}; " +
                     $"status={result.Status}; requiresRetry={result.RequiresRetry}; appliedEntryCount={result.AppliedEntryCount}; conflicts={result.ConflictIds.Count}; " +
-                    $"nativeExists={snapshot.Exists}; nativePlaceholder={snapshot.IsPlaceholder}; requestedNewIdentity={next.ItemId}; " +
+                    $"nativeExists={snapshot.Exists}; nativePlaceholder={snapshot.IsPlaceholder}; originalIdentity={previous.ItemId}; requestedNewIdentity={next.ItemId}; " +
                     $"actualNativeIdentity={actual?.ItemId}; oldItemTombstone={oldItem?.IsTombstone}; newItemExists={newItem is not null}; " +
                     $"pathItemIdentity={byPath?.ItemId}; originalDeleteFingerprintPreserved={deleteFingerprintPreserved}; " +
                     $"sourceReads={provider.Reads}; productCatalogCreated={File.Exists(paths.ProductCatalogDatabasePath)}.");
