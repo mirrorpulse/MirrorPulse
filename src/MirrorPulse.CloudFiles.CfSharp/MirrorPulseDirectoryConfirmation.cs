@@ -27,7 +27,8 @@ public static class MirrorPulseDirectoryConfirmation
         CloudItemSnapshot snapshot = await directory.InspectAsync(cancellationToken).ConfigureAwait(false);
         if (!snapshot.Exists || !Directory.Exists(localPath))
             throw new MirrorPulseMutationAmbiguousException("The accepted local directory disappeared.");
-        CloudPlaceholderIdentity identity = router.CreateFileIdentity(intent.InstanceId, intent.RootKey, remote.RemoteId, acceptedRevision);
+        CloudPlaceholderIdentity identity = await router.CreateCurrentFileIdentityAsync(intent.InstanceId, intent.RootKey,
+            remote.RemoteId, acceptedRevision, cancellationToken).ConfigureAwait(false);
         if (snapshot.IsPlaceholder)
         {
             if (CloudPlaceholderIdentity.Decode(snapshot.PlaceholderIdentity.Span).ItemId != identity.ItemId)

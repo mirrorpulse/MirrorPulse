@@ -11,6 +11,22 @@ public sealed class MirrorPulseRemoteIdentityResolver(MirrorPulseProductCatalog 
     private readonly MirrorPulseProductCatalog _catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
     private readonly TimeProvider _clock = timeProvider ?? TimeProvider.System;
 
+    /// <summary>Rejects callbacks for retired generations without allocating a successor from a stale callback.</summary>
+    public async ValueTask RequireCurrentAsync(RootRegistration root, CloudPlaceholderIdentity identity, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(root); ArgumentNullException.ThrowIfNull(identity);
+        if (!MirrorPulsePlaceholderIdentity.BelongsToRoot(root, identity)) throw new InvalidDataException("The callback belongs to another root.");
+        string backend = MirrorPulseGenerationalPlaceholderIdentity.TryDecode(root.InstanceId, identity, out var decoded)
+            ? decoded!.RemoteId : root.IdentityScope == RootIdentityScope.LegacyInstance ? identity.RemoteId :
+                MirrorPulsePlaceholderIdentity.Decode(root.InstanceId, identity.Encode()).RemoteId;
+        var original = MirrorPulsePlaceholderIdentity.CreateForRoot(root, backend, identity.RemoteRevision).ToCfSharp();
+        var selected = await _catalog.ReadRemoteIdentityGenerationAsync(root.RootId, original.ItemId, token).ConfigureAwait(false);
+        var current = selected is null ? original : ValidateCurrent(root, backend, identity.RemoteRevision, original, selected);
+        if (current.ItemId != identity.ItemId || current.RemoteId != identity.RemoteId ||
+            (await _catalog.ReadNamespaceTransferSourceGenerationsAsync(current.ItemId, token).ConfigureAwait(false)).Count != 0)
+            throw new InvalidDataException("A retired callback cannot read a replacement backend generation.");
+    }
+
     public async ValueTask<CloudPlaceholderIdentity> ResolveAsync(RootRegistration root, string remoteId,
         string? revision = null, CancellationToken token = default)
     {

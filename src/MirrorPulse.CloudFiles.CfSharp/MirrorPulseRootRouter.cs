@@ -18,15 +18,18 @@ public sealed class MirrorPulseRootRouter
         Dictionary<(InstanceId Instance, string Key), RootRegistration?> Routes,
         Dictionary<RootId, RootRegistration> StableIds, IReadOnlyList<RootRegistration> Registrations);
     private RoutingSnapshot _snapshot;
+    private readonly MirrorPulseRemoteIdentityResolver? _identityResolver;
     public IReadOnlyList<RootRegistration> Registrations => Volatile.Read(ref _snapshot).Registrations;
 
     public MirrorPulseRootRouter(string syncRootPath, IEnumerable<RootRegistration> registrations,
-        IEnumerable<MirrorPulseManagedRootName>? historicalNames = null)
+        IEnumerable<MirrorPulseManagedRootName>? historicalNames = null,
+        MirrorPulseRemoteIdentityResolver? identityResolver = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(syncRootPath);
         ArgumentNullException.ThrowIfNull(registrations);
         _syncRootPath = Path.GetFullPath(syncRootPath);
         _snapshot = CreateSnapshot(registrations, historicalNames);
+        _identityResolver = identityResolver;
     }
 
     /// <summary>Publishes a validated mapping atomically; native callbacks use current names only.</summary>
@@ -92,6 +95,23 @@ public sealed class MirrorPulseRootRouter
 
     public CloudPlaceholderIdentity CreateFileIdentity(InstanceId instanceId, string rootKey, string remoteId, string? revision = null) =>
         MirrorPulsePlaceholderIdentity.CreateForRoot(GetRegistration(instanceId, rootKey), remoteId, revision).ToCfSharp();
+
+    /// <summary>Selects the current backend generation; historical recovery must use its retained original identity instead.</summary>
+    public ValueTask<CloudPlaceholderIdentity> CreateCurrentFileIdentityAsync(InstanceId instanceId, string rootKey,
+        string remoteId, string? revision = null, CancellationToken token = default)
+    {
+        token.ThrowIfCancellationRequested();
+        var root = GetRegistration(instanceId, rootKey);
+        if (root.State != RootRegistrationState.Active) throw new IOException("The Adapter instance is offline.");
+        return _identityResolver is null
+            ? ValueTask.FromResult(MirrorPulsePlaceholderIdentity.CreateForRoot(root, remoteId, revision).ToCfSharp())
+            : _identityResolver.ResolveAsync(root, remoteId, revision, token);
+    }
+
+    internal ValueTask RequireCurrentCallbackAsync(MirrorPulseRoutedItem route, ReadOnlyMemory<byte> encodedIdentity, CancellationToken token) =>
+        _identityResolver is null || route.RelativePath.Length == 0 ? ValueTask.CompletedTask :
+            _identityResolver.RequireCurrentAsync(GetRegistration(route.InstanceId, route.RootKey),
+                CloudPlaceholderIdentity.Decode(encodedIdentity.Span), token);
 
     public CloudProviderDirectoryPage CreateRootPage()
     {

@@ -86,8 +86,8 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
             if (await stats.StatAsync(new(route.InstanceId, path, route.RootKey), token).ConfigureAwait(false) != copy.Plan.SourceRemoteRevision)
                 throw new IOException("The original remote source revision changed before conditional deletion.");
             var remote = await verifier.ReadMetadataAsync(route, path, null, copy.Plan.SourceRemoteRevision!, token).ConfigureAwait(false);
-            var scoped = router.CreateFileIdentity(route.InstanceId, route.RootKey, remote.RemoteId, remote.RemoteRevision);
-            if (scoped.ItemId != copy.Plan.Source.Identity.ItemId || scoped.RemoteId != copy.Plan.Source.Identity.RemoteId ||
+            var original = new CloudPlaceholderIdentity(copy.Plan.Source.Identity.ItemId!.Value, copy.Plan.Source.Identity.RemoteId!, remote.RemoteRevision);
+            if (!MirrorPulsePlaceholderIdentity.IdentifiesBackendObject(router.GetRegistration(route.InstanceId, route.RootKey), remote.RemoteId, original) ||
                 await stats.StatAsync(new(route.InstanceId, path, route.RootKey), token).ConfigureAwait(false) != copy.Plan.SourceRemoteRevision)
                 throw new IOException("Another remote object or revision occupies the original source path.");
         }).ConfigureAwait(false);
@@ -103,8 +103,11 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
         var projection = await MirrorPulseNamespaceMemberLocator.ResolveAsync(catalog, state.OpenStore,
             target.Context.Member.MemberId, actor, token).ConfigureAwait(false);
         RequireSourceProjection(target, projection);
-        var identity = router.CreateFileIdentity(copy.Plan.TargetRoute.InstanceId, copy.Plan.TargetRoute.RootKey,
-            copy.TargetVerification!.RemoteId, copy.AcceptedRevision);
+        var plan = copy.TargetBirth!.Plan;
+        var identity = new CloudPlaceholderIdentity(plan.ItemId, plan.RemoteId, plan.RemoteRevision);
+        if (!MirrorPulsePlaceholderIdentity.IdentifiesBackendObject(router.GetRegistration(copy.Plan.TargetRoute.InstanceId,
+                copy.Plan.TargetRoute.RootKey), copy.TargetVerification!.RemoteId, identity) || identity.RemoteRevision != copy.AcceptedRevision)
+            throw new InvalidDataException("The original target birth does not identify its accepted backend object.");
         if (!native.IsPlaceholder || native.SynchronizationState != CloudSynchronizationState.InSync || native.Length != copy.Plan.Length ||
             projection.ItemId != copy.TargetPublication!.ItemId || projection.RemoteRevision != copy.AcceptedRevision ||
             !native.PlaceholderIdentity.Span.SequenceEqual(identity.Encode()))

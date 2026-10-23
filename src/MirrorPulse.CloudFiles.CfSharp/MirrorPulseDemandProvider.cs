@@ -143,6 +143,8 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
 
         ReadOnlyMemory<byte> cursor = DecodeContinuation(continuationToken);
         using var admission = _namespaceWork?.Enter([_rootRouter!.GetRegistration(instanceId, rootKey!).RootId]);
+        if (_rootRouter is not null)
+            await _rootRouter.RequireCurrentCallbackAsync(new(instanceId, rootKey!, adapterPath), directoryIdentity, cancellationToken).ConfigureAwait(false);
         CloudRemoteDirectoryPage page = rootKey is null
             ? await _directoryPages.ReadPageAsync(instanceId, adapterPath, cursor, DirectoryPageSize, cancellationToken).ConfigureAwait(false)
             : await _directoryPages.ReadPageAsync(instanceId, rootKey, adapterPath, cursor, DirectoryPageSize, cancellationToken).ConfigureAwait(false);
@@ -162,8 +164,9 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
             throw new InvalidDataException("The Adapter repeated a directory continuation cursor.");
         }
 
-        MirrorPulsePlaceholderBatchPlan plan = MirrorPulsePlaceholderBatchCoordinator.Plan(instanceId, page.Entries,
-            rootKey is null ? null : _rootRouter!.GetRegistration(instanceId, rootKey));
+        MirrorPulsePlaceholderBatchPlan plan = rootKey is null
+            ? MirrorPulsePlaceholderBatchCoordinator.Plan(instanceId, page.Entries)
+            : await MirrorPulsePlaceholderBatchCoordinator.PlanAsync(_rootRouter!, instanceId, rootKey, page.Entries, cancellationToken).ConfigureAwait(false);
         var result = new CloudProviderDirectoryPage(plan.Placeholders, next);
         if (NamespacePublisher is { } publisher)
         {
@@ -221,7 +224,7 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
             cancellationToken);
     }
 
-    public ValueTask<Stream> OpenReadAsync(
+    public async ValueTask<Stream> OpenReadAsync(
         string normalizedPath,
         ReadOnlyMemory<byte> encodedIdentity,
         long fileSize,
@@ -260,8 +263,10 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
         try
         {
             admission = _namespaceWork?.Enter([_rootRouter!.GetRegistration(instanceId, rootKey!).RootId]);
+            if (_rootRouter is not null)
+                await _rootRouter.RequireCurrentCallbackAsync(new(instanceId, rootKey!, adapterPath), retainedIdentity, cancellationToken).ConfigureAwait(false);
             Stream stream = new WorkerRangeStream(_transport, instanceId, adapterPath, retainedIdentity, fileSize, rootKey, admission);
-            return ValueTask.FromResult(stream);
+            return stream;
         }
         catch { admission?.Dispose(); throw; }
     }

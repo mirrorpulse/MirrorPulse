@@ -24,9 +24,9 @@ internal sealed class MirrorPulseNamespaceTransferTargetPublisher(CloudFileSyste
         var parent = fileSystem.GetDirectory(copy.Plan.TargetParent.Context.Location.RelativePath);
         var item = fileSystem.GetFile(birth.RelativePath);
         var proof = MirrorPulseNamespaceProtectionProofReader.FromSnapshot(copy.Plan.TargetParent);
-        var identity = router.CreateFileIdentity(copy.Plan.TargetRoute.InstanceId, copy.Plan.TargetRoute.RootKey,
-            copy.TargetVerification!.RemoteId, copy.AcceptedRevision);
-        if (identity.ItemId != plan.ItemId || identity.RemoteId != plan.RemoteId || identity.RemoteRevision != plan.RemoteRevision)
+        var identity = new CloudPlaceholderIdentity(plan.ItemId, plan.RemoteId, plan.RemoteRevision);
+        if (!MirrorPulsePlaceholderIdentity.IdentifiesBackendObject(router.GetRegistration(copy.Plan.TargetRoute.InstanceId,
+                copy.Plan.TargetRoute.RootKey), copy.TargetVerification!.RemoteId, identity) || identity.RemoteRevision != copy.AcceptedRevision)
             throw new InvalidDataException("Target publication cannot change its original scoped public identity.");
         var specification = CloudFilePlaceholderSpec.CreateBuilder(birth.RelativePath[(birth.RelativePath.LastIndexOf('/') + 1)..], identity, copy.Plan.Length).WithInSyncState(true)
             .WithCollisionBehavior(CloudPlaceholderCollisionBehavior.Fail).WithInitialAvailability(CloudAvailabilityTarget.OnlineOnly).Build();

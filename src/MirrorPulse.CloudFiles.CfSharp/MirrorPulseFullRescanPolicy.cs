@@ -182,7 +182,7 @@ public sealed class MirrorPulseFullRescanPolicy(CloudFileSystem fileSystem, Clou
                     {
                         MirrorPulseWorkerDirectoryEntry remote = await FindRemoteAsync(route, token).ConfigureAwait(false);
                         if (remote.RemoteRevision != revision) throw new MirrorPulseMutationAmbiguousException();
-                        CloudPlaceholderIdentity identity = router.CreateFileIdentity(route.InstanceId, route.RootKey, remote.RemoteId, revision);
+                        CloudPlaceholderIdentity identity = await router.CreateCurrentFileIdentityAsync(route.InstanceId, route.RootKey, remote.RemoteId, revision, token).ConfigureAwait(false);
                         proof = new(intent.OperationId, intent.UploadBinding!, identity.ItemId, identity.RemoteId, revision,
                             intent.ContentLength!.Value, intent.ContentSha256!);
                         await catalog.SaveContentAcceptanceProofAsync(proof, token).ConfigureAwait(false);

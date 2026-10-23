@@ -147,8 +147,8 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator(CloudFileSys
             var current = await ReadAsync(operationId, token).ConfigureAwait(false);
             if (current.TargetBirth is not null) return current;
             var verification = current.TargetVerification!; var parent = current.Plan.TargetParent;
-            var identity = router.CreateFileIdentity(current.Plan.TargetRoute.InstanceId, current.Plan.TargetRoute.RootKey,
-                verification.RemoteId, current.AcceptedRevision);
+            var identity = await router.CreateCurrentFileIdentityAsync(current.Plan.TargetRoute.InstanceId, current.Plan.TargetRoute.RootKey,
+                verification.RemoteId, current.AcceptedRevision, token).ConfigureAwait(false);
             _ = identity.Encode();
             Guid birthId = Guid.NewGuid(); var preparedAt = DateTimeOffset.UtcNow;
             var birth = new MirrorPulseNamespaceBirthIntent(4, birthId, current.Plan.TargetRoute.RootId,

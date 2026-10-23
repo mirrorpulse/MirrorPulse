@@ -492,7 +492,7 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
                     phase = "ValidateMetadata";
                     if (remote.IsDeleted || !string.Equals(remote.ItemKind, "File", StringComparison.OrdinalIgnoreCase) || remote.RemoteRevision != revision)
                         throw new MirrorPulseMutationAmbiguousException("Remote metadata does not match the accepted upload.");
-                    CloudPlaceholderIdentity identity = _router.CreateFileIdentity(record.Intent.InstanceId, record.Intent.RootKey, remote.RemoteId, revision);
+                    CloudPlaceholderIdentity identity = await _router.CreateCurrentFileIdentityAsync(record.Intent.InstanceId, record.Intent.RootKey, remote.RemoteId, revision, cancellationToken).ConfigureAwait(false);
                     proof = new(operationId, record.Intent.UploadBinding, identity.ItemId, identity.RemoteId, revision,
                         record.Intent.ContentLength!.Value, record.Intent.ContentSha256!);
                     phase = "SaveProof";

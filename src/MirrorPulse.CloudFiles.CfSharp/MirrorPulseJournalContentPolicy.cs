@@ -20,9 +20,7 @@ public static class MirrorPulseJournalContentPolicy
         CloudPlaceholderIdentity identity = CloudPlaceholderIdentity.Decode(snapshot.PlaceholderIdentity.Span);
         // A directory revision can change with children or timestamps. This
         // recognizes the previously accepted namespace object, not metadata sync.
-        CloudPlaceholderIdentity expected = MirrorPulsePlaceholderIdentity.CreateForRoot(root, remoteId, identity.RemoteRevision).ToCfSharp();
-        return MirrorPulsePlaceholderIdentity.BelongsToRoot(root, identity) && identity.ItemId == expected.ItemId &&
-            identity.RemoteId == expected.RemoteId && snapshot.RemoteId == identity.RemoteId;
+        return MirrorPulsePlaceholderIdentity.IdentifiesBackendObject(root, remoteId, identity) && snapshot.RemoteId == identity.RemoteId;
     }
 
     private static bool IsAcceptedObservationCore(CloudItemSnapshot snapshot, Func<CloudPlaceholderIdentity, bool> owns, string? acknowledgedRevision, CloudItemKind kind)

@@ -76,6 +76,17 @@ public sealed record MirrorPulsePlaceholderIdentity(
         return identity.ItemId == CreateForRoot(root, remoteId!, identity.RemoteRevision).ToCfSharp().ItemId;
     }
 
+    /// <summary>Checks a retained public address against its exact backend object without selecting a newer generation.</summary>
+    public static bool IdentifiesBackendObject(RootRegistration root, string remoteId, CloudPlaceholderIdentity identity)
+    {
+        ArgumentNullException.ThrowIfNull(root); ArgumentNullException.ThrowIfNull(identity);
+        ArgumentException.ThrowIfNullOrWhiteSpace(remoteId);
+        if (MirrorPulseGenerationalPlaceholderIdentity.TryDecode(root.InstanceId, identity, out var generation))
+            return generation!.RootId == root.RootId && generation.RootKey == root.UniquenessKey && generation.RemoteId == remoteId;
+        var expected = CreateForRoot(root, remoteId, identity.RemoteRevision).ToCfSharp();
+        return expected.ItemId == identity.ItemId && expected.RemoteId == identity.RemoteId;
+    }
+
     public static bool BelongsToInstance(InstanceId instance, CloudPlaceholderIdentity identity, string? rootKey = null)
     {
         if (MirrorPulseGenerationalPlaceholderIdentity.TryDecode(instance, identity, out var generation))
