@@ -244,8 +244,8 @@ try {
         Start-Sleep -Milliseconds 500
         $status = Invoke-MirrorPulseCli @("--json", "--developer-mode", "status")
         $entry = @($status.data.instances) | Where-Object { $_.instanceId -eq $instanceId } | Select-Object -First 1
-    } while (($null -eq $entry -or $entry.phase -ne "Connected") -and [DateTime]::UtcNow -lt $deadline)
-    if ($null -eq $entry -or $entry.phase -ne "Connected") {
+    } while (($null -eq $entry -or $entry.workerConnected -ne $true) -and [DateTime]::UtcNow -lt $deadline)
+    if ($null -eq $entry -or $entry.workerConnected -ne $true) {
         throw "The CLI status response did not show a connected Local Worker: $($entry | ConvertTo-Json -Compress)"
     }
 
