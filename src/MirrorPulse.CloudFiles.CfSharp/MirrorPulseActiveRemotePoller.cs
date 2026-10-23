@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 using CfSharp;
 using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.Diagnostics;
 using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.CloudFiles.CfSharp;
@@ -38,6 +39,7 @@ public sealed class MirrorPulseActiveRemotePoller : IAsyncDisposable
     private readonly Func<RootRegistration, CloudRemoteChangeBatch, CancellationToken, ValueTask<bool>>? _mayReplay;
     private readonly CancellationTokenSource _shutdown = new();
     private Task? _loop;
+    private readonly LocalRollingLogWriter? _failureLog;
 
     public MirrorPulseActiveRemotePoller(
         IMirrorPulseDirectoryPageSource source,
@@ -53,7 +55,8 @@ public sealed class MirrorPulseActiveRemotePoller : IAsyncDisposable
         Func<RootRegistration, CancellationToken, ValueTask<bool>>? mayPoll = null,
         Func<IReadOnlyList<RootRegistration>>? currentRoots = null,
         MirrorPulseNamespaceWorkAdmission? namespaceWork = null,
-        Func<RootRegistration, CloudRemoteChangeBatch, CancellationToken, ValueTask<bool>>? mayReplay = null)
+        Func<RootRegistration, CloudRemoteChangeBatch, CancellationToken, ValueTask<bool>>? mayReplay = null,
+        string? diagnosticsDirectory = null)
     {
         _source = source ?? throw new ArgumentNullException(nameof(source));
         ArgumentNullException.ThrowIfNull(instances);
@@ -84,6 +87,7 @@ public sealed class MirrorPulseActiveRemotePoller : IAsyncDisposable
         _mayReplay = mayReplay;
         if (pendingStore is not null && snapshotStore is null)
             throw new ArgumentException("Pending batches require a durable snapshot store.", nameof(snapshotStore));
+        if (diagnosticsDirectory is not null) _failureLog = new(diagnosticsDirectory);
     }
 
     public async Task StartAsync(CancellationToken cancellationToken = default)
@@ -94,8 +98,29 @@ public sealed class MirrorPulseActiveRemotePoller : IAsyncDisposable
     }
 
     /// <summary>Runs one bounded root turn for an enabled instance, rotating even after a blocked or failed turn.</summary>
-    public ValueTask<bool> PollOnceAsync(InstanceId instanceId, CancellationToken cancellationToken = default) =>
-        _scheduler.RunAsync(instanceId, token => PollCoreAsync(instanceId, token), cancellationToken);
+    public async ValueTask<bool> PollOnceAsync(InstanceId instanceId, CancellationToken cancellationToken = default)
+    {
+        try { return await _scheduler.RunAsync(instanceId, token => PollCoreAsync(instanceId, token), cancellationToken).ConfigureAwait(false); }
+        catch (Exception error) when (error is not OperationCanceledException and not OutOfMemoryException)
+        {
+            if (_failureLog is not null)
+            {
+                try
+                {
+                    await _failureLog.WriteAsync(new(LogLevel.Warning, "sync", "RemotePollFailed", DateTimeOffset.UtcNow,
+                        [new("instanceId", instanceId.ToString()), new("hresult", error.HResult.ToString("X8", System.Globalization.CultureInfo.InvariantCulture)),
+                            new("failureCategory", SafeDiagnosticPolicy.ClassifyFailure(error)),
+                            new("remoteFailureBoundary", MirrorPulseRemoteFailureClassifier.ReadBoundary(error).ToString())]), CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception observation) when (observation is not OutOfMemoryException)
+                {
+                    // Diagnostics cannot replace the original polling failure or
+                    // change the retained snapshot, intent or public retry behavior.
+                }
+            }
+            throw;
+        }
+    }
 
     private async ValueTask<bool> PollCoreAsync(InstanceId instanceId, CancellationToken cancellationToken)
     {
@@ -474,6 +499,7 @@ public sealed class MirrorPulseActiveRemotePoller : IAsyncDisposable
 
         _shutdown.Dispose();
         if (_ownsScheduler) await _scheduler.DisposeAsync().ConfigureAwait(false);
+        _failureLog?.Dispose();
     }
 
     private static SnapshotEntry FromSnapshotEntry(MirrorPulseRemoteSnapshotEntry entry) =>

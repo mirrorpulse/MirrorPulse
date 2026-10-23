@@ -214,7 +214,8 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
                 directorySource, topology.Instances, topology.Roots, ApplyCloudRemoteBatchAsync,
                 snapshotStore: remoteSnapshotStore,
                 pendingStore: new MirrorPulseCatalogRemotePollPendingStore(catalog), scheduler: remoteScheduler,
-                mayPoll: namespaceFence.CanPollAsync, currentRoots: () => rootRouter.Registrations, namespaceWork: namespaceWork);
+                mayPoll: namespaceFence.CanPollAsync, currentRoots: () => rootRouter.Registrations, namespaceWork: namespaceWork,
+                diagnosticsDirectory: Path.Combine(paths.DataRootPath, "logs", "remote-poll"));
 
             var application = new MirrorPulseHostApplication(
                 paths, configurationStore, configuration, hostLease, catalog, conflictCenter, systemNotifications,

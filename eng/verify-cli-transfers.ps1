@@ -284,7 +284,7 @@ try {
             }
         }
         Write-TransferOriginal -Name 'startup-observations' -Value $startup
-        foreach ($relative in @('logs/mirrorpulse.log', 'logs/cloud-files/mirrorpulse.log', 'logs/workers/mirrorpulse.log')) {
+        foreach ($relative in @('logs/mirrorpulse.log', 'logs/cloud-files/mirrorpulse.log', 'logs/workers/mirrorpulse.log', 'logs/remote-poll/mirrorpulse.log')) {
             $log = Join-Path $data $relative
             if ((Test-Path -LiteralPath $log -PathType Leaf) -and -not (Get-Item -LiteralPath $log -Force).Attributes.HasFlag([IO.FileAttributes]::ReparsePoint)) {
                 Get-Content -LiteralPath $log -Tail 32 | ForEach-Object { $_.Replace($fixture, '<fixture>') } |
