@@ -14,9 +14,11 @@ public sealed class MirrorPulseRootRouter
 {
     private readonly string _syncRootPath;
     private sealed record RoutingSnapshot(Dictionary<string, RootRegistration> Roots,
-        Dictionary<string, RootRegistration> HistoricalNames);
+        Dictionary<string, RootRegistration> HistoricalNames,
+        Dictionary<(InstanceId Instance, string Key), RootRegistration?> Routes,
+        Dictionary<RootId, RootRegistration> StableIds, IReadOnlyList<RootRegistration> Registrations);
     private RoutingSnapshot _snapshot;
-    public IReadOnlyList<RootRegistration> Registrations => Volatile.Read(ref _snapshot).Roots.Values.ToArray();
+    public IReadOnlyList<RootRegistration> Registrations => Volatile.Read(ref _snapshot).Registrations;
 
     public MirrorPulseRootRouter(string syncRootPath, IEnumerable<RootRegistration> registrations,
         IEnumerable<MirrorPulseManagedRootName>? historicalNames = null)
@@ -67,12 +69,26 @@ public sealed class MirrorPulseRootRouter
                 throw new InvalidDataException("A historical root name has more than one stable owner.");
             names[name.DirectoryName] = owner;
         }
-        return new(roots, names);
+        var routes = new Dictionary<(InstanceId Instance, string Key), RootRegistration?>();
+        foreach (var root in roots.Values)
+        {
+            var key = (root.InstanceId, root.UniquenessKey);
+            // Preserve the old lookup-time rejection of ambiguous routes. A
+            // duplicate must never silently select either registered object.
+            if (!routes.TryAdd(key, root)) routes[key] = null;
+        }
+        return new(roots, names, routes, byId, Array.AsReadOnly(roots.Values.ToArray()));
     }
 
-    public RootRegistration GetRegistration(InstanceId instanceId, string rootKey) =>
-        Volatile.Read(ref _snapshot).Roots.Values.SingleOrDefault(root => root.InstanceId == instanceId && root.UniquenessKey == rootKey)
-        ?? throw new FileNotFoundException("The Adapter root is not registered.");
+    public RootRegistration GetRegistration(InstanceId instanceId, string rootKey)
+    {
+        if (!Volatile.Read(ref _snapshot).Routes.TryGetValue((instanceId, rootKey), out var root))
+            throw new FileNotFoundException("The Adapter root is not registered.");
+        return root ?? throw new InvalidOperationException("The Adapter root route is ambiguous.");
+    }
+
+    internal RootRegistration? FindRegistration(RootId rootId) =>
+        Volatile.Read(ref _snapshot).StableIds.GetValueOrDefault(rootId);
 
     public CloudPlaceholderIdentity CreateFileIdentity(InstanceId instanceId, string rootKey, string remoteId, string? revision = null) =>
         MirrorPulsePlaceholderIdentity.CreateForRoot(GetRegistration(instanceId, rootKey), remoteId, revision).ToCfSharp();
