@@ -166,7 +166,7 @@ try {
     $deadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
     do {
         $status = (Invoke-TransferCli @('--json', '--no-start', 'status')).data
-        $connected = @($status.instances | Where-Object { $_.instanceId -in @($sourceInstance.data.createdInstanceId, $targetInstance.data.createdInstanceId) -and $_.phase -ceq 'Connected' })
+        $connected = @($status.instances | Where-Object { $_.instanceId -in @($sourceInstance.data.createdInstanceId, $targetInstance.data.createdInstanceId) -and $_.workerConnected -eq $true })
         if ($connected.Count -eq 2) { break }
         Start-Sleep -Milliseconds 100
     } while ([DateTimeOffset]::UtcNow -lt $deadline)

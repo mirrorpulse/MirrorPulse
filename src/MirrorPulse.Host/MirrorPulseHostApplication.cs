@@ -352,7 +352,8 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
                 instance.DisplayName, instance.Enabled,
                 instance.Enabled ? runtime?.Phase ?? "Not running" : "Offline",
                 cursor?.CursorFingerprint, cursor?.UpdatedAt, runtime?.LastSuccessfulSync,
-                runtime?.LastErrorCode, runtime?.TransferProgress));
+                runtime?.LastErrorCode, runtime?.TransferProgress)
+            { WorkerConnected = instance.Enabled && _workers.IsConnected(instance.InstanceId) });
         }
 
         IReadOnlySet<Guid> snoozed = await _catalog.ReadSnoozedConflictIdsAsync(cancellationToken)

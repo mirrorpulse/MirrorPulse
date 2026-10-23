@@ -10,6 +10,12 @@ Lifecycle status and stop remain available while protected roots recover.
 SDK-dependent requests return a retryable `mp.control.hostBusy` until startup
 finishes; each managed root still requires its own fresh namespace admission.
 
+Each instance in `mp --json status` reports `workerConnected` from its live
+negotiated Worker connection. Its `phase` and last error still describe journal,
+transfer or recovery activity; a phase such as `Journal failed` does not itself
+mean that the Worker disconnected. Older Host payloads may omit the optional
+connection field, which means that this observation is unavailable.
+
 Automatic startup and `mp host start` wait for `Running` or `Degraded` within
 the existing 30-second request budget after the control channel opens. The
 control-channel startup deadline remains 10 seconds. A readiness timeout leaves

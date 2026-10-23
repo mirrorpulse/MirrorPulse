@@ -69,6 +69,7 @@ public sealed class AdapterInstanceProcessSupervisorTests
 
                 MirrorPulseInstanceRuntimeState? offline = await catalog.ReadInstanceRuntimeStateAsync(disabledId);
                 Assert.AreEqual("Offline", offline?.Phase);
+                Assert.IsFalse(supervisor.IsConnected(disabledId));
                 string retained = await WorkerFailureTestDiagnostics.ReadAsync(Path.Combine(root, "diagnostics"));
                 SafeLogEntry entry = JsonSerializer.Deserialize<SafeLogEntry[]>(retained)!.Single();
                 Assert.AreEqual("ReceiveFrames", entry.Fields["workerStage"]);

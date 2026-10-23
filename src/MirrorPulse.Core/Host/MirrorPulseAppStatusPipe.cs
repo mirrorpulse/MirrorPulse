@@ -18,7 +18,10 @@ public sealed record MirrorPulseAppInstanceStatus(
     DateTimeOffset? CursorUpdatedAt,
     DateTimeOffset? LastSuccessfulSync,
     string? LastErrorCode = null,
-    MirrorPulseTransferProgress? TransferProgress = null);
+    MirrorPulseTransferProgress? TransferProgress = null)
+{
+    public bool? WorkerConnected { get; init; }
+}
 
 public sealed record MirrorPulseAppNotification(
     string ConflictId,

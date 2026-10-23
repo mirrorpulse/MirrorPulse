@@ -321,10 +321,13 @@ try {
         do {
             $restartedReadStatus = Invoke-MirrorPulseCli @('--json', '--developer-mode', 'status')
             $restartedReadInstance = @($restartedReadStatus.data.instances) | Where-Object instanceId -eq $instanceId | Select-Object -First 1
-            if ($restartedReadInstance.phase -eq 'Connected') { break }
+            if ($restartedReadInstance.workerConnected -eq $true) { break }
             Start-Sleep -Milliseconds 500
         } while ([DateTime]::UtcNow -lt $deadline)
-        if ($restartedReadInstance.phase -ne 'Connected') { throw 'The Local Worker did not reconnect for the repeated-read check.' }
+        if ($restartedReadInstance.workerConnected -ne $true) {
+            Write-MirrorPulseUploadDiagnostics
+            throw 'The Local Worker did not reconnect for the repeated-read check.'
+        }
         Assert-CliNamespaceRoot -Phase RestartedRoot -ExpectedState Active
         $restartedRead = Invoke-CliFixtureProbe -Mode read -Phase HostRestarted
         if ($restartedRead.binarySha256 -cne $onlineRead.binarySha256) { throw 'Resident content changed after the Host restarted.' }

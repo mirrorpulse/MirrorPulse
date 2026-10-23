@@ -25,6 +25,7 @@ public sealed class AdapterInstanceProcessSupervisor :
     private readonly LocalRollingLogWriter? _log;
     private readonly CancellationTokenSource _shutdown = new();
     private readonly ConcurrentDictionary<InstanceId, AdapterWorkerReadRangeClient> _connected = new();
+    private readonly ConcurrentDictionary<InstanceId, AdapterWorkerReadRangeClient> _ready = new();
     private readonly ConcurrentDictionary<InstanceId, AdapterWorkerUploadClient> _uploads = new();
     private readonly ConcurrentDictionary<InstanceId, AdapterWorkerStatClient> _stats = new();
     private readonly ConcurrentDictionary<InstanceId, AdapterWorkerDirectoryPageClient> _directories = new();
@@ -75,6 +76,9 @@ public sealed class AdapterInstanceProcessSupervisor :
     public int GetConnectedProtocolVersion(InstanceId instanceId) =>
         _connected.TryGetValue(instanceId, out var channel) ? channel.ProtocolVersion :
             throw new AdapterWorkerOperationException("Offline");
+
+    /// <summary>Observes the live negotiated Worker after its Connected frame, independently of journal/progress status.</summary>
+    public bool IsConnected(InstanceId instanceId) => !_shutdown.IsCancellationRequested && _ready.ContainsKey(instanceId);
 
     public ValueTask<string> UploadAsync(
         MirrorPulseWorkerUploadRequest request,
@@ -522,6 +526,7 @@ public sealed class AdapterInstanceProcessSupervisor :
                         break;
                     case "Connected":
                         await SetPhaseAsync(instance.InstanceId, "Connected", cancellationToken).ConfigureAwait(false);
+                        _ready[instance.InstanceId] = channel;
                         break;
                     case "TransferProgress":
                         await SaveTransferProgressAsync(instance.InstanceId, frame.Payload, cancellationToken)
@@ -549,6 +554,7 @@ public sealed class AdapterInstanceProcessSupervisor :
         }
         finally
         {
+            _ready.TryRemove(instance.InstanceId, out _);
             _connected.TryRemove(instance.InstanceId, out _);
             _uploads.TryRemove(instance.InstanceId, out _);
             _stats.TryRemove(instance.InstanceId, out _);
