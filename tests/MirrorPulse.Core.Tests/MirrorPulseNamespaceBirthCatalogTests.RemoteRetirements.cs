@@ -227,6 +227,8 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             original = await first.PrepareNamespaceRetirementAsync(Retire(setup, Guid.NewGuid()));
         }
         await ExecuteSqlAsync(fixture.Paths, """
+            DROP TABLE remote_identity_generations;
+            DROP TABLE remote_identity_generation_history;
             DROP TABLE namespace_remote_retirement_outcomes;
             DROP TABLE namespace_remote_retirement_entries;
             ALTER TABLE namespace_member_retirements RENAME TO retirement_fixture_current;

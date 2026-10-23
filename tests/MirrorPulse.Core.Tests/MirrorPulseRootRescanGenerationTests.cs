@@ -155,7 +155,7 @@ public sealed class MirrorPulseRootRescanGenerationTests
         await connection.OpenAsync();
         await using var command = connection.CreateCommand();
         command.CommandText = "PRAGMA user_version;";
-        Assert.AreEqual(85L, await command.ExecuteScalarAsync());
+        Assert.AreEqual(86L, await command.ExecuteScalarAsync());
     }
 
     [TestMethod]
