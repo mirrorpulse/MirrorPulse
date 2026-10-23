@@ -156,6 +156,23 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinator
         // Ordinary directories have no placeholder identity to retain. Permission work
         // must neither convert them nor invent a remote identity for them.
         if (retained is null && !local.IsPlaceholder && local.ItemId is null && local.RemoteId is null) return null;
+        if (retained is null && !local.IsPlaceholder && local.PlaceholderIdentity is null &&
+            MatchesRetainedIdentity(local, null, null))
+        {
+            // The SDK can track an ordinary directory in its local journal without
+            // giving the native object a placeholder identity. Only an already
+            // registered original with no past or accepted native identity may
+            // retain Access-only protection. Do not adopt the journal's tracking pair.
+            var member = await _catalog.ReadNamespaceMemberByBindingAsync(baseline.LocalObject, token).ConfigureAwait(false);
+            if (member is { IsDirectory: true, Origin: MirrorPulseNamespaceMemberOrigin.CapturedOriginal } &&
+                member.OriginId == baseline.EvidenceId && member.RootId == baseline.RootId &&
+                member.LocalObject == baseline.LocalObject && member.OwnerSid == baseline.OwnerSid)
+            {
+                var identity = await _catalog.ReadNamespaceMemberIdentityAsync(member.MemberId, token).ConfigureAwait(false);
+                if (identity is { ItemId: null, RemoteId: null, OriginalItemId: null, OriginalRemoteId: null, AcceptanceOperationId: null })
+                    return null;
+            }
+        }
         if (!local.IsPlaceholder || local.PlaceholderIdentity is null || local.ItemId is null || local.RemoteId is null ||
             !MatchesRetainedIdentity(local, retained, null))
             return await FenceAsync(change, MirrorPulseNamespacePermissionRecoveryReason.ObjectChanged).ConfigureAwait(false);
