@@ -31,7 +31,7 @@ public static partial class CliFixtureProbe
             if ((await fixture.Catalog.ReadNamespaceDispatchFencedRootsAsync()).Count != 0)
                 throw new InvalidDataException("An unfinished namespace owner cannot be reported as completed transfers.");
             var receipts = new List<CliTransferFixtureReceipt>();
-            bool singleRoot = fixture.Marker.SchemaVersion == 2;
+            bool singleRoot = fixture.Marker.SchemaVersion is 2 or 3;
             foreach (Guid operation in operations)
             {
                 var copy = await fixture.Catalog.ReadNamespaceTransferAsync(operation)
@@ -81,7 +81,9 @@ public static partial class CliFixtureProbe
     {
         if (marker.SchemaVersion == 1) return source.UniquenessKey == "left" && target.UniquenessKey is "right" or "target";
         string sourceSide = index == 0 ? "left" : "right", targetSide = index == 0 ? "right" : "left";
-        return source.UniquenessKey == "local" && target.UniquenessKey == "local" && source.InstanceId != target.InstanceId &&
+        string sourceKey = marker.SchemaVersion == 3 && index == 1 ? "webdav" : "local";
+        string targetKey = marker.SchemaVersion == 3 && index == 0 ? "webdav" : "local";
+        return source.UniquenessKey == sourceKey && target.UniquenessKey == targetKey && source.InstanceId != target.InstanceId &&
             marker.Routes.Single(route => route.FixtureSide == sourceSide).RootId == source.RootId.ToString() &&
             marker.Routes.Single(route => route.FixtureSide == targetSide).RootId == target.RootId.ToString();
     }

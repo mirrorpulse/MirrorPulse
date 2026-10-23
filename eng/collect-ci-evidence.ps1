@@ -9,6 +9,7 @@ param(
     [string]$AdapterReleaseLockPath,
     [string]$IntegrationPath,
     [string]$TransferIntegrationPath,
+    [string]$CrossPackageTransferIntegrationPath,
     [string]$InstalledPath,
     [string]$RejectedPath,
     [string]$NamespaceNonAdminPath,
@@ -127,6 +128,15 @@ if ($TransferIntegrationPath) {
     . (Join-Path $PSScriptRoot 'cli-transfer-evidence-policy.ps1')
     Assert-CliTransferObservations $transfers -RequireSingleRoot
     $checks += [ordered]@{name='signed-local-cli-transfers';executed=$true;observations=$transfers}
+}
+if ($CrossPackageTransferIntegrationPath) {
+    $transfers = Get-Content -LiteralPath $CrossPackageTransferIntegrationPath -Raw | ConvertFrom-Json
+    if ($transfers.schemaVersion -ne 3 -or $transfers.runtime -cne $Runtime -or $transfers.sourceSha -cne $sourceSha) {
+        throw 'The signed cross-package transfer evidence belongs to another source or runtime.'
+    }
+    . (Join-Path $PSScriptRoot 'cli-transfer-evidence-policy.ps1')
+    Assert-CliTransferObservations $transfers -RequireSingleRoot
+    $checks += [ordered]@{name='signed-cross-package-cli-transfers';executed=$true;observations=$transfers}
 }
 if ($InstalledPath) {
     $installed = Get-Content -LiteralPath $InstalledPath -Raw | ConvertFrom-Json

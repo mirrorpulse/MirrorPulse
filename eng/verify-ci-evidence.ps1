@@ -64,6 +64,14 @@ foreach ($job in $expected.Keys) {
         if ($integration.Count -ne 1 -or $integration[0].executed -ne $true) { throw 'The ARM64 CLI regression did not execute exactly once.' }
         . (Join-Path $PSScriptRoot 'cli-regression-evidence-policy.ps1')
         Assert-CliRegressionObservations $integration[0]
+        $crossPackage = @($manifest.checks | Where-Object name -ceq 'signed-cross-package-cli-transfers')
+        if ($crossPackage.Count -gt 0) {
+            if ($crossPackage.Count -ne 1 -or $crossPackage[0].executed -ne $true -or
+                $crossPackage[0].observations.schemaVersion -ne 3 -or $crossPackage[0].observations.sourceSha -cne $ExpectedSourceSha -or
+                $crossPackage[0].observations.runtime -cne 'win-arm64') { throw 'The signed cross-package transfer execution is repeated or from another source.' }
+            . (Join-Path $PSScriptRoot 'cli-transfer-evidence-policy.ps1')
+            Assert-CliTransferObservations $crossPackage[0].observations -RequireSingleRoot
+        }
     }
     if ($job -eq "official-package-arm64" -and $RequireInstalled) {
         $installed = @($manifest.checks | Where-Object name -eq 'installed-msix')

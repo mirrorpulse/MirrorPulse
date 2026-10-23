@@ -211,3 +211,11 @@ retains the old transfer addresses and receipts when the backend reuses its
 remote ID. See [remote identity generations](remote-identity-generations.md) for
 selection, polling and streamed replay boundaries. This component does not
 replace the full signed transfer, later-generation and restart acceptance.
+
+## Cross-package verification
+
+The same disposable CLI verifier can additionally connect the signed Local and
+WebDAV packages, each with its manifest's single declared root. See
+[CLI transfer verification](cli-transfer-verification.md) for execution, original
+evidence, conditional HTTP effects, and the distinction between component checks
+and complete Host transfer acceptance.

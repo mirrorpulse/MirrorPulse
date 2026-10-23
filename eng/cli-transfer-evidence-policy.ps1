@@ -1,8 +1,9 @@
 function Assert-CliTransferObservations {
     param([Parameter(Mandatory)][object]$Evidence, [switch]$BeforeCleanup, [switch]$RequireSingleRoot)
 
-    $singleRoot = $Evidence.schemaVersion -eq 2
-    if ($Evidence.schemaVersion -notin @(1, 2) -or ($RequireSingleRoot -and -not $singleRoot) -or
+    $crossPackage = $Evidence.schemaVersion -eq 3
+    $singleRoot = $Evidence.schemaVersion -in @(2, 3)
+    if ($Evidence.schemaVersion -notin @(1, 2, 3) -or ($RequireSingleRoot -and -not $singleRoot) -or
         $Evidence.sourceSha -cnotmatch '\A[0-9a-f]{40}\z' -or $Evidence.runtime -notin @('win-x64', 'win-arm64') -or
         $Evidence.signedInstallation -isnot [bool] -or -not $Evidence.signedInstallation -or
         $Evidence.packageSha256 -cnotmatch '\A[0-9a-fA-F]{64}\z' -or
@@ -10,6 +11,30 @@ function Assert-CliTransferObservations {
         @($Evidence.workerProcessIds).Count -ne 2 -or @($Evidence.workerProcessIds | Select-Object -Unique).Count -ne 2 -or
         @($Evidence.workerProcessIds | Where-Object { ($_ -isnot [int] -and $_ -isnot [long]) -or $_ -le 0 }).Count) {
         throw 'The transfer evidence requires its actual signed installation and two independent private-runtime Worker processes.'
+    }
+    if ($crossPackage) {
+        $packages = @($Evidence.packages); $bindings = @($Evidence.workerBindings); $server = $Evidence.webDavServer
+        if ($packages.Count -ne 2 -or $bindings.Count -ne 2 -or @($packages.installId | Select-Object -Unique).Count -ne 2 -or
+            @($packages.adapterId | Select-Object -Unique).Count -ne 2 -or
+            @($packages | Where-Object { $_.adapterId -cnotin @('com.mirrorpulse.adapter.local', 'com.mirrorpulse.adapter.webdav') -or
+                $_.isSigned -isnot [bool] -or -not $_.isSigned -or $_.packageSha256 -cnotmatch '\A[0-9a-fA-F]{64}\z' }).Count -or
+            @($bindings.installId | Select-Object -Unique).Count -ne 2 -or
+            @(Compare-Object @($bindings.processId) @($Evidence.workerProcessIds)).Count -or
+            $server.schemaVersion -ne 1 -or $server.stopped -isnot [bool] -or -not $server.stopped -or
+            $server.fileBacked -isnot [bool] -or -not $server.fileBacked -or
+            @(@($server.reads, $server.puts, $server.deletes) | Where-Object { $_ -isnot [int] -and $_ -isnot [long] }).Count -or
+            $server.reads -lt 1 -or $server.puts -lt 2 -or $server.deletes -lt 1) {
+            throw 'Cross-package evidence requires both signed package identities, independent Workers and actual conditional HTTP file effects.'
+        }
+        foreach ($binding in $bindings) {
+            $package = @($packages | Where-Object { $_.installId -ceq $binding.installId -and $_.adapterId -ceq $binding.adapterId })
+            $install = [guid]::Empty
+            if ($package.Count -ne 1 -or -not [guid]::TryParseExact([string]$binding.installId, 'D', [ref]$install) -or $install -eq [guid]::Empty) {
+                throw 'Each actual Worker must belong to its exact signed installation.'
+            }
+        }
+        $local = @($packages | Where-Object adapterId -ceq 'com.mirrorpulse.adapter.local')
+        if ($local[0].packageSha256 -ine $Evidence.packageSha256) { throw 'The cross-package Local identity changed.' }
     }
     $cases = @($Evidence.cases)
     $rootCount = if ($singleRoot) { 2 } else { 3 }
@@ -32,7 +57,9 @@ function Assert-CliTransferObservations {
             $targetSide = if ($key -ceq 'Forward') { 'right' } else { 'left' }
             $source = @($Evidence.roots | Where-Object fixtureSide -ceq $sourceSide)
             $target = @($Evidence.roots | Where-Object fixtureSide -ceq $targetSide)
-            if ($source.Count -ne 1 -or $target.Count -ne 1 -or $source[0].rootKey -cne 'local' -or $target[0].rootKey -cne 'local' -or
+            $sourceKey = if ($crossPackage -and $key -ceq 'Reverse') { 'webdav' } else { 'local' }
+            $targetKey = if ($crossPackage -and $key -ceq 'Forward') { 'webdav' } else { 'local' }
+            if ($source.Count -ne 1 -or $target.Count -ne 1 -or $source[0].rootKey -cne $sourceKey -or $target[0].rootKey -cne $targetKey -or
                 $case.scope -cne 'CrossInstance' -or $retained.scope -cne 'CrossInstance' -or
                 $status.sourceRootId -cne $source[0].rootId -or $status.targetRootId -cne $target[0].rootId -or
                 $status.sourceInstanceId -cne $source[0].instanceId -or $status.targetInstanceId -cne $target[0].instanceId) {

@@ -3,6 +3,11 @@ using MirrorPulse.CfSharp.CrashProbe;
 using MirrorPulse.CloudFiles.CfSharp;
 using MirrorPulse.Core.Configuration;
 
+if (args.Length == 2 && args[0] == "--serve-cli-transfer-webdav")
+{
+    return await CliTransferWebDavFixture.RunAsync(args[1]);
+}
+
 if (args.Length == 4 && args[0] == "--namespace-source-consumer")
 {
     try

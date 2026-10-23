@@ -2,6 +2,7 @@
 param(
     [ValidateSet('win-x64', 'win-arm64')][string]$Runtime = 'win-arm64',
     [Parameter(Mandatory)][string]$PackagePath,
+    [string]$WebDavPackagePath,
     [ValidateSet('Debug', 'Release')][string]$Configuration = 'Release',
     [Parameter(Mandatory)][string]$EvidencePath
 )
@@ -16,13 +17,16 @@ if ($LASTEXITCODE -ne 0 -or $sourceSha -cnotmatch '\A[0-9a-f]{40}\z' -or ($env:G
 $fixture = Join-Path ([IO.Path]::GetTempPath()) ('MirrorPulse-cli-transfer-' + [guid]::NewGuid().ToString('N'))
 $sync = Join-Path $fixture 'sync'; $data = Join-Path $fixture 'data'
 $evidenceFile = [IO.Path]::GetFullPath($EvidencePath)
-$originals = Join-Path ([IO.Path]::GetDirectoryName($evidenceFile)) 'cli-transfers.originals'
+$crossPackage = -not [string]::IsNullOrWhiteSpace($WebDavPackagePath)
+$schemaVersion = if ($crossPackage) { 3 } else { 2 }
+$originals = Join-Path ([IO.Path]::GetDirectoryName($evidenceFile)) $(if ($crossPackage) { 'cli-cross-package.originals' } else { 'cli-transfers.originals' })
 New-Item -ItemType Directory -Path $originals -Force | Out-Null
 $savedEnvironment = @{}
 foreach ($name in @('MIRRORPULSE_DATA_ROOT', 'MIRRORPULSE_SYNC_ROOT', 'MIRRORPULSE_HOST_PATH', 'MIRRORPULSE_DEVELOPER_MODE')) {
     $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
 }
 $script:transferCli = $null; $script:transferProbe = $null; $script:ownedTransferHost = $false
+$script:webDavProcess = $null
 $primaryFailure = $null; $phase = 'Setup'; $report = $null
 $cases = [Collections.Generic.List[object]]::new()
 
@@ -71,6 +75,21 @@ function Read-TransferHash {
     return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash
 }
 
+function Stop-TransferWebDav {
+    if ($null -eq $script:webDavProcess) { return }
+    $process = $script:webDavProcess; $script:webDavProcess = $null
+    try {
+        if ($process.HasExited) { throw 'The owned WebDAV fixture stopped before its explicit shutdown.' }
+        $process.StandardInput.WriteLine('stop'); $process.StandardInput.Flush()
+        if (-not $process.WaitForExit(15000) -or $process.ExitCode -ne 0) { throw 'The owned WebDAV fixture did not stop successfully.' }
+        $script:webDavErrors.GetAwaiter().GetResult() | Out-Null
+        Write-TransferOriginal -Name 'webdav-server' -Value (Get-Content -Raw -LiteralPath (Join-Path $fixture 'webdav-server.json') | ConvertFrom-Json)
+    } finally {
+        if (-not $process.HasExited) { $process.Kill($true); $process.WaitForExit() }
+        $process.Dispose()
+    }
+}
+
 function Wait-TransferHash {
     param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Expected)
     $deadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
@@ -111,6 +130,19 @@ try {
             throw 'The current transfer fixture requires the actual Local V2 single-root manifest.'
         }
     } finally { $package.Dispose() }
+    if ($crossPackage) {
+        $package = [IO.Compression.ZipFile]::OpenRead((Resolve-Path $WebDavPackagePath).Path)
+        try {
+            $entry = $package.GetEntry('manifest.json')
+            if ($null -eq $entry -or $entry.Length -gt 1048576) { throw 'The WebDAV package manifest is missing or exceeds its fixture limit.' }
+            $reader = [IO.StreamReader]::new($entry.Open())
+            try { $manifest = $reader.ReadToEnd() | ConvertFrom-Json } finally { $reader.Dispose() }
+            if ($manifest.adapterId -cne 'com.mirrorpulse.adapter.webdav' -or $manifest.protocol.minimum -ne 2 -or $manifest.protocol.maximum -ne 2 -or
+                @($manifest.rootDefinitions).Count -ne 1 -or $manifest.rootDefinitions[0].key -cne 'webdav') {
+                throw 'The cross-package fixture requires the actual WebDAV V2 single-root manifest.'
+            }
+        } finally { $package.Dispose() }
+    }
     $phase = 'Setup'
     New-Item -ItemType Directory -Path $sync, $data -Force | Out-Null
     $user = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -137,6 +169,18 @@ try {
     }
     $script:transferCli = Join-Path $fixture 'cli/mp.exe'
     $script:transferProbe = Join-Path $fixture 'probe/MirrorPulse.CfSharp.CrashProbe.dll'
+    if ($crossPackage) {
+        $start = [Diagnostics.ProcessStartInfo]::new('dotnet')
+        $start.UseShellExecute = $false; $start.CreateNoWindow = $true
+        $start.RedirectStandardInput = $true; $start.RedirectStandardOutput = $true; $start.RedirectStandardError = $true
+        foreach ($argument in @($script:transferProbe, '--serve-cli-transfer-webdav', $fixture)) { $start.ArgumentList.Add($argument) }
+        $script:webDavProcess = [Diagnostics.Process]::Start($start)
+        $script:webDavErrors = $script:webDavProcess.StandardError.ReadToEndAsync()
+        $ready = $script:webDavProcess.StandardOutput.ReadLineAsync().WaitAsync([TimeSpan]::FromSeconds(15)).GetAwaiter().GetResult() | ConvertFrom-Json
+        $endpoint = [uri]$ready.endpoint
+        if ($endpoint.Scheme -cne 'http' -or $endpoint.Host -cne 'localhost' -or $endpoint.AbsolutePath -cne '/dav/' -or
+            $endpoint.UserInfo -or $endpoint.Query -or $endpoint.Fragment) { throw 'The test-only WebDAV origin did not return its private loopback endpoint.' }
+    }
     $env:MIRRORPULSE_DATA_ROOT = $data; $env:MIRRORPULSE_SYNC_ROOT = $sync
     $env:MIRRORPULSE_HOST_PATH = Join-Path $fixture 'host/MirrorPulse.Host.exe'; $env:MIRRORPULSE_DEVELOPER_MODE = '1'
     $phase = 'HostStartup'
@@ -147,19 +191,32 @@ try {
     $installId = $installation.data.installedAdapterId
     $sourceInstance = Invoke-TransferCli @('--json', 'instance', 'create', '--install-id', $installId, '--name', 'Transfer source',
         '--root', 'local=Transfer Left', '--config', ('root.local.sourceDirectory=' + [IO.Path]::Combine($fixture, 'source', 'left')))
-    $targetInstance = Invoke-TransferCli @('--json', 'instance', 'create', '--install-id', $installId, '--name', 'Transfer target',
-        '--root', 'local=Transfer Right', '--config', ('root.local.sourceDirectory=' + [IO.Path]::Combine($fixture, 'source', 'right')))
+    $targetKey = if ($crossPackage) { 'webdav' } else { 'local' }
+    $targetInstallId = $installId
+    if ($crossPackage) {
+        $webDavInstallation = Invoke-TransferCli @('--json', 'adapter', 'install', '--package', (Resolve-Path $WebDavPackagePath).Path)
+        $targetInstallId = $webDavInstallation.data.installedAdapterId
+    }
+    $targetConfiguration = if ($crossPackage) { 'root.webdav.endpoint=' + $endpoint.AbsoluteUri } else { 'root.local.sourceDirectory=' + [IO.Path]::Combine($fixture, 'source', 'right') }
+    $targetInstance = Invoke-TransferCli @('--json', 'instance', 'create', '--install-id', $targetInstallId, '--name', 'Transfer target',
+        '--root', ($targetKey + '=Transfer Right'), '--config', $targetConfiguration)
     $topology = (Invoke-TransferCli @('--json', '--no-start', 'adapter', 'list')).data
     $installed = @($topology.installations | Where-Object installId -ceq $installId)
+    $targetInstalled = @($topology.installations | Where-Object installId -ceq $targetInstallId)
+    $expectedInstallations = if ($crossPackage) { 2 } else { 1 }
     if ($installed.Count -ne 1 -or $installed[0].adapterId -cne 'com.mirrorpulse.adapter.local' -or $installed[0].isSigned -ne $true -or
+        $targetInstalled.Count -ne 1 -or $targetInstalled[0].adapterId -cne ('com.mirrorpulse.adapter.' + $targetKey) -or $targetInstalled[0].isSigned -ne $true -or
+        @($topology.installations).Count -ne $expectedInstallations -or
         @($topology.instances).Count -ne 2 -or @($topology.roots).Count -ne 2 -or
-        @($topology.roots | Where-Object uniquenessKey -cne 'local').Count) { throw 'The CLI fixture did not retain two actual single-root Local instances.' }
+        @($topology.roots | Where-Object { $_.uniquenessKey -cnotin @('local', $targetKey) }).Count) { throw 'The CLI fixture did not retain its actual signed single-root instances.' }
     $script:transferRoutes = @($topology.roots | ForEach-Object {
         $side = if ($_.instanceId -ceq $sourceInstance.data.createdInstanceId) { 'left' } elseif ($_.instanceId -ceq $targetInstance.data.createdInstanceId) { 'right' } else { throw 'A foreign instance entered the transfer fixture.' }
         [ordered]@{instanceId=$_.instanceId;rootId=$_.rootId;rootKey=$_.uniquenessKey;directoryName=$_.directoryName;fixtureSide=$side}
     })
     $operations = @([guid]::NewGuid().ToString('D'), [guid]::NewGuid().ToString('D'))
-    [ordered]@{schemaVersion=2;routes=$script:transferRoutes;transferOperationIds=$operations} |
+    $marker = [ordered]@{schemaVersion=$schemaVersion;routes=$script:transferRoutes;transferOperationIds=$operations}
+    if ($crossPackage) { $marker.webDavEndpoint = $endpoint.AbsoluteUri }
+    $marker |
         ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $fixture '.mp-cli-transfer-fixture.json') -Encoding utf8
     Invoke-TransferCli @('--json', 'host', 'restart') | Out-Null; Wait-TransferHostStopped
     Invoke-TransferCli @('--json', 'host', 'start') | Out-Null
@@ -173,21 +230,26 @@ try {
     if ($connected.Count -ne 2) { throw 'Both actual signed Local Workers must connect.' }
     Assert-TransferRootsReady
     $workerIds = [Collections.Generic.List[int]]::new()
-    $installPrefix = [IO.Path]::GetFullPath($installed[0].installationDirectory).TrimEnd('\') + '\'
+    $workerBindings = [Collections.Generic.List[object]]::new()
+    $fixtureInstallations = @($topology.installations)
     foreach ($process in Get-Process) {
         try {
             $executable = $process.MainModule.FileName
             if ([string]::IsNullOrWhiteSpace($executable)) { continue }
-            if (-not $executable.StartsWith($installPrefix, [StringComparison]::OrdinalIgnoreCase)) { continue }
+            $owners = @($fixtureInstallations | Where-Object { $executable.StartsWith(([IO.Path]::GetFullPath($_.installationDirectory).TrimEnd('\') + '\'), [StringComparison]::OrdinalIgnoreCase) })
+            if ($owners.Count -eq 0) { continue }
+            if ($owners.Count -ne 1) { throw 'The actual Worker executable has ambiguous installation ownership.' }
             $modules = @($process.Modules | Where-Object ModuleName -ieq 'coreclr.dll')
             if ($modules.Count -ne 1 -or $modules[0].FileName -ine (Join-Path ([IO.Path]::GetDirectoryName($executable)) 'coreclr.dll')) {
                 throw 'The actual signed Worker did not load its private payload runtime.'
             }
             $workerIds.Add($process.Id)
+            $workerBindings.Add([ordered]@{processId=$process.Id;installId=$owners[0].installId;adapterId=$owners[0].adapterId})
         } catch [ComponentModel.Win32Exception] { } catch [InvalidOperationException] { }
         finally { $process.Dispose() }
     }
     if ($workerIds.Count -ne 2) { throw 'Exactly two actual signed Worker processes must run from the verified installation.' }
+    if ($crossPackage -and @($workerBindings.installId | Select-Object -Unique).Count -ne 2) { throw 'Both signed packages must run their own actual Worker.' }
     $beforeRestart = (Invoke-TransferCli @('--json', '--no-start', 'host', 'status')).data.processId
     $phase = 'InitialRemoteRefresh'
     Invoke-TransferCli @('--json', '--no-start', 'sync', 'refresh') | Out-Null
@@ -254,11 +316,17 @@ try {
         $case.laterRemoteSourcePreserved = $case.laterSourceSha256 -ieq $case.resumedSourceSha256
     }
     Invoke-TransferCli @('--json', '--no-start', 'host', 'stop') | Out-Null; Wait-TransferHostStopped
+    Stop-TransferWebDav
     $phase = 'StoppedHostReceipts'
     $audit = Invoke-TransferProbe -Mode audit
-    $report = [ordered]@{schemaVersion=2;sourceSha=$sourceSha;runId=$env:GITHUB_RUN_ID;runtime=$Runtime
+    $report = [ordered]@{schemaVersion=$schemaVersion;sourceSha=$sourceSha;runId=$env:GITHUB_RUN_ID;runtime=$Runtime
         signedInstallation=$true;packageSha256=$installed[0].packageSha256;workerProcessIds=$workerIds.ToArray();privateWorkerRuntime=$true
         roots=$script:transferRoutes;cases=$cases.ToArray();audit=$audit;hostProcessBeforeRestart=$beforeRestart;hostProcessAfterRestart=$afterRestart}
+    if ($crossPackage) {
+        $report.packages = @($fixtureInstallations | ForEach-Object { [ordered]@{installId=$_.installId;adapterId=$_.adapterId;packageSha256=$_.packageSha256;isSigned=$_.isSigned} })
+        $report.workerBindings = $workerBindings.ToArray()
+        $report.webDavServer = Get-Content -Raw -LiteralPath (Join-Path $fixture 'webdav-server.json') | ConvertFrom-Json
+    }
     Assert-CliTransferObservations -Evidence ([pscustomobject]$report) -BeforeCleanup -RequireSingleRoot
     Write-TransferOriginal -Name 'completed-execution' -Value $report
 } catch {
@@ -310,6 +378,7 @@ try {
                 & $script:transferCli --json --developer-mode --no-start host stop 2>$null | Out-Null
                 Wait-TransferHostStopped
             }
+            Stop-TransferWebDav
             if (Test-Path -LiteralPath $fixture) {
                 $resolved = [IO.Path]::GetFullPath($fixture)
                 if ([IO.Path]::GetDirectoryName($resolved) -ine [IO.Path]::TrimEndingDirectorySeparator([IO.Path]::GetTempPath()) -or
@@ -331,4 +400,4 @@ try {
 }
 Assert-CliTransferObservations -Evidence ([pscustomobject]$report) -RequireSingleRoot
 $report | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $evidenceFile -Encoding utf8
-Write-Output "Verified forward and reverse transfers between real signed Local single-root instances for $Runtime."
+Write-Output "Verified forward and reverse transfers between real signed single-root instances for $Runtime (schema $schemaVersion)."
