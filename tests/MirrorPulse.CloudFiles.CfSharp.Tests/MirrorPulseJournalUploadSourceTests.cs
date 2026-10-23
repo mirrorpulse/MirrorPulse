@@ -378,6 +378,19 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
                 using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
                 MirrorPulseJournalUploadBatch batch = await source.ReadPendingAsync(timeout.Token);
                 CloudLocalChangeBatch raw = await feed.ReadBatchAsync(timeout.Token);
+                if (raw.Changes.Any(change => change.RelativePath == "Documents"))
+                    Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(new
+                    {
+                        Boundary = "OriginalRootNotificationAfterPlanning",
+                        Run = run,
+                        batch.WindowUpperSequence,
+                        batch.ScanInProgress,
+                        batch.PlanningInProgress,
+                        batch.DeferredCount,
+                        batch.RequiresFullRescan,
+                        RootNotifications = raw.Changes.Where(change => change.RelativePath == "Documents")
+                            .Select(change => new { change.OperationId, change.Sequence, change.Kind, change.ItemId, change.IsDirectory, change.ObservedAt }).ToArray()
+                    }));
                 Assert.IsFalse(raw.Changes.Any(change => change.RelativePath == "Documents"));
                 Assert.IsFalse(batch.RequiresFullRescan);
                 if (run == 0)
