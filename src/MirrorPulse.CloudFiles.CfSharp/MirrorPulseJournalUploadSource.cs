@@ -94,10 +94,12 @@ public sealed class MirrorPulseJournalUploadSource
     {
         if (_retiredSources is not null) await _retiredSources.RecoverPendingAsync(cancellationToken).ConfigureAwait(false);
         // Preserve the feed's wait-for-notification behavior when the journal is
-        // empty. This head is only a wake-up observation, never the planning window.
+        // empty and recovery has finished its root scan. Otherwise continue finite
+        // scans even without another journal notification. This head is only a
+        // wake-up observation, never the planning window.
         if (_planner is null)
         {
-            if (!_windowReader.HasPendingScan)
+            if (!_windowReader.HasPendingScan && _retiredSources?.RecoveryScanInProgress != true)
             {
                 CloudLocalChangeBatch head = await _feed.ReadBatchAsync(cancellationToken).ConfigureAwait(false);
                 if (head.RequiresFullRescan)

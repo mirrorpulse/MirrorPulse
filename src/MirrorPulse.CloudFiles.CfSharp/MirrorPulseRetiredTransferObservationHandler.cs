@@ -10,6 +10,8 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 public interface IMirrorPulseRetiredTransferObservationHandler
 {
     ValueTask RecoverPendingAsync(CancellationToken token);
+    /// <summary>Another bounded recovery turn must precede an empty-feed wait.</summary>
+    bool RecoveryScanInProgress => false;
     ValueTask<bool> TryAcknowledgeAsync(MirrorPulseLocalChangeObservation observation,
         MirrorPulseRetiredTransferSource source, CancellationToken token);
 }
@@ -21,19 +23,21 @@ internal sealed class MirrorPulseRetiredTransferObservationHandler(CloudFileSyst
     MirrorPulseNamespaceExecutionSession execution, MirrorPulseNamespaceActor actor, MirrorPulseNamespaceWorkAdmission work,
     Func<InstanceId, bool> mayDispatch) : IMirrorPulseRetiredTransferObservationHandler
 {
-    private int _nextRecoveryRoot;
+    private readonly MirrorPulseRetiredTransferRootCursor _recoveryRoots = new();
+
+    public bool RecoveryScanInProgress => _recoveryRoots.RecoveryInProgress;
 
     public async ValueTask RecoverPendingAsync(CancellationToken token)
     {
-        var roots = router.Registrations.Where(root => root.State == RootRegistrationState.Active && mayDispatch(root.InstanceId)).ToArray();
-        if (roots.Length == 0) return;
-        int first = (int)((uint)Interlocked.Increment(ref _nextRecoveryRoot) % (uint)roots.Length);
-        // At most eight original API replays per pass. Rotate roots before the feed can wait
-        // on an empty journal, including after a crash following the original SDK commit.
-        for (int offset = 0; offset < Math.Min(roots.Length, 4); offset++)
+        // Inspect at most four configured roots, including disabled/offline roots,
+        // and replay at most two accepted original notifications per selected root.
+        // Rotating the complete immutable snapshot reaches active roots even when
+        // a long disabled prefix is retained. Replay revalidates current admission.
+        var window = _recoveryRoots.Read(router, mayDispatch, token);
+        foreach (var root in window.Roots)
         {
-            var root = roots[(first + offset) % roots.Length];
             var pending = await catalog.ReadPendingRetiredTransferObservationsAsync(root.RootId, limit: 2, token).ConfigureAwait(false);
+            if (pending.Count != 0) _recoveryRoots.RetainPendingReplay();
             foreach (var start in pending) _ = await ReplayAcceptedAsync(start, token).ConfigureAwait(false);
         }
     }
@@ -45,7 +49,7 @@ internal sealed class MirrorPulseRetiredTransferObservationHandler(CloudFileSyst
         if (retained is not null) return await ReplayAcceptedAsync(retained, token).ConfigureAwait(false);
         if (source.Transfer.Acknowledgement?.AcknowledgedAt is null || source.Retirement.TransferSourceProjection is null ||
             source.Retirement.TransferSourceNameEpoch is null || !TryObservation(observation, out var original)) return false;
-        var root = router.Registrations.SingleOrDefault(root => root.RootId == source.Transfer.Plan.SourceRoute.RootId);
+        var root = router.FindRegistration(source.Transfer.Plan.SourceRoute.RootId);
         if (root is null || root.State != RootRegistrationState.Active || !mayDispatch(root.InstanceId) ||
             !work.TryEnter([root.RootId], out var admission)) return false;
         using var retainedAdmission = admission;
@@ -67,7 +71,7 @@ internal sealed class MirrorPulseRetiredTransferObservationHandler(CloudFileSyst
 
     private async ValueTask<bool> ReplayAcceptedAsync(MirrorPulseRetiredTransferObservationAcknowledgement start, CancellationToken token)
     {
-        var root = router.Registrations.SingleOrDefault(root => root.RootId == start.SourceRootId);
+        var root = router.FindRegistration(start.SourceRootId);
         if (root is null || root.State != RootRegistrationState.Active || !mayDispatch(root.InstanceId) ||
             !work.TryEnter([root.RootId], out var admission)) return false;
         using var retainedAdmission = admission;
