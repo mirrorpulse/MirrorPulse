@@ -202,3 +202,12 @@ requires authenticated bounded permission cleanup and root unregistration before
 the GUID fixture directory is removed. Its route/name allowlist is separate from
 the existing single-root hydration regression fixture. Run this native verifier
 only with `MIRRORPULSE_NATIVE_TEST=1` in the disposable Windows verification user.
+
+## Reused source backend addresses
+
+The default Host can select a durable successor public identity after the exact
+original transfer-source retirement and journal acknowledgement complete. It
+retains the old transfer addresses and receipts when the backend reuses its
+remote ID. See [remote identity generations](remote-identity-generations.md) for
+selection, polling and streamed replay boundaries. This component does not
+replace the full signed transfer, later-generation and restart acceptance.

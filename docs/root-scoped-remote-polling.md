@@ -29,7 +29,7 @@ instance-wide pending query still reports any such owner, so streamed changes
 cannot overtake pending polling work. Per-root completion clears only its exact
 batch after SDK/product completion and durable snapshot publication.
 
-New projection version 3 uses the reserved Host namespace
+Projection version 3 introduced the reserved Host namespace
 `<instance>/poll-root/<root>/<initial>/<final>`. Batch IDs, change IDs, snapshot
 cursors and official SDK polling checkpoints are independent across roots,
 including roots exposing identical remote IDs and paths. Opaque IDs and
@@ -72,3 +72,12 @@ namespace admission or cursor publication. A diagnostic category identifies a
 rejection boundary; it does not establish the underlying defect or authorize a
 recovery operation. Diagnostics remain local unless the user explicitly exports
 them.
+
+## Captured identity generations
+
+The default Host now uses projection 4 to retain selected public addresses while
+keeping the original projection 3 fingerprint for unchanged initial identities.
+Original version 1/2/3 pending batches still replay their original addresses and
+cursors. Incoming streamed batches have a separate durable projection retained
+after completion. See [remote identity generations](remote-identity-generations.md)
+for the original retirement proof, migration and current verification limits.
