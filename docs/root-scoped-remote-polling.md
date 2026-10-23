@@ -56,3 +56,19 @@ existing native cursor fixture additionally exercises interleaved root cursors;
 that extension is compiled and still requires disposable native CI. This work
 does not complete managed remote birth/replacement/retirement, new-role recovery,
 default Host composition, the full P083 budget matrix or S06 acceptance.
+
+## Local failure observations
+
+The Host writes bounded local remote-poll failure observations under
+`DataRoot/logs/remote-poll/mirrorpulse.log`. Each observation contains a registered
+description, the instance ID, HRESULT, safe failure category and a closed product
+boundary category. Native categories use the exception's native error code;
+arbitrary exception messages, paths and stacks are omitted by the diagnostic
+policy. Cancellation does not create a remote-poll failure entry.
+
+The original exception still reaches the caller if writing the observation fails.
+Logging neither advances the pending batch or snapshot nor changes replay,
+namespace admission or cursor publication. A diagnostic category identifies a
+rejection boundary; it does not establish the underlying defect or authorize a
+recovery operation. Diagnostics remain local unless the user explicitly exports
+them.

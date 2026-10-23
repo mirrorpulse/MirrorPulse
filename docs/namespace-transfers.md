@@ -6,6 +6,14 @@ an object's first root or birth provenance. A copied destination needs a separat
 member and public identity. Worker V2 root routing alone does not implement this
 product workflow.
 
+The current delivery baseline uses one declared root per Adapter instance and
+retains transfers between distinct instances, including separately selected
+packages and backends when their capabilities permit the operation. These
+instances share the single current-user Windows sync root. Same-instance
+transfers between several declared roots are deferred for review after the
+current journal milestone. Existing root addressing and component evidence stay
+compatible; a new multi-root package is not required for this baseline.
+
 Schema 80 adds the first file-copy admission and its original upload receipt.
 `PrepareNamespaceTransferAsync` atomically retains the immutable protected source,
 source parent, target parent, both backend scopes, private content ID, length,
@@ -130,6 +138,12 @@ deletion and the original non-null revision. Local-only sources, directory
 manifests, legacy protocols and unfinished transfers under a different protection
 role still require separate recovery. These commands do not complete those
 broader transfer requirements.
+
+The signed Local fixture exercises two independent single-root instances. Its
+first successful move is component evidence: complete later-source recreation,
+both transfer directions, restart, heterogeneous backends and the other recovery
+cases must pass before the complete workflow is accepted. A completed historical
+receipt grants no authority over a newer source or destination generation.
 
 Source retirement retains its exact pre-deletion public SDK generation, native
 binding and actual tombstone receipt before releasing the old product name.

@@ -15,6 +15,12 @@ inconclusive results when prerequisites are absent. `eng/verify-test-results.ps1
 checks executed counts and requires every named test in a dedicated suite.
 Ordinary CfSharp tests are not all native Cloud Files tests.
 
+The x64 native gate selects names containing `Native`, plus its explicit retained
+handle alias case. That filter can also select managed simulations. Read the
+individual tests and original reports before claiming that a selected case
+performed native Cloud Files operations; the selected count alone proves no such
+boundary. Bind required-case coverage to the suite policy from the executed source.
+
 The x64 native and ARM64 namespace suites both require the real NTFS retained
 handle alias test. It checks rejection of an existing or newly observed hard
 link, retention of original permissions and latest bytes, and handle cleanup
@@ -27,11 +33,12 @@ the original file ID, permissions and latest unaccepted bytes to remain intact,
 without marking content in sync or reading an Adapter source. Existing aliased
 ordinary files must refuse conversion without changing their permissions or
 bytes. This is a component boundary test; it does not enable whole-tree
-protection in the Host. The namespace report requires all fourteen
-registered tests to pass exactly once, without skips; missing, repeated, or
+protection in the Host. The namespace report requires every named test in
+`required.namespace` in [the suite policy](../eng/test-suites.json) to pass exactly once,
+without skips; missing, repeated, or
 partially executed results fail the gate.
 
-The ARM64 job also runs the same fourteen tests as a fresh local user in the built-in
+The ARM64 job also runs the same required namespace suite as a fresh local user in the built-in
 Users group, with a loaded Windows profile and an actual non-administrator token.
 `eng/verify-namespace-nonadmin.ps1` is restricted to disposable GitHub-hosted Windows
 runners. It copies the compiled test payload to a marked temporary workspace;
@@ -41,7 +48,7 @@ It does not build or restore packages as the test user.
 
 Original context and TRX results are uploaded separately as
 `namespace-nonadmin-arm64-test-results`. The ordinary-user check does not increase
-the elevated namespace suite's counts. Evidence requires all fourteen tests without
+the elevated namespace suite's counts. Evidence requires every declared namespace test without
 skips, matching source and digests, and successful account, profile and workspace
 cleanup. `eng/verify-ci-evidence.ps1 -RequireNonAdminNamespace` rejects missing or
 partial evidence. This component gate does not establish installed Host identity
