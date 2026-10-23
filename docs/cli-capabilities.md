@@ -128,7 +128,8 @@ tests executed. Missing environment prerequisites must produce skipped results.
 
 The ARM64 signed Local CLI regression gate covers real Host/Worker/CfSharp uploads,
 offline replay, conflicts and cursor/catalog persistence. A separate manual
-`verify-cli-transfers.ps1` gate exercises same-instance cross-root and cross-instance
+`verify-cli-transfers.ps1` gate exercises forward and reverse transfers between two
+single-root instances using the actual signed package's declared roots, including
 typed move/resume, complete bytes, original receipts, later generations and Host
 restart through the signed Local V2 Workers. Read that source's actual original
 report before treating this matrix as passed. FTP/SFTP process

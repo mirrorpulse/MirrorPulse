@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text.Json;
 using MirrorPulse.Core.Caching;
+using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.State;
 
 namespace MirrorPulse.CfSharp.CrashProbe;
@@ -8,7 +9,10 @@ namespace MirrorPulse.CfSharp.CrashProbe;
 public sealed record CliTransferFixtureReceipt(Guid OperationId, string Scope, Guid SourceRootId, Guid TargetRootId,
     Guid SourceMemberId, Guid TargetMemberId, Guid SourceItemId, Guid TargetItemId, long Length, string Sha256,
     int OriginalJournalCount, string AcknowledgementKind, DateTimeOffset AcknowledgedAt,
-    long SourceNameEpoch, bool PrivateBytesVerified);
+    long SourceNameEpoch, bool PrivateBytesVerified)
+{
+    public string? Direction { get; init; }
+}
 public sealed record CliTransferFixtureAudit(int SchemaVersion, bool ExclusiveCatalogOwner, IReadOnlyList<CliTransferFixtureReceipt> Transfers);
 
 public static partial class CliFixtureProbe
@@ -27,6 +31,7 @@ public static partial class CliFixtureProbe
             if ((await fixture.Catalog.ReadNamespaceDispatchFencedRootsAsync()).Count != 0)
                 throw new InvalidDataException("An unfinished namespace owner cannot be reported as completed transfers.");
             var receipts = new List<CliTransferFixtureReceipt>();
+            bool singleRoot = fixture.Marker.SchemaVersion == 2;
             foreach (Guid operation in operations)
             {
                 var copy = await fixture.Catalog.ReadNamespaceTransferAsync(operation)
@@ -36,7 +41,7 @@ public static partial class CliFixtureProbe
                 var source = fixture.Inventory.Roots.SingleOrDefault(root => root.RootId == plan.SourceRoute.RootId);
                 var target = fixture.Inventory.Roots.SingleOrDefault(root => root.RootId == plan.TargetRoute.RootId);
                 if (plan.Version != 2 || plan.CommandOrigin?.CommandId != operation || source is null || target is null ||
-                    source.UniquenessKey != "left" || target.UniquenessKey is not ("right" or "target") ||
+                    !MatchesOriginalTransferRoute(fixture.Marker, receipts.Count, source, target) ||
                     plan.SourceRoute.ProtocolVersion != 2 || plan.TargetRoute.ProtocolVersion != 2 || plan.SourceRemoteRevision is null ||
                     copy.CopyAcceptedAt is null || copy.TargetVerification is null || copy.TargetPublication is null ||
                     copy.SourceDeletion?.AcceptedAt is null || copy.Acknowledgement?.AcknowledgedAt is null || copy.JournalClaim is null ||
@@ -59,13 +64,25 @@ public static partial class CliFixtureProbe
                 receipts.Add(new(operation, source.InstanceId == target.InstanceId ? "SameInstance" : "CrossInstance",
                     source.RootId.Value, target.RootId.Value, plan.Source.Context.Member.MemberId, copy.TargetPublication.MemberId,
                     sourceItem, copy.TargetPublication.ItemId, plan.Length, digest, originalCount, copy.Acknowledgement.Kind.ToString(),
-                    copy.Acknowledgement.AcknowledgedAt.Value, retirement.TransferSourceNameEpoch.Value, true));
+                    copy.Acknowledgement.AcknowledgedAt.Value, retirement.TransferSourceNameEpoch.Value, true)
+                { Direction = singleRoot ? receipts.Count == 0 ? "Forward" : "Reverse" : null });
             }
-            if (receipts.Select(item => item.Scope).Distinct(StringComparer.Ordinal).Count() != 2)
-                throw new InvalidDataException("The stopped transfer oracle requires both same-instance and cross-instance executions.");
-            Console.WriteLine(JsonSerializer.Serialize(new CliTransferFixtureAudit(1, true, receipts.AsReadOnly()), JsonOptions));
+            if (singleRoot ? receipts.Any(item => item.Scope != "CrossInstance") :
+                receipts.Select(item => item.Scope).Distinct(StringComparer.Ordinal).Count() != 2)
+                throw new InvalidDataException("The stopped transfer oracle lost its required original execution shapes.");
+            Console.WriteLine(JsonSerializer.Serialize(new CliTransferFixtureAudit(fixture.Marker.SchemaVersion, true, receipts.AsReadOnly()), JsonOptions));
             return 0;
         }
         catch (Exception failure) { failure.Data["CliFixtureCleanupStage"] = stage; throw; }
+    }
+
+    private static bool MatchesOriginalTransferRoute(CliTransferFixtureMarker marker, int index,
+        RootRegistration source, RootRegistration target)
+    {
+        if (marker.SchemaVersion == 1) return source.UniquenessKey == "left" && target.UniquenessKey is "right" or "target";
+        string sourceSide = index == 0 ? "left" : "right", targetSide = index == 0 ? "right" : "left";
+        return source.UniquenessKey == "local" && target.UniquenessKey == "local" && source.InstanceId != target.InstanceId &&
+            marker.Routes.Single(route => route.FixtureSide == sourceSide).RootId == source.RootId.ToString() &&
+            marker.Routes.Single(route => route.FixtureSide == targetSide).RootId == target.RootId.ToString();
     }
 }

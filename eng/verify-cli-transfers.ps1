@@ -99,6 +99,19 @@ function Write-TransferOriginal {
 
 try {
     if (-not (Test-Path -LiteralPath $PackagePath -PathType Leaf)) { throw 'The exact signed Local package is missing.' }
+    $phase = 'PackageContract'
+    $package = [IO.Compression.ZipFile]::OpenRead((Resolve-Path $PackagePath).Path)
+    try {
+        $entry = $package.GetEntry('manifest.json')
+        if ($null -eq $entry -or $entry.Length -gt 1048576) { throw 'The Local package manifest is missing or exceeds its fixture limit.' }
+        $reader = [IO.StreamReader]::new($entry.Open())
+        try { $manifest = $reader.ReadToEnd() | ConvertFrom-Json } finally { $reader.Dispose() }
+        if ($manifest.adapterId -cne 'com.mirrorpulse.adapter.local' -or $manifest.protocol.minimum -ne 2 -or $manifest.protocol.maximum -ne 2 -or
+            @($manifest.rootDefinitions).Count -ne 1 -or $manifest.rootDefinitions[0].key -cne 'local') {
+            throw 'The current transfer fixture requires the actual Local V2 single-root manifest.'
+        }
+    } finally { $package.Dispose() }
+    $phase = 'Setup'
     New-Item -ItemType Directory -Path $sync, $data -Force | Out-Null
     $user = [Security.Principal.WindowsIdentity]::GetCurrent()
     try {
@@ -107,12 +120,12 @@ try {
             throw 'The fresh synthetic anchor did not retain its current-user owner.'
         }
     } finally { $user.Dispose() }
-    foreach ($key in @('left', 'right', 'target')) { New-Item -ItemType Directory -Path (Join-Path $fixture "source/$key") | Out-Null }
+    foreach ($key in @('left', 'right')) { New-Item -ItemType Directory -Path (Join-Path $fixture "source/$key") | Out-Null }
     $payloads = @{}
-    foreach ($entry in @(@{name='same-instance.bin';length=32769}, @{name='cross-instance.bin';length=2097409})) {
+    foreach ($entry in @(@{name='forward.bin';side='left';length=32769}, @{name='reverse.bin';side='right';length=2097409})) {
         $bytes = [byte[]]::new($entry.length); [Random]::new($entry.length).NextBytes($bytes)
         $payloads[$entry.name] = $bytes
-        [IO.File]::WriteAllBytes((Join-Path $fixture ('source/left/' + $entry.name)), $bytes)
+        [IO.File]::WriteAllBytes((Join-Path $fixture ('source/' + $entry.side + '/' + $entry.name)), $bytes)
     }
     foreach ($publish in @(@{project='src/MirrorPulse.Cli/MirrorPulse.Cli.csproj';directory='cli';native=$true},
         @{project='src/MirrorPulse.Host/MirrorPulse.Host.csproj';directory='host';native=$true},
@@ -133,19 +146,20 @@ try {
     $installation = Invoke-TransferCli @('--json', 'adapter', 'install', '--package', (Resolve-Path $PackagePath).Path)
     $installId = $installation.data.installedAdapterId
     $sourceInstance = Invoke-TransferCli @('--json', 'instance', 'create', '--install-id', $installId, '--name', 'Transfer source',
-        '--config', ('root.left.sourceDirectory=' + [IO.Path]::Combine($fixture, 'source', 'left')),
-        '--config', ('root.right.sourceDirectory=' + [IO.Path]::Combine($fixture, 'source', 'right')))
+        '--root', 'local=Transfer Left', '--config', ('root.local.sourceDirectory=' + [IO.Path]::Combine($fixture, 'source', 'left')))
     $targetInstance = Invoke-TransferCli @('--json', 'instance', 'create', '--install-id', $installId, '--name', 'Transfer target',
-        '--config', ('root.target.sourceDirectory=' + [IO.Path]::Combine($fixture, 'source', 'target')))
+        '--root', 'local=Transfer Right', '--config', ('root.local.sourceDirectory=' + [IO.Path]::Combine($fixture, 'source', 'right')))
     $topology = (Invoke-TransferCli @('--json', '--no-start', 'adapter', 'list')).data
     $installed = @($topology.installations | Where-Object installId -ceq $installId)
     if ($installed.Count -ne 1 -or $installed[0].adapterId -cne 'com.mirrorpulse.adapter.local' -or $installed[0].isSigned -ne $true -or
-        @($topology.instances).Count -ne 2 -or @($topology.roots).Count -ne 3) { throw 'The CLI fixture did not retain the exact signed two-instance three-root topology.' }
+        @($topology.instances).Count -ne 2 -or @($topology.roots).Count -ne 2 -or
+        @($topology.roots | Where-Object uniquenessKey -cne 'local').Count) { throw 'The CLI fixture did not retain two actual single-root Local instances.' }
     $script:transferRoutes = @($topology.roots | ForEach-Object {
-        [ordered]@{instanceId=$_.instanceId;rootId=$_.rootId;rootKey=$_.uniquenessKey;directoryName=$_.directoryName}
+        $side = if ($_.instanceId -ceq $sourceInstance.data.createdInstanceId) { 'left' } elseif ($_.instanceId -ceq $targetInstance.data.createdInstanceId) { 'right' } else { throw 'A foreign instance entered the transfer fixture.' }
+        [ordered]@{instanceId=$_.instanceId;rootId=$_.rootId;rootKey=$_.uniquenessKey;directoryName=$_.directoryName;fixtureSide=$side}
     })
     $operations = @([guid]::NewGuid().ToString('D'), [guid]::NewGuid().ToString('D'))
-    [ordered]@{schemaVersion=1;routes=$script:transferRoutes;transferOperationIds=$operations} |
+    [ordered]@{schemaVersion=2;routes=$script:transferRoutes;transferOperationIds=$operations} |
         ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $fixture '.mp-cli-transfer-fixture.json') -Encoding utf8
     Invoke-TransferCli @('--json', 'host', 'restart') | Out-Null; Wait-TransferHostStopped
     Invoke-TransferCli @('--json', 'host', 'start') | Out-Null
@@ -175,44 +189,44 @@ try {
     }
     if ($workerIds.Count -ne 2) { throw 'Exactly two actual signed Worker processes must run from the verified installation.' }
     $beforeRestart = (Invoke-TransferCli @('--json', '--no-start', 'host', 'status')).data.processId
-    $left = @($script:transferRoutes | Where-Object rootKey -ceq 'left')[0]
     $phase = 'TransferCommands'
     for ($index = 0; $index -lt 2; $index++) {
-        $same = $index -eq 0; $scope = if ($same) { 'SameInstance' } else { 'CrossInstance' }
-        $sourceName = if ($same) { 'same-instance.bin' } else { 'cross-instance.bin' }
-        $targetName = if ($same) { 'same-instance-moved.bin' } else { 'cross-instance-moved.bin' }
-        $targetKey = if ($same) { 'right' } else { 'target' }
-        $target = @($script:transferRoutes | Where-Object rootKey -ceq $targetKey)[0]
-        Get-ChildItem -LiteralPath (Join-Path $sync $left.directoryName) | Out-Null
-        $sourceLocal = Join-Path $sync ($left.directoryName + '/' + $sourceName)
-        $sourceRemote = Join-Path $fixture ('source/left/' + $sourceName)
+        $forward = $index -eq 0; $scope = 'CrossInstance'; $direction = if ($forward) { 'Forward' } else { 'Reverse' }
+        $sourceName = if ($forward) { 'forward.bin' } else { 'reverse.bin' }
+        $targetName = if ($forward) { 'forward-moved.bin' } else { 'reverse-moved.bin' }
+        $sourceSide = if ($forward) { 'left' } else { 'right' }; $targetSide = if ($forward) { 'right' } else { 'left' }
+        $source = @($script:transferRoutes | Where-Object fixtureSide -ceq $sourceSide)[0]
+        $target = @($script:transferRoutes | Where-Object fixtureSide -ceq $targetSide)[0]
+        Get-ChildItem -LiteralPath (Join-Path $sync $source.directoryName) | Out-Null
+        $sourceLocal = Join-Path $sync ($source.directoryName + '/' + $sourceName)
+        $sourceRemote = Join-Path $fixture ('source/' + $sourceSide + '/' + $sourceName)
         $sourceHash = Read-TransferHash $sourceRemote
         Wait-TransferHash $sourceLocal $sourceHash
-        $member = (Invoke-TransferCli @('--json', '--no-start', 'namespace', 'member', 'inspect', ($left.directoryName + '/' + $sourceName))).data
+        $member = (Invoke-TransferCli @('--json', '--no-start', 'namespace', 'member', 'inspect', ($source.directoryName + '/' + $sourceName))).data
         $parent = (Invoke-TransferCli @('--json', '--no-start', 'namespace', 'member', 'inspect', $target.directoryName, '--directory')).data
         $moved = (Invoke-TransferCli @('--json', '--no-start', 'namespace', 'transfer', 'move', $operations[$index], $member.memberId, $parent.memberId, $targetName)).data
         $targetLocal = Join-Path $sync ($target.directoryName + '/' + $targetName)
-        $targetRemote = Join-Path $fixture ('source/' + $targetKey + '/' + $targetName)
+        $targetRemote = Join-Path $fixture ('source/' + $targetSide + '/' + $targetName)
         Wait-TransferHash $targetRemote $sourceHash; Wait-TransferHash $targetLocal $sourceHash
         $published = (Invoke-TransferCli @('--json', '--no-start', 'namespace', 'member', 'inspect', ($target.directoryName + '/' + $targetName))).data
         Assert-TransferRootsReady
-        $case = [ordered]@{scope=$scope;operationId=$operations[$index];status=$moved;sourceItemId=$member.nativeItemId;targetItemId=$published.nativeItemId
+        $case = [ordered]@{scope=$scope;direction=$direction;operationId=$operations[$index];status=$moved;sourceItemId=$member.nativeItemId;targetItemId=$published.nativeItemId
             sourceSha256=$sourceHash;targetLocalSha256=(Read-TransferHash $targetLocal);targetRemoteSha256=(Read-TransferHash $targetRemote)
             sourceLocalMissing=(-not (Test-Path -LiteralPath $sourceLocal));sourceRemoteMissing=(-not (Test-Path -LiteralPath $sourceRemote));freshRootsAfterMove=$true}
-        $laterBytes = [Text.Encoding]::UTF8.GetBytes('later target edit ' + $scope)
+        $laterBytes = [Text.Encoding]::UTF8.GetBytes('later target edit ' + $direction)
         [IO.File]::WriteAllBytes($targetLocal, $laterBytes); $case.laterTargetSha256 = Read-TransferHash $targetLocal
         Wait-TransferHash $targetRemote $case.laterTargetSha256
-        [IO.File]::WriteAllBytes($sourceRemote, [Text.Encoding]::UTF8.GetBytes('later remote source ' + $scope))
+        [IO.File]::WriteAllBytes($sourceRemote, [Text.Encoding]::UTF8.GetBytes('later remote source ' + $direction))
         $case.laterSourceSha256 = Read-TransferHash $sourceRemote
         Invoke-TransferCli @('--json', '--no-start', 'sync', 'refresh') | Out-Null
         Wait-TransferHash $sourceLocal $case.laterSourceSha256
-        $newSource = (Invoke-TransferCli @('--json', '--no-start', 'namespace', 'member', 'inspect', ($left.directoryName + '/' + $sourceName))).data
+        $newSource = (Invoke-TransferCli @('--json', '--no-start', 'namespace', 'member', 'inspect', ($source.directoryName + '/' + $sourceName))).data
         $case.laterSourceMemberId = $newSource.memberId; $case.laterSourceItemId = $newSource.nativeItemId
         $case.laterSourcePublicIdentityReused = $newSource.nativeItemId -ceq $member.nativeItemId
         Assert-TransferRootsReady
         $case.resumedStatus = (Invoke-TransferCli @('--json', '--no-start', 'namespace', 'transfer', 'resume', $operations[$index])).data
         $case.resumedSourceSha256 = Read-TransferHash $sourceRemote; $case.laterRemoteSourcePreserved = $case.laterSourceSha256 -ieq $case.resumedSourceSha256
-        $cases.Add($case); Write-TransferOriginal -Name ('case-' + $scope) -Value $case
+        $cases.Add($case); Write-TransferOriginal -Name ('case-' + $direction) -Value $case
     }
     $phase = 'RestartAndHistoricalReplay'
     Invoke-TransferCli @('--json', 'host', 'restart') | Out-Null; Wait-TransferHostStopped
@@ -223,17 +237,18 @@ try {
         $case.freshRootsBeforeReplay = $true
         $case.restartedStatus = (Invoke-TransferCli @('--json', '--no-start', 'namespace', 'transfer', 'resume', $case.operationId)).data
         $case.restartedTargetSha256 = Read-TransferHash (Join-Path $sync $case.status.targetRelativePath)
-        $sourceName = if ($case.scope -ceq 'SameInstance') { 'same-instance.bin' } else { 'cross-instance.bin' }
-        $case.resumedSourceSha256 = Read-TransferHash (Join-Path $fixture ('source/left/' + $sourceName))
+        $sourceName = if ($case.direction -ceq 'Forward') { 'forward.bin' } else { 'reverse.bin' }
+        $sourceSide = if ($case.direction -ceq 'Forward') { 'left' } else { 'right' }
+        $case.resumedSourceSha256 = Read-TransferHash (Join-Path $fixture ('source/' + $sourceSide + '/' + $sourceName))
         $case.laterRemoteSourcePreserved = $case.laterSourceSha256 -ieq $case.resumedSourceSha256
     }
     Invoke-TransferCli @('--json', '--no-start', 'host', 'stop') | Out-Null; Wait-TransferHostStopped
     $phase = 'StoppedHostReceipts'
     $audit = Invoke-TransferProbe -Mode audit
-    $report = [ordered]@{schemaVersion=1;sourceSha=$sourceSha;runId=$env:GITHUB_RUN_ID;runtime=$Runtime
+    $report = [ordered]@{schemaVersion=2;sourceSha=$sourceSha;runId=$env:GITHUB_RUN_ID;runtime=$Runtime
         signedInstallation=$true;packageSha256=$installed[0].packageSha256;workerProcessIds=$workerIds.ToArray();privateWorkerRuntime=$true
         roots=$script:transferRoutes;cases=$cases.ToArray();audit=$audit;hostProcessBeforeRestart=$beforeRestart;hostProcessAfterRestart=$afterRestart}
-    Assert-CliTransferObservations -Evidence ([pscustomobject]$report) -BeforeCleanup
+    Assert-CliTransferObservations -Evidence ([pscustomobject]$report) -BeforeCleanup -RequireSingleRoot
     Write-TransferOriginal -Name 'completed-execution' -Value $report
 } catch {
     $primaryFailure = $_
@@ -303,6 +318,6 @@ try {
         foreach ($name in $savedEnvironment.Keys) { [Environment]::SetEnvironmentVariable($name, $savedEnvironment[$name], 'Process') }
     }
 }
-Assert-CliTransferObservations -Evidence ([pscustomobject]$report)
+Assert-CliTransferObservations -Evidence ([pscustomobject]$report) -RequireSingleRoot
 $report | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $evidenceFile -Encoding utf8
-Write-Output "Verified real signed Local CLI same-instance and cross-instance transfers for $Runtime."
+Write-Output "Verified forward and reverse transfers between real signed Local single-root instances for $Runtime."

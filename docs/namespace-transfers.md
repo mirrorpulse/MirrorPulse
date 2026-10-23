@@ -168,13 +168,19 @@ do not establish full transfer or S06 acceptance.
 
 The manual ARM64 workflow also runs `eng/verify-cli-transfers.ps1` against the
 same frozen signed Local V2 package. This separate disposable fixture uses two
-real Worker processes, two instances and three roots. It exercises typed CLI
+real Worker processes and two single-root instances, using the manifest's declared
+`local` key and distinct root labels. It exercises forward and reverse typed CLI
 move/resume, whole source and destination bytes, a later distinct source
 generation, later target edits, current root admission and Host restart. The
 stopped-Host test oracle acquires the actual exclusive catalog lease before
 reading original completion receipts and independently verifying retained private
 bytes. An empty captured claim must report command completion without claiming
 that original notifications were acknowledged.
+
+Current reports use schema 2 and bind each direction to the original instance
+and stable root IDs. The collector requires this single-root report. Schema 1
+remains readable for historical evidence; same-instance multi-root acceptance is
+deferred to the post-S06 refactor and is not a current S06 prerequisite.
 
 `cli-transfers-arm64-originals` retains the source-bound report, completed
 execution observations and independent execution/cleanup failures. The report

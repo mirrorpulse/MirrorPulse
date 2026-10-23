@@ -1,7 +1,9 @@
 function Assert-CliTransferObservations {
-    param([Parameter(Mandatory)][object]$Evidence, [switch]$BeforeCleanup)
+    param([Parameter(Mandatory)][object]$Evidence, [switch]$BeforeCleanup, [switch]$RequireSingleRoot)
 
-    if ($Evidence.schemaVersion -ne 1 -or $Evidence.sourceSha -cnotmatch '\A[0-9a-f]{40}\z' -or $Evidence.runtime -notin @('win-x64', 'win-arm64') -or
+    $singleRoot = $Evidence.schemaVersion -eq 2
+    if ($Evidence.schemaVersion -notin @(1, 2) -or ($RequireSingleRoot -and -not $singleRoot) -or
+        $Evidence.sourceSha -cnotmatch '\A[0-9a-f]{40}\z' -or $Evidence.runtime -notin @('win-x64', 'win-arm64') -or
         $Evidence.signedInstallation -isnot [bool] -or -not $Evidence.signedInstallation -or
         $Evidence.packageSha256 -cnotmatch '\A[0-9a-fA-F]{64}\z' -or
         $Evidence.privateWorkerRuntime -isnot [bool] -or -not $Evidence.privateWorkerRuntime -or
@@ -10,20 +12,35 @@ function Assert-CliTransferObservations {
         throw 'The transfer evidence requires its actual signed installation and two independent private-runtime Worker processes.'
     }
     $cases = @($Evidence.cases)
+    $rootCount = if ($singleRoot) { 2 } else { 3 }
     if ($cases.Count -ne 2 -or @($cases.operationId | Select-Object -Unique).Count -ne 2 -or
-        @($Evidence.roots).Count -ne 3 -or @($Evidence.roots.rootId | Select-Object -Unique).Count -ne 3 -or
+        @($Evidence.roots).Count -ne $rootCount -or @($Evidence.roots.rootId | Select-Object -Unique).Count -ne $rootCount -or
         @($Evidence.roots.instanceId | Select-Object -Unique).Count -ne 2) {
         throw 'The transfer evidence requires exactly two original commands across three stable roots and two instances.'
     }
     $caseRoots = @(@($cases.status.sourceRootId) + @($cases.status.targetRootId) | Select-Object -Unique)
-    if ($caseRoots.Count -ne 3 -or @(Compare-Object $caseRoots @($Evidence.roots.rootId)).Count) { throw 'The original command roots disagree with the retained fixture routes.' }
-    foreach ($scope in @('SameInstance', 'CrossInstance')) {
-        $selected = @($cases | Where-Object scope -ceq $scope)
-        $receipt = @($Evidence.audit.transfers | Where-Object scope -ceq $scope)
+    if ($caseRoots.Count -ne $rootCount -or @(Compare-Object $caseRoots @($Evidence.roots.rootId)).Count) { throw 'The original command roots disagree with the retained fixture routes.' }
+    $caseKeys = if ($singleRoot) { @('Forward', 'Reverse') } else { @('SameInstance', 'CrossInstance') }
+    foreach ($key in $caseKeys) {
+        $selected = if ($singleRoot) { @($cases | Where-Object direction -ceq $key) } else { @($cases | Where-Object scope -ceq $key) }
+        $receipt = if ($singleRoot) { @($Evidence.audit.transfers | Where-Object direction -ceq $key) } else { @($Evidence.audit.transfers | Where-Object scope -ceq $key) }
         if ($selected.Count -ne 1 -or $receipt.Count -ne 1) { throw 'Both original transfer scopes must execute exactly once.' }
         $case = $selected[0]; $retained = $receipt[0]; $status = $case.status
+        $scope = if ($singleRoot) { 'CrossInstance' } else { $key }
+        if ($singleRoot) {
+            $sourceSide = if ($key -ceq 'Forward') { 'left' } else { 'right' }
+            $targetSide = if ($key -ceq 'Forward') { 'right' } else { 'left' }
+            $source = @($Evidence.roots | Where-Object fixtureSide -ceq $sourceSide)
+            $target = @($Evidence.roots | Where-Object fixtureSide -ceq $targetSide)
+            if ($source.Count -ne 1 -or $target.Count -ne 1 -or $source[0].rootKey -cne 'local' -or $target[0].rootKey -cne 'local' -or
+                $case.scope -cne 'CrossInstance' -or $retained.scope -cne 'CrossInstance' -or
+                $status.sourceRootId -cne $source[0].rootId -or $status.targetRootId -cne $target[0].rootId -or
+                $status.sourceInstanceId -cne $source[0].instanceId -or $status.targetInstanceId -cne $target[0].instanceId) {
+                throw 'Each single-root direction must retain its actual distinct instances and declared local roots.'
+            }
+        }
         foreach ($id in @($case.operationId, $status.sourceRootId, $status.targetRootId, $status.sourceMemberId,
-            $status.targetMemberId, $case.sourceItemId, $case.targetItemId, $case.laterSourceMemberId, $case.laterSourceItemId)) {
+            $status.targetMemberId, $status.sourceInstanceId, $status.targetInstanceId, $case.sourceItemId, $case.targetItemId, $case.laterSourceMemberId, $case.laterSourceItemId)) {
             $parsed = [guid]::Empty
             if (-not [guid]::TryParseExact([string]$id, 'D', [ref]$parsed) -or $parsed -eq [guid]::Empty) { throw 'A transfer original identity is missing or invalid.' }
         }
@@ -69,7 +86,7 @@ function Assert-CliTransferObservations {
             throw 'Actual file outcomes and stopped-Host original receipts disagree, or an empty claim falsely reports journal acknowledgement.'
         }
     }
-    if ($Evidence.audit.schemaVersion -ne 1 -or $Evidence.audit.exclusiveCatalogOwner -isnot [bool] -or -not $Evidence.audit.exclusiveCatalogOwner -or
+    if ($Evidence.audit.schemaVersion -ne $Evidence.schemaVersion -or $Evidence.audit.exclusiveCatalogOwner -isnot [bool] -or -not $Evidence.audit.exclusiveCatalogOwner -or
         @($Evidence.audit.transfers).Count -ne 2 -or $Evidence.hostProcessBeforeRestart -le 0 -or $Evidence.hostProcessAfterRestart -le 0 -or
         $Evidence.hostProcessBeforeRestart -eq $Evidence.hostProcessAfterRestart) { throw 'The transfer oracle requires exclusive catalog ownership and an actual Host process restart.' }
     if (-not $BeforeCleanup -and ($Evidence.cleanup.exclusiveCatalogOwner -ne $true -or $Evidence.cleanup.protectedNamespace -ne $true -or

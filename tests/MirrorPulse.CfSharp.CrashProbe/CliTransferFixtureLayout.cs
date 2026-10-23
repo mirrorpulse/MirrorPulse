@@ -4,7 +4,10 @@ using MirrorPulse.Core.State;
 
 namespace MirrorPulse.CfSharp.CrashProbe;
 
-public sealed record CliTransferFixtureRoute(string InstanceId, string RootId, string RootKey, string DirectoryName);
+public sealed record CliTransferFixtureRoute(string InstanceId, string RootId, string RootKey, string DirectoryName)
+{
+    public string? FixtureSide { get; init; }
+}
 public sealed record CliTransferFixtureMarker(int SchemaVersion, IReadOnlyList<CliTransferFixtureRoute> Routes)
 {
     public IReadOnlyList<Guid>? TransferOperationIds { get; init; }
@@ -14,7 +17,7 @@ public sealed record CliTransferFixtureInventory(IReadOnlyList<RootRegistration>
 /// <summary>Authenticates only the three synthetic routes used by the signed CLI transfer fixture.</summary>
 /// <remarks>This test-only policy neither starts Cloud Files nor changes permissions. The caller must
 /// hold the stopped Host's exclusive catalog lease before using the inventory for cleanup.</remarks>
-public static class CliTransferFixtureLayout
+public static partial class CliTransferFixtureLayout
 {
     public const string DirectoryPrefix = "MirrorPulse-cli-transfer-";
     public const string MarkerFileName = ".mp-cli-transfer-fixture.json";
@@ -24,6 +27,7 @@ public static class CliTransferFixtureLayout
     {
         ArgumentNullException.ThrowIfNull(marker); ArgumentNullException.ThrowIfNull(topology);
         string root = RequireFixtureDirectory(directory);
+        if (marker.SchemaVersion == 2) return AuthenticateSingleRootInstances(root, marker, topology);
         if (marker.SchemaVersion != 1 || marker.Routes is not { Count: 3 } || topology.Roots.Count != 3 ||
             topology.Instances.Count != 2 || topology.Installations.Count != 1)
             throw new InvalidDataException("Transfer fixture authentication requires its exact temporary directory and complete three-route marker.");

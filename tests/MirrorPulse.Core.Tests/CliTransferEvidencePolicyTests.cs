@@ -5,7 +5,7 @@ using System.Text.Json.Nodes;
 namespace MirrorPulse.Core.Tests;
 
 [TestClass]
-public sealed class CliTransferEvidencePolicyTests
+public sealed partial class CliTransferEvidencePolicyTests
 {
     private static readonly int[] WorkerProcessIds = [101, 102];
 
@@ -229,7 +229,8 @@ public sealed class CliTransferEvidencePolicyTests
 
     private static string Id() => Guid.NewGuid().ToString("D");
 
-    private static async Task<(int ExitCode, string Output, string Error)> ExerciseAsync(JsonObject evidence, bool beforeCleanup = false)
+    private static async Task<(int ExitCode, string Output, string Error)> ExerciseAsync(JsonObject evidence, bool beforeCleanup = false,
+        bool requireSingleRoot = false)
     {
         string root = Path.Combine(Path.GetTempPath(), "MirrorPulse-transfer-policy-" + Id()); Directory.CreateDirectory(root);
         try
@@ -237,16 +238,16 @@ public sealed class CliTransferEvidencePolicyTests
             string input = Path.Combine(root, "evidence.json"), script = Path.Combine(root, "exercise.ps1");
             await File.WriteAllTextAsync(input, evidence.ToJsonString());
             await File.WriteAllTextAsync(script, """
-                param([string]$Repository,[string]$InputPath,[string]$BeforeCleanup)
+                param([string]$Repository,[string]$InputPath,[string]$BeforeCleanup,[string]$RequireSingleRoot)
                 $ErrorActionPreference='Stop'
                 . (Join-Path $Repository 'eng/cli-transfer-evidence-policy.ps1')
                 try {
-                    Assert-CliTransferObservations -Evidence (Get-Content -Raw -LiteralPath $InputPath | ConvertFrom-Json) -BeforeCleanup:($BeforeCleanup -ceq 'True')
+                    Assert-CliTransferObservations -Evidence (Get-Content -Raw -LiteralPath $InputPath | ConvertFrom-Json) -BeforeCleanup:($BeforeCleanup -ceq 'True') -RequireSingleRoot:($RequireSingleRoot -ceq 'True')
                     @{accepted=$true}|ConvertTo-Json -Compress
                 } catch { @{accepted=$false;message=$_.Exception.Message}|ConvertTo-Json -Compress; exit 1 }
                 """);
             var start = new ProcessStartInfo("pwsh") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
-            foreach (string argument in new[] { "-NoProfile", "-File", script, SftpProtocolFixture.FindRepositoryRoot(), input, beforeCleanup.ToString() }) start.ArgumentList.Add(argument);
+            foreach (string argument in new[] { "-NoProfile", "-File", script, SftpProtocolFixture.FindRepositoryRoot(), input, beforeCleanup.ToString(), requireSingleRoot.ToString() }) start.ArgumentList.Add(argument);
             using var process = Process.Start(start)!;
             Task<string> output = process.StandardOutput.ReadToEndAsync(), error = process.StandardError.ReadToEndAsync();
             try { await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30)); }

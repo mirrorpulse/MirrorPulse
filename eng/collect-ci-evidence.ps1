@@ -125,7 +125,7 @@ if ($TransferIntegrationPath) {
     $transfers = Get-Content -LiteralPath $TransferIntegrationPath -Raw | ConvertFrom-Json
     if ($transfers.runtime -cne $Runtime -or $transfers.sourceSha -cne $sourceSha) { throw 'The signed CLI transfer evidence belongs to another source or runtime.' }
     . (Join-Path $PSScriptRoot 'cli-transfer-evidence-policy.ps1')
-    Assert-CliTransferObservations $transfers
+    Assert-CliTransferObservations $transfers -RequireSingleRoot
     $checks += [ordered]@{name='signed-local-cli-transfers';executed=$true;observations=$transfers}
 }
 if ($InstalledPath) {
