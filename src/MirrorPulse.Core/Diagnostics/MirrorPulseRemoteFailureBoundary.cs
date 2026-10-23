@@ -3,7 +3,8 @@ namespace MirrorPulse.Core.Diagnostics;
 public enum MirrorPulseRemoteFailureBoundary
 {
     Unknown, NamespaceRecovery, BirthIdentityOwnership, BirthPlanIdentityOwnership,
-    BirthParentAdmission, BirthStarted, UpdateStarted, PollIntent, NativeItemMembership
+    BirthParentAdmission, BirthStarted, UpdateStarted, PollIntent, NativeItemMembership,
+    NativeItemMissing, NativeAccessDenied, NativeSharingViolation, NativeOther
 }
 
 /// <summary>Classifies fixed product failures without exporting exception text or stack contents.</summary>
@@ -12,6 +13,14 @@ public static class MirrorPulseRemoteFailureClassifier
     public static MirrorPulseRemoteFailureBoundary ReadBoundary(Exception exception)
     {
         ArgumentNullException.ThrowIfNull(exception);
+        if (exception is System.ComponentModel.Win32Exception native)
+            return native.NativeErrorCode switch
+            {
+                2 or 3 => MirrorPulseRemoteFailureBoundary.NativeItemMissing,
+                5 => MirrorPulseRemoteFailureBoundary.NativeAccessDenied,
+                32 => MirrorPulseRemoteFailureBoundary.NativeSharingViolation,
+                _ => MirrorPulseRemoteFailureBoundary.NativeOther
+            };
         return exception.Message switch
         {
             "Remote changes must wait for managed root namespace recovery." or
