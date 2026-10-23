@@ -38,6 +38,7 @@ public sealed partial class MirrorPulseActiveRemotePollerTests
             Assert.HasCount(1, lines);
             using var json = JsonDocument.Parse(lines[0]);
             Assert.AreEqual(expected, json.RootElement.GetProperty("Fields").GetProperty("remoteFailureBoundary").GetString());
+            Assert.AreEqual("ApplyAndCommit", json.RootElement.GetProperty("Fields").GetProperty("remotePollStage").GetString());
             Assert.IsFalse(lines[0].Contains("PRIVATE", StringComparison.Ordinal));
             Assert.AreEqual(code, failure.NativeErrorCode);
         }

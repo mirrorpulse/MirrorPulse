@@ -122,6 +122,7 @@ public static class SafeDiagnosticPolicy
                 "failureCategory" => value is "IO" or "InvalidData" or "Authorization" or "Cancelled" or "Internal" or "MutationAmbiguous" or "WorkerOffline" or "WorkerDisconnected" or "WorkerRejected" ? value : null,
                 "failureSite" => Enum.TryParse(value, out MirrorPulseStartupFailureSite site) && Enum.IsDefined(site) && value == site.ToString() ? value : null,
                 "remoteFailureBoundary" => Enum.TryParse(value, out MirrorPulseRemoteFailureBoundary boundary) && Enum.IsDefined(boundary) && value == boundary.ToString() ? value : null,
+                "remotePollStage" => Enum.TryParse(value, out MirrorPulseRemotePollStage pollStage) && Enum.IsDefined(pollStage) && value == pollStage.ToString() ? value : null,
                 "failureKind" => value is "FileNotFound" or "DirectoryNotFound" or "DllNotFound" or "Native" or "Other" ? value : null,
                 "contentObservation" => value is "Unavailable" or "NoAcceptedProof" or "ContentChanged" or "IdentityChanged" or "Selected" ? value : null,
                 "cloudRequestKind" => value is "FetchData" or "FetchPlaceholders" or "ValidateData" or "Dehydrate" or "Delete" or "Rename" or "CompletionNotification" or "Other" ? value : null,
