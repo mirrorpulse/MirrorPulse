@@ -27,20 +27,20 @@ public sealed partial class MirrorPulseProductCatalog
             await foreach (var transfer in ReadPendingNamespaceTransfersCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
                 if (transfer.Plan.SourceRoute.RootId == rootId || transfer.Plan.TargetRoute.RootId == rootId)
                     result.Add(new(transfer.Plan.OperationId, rootId, MirrorPulseNamespacePendingOperationKind.Transfer));
-            foreach (var update in await ReadPendingRemoteUpdatesCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
+            await foreach (var update in ReadPendingRemoteUpdatesCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
                 if (update.Plan.Child.Context.Member.RootId == rootId)
                     result.Add(new(update.Plan.OperationId, rootId, MirrorPulseNamespacePendingOperationKind.RemoteUpdate));
             if (await ReadPendingNamespaceMemberMoveCoreAsync(rootId, transaction, cancellationToken).ConfigureAwait(false) is { } move)
                 result.Add(new(move.OperationId, rootId, MirrorPulseNamespacePendingOperationKind.Move));
-            foreach (var retirement in await ReadPendingNamespaceRetirementsCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
+            await foreach (var retirement in ReadPendingNamespaceRetirementsCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
                 if (retirement.Intent.RootId == rootId)
                     result.Add(new(retirement.Intent.OperationId, rootId, MirrorPulseNamespacePendingOperationKind.Retirement));
-            foreach (var batch in await ReadPendingNamespaceRetirementBatchesCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
+            await foreach (var batch in ReadPendingNamespaceRetirementBatchesCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
                 if (batch.RootId == rootId)
                     result.Add(new(batch.OperationId, rootId, MirrorPulseNamespacePendingOperationKind.RetirementBatch));
             if (await ReadPendingNamespaceReplacementCoreAsync(rootId, transaction, cancellationToken).ConfigureAwait(false) is { } replacement)
                 result.Add(new(replacement.OperationId, rootId, MirrorPulseNamespacePendingOperationKind.Replacement));
-            foreach (var born in await ReadPendingBornMemberRecoveryActionsCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
+            await foreach (var born in ReadPendingBornMemberRecoveryActionsCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
                 if (born.Child.Member.RootId == rootId)
                     result.Add(new(born.ActionId, rootId, MirrorPulseNamespacePendingOperationKind.BornMemberRecovery));
             var births = new List<Guid>();

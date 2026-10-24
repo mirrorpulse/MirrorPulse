@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Microsoft.Data.Sqlite;
 
 namespace MirrorPulse.Core.State;
@@ -58,26 +59,16 @@ public sealed partial class MirrorPulseProductCatalog
         return result.AsReadOnly();
     }
 
-    private async Task<IReadOnlyList<MirrorPulseNamespaceBornMemberRecoveryAction>> ReadPendingBornMemberRecoveryActionsCoreAsync(
-        SqliteTransaction transaction, CancellationToken token)
+    private async IAsyncEnumerable<MirrorPulseNamespaceBornMemberRecoveryAction> ReadPendingBornMemberRecoveryActionsCoreAsync(
+        SqliteTransaction transaction, [EnumeratorCancellation] CancellationToken token)
     {
-        var members = new List<Guid>();
-        await using (var query = _connection.CreateCommand())
-        {
-            query.Transaction = transaction;
-            query.CommandText = "SELECT member_id FROM namespace_born_member_recovery_actions UNION SELECT member_id FROM namespace_born_member_recovery_heads UNION SELECT member_id FROM namespace_born_member_recovery_pending;";
-            await using var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
-            while (await reader.ReadAsync(token).ConfigureAwait(false)) members.Add(ParseNamespaceMemberId(reader.GetString(0)));
-        }
-        var result = new List<MirrorPulseNamespaceBornMemberRecoveryAction>();
-        foreach (Guid member in members)
+        await foreach (Guid member in ReadNamespaceOwnerIdsCoreAsync(NamespaceBornRecoveryMemberPageSql, transaction, token).ConfigureAwait(false))
         {
             var history = await ReadBornMemberRecoveryHistoryCoreAsync(member, transaction, token).ConfigureAwait(false);
             if (history.Count == 0) throw new InvalidDataException("Born recovery indexes have no original action.");
             var latest = history[^1];
-            if (await ReadBornMemberRecoveryCompletionCoreAsync(latest.ActionId, latest, transaction, token).ConfigureAwait(false) is null) result.Add(latest);
+            if (await ReadBornMemberRecoveryCompletionCoreAsync(latest.ActionId, latest, transaction, token).ConfigureAwait(false) is null) yield return latest;
         }
-        return result.AsReadOnly();
     }
 
     private async Task RequireBornMemberRecoveryHistoryReferencesAsync(MirrorPulseNamespaceBornMemberRecoveryAction action,

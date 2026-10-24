@@ -124,9 +124,10 @@ public sealed partial class MirrorPulseProductCatalog
         try
         {
             ThrowIfDisposed(); using var transaction = _connection.BeginTransaction(deferred: true);
-            var pending = await ReadPendingRemoteUpdatesCoreAsync(transaction, token).ConfigureAwait(false);
-            var result = pending.Where(update => update.Plan.Child.Context.Member.RootId == rootId).ToArray();
-            transaction.Commit(); return Array.AsReadOnly(result);
+            var result = new List<MirrorPulseNamespaceRemoteUpdate>();
+            await foreach (var update in ReadPendingRemoteUpdatesCoreAsync(transaction, token).ConfigureAwait(false))
+                if (update.Plan.Child.Context.Member.RootId == rootId) result.Add(update);
+            transaction.Commit(); return result.AsReadOnly();
         }
         finally { _gate.Release(); }
     }

@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -244,20 +245,11 @@ public sealed partial class MirrorPulseProductCatalog
             ?? throw new InvalidDataException("The retirement batch fence lost its receipt.");
     }
 
-    private async Task<List<MirrorPulseNamespaceRetirementBatch>> ReadPendingNamespaceRetirementBatchesCoreAsync(
-        SqliteTransaction transaction, CancellationToken token)
+    private async IAsyncEnumerable<MirrorPulseNamespaceRetirementBatch> ReadPendingNamespaceRetirementBatchesCoreAsync(
+        SqliteTransaction transaction, [EnumeratorCancellation] CancellationToken token)
     {
-        var result = new List<MirrorPulseNamespaceRetirementBatch>();
-        await using SqliteCommand query = _connection.CreateCommand(); query.Transaction = transaction;
-        query.CommandText = "SELECT operation_id FROM namespace_member_retirement_batches WHERE phase<>$completed ORDER BY operation_id;";
-        query.Parameters.AddWithValue("$completed", (int)MirrorPulseNamespaceRetirementBatchPhase.Completed);
-        await using SqliteDataReader reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
-        while (await reader.ReadAsync(token).ConfigureAwait(false))
-        {
-            if (!Guid.TryParseExact(reader.GetString(0), "D", out Guid operation)) throw new InvalidDataException("The retirement batch operation index is invalid.");
-            result.Add(await ReadNamespaceRetirementBatchCoreAsync(operation, transaction, token).ConfigureAwait(false)
-                ?? throw new InvalidDataException("The retirement batch disappeared."));
-        }
-        return result;
+        await foreach (Guid operation in ReadNamespaceOwnerIdsCoreAsync(NamespacePendingRetirementBatchPageSql, transaction, token).ConfigureAwait(false))
+            yield return await ReadNamespaceRetirementBatchCoreAsync(operation, transaction, token).ConfigureAwait(false)
+                ?? throw new InvalidDataException("The retirement batch disappeared.");
     }
 }

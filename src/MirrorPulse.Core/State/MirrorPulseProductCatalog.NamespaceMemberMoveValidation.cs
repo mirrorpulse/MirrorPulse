@@ -162,10 +162,10 @@ public sealed partial class MirrorPulseProductCatalog
             if ((transfer.Plan.SourceRoute.RootId == rootId || transfer.Plan.TargetRoute.RootId == rootId) &&
                 !(transfer.Plan.OperationId == allowedTransfer && transfer.Plan.TargetRoute.RootId == rootId))
                 throw new InvalidOperationException("An unresolved persistent transfer has fenced this managed root.");
-        foreach (var update in await ReadPendingRemoteUpdatesCoreAsync(transaction, token).ConfigureAwait(false))
+        await foreach (var update in ReadPendingRemoteUpdatesCoreAsync(transaction, token).ConfigureAwait(false))
             if (update.Plan.Child.Context.Member.RootId == rootId && update.Plan.OperationId != allowedRemoteUpdate)
                 throw new InvalidOperationException("An unresolved original remote update has fenced this managed root.");
-        foreach (var born in await ReadPendingBornMemberRecoveryActionsCoreAsync(transaction, token).ConfigureAwait(false))
+        await foreach (var born in ReadPendingBornMemberRecoveryActionsCoreAsync(transaction, token).ConfigureAwait(false))
             if (born.Child.Member.RootId == rootId && born.InitializationOperationId != allowedBornRecoveryInitialization)
                 throw new InvalidOperationException("The root has unfinished born member recovery requiring its admitted initializer.");
         var pending = await ReadPendingNamespaceMemberMoveCoreAsync(rootId, transaction, token).ConfigureAwait(false);
@@ -173,7 +173,7 @@ public sealed partial class MirrorPulseProductCatalog
             throw new InvalidOperationException("An unresolved controlled move has fenced this managed root.");
         if ((await ReadManagedRootRenamesCoreAsync(token, transaction).ConfigureAwait(false)).Any(intent => intent.RootId == rootId && intent.IsPending))
             throw new InvalidOperationException("An unresolved Label change has fenced this managed root.");
-        foreach (var retirement in await ReadPendingNamespaceRetirementsCoreAsync(transaction, token).ConfigureAwait(false))
+        await foreach (var retirement in ReadPendingNamespaceRetirementsCoreAsync(transaction, token).ConfigureAwait(false))
             if (retirement.Intent.RootId == rootId && retirement.OperationId != allowedRetirement)
                 throw new InvalidOperationException("An unresolved controlled retirement has fenced this managed root.");
         var batch = await ReadPendingNamespaceRetirementBatchCoreAsync(rootId, transaction, token).ConfigureAwait(false);

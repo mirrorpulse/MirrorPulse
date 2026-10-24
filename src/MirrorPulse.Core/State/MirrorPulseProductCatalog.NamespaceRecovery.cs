@@ -85,11 +85,11 @@ public sealed partial class MirrorPulseProductCatalog
     {
         await RequireRemoteTreeSettlementOwnershipIntegrityAsync(transaction, cancellationToken).ConfigureAwait(false);
         await RequireRemoteDeleteResolutionOwnershipIntegrityAsync(transaction, cancellationToken).ConfigureAwait(false);
-        var updates = await ReadPendingRemoteUpdatesCoreAsync(transaction, cancellationToken).ConfigureAwait(false);
-        HashSet<RootId> roots = (await ReadManagedRootRenamesCoreAsync(cancellationToken, transaction).ConfigureAwait(false))
-            .Where(intent => intent.IsPending).Select(intent => intent.RootId).ToHashSet();
-        foreach (var update in updates)
+        HashSet<RootId> roots = [];
+        await foreach (var update in ReadPendingRemoteUpdatesCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
             if (update.Plan.OperationId != admittedRemoteUpdateId) roots.Add(update.Plan.Child.Context.Member.RootId!.Value);
+        foreach (var rename in await ReadManagedRootRenamesCoreAsync(cancellationToken, transaction).ConfigureAwait(false))
+            if (rename.IsPending) roots.Add(rename.RootId);
         await foreach (var transfer in ReadPendingNamespaceTransfersCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
             if (transfer.Plan.OperationId != admittedTransferId)
             {
@@ -116,17 +116,17 @@ public sealed partial class MirrorPulseProductCatalog
                 ?? throw new InvalidDataException("The pending move lost its durable root fence.");
             if (move.OperationId != admittedRemoteMoveId || move.RemoteEntry is null) roots.Add(root);
         }
-        foreach (var retirement in await ReadPendingNamespaceRetirementsCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
+        await foreach (var retirement in ReadPendingNamespaceRetirementsCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
             if (!(retirement.OperationId == admittedRemoteRetirementId && retirement.Intent.RemoteEntry is not null) &&
                 !(admittedTransferId is not null && retirement.Intent.TransferEntry?.OperationId == admittedTransferId) &&
                 !(retirement.Intent.BatchOperationId == admittedRemoteResolutionId && admittedRemoteResolutionId is not null &&
                     await IsRemoteDeleteResolutionBatchAsync(admittedRemoteResolutionId.Value, transaction, cancellationToken).ConfigureAwait(false))) roots.Add(retirement.Intent.RootId);
-        foreach (var batch in await ReadPendingNamespaceRetirementBatchesCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
+        await foreach (var batch in ReadPendingNamespaceRetirementBatchesCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
             if (!(batch.OperationId == admittedRemoteRetirementTreeId && batch.RemoteEntry is not null) &&
                 !(batch.OperationId == admittedRemoteResolutionId && batch.RemoteConflictCommandId == admittedRemoteResolutionId)) roots.Add(batch.RootId);
         await AddNamespaceReplacementRootFencesAsync(roots, transaction, cancellationToken).ConfigureAwait(false);
         await AddNamespaceInitializationRootFencesAsync(roots, transaction, cancellationToken).ConfigureAwait(false);
-        foreach (var action in await ReadPendingBornMemberRecoveryActionsCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
+        await foreach (var action in ReadPendingBornMemberRecoveryActionsCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
             roots.Add(action.Child.Member.RootId!.Value);
         if (includeUnregisteredBirths)
         {

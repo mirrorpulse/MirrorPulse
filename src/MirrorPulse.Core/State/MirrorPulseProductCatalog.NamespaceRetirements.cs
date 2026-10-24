@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -142,21 +143,12 @@ public sealed partial class MirrorPulseProductCatalog
         finally { _gate.Release(); }
     }
 
-    private async Task<List<MirrorPulseNamespaceRetirement>> ReadPendingNamespaceRetirementsCoreAsync(
-        SqliteTransaction transaction, CancellationToken token)
+    private async IAsyncEnumerable<MirrorPulseNamespaceRetirement> ReadPendingNamespaceRetirementsCoreAsync(
+        SqliteTransaction transaction, [EnumeratorCancellation] CancellationToken token)
     {
-        var operations = new List<Guid>();
-        await using (SqliteCommand query = _connection.CreateCommand())
-        {
-            query.Transaction = transaction; query.CommandText = "SELECT operation_id FROM namespace_member_retirements WHERE phase NOT IN (2,4) ORDER BY operation_id;";
-            await using SqliteDataReader reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
-            while (await reader.ReadAsync(token).ConfigureAwait(false)) operations.Add(ParseNamespaceMemberId(reader.GetString(0)));
-        }
-        var pending = new List<MirrorPulseNamespaceRetirement>(operations.Count);
-        foreach (Guid operation in operations)
-            pending.Add(await ReadNamespaceRetirementCoreAsync(operation, transaction, token).ConfigureAwait(false)
-                ?? throw new InvalidDataException("The pending retirement lost its receipt."));
-        return pending;
+        await foreach (Guid operation in ReadNamespaceOwnerIdsCoreAsync(NamespacePendingRetirementPageSql, transaction, token).ConfigureAwait(false))
+            yield return await ReadNamespaceRetirementCoreAsync(operation, transaction, token).ConfigureAwait(false)
+                ?? throw new InvalidDataException("The pending retirement lost its receipt.");
     }
 
     public Task<MirrorPulseNamespaceRetirement> RecordNamespaceRetirementNativeDeletedAsync(Guid operationId,

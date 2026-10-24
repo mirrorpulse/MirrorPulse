@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
@@ -95,28 +96,16 @@ public sealed partial class MirrorPulseProductCatalog
         return payload;
     }
 
-    private async Task<IReadOnlyList<MirrorPulseNamespaceRemoteUpdate>> ReadPendingRemoteUpdatesCoreAsync(SqliteTransaction transaction, CancellationToken token)
+    private async IAsyncEnumerable<MirrorPulseNamespaceRemoteUpdate> ReadPendingRemoteUpdatesCoreAsync(
+        SqliteTransaction transaction, [EnumeratorCancellation] CancellationToken token)
     {
-        var ids = new List<Guid>();
-        await using (var query = _connection.CreateCommand())
+        int count = 0;
+        await foreach (Guid id in ReadNamespaceOwnerIdsCoreAsync(NamespacePendingRemoteUpdatePageSql, transaction, token).ConfigureAwait(false))
         {
-            query.Transaction = transaction;
-            query.CommandText = """
-                SELECT u.operation_id FROM namespace_remote_updates u LEFT JOIN namespace_remote_update_completions c ON c.operation_id=u.operation_id
-                    WHERE u.finished<>1 OR c.operation_id IS NULL OR c.owner_fingerprint<>u.fingerprint
-                UNION SELECT operation_id FROM namespace_remote_update_pending
-                UNION SELECT c.operation_id FROM namespace_remote_update_completions c LEFT JOIN namespace_remote_updates u ON u.operation_id=c.operation_id
-                    WHERE u.operation_id IS NULL OR u.finished<>1 OR c.owner_fingerprint<>u.fingerprint LIMIT 4097;
-                """;
-            await using var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
-            while (await reader.ReadAsync(token).ConfigureAwait(false)) ids.Add(ParseNamespaceMemberId(reader.GetString(0)));
+            if (++count > 4096) throw new InvalidDataException("Pending remote updates exceed the bounded root inventory.");
+            yield return await ReadRemoteUpdateCoreAsync(id, transaction, token).ConfigureAwait(false)
+                ?? throw new InvalidDataException("A pending remote update lost its original admission.");
         }
-        if (ids.Count > 4096) throw new InvalidDataException("Pending remote updates exceed the bounded root inventory.");
-        var result = new List<MirrorPulseNamespaceRemoteUpdate>(ids.Count);
-        foreach (Guid id in ids)
-            result.Add(await ReadRemoteUpdateCoreAsync(id, transaction, token).ConfigureAwait(false)
-                ?? throw new InvalidDataException("A pending remote update lost its original admission."));
-        return result.AsReadOnly();
     }
 
     private static async Task EnsureNamespaceRemoteUpdateSchemaAsync(SqliteConnection connection, CancellationToken token, bool stampVersion = false)
