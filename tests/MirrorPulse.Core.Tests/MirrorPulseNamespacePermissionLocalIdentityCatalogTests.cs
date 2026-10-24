@@ -260,7 +260,7 @@ public sealed class MirrorPulseNamespacePermissionLocalIdentityCatalogTests
         await using var connection = Connection(fixture.Paths);
         await connection.OpenAsync();
         await using var query = connection.CreateCommand(); query.CommandText = "PRAGMA user_version;";
-        Assert.AreEqual(88L, await query.ExecuteScalarAsync());
+        Assert.AreEqual(89L, await query.ExecuteScalarAsync());
         Assert.IsFalse(File.Exists(fixture.Paths.CfSharpStateDatabasePath));
     }
 

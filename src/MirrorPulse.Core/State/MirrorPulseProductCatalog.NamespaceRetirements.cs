@@ -44,6 +44,9 @@ public sealed record MirrorPulseNamespaceRetirement(Guid OperationId, MirrorPuls
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public long? RemoteSourceNameEpoch { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? ExplicitSourceNameEpoch { get; init; }
 }
 
 public sealed partial class MirrorPulseProductCatalog

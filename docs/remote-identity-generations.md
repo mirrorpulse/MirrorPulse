@@ -35,6 +35,24 @@ outcome proves native absence and its exact public tombstone. It does not borrow
 a transfer journal acknowledgement. Rejected deletions keep their current item;
 pending deletions reject hydration callbacks and replacement selection.
 
+The default automatic poll requires `PreserveUnsynchronizedLocalContent=true`.
+CfSharp preview.8 preserves the target and records a Delete conflict under that
+policy, including for a clean placeholder. Poll completion therefore cannot
+establish native deletion or authorize a successor. An explicit `KeepRemote`
+decision uses the existing public SDK conflict API; its separate settlement and
+command receipt preserve the original rejected poll and conflict epoch.
+
+Schema 89 indexes original controlled invocation item IDs, with at most two
+candidate owners read for each item. New explicit decision plans use version 2
+to retain their declared root key. Each actual member settlement records its
+name epoch in the same transaction that removes the original member name.
+Generation selection version 3 requires that exact completed explicit decision,
+verified native absence and official tombstone, the transactional name epoch,
+and the original observed command receipt. It cannot borrow transfer or automatic
+deletion authority. Started decisions block retired callbacks and reuse while
+settlement or the command receipt is pending. No hydration callback creates a
+successor.
+
 Population and current upload proofs select the current identity. Hydration
 rejects a callback for a retired generation before reading replacement backend
 bytes. A callback alone cannot allocate a successor. Transfer replay validates
@@ -77,11 +95,14 @@ Host's complete private data-root backup before changing Host versions; revertin
 the executable alone does not downgrade the catalog.
 
 The successor proofs cover completed transfer-source retirement and new original
-remote leaf retirement. Legacy remote reference version 1 retains its original
+remote leaf retirement, plus explicit conflict-decision settlement. Legacy remote reference version 1 retains its original
 bytes and outcome but has no captured root key and settled epoch; it cannot
 authorize a successor. Opening an older catalog builds only the item index and
-does not invent these facts from today's path. Recursive remote tree retirement,
-controlled retirement, and delete followed by recreation within one incoming
+does not invent these facts from today's path. Historical explicit decision plans
+use version 1 and retain their original bytes without a manufactured root key or
+name epoch. Their started item is indexed and reuse stays fenced for explicit
+reconciliation. Generic controlled retirement, full recursive remote tree
+generation recovery, and delete followed by recreation within one incoming
 batch still require their own lifecycle and recovery verification. These paths
 must not infer an original proof from today's name or tombstone.
 

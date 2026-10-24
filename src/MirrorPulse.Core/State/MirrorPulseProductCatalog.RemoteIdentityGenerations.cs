@@ -118,6 +118,13 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task RequireRemoteIdentityGenerationRetirementAsync(MirrorPulseRemoteIdentityGeneration selection,
         SqliteTransaction transaction, CancellationToken token)
     {
+        if (selection.Version == 3)
+        {
+            await RequireExplicitRemoteIdentityRetirementAsync(selection, transaction, token).ConfigureAwait(false);
+            return;
+        }
+        if ((await ReadControlledRetirementGenerationsCoreAsync(selection.PreviousItemId, transaction, token).ConfigureAwait(false)).Count != 0)
+            throw new InvalidOperationException("A transfer or automatic remote generation cannot borrow an explicit or controlled deletion.");
         if (selection.Version == 2)
         {
             await RequireOrdinaryRemoteIdentityRetirementAsync(selection, transaction, token).ConfigureAwait(false);
@@ -141,7 +148,7 @@ public sealed partial class MirrorPulseProductCatalog
     private static void ValidateRemoteIdentityGeneration(MirrorPulseRemoteIdentityGeneration selection)
     {
         if (!(selection.Version == 1 && selection.TransferOperationId != Guid.Empty ||
-                selection.Version == 2 && selection.TransferOperationId == Guid.Empty) ||
+                selection.Version is 2 or 3 && selection.TransferOperationId == Guid.Empty) ||
             selection.RootId.Value == Guid.Empty || selection.InstanceId.Value == Guid.Empty ||
             selection.BaseItemId == Guid.Empty || selection.PreviousItemId == Guid.Empty || selection.ItemId == Guid.Empty ||
             selection.Generation == Guid.Empty || selection.PreviousGeneration == Guid.Empty || selection.PreviousGeneration == selection.Generation ||

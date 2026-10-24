@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Data.Sqlite;
 using MirrorPulse.Core.Conflicts;
 
@@ -8,7 +9,11 @@ namespace MirrorPulse.Core.State;
 /// <summary>A sealed product tree for an explicit SDK conflict decision, separate from its original poll outcome.</summary>
 public sealed record MirrorPulseRemoteDeleteResolutionPlan(int Version, MirrorPulseRemoteConflictActionIntent Decision,
     string RemoteChangeFingerprint, MirrorPulseNamespaceMemberProtectionSnapshot Parent,
-    IReadOnlyList<MirrorPulseNamespaceRemoteRetirementTreeEntry> Entries, DateTimeOffset PreparedAt);
+    IReadOnlyList<MirrorPulseNamespaceRemoteRetirementTreeEntry> Entries, DateTimeOffset PreparedAt)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? RootKey { get; init; }
+}
 
 public enum MirrorPulseRemoteDeleteResolutionStatus { Applied, AlreadyApplied, Reconciled }
 
@@ -202,12 +207,20 @@ public sealed partial class MirrorPulseProductCatalog
                 await using var remove = _connection.CreateCommand(); remove.Transaction = transaction;
                 remove.CommandText = "DELETE FROM namespace_member_names WHERE member_id=$member;"; remove.Parameters.AddWithValue("$member", memberId.ToString("D"));
                 if (await remove.ExecuteNonQueryAsync(token).ConfigureAwait(false) != 1) throw new InvalidDataException("The deleted member lost its owned name before atomic settlement.");
-                await WriteNamespaceRetirementCoreAsync(retirement with
+                var terminal = retirement with
                 {
                     Phase = MirrorPulseNamespaceRetirementPhase.Completed,
                     NativeDeletedAt = settled.VerifiedAt,
                     CompletedAt = settled.VerifiedAt
-                }, transaction, token).ConfigureAwait(false);
+                };
+                if (current.Plan.Version == 2)
+                    terminal = terminal with
+                    {
+                        ExplicitSourceNameEpoch = await ReadNamespaceNameEpochCoreAsync(
+                            original.Original.Context.Location.ParentMemberId!.Value, retirement.Intent.RelativePath,
+                            transaction, token).ConfigureAwait(false)
+                    };
+                await WriteNamespaceRetirementCoreAsync(terminal, transaction, token).ConfigureAwait(false);
                 byte[] payload = ResolutionPayload(settled);
                 await using var insert = _connection.CreateCommand(); insert.Transaction = transaction;
                 insert.CommandText = "INSERT INTO remote_delete_resolution_members(command_id,ordinal,member_id,payload,fingerprint) VALUES($id,$ordinal,$member,$payload,$hash);";
@@ -272,7 +285,9 @@ public sealed partial class MirrorPulseProductCatalog
     private static void ValidateRemoteDeleteResolutionPlan(MirrorPulseRemoteDeleteResolutionPlan plan)
     {
         ValidateRemoteConflictActionIntent(plan.Decision);
-        if (plan.Version != 1 || plan.Decision.Action != MirrorPulseConflictAction.KeepRemote ||
+        if (!(plan.Version == 1 && plan.RootKey is null || plan.Version == 2 &&
+                !string.IsNullOrWhiteSpace(plan.RootKey) && plan.RootKey.Length <= 16_384 && !plan.RootKey.Contains('\0')) ||
+            plan.Decision.Action != MirrorPulseConflictAction.KeepRemote ||
             !MirrorPulseRemoteLibraryProvenance.IsSupported(plan.Decision.PackageVersion, plan.Decision.PackageSource) ||
             plan.Decision.PackageVersion == "0.1.0-preview.6" ||
             plan.RemoteChangeFingerprint is not { Length: 64 } || !plan.RemoteChangeFingerprint.All(char.IsAsciiHexDigitUpper) ||
@@ -398,11 +413,19 @@ public sealed partial class MirrorPulseProductCatalog
 
     private async Task ValidateRemoteDeleteResolutionMemberAsync(MirrorPulseNamespaceRetirement member, SqliteTransaction? transaction, CancellationToken token)
     {
-        if (member.Intent.BatchOperationId is not { } batchId) return;
+        if (member.Intent.BatchOperationId is not { } batchId)
+        {
+            if (member.ExplicitSourceNameEpoch is not null) throw new InvalidDataException("An explicit name epoch requires its original decision owner.");
+            return;
+        }
         var batch = await ReadNamespaceRetirementBatchCoreAsync(batchId, transaction, token).ConfigureAwait(false)
             ?? throw new InvalidDataException("The retirement member lost its original batch owner.");
         var owner = await ReadRemoteDeleteResolutionCoreAsync(batchId, transaction, token).ConfigureAwait(false);
-        if (owner is null) return;
+        if (owner is null)
+        {
+            if (member.ExplicitSourceNameEpoch is not null) throw new InvalidDataException("A controlled deletion cannot borrow an explicit decision epoch.");
+            return;
+        }
         var entry = owner.Plan.Entries.SingleOrDefault(entry => entry.Original.Context.Member.MemberId == member.Intent.MemberId)
             ?? throw new InvalidDataException("The explicit deletion member is outside its original tree.");
         var original = entry.Original.Context;
@@ -414,6 +437,8 @@ public sealed partial class MirrorPulseProductCatalog
             member.Phase is not (MirrorPulseNamespaceRetirementPhase.Prepared or MirrorPulseNamespaceRetirementPhase.Completed))
             throw new InvalidDataException("The explicit deletion member lost its original start, position, binding or owner.");
         bool settled = entry.Ordinal > owner.NextOrdinal;
+        if (owner.Plan.Version == 2 && settled ? member.ExplicitSourceNameEpoch is null or < 2 : member.ExplicitSourceNameEpoch is not null)
+            throw new InvalidDataException("The explicit deletion lost its transactional settled-name generation witness.");
         // During one atomic settlement transaction the next ordinal is written after its member rows.
         if (member.Phase == MirrorPulseNamespaceRetirementPhase.Completed && !settled)
             throw new InvalidDataException("The explicit deletion member is ahead of its owned settlement progress.");

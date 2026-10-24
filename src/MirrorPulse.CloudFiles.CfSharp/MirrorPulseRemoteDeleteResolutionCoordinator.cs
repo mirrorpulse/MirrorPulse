@@ -47,6 +47,8 @@ internal sealed class MirrorPulseRemoteDeleteResolutionCoordinator(CloudFileSyst
                     ?? throw new InvalidDataException("The SDK Delete target lost its protected direct parent.");
                 bool reconcileCompletedEffects = record is null && retained?.StartedAt is not null;
                 RequireCurrentRoute(decision, child, parent, reconcileCompletedEffects);
+                if (retained?.Plan.Version == 2 && retained.Plan.RootKey != router.ResolveCurrentPath(decision.Conflict.RelativePath).RootKey)
+                    throw new InvalidDataException("The explicit decision changed its original declared root key.");
                 if (record is not null && (record.Conflict.Change.ItemId != child.Identity.ItemId ||
                     record.Conflict.Change.RemoteId != child.Identity.RemoteId ||
                     (record.Conflict.Change.ItemKind == CloudItemKind.Directory) != child.Context.Member.IsDirectory))
@@ -59,8 +61,10 @@ internal sealed class MirrorPulseRemoteDeleteResolutionCoordinator(CloudFileSyst
                 if (retained is null)
                 {
                     var entries = await CaptureAsync(child.Context.Member.MemberId, admitted).ConfigureAwait(false);
-                    retained = await catalog.PrepareRemoteDeleteResolutionAsync(new(1, decision, Fingerprint(record!), parent, entries,
-                        DateTimeOffset.UtcNow), admitted).ConfigureAwait(false);
+                    var route = router.ResolveCurrentPath(decision.Conflict.RelativePath);
+                    retained = await catalog.PrepareRemoteDeleteResolutionAsync(new(2, decision, Fingerprint(record!), parent, entries,
+                        DateTimeOffset.UtcNow)
+                    { RootKey = route.RootKey }, admitted).ConfigureAwait(false);
                     if (checkpoint is not null) await checkpoint(MirrorPulseRemoteRetirementCheckpoint.AfterAdmission, admitted).ConfigureAwait(false);
                 }
                 if (record is not null && Fingerprint(record) != retained.Plan.RemoteChangeFingerprint)

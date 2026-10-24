@@ -6,11 +6,11 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     [DoNotParallelize]
     [TestCategory("NativeCloudFiles")]
     public Task NativeOriginalRemoteFileDeletionSelectsDistinctSuccessorAndPreservesBothGenerationsAcrossOwners() =>
-        RunOriginalRemoteDeleteGapAsync(false, false, false, recreate: true);
+        RunOriginalRemoteDeleteGapAsync(false, false, true, recreate: true);
 
     [TestMethod]
     [DoNotParallelize]
     [TestCategory("NativeCloudFiles")]
     public Task NativeOriginalRemoteEmptyDirectoryDeletionSelectsDistinctSuccessorAndPreservesBothGenerationsAcrossOwners() =>
-        RunOriginalRemoteDeleteGapAsync(true, false, false, recreate: true);
+        RunOriginalRemoteDeleteGapAsync(true, false, true, recreate: true);
 }
