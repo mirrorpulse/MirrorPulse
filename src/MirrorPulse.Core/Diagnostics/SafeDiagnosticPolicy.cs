@@ -42,6 +42,7 @@ public static class SafeDiagnosticPolicy
         ["RemoteBatchRetry"] = "The remote batch requires another attempt.",
         ["RemotePollFailed"] = "Remote polling failed.",
         ["TransferComplete"] = "The transfer completed.",
+        ["TransferCommandFailed"] = "A transfer command stopped at a retained execution boundary.",
         ["sync.failed"] = "Synchronization failed.",
     };
 
@@ -116,6 +117,10 @@ public static class SafeDiagnosticPolicy
                     Guid.TryParse(value, out Guid id) ? id.ToString("D") : null,
                 "hresult" => value.Length == 8 && uint.TryParse(value, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out uint number)
                     ? number.ToString("X8", CultureInfo.InvariantCulture) : null,
+                "transferCommandPhase" => Enum.TryParse(value, out MirrorPulseTransferCommandPhase transferPhase) && Enum.IsDefined(transferPhase) && value == transferPhase.ToString() ? value : null,
+                "transferFailureBoundary" => Enum.TryParse(value, out MirrorPulseTransferFailureBoundary transferBoundary) && Enum.IsDefined(transferBoundary) && value == transferBoundary.ToString() ? value : null,
+                "transferFailureKind" => value is "Native" or "Disposed" or "InvalidData" or "InvalidOperation" or "Authorization" or "Cancelled" or "IO" or "Argument" or "Other" ? value : null,
+                "nativeErrorCode" => int.TryParse(value, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out int nativeCode) ? nativeCode.ToString(CultureInfo.InvariantCulture) : null,
                 "attempt" or "bytesTransferred" or "totalBytes" or "pendingCount" =>
                     long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out long count) && count >= 0
                         ? count.ToString(CultureInfo.InvariantCulture) : null,

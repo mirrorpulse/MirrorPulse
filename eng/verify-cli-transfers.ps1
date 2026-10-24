@@ -360,7 +360,23 @@ try {
             }
         }
         Write-TransferOriginal -Name 'startup-observations' -Value $startup
-        foreach ($relative in @('logs/mirrorpulse.log', 'logs/cloud-files/mirrorpulse.log', 'logs/workers/mirrorpulse.log', 'logs/remote-poll/mirrorpulse.log')) {
+        if ($null -ne $script:transferCli -and (Test-Path -LiteralPath $script:transferCli) -and
+            $null -ne $operations -and $null -ne $index -and $index -ge 0 -and $index -lt $operations.Count) {
+            $failedOperation = [guid]::Parse($operations[$index]).ToString('D')
+            $statusRaw = (& $script:transferCli --json --developer-mode --no-start namespace transfer status $failedOperation 2>$null | Out-String).Trim()
+            $statusExit = $LASTEXITCODE
+            $failedStatus = [ordered]@{sourceSha=$sourceSha;runId=$env:GITHUB_RUN_ID;phase=$phase;operationId=$failedOperation
+                exitCode=$statusExit;observationUnavailable=$true}
+            if ($statusExit -eq 0 -and -not [string]::IsNullOrWhiteSpace($statusRaw)) {
+                $statusEnvelope = $statusRaw | ConvertFrom-Json
+                if ($statusEnvelope.kind -ceq 'result' -and $statusEnvelope.data.operationId -ceq $failedOperation) {
+                    $failedStatus.observationUnavailable = $false
+                    $failedStatus.status = $statusEnvelope.data
+                }
+            }
+            Write-TransferOriginal -Name 'failed-transfer-status' -Value $failedStatus
+        }
+        foreach ($relative in @('logs/mirrorpulse.log', 'logs/cloud-files/mirrorpulse.log', 'logs/workers/mirrorpulse.log', 'logs/remote-poll/mirrorpulse.log', 'logs/transfers/mirrorpulse.log')) {
             $log = Join-Path $data $relative
             if ((Test-Path -LiteralPath $log -PathType Leaf) -and -not (Get-Item -LiteralPath $log -Force).Attributes.HasFlag([IO.FileAttributes]::ReparsePoint)) {
                 Get-Content -LiteralPath $log -Tail 32 | ForEach-Object { $_.Replace($fixture, '<fixture>') } |
