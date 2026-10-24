@@ -155,3 +155,41 @@ identity transition to the original observed execution. Explicit KeepLocal
 move-and-upload decisions confirm only their later upload. Historical seed
 acceptance and receipts remain immutable. Lost move replies without a retained
 accepted revision stay unresolved; target presence alone is insufficient.
+
+## Final admission scheduling
+
+The Host captures a finite public journal boundary, reads that complete window,
+and classifies its original observations before final admission. Final admission
+then processes unsupported-result bookkeeping, held dependency indexing, Worker
+request fingerprints and filtered complete-window projection in bounded turns.
+`admissionOperationsPerRead` defaults to 2048 and accepts values from 1 through
+4096. Each unit visits one original record in its current admission stage.
+
+An unfinished turn returns `AdmissionInProgress`, the original window boundary,
+empty ready commands and no exposed coalescing window. Durable request
+fingerprints may already exist at this stage, after complete classification.
+Worker execution and ordinary file acknowledgement wait for the complete batch.
+Later notifications retain their original journal entries for another finite
+scan. Feed loss is checked on every continuation turn.
+
+Unsupported metadata retains its durable product result before a null-revision
+CfSharp acknowledgement under namespace work admission. This records the
+content-only policy without accepting remote timestamps or attributes. Each
+original is settled separately so one large metadata group cannot occupy the
+whole turn. Already settled metadata keeps its result if cancellation or failure
+discards the ephemeral continuation; retry reads the official pending journal.
+All file IDs, sequences, immutable request fingerprints and dispatch ownership
+retain their existing boundaries. A failed admission never publishes a partial
+batch, and concurrent advancement cannot take ownership from the current call.
+
+Dispatch rechecks current root availability, Worker availability, durable
+namespace fences and the operation's pending conflict. A request admitted in an
+earlier scheduling turn cannot bypass a conflict created before dispatch. The
+existing instance scheduler, native binding checks, conditional effects and
+accepted-effect recovery still govern execution and acknowledgement.
+
+These budgets limit admission units per turn. The complete input and plan are
+still retained, global namespace-fence reads still materialize their results,
+and the scheduler still performs complete-window dependency checks. End-to-end
+memory, database-work bounds and the full recovery/fairness matrix remain
+separate acceptance requirements.

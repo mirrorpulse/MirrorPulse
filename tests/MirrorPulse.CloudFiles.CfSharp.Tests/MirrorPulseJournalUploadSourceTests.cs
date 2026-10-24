@@ -27,7 +27,12 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
     [TestCategory("NativeCloudFiles")]
     public Task NativeJournalWindowYieldsBeforePlanningAndRetainsTheCompleteOriginalBoundary() => RunBoundedJournalFairnessAsync(1, 64);
 
-    private async Task RunBoundedJournalFairnessAsync(int scanPagesPerRead, int planningBudget = 2048)
+    [TestMethod]
+    [DoNotParallelize]
+    [TestCategory("NativeCloudFiles")]
+    public Task NativeJournalFinalAdmissionYieldsWithoutPublishingPartialCommandsOrLosingOriginals() => RunBoundedJournalFairnessAsync(1, 64, 16);
+
+    private async Task RunBoundedJournalFairnessAsync(int scanPagesPerRead, int planningBudget = 2048, int admissionBudget = 2048)
     {
         if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
             Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
@@ -72,27 +77,33 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
             Guid later = await WaitForJournalAsync("Docs/later.txt");
             await using var catalog = await MirrorPulseProductCatalog.OpenAsync(paths, timeout.Token);
             var source = new MirrorPulseJournalUploadSource(feed, router, catalog, _ => true,
-                scanPagesPerRead: scanPagesPerRead, planningObservationsPerRead: planningBudget);
+                scanPagesPerRead: scanPagesPerRead, planningObservationsPerRead: planningBudget, admissionOperationsPerRead: admissionBudget);
             for (int pass = 0; pass < 4; pass++)
             {
-                MirrorPulseJournalUploadBatch batch; int pendingTurns = 0, planningTurns = 0; long? originalBoundary = null;
+                MirrorPulseJournalUploadBatch batch; int pendingTurns = 0, planningTurns = 0, admissionTurns = 0; long? originalBoundary = null;
                 do
                 {
                     batch = await source.ReadPendingAsync(timeout.Token);
                     originalBoundary ??= batch.WindowUpperSequence;
                     Assert.AreEqual(originalBoundary.Value, batch.WindowUpperSequence);
-                    if (batch.ScanInProgress || batch.PlanningInProgress)
+                    if (batch.ScanInProgress || batch.PlanningInProgress || batch.AdmissionInProgress)
                     {
                         if (batch.PlanningInProgress) planningTurns++;
+                        if (batch.AdmissionInProgress) admissionTurns++;
                         pendingTurns++; Assert.IsEmpty(batch.ReadyCommands); Assert.IsNull(batch.CompleteWindow);
                         Assert.IsFalse(batch.RequiresFullRescan);
-                        if (pass == 0) Assert.IsNull(await catalog.ReadWorkerRequestAsync(later, timeout.Token), "A partial scan cannot acquire ordinary dispatch ownership.");
+                        if (pass == 0 && !batch.AdmissionInProgress) Assert.IsNull(await catalog.ReadWorkerRequestAsync(later, timeout.Token), "A partial scan or classification cannot acquire ordinary dispatch ownership.");
                         await using var retained = await state.OpenStore.BeginTransactionAsync(timeout.Token);
                         Assert.IsNotNull(await retained.Operations.GetAsync(firstDeferred, timeout.Token));
                         Assert.IsNotNull(await retained.Operations.GetAsync(later, timeout.Token));
                         await retained.RollbackAsync(timeout.Token);
                     }
-                } while (batch.ScanInProgress || batch.PlanningInProgress);
+                } while (batch.ScanInProgress || batch.PlanningInProgress || batch.AdmissionInProgress);
+                if (admissionBudget == 16)
+                {
+                    Assert.IsGreaterThan(0, admissionTurns);
+                    TestContext.WriteLine($"PublicJournalAdmissionBudget: operationsPerRead=16; admissionTurns={admissionTurns}; originalBoundary={originalBoundary}; noPartialCommands=True; officialOriginalsRetained=True.");
+                }
                 if (scanPagesPerRead == 1)
                 {
                     Assert.IsGreaterThan(0, pendingTurns);
@@ -386,7 +397,7 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
                 {
                     batch = await source.ReadPendingAsync(timeout.Token);
                     Assert.IsFalse(batch.RequiresFullRescan);
-                    if (batch.ScanInProgress || batch.PlanningInProgress ||
+                    if (batch.ScanInProgress || batch.PlanningInProgress || batch.AdmissionInProgress ||
                         run == 0 && !batch.ReadyCommands.Any(command => command.RelativePath == "report.txt"))
                         await Task.Yield();
                     else break;

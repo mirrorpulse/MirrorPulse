@@ -215,9 +215,7 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
         MirrorPulseWorkerChangeCommand command,
         CancellationToken cancellationToken)
     {
-        RootRegistration root = _router.GetRegistration(command.InstanceId, command.RootKey);
-        if (root.State != RootRegistrationState.Active || !_mayDispatch(command.InstanceId) ||
-            (await _catalog.ReadNamespaceDispatchFencedRootsAsync(cancellationToken).ConfigureAwait(false)).Contains(root.RootId))
+        if (!await MirrorPulseJournalDispatchReadiness.MayDispatchAsync(command, _router, _catalog, _mayDispatch, cancellationToken).ConfigureAwait(false))
             return false;
         if (_completedCoalescedOriginals.Contains(command.OperationId)) return true;
         if (await TryDispatchCoalescedAsync(command, cancellationToken).ConfigureAwait(false) is { } coalesced) return coalesced;

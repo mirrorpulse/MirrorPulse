@@ -17,6 +17,7 @@ public sealed record MirrorPulseJournalUploadBatch(
     public long WindowUpperSequence { get; init; }
     public bool ScanInProgress { get; init; }
     public bool PlanningInProgress { get; init; }
+    public bool AdmissionInProgress { get; init; }
 
     // Only the finite-window source supplies this exact immutable list after
     // validating its original sequence. A copied batch with different ready
@@ -34,7 +35,9 @@ public sealed class MirrorPulseJournalUploadSource
     private readonly CloudLocalChangeFeed _feed;
     private readonly MirrorPulseJournalWindowReader<CloudLocalChangeScan> _windowReader;
     private readonly int _planningBudget;
+    private readonly int _admissionBudget;
     private MirrorPulseJournalWindowPlanner? _planner;
+    private MirrorPulseJournalAdmissionPlanner? _admission;
     private HashSet<Guid> _retiredHeld = [];
     private int _reading;
     private readonly MirrorPulseRootRouter _router;
@@ -60,7 +63,8 @@ public sealed class MirrorPulseJournalUploadSource
         MirrorPulseNamespaceWorkAdmission? namespaceWork = null,
         IMirrorPulseRetiredTransferObservationHandler? retiredSources = null,
         int scanPagesPerRead = 8,
-        int planningObservationsPerRead = 2048)
+        int planningObservationsPerRead = 2048,
+        int admissionOperationsPerRead = 2048)
     {
         ArgumentNullException.ThrowIfNull(feed);
         ArgumentNullException.ThrowIfNull(router);
@@ -68,7 +72,10 @@ public sealed class MirrorPulseJournalUploadSource
         ArgumentNullException.ThrowIfNull(mayDispatch);
         ArgumentOutOfRangeException.ThrowIfLessThan(planningObservationsPerRead, 1);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(planningObservationsPerRead, 4096);
+        ArgumentOutOfRangeException.ThrowIfLessThan(admissionOperationsPerRead, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(admissionOperationsPerRead, 4096);
         _planningBudget = planningObservationsPerRead;
+        _admissionBudget = admissionOperationsPerRead;
         _feed = feed;
         _windowReader = new(feed.BeginScanAsync, scan => scan.ThroughSequence, scan => scan.RequiresFullRescan,
             async (scan, after, limit, token) =>
@@ -102,7 +109,7 @@ public sealed class MirrorPulseJournalUploadSource
         // empty and recovery has finished its root scan. Otherwise continue finite
         // scans even without another journal notification. This head is only a
         // wake-up observation, never the planning window.
-        if (_planner is null)
+        if (_planner is null && _admission is null)
         {
             if (!_windowReader.HasPendingScan && _retiredSources?.RecoveryScanInProgress != true)
             {
@@ -142,66 +149,55 @@ public sealed class MirrorPulseJournalUploadSource
             ResetPlanning(); RequiresFullRescan = true; return new([], 0, true);
         }
         HashSet<RootId> pendingRoots = (await _catalog.ReadNamespaceDispatchFencedRootsAsync(cancellationToken).ConfigureAwait(false)).ToHashSet();
-        if (!await _planner.AdvanceAsync((observation, token) => IncludeOriginalAsync(observation, pendingRoots, token), cancellationToken).ConfigureAwait(false))
-            return new([], 0, false) { PlanningInProgress = true, WindowUpperSequence = _planner.UpperSequence };
-        MirrorPulseLocalBatchPlan plan = _planner.Plan;
-        long upperSequence = _planner.UpperSequence;
-        var retiredHeld = _retiredHeld;
-        _planner = null; _retiredHeld = [];
-        pendingRoots = (await _catalog.ReadNamespaceDispatchFencedRootsAsync(cancellationToken).ConfigureAwait(false)).ToHashSet();
-        if (plan.RequiresFullRescan)
+        if (_admission is null)
         {
-            RequiresFullRescan = true;
-            return new([], 0, true);
+            if (!await _planner!.AdvanceAsync((observation, token) => IncludeOriginalAsync(observation, pendingRoots, token), cancellationToken).ConfigureAwait(false))
+                return new([], 0, false) { PlanningInProgress = true, WindowUpperSequence = _planner.UpperSequence };
+            MirrorPulseLocalBatchPlan plan = _planner.Plan;
+            long upperSequence = _planner.UpperSequence;
+            _planner = null;
+            if (plan.RequiresFullRescan)
+            {
+                ResetPlanning(); RequiresFullRescan = true; return new([], 0, true);
+            }
+            _admission = new(plan, upperSequence, _admissionBudget);
+            pendingRoots = (await _catalog.ReadNamespaceDispatchFencedRootsAsync(cancellationToken).ConfigureAwait(false)).ToHashSet();
         }
+        if (!await _admission.AdvanceAsync((blocked, token) => RecordBlockedAsync(blocked, pendingRoots, token),
+            (command, token) => PrepareCommandAsync(command, pendingRoots, token), cancellationToken).ConfigureAwait(false))
+            return new([], 0, false) { AdmissionInProgress = true, WindowUpperSequence = _admission.UpperSequence };
+        var result = _admission.Result;
+        _admission = null; _retiredHeld = [];
+        return result;
+    }
 
-        var ready = new List<MirrorPulseWorkerChangeCommand>(plan.Commands.Count);
-        var held = new MirrorPulseJournalOrderIndex();
-        int deferred = plan.BlockedOperations?.Count ?? 0;
-        foreach (MirrorPulseBlockedLocalOperation blocked in plan.BlockedOperations ?? [])
-            if (!retiredHeld.Contains(blocked.OperationId)) await _catalog.SaveBlockedLocalOperationAsync(blocked, cancellationToken).ConfigureAwait(false);
-        var excludedMetadata = (plan.BlockedOperations ?? [])
-            .Where(operation => operation.Reason == MirrorPulseLocalOperationBlockReason.UnsupportedMetadataChange &&
-                !retiredHeld.Contains(operation.OperationId) &&
-                !IsNamespaceFenced(operation.RelativePath, pendingRoots))
-            .GroupBy(operation =>
-            {
-                var routed = _router.ResolvePath(operation.RelativePath);
-                return _router.GetRegistration(routed.InstanceId, routed.RootKey).RootId;
-            });
-        var acceptedMetadata = new HashSet<Guid>();
-        foreach (var rootMetadata in excludedMetadata)
+    private async ValueTask<bool> RecordBlockedAsync(MirrorPulseBlockedLocalOperation blocked, HashSet<RootId> pendingRoots, CancellationToken token)
+    {
+        if (_retiredHeld.Contains(blocked.OperationId)) return false;
+        await _catalog.SaveBlockedLocalOperationAsync(blocked, token).ConfigureAwait(false);
+        if (blocked.Reason != MirrorPulseLocalOperationBlockReason.UnsupportedMetadataChange || IsNamespaceFenced(blocked.RelativePath, pendingRoots))
+            return false;
+        var routed = _router.ResolvePath(blocked.RelativePath);
+        RootId rootId = _router.GetRegistration(routed.InstanceId, routed.RootKey).RootId;
+        MirrorPulseNamespaceWorkAdmission.WorkLease? admission = null;
+        if (_namespaceWork is not null && !_namespaceWork.TryEnter([rootId], out admission)) return false;
+        using (admission)
         {
-            MirrorPulseNamespaceWorkAdmission.WorkLease? admission = null;
-            if (_namespaceWork is not null && !_namespaceWork.TryEnter([rootMetadata.Key], out admission)) continue;
-            using var retainedAdmission = admission;
-            // Retain even unsupported metadata while the root's namespace is unresolved.
-            // Durable product results accept the notification's unsupported meaning,
-            // not remote metadata. No revision is advanced. Settling these entries
-            // also prevents excluded metadata from starving a bounded official batch.
-            await _feed.AcknowledgeAsync(rootMetadata.Select(operation =>
-                new CloudLocalChangeAcknowledgement(operation.OperationId, null)), cancellationToken).ConfigureAwait(false);
-            acceptedMetadata.UnionWith(rootMetadata.Select(operation => operation.OperationId));
+            // Each original is settled only after its durable unsupported result,
+            // under the same namespace admission. This grants no remote metadata acceptance.
+            await _feed.AcknowledgeAsync([new CloudLocalChangeAcknowledgement(blocked.OperationId, null)], token).ConfigureAwait(false);
         }
-        foreach (var command in plan.RoutedBlockedCommands)
-            if (!acceptedMetadata.Contains(command.OperationId)) held.Add(command);
-        // The finite-window planner validates strict source order before routing;
-        // its builder preserves that order while filtering blocked observations.
-        foreach (MirrorPulseWorkerChangeCommand command in plan.Commands)
+        return true;
+    }
+
+    private async ValueTask<bool> PrepareCommandAsync(MirrorPulseWorkerChangeCommand command, HashSet<RootId> pendingRoots, CancellationToken token)
+    {
+        RootRegistration root = _router.GetRegistration(command.InstanceId, command.RootKey);
+        if (pendingRoots.Contains(root.RootId) || _retiredHeld.Contains(command.OperationId)) return false;
+        MirrorPulseNamespaceWorkAdmission.WorkLease? admission = null;
+        if (_namespaceWork is not null && !_namespaceWork.TryEnter([root.RootId], out admission)) return false;
+        using (admission)
         {
-            RootRegistration root = _router.GetRegistration(command.InstanceId, command.RootKey);
-            // A durable namespace owner must get the original notification before any ordinary
-            // Worker/coalescing claim, including callers without an in-memory work admission.
-            if (pendingRoots.Contains(root.RootId) || retiredHeld.Contains(command.OperationId))
-            {
-                held.Add(command); deferred++; continue;
-            }
-            MirrorPulseNamespaceWorkAdmission.WorkLease? admission = null;
-            if (_namespaceWork is not null && !_namespaceWork.TryEnter([root.RootId], out admission))
-            {
-                held.Add(command); deferred++; continue;
-            }
-            using var retainedAdmission = admission;
             byte[] fingerprint = SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(command));
             // Official identity projection may clear a journal's old ItemId reference.
             // The operation, routing, paths, kind, sequence and observation remain fixed;
@@ -213,48 +209,24 @@ public sealed class MirrorPulseJournalUploadSource
                 command.OperationId,
                 command.InstanceId,
                 fingerprint,
-                    stableFingerprint, cancellationToken).ConfigureAwait(false);
+                    stableFingerprint, token).ConfigureAwait(false);
             }
             catch (Exception error) when (error is InvalidDataException or InvalidOperationException)
             {
                 await _catalog.SaveBlockedLocalOperationAsync(new(command.OperationId, command.InstanceId,
-                    command.RelativePath, MirrorPulseLocalOperationBlockReason.RequestIdentityMismatch, command.ObservedAt), cancellationToken).ConfigureAwait(false);
-                deferred++;
-                held.Add(command);
-                continue;
+                    command.RelativePath, MirrorPulseLocalOperationBlockReason.RequestIdentityMismatch, command.ObservedAt), token).ConfigureAwait(false);
+                return false;
             }
-            await _catalog.ClearBlockedLocalOperationAsync(command.OperationId, cancellationToken).ConfigureAwait(false);
+            await _catalog.ClearBlockedLocalOperationAsync(command.OperationId, token).ConfigureAwait(false);
             DateTimeOffset? retryAfter = _completion is null
                 ? null
-                : await _completion.GetRetryAfterAsync(command.OperationId, cancellationToken)
+                : await _completion.GetRetryAfterAsync(command.OperationId, token)
                     .ConfigureAwait(false);
-            if (_mayDispatch(command.InstanceId) && root.State == RootRegistrationState.Active && !pendingRoots.Contains(root.RootId) &&
-                !await _catalog.HasPendingUploadConflictAsync(command.OperationId, cancellationToken)
+            return _mayDispatch(command.InstanceId) && root.State == RootRegistrationState.Active && !pendingRoots.Contains(root.RootId) &&
+                !await _catalog.HasPendingUploadConflictAsync(command.OperationId, token)
                     .ConfigureAwait(false) &&
-                (retryAfter is null || retryAfter <= DateTimeOffset.UtcNow))
-            {
-                if (held.HasEarlierDependency(command))
-                {
-                    held.Add(command);
-                    deferred++;
-                }
-                else ready.Add(command);
-            }
-            else
-            {
-                held.Add(command);
-                deferred++;
-            }
+                (retryAfter is null || retryAfter <= DateTimeOffset.UtcNow);
         }
-
-        var readyCommands = ready.AsReadOnly();
-        return new(readyCommands, deferred, false)
-        {
-            ValidatedSequenceCommands = readyCommands,
-            CompleteWindow = plan.CompleteWindow is { } window ?
-                Array.AsReadOnly(window.Where(command => !acceptedMetadata.Contains(command.OperationId)).ToArray()) : null,
-            WindowUpperSequence = upperSequence,
-        };
     }
 
     private async ValueTask<bool> IncludeOriginalAsync(MirrorPulseLocalChangeObservation observation,
@@ -277,7 +249,7 @@ public sealed class MirrorPulseJournalUploadSource
         return true;
     }
 
-    private void ResetPlanning() { _windowReader.Reset(); _planner = null; _retiredHeld = []; }
+    private void ResetPlanning() { _windowReader.Reset(); _planner = null; _admission = null; _retiredHeld = []; }
 
     private bool IsNamespaceFenced(string path, HashSet<RootId> pendingRoots)
     {
