@@ -126,7 +126,7 @@ public static class SafeDiagnosticPolicy
                 "failureKind" => value is "FileNotFound" or "DirectoryNotFound" or "DllNotFound" or "Native" or "Other" ? value : null,
                 "contentObservation" => value is "Unavailable" or "NoAcceptedProof" or "ContentChanged" or "IdentityChanged" or "Selected" ? value : null,
                 "cloudRequestKind" => value is "FetchData" or "FetchPlaceholders" or "ValidateData" or "Dehydrate" or "Delete" or "Rename" or "CompletionNotification" or "Other" ? value : null,
-                "workerFailureCode" => value is "Offline" or "Disconnected" or "InvalidRequest" or "AccessDenied" or "SourceUnavailable" or "CapabilityUnavailable" or "LocalIoFailure" or "RetryableTransferFailure" or "RemoteConflict" or "UncorrelatedResponse" or "InvalidConfiguration" or "WorkerFailure" or "Unknown" ? value : null,
+                "workerFailureCode" => value is "Offline" or "Disconnected" or "InvalidRequest" or "AccessDenied" or "SourceUnavailable" or "CapabilityUnavailable" or "LocalIoFailure" or "RetryableTransferFailure" or "RemoteConflict" or "DirectoryNotEmpty" or "UncorrelatedResponse" or "InvalidConfiguration" or "WorkerFailure" or "Unknown" ? value : null,
                 "workerStage" => value is "ResolvePayload" or "CreatePipe" or "CreateJob" or "StartProcess" or "AttachJob" or "AwaitPipe" or "ValidatePeer" or "AwaitHello" or "Negotiate" or "SendReady" or "ReceiveFrames" or "StopWorker" ? value : null,
                 "workerElapsedMs" or "workerStageElapsedMs" =>
                     int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out int elapsed) && elapsed >= 0
