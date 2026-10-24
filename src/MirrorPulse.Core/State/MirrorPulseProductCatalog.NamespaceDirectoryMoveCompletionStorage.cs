@@ -18,6 +18,10 @@ public sealed partial class MirrorPulseProductCatalog
 
     private async Task<MirrorPulseNamespaceDirectoryMoveCompletion?> ReadNamespaceDirectoryMoveCompletionCoreAsync(Guid operationId,
         SqliteTransaction transaction, CancellationToken token)
+        => (await ReadNamespaceDirectoryMoveCompletionGraphCoreAsync(operationId, transaction, token).ConfigureAwait(false))?.Completion;
+
+    private async Task<NamespaceDirectoryHistoryGraph?> ReadNamespaceDirectoryMoveCompletionGraphCoreAsync(Guid operationId,
+        SqliteTransaction transaction, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
         var reads = _namespaceHistoryReads.GetOrCreateValue(transaction);
@@ -43,7 +47,7 @@ public sealed partial class MirrorPulseProductCatalog
                     ?? throw new InvalidDataException("The entire subtree lost its atomic root completion.");
                 if (root.MemberId != snapshot.Entries.Single(entry => entry.Depth == 0).MemberId || root.Completion != completion.Root)
                     throw new InvalidDataException("The entire subtree receipt and root completion disagree.");
-                retained = (completion, snapshot, snapshot.Entries.Select((entry, index) => (entry.MemberId, Index: index))
+                retained = new(completion, snapshot, snapshot.Entries.Select((entry, index) => (entry.MemberId, Index: index))
                     .ToDictionary(entry => entry.MemberId, entry => entry.Index));
                 reads.DirectoryCompletions.Add(operationId, retained);
             }
@@ -55,7 +59,7 @@ public sealed partial class MirrorPulseProductCatalog
             await ValidateNamespaceDirectorySettledPositionsAsync(retained.Completion, retained.Snapshot, transaction, token).ConfigureAwait(false);
             reads.DirectoryPositions.Add(operationId);
         }
-        return retained.Completion;
+        return retained;
     }
 
     private async Task ValidateNamespaceDirectorySettledPositionsAsync(MirrorPulseNamespaceDirectoryMoveCompletion completion,

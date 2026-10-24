@@ -18,9 +18,17 @@ retirements, batches or born-member histories. Existing catalog bytes, schema
 version, SDK policy and public result ordering remain unchanged.
 
 This removes lists of all complete owner graphs from those internal iterators.
-It does not bound total SQL work or complete P083. Born-member validation still
-loads one bounded original history, public history APIs retain their requested
-results, and shared transaction graph caches retain validated references.
+Each of the 13 transaction history cache families retains at most 16 successfully
+validated immutable entries. A full cache declines new retention; readers still
+load and validate every original fact. Directory position and protection readers
+use their returned validated graph directly, including graphs beyond cache
+capacity. A new transaction starts without prior cached facts.
+
+This does not bound total SQL work, all process memory or complete P083. Each
+cached graph still follows its existing payload/member limits. Born-member
+validation loads one bounded original history, and public history APIs retain
+their requested results. Cache misses can repeat validation; per-turn work and
+fairness require separate limits.
 Managed-root rename discovery, move-root IDs, unregistered birth discovery,
 root sorting, total catalog work per turn and complete fairness still require
 their own bounds. The default Host must continue using its shared admission,

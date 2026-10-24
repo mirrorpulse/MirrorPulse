@@ -120,9 +120,9 @@ public sealed partial class MirrorPulseProductCatalog
             ?? throw new InvalidDataException("The position lost its completed affecting move.");
         if (row.Completion.IsDirectory)
         {
-            var subtree = await ReadNamespaceDirectoryMoveCompletionCoreAsync(position.OperationId, transaction, token).ConfigureAwait(false)
+            var retained = await ReadNamespaceDirectoryMoveCompletionGraphCoreAsync(position.OperationId, transaction, token).ConfigureAwait(false)
                 ?? throw new InvalidDataException("The affecting directory move lost its complete subtree settlement.");
-            var retained = _namespaceHistoryReads.GetOrCreateValue(transaction).DirectoryCompletions[position.OperationId];
+            var subtree = retained.Completion;
             if (!retained.MemberIndexes.TryGetValue(member.MemberId, out int index) ||
                 member.MemberId != position.MemberId || member.RegisteredAt >= position.VerifiedAt ||
                 member.LocalObject != retained.Snapshot.Entries[index].LocalObject || member.OwnerSid != move.OwnerSid ||

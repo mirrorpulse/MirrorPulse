@@ -125,9 +125,9 @@ public sealed partial class MirrorPulseProductCatalog
             ?? throw new InvalidDataException("The protection context lost its affecting move.");
         if (move.DirectoryMoveEvidence is not null)
         {
-            var completion = await ReadNamespaceDirectoryMoveCompletionCoreAsync(operationId, transaction, token).ConfigureAwait(false)
+            var history = await ReadNamespaceDirectoryMoveCompletionGraphCoreAsync(operationId, transaction, token).ConfigureAwait(false)
                 ?? throw new InvalidDataException("The protection context lost its complete subtree receipt.");
-            var history = _namespaceHistoryReads.GetOrCreateValue(transaction).DirectoryCompletions[operationId];
+            var completion = history.Completion;
             if (!history.MemberIndexes.TryGetValue(member.MemberId, out int index))
                 throw new InvalidDataException("The subtree receipt does not contain the protected member.");
             retainedProtectionId = history.Snapshot.Entries[index].ProtectionId;
