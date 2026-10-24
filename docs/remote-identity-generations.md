@@ -1,7 +1,7 @@
 # Remote identity generations
 
 An Adapter's opaque remote ID identifies its backend address. The backend may
-reuse that address after a completed transfer removes the original source. The
+reuse that address after a completed transfer or original remote deletion removes the source. The
 Host must preserve the retired public item and its historical receipts while
 publishing a distinct replacement item at the reused backend address.
 
@@ -24,6 +24,16 @@ native absence, official SDK tombstone, original source-name epoch and successfu
 original journal acknowledgement. It compares the expected predecessor before
 advancing the pointer. A pending or ambiguous retirement cannot authorize a
 successor. Historical member, transfer and retirement records stay unchanged.
+
+Schema 88 indexes original remote file and empty-directory retirements by their
+captured public item. New leaf admissions retain reference version 2, including
+the original root key. Successful settlement records the name epoch in the same
+transaction that retains the verified SDK outcome and releases the original
+member name. Generation selection version 2 requires that exact completed
+retirement, root, instance, public address and settled epoch. The original SDK
+outcome proves native absence and its exact public tombstone. It does not borrow
+a transfer journal acknowledgement. Rejected deletions keep their current item;
+pending deletions reject hydration callbacks and replacement selection.
 
 Population and current upload proofs select the current identity. Hydration
 rejects a callback for a retired generation before reading replacement backend
@@ -66,10 +76,14 @@ opening. A newer catalog cannot be opened by an older Host. Preserve a stopped
 Host's complete private data-root backup before changing Host versions; reverting
 the executable alone does not downgrade the catalog.
 
-The current successor proof covers completed transfer-source retirement. General
-remote and controlled retirement, and delete followed by recreation within one
-incoming batch, still require their own lifecycle and recovery verification.
-These paths must not infer an original proof from today's name or tombstone.
+The successor proofs cover completed transfer-source retirement and new original
+remote leaf retirement. Legacy remote reference version 1 retains its original
+bytes and outcome but has no captured root key and settled epoch; it cannot
+authorize a successor. Opening an older catalog builds only the item index and
+does not invent these facts from today's path. Recursive remote tree retirement,
+controlled retirement, and delete followed by recreation within one incoming
+batch still require their own lifecycle and recovery verification. These paths
+must not infer an original proof from today's name or tombstone.
 
 Managed SQLite, routing and replay tests cover these component boundaries. Full
 signed Worker, clean Windows native, restart and later-generation acceptance must

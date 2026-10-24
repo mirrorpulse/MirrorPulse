@@ -35,7 +35,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     [TestCategory("NativeCloudFiles")]
     public Task NativeOriginalRemoteDeleteConflictRetainsChildAndDurableConflictAcrossOwners() => RunOriginalRemoteDeleteGapAsync(false, false, true);
 
-    private async Task RunOriginalRemoteDeleteGapAsync(bool directoryItem, bool loseProgressCommit, bool conflict)
+    private async Task RunOriginalRemoteDeleteGapAsync(bool directoryItem, bool loseProgressCommit, bool conflict, bool recreate = false)
     {
         if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
             Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
@@ -61,6 +61,9 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         var progressFault = new MirrorPulseRemoteProgressCommitFault(deleteBatch);
         MirrorPulseNamespaceRetirementIntent original = null!;
         MirrorPulseNamespaceMemberRegistration originalMember = null!;
+        CloudPlaceholderIdentity successor = null!;
+        MirrorPulseNamespaceMemberRegistration successorMember = null!;
+        MirrorPulseNamespaceRemoteRetirementOutcome originalOutcome = null!;
         try
         {
             registry.Register(new(paths.SyncRootPath, "0.1.0", Guid.NewGuid(), [1, 2, 3]));
@@ -73,7 +76,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 SetProtectedFixtureUserOwner(setup.Root, caller.User!); SetProtectedFixtureUserOwner(setup.GetDirectory("Docs"), caller.User!);
             }
             await using var execution = new MirrorPulseNamespaceExecutionSession();
-            for (int owner = 0; owner < 2; owner++)
+            for (int owner = 0; owner < (recreate ? 3 : 2); owner++)
             {
                 var state = new MirrorPulseCfSharpStateSession(paths);
                 await using var fileSystem = new MirrorPulseCloudFileSystemBuilder(paths)
@@ -122,6 +125,30 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 }
                 else
                 {
+                    if (owner == 2)
+                    {
+                        Assert.AreEqual(CloudRemoteBatchStatus.Applied, (await coordinator.ApplyAsync(root.InstanceId, deleteBatch, cancellationToken: deadline.Token)).Status);
+                        var resolver = new MirrorPulseRemoteIdentityResolver(catalog);
+                        var restored = await resolver.ResolveAsync(root, "retire-original", "later-v3", deadline.Token);
+                        Assert.AreEqual(successor.ItemId, restored.ItemId); Assert.AreEqual(successor.RemoteId, restored.RemoteId);
+                        await resolver.RequireCurrentAsync(root, restored, deadline.Token);
+                        await Assert.ThrowsExactlyAsync<InvalidDataException>(() => resolver.RequireCurrentAsync(root, identity, deadline.Token).AsTask());
+                        Assert.AreEqual(successorMember, await catalog.ReadNamespaceMemberChildAsync(original.RemoteEntry!.Parent.Context.Member.MemberId, "retire", deadline.Token));
+                        CloudItem currentItem = directoryItem ? fileSystem.GetDirectory("Docs/retire") : fileSystem.GetFile("Docs/retire");
+                        var native = await currentItem.InspectAsync(deadline.Token);
+                        Assert.IsTrue(native.Exists); Assert.AreEqual(successor.ItemId, native.ItemId);
+                        Assert.AreEqual(successor.ItemId, CloudPlaceholderIdentity.Decode(native.PlaceholderIdentity.Span).ItemId);
+                        Assert.AreEqual(successorMember.LocalObject.LocalFileId, native.LocalBinding!.LocalFileId);
+                        Assert.AreEqual(originalOutcome, await catalog.ReadNamespaceRemoteRetirementOutcomeAsync(original.OperationId, deadline.Token));
+                        await using var transaction = await state.OpenStore.BeginTransactionAsync(deadline.Token);
+                        Assert.IsTrue((await transaction.Items.GetByItemIdAsync(identity.ItemId, deadline.Token))!.IsTombstone);
+                        Assert.IsFalse((await transaction.Items.GetByItemIdAsync(successor.ItemId, deadline.Token))!.IsTombstone);
+                        Assert.AreEqual(successor.ItemId, (await transaction.Items.GetByRelativePathAsync(birthBatch.Changes[0].RelativePath, deadline.Token))!.ItemId);
+                        CollectionAssert.AreEqual(deleteBatch.Fingerprint.ToArray(), (await transaction.RemoteBatches.GetAsync(deleteBatch.BatchId, deadline.Token))!.Fingerprint.ToArray());
+                        await transaction.RollbackAsync(deadline.Token);
+                        Assert.AreEqual(0, provider.Reads);
+                        continue;
+                    }
                     var result = await coordinator.ApplyAsync(root.InstanceId, deleteBatch, cancellationToken: deadline.Token);
                     Assert.AreEqual(CloudRemoteBatchStatus.Applied, result.Status); Assert.IsFalse(result.RequiresRetry);
                     var terminal = (await catalog.ReadNamespaceRemoteRetirementAsync(root.InstanceId, deleteBatch.BatchId, 0, deadline.Token))!;
@@ -145,12 +172,32 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     Assert.AreEqual(CloudRemoteBatchStatus.Applied, (await coordinator.ApplyAsync(root.InstanceId, deleteBatch, cancellationToken: deadline.Token)).Status);
                     Assert.AreEqual(outcome, await catalog.ReadNamespaceRemoteRetirementOutcomeAsync(original.OperationId, deadline.Token));
                     Assert.AreEqual(0, provider.Reads);
+                    if (recreate)
+                    {
+                        originalOutcome = outcome;
+                        successor = await new MirrorPulseRemoteIdentityResolver(catalog).ResolveAsync(root, "retire-original", "later-v3", deadline.Token);
+                        Assert.AreNotEqual(identity.ItemId, successor.ItemId); Assert.AreNotEqual(identity.RemoteId, successor.RemoteId);
+                        var later = new CloudRemoteChangeBatch(root.InstanceId + "/later-birth", deleteBatch.FinalCursor,
+                            [new("later-birth", directoryItem ? CloudRemoteChangeKind.DirectoryUpsert : CloudRemoteChangeKind.FileUpsert,
+                                successor.RemoteId, "later-v3", kind, "Docs/retire", successor.ItemId, length: directoryItem ? null : 4,
+                                metadata: metadata, cursorAfter: new byte[] { 3 })], new byte[] { 3 });
+                        Assert.AreEqual(CloudRemoteBatchStatus.Applied, (await coordinator.ApplyAsync(root.InstanceId, later, cancellationToken: deadline.Token)).Status);
+                        var laterBirth = (await catalog.ReadNamespaceRemoteBirthAsync(root.InstanceId, later.BatchId, 0, deadline.Token))!;
+                        successorMember = (await catalog.ReadNamespaceMemberAsync(laterBirth.OperationId, deadline.Token))!;
+                        Assert.AreNotEqual(originalMember.MemberId, successorMember.MemberId);
+                        Assert.AreNotEqual(originalMember.LocalObject, successorMember.LocalObject);
+                        Assert.AreEqual(successor.ItemId, (await catalog.ReadNamespaceMemberIdentityAsync(successorMember.MemberId, deadline.Token)).ItemId);
+                        Assert.AreEqual(outcome, await catalog.ReadNamespaceRemoteRetirementOutcomeAsync(original.OperationId, deadline.Token));
+                    }
                 }
             }
             TestContext.WriteLine($"OriginalRemoteDelete: directory={directoryItem}; lostSdkProgressCommit={loseProgressCommit}; durableConflictRetained={conflict}; " +
                 "originalNativeBindingBeforeSdk=True; sdkOwnsDeletion=True; noPredeletion=True; " +
                 $"twoProductAndSdkOwners=True; actualTombstone={!conflict}; nameSettledBeforeCursor=True; sameRole=True; " +
                 "hydration=False; recursiveDelete=False; newRoleRecovery=False; defaultHostIntegrated=False.");
+            if (recreate) TestContext.WriteLine($"RemoteDeletionGeneration: directory={directoryItem}; threeProductAndSdkOwners=True; " +
+                $"originalItem={identity.ItemId:D}; successorItem={successor.ItemId:D}; differentNativeMember=True; oldCallbackRejected=True; " +
+                "originalDeleteReplayPreservedSuccessor=True; originalSdkTombstoneAndBatchRetained=True; providerReads=0.");
         }
         finally
         {

@@ -32,7 +32,7 @@ public sealed partial class MirrorPulseProductCatalog
 
     /// <summary>Atomically retains an immutable successor and advances only its expected predecessor.</summary>
     /// <remarks>The boundary derives the new public address from Generation before calling this method.
-    /// Only a sole completed original transfer, actual native/public retirement and original ACK authorize selection.</remarks>
+    /// A sole completed original retirement authorizes selection; a transfer also requires its original ACK.</remarks>
     public async Task<MirrorPulseRemoteIdentityGeneration> SelectRemoteIdentityGenerationAsync(
         MirrorPulseRemoteIdentityGeneration selection, CancellationToken token = default)
     {
@@ -118,6 +118,13 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task RequireRemoteIdentityGenerationRetirementAsync(MirrorPulseRemoteIdentityGeneration selection,
         SqliteTransaction transaction, CancellationToken token)
     {
+        if (selection.Version == 2)
+        {
+            await RequireOrdinaryRemoteIdentityRetirementAsync(selection, transaction, token).ConfigureAwait(false);
+            return;
+        }
+        if ((await ReadRemoteRetirementGenerationsCoreAsync(selection.PreviousItemId, transaction, token).ConfigureAwait(false)).Count != 0)
+            throw new InvalidOperationException("A transfer generation cannot borrow an ordinary remote retirement.");
         var (copy, retirement) = await ReadTransferRetirementAsync(selection.TransferOperationId, transaction, token).ConfigureAwait(false);
         var projection = retirement.TransferSourceProjection;
         if (retirement.OperationId != selection.RetirementOperationId || retirement.Phase != MirrorPulseNamespaceRetirementPhase.Completed ||
@@ -133,11 +140,13 @@ public sealed partial class MirrorPulseProductCatalog
 
     private static void ValidateRemoteIdentityGeneration(MirrorPulseRemoteIdentityGeneration selection)
     {
-        if (selection.Version != 1 || selection.RootId.Value == Guid.Empty || selection.InstanceId.Value == Guid.Empty ||
+        if (!(selection.Version == 1 && selection.TransferOperationId != Guid.Empty ||
+                selection.Version == 2 && selection.TransferOperationId == Guid.Empty) ||
+            selection.RootId.Value == Guid.Empty || selection.InstanceId.Value == Guid.Empty ||
             selection.BaseItemId == Guid.Empty || selection.PreviousItemId == Guid.Empty || selection.ItemId == Guid.Empty ||
             selection.Generation == Guid.Empty || selection.PreviousGeneration == Guid.Empty || selection.PreviousGeneration == selection.Generation ||
             selection.ItemId == selection.PreviousItemId || selection.ItemId == selection.BaseItemId ||
-            selection.TransferOperationId == Guid.Empty || selection.RetirementOperationId == Guid.Empty || selection.RetiredNameEpoch < 2 ||
+            selection.RetirementOperationId == Guid.Empty || selection.RetiredNameEpoch < 2 ||
             string.IsNullOrWhiteSpace(selection.RootKey) || selection.RootKey.Length > 16_384 ||
             string.IsNullOrWhiteSpace(selection.BaseRemoteId) || selection.BaseRemoteId.Length > 16_384 ||
             string.IsNullOrWhiteSpace(selection.PreviousRemoteId) || selection.PreviousRemoteId.Length > 16_384 ||

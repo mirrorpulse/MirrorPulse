@@ -32,7 +32,9 @@ internal sealed class MirrorPulseRemoteRetirementBatchCoordinator(CloudFileSyste
             var parent = retained?.Intent.RemoteEntry?.Parent ?? await catalog.ReadNamespaceMemberProtectionSnapshotAsync(
                 child.Context.Location.ParentMemberId ?? throw new InvalidDataException("Remote retirement cannot delete the sync-root anchor."), admitted).ConfigureAwait(false)
                 ?? throw new InvalidDataException("The original remote delete parent is missing.");
-            RequireCurrentRoute(instance, change, child, parent);
+            var owningRoot = RequireCurrentRoute(instance, change, child, parent);
+            if (retained?.Intent.RemoteEntry?.RootKey is { } originalRootKey && originalRootKey != owningRoot.UniquenessKey)
+                throw new InvalidDataException("The original retirement changed its retained root key.");
             if (retained is null)
             {
                 if ((await catalog.ReadNamespaceDispatchFencedRootsAsync(admitted).ConfigureAwait(false)).Contains(child.Context.Member.RootId!.Value))
@@ -65,7 +67,7 @@ internal sealed class MirrorPulseRemoteRetirementBatchCoordinator(CloudFileSyste
                     var intent = new MirrorPulseNamespaceRetirementIntent(2, Guid.NewGuid(), memberId, child.Context.Member.RootId!.Value,
                         child.Context.Member.LocalObject, child.Context.Location.RelativePath, child.Context.Member.IsDirectory,
                         child.Context.Member.OwnerSid, execution.RoleSid.Value, DateTimeOffset.UtcNow)
-                    { RemoteEntry = Reference(instance, batch, ordinal, options, child, parent, revision, projection.RemoteRevision) };
+                    { RemoteEntry = Reference(instance, batch, ordinal, options, child, parent, revision, projection.RemoteRevision, owningRoot.UniquenessKey) };
                     retained = await catalog.PrepareNamespaceRetirementAsync(intent, admitted).ConfigureAwait(false);
                     if (checkpoint is not null) await checkpoint(MirrorPulseRemoteRetirementCheckpoint.AfterAdmission, admitted).ConfigureAwait(false);
                 }
@@ -161,7 +163,7 @@ internal sealed class MirrorPulseRemoteRetirementBatchCoordinator(CloudFileSyste
         if (checkpoint is not null) await checkpoint(MirrorPulseRemoteRetirementCheckpoint.AfterSettlement, token).ConfigureAwait(false);
     }
 
-    internal void RequireCurrentRoute(InstanceId instance, CloudRemoteChange change,
+    internal RootRegistration RequireCurrentRoute(InstanceId instance, CloudRemoteChange change,
         MirrorPulseNamespaceMemberProtectionSnapshot child, MirrorPulseNamespaceMemberProtectionSnapshot parent)
     {
         var route = router.ResolveCurrentPath(change.RelativePath); var root = router.GetRegistration(route.InstanceId, route.RootKey);
@@ -172,6 +174,7 @@ internal sealed class MirrorPulseRemoteRetirementBatchCoordinator(CloudFileSyste
             child.Context.Protection.RoleSid != execution.RoleSid.Value || parent.Context.Protection.RoleSid != execution.RoleSid.Value ||
             child.Context.Member.OwnerSid != execution.OwnerSid.Value || parent.Context.Member.OwnerSid != execution.OwnerSid.Value)
             throw new InvalidDataException("Remote retirement requires its current active root, original direct parent and protected role.");
+        return root;
     }
 
     internal static async Task<MirrorPulseNamespacePermissionObject> InspectParentAsync(MirrorPulseNamespaceMemberProtectionSnapshot original,
@@ -259,7 +262,7 @@ internal sealed class MirrorPulseRemoteRetirementBatchCoordinator(CloudFileSyste
         if (original.Version != 2 || original.RemoteEntry is not { } remote || original.RelativePath != change.RelativePath.Replace('\\', '/') ||
             original.IsDirectory != (change.ItemKind == CloudItemKind.Directory) ||
             !MirrorPulseRemoteLibraryProvenance.IsSupported(remote.PackageVersion, remote.PackageSource) ||
-            remote != (Reference(instance, batch, ordinal, options, remote.Child, remote.Parent, remote.NativeRemoteRevision, remote.OfficialRemoteRevision) with
+            remote != (Reference(instance, batch, ordinal, options, remote.Child, remote.Parent, remote.NativeRemoteRevision, remote.OfficialRemoteRevision, remote.RootKey) with
             { PackageVersion = remote.PackageVersion, PackageSource = remote.PackageSource }))
             throw new InvalidDataException("The original remote retirement changed its immutable batch, identity, path or public policy.");
     }
@@ -276,12 +279,13 @@ internal sealed class MirrorPulseRemoteRetirementBatchCoordinator(CloudFileSyste
 
     internal static MirrorPulseNamespaceRemoteRetirementReference Reference(InstanceId instance, CloudRemoteChangeBatch batch,
         int ordinal, CloudRemoteApplyOptions options, MirrorPulseNamespaceMemberProtectionSnapshot child,
-        MirrorPulseNamespaceMemberProtectionSnapshot parent, string? nativeRevision, string? officialRevision)
+        MirrorPulseNamespaceMemberProtectionSnapshot parent, string? nativeRevision, string? officialRevision, string? rootKey = null)
     {
         var change = batch.Changes[ordinal];
-        return new(1, instance, batch.BatchId, Convert.ToHexString(batch.Fingerprint.Span), batch.Changes.Count, ordinal, change.ChangeId,
+        return new(rootKey is null ? 1 : 2, instance, batch.BatchId, Convert.ToHexString(batch.Fingerprint.Span), batch.Changes.Count, ordinal, change.ChangeId,
             change.ItemId!.Value, change.RemoteId, change.PreviousRemoteRevision, change.RemoteRevision, nativeRevision, officialRevision,
             child, parent, MirrorPulseRemoteLibraryProvenance.CurrentPackageVersion, MirrorPulseRemoteLibraryProvenance.CurrentSourceCommit,
-            new(options.PreserveUnsynchronizedLocalContent, options.SuppressLocalEcho, options.EchoSuppressionLifetime.Ticks, options.EchoSuppressionObservationCount));
+            new(options.PreserveUnsynchronizedLocalContent, options.SuppressLocalEcho, options.EchoSuppressionLifetime.Ticks, options.EchoSuppressionObservationCount))
+        { RootKey = rootKey };
     }
 }

@@ -100,8 +100,9 @@ public sealed class NamespaceNonAdminControllerTests
                         if ($Count -eq 56 -and $budget -le (Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 52)) {
                             throw 'New required cases did not receive execution budget.'
                         }
-                        $maximumMinutes=if ($Scenario -eq 'budget-catalog') {38} else {35}
-                        if ($stepMinutes -lt 15 -or $stepMinutes -gt $maximumMinutes -or $stepMinutes*60000 - $budget -lt 300000) {
+                        $maximumMinutes=[int][Math]::Ceiling($maximum/60000.0)+5
+                        if ($stepMinutes -lt 15 -or $stepMinutes -gt $maximumMinutes -or
+                            $stepMinutes -ne [int][Math]::Ceiling($budget/60000.0)+5 -or $stepMinutes*60000 - $budget -lt 300000) {
                             throw 'The workflow can terminate the controller before its child timeout and diagnostic cleanup.'
                         }
                     }

@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Data.Sqlite;
 using MirrorPulse.Core.Contracts;
 
@@ -11,7 +12,11 @@ public sealed record MirrorPulseNamespaceRemoteRetirementReference(int Version, 
     Guid ItemId, string RemoteId, string? PreviousRemoteRevision, string? RemoteRevision,
     string? NativeRemoteRevision, string? OfficialRemoteRevision,
     MirrorPulseNamespaceMemberProtectionSnapshot Child, MirrorPulseNamespaceMemberProtectionSnapshot Parent,
-    string PackageVersion, string PackageSource, MirrorPulseRemoteBirthPolicy Policy);
+    string PackageVersion, string PackageSource, MirrorPulseRemoteBirthPolicy Policy)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? RootKey { get; init; }
+}
 
 /// <summary>Fresh facts after an actual original SDK outcome, without resolving its durable conflict.</summary>
 public sealed record MirrorPulseNamespaceRemoteRetirementOutcome(int Version, Guid OperationId,
@@ -165,6 +170,12 @@ public sealed partial class MirrorPulseProductCatalog
                 NativeDeletedAt = outcome.ConflictId is null ? outcome.VerifiedAt : null,
                 CompletedAt = outcome.VerifiedAt
             };
+            if (outcome.ConflictId is null && original.Intent.RemoteEntry is { Version: 2 } remote)
+                terminal = terminal with
+                {
+                    RemoteSourceNameEpoch = await ReadNamespaceNameEpochCoreAsync(
+                    remote.Parent.Context.Member.MemberId, original.Intent.RelativePath, transaction, cancellationToken).ConfigureAwait(false)
+                };
             await WriteNamespaceRetirementCoreAsync(terminal, transaction, cancellationToken).ConfigureAwait(false);
             transaction.Commit(); return terminal;
         }
@@ -217,7 +228,9 @@ public sealed partial class MirrorPulseProductCatalog
     {
         var remote = intent.RemoteEntry!;
         ValidateRemoteBirthLookup(remote.InstanceId, remote.BatchId, remote.Ordinal);
-        if (remote.Version != 1 || remote.BatchEntryCount is < 1 or > 65_536 || remote.Ordinal >= remote.BatchEntryCount ||
+        if (!(remote.Version == 1 && remote.RootKey is null || remote.Version == 2 &&
+                !string.IsNullOrWhiteSpace(remote.RootKey) && remote.RootKey.Length <= 16_384 && !remote.RootKey.Contains('\0')) ||
+            remote.BatchEntryCount is < 1 or > 65_536 || remote.Ordinal >= remote.BatchEntryCount ||
             remote.BatchFingerprint is not { Length: 64 } || remote.BatchFingerprint.Any(character => !char.IsAsciiHexDigitUpper(character)) ||
             remote.ItemId == Guid.Empty || string.IsNullOrWhiteSpace(remote.ChangeId) || remote.ChangeId.Length > 16_384 || remote.ChangeId.Contains('\0') ||
             string.IsNullOrWhiteSpace(remote.RemoteId) || remote.RemoteId.Length > 4096 || remote.RemoteId.Contains('\0') ||

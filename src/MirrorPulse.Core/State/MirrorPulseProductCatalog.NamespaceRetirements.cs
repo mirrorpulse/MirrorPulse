@@ -41,6 +41,9 @@ public sealed record MirrorPulseNamespaceRetirement(Guid OperationId, MirrorPuls
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public long? TransferSourceNameEpoch { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? RemoteSourceNameEpoch { get; init; }
 }
 
 public sealed partial class MirrorPulseProductCatalog
@@ -244,6 +247,10 @@ public sealed partial class MirrorPulseProductCatalog
         if (payload.Length > 131_072 || fingerprint.Length != 32 || !CryptographicOperations.FixedTimeEquals(SHA256.HashData(payload), fingerprint)) throw new InvalidDataException("The namespace retirement fingerprint is invalid.");
         var retirement = JsonSerializer.Deserialize<MirrorPulseNamespaceRetirement>(payload, TopologyJsonOptions) ?? throw new InvalidDataException("The namespace retirement is empty.");
         ValidateNamespaceRetirementIntent(retirement.Intent);
+        if (retirement.RemoteSourceNameEpoch is { } epoch && (epoch < 2 || retirement.Phase != MirrorPulseNamespaceRetirementPhase.Completed ||
+                retirement.Intent.RemoteEntry?.Version != 2) || retirement.Intent.RemoteEntry?.Version == 2 &&
+                retirement.Phase == MirrorPulseNamespaceRetirementPhase.Completed && retirement.RemoteSourceNameEpoch is null)
+            throw new InvalidDataException("The remote retirement lost its original settled-name generation witness.");
         if (retirement.StartedAt < retirement.Intent.PreparedAt || retirement.NativeDeletedAt < retirement.StartedAt ||
             retirement.CompletedAt < retirement.NativeDeletedAt)
             throw new InvalidDataException("The retirement receipt chronology is inconsistent.");
