@@ -28,7 +28,8 @@ public sealed partial class MirrorPulseProductCatalog
         finally { _gate.Release(); }
     }
 
-    /// <summary>Reads both sides of a root's pending transfer from one validated catalog snapshot.</summary>
+    /// <summary>Reads this root's original pending transfer from one indexed, validated catalog snapshot.</summary>
+    /// <remarks>This read-only status grants no native authority, root readiness or acknowledgement.</remarks>
     public async Task<IReadOnlyList<MirrorPulseNamespaceTransferStatus>> ReadPendingNamespaceTransferStatusesAsync(RootId rootId,
         CancellationToken token = default)
     {
@@ -37,11 +38,10 @@ public sealed partial class MirrorPulseProductCatalog
         try
         {
             ThrowIfDisposed(); using var transaction = _connection.BeginTransaction(deferred: true);
-            var result = new List<MirrorPulseNamespaceTransferStatus>();
-            foreach (var copy in await ReadPendingNamespaceTransfersCoreAsync(transaction, token).ConfigureAwait(false))
-                if (copy.Plan.SourceRoute.RootId == rootId || copy.Plan.TargetRoute.RootId == rootId)
-                    result.Add(await ReadTransferStatusCoreAsync(copy, transaction, token).ConfigureAwait(false));
-            transaction.Commit(); return result.AsReadOnly();
+            var copy = await ReadPendingNamespaceTransferForRootCoreAsync(rootId, transaction, token).ConfigureAwait(false);
+            MirrorPulseNamespaceTransferStatus[] result = copy is null ? [] :
+                [await ReadTransferStatusCoreAsync(copy, transaction, token).ConfigureAwait(false)];
+            transaction.Commit(); return result;
         }
         finally { _gate.Release(); }
     }

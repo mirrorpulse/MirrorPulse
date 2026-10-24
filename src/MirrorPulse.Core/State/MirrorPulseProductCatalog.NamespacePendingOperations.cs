@@ -24,7 +24,7 @@ public sealed partial class MirrorPulseProductCatalog
             // not turn a query for another root into a false declaration of readiness.
             _ = await ReadNamespaceRootFencesCoreAsync(true, transaction, cancellationToken).ConfigureAwait(false);
             var result = new List<MirrorPulseNamespacePendingOperation>();
-            foreach (var transfer in await ReadPendingNamespaceTransfersCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
+            await foreach (var transfer in ReadPendingNamespaceTransfersCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
                 if (transfer.Plan.SourceRoute.RootId == rootId || transfer.Plan.TargetRoute.RootId == rootId)
                     result.Add(new(transfer.Plan.OperationId, rootId, MirrorPulseNamespacePendingOperationKind.Transfer));
             foreach (var update in await ReadPendingRemoteUpdatesCoreAsync(transaction, cancellationToken).ConfigureAwait(false))

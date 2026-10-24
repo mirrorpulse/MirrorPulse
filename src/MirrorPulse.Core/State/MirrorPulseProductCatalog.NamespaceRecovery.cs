@@ -90,7 +90,7 @@ public sealed partial class MirrorPulseProductCatalog
             .Where(intent => intent.IsPending).Select(intent => intent.RootId).ToHashSet();
         foreach (var update in updates)
             if (update.Plan.OperationId != admittedRemoteUpdateId) roots.Add(update.Plan.Child.Context.Member.RootId!.Value);
-        foreach (var transfer in await ReadPendingNamespaceTransfersCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
+        await foreach (var transfer in ReadPendingNamespaceTransfersCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
             if (transfer.Plan.OperationId != admittedTransferId)
             {
                 roots.Add(transfer.Plan.SourceRoute.RootId);

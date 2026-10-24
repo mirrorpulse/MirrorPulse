@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
@@ -59,26 +60,37 @@ public sealed partial class MirrorPulseProductCatalog
         return copy;
     }
 
-    private async Task<IReadOnlyList<MirrorPulseNamespaceTransferCopy>> ReadPendingNamespaceTransfersCoreAsync(
-        SqliteTransaction transaction, CancellationToken token)
+    internal const string NamespacePendingTransferPageSql = """
+        SELECT operation_id FROM namespace_transfer_states
+        WHERE completed=0 AND operation_id>$after ORDER BY operation_id LIMIT 16;
+        """;
+
+    private async IAsyncEnumerable<MirrorPulseNamespaceTransferCopy> ReadPendingNamespaceTransfersCoreAsync(
+        SqliteTransaction transaction, [EnumeratorCancellation] CancellationToken token)
     {
         await RequireNamespaceTransferStateIntegrityAsync(transaction, token).ConfigureAwait(false);
-        var ids = new List<Guid>();
-        await using (var query = _connection.CreateCommand())
+        string after = string.Empty; int count = 0;
+        while (true)
         {
-            query.Transaction = transaction;
-            query.CommandText = """
-                SELECT operation_id FROM namespace_transfer_states WHERE completed=0 ORDER BY operation_id LIMIT 4097;
-                """;
-            await using var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
-            while (await reader.ReadAsync(token).ConfigureAwait(false)) ids.Add(ParseNamespaceMemberId(reader.GetString(0)));
+            var ids = new List<Guid>(16);
+            await using (var query = _connection.CreateCommand())
+            {
+                query.Transaction = transaction; query.CommandText = NamespacePendingTransferPageSql;
+                query.Parameters.AddWithValue("$after", after);
+                await using var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
+                while (await reader.ReadAsync(token).ConfigureAwait(false)) ids.Add(ParseNamespaceMemberId(reader.GetString(0)));
+            }
+            foreach (Guid id in ids)
+            {
+                if (++count > 4096) throw new InvalidDataException("The pending transfer inventory exceeds its recovery bound.");
+                // Consumers keep the original catalog transaction. Only one complete graph and
+                // one bounded ID page are retained; no partial recovery result is published.
+                yield return await ReadNamespaceTransferCoreAsync(id, transaction, token).ConfigureAwait(false)
+                    ?? throw new InvalidDataException("An original transfer fence or effect lost its admission.");
+            }
+            if (ids.Count < 16) yield break;
+            after = ids[^1].ToString("D");
         }
-        if (ids.Count > 4096) throw new InvalidDataException("The pending transfer inventory exceeds its recovery bound.");
-        var result = new List<MirrorPulseNamespaceTransferCopy>(ids.Count);
-        foreach (Guid id in ids)
-            result.Add(await ReadNamespaceTransferCoreAsync(id, transaction, token).ConfigureAwait(false)
-                ?? throw new InvalidDataException("An original transfer fence or effect lost its admission."));
-        return result.AsReadOnly();
     }
 
     private async Task WriteNamespaceTransferCoreAsync(MirrorPulseNamespaceTransferCopy copy,

@@ -484,6 +484,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
             await EnsureRemoteIdentityGenerationSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
             await EnsureAdapterRemoteProjectionSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
             await EnsureRemoteRetirementGenerationSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
+            await EnsureNamespaceTransferRootReadIndexesAsync(connection, cancellationToken).ConfigureAwait(false);
             return catalog;
         }
         catch

@@ -133,6 +133,24 @@ deletion, local source retirement and original journal acknowledgement. An
 ambiguous copy or delete remains pending for explicit reconciliation; resume
 does not authorize another remote effect from matching target bytes.
 
+The read-only list for one root uses derived indexes of the original pending
+source and destination routes, plus the retained root reservation. It validates
+the selected transfer's complete original records. Missing state or reservation
+rows cannot turn that original into an empty result. An unrelated root's damaged
+transfer does not prevent reading this root's status; global recovery integrity
+still rejects that damage before publishing its full root snapshot. Status does
+not grant native authority, live root readiness or a journal acknowledgement.
+A state with no original operation has no trustworthy root, so even a root-local
+status lookup retains the global orphan-state check and rejects that damage.
+
+Global transfer recovery keeps its complete integrity check and original catalog
+transaction, then reads pending IDs in ordered pages of 16 and validates transfer
+graphs individually. It retains no list of all complete transfer graphs. A late
+invalid owner prevents publication of the full root result. The route indexes
+can be rebuilt from existing originals without changing receipts or the catalog
+version. These changes do not bound the total global integrity or orphan scan or the other
+namespace-owner inventories; those broader backlog limits remain open.
+
 The current remote-source completion requires negotiated V2 conditional source
 deletion and the original non-null revision. Local-only sources, directory
 manifests, legacy protocols and unfinished transfers under a different protection
