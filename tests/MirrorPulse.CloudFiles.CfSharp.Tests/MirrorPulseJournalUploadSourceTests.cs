@@ -350,13 +350,16 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
             new AdapterRootDefinition("docs", "Documents", "Documents", false),
             RootRegistrationState.Active);
         var router = new MirrorPulseRootRouter(paths.SyncRootPath, [registration]);
+        Guid rootItemId = router.CreateRootPage().Children.Single().Identity.ItemId;
         try
         {
             cloud.Register(definition);
             Guid originalId = Guid.Empty;
+            var observedRootMetadata = new Dictionary<Guid, CloudLocalChange>();
             for (int run = 0; run < 3; run++)
             {
-                await using var fileSystem = new MirrorPulseCloudFileSystemBuilder(paths)
+                var state = new MirrorPulseCfSharpStateSession(paths);
+                await using var fileSystem = new MirrorPulseCloudFileSystemBuilder(paths).WithStateStore(state)
                     .WithContentProvider(MirrorPulseDemandProvider.CreateWithoutAdapters(paths.SyncRootPath))
                     .Build();
                 await fileSystem.StartAsync();
@@ -373,33 +376,78 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
                         Path.Combine(paths.SyncRootPath, "Documents", "report.txt"), "local content");
                 }
 
-                var source = new MirrorPulseJournalUploadSource(
-                    feed, router, catalog, _ => run != 1);
+                var source = new MirrorPulseJournalUploadSource(feed, router, catalog, _ => run != 1);
                 using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-                MirrorPulseJournalUploadBatch batch = await source.ReadPendingAsync(timeout.Token);
+                MirrorPulseJournalUploadBatch batch;
+                // A finite snapshot may precede the actual file notification.
+                // Keep the original deadline and wait for its durable command,
+                // rather than assuming the first notification is that file.
+                do
+                {
+                    batch = await source.ReadPendingAsync(timeout.Token);
+                    Assert.IsFalse(batch.RequiresFullRescan);
+                    if (batch.ScanInProgress || batch.PlanningInProgress ||
+                        run == 0 && !batch.ReadyCommands.Any(command => command.RelativePath == "report.txt"))
+                        await Task.Yield();
+                    else break;
+                    timeout.Token.ThrowIfCancellationRequested();
+                } while (true);
+                Assert.AreSame(batch.ReadyCommands, batch.ValidatedSequenceCommands);
+                Assert.IsTrue(batch.ReadyCommands.All(command => command.RelativePath == "report.txt" && !command.IsDirectory));
                 CloudLocalChangeBatch raw = await feed.ReadBatchAsync(timeout.Token);
-                if (raw.Changes.Any(change => change.RelativePath == "Documents"))
-                    Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(new
+                Assert.IsFalse(raw.Changes.Any(change => change.RelativePath == "Documents" && change.Sequence <= batch.WindowUpperSequence));
+                // Inspect all actually pending official rows, not only the
+                // legacy feed's delivery batch. The scan remains finite even
+                // if a newer native notification arrives during its pages.
+                var pendingScan = await feed.BeginScanAsync(timeout.Token);
+                Assert.IsFalse(pendingScan.RequiresFullRescan);
+                long after = 0;
+                var rootNotifications = new List<CloudLocalChange>();
+                while (true)
+                {
+                    var page = await feed.ReadPageAsync(pendingScan, after, 64, timeout.Token);
+                    Assert.IsFalse(page.RequiresFullRescan);
+                    Assert.IsLessThanOrEqualTo(64, page.Changes.Count);
+                    long previous = after;
+                    foreach (var change in page.Changes)
                     {
-                        Boundary = "OriginalRootNotificationAfterPlanning",
-                        Run = run,
-                        batch.WindowUpperSequence,
-                        batch.ScanInProgress,
-                        batch.PlanningInProgress,
-                        batch.DeferredCount,
-                        batch.RequiresFullRescan,
-                        RootNotifications = raw.Changes.Where(change => change.RelativePath == "Documents")
-                            .Select(change => new { change.OperationId, change.Sequence, change.Kind, change.ItemId, change.IsDirectory, change.ObservedAt }).ToArray()
-                    }));
-                Assert.IsFalse(raw.Changes.Any(change => change.RelativePath == "Documents"));
-                Assert.IsFalse(batch.RequiresFullRescan);
+                        Assert.IsGreaterThan(previous, change.Sequence);
+                        Assert.IsLessThanOrEqualTo(pendingScan.ThroughSequence, change.Sequence);
+                        previous = change.Sequence;
+                        if (change.RelativePath == "Documents") rootNotifications.Add(change);
+                    }
+                    Assert.IsGreaterThanOrEqualTo(previous, page.LastScannedSequence);
+                    Assert.IsLessThanOrEqualTo(pendingScan.ThroughSequence, page.LastScannedSequence);
+                    if (!page.HasMore) { Assert.AreEqual(pendingScan.ThroughSequence, page.LastScannedSequence); break; }
+                    Assert.IsGreaterThan(after, page.LastScannedSequence);
+                    after = page.LastScannedSequence;
+                }
+                // Metadata covered by this window must have its unsupported
+                // bookkeeping result and be settled. A later notification has
+                // no authority to extend that already captured boundary.
+                Assert.IsFalse(rootNotifications.Any(change => change.Sequence <= batch.WindowUpperSequence));
+                foreach (var change in rootNotifications)
+                {
+                    Assert.AreEqual(CloudLocalChangeKind.MetadataUpdate, change.Kind);
+                    Assert.IsTrue(change.IsDirectory); Assert.AreEqual(rootItemId, change.ItemId);
+                    Assert.IsNull(await catalog.ReadWorkerRequestAsync(change.OperationId, timeout.Token),
+                        "A future root notification cannot acquire ordinary dispatch ownership.");
+                    observedRootMetadata.TryAdd(change.OperationId, change);
+                }
+                var coveredMetadata = observedRootMetadata.Values.Where(change => change.Sequence <= batch.WindowUpperSequence).ToArray();
+                var bookkeeping = await catalog.ReadBlockedLocalOperationsAsync(timeout.Token);
+                foreach (var change in coveredMetadata)
+                {
+                    var result = bookkeeping.Single(item => item.OperationId == change.OperationId);
+                    Assert.AreEqual(MirrorPulseLocalOperationBlockReason.UnsupportedMetadataChange, result.Reason);
+                    Assert.AreEqual(instance, result.InstanceId); Assert.AreEqual("Documents", result.RelativePath);
+                    Assert.AreEqual(change.ObservedAt, result.ObservedAt);
+                }
                 if (run == 0)
                 {
-                    Assert.IsNotEmpty(batch.ReadyCommands);
-                    MirrorPulseWorkerChangeCommand command = batch.ReadyCommands[0];
+                    MirrorPulseWorkerChangeCommand command = batch.ReadyCommands.First(item => item.RelativePath == "report.txt");
                     Assert.AreEqual(Path.Combine(paths.SyncRootPath, "Documents", "report.txt"),
-                        router.ResolveUploadPath(command.InstanceId, command.RootKey,
-                            command.RelativePath));
+                        router.ResolveUploadPath(command.InstanceId, command.RootKey, command.RelativePath));
                     originalId = command.OperationId;
                     Assert.AreNotEqual(Guid.Empty, originalId);
                 }
@@ -408,8 +456,7 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
                     Assert.IsEmpty(batch.ReadyCommands);
                     Assert.IsGreaterThan(0, batch.DeferredCount);
                     MirrorPulseWorkerRequestRecord? recorded = await catalog.ReadWorkerRequestAsync(originalId);
-                    Assert.IsNotNull(recorded);
-                    Assert.AreEqual(instance, recorded.InstanceId);
+                    Assert.IsNotNull(recorded); Assert.AreEqual(instance, recorded.InstanceId);
                 }
                 else
                 {
@@ -417,6 +464,33 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
                     Assert.AreEqual(originalId, batch.ReadyCommands[0].OperationId);
                     Assert.AreEqual(0, batch.DeferredCount);
                 }
+                await using (var transaction = await state.OpenStore.BeginTransactionAsync(timeout.Token))
+                {
+                    Assert.IsNotNull(await transaction.Operations.GetAsync(originalId, timeout.Token),
+                        "Reading, disabling and reopening owners must not acknowledge the original file.");
+                    foreach (var change in rootNotifications)
+                    {
+                        var pending = await transaction.Operations.GetAsync(change.OperationId, timeout.Token);
+                        Assert.IsNotNull(pending); Assert.AreEqual(change.ItemId, pending.ItemId);
+                    }
+                    foreach (var change in coveredMetadata)
+                        Assert.IsNull(await transaction.Operations.GetAsync(change.OperationId, timeout.Token),
+                            "A covered metadata original must settle only after its durable unsupported result.");
+                    await transaction.RollbackAsync(timeout.Token);
+                }
+                Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    Boundary = "FiniteOriginalJournalAfterPlanning",
+                    Run = run,
+                    batch.WindowUpperSequence,
+                    OriginalFileStillPending = true,
+                    RootOrdinaryDispatch = false,
+                    CoveredRootMetadataSettled = true,
+                    FutureRootMetadataRetained = rootNotifications.Count,
+                    AllPendingOfficialPagesInspected = true,
+                    KnownCoveredMetadataResultsVerified = coveredMetadata.Length,
+                    OriginalDeadlineSeconds = 15
+                }));
             }
         }
         finally
