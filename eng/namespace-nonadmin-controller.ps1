@@ -1,6 +1,7 @@
 function Get-OrdinaryUserNamespaceBudgetMilliseconds {
     param([Parameter(Mandatory)][ValidateRange(1, 112)][int]$TestCount, [string[]]$TestNames)
     $executions = $TestCount
+    $transferDeadlineMilliseconds = 0
     if ($PSBoundParameters.ContainsKey('TestNames')) {
         if ($TestNames.Count -ne $TestCount) { throw 'The namespace budget must describe the exact selected catalog.' }
         $selected = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
@@ -15,14 +16,22 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
             if ([string]::IsNullOrWhiteSpace($name) -or $name.Length -gt 512 -or $name -cnotmatch '^[A-Za-z0-9_.]+$' -or -not $selected.Add($name)) {
                 throw 'The namespace budget requires distinct, bounded test names.'
             }
-            if ($repeated.ContainsKey($name)) { $executions += $repeated[$name] - 1 }
+            if ($repeated.ContainsKey($name)) {
+                $executions += $repeated[$name] - 1
+                # Each original transfer scope/cutpoint already owns a 45-second
+                # native deadline. The aggregate controller must preserve it;
+                # its ordinary 15-second per-case estimate cannot replace it.
+                $transferDeadlineMilliseconds += $repeated[$name] * 30000
+            }
         }
     }
     # Count both scopes inside the five selected transfer methods, including the
     # retirement matrix and ACK retries inside their original native deadlines.
-    # At most 112 names plus 13 repeated executions gives a bounded 33m15s child
-    # envelope; count-only callers retain 30 minutes.
-    return [Math]::Max(600000, 120000 + $executions * 15000)
+    # At most 112 names plus 13 repeated executions and the existing 45-second
+    # deadlines for all 18 transfer executions gives a bounded 42m15s child
+    # envelope. Count-only callers retain 30 minutes; the step adds five minutes
+    # for controller diagnostics and disposable-account/profile cleanup.
+    return [Math]::Max(600000, 120000 + $executions * 15000 + $transferDeadlineMilliseconds)
 }
 
 function Get-OrdinaryUserNamespaceStepTimeoutMinutes {

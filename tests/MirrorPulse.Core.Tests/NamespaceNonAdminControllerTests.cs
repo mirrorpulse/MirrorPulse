@@ -59,7 +59,7 @@ public sealed class NamespaceNonAdminControllerTests
                     $names+='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.'+$Scenario.Substring(7)
                     $old=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 109
                     $actual=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 109 -TestNames $names
-                    if ($actual -ne $old+($Count-1)*15000) { throw 'A selected transfer execution or cutpoint has no controller budget.' }
+                    if ($actual -ne $old-15000+$Count*45000) { throw 'A selected transfer execution or cutpoint lost its existing 45-second native deadline.' }
                     exit 0
                 }
                 if ($Scenario -like 'selection-*') {
@@ -91,9 +91,9 @@ public sealed class NamespaceNonAdminControllerTests
                     if ($Scenario -eq 'budget-rejected') {
                         if (-not $rejected) { throw 'An invalid or unbounded selection was accepted.' }
                     } else {
-                        $maximum=if ($Scenario -eq 'budget-catalog') {1995000} else {1800000}
+                        $maximum=if ($Scenario -eq 'budget-catalog') {2535000} else {1800000}
                         if ($rejected -or $budget -lt 600000 -or $budget -gt $maximum) { throw 'The whole-suite envelope is missing or unbounded.' }
-                        if ($Scenario -eq 'budget-catalog' -and $budget -ne 120000+($Count+13)*15000) {
+                        if ($Scenario -eq 'budget-catalog' -and $budget -ne 120000+($Count+13)*15000+18*30000) {
                             throw 'The actual catalog lost a same/cross-instance transfer or one of its five retirement cutpoints.'
                         }
                         if ($Count -ge 52 -and $budget -le 600000) { throw 'The growing suite still has the obsolete fixed ten-minute envelope.' }
