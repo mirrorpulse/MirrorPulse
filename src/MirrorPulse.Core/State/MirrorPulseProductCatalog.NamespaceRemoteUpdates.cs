@@ -32,9 +32,6 @@ public sealed partial class MirrorPulseProductCatalog
         MirrorPulseNamespaceRemoteUpdatePlan plan, CancellationToken token = default)
     {
         ValidateRemoteUpdatePlan(plan);
-        if (plan.PackageVersion != MirrorPulseRemoteLibraryProvenance.CurrentPackageVersion ||
-            plan.PackageSource != MirrorPulseRemoteLibraryProvenance.CurrentSourceCommit)
-            throw new InvalidOperationException("New remote updates require the current reviewed SDK provenance.");
         await _gate.WaitAsync(token).ConfigureAwait(false);
         try
         {
@@ -45,6 +42,9 @@ public sealed partial class MirrorPulseProductCatalog
                 if (replay.Plan != plan) throw new InvalidOperationException("A remote update cannot replace its original entry, object, policy or role.");
                 transaction.Commit(); return replay;
             }
+            if (plan.PackageVersion != MirrorPulseRemoteLibraryProvenance.CurrentPackageVersion ||
+                plan.PackageSource != MirrorPulseRemoteLibraryProvenance.CurrentSourceCommit)
+                throw new InvalidOperationException("New remote updates require the current reviewed SDK provenance.");
             await RequireNotNamespaceTransferOwnerAsync(plan.OperationId, transaction, token).ConfigureAwait(false);
             await RequireRemoteUpdateCurrentAsync(plan, transaction, token).ConfigureAwait(false);
             var root = plan.Child.Context.Member.RootId!.Value;

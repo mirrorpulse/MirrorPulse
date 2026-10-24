@@ -96,7 +96,8 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         return new(1, Guid.NewGuid(), instance, instance + "/original-update", new string('A', 64), 3, 1, "versioned-upsert", new string('B', 64),
             child.Identity.ItemId!.Value, child.Identity.RemoteId!, "v1", "v2", "v1", "v1", true, child, parent,
             child.Context.Verification with { ObservedAt = prepared }, parent.Context.Verification with { ObservedAt = prepared },
-            "0.1.0-preview.7", "137d6e2a9c1b15f337e8e7ca3566d5e3f29fcdb9", new(true, true, TimeSpan.FromMinutes(5).Ticks, 2), prepared);
+            MirrorPulseRemoteLibraryProvenance.CurrentPackageVersion, MirrorPulseRemoteLibraryProvenance.CurrentSourceCommit,
+            new(true, true, TimeSpan.FromMinutes(5).Ticks, 2), prepared);
     }
 
     private static MirrorPulseNamespaceRemoteUpdateOutcome RemoteUpdateOutcome(MirrorPulseNamespaceRemoteUpdatePlan plan, bool conflict, bool reconciled)

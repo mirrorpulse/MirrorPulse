@@ -1,13 +1,36 @@
 # CfSharp Preview Compatibility Report
 
-MirrorPulse pins `CfSharp` and `CfSharp.Storage.Sqlite` to `0.1.0-preview.7` from
+MirrorPulse pins `CfSharp` and `CfSharp.Storage.Sqlite` to `0.1.0-preview.8` from
 NuGet.org. The integration project owns CfSharp types and lifecycle; Core exposes
 MirrorPulse contracts to Adapters and the product UI.
 
 The core, SQLite provider and native NuGet publications identify the same source
-commit, `137d6e2a9c1b15f337e8e7ca3566d5e3f29fcdb9`. Package and lock updates do
-not establish native acceptance. The native evidence described below was obtained
-with earlier previews; preview.7 requires validation on the exact MirrorPulse source.
+commit, `ee593578dba3c666cf59f4a922f0e220f115bf7f`. Package and lock updates do
+not establish native acceptance. Earlier native evidence remains bound to its
+original preview and MirrorPulse source. Preview.8 requires its own clean Windows
+native, signed Worker, installed and ordinary-user acceptance.
+
+Preview.8 addresses distinct births at retired paths (CF-009). Its official SQLite
+schema 9 retains original tombstones and paths, permits one live owner at each
+path and makes public path lookup prefer that live generation. A distinct explicit
+item and remote identity must remain distinct through preparation, native creation,
+projection, replay and reopening. MirrorPulse's unchanged SDK-only file and empty
+directory regressions check the requested successor against both native identity
+and public identity/path lookups. Passing those cases alone cannot close complete
+cross-instance or cross-package transfer acceptance.
+
+Back up the stopped Host's entire private data root before upgrading. The official
+provider owns the schema 9 migration; earlier runtimes reject the upgraded store.
+Reverting the executable does not downgrade it. Migration preserves existing
+accepted history and does not repair a preview.7 batch that already projected its
+successor onto the predecessor. Incompatible legacy creation preparations and
+accepted identity mismatches remain fenced with managed provenance errors.
+Retain the original immutable batches, native bindings, public SDK rows, journal
+and product ownership evidence for explicit reconciliation. Do not erase or rename
+tombstones, rewrite accepted fingerprints, create a replacement store implicitly,
+or infer repaired ownership from `AlreadyApplied`.
+See the pinned upstream [retired-path and reconciliation contract](https://github.com/mirrorpulse/cfsharp/blob/ee593578dba3c666cf59f4a922f0e220f115bf7f/docs/remote-change-application.md#distinct-births-at-retired-paths-cf-009)
+and [schema 9 migration](https://github.com/mirrorpulse/cfsharp/blob/ee593578dba3c666cf59f4a922f0e220f115bf7f/docs/state-store-sqlite.md#schema-9-retired-paths-and-distinct-generations).
 
 Preview.7 introduces authenticated original Delete preparation, sealed inventories,
 native acceptance and item-projection receipts, and atomic batch-outcome recovery.
@@ -25,10 +48,17 @@ regressions explicitly authorize deletion of their disposable originals; additio
 native cases require default preservation to retain one conflict across store owners.
 See the [upstream Delete contract](https://github.com/mirrorpulse/cfsharp/blob/137d6e2a9c1b15f337e8e7ca3566d5e3f29fcdb9/docs/remote-change-application.md).
 
-New product birth, retirement and file-move admissions record preview.7 provenance.
-Historical preview.6 records keep their exact original version, source and policy.
-Readers accept the two audited version/source pairs and reject mixed publications;
+New product birth, retirement and file-move admissions record preview.8 provenance.
+Historical preview.6 and preview.7 records keep their exact original version,
+source and policy. Readers accept the three audited version/source pairs and reject
+mixed or unknown publications;
 this compatibility does not confer native completion or reauthorize a Delete.
+Retained remote updates and sealed explicit Delete decisions can replay their
+unchanged original preview.7 publication. New updates and new sealed Delete
+inventories require preview.8. Changing a retained command to the current
+publication is rejected; its original start, conflict, inventory and root fence
+remain intact. Preview.6 cannot acquire the sealed Delete recovery protocol
+introduced in preview.7.
 
 Manual ARM64 CI runs the four independent SDK Delete regressions before default
 Host integration and preserves their original TRX separately. This lets SDK
@@ -86,7 +116,7 @@ transaction rolled back and `PRAGMA integrity_check` returned `ok`.
 The earlier `CF-001`, `API-001`, and `API-002` gaps were retested after pinning
 preview.2. MirrorPulse uses the public CfSharp batch and conflict contracts and
 does not read or mutate CfSharp's private SQLite tables or conflict payload
-format. Preview.7 remains a prerelease dependency until CfSharp 1.0.0 is published
+format. Preview.8 remains a prerelease dependency until CfSharp 1.0.0 is published
 and validated for the release candidate.
 
 Preview.2 also exposes a confirmation limitation: coordination USNs can be zero,

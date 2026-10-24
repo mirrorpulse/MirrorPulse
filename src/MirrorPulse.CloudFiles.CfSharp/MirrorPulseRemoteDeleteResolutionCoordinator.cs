@@ -140,7 +140,7 @@ internal sealed class MirrorPulseRemoteDeleteResolutionCoordinator(CloudFileSyst
     {
         var graph = await catalog.ReadNamespaceMemberTreeAsync(memberId, token).ConfigureAwait(false);
         if (graph.Count > 4096)
-            throw new NotSupportedException("CfSharp preview.7 supports at most4096 members in one explicit Delete; no deletion owner was admitted.");
+            throw new NotSupportedException("CfSharp preview.8 supports at most4096 members in one explicit Delete; no deletion owner was admitted.");
         var entries = new List<MirrorPulseNamespaceRemoteRetirementTreeEntry>(graph.Count);
         foreach (var node in graph)
         {

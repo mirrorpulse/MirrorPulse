@@ -23,8 +23,8 @@
     {
       "type": "library",
       "name": "CfSharp.Native",
-      "version": "0.1.0-preview.7",
-      "purl": "pkg:nuget/CfSharp.Native@0.1.0-preview.7",
+      "version": "0.1.0-preview.8",
+      "purl": "pkg:nuget/CfSharp.Native@0.1.0-preview.8",
       "licenses": [
         {
           "expression": "Apache-2.0"
@@ -32,7 +32,7 @@
       ],
       "hashes": [
         {
-          "content": "893198e39b1574f257507ad91cdded04af63543869f7458ad4ff931d899c5af57875144771949c5c0da0f95840697ed744e2b87cf28ac4b3619ba9b370b5be44",
+          "content": "96aa9d99a3e4ab0282404d73714b15968e3ffd8fe9b8fb09c302fff45f4ace2c6c2ce0a48bb701fe164ff69b2ac522222b78596602702c4193796cdaef83ff64",
           "alg": "SHA-512"
         }
       ]
@@ -40,8 +40,8 @@
     {
       "type": "library",
       "name": "CfSharp.Storage.Sqlite",
-      "version": "0.1.0-preview.7",
-      "purl": "pkg:nuget/CfSharp.Storage.Sqlite@0.1.0-preview.7",
+      "version": "0.1.0-preview.8",
+      "purl": "pkg:nuget/CfSharp.Storage.Sqlite@0.1.0-preview.8",
       "licenses": [
         {
           "expression": "Apache-2.0"
@@ -49,7 +49,7 @@
       ],
       "hashes": [
         {
-          "content": "78b88d144dbd6c32a43ee4b7a29c7f20b737ee85208ca6c809fc3d8b82c43266d9dc03d9c98d0a3febcaa5ac8cc81a3d48d0e51f03e1c26ece4fa9eb58a171f6",
+          "content": "9f3e898844f73ca103d4595108d631c0617883d64ff6733b27cca60f6782b1f4f009ec95e4d899ddd1618cf4ab68615ab16e188c0fa6f75852b489d1dd798555",
           "alg": "SHA-512"
         }
       ]
@@ -57,8 +57,8 @@
     {
       "type": "library",
       "name": "CfSharp",
-      "version": "0.1.0-preview.7",
-      "purl": "pkg:nuget/CfSharp@0.1.0-preview.7",
+      "version": "0.1.0-preview.8",
+      "purl": "pkg:nuget/CfSharp@0.1.0-preview.8",
       "licenses": [
         {
           "expression": "Apache-2.0"
@@ -66,7 +66,7 @@
       ],
       "hashes": [
         {
-          "content": "f75d0c46cfb6065726546347c517f9b21f1b2b5668a058d66caaba4c9940b012f4d87f4f0e38b1cf44bbffdbcd09d9d8cde2a0287f3af1ce41c801b3f5fdbe60",
+          "content": "7c9ff9bc4cb8b1982ed44bf0024cbab94598d33a5f7e6b980cb8e842b62102e3db352540845823ba17321b52881ba7c99b20a4aa044647ad003626d5ce179fc9",
           "alg": "SHA-512"
         }
       ]

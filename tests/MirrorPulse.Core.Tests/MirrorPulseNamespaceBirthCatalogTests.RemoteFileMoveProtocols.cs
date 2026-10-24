@@ -12,10 +12,10 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
     [DataRow(true, false)]
     [DataRow(false, true)]
     [DataRow(true, true)]
-    public async Task FileMoveProtocolAdmissionRetainsTheOriginalStartAndPolicyAcrossOwners(bool nullBaseline, bool preview7)
+    public async Task FileMoveProtocolAdmissionRetainsTheOriginalStartAndPolicyAcrossOwners(bool nullBaseline, bool currentPublication)
     {
-        var package = preview7 ? MirrorPulseRemoteLibraryProvenance.CurrentPackageVersion : "0.1.0-preview.6";
-        var source = preview7 ? MirrorPulseRemoteLibraryProvenance.CurrentSourceCommit : ProtocolSource;
+        var package = currentPublication ? MirrorPulseRemoteLibraryProvenance.CurrentPackageVersion : "0.1.0-preview.6";
+        var source = currentPublication ? MirrorPulseRemoteLibraryProvenance.CurrentSourceCommit : ProtocolSource;
         using var fixture = new Fixture(); MoveFixture setup; MirrorPulseRemoteFileMoveProtocolAdmission original;
         await using (var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths))
         {
@@ -39,6 +39,39 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         Assert.AreEqual(setup.Move.Source.RelativePath, (await reopened.ReadNamespaceMemberLocationAsync(setup.Member.MemberId)).RelativePath);
         Assert.IsNull(await reopened.ReadNamespaceMemberMoveCompletionAsync(setup.Move.OperationId));
         Assert.IsNull(await reopened.ReadNamespaceRemoteMoveRejectionAsync(setup.Move.OperationId));
+        Assert.IsFalse(File.Exists(fixture.Paths.CfSharpStateDatabasePath));
+        Assert.IsFalse(Directory.Exists(fixture.Paths.SyncRootPath));
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task Preview7FileMoveProtocolCannotBeReplacedByPreview8AfterReopen(bool nullBaseline)
+    {
+        using var fixture = new Fixture();
+        MoveFixture setup;
+        MirrorPulseRemoteFileMoveProtocolAdmission original;
+        await using (var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths))
+        {
+            setup = await PrepareRemoteRejectableMoveAsync(catalog, start: false);
+            await catalog.RecordNamespaceMemberMoveStartAsync(new(2, setup.Move.OperationId, setup.Move.PreparedAt)
+            { OriginalOfficialRemoteRevision = nullBaseline ? null : "preview7-original-baseline" });
+            original = await catalog.AdmitNamespaceRemoteFileMoveProtocolAsync(setup.Move.OperationId,
+                "0.1.0-preview.7", "137d6e2a9c1b15f337e8e7ca3566d5e3f29fcdb9", OriginalFileMovePolicy, setup.Move.PreparedAt.AddSeconds(1));
+        }
+
+        await using var reopened = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        Assert.AreEqual(original, await reopened.ReadNamespaceRemoteFileMoveProtocolAsync(setup.Move.OperationId));
+        Assert.AreEqual(original, await reopened.AdmitNamespaceRemoteFileMoveProtocolAsync(setup.Move.OperationId,
+            original.PackageVersion, original.PackageSourceCommit, OriginalFileMovePolicy, original.AdmittedAt));
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => reopened.AdmitNamespaceRemoteFileMoveProtocolAsync(setup.Move.OperationId,
+            MirrorPulseRemoteLibraryProvenance.CurrentPackageVersion, MirrorPulseRemoteLibraryProvenance.CurrentSourceCommit,
+            OriginalFileMovePolicy, original.AdmittedAt));
+        Assert.AreEqual(original, await reopened.ReadNamespaceRemoteFileMoveProtocolAsync(setup.Move.OperationId));
+        Assert.AreEqual(original.OriginalStart, await reopened.ReadNamespaceMemberMoveStartAsync(setup.Move.OperationId));
+        Assert.AreEqual(setup.Move, await reopened.ReadPendingNamespaceMemberMoveAsync(setup.Move.RootId));
+        Assert.IsNull(await reopened.ReadNamespaceMemberMoveObservationAsync(setup.Move.OperationId));
+        Assert.IsNull(await reopened.ReadNamespaceMemberMoveCompletionAsync(setup.Move.OperationId));
         Assert.IsFalse(File.Exists(fixture.Paths.CfSharpStateDatabasePath));
         Assert.IsFalse(Directory.Exists(fixture.Paths.SyncRootPath));
     }

@@ -33,11 +33,11 @@ public sealed class MirrorPulseRemoteBirthBatchCoordinatorTests
     [TestMethod]
     [DataRow(false)]
     [DataRow(true)]
-    public void EntryBudgetMayChangeWithoutRewritingTheOriginalBirthPolicy(bool preview7)
+    public void EntryBudgetMayChangeWithoutRewritingTheOriginalBirthPolicy(bool currentPublication)
     {
         var instance = InstanceId.New(); var batch = Batch(instance, Guid.NewGuid()); var options = CloudRemoteApplyOptions.Default;
         var birth = Birth(instance, batch, options);
-        if (preview7) birth = birth with
+        if (currentPublication) birth = birth with
         {
             RemoteEntry = birth.RemoteEntry! with
             { PackageVersion = MirrorPulseRemoteLibraryProvenance.CurrentPackageVersion, PackageSource = MirrorPulseRemoteLibraryProvenance.CurrentSourceCommit }

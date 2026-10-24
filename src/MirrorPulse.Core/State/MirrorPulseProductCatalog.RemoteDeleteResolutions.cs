@@ -40,6 +40,9 @@ public sealed partial class MirrorPulseProductCatalog
                 _ = await ReadNamespaceRetirementBatchCoreAsync(id, transaction, token).ConfigureAwait(false);
                 transaction.Commit(); return existing;
             }
+            if (plan.Decision.PackageVersion != MirrorPulseRemoteLibraryProvenance.CurrentPackageVersion ||
+                plan.Decision.PackageSource != MirrorPulseRemoteLibraryProvenance.CurrentSourceCommit)
+                throw new InvalidOperationException("New explicit deletes require the current reviewed SDK provenance.");
             var decision = await ReadRemoteConflictActionCoreAsync(id, transaction, token).ConfigureAwait(false);
             if (decision is null || decision.Value.Intent != plan.Decision || decision.Value.Receipt is not null)
                 throw new InvalidOperationException("Deletion requires the same pending explicit product decision admission.");
@@ -270,8 +273,8 @@ public sealed partial class MirrorPulseProductCatalog
     {
         ValidateRemoteConflictActionIntent(plan.Decision);
         if (plan.Version != 1 || plan.Decision.Action != MirrorPulseConflictAction.KeepRemote ||
-            plan.Decision.PackageVersion != MirrorPulseRemoteLibraryProvenance.CurrentPackageVersion ||
-            plan.Decision.PackageSource != MirrorPulseRemoteLibraryProvenance.CurrentSourceCommit ||
+            !MirrorPulseRemoteLibraryProvenance.IsSupported(plan.Decision.PackageVersion, plan.Decision.PackageSource) ||
+            plan.Decision.PackageVersion == "0.1.0-preview.6" ||
             plan.RemoteChangeFingerprint is not { Length: 64 } || !plan.RemoteChangeFingerprint.All(char.IsAsciiHexDigitUpper) ||
             plan.Entries.Count is < 1 or > 65_536 || plan.PreparedAt < plan.Decision.Conflict.DetectedAt || plan.Parent is null)
             throw new ArgumentException("Explicit deletion requires a bounded original conflict and complete protected tree.", nameof(plan));

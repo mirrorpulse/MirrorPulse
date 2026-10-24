@@ -34,11 +34,11 @@ public sealed class MirrorPulseRemoteRetirementBatchCoordinatorTests
     [TestMethod]
     [DataRow(false)]
     [DataRow(true)]
-    public void OriginalRemoteDeleteAllowsAChangedTurnBudgetWithoutReplacingItsDurablePolicy(bool preview7)
+    public void OriginalRemoteDeleteAllowsAChangedTurnBudgetWithoutReplacingItsDurablePolicy(bool currentPublication)
     {
         var instance = InstanceId.New(); var batch = Batch(instance, Guid.NewGuid()); var options = CloudRemoteApplyOptions.Default;
         var original = Original(instance, batch, options);
-        if (preview7) original = original with
+        if (currentPublication) original = original with
         {
             RemoteEntry = original.RemoteEntry! with
             { PackageVersion = MirrorPulseRemoteLibraryProvenance.CurrentPackageVersion, PackageSource = MirrorPulseRemoteLibraryProvenance.CurrentSourceCommit }

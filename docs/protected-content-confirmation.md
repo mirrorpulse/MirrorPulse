@@ -2,7 +2,7 @@
 
 ## Status
 
-MirrorPulse is pinned to CfSharp `0.1.0-preview.7`. Both full-rescan and journal
+MirrorPulse is pinned to CfSharp `0.1.0-preview.8`. Both full-rescan and journal
 uploads use its public managed confirmation API through the anti-corruption
 layer. The Host retains the accepted proof before confirmation and does not
 acknowledge local content when native verification or official projection is
