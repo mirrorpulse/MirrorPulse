@@ -319,6 +319,7 @@ try {
     Stop-TransferWebDav
     $phase = 'StoppedHostReceipts'
     $audit = Invoke-TransferProbe -Mode audit
+    Write-TransferOriginal -Name 'stopped-host-receipts' -Value ([ordered]@{sourceSha=$sourceSha;runId=$env:GITHUB_RUN_ID;schemaVersion=$schemaVersion;audit=$audit})
     $report = [ordered]@{schemaVersion=$schemaVersion;sourceSha=$sourceSha;runId=$env:GITHUB_RUN_ID;runtime=$Runtime
         signedInstallation=$true;packageSha256=$installed[0].packageSha256;workerProcessIds=$workerIds.ToArray();privateWorkerRuntime=$true
         roots=$script:transferRoutes;cases=$cases.ToArray();audit=$audit;hostProcessBeforeRestart=$beforeRestart;hostProcessAfterRestart=$afterRestart}

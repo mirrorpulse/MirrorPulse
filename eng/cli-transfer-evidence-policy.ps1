@@ -47,8 +47,11 @@ function Assert-CliTransferObservations {
     if ($caseRoots.Count -ne $rootCount -or @(Compare-Object $caseRoots @($Evidence.roots.rootId)).Count) { throw 'The original command roots disagree with the retained fixture routes.' }
     $caseKeys = if ($singleRoot) { @('Forward', 'Reverse') } else { @('SameInstance', 'CrossInstance') }
     foreach ($key in $caseKeys) {
-        $selected = if ($singleRoot) { @($cases | Where-Object direction -ceq $key) } else { @($cases | Where-Object scope -ceq $key) }
-        $receipt = if ($singleRoot) { @($Evidence.audit.transfers | Where-Object direction -ceq $key) } else { @($Evidence.audit.transfers | Where-Object scope -ceq $key) }
+        # The producer holds live ordered dictionaries; assigning an if result
+        # unwraps a one-element array and exposes the dictionary's field Count.
+        # Capture the complete pipeline so Count always measures matched objects.
+        $selected = @(if ($singleRoot) { $cases | Where-Object direction -ceq $key } else { $cases | Where-Object scope -ceq $key })
+        $receipt = @(if ($singleRoot) { $Evidence.audit.transfers | Where-Object direction -ceq $key } else { $Evidence.audit.transfers | Where-Object scope -ceq $key })
         if ($selected.Count -ne 1 -or $receipt.Count -ne 1) { throw 'Both original transfer scopes must execute exactly once.' }
         $case = $selected[0]; $retained = $receipt[0]; $status = $case.status
         $scope = if ($singleRoot) { 'CrossInstance' } else { $key }

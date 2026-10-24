@@ -230,7 +230,7 @@ public sealed partial class CliTransferEvidencePolicyTests
     private static string Id() => Guid.NewGuid().ToString("D");
 
     private static async Task<(int ExitCode, string Output, string Error)> ExerciseAsync(JsonObject evidence, bool beforeCleanup = false,
-        bool requireSingleRoot = false)
+        bool requireSingleRoot = false, bool liveDictionaries = false, bool liveReceiptDictionaries = false)
     {
         string root = Path.Combine(Path.GetTempPath(), "MirrorPulse-transfer-policy-" + Id()); Directory.CreateDirectory(root);
         try
@@ -238,16 +238,31 @@ public sealed partial class CliTransferEvidencePolicyTests
             string input = Path.Combine(root, "evidence.json"), script = Path.Combine(root, "exercise.ps1");
             await File.WriteAllTextAsync(input, evidence.ToJsonString());
             await File.WriteAllTextAsync(script, """
-                param([string]$Repository,[string]$InputPath,[string]$BeforeCleanup,[string]$RequireSingleRoot)
+                param([string]$Repository,[string]$InputPath,[string]$BeforeCleanup,[string]$RequireSingleRoot,[string]$LiveDictionaries,[string]$LiveReceiptDictionaries)
                 $ErrorActionPreference='Stop'
                 . (Join-Path $Repository 'eng/cli-transfer-evidence-policy.ps1')
                 try {
-                    Assert-CliTransferObservations -Evidence (Get-Content -Raw -LiteralPath $InputPath | ConvertFrom-Json) -BeforeCleanup:($BeforeCleanup -ceq 'True') -RequireSingleRoot:($RequireSingleRoot -ceq 'True')
+                    $evidence = Get-Content -Raw -LiteralPath $InputPath | ConvertFrom-Json
+                    if ($LiveDictionaries -ceq 'True') {
+                        $evidence.cases = @(foreach ($case in $evidence.cases) {
+                            $dictionary = [ordered]@{}
+                            foreach ($property in $case.PSObject.Properties) { $dictionary[$property.Name] = $property.Value }
+                            $dictionary
+                        })
+                    }
+                    if ($LiveReceiptDictionaries -ceq 'True') {
+                        $evidence.audit.transfers = @(foreach ($receipt in $evidence.audit.transfers) {
+                            $dictionary = [ordered]@{}
+                            foreach ($property in $receipt.PSObject.Properties) { $dictionary[$property.Name] = $property.Value }
+                            $dictionary
+                        })
+                    }
+                    Assert-CliTransferObservations -Evidence $evidence -BeforeCleanup:($BeforeCleanup -ceq 'True') -RequireSingleRoot:($RequireSingleRoot -ceq 'True')
                     @{accepted=$true}|ConvertTo-Json -Compress
                 } catch { @{accepted=$false;message=$_.Exception.Message}|ConvertTo-Json -Compress; exit 1 }
                 """);
             var start = new ProcessStartInfo("pwsh") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
-            foreach (string argument in new[] { "-NoProfile", "-File", script, SftpProtocolFixture.FindRepositoryRoot(), input, beforeCleanup.ToString(), requireSingleRoot.ToString() }) start.ArgumentList.Add(argument);
+            foreach (string argument in new[] { "-NoProfile", "-File", script, SftpProtocolFixture.FindRepositoryRoot(), input, beforeCleanup.ToString(), requireSingleRoot.ToString(), liveDictionaries.ToString(), liveReceiptDictionaries.ToString() }) start.ArgumentList.Add(argument);
             using var process = Process.Start(start)!;
             Task<string> output = process.StandardOutput.ReadToEndAsync(), error = process.StandardError.ReadToEndAsync();
             try { await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30)); }
