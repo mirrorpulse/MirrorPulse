@@ -14,6 +14,7 @@ $sourceSha = (& git -C $repository rev-parse HEAD | Out-String).Trim()
 if ($LASTEXITCODE -ne 0 -or $sourceSha -cnotmatch '\A[0-9a-f]{40}\z' -or ($env:GITHUB_SHA -and $sourceSha -cne $env:GITHUB_SHA)) { throw 'The actual CLI transfer source commit could not be bound.' }
 . (Join-Path $PSScriptRoot 'cli-integration-failure-policy.ps1')
 . (Join-Path $PSScriptRoot 'cli-transfer-evidence-policy.ps1')
+. (Join-Path $PSScriptRoot 'cli-transfer-failure-observations.ps1')
 $fixture = Join-Path ([IO.Path]::GetTempPath()) ('MirrorPulse-cli-transfer-' + [guid]::NewGuid().ToString('N'))
 $sync = Join-Path $fixture 'sync'; $data = Join-Path $fixture 'data'
 $evidenceFile = [IO.Path]::GetFullPath($EvidencePath)
@@ -384,6 +385,13 @@ try {
             }
         }
     } catch { Write-Host 'The original transfer startup observer was unavailable.' }
+    try {
+        if ($null -ne $script:transferCli -and (Test-Path -LiteralPath $script:transferCli)) {
+            $followup = Get-CliTransferFailureObservations -CliPath $script:transferCli -SourceSha $sourceSha -RunId $env:GITHUB_RUN_ID `
+                -Phase $phase -RootIds @($script:transferRoutes | ForEach-Object { $_.rootId })
+            Write-TransferOriginal -Name 'failed-sync-observations' -Value $followup
+        }
+    } catch { Write-Host 'The original transfer follow-up observer was unavailable.' }
     throw $primaryFailure
 } finally {
     try {

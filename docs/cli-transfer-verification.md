@@ -72,3 +72,18 @@ Remote polling diagnostics expose only a closed failure boundary and named poll
 stage, preserving the original exception and retry state. They export no remote
 IDs, paths, exception text or stacks. `Unknown` remains an unclassified failure;
 it must not be interpreted as a successful poll or evidence of a library defect.
+
+
+After an actual matrix failure, the verifier also reads public `sync status` and
+the original roots through `root list`, using `--no-start` and a five-second
+request budget per command. The bounded `failed-sync-observations.json` retains
+queue/conflict counts, Worker connection states, blocked operation IDs and known
+reasons, and current root admission/rescan indicators. It omits display names,
+paths, raw errors, exception text and credentials. Missing observations remain
+unavailable; they are not evidence of an empty queue or a ready root.
+
+These reads occur only after the original transfer or byte-check failure. They
+cannot refresh, resume or acknowledge work, change the original deadlines, or
+replace the original error and authenticated cleanup. Their purpose is to
+distinguish a completed transfer from a later edit blocked or queued elsewhere;
+they do not establish the failure's cause or complete an acceptance matrix.
