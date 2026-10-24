@@ -11,11 +11,12 @@ internal sealed class MirrorPulseJournalWindowPlanner(IReadOnlyList<MirrorPulseL
         throw new ArgumentOutOfRangeException(nameof(observationsPerTurn));
     private readonly MirrorPulseLocalBatchPlanBuilder _builder = new(router);
     private int _next;
+    private long _lastSequence;
     private int _reading;
     private bool _failed;
     private MirrorPulseLocalBatchPlan? _plan;
 
-    internal long UpperSequence { get; } = upperSequence;
+    internal long UpperSequence { get; } = upperSequence >= 0 ? upperSequence : throw new ArgumentOutOfRangeException(nameof(upperSequence));
     internal MirrorPulseLocalBatchPlan Plan => _plan ?? throw new InvalidOperationException("Classification and routing are incomplete.");
 
     internal async ValueTask<bool> AdvanceAsync(Func<MirrorPulseLocalChangeObservation, CancellationToken, ValueTask<bool>> include,
@@ -32,7 +33,14 @@ internal sealed class MirrorPulseJournalWindowPlanner(IReadOnlyList<MirrorPulseL
             {
                 token.ThrowIfCancellationRequested();
                 var observation = observations[_next];
+                // Preserve the public reader's strict original order across turns,
+                // including observations settled outside ordinary mapping. The
+                // builder only filters this order; final admission need not sort
+                // and buffer the complete command list a second time.
+                if (observation.Sequence <= _lastSequence || observation.Sequence > UpperSequence)
+                    throw new InvalidDataException("The planning window lost its original finite sequence order.");
                 if (await include(observation, token).ConfigureAwait(false)) _builder.Add(observation);
+                _lastSequence = observation.Sequence;
                 _next++; remaining--;
             }
             // Final dependency projection has its own bounded turn and retains the

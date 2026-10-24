@@ -135,6 +135,63 @@ public sealed class MirrorPulseJournalWindowPlannerTests
     }
 
     [TestMethod]
+    [DataRow(1)]
+    [DataRow(3)]
+    public async Task OriginalSequenceOrderSurvivesHolesRetiredSettlementAndBlockedRoutes(int budget)
+    {
+        var rows = Rows(6);
+        for (int index = 0; index < rows.Length; index++) rows[index] = rows[index] with { Sequence = (index + 1) * 11L };
+        rows[2] = rows[2] with { RelativePath = "Other/disabled.bin" };
+        rows[3] = rows[3] with { Kind = CloudLocalChangeKind.MetadataUpdate };
+        var planner = new MirrorPulseJournalWindowPlanner(rows, Router(), 77, budget);
+        var classified = new List<long>();
+        while (!await planner.AdvanceAsync((row, _) =>
+        {
+            classified.Add(row.Sequence);
+            return ValueTask.FromResult(row.OperationId != rows[1].OperationId);
+        }, default)) { }
+        CollectionAssert.AreEqual(rows.Select(row => row.Sequence).ToArray(), classified.ToArray());
+        CollectionAssert.AreEqual(new[] { rows[0].OperationId, rows[2].OperationId, rows[4].OperationId, rows[5].OperationId },
+            planner.Plan.Commands.Select(command => command.OperationId).ToArray());
+        CollectionAssert.AreEqual(new long[] { 11, 33, 55, 66 }, planner.Plan.Commands.Select(command => command.Sequence).ToArray());
+        CollectionAssert.AreEqual(new[] { rows[3].OperationId }, planner.Plan.RoutedBlockedCommands.Select(command => command.OperationId).ToArray());
+        CollectionAssert.AreEqual(new long[] { 11, 33, 44, 55, 66 }, planner.Plan.CompleteWindow!.Select(command => command.Sequence).ToArray());
+        Assert.AreEqual(77L, planner.UpperSequence);
+    }
+
+    [TestMethod]
+    [DataRow(0L, 3)]
+    [DataRow(-1L, 3)]
+    [DataRow(1L, 3)]
+    [DataRow(4L, 3)]
+    [DataRow(1L, 1)]
+    [DataRow(4L, 1)]
+    public async Task InvalidOriginalSequenceNeverReachesClassificationOrExposesAPartialPlan(long invalid, int budget)
+    {
+        var rows = Rows(2); rows[1] = rows[1] with { Sequence = invalid };
+        var planner = new MirrorPulseJournalWindowPlanner(rows, Router(), 3, budget);
+        var classified = new List<Guid>();
+        async Task AdvanceUntilComplete()
+        {
+            while (!await planner.AdvanceAsync((row, _) =>
+            {
+                classified.Add(row.OperationId);
+                // A settled original still participates in the sequence fence.
+                return ValueTask.FromResult(false);
+            }, default)) { }
+        }
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(AdvanceUntilComplete);
+        CollectionAssert.AreEqual(new[] { rows[0].OperationId }, classified.ToArray());
+        Assert.ThrowsExactly<InvalidOperationException>(() => _ = planner.Plan);
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(async () =>
+            await planner.AdvanceAsync((_, _) => throw new AssertFailedException("A failed window must not classify another observation."), default));
+    }
+
+    [TestMethod]
+    public void NegativeFiniteBoundaryCannotCreateAPlanningOwner() =>
+        Assert.ThrowsExactly<ArgumentOutOfRangeException>(() => new MirrorPulseJournalWindowPlanner([], Router(), -1));
+
+    [TestMethod]
     [DataRow(0)]
     [DataRow(4097)]
     public void InvalidObservationBudgetCannotCreateAPlanningOwner(int budget) =>

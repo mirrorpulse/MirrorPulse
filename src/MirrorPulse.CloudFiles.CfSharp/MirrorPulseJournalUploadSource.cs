@@ -180,7 +180,9 @@ public sealed class MirrorPulseJournalUploadSource
         }
         foreach (var command in plan.RoutedBlockedCommands)
             if (!acceptedMetadata.Contains(command.OperationId)) held.Add(command);
-        foreach (MirrorPulseWorkerChangeCommand command in plan.Commands.OrderBy(command => command.Sequence))
+        // The finite-window planner validates strict source order before routing;
+        // its builder preserves that order while filtering blocked observations.
+        foreach (MirrorPulseWorkerChangeCommand command in plan.Commands)
         {
             RootRegistration root = _router.GetRegistration(command.InstanceId, command.RootKey);
             // A durable namespace owner must get the original notification before any ordinary
