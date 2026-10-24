@@ -64,23 +64,28 @@ public sealed class MirrorPulseJournalPumpRunner
         }
         if (batch.RequiresFullRescan) return false;
         bool progressed = false;
-        MirrorPulseWorkerChangeCommand[] ordered = batch.ReadyCommands.OrderBy(command => command.Sequence).ToArray();
+        IReadOnlyList<MirrorPulseWorkerChangeCommand> ordered = ReferenceEquals(batch.ValidatedSequenceCommands, batch.ReadyCommands)
+            ? batch.ReadyCommands : batch.ReadyCommands.OrderBy(command => command.Sequence).ToArray();
         var routes = ordered.GroupBy(command => (command.InstanceId, command.RootKey))
             .Select(group => (Key: group.Key, Commands: new Queue<MirrorPulseWorkerChangeCommand>(group), Inspected: 0)).ToArray();
         if (routes.Length == 0) return false;
         int route = _nextRoute is { } cursor ? Array.FindIndex(routes, entry => entry.Key == cursor) : 0;
         if (route < 0) route = 0;
+        // Visit each eligible route directly. A root that exhausts its commands
+        // or per-cycle budget leaves this ring, rather than participating in
+        // repeated global Any scans and skipped round-robin turns.
+        var eligibleRoutes = new Queue<int>(routes.Length);
+        for (int offset = 0; offset < routes.Length; offset++) eligibleRoutes.Enqueue((route + offset) % routes.Length);
         var acceptedOperations = new HashSet<Guid>();
         int inspected = 0;
-        while (inspected < _maximumCommandsPerCycle && routes.Any(entry => entry.Commands.Count > 0 && entry.Inspected < _maximumCommandsPerRoot))
+        while (inspected < _maximumCommandsPerCycle && eligibleRoutes.Count > 0)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            int selected = route;
-            route = (route + 1) % routes.Length;
-            _nextRoute = routes[route].Key;
-            if (routes[selected].Commands.Count == 0 || routes[selected].Inspected >= _maximumCommandsPerRoot) continue;
+            int selected = eligibleRoutes.Dequeue();
+            _nextRoute = routes[(selected + 1) % routes.Length].Key;
             MirrorPulseWorkerChangeCommand command = routes[selected].Commands.Dequeue();
             routes[selected].Inspected++;
+            if (routes[selected].Commands.Count > 0 && routes[selected].Inspected < _maximumCommandsPerRoot) eligibleRoutes.Enqueue(selected);
             inspected++;
             // An earlier operation outside this cycle's budget still fences its
             // affected objects/subtree. Round-robin ordering is safe only for

@@ -17,6 +17,11 @@ public sealed record MirrorPulseJournalUploadBatch(
     public long WindowUpperSequence { get; init; }
     public bool ScanInProgress { get; init; }
     public bool PlanningInProgress { get; init; }
+
+    // Only the finite-window source supplies this exact immutable list after
+    // validating its original sequence. A copied batch with different ready
+    // commands must take the ordinary ordering path again.
+    internal IReadOnlyList<MirrorPulseWorkerChangeCommand>? ValidatedSequenceCommands { get; init; }
 }
 
 /// <summary>
@@ -242,8 +247,10 @@ public sealed class MirrorPulseJournalUploadSource
             }
         }
 
-        return new(ready.AsReadOnly(), deferred, false)
+        var readyCommands = ready.AsReadOnly();
+        return new(readyCommands, deferred, false)
         {
+            ValidatedSequenceCommands = readyCommands,
             CompleteWindow = plan.CompleteWindow is { } window ?
                 Array.AsReadOnly(window.Where(command => !acceptedMetadata.Contains(command.OperationId)).ToArray()) : null,
             WindowUpperSequence = upperSequence,
