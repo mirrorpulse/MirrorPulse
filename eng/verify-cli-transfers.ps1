@@ -94,7 +94,14 @@ function Wait-TransferHash {
     param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Expected)
     $deadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
     do {
-        if ((Test-Path -LiteralPath $Path -PathType Leaf) -and (Read-TransferHash $Path) -ieq $Expected) { return }
+        try {
+            if ((Test-Path -LiteralPath $Path -PathType Leaf) -and (Read-TransferHash $Path) -ieq $Expected) { return }
+        } catch [IO.IOException] {
+            # An in-flight conditional upload can temporarily exclude this read.
+            # Keep the original deadline and whole-file hash requirement; other
+            # I/O failures retain their original error instead of becoming waits.
+            if ($_.Exception.HResult -notin @(-2147024864, -2147024863)) { throw }
+        }
         Start-Sleep -Milliseconds 100
     } while ([DateTimeOffset]::UtcNow -lt $deadline)
     throw ('The actual transfer or later user write did not produce its expected complete source bytes. Phase=' + $phase + '; exists=' + (Test-Path -LiteralPath $Path) + '.')
