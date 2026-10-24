@@ -23,15 +23,16 @@ public sealed partial class MirrorPulseProductCatalog
         try
         {
             ThrowIfDisposed(); using var transaction = _connection.BeginTransaction();
-            var history = await ReadBornMemberRecoveryHistoryCoreAsync(action.Child.Member.MemberId, transaction, cancellationToken).ConfigureAwait(false);
-            var replay = history.SingleOrDefault(value => value.ActionId == action.ActionId);
+            var history = await ReadBornMemberRecoverySummaryCoreAsync(action.Child.Member.MemberId, transaction, cancellationToken,
+                selectedActionId: action.ActionId).ConfigureAwait(false);
+            var replay = history.Selected;
             if (replay is not null)
             {
                 if (!SameNamespaceReplacementPayload(replay, action)) throw new InvalidOperationException("The born recovery action is immutable.");
                 transaction.Commit(); return replay;
             }
-            if (history.Count >= 4096 || action.PreviousActionId != (history.Count == 0 ? null : (Guid?)history[^1].ActionId) ||
-                history.Count != 0 && action.PreparedAt <= history[^1].PreparedAt)
+            if (history.Count >= 4096 || action.PreviousActionId != history.Latest?.ActionId ||
+                history.Count != 0 && action.PreparedAt <= history.Latest!.PreparedAt)
                 throw new InvalidOperationException("Born recovery must extend its bounded immutable action chain.");
             await RequireBornMemberRecoveryCurrentAsync(action, transaction, cancellationToken).ConfigureAwait(false);
             if (await ReadNamespaceBirthProtectionRowAsync(action.ActionId, transaction, cancellationToken).ConfigureAwait(false) is not null)
@@ -96,8 +97,8 @@ public sealed partial class MirrorPulseProductCatalog
         {
             ThrowIfDisposed(); using var transaction = _connection.BeginTransaction(deferred: true);
             var action = await RequireBornMemberRecoveryActionCoreAsync(actionId, transaction, cancellationToken).ConfigureAwait(false);
-            var history = await ReadBornMemberRecoveryHistoryCoreAsync(action.Child.Member.MemberId, transaction, cancellationToken).ConfigureAwait(false);
-            if (history[^1].ActionId != actionId || await ReadBornMemberRecoveryCompletionCoreAsync(actionId, action, transaction, cancellationToken).ConfigureAwait(false) is not null)
+            var history = await ReadBornMemberRecoverySummaryCoreAsync(action.Child.Member.MemberId, transaction, cancellationToken).ConfigureAwait(false);
+            if (history.Latest?.ActionId != actionId || await ReadBornMemberRecoveryCompletionCoreAsync(actionId, action, transaction, cancellationToken).ConfigureAwait(false) is not null)
                 throw new InvalidOperationException("Native execution requires the latest unfinished born recovery action.");
             await RequireBornMemberRecoveryCurrentAsync(action, transaction, cancellationToken).ConfigureAwait(false);
             transaction.Commit(); return action;

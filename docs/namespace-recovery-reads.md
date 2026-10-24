@@ -26,8 +26,11 @@ capacity. A new transaction starts without prior cached facts.
 
 This does not bound total SQL work, all process memory or complete P083. Each
 cached graph still follows its existing payload/member limits. Born-member
-validation loads one bounded original history, and public history APIs retain
-their requested results. Cache misses can repeat validation; per-turn work and
+recovery scans action sequences in pages of 16, validating every original action,
+predecessor, initialization, reference, completion, head and pending reservation.
+Internal callers retain the latest and optional selected action while validating
+the current row. The existing 4096-action history limit stays unchanged. Public
+history queries still return their complete requested original actions. Cache misses can repeat validation; per-turn work and
 fairness require separate limits.
 Managed-root rename discovery, move-root IDs, unregistered birth discovery,
 root sorting, total catalog work per turn and complete fairness still require

@@ -25,8 +25,8 @@ public sealed partial class MirrorPulseProductCatalog
                     throw new InvalidOperationException("The born recovery completion is immutable.");
                 transaction.Commit(); return replay;
             }
-            var history = await ReadBornMemberRecoveryHistoryCoreAsync(action.Child.Member.MemberId, transaction, cancellationToken).ConfigureAwait(false);
-            if (history[^1].ActionId != actionId) throw new InvalidOperationException("A superseded born recovery action cannot complete.");
+            var history = await ReadBornMemberRecoverySummaryCoreAsync(action.Child.Member.MemberId, transaction, cancellationToken).ConfigureAwait(false);
+            if (history.Latest?.ActionId != actionId) throw new InvalidOperationException("A superseded born recovery action cannot complete.");
             await RequireBornMemberRecoveryCurrentAsync(action, transaction, cancellationToken).ConfigureAwait(false);
             RequireBornMemberRecoveryProjection(action, protection, completion);
             await RecordNamespaceBirthProtectionCoreAsync(protection, transaction, cancellationToken,

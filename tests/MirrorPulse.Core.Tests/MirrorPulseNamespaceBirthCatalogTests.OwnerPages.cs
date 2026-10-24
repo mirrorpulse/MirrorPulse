@@ -66,7 +66,8 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
                 "update" => "namespace_remote_updates",
                 _ => "namespace_born_member_recovery_actions"
             };
-            var pages = statements.Where(sql => sql.Contains("FROM " + table, StringComparison.Ordinal) &&
+            var pages = statements.Where(sql => sql.StartsWith(kind == "born" ? "SELECT member_id FROM (" : "SELECT operation_id FROM ", StringComparison.Ordinal) &&
+                sql.Contains("FROM " + table, StringComparison.Ordinal) &&
                 sql.Contains("LIMIT 16", StringComparison.Ordinal) && !sql.Contains("WHERE operation_id=", StringComparison.Ordinal)).ToArray();
             Assert.HasCount(2, pages, "Seventeen actual original owners must be read through two bounded ID pages.");
             Assert.AreEqual(originals, await ReadOwnerPageOriginalsAsync(fixture.Paths));
