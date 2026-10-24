@@ -88,6 +88,18 @@ progress, safe cursors and root admission remain separate verified boundaries.
 
 ## Migration and current limits
 
+The product's Adapter cursor must follow each incoming batch's original cursor
+boundary. Once a later batch advances that checkpoint, submitting an older batch
+through the current product apply path is rejected. An old completed SDK receipt
+cannot move the current product checkpoint backwards.
+
+The native generation verifier also replays the exact completed batch through the
+public SDK. It first checks its original applied progress, cursor and fingerprint,
+then verifies that replay preserves the successor's native identity, the old
+tombstone and the original product decision receipt. The later product cursor
+must stay unchanged. This SDK history check supplies no new incoming admission;
+complete incoming protocol and recovery acceptance remain separate obligations.
+
 The migrations preserve existing generation and retirement history. Missing or
 malformed required tables and populated future tables in an older catalog reject
 opening. A newer catalog cannot be opened by an older Host. Preserve a stopped

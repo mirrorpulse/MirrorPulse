@@ -134,7 +134,27 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 {
                     if (owner == 2)
                     {
-                        Assert.AreEqual(CloudRemoteBatchStatus.Applied, (await coordinator.ApplyAsync(root.InstanceId, deleteBatch, cancellationToken: deadline.Token)).Status);
+                        CollectionAssert.AreEqual(new byte[] { 3 }, (await coordinator.ReadCursorAsync(root.InstanceId, deadline.Token))!.Value.ToArray());
+                        await using (var history = await state.OpenStore.BeginTransactionAsync(deadline.Token))
+                        {
+                            var applied = (await history.RemoteBatches.GetAsync(deleteBatch.BatchId, deadline.Token))!;
+                            Assert.AreEqual(CloudRemoteBatchStatus.Applied, applied.Status);
+                            Assert.AreEqual(deleteBatch.Changes.Count, applied.AppliedEntryCount);
+                            CollectionAssert.AreEqual(deleteBatch.FinalCursor.ToArray(), applied.Cursor.ToArray());
+                            CollectionAssert.AreEqual(deleteBatch.Fingerprint.ToArray(), applied.Fingerprint.ToArray());
+                            await history.RollbackAsync(deadline.Token);
+                        }
+                        var stale = await Assert.ThrowsExactlyAsync<InvalidDataException>(() => coordinator.ApplyAsync(root.InstanceId, deleteBatch,
+                            cancellationToken: deadline.Token).AsTask());
+                        Assert.AreEqual("The Adapter batch does not follow its durable CfSharp cursor.", stale.Message);
+                        // The original SDK receipt is historical. It cannot become today's
+                        // product cursor or authorize another native deletion of the successor.
+                        var historical = await fileSystem.ApplyRemoteChangesAsync(deleteBatch, cancellationToken: deadline.Token);
+                        Assert.AreEqual(CloudRemoteBatchStatus.Applied, historical.Status);
+                        Assert.IsFalse(historical.RequiresRetry);
+                        Assert.AreEqual(deleteBatch.Changes.Count, historical.AppliedEntryCount);
+                        CollectionAssert.AreEqual(deleteBatch.FinalCursor.ToArray(), historical.SafeCursor.ToArray());
+                        CollectionAssert.AreEqual(new byte[] { 3 }, (await coordinator.ReadCursorAsync(root.InstanceId, deadline.Token))!.Value.ToArray());
                         var resolver = new MirrorPulseRemoteIdentityResolver(catalog);
                         var restored = await resolver.ResolveAsync(root, "retire-original", "later-v3", deadline.Token);
                         Assert.AreEqual(successor.ItemId, restored.ItemId); Assert.AreEqual(successor.RemoteId, restored.RemoteId);
@@ -222,7 +242,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             if (recreate) TestContext.WriteLine($"RemoteDeletionGeneration: directory={directoryItem}; threeProductAndSdkOwners=True; " +
                 $"originalItem={identity.ItemId:D}; successorItem={successor.ItemId:D}; differentNativeMember=True; oldCallbackRejected=True; " +
                 "originalDeleteReplayPreservedSuccessor=True; originalSdkTombstoneAndBatchRetained=True; " +
-                "defaultDeleteConflictPreserved=True; explicitKeepRemote=True; separateDecisionReceiptRetained=True; providerReads=0.");
+                "defaultDeleteConflictPreserved=True; explicitKeepRemote=True; separateDecisionReceiptRetained=True; " +
+                "staleProductCursorRejected=True; sdkHistoricalReplay=True; currentCursorPreserved=True; providerReads=0.");
         }
         finally
         {
