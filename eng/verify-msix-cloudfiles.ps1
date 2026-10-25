@@ -11,6 +11,7 @@ param(
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot 'installed-startup-diagnostics.ps1')
 . (Join-Path $PSScriptRoot 'installed-shell-observations.ps1')
+. (Join-Path $PSScriptRoot 'installed-shell-process-boundary.ps1')
 if (-not $IsWindows) {
     throw "MSIX Cloud Files verification requires Windows."
 }
@@ -216,7 +217,8 @@ catch {
             $directory=[IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($EvidencePath))
             New-Item -ItemType Directory -Path $directory -Force|Out-Null
             [ordered]@{schemaVersion=1;sourceSha=$env:GITHUB_SHA;runId=$env:GITHUB_RUN_ID;runtime=$Runtime;
-                phase='Shell';verified=$false;shellRegistration=$false;entryPointVerified=$shellEntryPointVerified;outputPrepared=$shellOutputPrepared;attemptedAt=$shellAttemptedAt.ToString('O');probe=$observation}|
+                phase='Shell';verified=$false;shellRegistration=$false;entryPointVerified=$shellEntryPointVerified;outputPrepared=$shellOutputPrepared;attemptedAt=$shellAttemptedAt.ToString('O');probe=$observation;
+                processBoundary=(Get-InstalledShellProbeProcessBoundary -Process $probeProcess)}|
                 ConvertTo-Json -Depth 5|Set-Content -LiteralPath (Join-Path $directory 'installed-shell-failure.json') -Encoding utf8
             Write-Host 'Installed Shell failure observations retained.'
         } catch { Write-Host 'Installed Shell observations were unavailable; the original verification failure is retained.' }
