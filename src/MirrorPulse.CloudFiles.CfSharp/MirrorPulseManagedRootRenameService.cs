@@ -29,8 +29,7 @@ public sealed class MirrorPulseManagedRootRenameService
         CancellationToken cancellationToken = default)
     {
         if (operationId == Guid.Empty) throw new ArgumentException("A root rename operation ID is required.", nameof(operationId));
-        MirrorPulseRootRenameIntent intent = (await _catalog.ReadManagedRootRenameHistoryAsync(cancellationToken).ConfigureAwait(false))
-            .Select(item => item.Intent).SingleOrDefault(item => item.OperationId == operationId)
+        MirrorPulseRootRenameIntent intent = (await _catalog.ReadManagedRootRenameHistoryAsync(operationId, cancellationToken).ConfigureAwait(false))?.Intent
             ?? throw new FileNotFoundException("The root rename history is not registered.");
         RootRegistration root = (await _catalog.ReadAdapterTopologyAsync(cancellationToken).ConfigureAwait(false))
             .Roots.SingleOrDefault(item => item.RootId == intent.RootId)

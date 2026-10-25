@@ -106,8 +106,7 @@ public sealed class MirrorPulseManagedRootRenameCoordinator
     }
 
     private async ValueTask<MirrorPulseRootRenameHistory> ReadAsync(Guid operationId, CancellationToken token) =>
-        (await _catalog.ReadManagedRootRenameHistoryAsync(token).ConfigureAwait(false))
-            .SingleOrDefault(item => item.Intent.OperationId == operationId)
+        await _catalog.ReadManagedRootRenameHistoryAsync(operationId, token).ConfigureAwait(false)
         ?? throw new FileNotFoundException("The root rename history is not registered.");
 
     private async ValueTask RefreshRouterAsync(CancellationToken token) =>

@@ -7,7 +7,7 @@ using MirrorPulse.Core.State;
 namespace MirrorPulse.Core.Tests;
 
 [TestClass]
-public sealed class MirrorPulseRootRenameHistoryIntegrityTests
+public sealed partial class MirrorPulseRootRenameHistoryIntegrityTests
 {
     [TestMethod]
     [DataRow("owner-root")]

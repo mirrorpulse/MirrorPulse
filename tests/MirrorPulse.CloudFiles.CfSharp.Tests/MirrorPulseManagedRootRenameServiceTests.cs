@@ -8,7 +8,7 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 
 [TestClass]
 [SupportedOSPlatform("windows10.0.19041")]
-public sealed class MirrorPulseManagedRootRenameServiceTests
+public sealed partial class MirrorPulseManagedRootRenameServiceTests
 {
     [TestMethod]
     public async Task RecoveryWaitsForItsInstanceWhileAnotherInstanceProgresses()

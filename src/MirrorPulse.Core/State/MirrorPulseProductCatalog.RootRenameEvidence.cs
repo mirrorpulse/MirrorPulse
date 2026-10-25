@@ -16,6 +16,20 @@ public sealed record MirrorPulseRootRenameHistory(MirrorPulseRootRenameIntent In
 
 public sealed partial class MirrorPulseProductCatalog
 {
+    /// <summary>Reads one original operation without enumerating other roots or historical receipts.</summary>
+    public async Task<MirrorPulseRootRenameHistory?> ReadManagedRootRenameHistoryAsync(Guid operationId,
+        CancellationToken cancellationToken = default)
+    {
+        if (operationId == Guid.Empty) throw new ArgumentException("A root rename operation ID is required.", nameof(operationId));
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            return await FindManagedRootRenameHistoryCoreAsync(operationId, cancellationToken).ConfigureAwait(false);
+        }
+        finally { _gate.Release(); }
+    }
+
     public async Task<IReadOnlyList<MirrorPulseRootRenameHistory>> ReadManagedRootRenameHistoryAsync(
         CancellationToken cancellationToken = default)
     {
@@ -34,6 +48,11 @@ public sealed partial class MirrorPulseProductCatalog
     }
 
     private async Task<MirrorPulseRootRenameHistory> ReadManagedRootRenameHistoryCoreAsync(Guid operationId,
+        CancellationToken token, SqliteTransaction? transaction = null) =>
+        await FindManagedRootRenameHistoryCoreAsync(operationId, token, transaction).ConfigureAwait(false)
+        ?? throw new FileNotFoundException("The root rename history is not registered.");
+
+    private async Task<MirrorPulseRootRenameHistory?> FindManagedRootRenameHistoryCoreAsync(Guid operationId,
         CancellationToken token, SqliteTransaction? transaction = null)
     {
         await using SqliteCommand query = _connection.CreateCommand();
@@ -41,7 +60,7 @@ public sealed partial class MirrorPulseProductCatalog
         query.CommandText = "SELECT payload, proof, observation, root_id, operation_id FROM managed_root_rename_history WHERE operation_id=$operation;";
         query.Parameters.AddWithValue("$operation", operationId.ToString());
         await using SqliteDataReader reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
-        if (!await reader.ReadAsync(token).ConfigureAwait(false)) throw new FileNotFoundException("The root rename history is not registered.");
+        if (!await reader.ReadAsync(token).ConfigureAwait(false)) return null;
         return ReadRenameHistory(reader);
     }
 

@@ -1346,8 +1346,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
             var service = _rootRenames ?? throw new NotSupportedException("The managed root recovery service is unavailable.");
             using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _admissionShutdown.Token);
-            var intent = (await catalog!.ReadManagedRootRenameHistoryAsync(stop.Token).ConfigureAwait(false))
-                .SingleOrDefault(history => history.Intent.OperationId == operationId)?.Intent
+            var intent = (await catalog!.ReadManagedRootRenameHistoryAsync(operationId, stop.Token).ConfigureAwait(false))?.Intent
                 ?? throw new FileNotFoundException("The root rename history is not registered.");
             await using var admission = namespaceWork is null ? null : await namespaceWork.EnterPendingOperationAsync(intent.RootId, stop.Token).ConfigureAwait(false);
             return await service.RecoverAsync(operationId, stop.Token).ConfigureAwait(false);

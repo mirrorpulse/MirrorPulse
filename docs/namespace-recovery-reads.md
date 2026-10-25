@@ -36,3 +36,12 @@ Managed-root rename discovery, move-root IDs, unregistered birth discovery,
 root sorting, total catalog work per turn and complete fairness still require
 their own bounds. The default Host must continue using its shared admission,
 namespace actor and current native verification before dispatch.
+
+An individual managed-root rename recovery now selects its original operation
+through the indexed catalog key in the Host, scheduler service and public-proof
+coordinator. It validates the same indexed owner, original proof and observation
+without loading another root's history. A missing operation returns no record;
+corruption in the selected record still fails. The complete history API retains
+all requested original records and continues to report corruption. Startup still
+requests the complete discovery inventory; only each selected recovery uses the
+point lookup. This does not establish bounded pending discovery or complete P083.
