@@ -8,6 +8,9 @@ function New-InstalledShellProbeStartInfo {
     $start.CreateNoWindow=$true
     $start.WindowStyle=[Diagnostics.ProcessWindowStyle]::Hidden
     $start.Environment['MIRRORPULSE_PACKAGED_SHELL_PROBE_RESULT']=$ResultPath
+    # Native apphost errors precede CLR/SDK initialization. Preserve their exit
+    # code instead of waiting for a dialog in this disposable CI child.
+    $start.Environment['DOTNET_DISABLE_GUI_ERRORS']='1'
     return $start
 }
 

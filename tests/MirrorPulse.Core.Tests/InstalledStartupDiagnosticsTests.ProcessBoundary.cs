@@ -3,6 +3,7 @@ namespace MirrorPulse.Core.Tests;
 public sealed partial class InstalledStartupDiagnosticsTests
 {
     [TestMethod]
+    [DoNotParallelize] // Cold PowerShell/native interop compilation shares the original 30-second process deadline.
     [DataRow("missing")]
     [DataRow("disposed")]
     [DataRow("running")]

@@ -8,10 +8,13 @@ public sealed partial class InstalledStartupDiagnosticsTests
     {
         await RunSharedShellOutputProbeAsync("environment", """
             $executable=Join-Path $Directory 'app with spaces.exe'
+            $parentGuiErrors=[Environment]::GetEnvironmentVariable('DOTNET_DISABLE_GUI_ERRORS')
             $start=New-InstalledShellProbeStartInfo -ExecutablePath $executable -ResultPath $resultPath
             if ($start.FileName -cne $executable -or $start.UseShellExecute -or -not $start.CreateNoWindow -or
                 $start.WindowStyle -ne [Diagnostics.ProcessWindowStyle]::Hidden -or
                 $start.Environment['MIRRORPULSE_PACKAGED_SHELL_PROBE_RESULT'] -cne $resultPath -or
+                $start.Environment['DOTNET_DISABLE_GUI_ERRORS'] -cne '1' -or
+                [Environment]::GetEnvironmentVariable('DOTNET_DISABLE_GUI_ERRORS') -cne $parentGuiErrors -or
                 $start.ArgumentList.Count -ne 0 -or $start.Arguments.Length -ne 0) {
                 throw 'The observed executable must receive its exact private output environment without shell activation or command interpolation.'
             }
@@ -117,13 +120,14 @@ public sealed partial class InstalledStartupDiagnosticsTests
             """);
     }
 
-    private static async Task RunSharedShellOutputProbeAsync(string scenario, string body)
+    private static async Task RunSharedShellOutputProbeAsync(string scenario, string body, Func<string, Task>? prepare = null)
     {
         string prefix = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "MirrorPulse-installed-diagnostics-tests"));
         string directory = Path.Combine(prefix, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
         try
         {
+            if (prepare is not null) await prepare(directory);
             string script = Path.Combine(directory, "verify.ps1");
             await File.WriteAllTextAsync(script, """
                 param([string]$Policy,[string]$Directory,[string]$Scenario)
