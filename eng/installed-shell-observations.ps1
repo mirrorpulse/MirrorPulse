@@ -35,5 +35,43 @@ function Get-InstalledShellProbeObservation {
     } catch [System.Management.Automation.ItemNotFoundException] { $resultState='Missing' }
     catch { $resultState='Unreadable' }
     # No process path, arbitrary probe text, exception, user label or credential.
-    [pscustomobject]@{processState=$processState;exitCode=$exitCode;resultState=$resultState;failureHResult=$failureHResult}
+    $progress=Get-InstalledShellProbeStage -ResultPath $ResultPath
+    [pscustomobject]@{processState=$processState;exitCode=$exitCode;resultState=$resultState;failureHResult=$failureHResult;
+        stageState=$progress.state;stage=$progress.stage}
+}
+
+function Get-InstalledShellProbeStage {
+    param([Parameter(Mandatory)][string]$ResultPath)
+    $state='Missing';$stage=$null
+    try {
+        $file=Get-Item -LiteralPath ($ResultPath+'.progress') -Force -ErrorAction Stop
+        if (($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { $state='Linked' }
+        elseif ($file.PSIsContainer) { $state='Invalid' }
+        elseif ($file.Length -gt 128) { $state='TooLarge' }
+        else {
+            $stream=[IO.File]::Open($file.FullName,[IO.FileMode]::Open,[IO.FileAccess]::Read,
+                [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
+            try {
+                $bytes=[byte[]]::new(129);$count=$stream.Read($bytes,0,$bytes.Length)
+                if ($count -gt 128) { $state='TooLarge' }
+                else {
+                    $value=[Text.Encoding]::UTF8.GetString($bytes,0,$count)
+                    $known=@('AppConstructing','AppInitialized','AppLaunched','ProbeSelected','ProbeEntered',
+                        'PackageValidated','RootCreated','CustomRegistrationStarted','CustomRegistrationCompleted',
+                        'CustomReadbackStarted','CustomReadbackVerified','UnifiedRegistrationStarted',
+                        'UnifiedRegistrationCompleted','UnifiedReadbackStarted','UnifiedReadbackVerified',
+                        'WritingSuccess','SuccessWritten','FailureHandling','MinimalFolderStarted','MinimalFolderReady',
+                        'MinimalRegistrationStarted','MinimalRegistrationCompleted','MinimalReadbackStarted',
+                        'MinimalReadbackCompleted','MinimalUnregisterStarted','MinimalUnregisterCompleted',
+                        'WritingFailure','FailureWritten','UnregisterStarted','UnregisterCompleted',
+                        'DirectoryCleanupStarted','DirectoryCleanupCompleted','Exiting')
+                    if ($value.StartsWith('1:',[StringComparison]::Ordinal) -and $value.Substring(2) -cin $known) {
+                        $state='Observed';$stage=$value.Substring(2)
+                    } else { $state='Invalid' }
+                }
+            } finally { $stream.Dispose() }
+        }
+    } catch [System.Management.Automation.ItemNotFoundException] { $state='Missing' }
+    catch { $state='Unreadable' }
+    [pscustomobject]@{state=$state;stage=$stage}
 }

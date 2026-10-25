@@ -3,7 +3,7 @@ using System.Diagnostics;
 namespace MirrorPulse.Core.Tests;
 
 [TestClass]
-public sealed class InstalledStartupDiagnosticsTests
+public sealed partial class InstalledStartupDiagnosticsTests
 {
     [TestMethod]
     [DataRow("valid")]

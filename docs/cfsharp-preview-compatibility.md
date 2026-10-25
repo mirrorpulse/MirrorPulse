@@ -97,6 +97,12 @@ the complete protocol/file-operation release matrix remains open.
 
 ## Validation
 
+The disposable installed Shell probe retains bounded fixed-stage progress separately
+from its required result. On a missing result, failure evidence distinguishes App
+initialization, custom and unified Shell registration/readback, and the minimal
+registration fallback. Unknown, linked or oversized progress is rejected. Progress
+never establishes registration success or extends the original result deadline.
+
 The default CI gate runs locked restore, formatting, platform checks, Release
 build and tests, and Host publishes for both architectures. On a Windows machine
 with Cloud Files support, run `pwsh ./eng/verify-native.ps1` after the Release

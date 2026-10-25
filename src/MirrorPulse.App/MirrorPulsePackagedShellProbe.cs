@@ -11,6 +11,7 @@ internal static class MirrorPulsePackagedShellProbe
 {
     public static async Task RunAsync(string resultPath, App app)
     {
+        MirrorPulsePackagedShellProbeProgress.Record(resultPath, MirrorPulsePackagedShellProbeStage.ProbeEntered);
         string root = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
             "MirrorPulse-packaged-shell",
@@ -23,11 +24,16 @@ internal static class MirrorPulsePackagedShellProbe
                 throw new InvalidOperationException("The Shell probe process has the wrong package identity.");
             }
 
+            MirrorPulsePackagedShellProbeProgress.Record(resultPath, MirrorPulsePackagedShellProbeStage.PackageValidated);
             Directory.CreateDirectory(root);
+            MirrorPulsePackagedShellProbeProgress.Record(resultPath, MirrorPulsePackagedShellProbeStage.RootCreated);
             var definition = new MirrorPulseSyncRootDefinition(root, "0.1.0",
                 Guid.Parse("89f1747b-62aa-48bd-a725-e33f20c271a5"), [1, 2, 3]);
             profile = MirrorPulseShellSyncRootRegistrar.CreateCurrentUserProfile(definition, "Personal drive");
+            MirrorPulsePackagedShellProbeProgress.Record(resultPath, MirrorPulsePackagedShellProbeStage.CustomRegistrationStarted);
             await MirrorPulseShellSyncRootRegistrar.RegisterAsync(profile);
+            MirrorPulsePackagedShellProbeProgress.Record(resultPath, MirrorPulsePackagedShellProbeStage.CustomRegistrationCompleted);
+            MirrorPulsePackagedShellProbeProgress.Record(resultPath, MirrorPulsePackagedShellProbeStage.CustomReadbackStarted);
             StorageProviderSyncRootInfo custom = StorageProviderSyncRootManager
                 .GetSyncRootInformationForId(profile.RegistrationId);
             if (custom.DisplayNameResource != "Personal drive")
@@ -36,7 +42,11 @@ internal static class MirrorPulsePackagedShellProbe
             }
 
             profile = MirrorPulseShellSyncRootRegistrar.CreateCurrentUserProfile(definition, "MirrorPulse");
+            MirrorPulsePackagedShellProbeProgress.Record(resultPath, MirrorPulsePackagedShellProbeStage.CustomReadbackVerified);
+            MirrorPulsePackagedShellProbeProgress.Record(resultPath, MirrorPulsePackagedShellProbeStage.UnifiedRegistrationStarted);
             await MirrorPulseShellSyncRootRegistrar.RegisterAsync(profile);
+            MirrorPulsePackagedShellProbeProgress.Record(resultPath, MirrorPulsePackagedShellProbeStage.UnifiedRegistrationCompleted);
+            MirrorPulsePackagedShellProbeProgress.Record(resultPath, MirrorPulsePackagedShellProbeStage.UnifiedReadbackStarted);
             StorageProviderSyncRootInfo unified = StorageProviderSyncRootManager
                 .GetSyncRootInformationForId(profile.RegistrationId);
             if (unified.DisplayNameResource != "MirrorPulse")
@@ -44,14 +54,20 @@ internal static class MirrorPulsePackagedShellProbe
                 throw new InvalidDataException("The unified Shell label did not appear.");
             }
 
+            MirrorPulsePackagedShellProbeProgress.Record(resultPath, MirrorPulsePackagedShellProbeStage.UnifiedReadbackVerified);
+            MirrorPulsePackagedShellProbeProgress.Record(resultPath, MirrorPulsePackagedShellProbeStage.WritingSuccess);
             await File.WriteAllTextAsync(resultPath, "success");
+            MirrorPulsePackagedShellProbeProgress.Record(resultPath, MirrorPulsePackagedShellProbeStage.SuccessWritten);
         }
         catch (Exception exception)
         {
-            string minimalResult = await TryMinimalRegistrationAsync(root);
+            MirrorPulsePackagedShellProbeProgress.Record(resultPath, MirrorPulsePackagedShellProbeStage.FailureHandling);
+            string minimalResult = await TryMinimalRegistrationAsync(root, resultPath);
+            MirrorPulsePackagedShellProbeProgress.Record(resultPath, MirrorPulsePackagedShellProbeStage.WritingFailure);
             await File.WriteAllTextAsync(resultPath,
                 $"failure: 0x{exception.HResult:X8} {exception.GetType().Name}: {exception.Message}; " +
                 $"minimal registration: {minimalResult}");
+            MirrorPulsePackagedShellProbeProgress.Record(resultPath, MirrorPulsePackagedShellProbeStage.FailureWritten);
         }
         finally
         {
@@ -59,7 +75,9 @@ internal static class MirrorPulsePackagedShellProbe
             {
                 try
                 {
+                    MirrorPulsePackagedShellProbeProgress.Record(resultPath, MirrorPulsePackagedShellProbeStage.UnregisterStarted);
                     MirrorPulseShellSyncRootRegistrar.Unregister(profile);
+                    MirrorPulsePackagedShellProbeProgress.Record(resultPath, MirrorPulsePackagedShellProbeStage.UnregisterCompleted);
                 }
                 catch (Exception)
                 {
@@ -68,14 +86,17 @@ internal static class MirrorPulsePackagedShellProbe
 
             if (Directory.Exists(root))
             {
+                MirrorPulsePackagedShellProbeProgress.Record(resultPath, MirrorPulsePackagedShellProbeStage.DirectoryCleanupStarted);
                 Directory.Delete(root, recursive: true);
+                MirrorPulsePackagedShellProbeProgress.Record(resultPath, MirrorPulsePackagedShellProbeStage.DirectoryCleanupCompleted);
             }
 
+            MirrorPulsePackagedShellProbeProgress.Record(resultPath, MirrorPulsePackagedShellProbeStage.Exiting);
             app.Exit();
         }
     }
 
-    private static async Task<string> TryMinimalRegistrationAsync(string root)
+    private static async Task<string> TryMinimalRegistrationAsync(string root, string resultPath)
     {
         string path = Path.Combine(root, "minimal");
         string? registrationId = null;
@@ -86,7 +107,9 @@ internal static class MirrorPulsePackagedShellProbe
             string sid = WindowsIdentity.GetCurrent().User?.Value
                 ?? throw new InvalidOperationException("The Shell probe user has no SID.");
             registrationId = $"MirrorPulseProbe!{sid}!Minimum";
+            MirrorPulsePackagedShellProbeProgress.Record(resultPath, MirrorPulsePackagedShellProbeStage.MinimalFolderStarted);
             StorageFolder folder = await StorageFolder.GetFolderFromPathAsync(path);
+            MirrorPulsePackagedShellProbeProgress.Record(resultPath, MirrorPulsePackagedShellProbeStage.MinimalFolderReady);
             var info = new StorageProviderSyncRootInfo
             {
                 Id = registrationId,
@@ -102,10 +125,14 @@ internal static class MirrorPulsePackagedShellProbe
                 Version = "0.1.0",
                 ShowSiblingsAsGroup = false,
             };
+            MirrorPulsePackagedShellProbeProgress.Record(resultPath, MirrorPulsePackagedShellProbeStage.MinimalRegistrationStarted);
             StorageProviderSyncRootManager.Register(info);
+            MirrorPulsePackagedShellProbeProgress.Record(resultPath, MirrorPulsePackagedShellProbeStage.MinimalRegistrationCompleted);
             registered = true;
+            MirrorPulsePackagedShellProbeProgress.Record(resultPath, MirrorPulsePackagedShellProbeStage.MinimalReadbackStarted);
             StorageProviderSyncRootInfo actual = StorageProviderSyncRootManager
                 .GetSyncRootInformationForId(registrationId);
+            MirrorPulsePackagedShellProbeProgress.Record(resultPath, MirrorPulsePackagedShellProbeStage.MinimalReadbackCompleted);
             return actual.DisplayNameResource == info.DisplayNameResource
                 ? "success"
                 : "registered but display name differs";
@@ -120,7 +147,9 @@ internal static class MirrorPulsePackagedShellProbe
             {
                 try
                 {
+                    MirrorPulsePackagedShellProbeProgress.Record(resultPath, MirrorPulsePackagedShellProbeStage.MinimalUnregisterStarted);
                     StorageProviderSyncRootManager.Unregister(registrationId);
+                    MirrorPulsePackagedShellProbeProgress.Record(resultPath, MirrorPulsePackagedShellProbeStage.MinimalUnregisterCompleted);
                 }
                 catch (Exception)
                 {
