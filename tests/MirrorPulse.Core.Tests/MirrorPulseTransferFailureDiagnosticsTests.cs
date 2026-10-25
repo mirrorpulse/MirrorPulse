@@ -10,6 +10,38 @@ namespace MirrorPulse.Core.Tests;
 public sealed class MirrorPulseTransferFailureDiagnosticsTests
 {
     [TestMethod]
+    [DataRow("Transfer capture requires the Host's already-running public journal.", MirrorPulseTransferFailureBoundary.JournalUnavailable)]
+    [DataRow("The local-change feed has not been started.", MirrorPulseTransferFailureBoundary.JournalUnavailable)]
+    [DataRow("The local-change feed stopped unexpectedly.", MirrorPulseTransferFailureBoundary.JournalUnavailable)]
+    [DataRow("The original journal requires reconciliation before transfer capture.", MirrorPulseTransferFailureBoundary.JournalReconciliation)]
+    [DataRow("The original journal lost its captured reconciliation boundary.", MirrorPulseTransferFailureBoundary.JournalReconciliation)]
+    [DataRow("An original product owner already retains this transfer or effect ID.", MirrorPulseTransferFailureBoundary.JournalOwnership)]
+    [DataRow("Original journal ownership cannot be adopted after the first remote copy start.", MirrorPulseTransferFailureBoundary.JournalOwnership)]
+    [DataRow("The original journal reservation is immutable.", MirrorPulseTransferFailureBoundary.JournalOwnership)]
+    [DataRow("An affected original source observation requires separate proved journal ownership.", MirrorPulseTransferFailureBoundary.JournalShape)]
+    [DataRow("The original source content journal exceeds its bounded reservation.", MirrorPulseTransferFailureBoundary.JournalShape)]
+    [DataRow("The local-change move paths are inconsistent.", MirrorPulseTransferFailureBoundary.JournalShape)]
+    [DataRow("synthetic-secret The local-change move paths are inconsistent.", MirrorPulseTransferFailureBoundary.Unknown)]
+    [DataRow("The local-change move paths are inconsistent. synthetic-secret", MirrorPulseTransferFailureBoundary.Unknown)]
+    public async Task CopyJournalRejectionsRetainOnlyAnExactClosedBoundaryAndOriginalFailure(string message,
+        MirrorPulseTransferFailureBoundary expected)
+    {
+        var original = new InvalidOperationException(message); LogEntry observed = null!;
+        var thrown = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
+            MirrorPulseTransferFailureDiagnostics.RunAsync<int>(Guid.NewGuid(), MirrorPulseTransferCommandPhase.Copy,
+                () => ValueTask.FromException<int>(original), entry => { observed = entry; return ValueTask.CompletedTask; }).AsTask());
+        Assert.AreSame(original, thrown);
+        var safe = SafeDiagnosticPolicy.Sanitize(observed);
+        Assert.AreEqual(expected.ToString(), safe.Fields["transferFailureBoundary"]);
+        Assert.AreEqual("Copy", safe.Fields["transferCommandPhase"]);
+        Assert.AreEqual("InvalidOperation", safe.Fields["transferFailureKind"]);
+        Assert.AreEqual(original.HResult.ToString("X8", CultureInfo.InvariantCulture), safe.Fields["hresult"]);
+        Assert.HasCount(6, safe.Fields);
+        Assert.IsFalse(JsonSerializer.Serialize(safe).Contains(message, StringComparison.Ordinal));
+        Assert.IsFalse(JsonSerializer.Serialize(safe).Contains("synthetic-secret", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
     [DataRow(MirrorPulseTransferCommandPhase.Prepare)]
     [DataRow(MirrorPulseTransferCommandPhase.Read)]
     [DataRow(MirrorPulseTransferCommandPhase.Copy)]

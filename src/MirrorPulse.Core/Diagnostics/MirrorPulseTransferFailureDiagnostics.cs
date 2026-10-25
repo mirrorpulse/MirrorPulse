@@ -11,7 +11,8 @@ public enum MirrorPulseTransferCommandPhase
 
 public enum MirrorPulseTransferFailureBoundary
 {
-    Unknown, NamespaceOwner, CurrentProtection, RootRoute, DestinationOccupied, JournalUnavailable, SourceProjection
+    Unknown, NamespaceOwner, CurrentProtection, RootRoute, DestinationOccupied, JournalUnavailable, SourceProjection,
+    JournalReconciliation, JournalOwnership, JournalShape
 }
 
 /// <summary>Observes one failed transfer call using fixed fields while preserving its original exception and progress.</summary>
@@ -79,7 +80,18 @@ public static class MirrorPulseTransferFailureDiagnostics
         "An existing native object occupies the transfer destination." or
         "The native transfer destination changed during the original operation." => MirrorPulseTransferFailureBoundary.DestinationOccupied,
         "The Host's running original journal is unavailable." or
-        "A legacy transfer cannot acquire retrospective journal ownership." => MirrorPulseTransferFailureBoundary.JournalUnavailable,
+        "A legacy transfer cannot acquire retrospective journal ownership." or
+        "Transfer capture requires the Host's already-running public journal." or
+        "The local-change feed has not been started." or
+        "The local-change feed stopped unexpectedly." => MirrorPulseTransferFailureBoundary.JournalUnavailable,
+        "The original journal requires reconciliation before transfer capture." or
+        "The original journal lost its captured reconciliation boundary." => MirrorPulseTransferFailureBoundary.JournalReconciliation,
+        "An original product owner already retains this transfer or effect ID." or
+        "Original journal ownership cannot be adopted after the first remote copy start." or
+        "The original journal reservation is immutable." => MirrorPulseTransferFailureBoundary.JournalOwnership,
+        "An affected original source observation requires separate proved journal ownership." or
+        "The original source content journal exceeds its bounded reservation." or
+        "The local-change move paths are inconsistent." => MirrorPulseTransferFailureBoundary.JournalShape,
         "The transfer source lost its original public SDK projection." or
         "The native transfer source disagrees with its official public identity." or
         "The original source projection changed after transfer admission." or
