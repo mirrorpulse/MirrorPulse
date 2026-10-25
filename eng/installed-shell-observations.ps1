@@ -44,7 +44,7 @@ function Get-InstalledShellProbeObservation {
             else { $processState='Running' }
         } catch { $processState='Unavailable';$exitCode=$null }
     }
-    $resultState='Missing';$failureHResult=$null
+    $resultState='Missing';$failureHResult=$null;$resultBytesRead=$null
     try {
         $file=Get-Item -LiteralPath $ResultPath -Force -ErrorAction Stop
         if (($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { $resultState='Linked' }
@@ -55,6 +55,7 @@ function Get-InstalledShellProbeObservation {
                 [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
             try {
                 $bytes=[byte[]]::new(4097);$count=$stream.Read($bytes,0,$bytes.Length)
+                $resultBytesRead=$count
                 if ($count -gt 4096) { $resultState='TooLarge' }
                 else {
                     $value=[Text.Encoding]::UTF8.GetString($bytes,0,$count).Trim()
@@ -70,12 +71,12 @@ function Get-InstalledShellProbeObservation {
     # No process path, arbitrary probe text, exception, user label or credential.
     $progress=Get-InstalledShellProbeStage -ResultPath $ResultPath
     [pscustomobject]@{processState=$processState;exitCode=$exitCode;resultState=$resultState;failureHResult=$failureHResult;
-        stageState=$progress.state;stage=$progress.stage}
+        stageState=$progress.state;stage=$progress.stage;resultBytesRead=$resultBytesRead;progressBytesRead=$progress.bytesRead}
 }
 
 function Get-InstalledShellProbeStage {
     param([Parameter(Mandatory)][string]$ResultPath)
-    $state='Missing';$stage=$null
+    $state='Missing';$stage=$null;$bytesRead=$null
     try {
         $file=Get-Item -LiteralPath ($ResultPath+'.progress') -Force -ErrorAction Stop
         if (($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { $state='Linked' }
@@ -86,6 +87,7 @@ function Get-InstalledShellProbeStage {
                 [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
             try {
                 $bytes=[byte[]]::new(129);$count=$stream.Read($bytes,0,$bytes.Length)
+                $bytesRead=$count
                 if ($count -gt 128) { $state='TooLarge' }
                 else {
                     $value=[Text.Encoding]::UTF8.GetString($bytes,0,$count)
@@ -97,7 +99,8 @@ function Get-InstalledShellProbeStage {
                         'MinimalRegistrationStarted','MinimalRegistrationCompleted','MinimalReadbackStarted',
                         'MinimalReadbackCompleted','MinimalUnregisterStarted','MinimalUnregisterCompleted',
                         'WritingFailure','FailureWritten','UnregisterStarted','UnregisterCompleted',
-                        'DirectoryCleanupStarted','DirectoryCleanupCompleted','Exiting')
+                        'DirectoryCleanupStarted','DirectoryCleanupCompleted','Exiting',
+                        'ProcessEntering','GeneratedStartupStarting','GeneratedStartupReturned')
                     if ($value.StartsWith('1:',[StringComparison]::Ordinal) -and $value.Substring(2) -cin $known) {
                         $state='Observed';$stage=$value.Substring(2)
                     } else { $state='Invalid' }
@@ -106,5 +109,30 @@ function Get-InstalledShellProbeStage {
         }
     } catch [System.Management.Automation.ItemNotFoundException] { $state='Missing' }
     catch { $state='Unreadable' }
-    [pscustomobject]@{state=$state;stage=$stage}
+    [pscustomobject]@{state=$state;stage=$stage;bytesRead=$bytesRead}
+}
+
+# Inspect metadata only; never load or execute the installed WinUI assembly here.
+function Get-InstalledManagedEntryPoint {
+    param([Parameter(Mandatory)][string]$AssemblyPath)
+    $file=Get-Item -LiteralPath $AssemblyPath -Force -ErrorAction Stop
+    if ($file.PSIsContainer -or ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+        $file.Length -gt 64MB) { throw 'Invalid managed entry-point inspection input.' }
+    $stream=[IO.File]::OpenRead($file.FullName)
+    try {
+        $reader=[Reflection.PortableExecutable.PEReader]::new($stream)
+        try {
+            $cor=$reader.PEHeaders.CorHeader
+            if ($null -eq $cor -or ($cor.Flags -band [Reflection.PortableExecutable.CorFlags]::NativeEntryPoint) -ne 0 -or
+                ($cor.EntryPointTokenOrRelativeVirtualAddress -band 0xff000000) -ne 0x06000000) {
+                throw 'A managed method entry point is required.'
+            }
+            $metadata=[Reflection.Metadata.PEReaderExtensions]::GetMetadataReader($reader)
+            $handle=[Reflection.Metadata.Ecma335.MetadataTokens]::MethodDefinitionHandle($cor.EntryPointTokenOrRelativeVirtualAddress -band 0xffffff)
+            $method=$metadata.GetMethodDefinition($handle)
+            $type=$metadata.GetTypeDefinition($method.GetDeclaringType())
+            $namespace=$metadata.GetString($type.Namespace);$name=$metadata.GetString($type.Name)
+            [pscustomobject]@{type=$(if($namespace.Length){$namespace+'.'+$name}else{$name});method=$metadata.GetString($method.Name)}
+        } finally {$reader.Dispose()}
+    } finally {$stream.Dispose()}
 }

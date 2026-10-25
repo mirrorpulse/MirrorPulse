@@ -10,7 +10,8 @@ internal enum MirrorPulsePackagedShellProbeStage
     MinimalRegistrationStarted, MinimalRegistrationCompleted, MinimalReadbackStarted,
     MinimalReadbackCompleted, MinimalUnregisterStarted, MinimalUnregisterCompleted,
     WritingFailure, FailureWritten, UnregisterStarted, UnregisterCompleted,
-    DirectoryCleanupStarted, DirectoryCleanupCompleted, Exiting
+    DirectoryCleanupStarted, DirectoryCleanupCompleted, Exiting,
+    ProcessEntering, GeneratedStartupStarting, GeneratedStartupReturned
 }
 
 /// <summary>Optional fixed-stage progress for the disposable installed Shell probe.</summary>

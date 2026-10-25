@@ -16,6 +16,7 @@
     <Using Include="Microsoft.VisualStudio.TestTools.UnitTesting" />
     <Compile Include="../Shared/TransferAcknowledgementFaultSql.cs" Link="Fixtures/TransferAcknowledgementFaultSql.cs" />
     <Compile Include="../../src/MirrorPulse.App/MirrorPulsePackagedShellProbeProgress.cs" Link="Probe/MirrorPulsePackagedShellProbeProgress.cs" />
+    <Compile Include="../../src/MirrorPulse.App/MirrorPulsePackagedShellProbeStartup.cs" Link="Probe/MirrorPulsePackagedShellProbeStartup.cs" />
   </ItemGroup>
 
   <ItemGroup>

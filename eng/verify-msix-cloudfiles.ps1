@@ -35,6 +35,7 @@ $statusExitCode = $null
 $shellAttemptedAt = $null
 $probeProcess = $null
 $shellOutputPrepared = $false
+$shellEntryPointVerified = $false
 
 if (Get-AppxPackage -Name $packageName | Select-Object -First 1) {
     throw "The verification user already has MirrorPulse installed; use a clean test user."
@@ -154,6 +155,12 @@ try {
         }
 
         $shellAttemptedAt = [DateTimeOffset]::UtcNow
+        $entryPoint=Get-InstalledManagedEntryPoint -AssemblyPath (Join-Path $installed.InstallLocation 'MirrorPulse.App.dll')
+        if ($entryPoint.type -cne 'MirrorPulse.App.MirrorPulsePackagedShellProbeEntryPoint' -or $entryPoint.method -cne 'Main') {
+            throw 'The installed App assembly does not contain the requested Shell probe entry point.'
+        }
+        $shellEntryPointVerified = $true
+
         Initialize-InstalledShellProbeOutput -ResultPath $resultPath
         $shellOutputPrepared = $true
         $env:MIRRORPULSE_PACKAGED_SHELL_PROBE_RESULT = $resultPath
@@ -209,7 +216,7 @@ catch {
             $directory=[IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($EvidencePath))
             New-Item -ItemType Directory -Path $directory -Force|Out-Null
             [ordered]@{schemaVersion=1;sourceSha=$env:GITHUB_SHA;runId=$env:GITHUB_RUN_ID;runtime=$Runtime;
-                phase='Shell';verified=$false;shellRegistration=$false;outputPrepared=$shellOutputPrepared;attemptedAt=$shellAttemptedAt.ToString('O');probe=$observation}|
+                phase='Shell';verified=$false;shellRegistration=$false;entryPointVerified=$shellEntryPointVerified;outputPrepared=$shellOutputPrepared;attemptedAt=$shellAttemptedAt.ToString('O');probe=$observation}|
                 ConvertTo-Json -Depth 5|Set-Content -LiteralPath (Join-Path $directory 'installed-shell-failure.json') -Encoding utf8
             Write-Host 'Installed Shell failure observations retained.'
         } catch { Write-Host 'Installed Shell observations were unavailable; the original verification failure is retained.' }
@@ -244,5 +251,6 @@ if ($EvidencePath) {
         installedIdentity=$true;cliAlias=$true;hostAutoStart=$true
         cloudFilesExtension=$true;adapterAssociation=$true;uninstalled=$true
         shellRegistration=$VerifyShell.IsPresent
+        shellEntryPointVerified=$shellEntryPointVerified
     } | ConvertTo-Json | Set-Content -LiteralPath $EvidencePath -Encoding utf8
 }
