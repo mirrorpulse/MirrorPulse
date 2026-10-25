@@ -156,6 +156,14 @@ and remote application. `mp root recover OPERATION_ID` uses that same Host servi
 and reports incomplete recovery as pending. Callback authorization, preparation of
 a new rename from the CLI and the full fault recovery matrix remain pending work.
 
+Product catalog reads check that each retained rename payload belongs to its
+indexed root and operation. They also validate the stored binding and encoded
+proof envelope and require a retained native observation to match that proof,
+destination and chronology. Invalid records fail before proof reuse or replacement;
+reading them never repairs their bytes. Missing legacy proof remains readable so
+the existing root fence and migration behavior are preserved. These checks do not
+decode the public library's opaque proof or authorize a new native rename.
+
 ## Strict tree protection status
 
 Preview.5 packages identify source commit

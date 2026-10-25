@@ -32,18 +32,32 @@ public sealed partial class MirrorPulseProductCatalog
     {
         await using SqliteCommand query = _connection.CreateCommand();
         query.Transaction = transaction;
-        query.CommandText = "SELECT payload FROM managed_root_renames ORDER BY root_id;";
+        query.CommandText = "SELECT payload, root_id FROM managed_root_renames ORDER BY root_id;";
         await using SqliteDataReader reader = await query.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         var result = new List<MirrorPulseRootRenameIntent>();
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
-            MirrorPulseRootRenameIntent intent = JsonSerializer.Deserialize<MirrorPulseRootRenameIntent>(reader.GetString(0), TopologyJsonOptions)
-                ?? throw new InvalidDataException("The managed root rename intent is invalid.");
-            if (intent.OperationId == Guid.Empty || !Enum.IsDefined(intent.Phase))
-                throw new InvalidDataException("The managed root rename intent is invalid.");
-            result.Add(intent);
+            result.Add(ReadRootRenameIntent(reader.GetString(0), reader.GetString(1)));
         }
         return result.AsReadOnly();
+    }
+
+    private static MirrorPulseRootRenameIntent ReadRootRenameIntent(string payload, string rootId, string? operationId = null)
+    {
+        try
+        {
+            MirrorPulseRootRenameIntent intent = JsonSerializer.Deserialize<MirrorPulseRootRenameIntent>(payload, TopologyJsonOptions)
+                ?? throw new InvalidDataException("The managed root rename intent is invalid.");
+            if (intent.OperationId == Guid.Empty || intent.RootId.Value == Guid.Empty || !Enum.IsDefined(intent.Phase) ||
+                intent.UpdatedAt == default || intent.RootId.ToString() != rootId ||
+                operationId is not null && intent.OperationId.ToString() != operationId)
+                throw new InvalidDataException("The managed root rename intent does not match its indexed owner.");
+            return intent;
+        }
+        catch (Exception failure) when (failure is JsonException or ArgumentException)
+        {
+            throw new InvalidDataException("The managed root rename intent is invalid.", failure);
+        }
     }
 
     public async Task<MirrorPulseRootRenameIntent> PrepareManagedRootRenameAsync(RootId rootId, string label,

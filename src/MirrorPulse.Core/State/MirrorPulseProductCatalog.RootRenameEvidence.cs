@@ -24,7 +24,7 @@ public sealed partial class MirrorPulseProductCatalog
         {
             ThrowIfDisposed();
             await using SqliteCommand query = _connection.CreateCommand();
-            query.CommandText = "SELECT payload, proof, observation FROM managed_root_rename_history ORDER BY rowid;";
+            query.CommandText = "SELECT payload, proof, observation, root_id, operation_id FROM managed_root_rename_history ORDER BY rowid;";
             await using SqliteDataReader reader = await query.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
             var result = new List<MirrorPulseRootRenameHistory>();
             while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false)) result.Add(ReadRenameHistory(reader));
@@ -38,7 +38,7 @@ public sealed partial class MirrorPulseProductCatalog
     {
         await using SqliteCommand query = _connection.CreateCommand();
         query.Transaction = transaction;
-        query.CommandText = "SELECT payload, proof, observation FROM managed_root_rename_history WHERE operation_id=$operation;";
+        query.CommandText = "SELECT payload, proof, observation, root_id, operation_id FROM managed_root_rename_history WHERE operation_id=$operation;";
         query.Parameters.AddWithValue("$operation", operationId.ToString());
         await using SqliteDataReader reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
         if (!await reader.ReadAsync(token).ConfigureAwait(false)) throw new FileNotFoundException("The root rename history is not registered.");
@@ -47,20 +47,33 @@ public sealed partial class MirrorPulseProductCatalog
 
     private static MirrorPulseRootRenameHistory ReadRenameHistory(SqliteDataReader reader)
     {
-        var intent = JsonSerializer.Deserialize<MirrorPulseRootRenameIntent>(reader.GetString(0), TopologyJsonOptions)
-            ?? throw new InvalidDataException("The root rename history is invalid.");
-        var proof = reader.IsDBNull(1) ? null : JsonSerializer.Deserialize<MirrorPulseRootRenameProof>(reader.GetString(1), TopologyJsonOptions);
-        var observation = reader.IsDBNull(2) ? null : JsonSerializer.Deserialize<MirrorPulseRootRenameObservation>(reader.GetString(2), TopologyJsonOptions);
-        return new(intent, proof, observation);
+        MirrorPulseRootRenameIntent intent = ReadRootRenameIntent(reader.GetString(0), reader.GetString(3), reader.GetString(4));
+        try
+        {
+            var proof = reader.IsDBNull(1) ? null : JsonSerializer.Deserialize<MirrorPulseRootRenameProof>(reader.GetString(1), TopologyJsonOptions)
+                ?? throw new InvalidDataException("The retained root rename proof is invalid.");
+            var observation = reader.IsDBNull(2) ? null : JsonSerializer.Deserialize<MirrorPulseRootRenameObservation>(reader.GetString(2), TopologyJsonOptions)
+                ?? throw new InvalidDataException("The retained root rename observation is invalid.");
+            if (proof is not null) ValidateRootRenameProof(proof);
+            if (observation is not null && (proof is null || observation.LocalObject != proof.LocalObject ||
+                observation.PlaceholderIdentity != proof.PlaceholderIdentity || observation.DirectoryName != intent.TargetName ||
+                observation.ObservedAt < proof.CapturedAt || intent.Phase is MirrorPulseRootRenamePhase.Prepared or MirrorPulseRootRenamePhase.Cancelled))
+                throw new InvalidDataException("The retained root rename observation does not match its original proof.");
+            // Missing legacy proof remains readable and fenced; it grants no authority
+            // to acquire a replacement identity from the current path.
+            return new(intent, proof, observation);
+        }
+        catch (Exception failure) when (failure is JsonException or ArgumentException)
+        {
+            throw new InvalidDataException("The retained root rename evidence is invalid.", failure);
+        }
     }
 
     public async Task SaveManagedRootRenameProofAsync(Guid operationId, MirrorPulseRootRenameProof proof,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(proof);
-        ValidateRenameBinding(proof.LocalObject, proof.PlaceholderIdentity);
-        ValidateDirectoryMoveEvidence(proof.DirectoryMoveEvidence);
-        if (proof.ItemId == Guid.Empty || proof.CapturedAt == default) throw new ArgumentException("The original root proof is incomplete.", nameof(proof));
+        ValidateRootRenameProof(proof);
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -116,6 +129,13 @@ public sealed partial class MirrorPulseProductCatalog
             return updated;
         }
         finally { _gate.Release(); }
+    }
+
+    private static void ValidateRootRenameProof(MirrorPulseRootRenameProof proof)
+    {
+        ValidateRenameBinding(proof.LocalObject, proof.PlaceholderIdentity);
+        ValidateDirectoryMoveEvidence(proof.DirectoryMoveEvidence);
+        if (proof.ItemId == Guid.Empty || proof.CapturedAt == default) throw new ArgumentException("The original root proof is incomplete.", nameof(proof));
     }
 
     private static void ValidateRenameBinding(MirrorPulseLocalFileBinding binding, string identity)
