@@ -123,6 +123,15 @@ owner remains unchanged and can recover through its own boundary. Retry the
 controlled request only after that work has settled; this rejection proves no
 new transfer admission, not a failed remote copy or permission to adopt old IDs.
 
+The Host distinguishes this exact rolled-back admission with a dedicated busy
+exception. Its move command releases every preparation lease before at most four
+waits (250, 500, 1000 and 2000 milliseconds) and five total admission attempts,
+using the same operation ID and original request cancellation/deadline. No resume,
+copy or delete stage participates in this retry. An unresolved owner returns the
+existing retryable Control `HostBusy` error. Generic ownership errors, IO failures,
+cancellation and ambiguous remote receipts do not authorize a retry. A pending
+historical transfer cannot be classified as this never-admitted case.
+
 The atomic entry rejects retrospective ownership on an existing admission that
 lacks a claim. Older persisted transfers keep their original separate claim and
 copy recovery rules. A new timestamp, current queue/path, matching bytes or empty

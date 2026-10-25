@@ -3,6 +3,7 @@ using MirrorPulse.Control.Dispatch;
 using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.Diagnostics;
 using MirrorPulse.Core.State;
+using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.Host;
 
@@ -15,9 +16,10 @@ public sealed partial class MirrorPulseHostApplication
             {
                 if (arguments.OperationId == Guid.Empty || arguments.SourceMemberId == Guid.Empty || arguments.TargetParentMemberId == Guid.Empty)
                     throw new ArgumentException("Transfer operation, source member and target parent IDs are required.");
-                await RunTransferPhaseAsync(arguments.OperationId, MirrorPulseTransferCommandPhase.Prepare,
-                    () => _session.PrepareNamespaceTransferAsync(arguments.OperationId, arguments.SourceMemberId,
-                        arguments.TargetParentMemberId, arguments.TargetName, token)).ConfigureAwait(false);
+                await MirrorPulseTransferAdmissionRetry.RunAsync(stop =>
+                    RunTransferPhaseAsync(arguments.OperationId, MirrorPulseTransferCommandPhase.Prepare,
+                        () => _session.PrepareNamespaceTransferAsync(arguments.OperationId, arguments.SourceMemberId,
+                            arguments.TargetParentMemberId, arguments.TargetName, stop)), token).ConfigureAwait(false);
                 return await ResumeNamespaceTransferAsync(arguments.OperationId, token).ConfigureAwait(false);
             });
         dispatcher.Register<NamespaceTransferResumeArguments, MirrorPulseControlTransferStatus>(

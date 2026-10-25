@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.Core.State;
 
@@ -113,7 +114,11 @@ public sealed partial class MirrorPulseProductCatalog
             await RequireCurrentNamespaceTransferAsync(plan, transaction, token).ConfigureAwait(false);
             if (claim is not null)
                 foreach (var member in claim.Members)
-                    await RequireNamespaceTransferIdAvailableAsync(member.OperationId, transaction, token).ConfigureAwait(false);
+                {
+                    try { await RequireNamespaceTransferIdAvailableAsync(member.OperationId, transaction, token).ConfigureAwait(false); }
+                    catch (InvalidOperationException failure) when (failure.Message == "An original product owner already retains this transfer or effect ID.")
+                    { throw new MirrorPulseTransferAdmissionBusyException(); }
+                }
             var result = new MirrorPulseNamespaceTransferCopy(plan, null, null, null) { JournalClaim = claim };
             await WriteNamespaceTransferCoreAsync(result, transaction, token, insert: true).ConfigureAwait(false);
             await using var reserve = _connection.CreateCommand(); reserve.Transaction = transaction;

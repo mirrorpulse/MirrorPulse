@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using MirrorPulse.Core.State;
+using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.Core.Tests;
 
@@ -56,7 +57,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         var coalescing = TransferJournalCoalescing(plan, claim.Members.Select(member => member.OperationId).ToArray());
         if (owner == "mutation") await catalog.PrepareMutationAsync(mutation);
         else await catalog.PrepareJournalCoalescingAsync(coalescing);
-        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => catalog.PrepareNamespaceTransferWithJournalAsync(plan, claim));
+        await Assert.ThrowsExactlyAsync<MirrorPulseTransferAdmissionBusyException>(() => catalog.PrepareNamespaceTransferWithJournalAsync(plan, claim));
         Assert.IsNull(await catalog.ReadNamespaceTransferAsync(plan.OperationId));
         Assert.IsEmpty(await catalog.ReadNamespaceDispatchFencedRootsAsync());
         foreach (var member in claim.Members) Assert.IsNull(await catalog.ReadNamespaceTransferJournalOwnerAsync(member.OperationId));

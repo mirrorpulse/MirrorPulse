@@ -97,6 +97,11 @@ public static class MirrorPulseControlErrorMapper
         ArgumentNullException.ThrowIfNull(exception);
         return exception switch
         {
+            MirrorPulse.Core.Sync.MirrorPulseTransferAdmissionBusyException => new ControlError(
+                MirrorPulseControlErrorCodes.HostBusy,
+                "Original local work must settle before a new transfer can be admitted.",
+                ErrorCategory.Native,
+                retryable: true),
             OperationCanceledException => new ControlError(
                 MirrorPulseControlErrorCodes.OperationCancelled,
                 "The operation was cancelled.",
