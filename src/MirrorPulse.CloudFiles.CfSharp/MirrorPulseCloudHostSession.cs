@@ -1277,11 +1277,11 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             if (catalog is not null && router is not null)
             {
                 _rootRenames = new(catalog, _scheduler, (operation, token) => WithCurrentLibraryAsync(
-                    current => new MirrorPulseManagedRootRenameCoordinator(fileSystem, catalog, router).RecoverAsync(operation, current), token));
+                    current => new MirrorPulseManagedRootRenameRecoveryRouter(fileSystem, state, catalog, router, _namespaceExecution, _namespaceActor).RecoverAsync(operation, current), token));
                 // Recover original namespace evidence before upload dispatch starts.
                 // Incomplete and legacy records keep their per-root durable fence.
                 var restoration = admittedInstances is null ? _rootRenames : new MirrorPulseManagedRootRenameService(catalog, admittedInstances,
-                    (operation, token) => new MirrorPulseManagedRootRenameCoordinator(fileSystem, catalog, router).RecoverAsync(operation, token));
+                    (operation, token) => new MirrorPulseManagedRootRenameRecoveryRouter(fileSystem, state, catalog, router, _namespaceExecution, _namespaceActor).RecoverAsync(operation, token));
                 RootRenameRecoveryResults = await restoration.RestorePendingAsync(cancellationToken).ConfigureAwait(false);
             }
             if (catalog is not null && conflicts is not null && notifications is not null)
