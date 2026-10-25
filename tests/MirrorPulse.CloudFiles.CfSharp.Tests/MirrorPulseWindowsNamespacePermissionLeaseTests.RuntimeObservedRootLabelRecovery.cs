@@ -37,8 +37,6 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(60));
         var setupSource = new ProtectedPermissionNoSourceProvider();
         var ranges = new RootLabelExecutionRejectedRanges();
-        var originals = new List<MirrorPulseNamespacePermissionPreparation>();
-        var members = new Dictionary<Guid, MirrorPulseNamespaceMemberRegistration>();
         MirrorPulseRootRenameHistory original = null!;
         MirrorPulseNamespaceMemberMoveIntent intent = null!;
         MirrorPulseNamespaceDirectoryMoveSnapshot sealedTree = null!;
@@ -128,11 +126,23 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         await new MirrorPulseRootPopulationCoordinator(fileSystem, feed).PopulateAsync(router, deadline.Token);
                     }
                     await File.WriteAllBytesAsync(fileSystem.GetFile("Docs/original.bin").FullPath, bytes, deadline.Token);
-                    await PrepareAcceptedIdentityOriginalsAsync(fileSystem, catalog, router, role, caller.User!, originals, deadline.Token);
+                    foreach (CloudItem item in new CloudItem[] { fileSystem.Root, fileSystem.GetDirectory("Docs"), fileSystem.GetFile("Docs/original.bin") })
+                        SetProtectedFixtureUserOwner(item, caller.User!);
+                    await fileSystem.GetDirectory("Docs").SetPopulationStateAsync(CloudDirectoryPopulationState.Complete, cancellationToken: deadline.Token);
                     await SaveAcceptedIdentityFixtureTopologyAsync(catalog, root, deadline.Token);
-                    await RegisterNativeOriginalMembersAsync(fileSystem, catalog, router, role, originals, members, actor, deadline.Token);
-                    var rootMember = members.Values.Single(member => member.IsDirectory && member.RootId is not null);
-                    var file = members.Values.Single(member => !member.IsDirectory);
+                    await using var initializationScheduler = new MirrorPulseInstanceScheduler();
+                    await using var initializationPermissions = new MirrorPulseNamespacePermissionCoordinator(catalog);
+                    await using var initialized = await new MirrorPulseNamespaceInitializationCoordinator(fileSystem, catalog, router, role,
+                        actor, initializationScheduler, initializationPermissions).InitializeAsync(Guid.NewGuid(), deadline.Token);
+                    Assert.AreEqual(MirrorPulseNamespaceInitializationInventoryKind.OriginalInventory, initialized.Completion.InventoryKind);
+                    var captures = await catalog.ReadNamespacePermissionTreesAsync(root.RootId, cancellationToken: deadline.Token);
+                    Assert.HasCount(1, captures);
+                    Assert.AreEqual(MirrorPulseNamespacePermissionTreePhase.Sealed, captures[0].Phase);
+                    Assert.AreEqual(2, captures[0].CapturedMembers);
+                    var rootMember = (await catalog.ReadNamespaceMemberChildAsync(initialized.Completion.AnchorMemberId, "Docs", deadline.Token))!;
+                    var file = (await catalog.ReadNamespaceMemberChildAsync(rootMember.MemberId, "original.bin", deadline.Token))!;
+                    Assert.IsNotNull(rootMember);
+                    Assert.IsNotNull(file);
                     var creation = new MirrorPulseNamespaceCreationCoordinator(fileSystem, state, catalog, router, role, actor);
                     var left = await creation.CreateAsync(Guid.NewGuid(), rootMember.MemberId, "left", true, deadline.Token);
                     var nested = await creation.CreateAsync(Guid.NewGuid(), left.MemberId, "nested", true, deadline.Token);
