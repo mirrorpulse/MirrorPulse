@@ -157,6 +157,13 @@ must preserve the original product proof, root and child identities, and root
 availability. This disposable permissive-provider boundary does not establish
 protected production rename approval or complete Host acceptance.
 
+The default Host rename callback retains the SDK's default denial except for an
+explicit current root rename whose original public proof, exact target and complete
+opaque root identity agree. It reads only the indexed current root and original
+operation, changes no progress and grants no journal acknowledgement. This approval
+does not replace guarded native binding checks, protected execution or complete
+subtree settlement.
+
 The managed root rename coordinator captures and validates the public move proof,
 then atomically retains a new product intent and that exact proof before external
 authorization. SDK rejection or a failed catalog transaction publishes neither

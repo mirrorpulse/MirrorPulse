@@ -45,9 +45,8 @@ public sealed class MirrorPulseManagedRootRenameCoordinator
             throw new InvalidOperationException("The managed root cannot be renamed in its current state.");
         ArgumentException.ThrowIfNullOrWhiteSpace(label);
         string target = label.Trim();
-        var existing = (await _catalog.ReadManagedRootRenamesAsync(cancellationToken).ConfigureAwait(false))
-            .SingleOrDefault(item => item.RootId == rootId && item.IsPending);
-        if (existing is not null)
+        var current = await _catalog.ReadManagedRootRenameAsync(rootId, cancellationToken).ConfigureAwait(false);
+        if (current is { IsPending: true } existing)
         {
             if (existing.TargetName != target || root.DirectoryName != existing.SourceName && root.DirectoryName != existing.TargetName)
                 throw new InvalidOperationException("The managed root has a pending namespace transition.");
@@ -130,7 +129,7 @@ public sealed class MirrorPulseManagedRootRenameCoordinator
         _router.ReplaceRegistrations((await _catalog.ReadAdapterTopologyAsync(token).ConfigureAwait(false)).Roots,
             await _catalog.ReadManagedRootNamesAsync(token).ConfigureAwait(false));
 
-    private static CloudDirectoryMoveProof Decode(MirrorPulseRootRenameHistory history, RootRegistration root)
+    internal static CloudDirectoryMoveProof Decode(MirrorPulseRootRenameHistory history, RootRegistration root)
     {
         if (history.Intent.RootId != root.RootId)
             throw new InvalidDataException("The directory move evidence does not match the original managed root intent.");

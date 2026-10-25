@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "allowSkipped": [
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeDefaultProviderApprovesOnlyTheCurrentOriginalRootRenameAndRetainsRecoveryAcrossOwners",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeRootRenamePreparationCutsRetainOnlyCompleteOriginalProductProofAcrossOwners",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseNamespaceHandleTests.NativePlaceholderHardLinkPolicyPreservesUnacceptedBytesAndRejectsExistingAliasesAcrossRestart",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseContentConfirmationRecoveryTests.NativeRejectedProductProofDoesNotPrepareOrModifyContent",
@@ -172,6 +173,7 @@
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeCfSharpPreservedEmptyDirectoryDeleteRetainsItsConflictAcrossOwners"
     ],
     "namespace": [
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeDefaultProviderApprovesOnlyTheCurrentOriginalRootRenameAndRetainsRecoveryAcrossOwners",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeRootRenamePreparationCutsRetainOnlyCompleteOriginalProductProofAcrossOwners",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseNormalUserWorkerTransportTests.WorkerCallsAndLazyRangeBodiesNeverInheritNamespaceRole",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseNormalUserWorkerTransportTests.FailedOrCanceledSourceReadReturnsNoPartialBodyAndRestoresCaller",
@@ -287,6 +289,7 @@
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseNamespaceExecutionSessionTests.NamespaceBirthUsesCurrentUserOwnerWithoutChangingTheNormalSourceToken"
     ],
     "native": [
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeDefaultProviderApprovesOnlyTheCurrentOriginalRootRenameAndRetainsRecoveryAcrossOwners",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeRootRenamePreparationCutsRetainOnlyCompleteOriginalProductProofAcrossOwners",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseNamespaceHandleTests.NativePlaceholderHardLinkPolicyPreservesUnacceptedBytesAndRejectsExistingAliasesAcrossRestart",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseNamespaceHandleTests.RetainedHandleRejectsExistingAndNewlyObservedAliasesWithoutAclWrites",

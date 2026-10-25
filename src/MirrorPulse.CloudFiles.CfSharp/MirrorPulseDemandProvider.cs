@@ -2,6 +2,7 @@ using System.Runtime.Versioning;
 using CfSharp;
 using MirrorPulse.Core.CloudFiles;
 using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.State;
 using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.CloudFiles.CfSharp;
@@ -35,6 +36,7 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
     private readonly IMirrorPulseDirectoryPageSource? _directoryPages;
     private readonly MirrorPulseRootRouter? _rootRouter;
     private readonly MirrorPulseNamespaceWorkAdmission? _namespaceWork;
+    private readonly MirrorPulseManagedRootRenameApproval? _rootRenameApproval;
     internal MirrorPulseNamespaceDirectoryPublisher? NamespacePublisher { get; set; }
     // Observe the actual boundary before the SDK maps an exception to a native
     // callback status. Tests use only synthetic fixture data; production has no observer.
@@ -56,12 +58,14 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
         MirrorPulseRootRouter rootRouter,
         IMirrorPulseWorkerRangeTransport transport,
         IMirrorPulseDirectoryPageSource? directoryPages = null,
-        MirrorPulseNamespaceWorkAdmission? namespaceWork = null)
+        MirrorPulseNamespaceWorkAdmission? namespaceWork = null,
+        MirrorPulseProductCatalog? catalog = null)
         : this([], transport, directoryPages)
     {
         ArgumentNullException.ThrowIfNull(rootRouter);
         _rootRouter = rootRouter;
         _namespaceWork = namespaceWork;
+        _rootRenameApproval = catalog is null ? null : new(rootRouter, catalog);
     }
 
     /// <summary>Connects a real CfSharp session while the current user has no active Adapters.</summary>
@@ -78,6 +82,16 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
         cancellationToken.ThrowIfCancellationRequested();
         return ValueTask.FromResult(_rootRouter is null ? CloudProviderPolicyDecision.Allow :
             MirrorPulseRootNamespacePolicy.ApproveDelete(_rootRouter, request.NormalizedPath));
+    }
+
+    public ValueTask<CloudProviderPolicyDecision> ApproveRenameAsync(CloudProviderRenameRequest request,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        cancellationToken.ThrowIfCancellationRequested();
+        return _rootRenameApproval is null ? ValueTask.FromResult(CloudProviderPolicyDecision.Deny)
+            : _rootRenameApproval.EvaluateAsync(request.NormalizedPath, request.FileIdentity, request.TargetPath,
+                request.IsDirectory, request.SourceInScope, request.TargetInScope, cancellationToken);
     }
 
     public ValueTask<CloudProviderDirectoryPage> FetchChildrenAsync(

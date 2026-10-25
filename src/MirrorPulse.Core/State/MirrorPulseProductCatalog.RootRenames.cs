@@ -15,6 +15,25 @@ public sealed record MirrorPulseRootRenameIntent(Guid OperationId, RootId RootId
 
 public sealed partial class MirrorPulseProductCatalog
 {
+    /// <summary>Reads one root's current intent without loading other roots or original histories.</summary>
+    public async Task<MirrorPulseRootRenameIntent?> ReadManagedRootRenameAsync(RootId rootId,
+        CancellationToken cancellationToken = default)
+    {
+        if (rootId.Value == Guid.Empty) throw new ArgumentException("A stable root is required.", nameof(rootId));
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            await using SqliteCommand query = _connection.CreateCommand();
+            query.CommandText = "SELECT payload, root_id FROM managed_root_renames WHERE root_id=$root;";
+            query.Parameters.AddWithValue("$root", rootId.ToString());
+            await using SqliteDataReader reader = await query.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
+                ? ReadRootRenameIntent(reader.GetString(0), reader.GetString(1)) : null;
+        }
+        finally { _gate.Release(); }
+    }
+
     public async Task<IReadOnlyList<MirrorPulseRootRenameIntent>> ReadManagedRootRenamesAsync(
         CancellationToken cancellationToken = default)
     {

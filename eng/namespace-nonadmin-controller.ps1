@@ -1,7 +1,9 @@
 function Get-OrdinaryUserNamespaceBudgetMilliseconds {
-    param([Parameter(Mandatory)][ValidateRange(1, 113)][int]$TestCount, [string[]]$TestNames)
+    param([Parameter(Mandatory)][ValidateRange(1, 114)][int]$TestCount, [string[]]$TestNames)
     $preparation = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeRootRenamePreparationCutsRetainOnlyCompleteOriginalProductProofAcrossOwners'
-    if ($TestCount -gt 112 -and (-not $PSBoundParameters.ContainsKey('TestNames') -or $preparation -cnotin $TestNames)) {
+    $approval = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeDefaultProviderApprovesOnlyTheCurrentOriginalRootRenameAndRetainsRecoveryAcrossOwners'
+    $additionalSelections = @(@($preparation,$approval) | Where-Object {$_ -cin $TestNames}).Count
+    if ($TestCount -gt 112 -and (-not $PSBoundParameters.ContainsKey('TestNames') -or $additionalSelections -lt $TestCount-112)) {
         throw 'The additional namespace case requires its explicit original preparation selection.'
     }
     $executions = $TestCount
@@ -17,6 +19,7 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
         $repeated.Add($prefix + 'NativeHostTransferSourceRetirementResumesOriginalNativeAndReceiptBoundariesAcrossStoreOwners', 10)
         $repeated.Add($prefix + 'NativeHostTransferAcknowledgesOriginalClaimAndRecoversSdkReturnBeforeReceiptAcrossStoreOwners', 2)
         $repeated.Add($preparation, 2)
+        $repeated.Add($approval, 2)
         foreach ($name in $TestNames) {
             if ([string]::IsNullOrWhiteSpace($name) -or $name.Length -gt 512 -or $name -cnotmatch '^[A-Za-z0-9_.]+$' -or -not $selected.Add($name)) {
                 throw 'The namespace budget requires distinct, bounded test names.'
@@ -26,23 +29,23 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
                 # Each original transfer scope/cutpoint already owns a 45-second
                 # native deadline. The aggregate controller must preserve it;
                 # its ordinary 15-second per-case estimate cannot replace it.
-                $additional = if ($name -ceq $preparation) { 15000 } else { 30000 }
+                $additional = if ($name -cin @($preparation,$approval)) { 15000 } else { 30000 }
                 $transferDeadlineMilliseconds += $repeated[$name] * $additional
             }
         }
     }
     # Count both scopes inside the five selected transfer methods, including the
     # retirement matrix and ACK retries inside their original native deadlines.
-    # At most 113 names plus 14 repeated executions, the existing 45-second
-    # deadlines for all 18 transfer executions and both new 30-second preparation
-    # executions give a bounded 43m15s child envelope. Count-only callers retain
+    # At most 114 names plus 15 repeated executions, the existing 45-second
+    # deadlines for all 18 transfer executions and four 30-second preparation and
+    # callback executions give a bounded 44m15s child envelope. Count-only callers retain
     # the original 112-name/30-minute bound; the step adds five minutes
     # for controller diagnostics and disposable-account/profile cleanup.
     return [Math]::Max(600000, 120000 + $executions * 15000 + $transferDeadlineMilliseconds)
 }
 
 function Get-OrdinaryUserNamespaceStepTimeoutMinutes {
-    param([Parameter(Mandatory)][ValidateRange(1, 113)][int]$TestCount, [string[]]$TestNames)
+    param([Parameter(Mandatory)][ValidateRange(1, 114)][int]$TestCount, [string[]]$TestNames)
     # The workflow must let the existing child budget expire and allow the
     # controller to preserve diagnostics and remove its disposable user/profile.
     $parameters = @{ TestCount = $TestCount }

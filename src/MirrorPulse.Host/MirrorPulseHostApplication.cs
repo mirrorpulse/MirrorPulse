@@ -205,7 +205,7 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
             var source = new MirrorPulseNormalUserWorkerTransport(namespaceExecution,
                 workers, workers, workers, workers, workers);
             var directorySource = new MirrorPulseAdapterDirectoryPageSource(source);
-            var provider = new MirrorPulseDemandProvider(rootRouter, source, directorySource, namespaceWork);
+            var provider = new MirrorPulseDemandProvider(rootRouter, source, directorySource, namespaceWork, catalog);
             session = MirrorPulseCloudHostSession.CreateDefault(
                 paths, topology.Instances, topology.Roots, provider, source, source,
                 rootRouter, catalog, instanceId => topology.Instances.Any(instance =>
