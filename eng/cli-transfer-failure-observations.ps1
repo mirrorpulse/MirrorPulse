@@ -89,5 +89,7 @@ function Get-CliTransferFailureObservations {
             }
         }
     } catch { $result.roots.failureHResult = $_.Exception.HResult.ToString('X8') }
+    . (Join-Path $PSScriptRoot 'cli-transfer-conflict-observations.ps1')
+    $result.conflicts = Get-CliTransferConflictObservations -CliPath $CliPath
     return $result
 }
