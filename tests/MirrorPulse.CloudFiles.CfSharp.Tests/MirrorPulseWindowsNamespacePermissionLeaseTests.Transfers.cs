@@ -252,13 +252,21 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     Assert.AreEqual(target.MemberId, prepared.Plan.CommandOrigin.TargetParentMemberId);
                     Assert.AreEqual("moved.bin", prepared.Plan.CommandOrigin.TargetName);
                     Assert.IsTrue(prepared.Plan.CommandOrigin.RequestedAt <= prepared.Plan.PreparedAt);
-                    Assert.IsNull(prepared.JournalClaim);
+                    Assert.IsNotNull(prepared.JournalClaim);
+                    Assert.AreEqual(operation, prepared.JournalClaim.OperationId);
+                    Assert.IsTrue(prepared.Plan.PreparedAt <= prepared.JournalClaim.CapturedAt);
+                    Assert.IsNull(prepared.Acknowledgement);
+                    foreach (Guid originalId in originalContentIds)
+                    {
+                        Assert.IsTrue(prepared.JournalClaim.Members.Any(change => change.OperationId == originalId));
+                        Assert.AreEqual(operation, await catalog.ReadNamespaceTransferJournalOwnerAsync(originalId, deadline.Token));
+                    }
                     var fenced = await new MirrorPulseJournalUploadSource(journal, router, catalog, _ => true).ReadPendingAsync(deadline.Token);
                     Assert.IsEmpty(fenced.ReadyCommands); Assert.IsFalse(fenced.RequiresFullRescan);
                     Assert.IsGreaterThan(0, fenced.DeferredCount);
                     foreach (Guid originalId in originalContentIds)
                         Assert.IsNull(await catalog.ReadWorkerRequestAsync(originalId, deadline.Token),
-                            "A durable transfer fence must prevent ordinary ownership before the pre-copy claim exists.");
+                            "Atomic original ownership and both root fences must prevent a competing ordinary request before copy.");
                     var stillPending = await ReadTransferOriginalJournalIdsAsync(journal, deadline.Token);
                     foreach (Guid originalId in originalContentIds) Assert.IsTrue(stillPending.Contains(originalId));
                     worker.Plan = prepared.Plan;
@@ -272,6 +280,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         await File.WriteAllBytesAsync(sourcePath, [9], deadline.Token);
                         await Assert.ThrowsExactlyAsync<IOException>(async () => await runtime.CopyNamespaceTransferAsync(operation, deadline.Token));
                         Assert.AreEqual(0, worker.Uploads); Assert.IsNull((await catalog.ReadNamespaceTransferAsync(operation, deadline.Token))!.CopyStartedAt);
+                        Assert.AreEqual(prepared.JournalClaim, (await catalog.ReadNamespaceTransferAsync(operation, deadline.Token))!.JournalClaim);
                         await File.WriteAllBytesAsync(sourcePath, bytes, deadline.Token);
                     }
                     using (var mappingInput = new FileStream(sourcePath, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite | FileShare.Delete))
@@ -283,12 +292,14 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         await Assert.ThrowsExactlyAsync<IOException>(async () => await runtime.CopyNamespaceTransferAsync(operation, deadline.Token));
                         Assert.AreEqual(0, worker.Uploads);
                         var unchanged = (await catalog.ReadNamespaceTransferAsync(operation, deadline.Token))!;
-                        Assert.IsNull(unchanged.CopyStartedAt); Assert.IsNull(unchanged.JournalClaim);
+                        Assert.IsNull(unchanged.CopyStartedAt); Assert.AreEqual(prepared.JournalClaim, unchanged.JournalClaim);
                     }
                     await File.WriteAllBytesAsync(sourcePath, bytes, deadline.Token);
                     var accepted = await runtime.CopyNamespaceTransferAsync(operation, deadline.Token);
                     Assert.AreEqual("target-v1", accepted.AcceptedRevision);
                     Assert.IsNotNull(accepted.JournalClaim);
+                    Assert.AreEqual(prepared.JournalClaim, accepted.JournalClaim,
+                        "Copy must retain the original admission claim without recapturing later notifications.");
                     Assert.IsGreaterThanOrEqualTo(originalContentIds.Count, accepted.JournalClaim.Members.Count);
                     foreach (Guid originalId in originalContentIds)
                     {

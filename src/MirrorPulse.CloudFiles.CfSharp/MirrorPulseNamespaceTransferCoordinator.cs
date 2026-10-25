@@ -84,16 +84,20 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator(CloudFileSys
                 var sourceRoute = CaptureRoute(topology, original); var targetRoute = CaptureRoute(topology, targetParent);
                 var projection = await ReadSourceProjectionAsync(file, original, stop).ConfigureAwait(false);
                 Guid contentId = Guid.NewGuid();
-                var content = await execution.RunNormalUserOperationAsync(async () =>
+                return await execution.RunNormalUserOperationAsync(async () =>
                 {
+                    // Keep the original source read lease through capture and atomic admission.
+                    // An existing journal owner rejects the whole new admission before either fence.
                     await using var source = OpenSource(file);
-                    return await inputs.StageRetainedAsync(contentId, source, stop).ConfigureAwait(false);
+                    var content = await inputs.StageRetainedAsync(contentId, source, stop).ConfigureAwait(false);
+                    var plan = new MirrorPulseNamespaceTransferPlan(2, operationId, sourceRoute, targetRoute,
+                        original, parent, targetParent, targetPath, projection.RemoteRevision, contentId,
+                        content.Length, content.Sha256, Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow)
+                    { CommandOrigin = command };
+                    var journal = JournalFeed ?? throw new InvalidOperationException("The Host's running original journal is unavailable.");
+                    var claim = await new MirrorPulseTransferJournalCapture(journal).CaptureAsync(plan, stop).ConfigureAwait(false);
+                    return await catalog.PrepareNamespaceTransferWithJournalAsync(plan, claim, stop).ConfigureAwait(false);
                 }).ConfigureAwait(false);
-                var plan = new MirrorPulseNamespaceTransferPlan(2, operationId, sourceRoute, targetRoute,
-                    original, parent, targetParent, targetPath, projection.RemoteRevision, contentId,
-                    content.Length, content.Sha256, Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow)
-                { CommandOrigin = command };
-                return await catalog.PrepareNamespaceTransferAsync(plan, stop).ConfigureAwait(false);
             }, stop).ConfigureAwait(false);
         }, token).ConfigureAwait(false);
     }

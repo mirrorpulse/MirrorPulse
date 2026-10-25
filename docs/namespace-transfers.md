@@ -113,6 +113,24 @@ operation ID and from import/replacement storage. Reopening a catalog owner does
 not discard these bytes. A damaged or missing input cannot start an upload;
 neither copy acceptance nor target verification reclaims the private content.
 
+New controlled Host preparation captures the exact pending source originals while
+retaining its readable source handle, before publishing either durable root fence.
+`PrepareNamespaceTransferWithJournalAsync` reserves the original plan, both roots,
+remote effect IDs and all captured journal IDs in one catalog transaction. If an
+original mutation or coalescing owner already exists, or any admission write
+fails, none of this new transfer or its fences is published. The existing original
+owner remains unchanged and can recover through its own boundary. Retry the
+controlled request only after that work has settled; this rejection proves no
+new transfer admission, not a failed remote copy or permission to adopt old IDs.
+
+The atomic entry rejects retrospective ownership on an existing admission that
+lacks a claim. Older persisted transfers keep their original separate claim and
+copy recovery rules. A new timestamp, current queue/path, matching bytes or empty
+scan cannot replace an original owner or manufacture a missing receipt. Neither
+atomic reservation nor a finite scan acknowledges the SDK or proves watcher
+drainage. This ordering change still requires clean signed Host/CLI/native
+acceptance and does not repair every historical transfer failure.
+
 The Host runtime exposes separate prepare, copy, target-verification and history
 methods. Copy rechecks the current local source against the prepared whole
 content before claiming its first upload. Pending execution admits both roots

@@ -35,9 +35,7 @@ public sealed partial class MirrorPulseProductCatalog
     public async Task<MirrorPulseNamespaceTransferCopy> PrepareNamespaceTransferJournalClaimAsync(
         MirrorPulseNamespaceTransferJournalClaim claim, CancellationToken token = default)
     {
-        ArgumentNullException.ThrowIfNull(claim); ArgumentNullException.ThrowIfNull(claim.Members);
-        if (claim.Members.Count > 4096) throw new ArgumentException("The original journal reservation exceeds its recovery bound.", nameof(claim));
-        claim = claim with { Members = Array.AsReadOnly(claim.Members.ToArray()) };
+        claim = SnapshotNamespaceTransferJournalClaim(claim);
         await _gate.WaitAsync(token).ConfigureAwait(false);
         try
         {
@@ -58,18 +56,31 @@ public sealed partial class MirrorPulseProductCatalog
                 await RequireNamespaceTransferIdAvailableAsync(member.OperationId, transaction, token).ConfigureAwait(false);
             copy = copy with { JournalClaim = claim };
             await WriteNamespaceTransferCoreAsync(copy, transaction, token).ConfigureAwait(false);
-            foreach (var member in claim.Members)
-            {
-                await using var insert = _connection.CreateCommand(); insert.Transaction = transaction;
-                insert.CommandText = "INSERT INTO namespace_transfer_journal_members(operation_id,transfer_id,sequence) VALUES($id,$transfer,$sequence);";
-                insert.Parameters.AddWithValue("$id", member.OperationId.ToString("D"));
-                insert.Parameters.AddWithValue("$transfer", copy.Plan.OperationId.ToString("D"));
-                insert.Parameters.AddWithValue("$sequence", member.Sequence);
-                await insert.ExecuteNonQueryAsync(token).ConfigureAwait(false);
-            }
+            await InsertNamespaceTransferJournalMembersAsync(claim, transaction, token).ConfigureAwait(false);
             transaction.Commit(); return copy;
         }
         finally { _gate.Release(); }
+    }
+
+    private static MirrorPulseNamespaceTransferJournalClaim SnapshotNamespaceTransferJournalClaim(MirrorPulseNamespaceTransferJournalClaim claim)
+    {
+        ArgumentNullException.ThrowIfNull(claim); ArgumentNullException.ThrowIfNull(claim.Members);
+        if (claim.Members.Count > 4096) throw new ArgumentException("The original journal reservation exceeds its recovery bound.", nameof(claim));
+        return claim with { Members = Array.AsReadOnly(claim.Members.ToArray()) };
+    }
+
+    private async Task InsertNamespaceTransferJournalMembersAsync(MirrorPulseNamespaceTransferJournalClaim claim,
+        SqliteTransaction transaction, CancellationToken token)
+    {
+        foreach (var member in claim.Members)
+        {
+            await using var insert = _connection.CreateCommand(); insert.Transaction = transaction;
+            insert.CommandText = "INSERT INTO namespace_transfer_journal_members(operation_id,transfer_id,sequence) VALUES($id,$transfer,$sequence);";
+            insert.Parameters.AddWithValue("$id", member.OperationId.ToString("D"));
+            insert.Parameters.AddWithValue("$transfer", claim.OperationId.ToString("D"));
+            insert.Parameters.AddWithValue("$sequence", member.Sequence);
+            await insert.ExecuteNonQueryAsync(token).ConfigureAwait(false);
+        }
     }
 
     public async Task<Guid?> ReadNamespaceTransferJournalOwnerAsync(Guid originalOperationId, CancellationToken token = default)

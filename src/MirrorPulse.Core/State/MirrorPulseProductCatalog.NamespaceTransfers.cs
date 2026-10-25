@@ -81,10 +81,21 @@ public sealed record MirrorPulseTransferTargetVerification(int Version, Guid Ope
 
 public sealed partial class MirrorPulseProductCatalog
 {
-    public async Task<MirrorPulseNamespaceTransferCopy> PrepareNamespaceTransferAsync(
-        MirrorPulseNamespaceTransferPlan plan, CancellationToken token = default)
+    public Task<MirrorPulseNamespaceTransferCopy> PrepareNamespaceTransferAsync(
+        MirrorPulseNamespaceTransferPlan plan, CancellationToken token = default) =>
+        PrepareNamespaceTransferCoreAsync(plan, null, token);
+
+    /// <summary>Reserves original journal ownership and both transfer fences in one admission transaction.</summary>
+    /// <remarks>Existing owners are never adopted. Replaying an old admission cannot attach a missing claim.</remarks>
+    public Task<MirrorPulseNamespaceTransferCopy> PrepareNamespaceTransferWithJournalAsync(
+        MirrorPulseNamespaceTransferPlan plan, MirrorPulseNamespaceTransferJournalClaim claim, CancellationToken token = default) =>
+        PrepareNamespaceTransferCoreAsync(plan, SnapshotNamespaceTransferJournalClaim(claim), token);
+
+    private async Task<MirrorPulseNamespaceTransferCopy> PrepareNamespaceTransferCoreAsync(
+        MirrorPulseNamespaceTransferPlan plan, MirrorPulseNamespaceTransferJournalClaim? claim, CancellationToken token)
     {
         ValidateNamespaceTransferPlan(plan);
+        if (claim is not null) ValidateNamespaceTransferJournalClaim(plan, claim);
         await _gate.WaitAsync(token).ConfigureAwait(false);
         try
         {
@@ -93,12 +104,17 @@ public sealed partial class MirrorPulseProductCatalog
             if (replay is not null)
             {
                 if (replay.Plan != plan) throw new InvalidOperationException("The original transfer and its source bytes are immutable.");
+                if (claim is not null && replay.JournalClaim != claim)
+                    throw new InvalidOperationException("Atomic transfer admission cannot replace or manufacture original journal ownership.");
                 transaction.Commit(); return replay;
             }
             foreach (Guid id in new[] { plan.OperationId, plan.CopyOperationId, plan.DeleteOperationId })
                 await RequireNamespaceTransferIdAvailableAsync(id, transaction, token).ConfigureAwait(false);
             await RequireCurrentNamespaceTransferAsync(plan, transaction, token).ConfigureAwait(false);
-            var result = new MirrorPulseNamespaceTransferCopy(plan, null, null, null);
+            if (claim is not null)
+                foreach (var member in claim.Members)
+                    await RequireNamespaceTransferIdAvailableAsync(member.OperationId, transaction, token).ConfigureAwait(false);
+            var result = new MirrorPulseNamespaceTransferCopy(plan, null, null, null) { JournalClaim = claim };
             await WriteNamespaceTransferCoreAsync(result, transaction, token, insert: true).ConfigureAwait(false);
             await using var reserve = _connection.CreateCommand(); reserve.Transaction = transaction;
             reserve.CommandText = """
@@ -111,6 +127,8 @@ public sealed partial class MirrorPulseProductCatalog
             reserve.Parameters.AddWithValue("$copy", plan.CopyOperationId.ToString("D"));
             reserve.Parameters.AddWithValue("$delete", plan.DeleteOperationId.ToString("D"));
             await reserve.ExecuteNonQueryAsync(token).ConfigureAwait(false);
+            if (claim is not null)
+                await InsertNamespaceTransferJournalMembersAsync(claim, transaction, token).ConfigureAwait(false);
             transaction.Commit(); return result;
         }
         finally { _gate.Release(); }
