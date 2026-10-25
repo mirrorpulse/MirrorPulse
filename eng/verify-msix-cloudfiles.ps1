@@ -10,6 +10,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot 'installed-startup-diagnostics.ps1')
+. (Join-Path $PSScriptRoot 'installed-shell-observations.ps1')
 if (-not $IsWindows) {
     throw "MSIX Cloud Files verification requires Windows."
 }
@@ -31,6 +32,8 @@ $packageName = "0B72358D-6DC9-479D-8C28-F0232B42A0B3"
 $verificationPhase = 'Build'
 $hostAttemptedAt = $null
 $statusExitCode = $null
+$shellAttemptedAt = $null
+$probeProcess = $null
 
 if (Get-AppxPackage -Name $packageName | Select-Object -First 1) {
     throw "The verification user already has MirrorPulse installed; use a clean test user."
@@ -150,6 +153,7 @@ try {
         }
 
         $env:MIRRORPULSE_PACKAGED_SHELL_PROBE_RESULT = $resultPath
+        $shellAttemptedAt = [DateTimeOffset]::UtcNow
         try {
             $probeProcess = Start-Process -FilePath $appExe -WindowStyle Hidden -PassThru
             $deadline = [DateTime]::UtcNow.AddMinutes(2)
@@ -198,6 +202,17 @@ catch {
                 ConvertTo-Json -Depth 7|Set-Content -LiteralPath (Join-Path $directory 'installed-startup-failure.json') -Encoding utf8
             Write-Host "Installed startup diagnostics retained: $($diagnostics.records.Count) bounded Host records."
         } catch { Write-Host 'Installed startup diagnostics were unavailable; the original verification failure is retained.' }
+    }
+    if ($verificationPhase -eq 'Shell' -and $VerifyShell -and $EvidencePath -and $null -ne $shellAttemptedAt) {
+        try {
+            $observation=Get-InstalledShellProbeObservation -Process $probeProcess -ResultPath $resultPath
+            $directory=[IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($EvidencePath))
+            New-Item -ItemType Directory -Path $directory -Force|Out-Null
+            [ordered]@{schemaVersion=1;sourceSha=$env:GITHUB_SHA;runId=$env:GITHUB_RUN_ID;runtime=$Runtime;
+                phase='Shell';verified=$false;shellRegistration=$false;attemptedAt=$shellAttemptedAt.ToString('O');probe=$observation}|
+                ConvertTo-Json -Depth 5|Set-Content -LiteralPath (Join-Path $directory 'installed-shell-failure.json') -Encoding utf8
+            Write-Host 'Installed Shell failure observations retained.'
+        } catch { Write-Host 'Installed Shell observations were unavailable; the original verification failure is retained.' }
     }
     throw
 }

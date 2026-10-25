@@ -269,3 +269,15 @@ Credential configuration is excluded. Controller failures retain the primary
 failure and each cleanup failure independently; cleanup failure cannot turn the
 run green or erase the original diagnostic. Successful execution still requires
 all existing ordinary-user identity and cleanup evidence.
+
+## Installed Shell failure observations
+
+When the installed App does not finish its Shell probe, verification retains
+`installed-shell-failure-arm64` from the same source and run. The bounded report
+records whether the original process is running, exited or unavailable, its
+observed exit code, and a classified result with an optional native HRESULT.
+Unavailable observations remain unknown. Arbitrary probe text, paths, labels and
+exception messages are excluded. Observation runs only after failure; the original
+two-minute deadline, required `success` result and installation cleanup remain.
+This diagnostic cannot establish successful Shell registration or installed
+acceptance.

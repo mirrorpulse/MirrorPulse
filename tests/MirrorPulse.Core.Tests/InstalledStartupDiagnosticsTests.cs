@@ -163,6 +163,72 @@ public sealed class InstalledStartupDiagnosticsTests
         finally { Cleanup(prefix, directory); }
     }
 
+    [TestMethod]
+    [DataRow("missing")]
+    [DataRow("success")]
+    [DataRow("failure")]
+    [DataRow("private")]
+    [DataRow("oversized")]
+    [DataRow("directory")]
+    [DataRow("linked")]
+    [DataRow("exited")]
+    [DataRow("running")]
+    public async Task ShellFailureObservationRetainsOnlyBoundedResultAndActualProcessState(string scenario)
+    {
+        string prefix = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "MirrorPulse-installed-diagnostics-tests"));
+        string directory = Path.Combine(prefix, Guid.NewGuid().ToString("N")); Directory.CreateDirectory(directory);
+        try
+        {
+            string script = Path.Combine(directory, "verify.ps1");
+            await File.WriteAllTextAsync(script, """
+                param([string]$Policy,[string]$Directory,[string]$Scenario)
+                $ErrorActionPreference='Stop'
+                . (Join-Path (Split-Path -Parent $Policy) 'installed-shell-observations.ps1')
+                $resultPath=Join-Path $Directory 'result';$child=$null;$linkCreated=$false
+                try {
+                    switch ($Scenario) {
+                        'success' { [IO.File]::WriteAllText($resultPath,'success') }
+                        'failure' { [IO.File]::WriteAllText($resultPath,'failure: 0x80070005 PRIVATE_TEST_SENTINEL') }
+                        'private' { [IO.File]::WriteAllText($resultPath,'PRIVATE_TEST_SENTINEL') }
+                        'oversized' { [IO.File]::WriteAllBytes($resultPath,[byte[]]::new(4097)) }
+                        'directory' { New-Item -ItemType Directory $resultPath|Out-Null }
+                        'linked' {
+                            $target=Join-Path $Directory 'target';New-Item -ItemType Directory $target|Out-Null
+                            New-Item -ItemType Junction -Path $resultPath -Target $target|Out-Null
+                            $linkCreated=$true
+                        }
+                        'exited' {
+                            $child=Start-Process (Get-Command pwsh).Source -WindowStyle Hidden -PassThru -ArgumentList @('-NoProfile','-NonInteractive','-Command','exit 23')
+                            if (-not $child.WaitForExit(5000)) {throw 'The synthetic process did not exit.'}
+                        }
+                        'running' {
+                            $child=Start-Process (Get-Command pwsh).Source -WindowStyle Hidden -PassThru -ArgumentList @('-NoProfile','-NonInteractive','-Command','Start-Sleep -Seconds 30')
+                        }
+                    }
+                    $result=Get-InstalledShellProbeObservation -Process $child -ResultPath $resultPath
+                    $json=$result|ConvertTo-Json -Compress
+                    if ($json.Contains('PRIVATE_TEST_SENTINEL') -or $json.Contains($Directory)) {throw 'Private text or paths escaped the closed projection.'}
+                    $expected=@{missing='Missing';success='Success';failure='Failure';private='Invalid';oversized='TooLarge';directory='Invalid';linked='Linked';exited='Missing';running='Missing'}
+                    if ($result.resultState -cne $expected[$Scenario]) {throw ('Wrong actual result observation: '+$json)}
+                    if ($Scenario -eq 'exited') {
+                        if ($result.processState -cne 'Exited' -or $result.exitCode -ne 23) {throw ('The actual exit fact was lost: '+$json)}
+                    } elseif ($Scenario -eq 'running') {
+                        if ($result.processState -cne 'Running' -or $null -ne $result.exitCode) {throw 'A running probe acquired a fabricated exit code.'}
+                    } elseif ($result.processState -cne 'Unavailable' -or $null -ne $result.exitCode) {throw 'A missing process acquired a fabricated state.'}
+                    if ($Scenario -eq 'failure') {
+                        if ($result.failureHResult -cne '80070005') {throw 'The closed native failure code was lost.'}
+                    } elseif ($null -ne $result.failureHResult) {throw 'An unobserved native failure code was fabricated.'}
+                    $json
+                } finally {
+                    if ($null -ne $child) {try {if (-not $child.HasExited) {$child.Kill();$child.WaitForExit()}} finally {$child.Dispose()}}
+                    if ($linkCreated) {Remove-Item -LiteralPath $resultPath -Force}
+                }
+                """);
+            await RunProbeAsync(script, directory, scenario);
+        }
+        finally { Cleanup(prefix, directory); }
+    }
+
     private static async Task RunProbeAsync(string script, string directory, string scenario)
     {
         var start = new ProcessStartInfo("pwsh") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
