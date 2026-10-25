@@ -17,6 +17,13 @@
     <DefineConstants Condition="'$(MirrorPulseShellProbe)'=='true'">$(DefineConstants);MIRRORPULSE_SHELL_PROBE;DISABLE_XAML_GENERATED_MAIN</DefineConstants>
   </PropertyGroup>
 
+  <!-- The disposable CI probe must report SDK deployment errors without a dialog.
+       Keep the SDK initializer and its original failing exit status enabled. -->
+  <PropertyGroup Condition="'$(MirrorPulseShellProbe)'=='true'">
+    <WindowsAppSDKDeploymentManagerAutoInitializeOptions_Default>false</WindowsAppSDKDeploymentManagerAutoInitializeOptions_Default>
+    <WindowsAppSDKDeploymentManagerAutoInitializeOptions_OnErrorShowUI>false</WindowsAppSDKDeploymentManagerAutoInitializeOptions_OnErrorShowUI>
+    <WindowsAppSDKDeploymentManagerAutoInitializeOptions_None>true</WindowsAppSDKDeploymentManagerAutoInitializeOptions_None>
+  </PropertyGroup>
   <ItemGroup>
     <Content Include="Assets\SplashScreen.scale-200.png" />
     <Content Include="Assets\LockScreenLogo.scale-200.png" />
