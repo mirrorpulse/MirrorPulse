@@ -1,3 +1,36 @@
+# Precreate the verifier-owned files before launching the packaged process. MSIX
+# may redirect newly created AppData files; opening an existing real file retains
+# its actual cross-process location. Empty files are never probe completion.
+function New-InstalledShellProbeStartInfo {
+    param([Parameter(Mandatory)][string]$ExecutablePath,[Parameter(Mandatory)][string]$ResultPath)
+    $start=[Diagnostics.ProcessStartInfo]::new($ExecutablePath)
+    $start.UseShellExecute=$false
+    $start.CreateNoWindow=$true
+    $start.WindowStyle=[Diagnostics.ProcessWindowStyle]::Hidden
+    $start.Environment['MIRRORPULSE_PACKAGED_SHELL_PROBE_RESULT']=$ResultPath
+    return $start
+}
+
+function Initialize-InstalledShellProbeOutput {
+    param([Parameter(Mandatory)][string]$ResultPath)
+    ([IO.File]::Open($ResultPath,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::Read)).Dispose()
+    ([IO.File]::Open($ResultPath+'.progress',[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::Read)).Dispose()
+}
+
+function Wait-InstalledShellProbeResult {
+    param(
+        [AllowNull()][System.Diagnostics.Process]$Process,
+        [Parameter(Mandatory)][string]$ResultPath,
+        [Parameter(Mandatory)][DateTime]$DeadlineUtc
+    )
+    while ($true) {
+        $observation=Get-InstalledShellProbeObservation -Process $Process -ResultPath $ResultPath
+        if ($observation.resultState -cin @('Success','Failure') -or $observation.processState -ceq 'Exited' -or
+            [DateTime]::UtcNow -ge $DeadlineUtc) { return $observation }
+        Start-Sleep -Milliseconds 500
+    }
+}
+
 function Get-InstalledShellProbeObservation {
     param(
         [AllowNull()][System.Diagnostics.Process]$Process,

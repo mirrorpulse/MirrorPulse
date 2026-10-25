@@ -34,6 +34,7 @@ $hostAttemptedAt = $null
 $statusExitCode = $null
 $shellAttemptedAt = $null
 $probeProcess = $null
+$shellOutputPrepared = $false
 
 if (Get-AppxPackage -Name $packageName | Select-Object -First 1) {
     throw "The verification user already has MirrorPulse installed; use a clean test user."
@@ -152,21 +153,20 @@ try {
             throw "The installed MirrorPulse app executable was not found."
         }
 
-        $env:MIRRORPULSE_PACKAGED_SHELL_PROBE_RESULT = $resultPath
         $shellAttemptedAt = [DateTimeOffset]::UtcNow
+        Initialize-InstalledShellProbeOutput -ResultPath $resultPath
+        $shellOutputPrepared = $true
+        $env:MIRRORPULSE_PACKAGED_SHELL_PROBE_RESULT = $resultPath
         try {
-            $probeProcess = Start-Process -FilePath $appExe -WindowStyle Hidden -PassThru
+            $probeProcess = [Diagnostics.Process]::Start((New-InstalledShellProbeStartInfo -ExecutablePath $appExe -ResultPath $resultPath))
             $deadline = [DateTime]::UtcNow.AddMinutes(2)
-            while (-not (Test-Path -LiteralPath $resultPath) -and [DateTime]::UtcNow -lt $deadline) {
-                if ($probeProcess.HasExited) { break }
-                Start-Sleep -Milliseconds 500
-            }
+            $probeObservation = Wait-InstalledShellProbeResult -Process $probeProcess -ResultPath $resultPath -DeadlineUtc $deadline
         }
         finally {
             Remove-Item Env:\MIRRORPULSE_PACKAGED_SHELL_PROBE_RESULT -ErrorAction SilentlyContinue
         }
 
-        if (-not (Test-Path -LiteralPath $resultPath)) {
+        if ($probeObservation.resultState -cnotin @('Success','Failure')) {
             throw "The packaged App process did not report a Shell probe result."
         }
 
@@ -209,7 +209,7 @@ catch {
             $directory=[IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($EvidencePath))
             New-Item -ItemType Directory -Path $directory -Force|Out-Null
             [ordered]@{schemaVersion=1;sourceSha=$env:GITHUB_SHA;runId=$env:GITHUB_RUN_ID;runtime=$Runtime;
-                phase='Shell';verified=$false;shellRegistration=$false;attemptedAt=$shellAttemptedAt.ToString('O');probe=$observation}|
+                phase='Shell';verified=$false;shellRegistration=$false;outputPrepared=$shellOutputPrepared;attemptedAt=$shellAttemptedAt.ToString('O');probe=$observation}|
                 ConvertTo-Json -Depth 5|Set-Content -LiteralPath (Join-Path $directory 'installed-shell-failure.json') -Encoding utf8
             Write-Host 'Installed Shell failure observations retained.'
         } catch { Write-Host 'Installed Shell observations were unavailable; the original verification failure is retained.' }
