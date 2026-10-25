@@ -142,6 +142,15 @@ and recoverable directory moves through `CloudDirectory.PrepareMoveAsync` and
 paging and directory projection contracts. Product integration and native
 acceptance of these capabilities remain separate from upgrading the dependency.
 
+The native preparation interruption probe requires three separate SDK and product
+catalog owners for both active and disabled roots. It interrupts after public SDK
+capture and after atomic product commit, then requires an original witnessed
+retry without another capture. The earlier unpublished SDK proof must remain
+authenticated after the later capture. A subsequent external move and recovery
+must preserve the original product proof, root and child identities, and root
+availability. This disposable permissive-provider boundary does not establish
+protected production rename approval or complete Host acceptance.
+
 The managed root rename coordinator captures and validates the public move proof,
 then atomically retains a new product intent and that exact proof before external
 authorization. SDK rejection or a failed catalog transaction publishes neither

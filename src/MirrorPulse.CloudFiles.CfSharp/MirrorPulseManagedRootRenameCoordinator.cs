@@ -5,6 +5,8 @@ using MirrorPulse.Core.State;
 
 namespace MirrorPulse.CloudFiles.CfSharp;
 
+internal enum MirrorPulseRootRenamePreparationCheckpoint { AfterPublicProofCaptured, AfterProductPreparationCommitted }
+
 public sealed record MirrorPulseManagedRootRenameRecovery(MirrorPulseRootRenameIntent Intent,
     CloudDirectoryMoveReconciliationResult? LibraryResult);
 
@@ -20,6 +22,10 @@ public sealed class MirrorPulseManagedRootRenameCoordinator
     private readonly CloudFileSystem _fileSystem;
     private readonly MirrorPulseProductCatalog _catalog;
     private readonly MirrorPulseRootRouter _router;
+
+    internal Func<MirrorPulseRootRenamePreparationCheckpoint, MirrorPulseRootRenameProof, CancellationToken, ValueTask>?
+        PreparationCheckpoint
+    { get; init; }
 
     public MirrorPulseManagedRootRenameCoordinator(CloudFileSystem fileSystem,
         MirrorPulseProductCatalog catalog, MirrorPulseRootRouter router)
@@ -59,10 +65,16 @@ public sealed class MirrorPulseManagedRootRenameCoordinator
             Convert.ToBase64String(proof.ExpectedPlaceholderIdentity.Span), DateTimeOffset.UtcNow,
             Convert.ToBase64String(proof.Encode()));
         _ = Decode(captured, root, root.DirectoryName, target);
+        if (PreparationCheckpoint is not null)
+            await PreparationCheckpoint(MirrorPulseRootRenamePreparationCheckpoint.AfterPublicProofCaptured, captured,
+                cancellationToken).ConfigureAwait(false);
         // No bare product intent is published if SDK capture or validation fails.
         var history = await _catalog.PrepareManagedRootRenameWithProofAsync(rootId, target, root.DirectoryName,
             captured, cancellationToken).ConfigureAwait(false);
         _ = Decode(history, root);
+        if (PreparationCheckpoint is not null)
+            await PreparationCheckpoint(MirrorPulseRootRenamePreparationCheckpoint.AfterProductPreparationCommitted, history.Proof!,
+                cancellationToken).ConfigureAwait(false);
         return history;
     }
 

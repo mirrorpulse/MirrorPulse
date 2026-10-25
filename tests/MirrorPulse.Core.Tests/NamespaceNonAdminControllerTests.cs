@@ -3,7 +3,7 @@ using System.Diagnostics;
 namespace MirrorPulse.Core.Tests;
 
 [TestClass]
-public sealed class NamespaceNonAdminControllerTests
+public sealed partial class NamespaceNonAdminControllerTests
 {
     [TestMethod]
     [DataRow("allowed", 1)]
@@ -54,6 +54,20 @@ public sealed class NamespaceNonAdminControllerTests
                 param([string]$Policy,[string]$Directory,[string]$Scenario,[int]$Count)
                 $ErrorActionPreference='Stop'
                 . $Policy
+                if ($Scenario -like 'preparation-*') {
+                    $names=@(for ($index=1;$index -lt $Count;$index++) { 'Fixture.Case'+$index })
+                    $names+='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeRootRenamePreparationCutsRetainOnlyCompleteOriginalProductProofAcrossOwners'
+                    if ($Scenario -eq 'preparation-missing') {
+                        $names[-1]='Fixture.Unrelated';$rejected=$false
+                        try {Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $Count -TestNames $names|Out-Null} catch {$rejected=$true}
+                        if (-not $rejected) {throw 'The expanded selection did not require the actual new preparation case.'}
+                    } else {
+                        $actual=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $Count -TestNames $names
+                        $expected=[Math]::Max(600000,120000+($Count-1)*15000+2*30000)
+                        if ($actual -ne $expected) {throw 'Both actual preparation availability states must retain their original thirty-second deadlines.'}
+                    }
+                    exit 0
+                }
                 if ($Scenario -like 'bundle-*') {
                     $names=@(1..108 | ForEach-Object { 'Fixture.Case' + $_ })
                     $names+='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.'+$Scenario.Substring(7)
@@ -91,9 +105,9 @@ public sealed class NamespaceNonAdminControllerTests
                     if ($Scenario -eq 'budget-rejected') {
                         if (-not $rejected) { throw 'An invalid or unbounded selection was accepted.' }
                     } else {
-                        $maximum=if ($Scenario -eq 'budget-catalog') {2535000} else {1800000}
+                        $maximum=if ($Scenario -eq 'budget-catalog') {2595000} else {1800000}
                         if ($rejected -or $budget -lt 600000 -or $budget -gt $maximum) { throw 'The whole-suite envelope is missing or unbounded.' }
-                        if ($Scenario -eq 'budget-catalog' -and $budget -ne 120000+($Count+13)*15000+18*30000) {
+                        if ($Scenario -eq 'budget-catalog' -and $budget -ne 120000+($Count+14)*15000+18*30000+2*15000) {
                             throw 'The actual catalog lost a same/cross-instance transfer or one of its five retirement cutpoints.'
                         }
                         if ($Count -ge 52 -and $budget -le 600000) { throw 'The growing suite still has the obsolete fixed ten-minute envelope.' }
