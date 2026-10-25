@@ -160,7 +160,8 @@
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeHostTransferAcknowledgesOriginalClaimAndRecoversSdkReturnBeforeReceiptAcrossStoreOwners",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeAutomaticStartupProtectsACompletelyEmptyRootWithoutASetupLibraryOrAdapter",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeCfSharpNewFileIdentityAtRetiredPathDoesNotAdoptTheOriginalTombstone",
-    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeCfSharpNewDirectoryIdentityAtRetiredPathDoesNotAdoptTheOriginalTombstone"
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeCfSharpNewDirectoryIdentityAtRetiredPathDoesNotAdoptTheOriginalTombstone",
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeProtectedRootLabelExecutionRecoversOriginalSubtreeAndCaseOnlyHistoryAcrossOwners"
   ],
   "required": {
     "cfsharpRecreation": [
@@ -288,7 +289,8 @@
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeHostTransferSourceRetirementResumesOriginalNativeAndReceiptBoundariesAcrossStoreOwners",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeHostTransferAcknowledgesOriginalClaimAndRecoversSdkReturnBeforeReceiptAcrossStoreOwners",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeAutomaticStartupProtectsACompletelyEmptyRootWithoutASetupLibraryOrAdapter",
-      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseNamespaceExecutionSessionTests.NamespaceBirthUsesCurrentUserOwnerWithoutChangingTheNormalSourceToken"
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseNamespaceExecutionSessionTests.NamespaceBirthUsesCurrentUserOwnerWithoutChangingTheNormalSourceToken",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeProtectedRootLabelExecutionRecoversOriginalSubtreeAndCaseOnlyHistoryAcrossOwners"
     ],
     "native": [
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeRootLabelPreparationSealsOnlyItsOriginalProtectedSubtreeAcrossOwners",
@@ -430,7 +432,8 @@
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeHostTransferAcknowledgesOriginalClaimAndRecoversSdkReturnBeforeReceiptAcrossStoreOwners",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeAutomaticStartupProtectsACompletelyEmptyRootWithoutASetupLibraryOrAdapter",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeCfSharpNewFileIdentityAtRetiredPathDoesNotAdoptTheOriginalTombstone",
-      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeCfSharpNewDirectoryIdentityAtRetiredPathDoesNotAdoptTheOriginalTombstone"
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeCfSharpNewDirectoryIdentityAtRetiredPathDoesNotAdoptTheOriginalTombstone",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeProtectedRootLabelExecutionRecoversOriginalSubtreeAndCaseOnlyHistoryAcrossOwners"
     ],
     "official": [
       "MirrorPulse.Core.Tests.FtpWorkerProcessTests.SignedFtpReleaseReadsAndConditionallyUploadsThroughHostAndCfSharp",

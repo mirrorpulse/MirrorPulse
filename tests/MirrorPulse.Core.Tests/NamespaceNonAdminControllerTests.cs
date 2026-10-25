@@ -54,6 +54,22 @@ public sealed partial class NamespaceNonAdminControllerTests
                 param([string]$Policy,[string]$Directory,[string]$Scenario,[int]$Count)
                 $ErrorActionPreference='Stop'
                 . $Policy
+                if ($Scenario -like 'root-execution-*') {
+                    $names=@(1..112|ForEach-Object {'Fixture.Case'+$_})
+                    $names+='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeRootRenamePreparationCutsRetainOnlyCompleteOriginalProductProofAcrossOwners'
+                    $names+='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeDefaultProviderApprovesOnlyTheCurrentOriginalRootRenameAndRetainsRecoveryAcrossOwners'
+                    $names+='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeRootLabelPreparationSealsOnlyItsOriginalProtectedSubtreeAcrossOwners'
+                    if ($Scenario -eq 'root-execution-selected') {
+                        $names+='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeProtectedRootLabelExecutionRecoversOriginalSubtreeAndCaseOnlyHistoryAcrossOwners'
+                        $actual=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 116 -TestNames $names
+                        if ($actual -ne 120000+112*15000+20*30000) {throw 'Retain all original preparation pairs and fourteen actual execution state/fault deadlines.'}
+                    } else {
+                        $names+='Fixture.Unrelated';$rejected=$false
+                        try {Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 116 -TestNames $names|Out-Null} catch {$rejected=$true}
+                        if (-not $rejected) {throw 'The expanded slot did not require the actual root execution matrix.'}
+                    }
+                    exit 0
+                }
                 if ($Scenario -like 'root-label-*') {
                     $names=@(1..112|ForEach-Object {'Fixture.Case'+$_})
                     $names+='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeRootRenamePreparationCutsRetainOnlyCompleteOriginalProductProofAcrossOwners'
@@ -134,9 +150,9 @@ public sealed partial class NamespaceNonAdminControllerTests
                     if ($Scenario -eq 'budget-rejected') {
                         if (-not $rejected) { throw 'An invalid or unbounded selection was accepted.' }
                     } else {
-                        $maximum=if ($Scenario -eq 'budget-catalog') {2715000} else {1800000}
+                        $maximum=if ($Scenario -eq 'budget-catalog') {3135000} else {1800000}
                         if ($rejected -or $budget -lt 600000 -or $budget -gt $maximum) { throw 'The whole-suite envelope is missing or unbounded.' }
-                        if ($Scenario -eq 'budget-catalog' -and $budget -ne 120000+($Count+16)*15000+18*30000+6*15000) {
+                        if ($Scenario -eq 'budget-catalog' -and $budget -ne 120000+($Count+29)*15000+18*30000+20*15000) {
                             throw 'The actual catalog lost a same/cross-instance transfer or one of its five retirement cutpoints.'
                         }
                         if ($Count -ge 52 -and $budget -le 600000) { throw 'The growing suite still has the obsolete fixed ten-minute envelope.' }
