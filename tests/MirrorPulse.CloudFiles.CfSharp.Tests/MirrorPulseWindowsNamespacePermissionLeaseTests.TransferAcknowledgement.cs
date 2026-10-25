@@ -3,6 +3,7 @@ using MirrorPulse.CloudFiles.CfSharp;
 using MirrorPulse.Core.Configuration;
 using MirrorPulse.Core.State;
 using MirrorPulse.Core.Sync;
+using MirrorPulse.Tests.Fixtures;
 
 namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 
@@ -99,7 +100,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             Assert.AreEqual(completed, await publishing.CompleteNamespaceTransferAsync(operation, token));
             Guid lateDelete = await WaitForRetiredTransferDeleteAsync(journal(), prepared.Plan.Source.Identity.ItemId!.Value, token);
             await ExecuteTransferPublicationFixtureSqlAsync(paths,
-                "CREATE TRIGGER fail_late_transfer_ack BEFORE UPDATE ON retired_transfer_observations BEGIN SELECT RAISE(ABORT,'late-ack-return-gap'); END;", token);
+                TransferAcknowledgementFaultSql.BeforeOriginalReceipt(lateDelete), token);
             try { await Assert.ThrowsExactlyAsync<Microsoft.Data.Sqlite.SqliteException>(async () => await source().ReadPendingAsync(token)); }
             finally { await ExecuteTransferPublicationFixtureSqlAsync(paths, "DROP TRIGGER fail_late_transfer_ack;", CancellationToken.None); }
             var lateStart = await catalog.ReadRetiredTransferObservationAcknowledgementAsync(lateDelete, token);
