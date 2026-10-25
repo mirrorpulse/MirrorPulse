@@ -12,6 +12,7 @@ $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot 'installed-startup-diagnostics.ps1')
 . (Join-Path $PSScriptRoot 'installed-shell-observations.ps1')
 . (Join-Path $PSScriptRoot 'installed-shell-process-boundary.ps1')
+. (Join-Path $PSScriptRoot 'installed-runtime-layout.ps1')
 if (-not $IsWindows) {
     throw "MSIX Cloud Files verification requires Windows."
 }
@@ -82,6 +83,7 @@ try {
         if ($packageEntries -notcontains "host\MirrorPulse.Host.exe") {
             throw "The MSIX payload does not contain host\MirrorPulse.Host.exe."
         }
+        Assert-InstalledAppRuntimeLayout -Archive $archive
     }
     finally {
         $archive.Dispose()
