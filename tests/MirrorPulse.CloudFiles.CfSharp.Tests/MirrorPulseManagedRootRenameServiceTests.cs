@@ -131,6 +131,7 @@ public sealed partial class MirrorPulseManagedRootRenameServiceTests
         RootRegistration[] roots, MirrorPulseRootRenameIntent[] intents) : IAsyncDisposable
     {
         public MirrorPulseProductCatalog Catalog => catalog;
+        public MirrorPulseStoragePaths Paths => new(Path.Combine(directory, "sync"), Path.Combine(directory, "data"));
         public RootRegistration[] Roots => roots;
         public MirrorPulseRootRenameIntent[] Intents => intents;
 

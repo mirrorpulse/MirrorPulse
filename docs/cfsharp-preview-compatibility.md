@@ -142,8 +142,12 @@ and recoverable directory moves through `CloudDirectory.PrepareMoveAsync` and
 paging and directory projection contracts. Product integration and native
 acceptance of these capabilities remain separate from upgrading the dependency.
 
-The managed root rename coordinator persists the exact public move proof before
-external authorization, verifies its stable root binding on replay, and uses the
+The managed root rename coordinator captures and validates the public move proof,
+then atomically retains a new product intent and that exact proof before external
+authorization. SDK rejection or a failed catalog transaction publishes neither
+half. The transaction rechecks the original source mapping and target reservation;
+an existing witnessed intent returns its original proof. The coordinator verifies
+its stable root binding on replay and uses the
 public reconciliation result before changing the product Label. Legacy records
 without the original encoded proof remain fenced; recovery cannot replace them
 with the identity currently found at a path. The native gate verifies external
@@ -153,8 +157,11 @@ scheduling. Runtime startup replays original pending proofs before starting the
 upload pump; missing legacy proofs and recoverable per-root failures retain their
 namespace fences. Explicit recovery shares the same instance scheduler as uploads
 and remote application. `mp root recover OPERATION_ID` uses that same Host service
-and reports incomplete recovery as pending. Callback authorization, preparation of
-a new rename from the CLI and the full fault recovery matrix remain pending work.
+and reports incomplete recovery as pending. `mp root prepare-rename ROOT_ID LABEL`
+retains the complete preparation without executing a native rename. Callback
+authorization, protected execution and the full native fault recovery matrix
+remain pending work. Legacy unwitnessed intents remain fenced; a preparation
+retry cannot capture the current object as their missing original proof.
 
 Product catalog reads check that each retained rename payload belongs to its
 indexed root and operation. They also validate the stored binding and encoded

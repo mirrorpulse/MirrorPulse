@@ -35,30 +35,35 @@ public sealed class MirrorPulseManagedRootRenameCoordinator
         RootRegistration root = (await _catalog.ReadAdapterTopologyAsync(cancellationToken).ConfigureAwait(false))
             .Roots.SingleOrDefault(item => item.RootId == rootId)
             ?? throw new FileNotFoundException("The managed root is not registered.");
+        if (root.State is not (RootRegistrationState.Active or RootRegistrationState.Disabled))
+            throw new InvalidOperationException("The managed root cannot be renamed in its current state.");
+        ArgumentException.ThrowIfNullOrWhiteSpace(label);
+        string target = label.Trim();
+        var existing = (await _catalog.ReadManagedRootRenamesAsync(cancellationToken).ConfigureAwait(false))
+            .SingleOrDefault(item => item.RootId == rootId && item.IsPending);
+        if (existing is not null)
+        {
+            if (existing.TargetName != target || root.DirectoryName != existing.SourceName && root.DirectoryName != existing.TargetName)
+                throw new InvalidOperationException("The managed root has a pending namespace transition.");
+            var original = await ReadAsync(existing.OperationId, cancellationToken).ConfigureAwait(false);
+            _ = Decode(original, root);
+            return original;
+        }
         if (await _catalog.ReadPendingRemoteBatchAsync(root.InstanceId, cancellationToken).ConfigureAwait(false) is not null ||
             await _catalog.ReadRetainedRemoteBatchAsync(root.InstanceId, cancellationToken).ConfigureAwait(false) is not null)
             throw new InvalidOperationException("The original remote batch must converge before preparing a root rename.");
-        MirrorPulseRootRenameIntent intent = await _catalog.PrepareManagedRootRenameAsync(rootId, label, cancellationToken)
-            .ConfigureAwait(false);
-        MirrorPulseRootRenameHistory history = await ReadAsync(intent.OperationId, cancellationToken).ConfigureAwait(false);
-        if (history.Proof is not null)
-        {
-            _ = Decode(history, root);
-            return history;
-        }
-        if (intent.Phase != MirrorPulseRootRenamePhase.Prepared)
-            throw new InvalidOperationException("A historical rename cannot capture a new object as its original proof.");
-        CloudDirectoryMoveProof proof = await _fileSystem.GetDirectory(intent.SourceName)
-            .PrepareMoveAsync(_fileSystem.Root, intent.TargetName, cancellationToken).ConfigureAwait(false);
+        CloudDirectoryMoveProof proof = await _fileSystem.GetDirectory(root.DirectoryName)
+            .PrepareMoveAsync(_fileSystem.Root, target, cancellationToken).ConfigureAwait(false);
         var captured = new MirrorPulseRootRenameProof(proof.RootItemId,
             new(proof.ExpectedBinding.VolumeSerialNumber, proof.ExpectedBinding.SyncRootFileId, proof.ExpectedBinding.LocalFileId),
             Convert.ToBase64String(proof.ExpectedPlaceholderIdentity.Span), DateTimeOffset.UtcNow,
             Convert.ToBase64String(proof.Encode()));
-        history = history with { Proof = captured };
+        _ = Decode(captured, root, root.DirectoryName, target);
+        // No bare product intent is published if SDK capture or validation fails.
+        var history = await _catalog.PrepareManagedRootRenameWithProofAsync(rootId, target, root.DirectoryName,
+            captured, cancellationToken).ConfigureAwait(false);
         _ = Decode(history, root);
-        // Durable proof must precede the caller's authorization of an external/native rename.
-        await _catalog.SaveManagedRootRenameProofAsync(intent.OperationId, captured, cancellationToken).ConfigureAwait(false);
-        return await ReadAsync(intent.OperationId, cancellationToken).ConfigureAwait(false);
+        return history;
     }
 
     public async ValueTask<MirrorPulseManagedRootRenameRecovery> RecoverAsync(Guid operationId,
@@ -115,15 +120,23 @@ public sealed class MirrorPulseManagedRootRenameCoordinator
 
     private static CloudDirectoryMoveProof Decode(MirrorPulseRootRenameHistory history, RootRegistration root)
     {
+        if (history.Intent.RootId != root.RootId)
+            throw new InvalidDataException("The directory move evidence does not match the original managed root intent.");
         MirrorPulseRootRenameProof captured = history.Proof
             ?? throw new InvalidOperationException("The root rename has no original object proof.");
+        return Decode(captured, root, history.Intent.SourceName, history.Intent.TargetName);
+    }
+
+    private static CloudDirectoryMoveProof Decode(MirrorPulseRootRenameProof captured, RootRegistration root,
+        string sourceName, string targetName)
+    {
         if (captured.DirectoryMoveEvidence is null)
             throw new NotSupportedException("This historical rename has no original public directory move evidence.");
         CloudDirectoryMoveProof proof = CloudDirectoryMoveProof.Decode(Convert.FromBase64String(captured.DirectoryMoveEvidence));
         Guid expectedItem = MirrorPulsePlaceholderIdentity.Create(root.InstanceId, $"mirrorpulse-root:{root.RootId}").ToCfSharp().ItemId;
-        if (history.Intent.RootId != root.RootId || proof.RootItemId != expectedItem || proof.RootItemId != captured.ItemId ||
-            !string.Equals(proof.SourceRelativePath, history.Intent.SourceName, StringComparison.OrdinalIgnoreCase) ||
-            proof.DestinationRelativePath != history.Intent.TargetName ||
+        if (proof.RootItemId != expectedItem || proof.RootItemId != captured.ItemId ||
+            !string.Equals(proof.SourceRelativePath, sourceName, StringComparison.OrdinalIgnoreCase) ||
+            proof.DestinationRelativePath != targetName ||
             proof.ExpectedBinding.VolumeSerialNumber != captured.LocalObject.VolumeSerialNumber ||
             proof.ExpectedBinding.SyncRootFileId != captured.LocalObject.SyncRootFileId ||
             proof.ExpectedBinding.LocalFileId != captured.LocalObject.LocalFileId ||
