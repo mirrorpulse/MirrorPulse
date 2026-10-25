@@ -29,9 +29,11 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLease : IMirror
     private readonly SafeFileHandle _target;
     private readonly bool _isDirectory;
     private readonly bool _metadataOnly;
+    private readonly MirrorPulseRootLabelTargetInspection? _rootLabelTargetInspection;
     private bool _disposed;
 
-    private MirrorPulseWindowsNamespacePermissionLease(CloudItem item, RootId? rootId, List<SafeFileHandle> handles, bool metadataOnly = false)
+    private MirrorPulseWindowsNamespacePermissionLease(CloudItem item, RootId? rootId, List<SafeFileHandle> handles, bool metadataOnly = false,
+        MirrorPulseRootLabelTargetInspection? rootLabelTargetInspection = null)
     {
         _item = item;
         _rootId = rootId;
@@ -39,6 +41,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLease : IMirror
         _target = handles[^1];
         _isDirectory = item.Kind == CloudItemKind.Directory;
         _metadataOnly = metadataOnly;
+        _rootLabelTargetInspection = rootLabelTargetInspection;
     }
 
     /// <summary>Opens only a currently routed root or its descendant in an already started CfSharp session.</summary>
@@ -50,17 +53,33 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLease : IMirror
         MirrorPulseRootRouter router, CancellationToken cancellationToken) =>
         OpenCoreAsync(item, router, metadataOnlyTarget: true, cancellationToken);
 
+    internal static Task<MirrorPulseWindowsNamespacePermissionLease> OpenRootLabelTargetMetadataAsync(CloudItem item,
+        MirrorPulseRootRouter router, MirrorPulseRootLabelTargetInspection inspection, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(inspection);
+        inspection.RequireRouter(router);
+        return OpenCoreAsync(item, router, metadataOnlyTarget: true, ownerMetadataWrite: false, cancellationToken, inspection);
+    }
+
     private static async Task<MirrorPulseWindowsNamespacePermissionLease> OpenCoreAsync(CloudItem item,
         MirrorPulseRootRouter router, bool metadataOnlyTarget, CancellationToken cancellationToken)
         => await OpenCoreAsync(item, router, metadataOnlyTarget, ownerMetadataWrite: false, cancellationToken).ConfigureAwait(false);
 
     private static async Task<MirrorPulseWindowsNamespacePermissionLease> OpenCoreAsync(CloudItem item,
-        MirrorPulseRootRouter router, bool metadataOnlyTarget, bool ownerMetadataWrite, CancellationToken cancellationToken)
+        MirrorPulseRootRouter router, bool metadataOnlyTarget, bool ownerMetadataWrite, CancellationToken cancellationToken,
+        MirrorPulseRootLabelTargetInspection? rootLabelTargetInspection = null)
     {
         ArgumentNullException.ThrowIfNull(item);
         ArgumentNullException.ThrowIfNull(router);
         RootId? rootId = null;
-        if (!router.IsSyncRoot(item.FullPath))
+        if (rootLabelTargetInspection is not null)
+        {
+            if (!metadataOnlyTarget || ownerMetadataWrite)
+                throw new InvalidOperationException("Root Label target inspection cannot grant metadata writes.");
+            _ = rootLabelTargetInspection.RequireMember(item);
+            rootId = rootLabelTargetInspection.RootId;
+        }
+        else if (!router.IsSyncRoot(item.FullPath))
         {
             MirrorPulseRoutedItem route = router.ResolveCurrentPath(item.FullPath);
             rootId = router.GetRegistration(route.InstanceId, route.RootKey).RootId;
@@ -108,8 +127,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLease : IMirror
                         throw new InvalidDataException("A foreign reparse point cannot own namespace permission evidence.");
                 }
             }
-            var lease = new MirrorPulseWindowsNamespacePermissionLease(item, rootId, handles, metadataOnlyTarget);
-            if (!metadataOnlyTarget) _ = await lease.InspectAsync(cancellationToken).ConfigureAwait(false);
+            var lease = new MirrorPulseWindowsNamespacePermissionLease(item, rootId, handles, metadataOnlyTarget, rootLabelTargetInspection);
+            if (!metadataOnlyTarget || rootLabelTargetInspection is not null) _ = await lease.InspectAsync(cancellationToken).ConfigureAwait(false);
             return lease;
         }
         catch
@@ -122,6 +141,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLease : IMirror
     public async ValueTask<MirrorPulseNamespacePermissionObject> InspectAsync(CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        _ = _rootLabelTargetInspection?.RequireMember(_item);
         CloudItemSnapshot snapshot = await _item.InspectAsync(cancellationToken).ConfigureAwait(false);
         if (!snapshot.Exists || snapshot.LocalBinding is not { } binding ||
             (snapshot.Kind == CloudItemKind.Directory) != _isDirectory ||
@@ -131,10 +151,12 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLease : IMirror
         uint linkCount = ValidateRetainedHandle(_target);
         var descriptor = new HandleSecurity(_target, _isDirectory);
         string owner = ReadOwnerSid(binding);
-        return new(new(binding.VolumeSerialNumber, binding.SyncRootFileId, binding.LocalFileId), _rootId,
+        var result = new MirrorPulseNamespacePermissionObject(new(binding.VolumeSerialNumber, binding.SyncRootFileId, binding.LocalFileId), _rootId,
             _item.RelativePath.Replace('\\', '/'), _isDirectory, owner,
             descriptor.GetSecurityDescriptorSddlForm(AccessControlSections.Access), DateTimeOffset.UtcNow)
         { LinkCount = linkCount };
+        _rootLabelTargetInspection?.RequireNativeMember(_item, result, snapshot);
+        return result;
     }
 
     public ValueTask ApplyDaclAsync(string dacl, CancellationToken cancellationToken)
