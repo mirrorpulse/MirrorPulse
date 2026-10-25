@@ -178,7 +178,8 @@ public sealed partial class MirrorPulseProductCatalog
         var projection = await ReadNamespaceMoveFactCoreAsync<MirrorPulseNamespaceMemberMoveProjection>(
             completion.OperationId, false, transaction, token, false).ConfigureAwait(false)
             ?? throw new FileNotFoundException("The official move projection is missing.");
-        if (completion.ItemId != observation.ItemId || completion.RemoteId != observation.RemoteId ||
+        if (completion.Version != observation.Version || completion.Version != projection.Version ||
+            completion.ItemId != observation.ItemId || completion.RemoteId != observation.RemoteId ||
             completion.RelativePath != observation.RelativePath || completion.IsDirectory != observation.IsDirectory ||
             completion.OfficialRemoteRevision != projection.ProjectedRemoteRevision ||
             completion.VerifiedAt <= projection.ObservedAt ||

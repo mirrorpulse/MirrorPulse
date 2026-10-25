@@ -183,17 +183,21 @@ public sealed partial class MirrorPulseProductCatalog
         try
         {
             ThrowIfDisposed();
-            MirrorPulseRootRenameIntent current = (await ReadManagedRootRenamesCoreAsync(cancellationToken).ConfigureAwait(false))
+            using SqliteTransaction transaction = _connection.BeginTransaction();
+            MirrorPulseRootRenameIntent current = (await ReadManagedRootRenamesCoreAsync(cancellationToken, transaction).ConfigureAwait(false))
                 .SingleOrDefault(intent => intent.OperationId == operationId)
                 ?? throw new FileNotFoundException("The managed root rename intent is not registered.");
             if (current.Phase == next) return current;
             if (current.Phase != expected) throw new InvalidOperationException("The managed root rename phase has changed.");
+            if (await ReadNamespaceMemberMoveRowAsync(operationId, transaction, cancellationToken).ConfigureAwait(false) is { Version: 3 })
+                throw new InvalidOperationException("A sealed root Label operation must settle its complete subtree atomically.");
             if (next is MirrorPulseRootRenamePhase.LocalProjected or MirrorPulseRootRenamePhase.Completed)
             {
-                MirrorPulseRootRenameHistory history = await ReadManagedRootRenameHistoryCoreAsync(operationId, cancellationToken).ConfigureAwait(false);
+                MirrorPulseRootRenameHistory history = await ReadManagedRootRenameHistoryCoreAsync(operationId, cancellationToken, transaction).ConfigureAwait(false);
                 if (history.Proof is null || history.Observation is null)
                     throw new InvalidOperationException("The rename requires its original native object proof and matching observation.");
                 await using SqliteCommand topology = _connection.CreateCommand();
+                topology.Transaction = transaction;
                 topology.CommandText = "SELECT payload FROM adapter_topology WHERE id=1;";
                 string? payload = (string?)await topology.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
                 RootRegistration? root = payload is null ? null : DeserializeTopology(payload).Roots.SingleOrDefault(root => root.RootId == current.RootId);
@@ -201,7 +205,8 @@ public sealed partial class MirrorPulseProductCatalog
                     throw new InvalidOperationException("The renamed root's display mapping has not been projected.");
             }
             MirrorPulseRootRenameIntent updated = current with { Phase = next, UpdatedAt = DateTimeOffset.UtcNow };
-            await SaveManagedRootRenameCoreAsync(updated, cancellationToken).ConfigureAwait(false);
+            await SaveManagedRootRenameCoreAsync(updated, cancellationToken, transaction).ConfigureAwait(false);
+            transaction.Commit();
             return updated;
         }
         finally { _gate.Release(); }

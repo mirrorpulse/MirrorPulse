@@ -130,8 +130,9 @@ public sealed partial class MirrorPulseProductCatalog
         string remoteId, string? revision, string path)
     {
         ValidatePermissionRelativePath(path);
-        if (version != 1 || operationId == Guid.Empty || itemId == Guid.Empty || string.IsNullOrWhiteSpace(remoteId) ||
-            remoteId.Length > 16_384 || revision is { Length: > 16_384 } || path.LastIndexOf('/') <= 0)
+        if (version is not (1 or 2) || operationId == Guid.Empty || itemId == Guid.Empty || string.IsNullOrWhiteSpace(remoteId) ||
+            remoteId.Length > 16_384 || revision is { Length: > 16_384 } ||
+            (version == 2 ? path.Length == 0 || path.Contains('/') : path.LastIndexOf('/') <= 0))
             throw new ArgumentException("Move facts require complete identities, a child path and bounded opaque tokens.");
     }
 }

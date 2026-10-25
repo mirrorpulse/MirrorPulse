@@ -14,6 +14,8 @@ public sealed partial class MirrorPulseProductCatalog
         switch (fact)
         {
             case MirrorPulseNamespaceMemberMoveObservation native:
+                if ((intent.Version == 3) != (native.Version == 2))
+                    throw new InvalidOperationException("A first-level native fact requires its original sealed root Label operation.");
                 if (intent.RemoteEntry is { } remote && native.NativeRemoteRevision != remote.OriginalRemoteRevision)
                     throw new InvalidOperationException("The remote move must retain its original native identity revision.");
                 var member = await ReadNamespaceMemberCoreAsync(intent.MemberId, transaction, token).ConfigureAwait(false)
@@ -31,6 +33,8 @@ public sealed partial class MirrorPulseProductCatalog
                     throw new InvalidOperationException("Native move facts require the original child, actual target parent and retained protected descriptors.");
                 break;
             case MirrorPulseNamespaceMemberMoveProjection projection:
+                if ((intent.Version == 3) != (projection.Version == 2))
+                    throw new InvalidOperationException("A first-level projection requires its original sealed root Label operation.");
                 if (intent.RemoteEntry is { } remoteProjection && projection.ProjectedRemoteRevision != remoteProjection.RemoteRevision)
                     throw new InvalidOperationException("The remote move projection must match its original incoming revision.");
                 var observation = await ReadNamespaceMoveFactCoreAsync<MirrorPulseNamespaceMemberMoveObservation>(operationId, true, transaction, token, false).ConfigureAwait(false)

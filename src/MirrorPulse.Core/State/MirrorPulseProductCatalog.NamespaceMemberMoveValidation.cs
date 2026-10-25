@@ -18,12 +18,18 @@ public sealed partial class MirrorPulseProductCatalog
         ValidatePermissionSid(intent.RoleSid, role: true);
         ValidatePermissionRelativePath(intent.Source.RelativePath);
         ValidatePermissionRelativePath(intent.Target.RelativePath);
-        if (intent.Version is not (1 or 2) || (intent.Version == 2) != (intent.RemoteEntry is not null) ||
+        if (intent.Version is not (1 or 2 or 3) || (intent.Version == 2) != (intent.RemoteEntry is not null) ||
             intent.OperationId == Guid.Empty || intent.MemberId == Guid.Empty || intent.ProtectionId == Guid.Empty ||
             intent.RootId.Value == Guid.Empty || intent.ItemId == Guid.Empty || intent.Source.ParentMemberId == Guid.Empty ||
             intent.Target.ParentMemberId == Guid.Empty || intent.Source.ParentProtectionId == Guid.Empty || intent.Target.ParentProtectionId == Guid.Empty ||
             intent.PreparedAt == default || string.IsNullOrWhiteSpace(intent.RemoteId) || intent.RemoteId.Length > 16_384 ||
-            intent.Source.RelativePath.LastIndexOf('/') <= 0 || intent.Target.RelativePath.LastIndexOf('/') <= 0 || intent.Source.RelativePath == intent.Target.RelativePath)
+            intent.Source.RelativePath == intent.Target.RelativePath ||
+            (intent.Version == 3 ? intent.DirectoryMoveEvidence is null || intent.Source.RelativePath.Length == 0 ||
+                intent.Target.RelativePath.Length == 0 || intent.Source.RelativePath.Contains('/') || intent.Target.RelativePath.Contains('/') ||
+                intent.Source.ParentMemberId != intent.Target.ParentMemberId || intent.Source.ParentLocalObject != intent.Target.ParentLocalObject ||
+                intent.Source.ParentProtectionId != intent.Target.ParentProtectionId ||
+                intent.Source.ParentPositionOperationId != intent.Target.ParentPositionOperationId
+                : intent.Source.RelativePath.LastIndexOf('/') <= 0 || intent.Target.RelativePath.LastIndexOf('/') <= 0))
             throw new ArgumentException("A controlled move requires distinct child paths and complete retained identities.", nameof(intent));
         if (intent.PreviousMoveOperationId == Guid.Empty || intent.PreviousMoveOperationId == intent.OperationId ||
             intent.IdentityAcceptanceOperationId == Guid.Empty || intent.SourcePositionOperationId == Guid.Empty ||
@@ -66,13 +72,16 @@ public sealed partial class MirrorPulseProductCatalog
         var target = await ReadNamespaceMemberCoreAsync(intent.Target.ParentMemberId, transaction, token).ConfigureAwait(false)
             ?? throw new FileNotFoundException("The target parent member is missing.");
         if (member.LocalObject != intent.LocalObject || member.OwnerSid != intent.OwnerSid ||
-            member.RootId != intent.RootId || source.RootId != intent.RootId ||
-            target.RootId != intent.RootId || !source.IsDirectory || !target.IsDirectory ||
+            member.RootId != intent.RootId ||
+            (intent.Version == 3 ? source.RootId is not null || target.RootId is not null : source.RootId != intent.RootId || target.RootId != intent.RootId) ||
+            !source.IsDirectory || !target.IsDirectory ||
             source.LocalObject != intent.Source.ParentLocalObject || target.LocalObject != intent.Target.ParentLocalObject ||
             source.OwnerSid != intent.OwnerSid || target.OwnerSid != intent.OwnerSid || intent.PreparedAt < member.RegisteredAt ||
             intent.PreparedAt < source.RegisteredAt || intent.PreparedAt < target.RegisteredAt ||
             target.MemberId == member.MemberId || member.IsDirectory != (intent.DirectoryMoveEvidence is not null))
             throw new InvalidOperationException("Move admission must preserve its original member and direct parents within one managed root.");
+        if (intent.Version == 3)
+            await RequireManagedRootSubtreeRenameReferenceAsync(intent, source, current, transaction, token).ConfigureAwait(false);
         await RequireNamespaceMoveIdentityAsync(intent, member, current, transaction, token).ConfigureAwait(false);
         await RequireNamespaceMoveParentPositionAsync(source, intent.Source, intent.PreparedAt, current, transaction, token).ConfigureAwait(false);
         await RequireNamespaceMoveParentPositionAsync(target, intent.Target, intent.PreparedAt, current, transaction, token).ConfigureAwait(false);
@@ -128,7 +137,8 @@ public sealed partial class MirrorPulseProductCatalog
         }
     }
 
-    private static string ParentMovePath(string relativePath) => relativePath[..relativePath.LastIndexOf('/')];
+    private static string ParentMovePath(string relativePath) => relativePath.LastIndexOf('/') is var separator && separator >= 0
+        ? relativePath[..separator] : string.Empty;
 
     private async Task RequireNamespaceMoveTargetAvailableAsync(MirrorPulseNamespaceMemberMoveIntent intent,
         SqliteTransaction transaction, CancellationToken token)
@@ -156,7 +166,7 @@ public sealed partial class MirrorPulseProductCatalog
 
     private async Task RequireNamespaceMoveRootUnfencedAsync(RootId rootId, Guid? allowedMove,
         SqliteTransaction transaction, CancellationToken token, Guid? allowedRetirement = null, Guid? allowedBatch = null, Guid? allowedReplacement = null,
-        Guid? allowedBornRecoveryInitialization = null, Guid? allowedRemoteUpdate = null, Guid? allowedTransfer = null)
+        Guid? allowedBornRecoveryInitialization = null, Guid? allowedRemoteUpdate = null, Guid? allowedTransfer = null, Guid? allowedRootRename = null)
     {
         await foreach (var transfer in ReadPendingNamespaceTransfersCoreAsync(transaction, token).ConfigureAwait(false))
             if ((transfer.Plan.SourceRoute.RootId == rootId || transfer.Plan.TargetRoute.RootId == rootId) &&
@@ -171,7 +181,8 @@ public sealed partial class MirrorPulseProductCatalog
         var pending = await ReadPendingNamespaceMemberMoveCoreAsync(rootId, transaction, token).ConfigureAwait(false);
         if (pending is not null && pending.OperationId != allowedMove)
             throw new InvalidOperationException("An unresolved controlled move has fenced this managed root.");
-        if ((await ReadManagedRootRenamesCoreAsync(token, transaction).ConfigureAwait(false)).Any(intent => intent.RootId == rootId && intent.IsPending))
+        if ((await ReadManagedRootRenamesCoreAsync(token, transaction).ConfigureAwait(false))
+            .Any(intent => intent.RootId == rootId && intent.IsPending && intent.OperationId != allowedRootRename))
             throw new InvalidOperationException("An unresolved Label change has fenced this managed root.");
         await foreach (var retirement in ReadPendingNamespaceRetirementsCoreAsync(transaction, token).ConfigureAwait(false))
             if (retirement.Intent.RootId == rootId && retirement.OperationId != allowedRetirement)

@@ -185,6 +185,21 @@ authorization, protected execution and the full native fault recovery matrix
 remain pending work. Legacy unwitnessed intents remain fenced; a preparation
 retry cannot capture the current object as their missing original proof.
 
+The product catalog admits a version 3 subtree move only when its operation ID,
+source and target, item and native binding, and complete opaque public proof match
+the original current root Label operation. Only this mode uses the original
+sync-root anchor as both parents; ordinary member moves keep their existing
+same-root child-path checks. Root native/projection/completion facts use version 2
+with a first-level path and require that linked operation. Admission seals the
+complete current product subtree. After a retained native start, original Label
+observation, public reconciliation and fresh protected member observations, one
+transaction settles all positions, the owned name, Label mapping, historical names
+and both fences. Any interrupted insert or Label update rolls back the whole
+settlement. Historical replay preserves later Label generations. This catalog
+boundary does not execute a protected native rename, refresh routing, establish
+public SDK provenance or acknowledge journals; those Host boundaries require
+separate implementation and clean native acceptance.
+
 Product catalog reads check that each retained rename payload belongs to its
 indexed root and operation. They also validate the stored binding and encoded
 proof envelope and require a retained native observation to match that proof,

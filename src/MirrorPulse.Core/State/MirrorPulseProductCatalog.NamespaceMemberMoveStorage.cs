@@ -118,6 +118,9 @@ public sealed partial class MirrorPulseProductCatalog
         var pending = await ReadPendingNamespaceMemberMoveCoreAsync(intent.RootId, transaction, token).ConfigureAwait(false);
         if (pending?.OperationId != operationId) throw new InvalidOperationException("Only the retained pending move can execute.");
         await ValidateNamespaceMemberMoveReferencesAsync(intent, true, transaction, token).ConfigureAwait(false);
+        if (intent.Version == 3)
+            await RequireNamespaceMoveRootUnfencedAsync(intent.RootId, intent.OperationId, transaction, token,
+                allowedRootRename: intent.OperationId).ConfigureAwait(false);
         await RequireNamespaceMoveTargetAvailableAsync(intent, transaction, token).ConfigureAwait(false);
         if (intent.DirectoryMoveEvidence is not null)
             await RequireCurrentNamespaceDirectoryMoveSnapshotAsync(intent, transaction, token).ConfigureAwait(false);

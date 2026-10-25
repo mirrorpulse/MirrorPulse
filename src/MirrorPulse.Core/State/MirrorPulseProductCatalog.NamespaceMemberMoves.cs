@@ -26,7 +26,9 @@ public sealed record MirrorPulseNamespaceRemoteMoveReference(int Version, Instan
 /// and the target is reserved. Preparation neither moves an object nor authorizes native execution.
 /// The Host quiesces earlier work, retains its shared actor and native guards, and verifies fresh
 /// objects and public move evidence. DirectoryMoveEvidence is an opaque public CfSharp encoding.
-/// Managed-root Label changes and cross-root copy/delete use their separate product lifecycles.
+/// Version 3 links this same operation ID to an original managed-root Label change;
+/// only that mode may retain the sync-root anchor as both parents. Cross-root
+/// copy/delete uses its separate product lifecycle.
 /// </remarks>
 public sealed record MirrorPulseNamespaceMemberMoveIntent(int Version, Guid OperationId, Guid MemberId,
     Guid ProtectionId, RootId RootId, MirrorPulseLocalFileBinding LocalObject, Guid ItemId, string RemoteId,
@@ -86,7 +88,8 @@ public sealed partial class MirrorPulseProductCatalog
             }
             await RequireNotNamespaceTransferOwnerAsync(intent.OperationId, transaction, cancellationToken).ConfigureAwait(false);
             await ValidateNamespaceMemberMoveReferencesAsync(intent, current: true, transaction, cancellationToken).ConfigureAwait(false);
-            await RequireNamespaceMoveRootUnfencedAsync(intent.RootId, null, transaction, cancellationToken).ConfigureAwait(false);
+            await RequireNamespaceMoveRootUnfencedAsync(intent.RootId, null, transaction, cancellationToken,
+                allowedRootRename: intent.Version == 3 ? intent.OperationId : null).ConfigureAwait(false);
             await RequireNamespaceMoveTargetAvailableAsync(intent, transaction, cancellationToken).ConfigureAwait(false);
             byte[] payload = JsonSerializer.SerializeToUtf8Bytes(intent, TopologyJsonOptions);
             if (payload.Length > NamespaceMemberMovePayloadLimit) throw new ArgumentException("The move evidence must be bounded.", nameof(intent));

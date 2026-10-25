@@ -47,6 +47,10 @@ public sealed partial class MirrorPulseProductCatalog
                     ?? throw new InvalidDataException("The entire subtree lost its atomic root completion.");
                 if (root.MemberId != snapshot.Entries.Single(entry => entry.Depth == 0).MemberId || root.Completion != completion.Root)
                     throw new InvalidDataException("The entire subtree receipt and root completion disagree.");
+                var intent = await ReadNamespaceMemberMoveCoreAsync(operationId, transaction, token).ConfigureAwait(false)
+                    ?? throw new InvalidDataException("The directory receipt lost its original move intent.");
+                if (intent.Version == 3)
+                    await ValidateManagedRootSubtreeRenameReceiptAsync(intent, completion, transaction, token).ConfigureAwait(false);
                 retained = new(completion, snapshot, snapshot.Entries.Select((entry, index) => (entry.MemberId, Index: index))
                     .ToDictionary(entry => entry.MemberId, entry => entry.Index));
                 reads.DirectoryCompletions.Add(operationId, retained);

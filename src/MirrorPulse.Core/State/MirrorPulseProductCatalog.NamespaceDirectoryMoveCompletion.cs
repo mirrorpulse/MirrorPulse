@@ -72,6 +72,8 @@ public sealed partial class MirrorPulseProductCatalog
             await InsertNamespaceDirectoryMoveCompletionCoreAsync(completion, payload, transaction, cancellationToken).ConfigureAwait(false);
             foreach (var position in positions)
                 await InsertNamespaceMemberPositionCoreAsync(position, transaction, cancellationToken).ConfigureAwait(false);
+            if (intent.Version == 3)
+                await CompleteManagedRootSubtreeRenameCoreAsync(intent, completion, transaction, cancellationToken).ConfigureAwait(false);
             transaction.Commit(); return completion;
         }
         finally { _gate.Release(); }
