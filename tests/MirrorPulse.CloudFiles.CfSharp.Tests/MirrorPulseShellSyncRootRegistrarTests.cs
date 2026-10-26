@@ -26,6 +26,10 @@ public sealed class MirrorPulseShellSyncRootRegistrarTests
         Assert.AreEqual("MirrorPulse", first.DisplayName);
         Assert.AreEqual("0.1.0", first.ProviderVersion);
         Assert.IsFalse(string.IsNullOrWhiteSpace(first.IconResource));
+        Assert.AreEqual(Convert.ToBase64String([1, 2, 3]), first.CloudFilesRootIdentity);
+        definition.Identity[0] = 99;
+        Assert.AreEqual(Convert.ToBase64String([1, 2, 3]), first.CloudFilesRootIdentity);
+        Assert.AreEqual(first.CloudFilesRootIdentity, (first with { DisplayName = "Another label" }).CloudFilesRootIdentity);
     }
 
     [TestMethod]

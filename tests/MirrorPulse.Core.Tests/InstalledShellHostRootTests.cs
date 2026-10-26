@@ -50,6 +50,37 @@ public sealed class InstalledShellHostRootTests
     }
 
     [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public void UnreportedProviderRequiresAnExplicitSuccessfulFreshOwnershipCallback(bool fails)
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "MirrorPulse-shell-root-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            Guid expected = Guid.NewGuid();
+            var original = new IOException("Fresh ownership check failed.");
+            int calls = 0;
+            void Verify() { calls++; if (fails) throw original; }
+            Assert.ThrowsExactly<InvalidOperationException>(() => MirrorPulseShellProbeHostRoot.RequireRegistration(
+                directory, expected, directory + "-foreign", Guid.Empty, Verify));
+            Assert.ThrowsExactly<InvalidOperationException>(() => MirrorPulseShellProbeHostRoot.RequireRegistration(
+                directory, expected, directory, Guid.NewGuid(), Verify));
+            Assert.AreEqual(0, calls);
+            if (fails)
+            {
+                var observed = Assert.ThrowsExactly<IOException>(() => MirrorPulseShellProbeHostRoot.RequireRegistration(
+                    directory, expected, directory, Guid.Empty, Verify));
+                Assert.AreSame(original, observed);
+            }
+            else MirrorPulseShellProbeHostRoot.RequireRegistration(directory, expected, directory, Guid.Empty, Verify);
+            Assert.AreEqual(1, calls);
+            Assert.IsTrue(Directory.Exists(directory));
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [TestMethod]
     [DataRow(false, false)]
     [DataRow(true, false)]
     [DataRow(false, true)]

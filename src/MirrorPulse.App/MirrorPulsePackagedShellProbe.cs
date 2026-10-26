@@ -26,7 +26,8 @@ internal static class MirrorPulsePackagedShellProbe
                 Guid.Parse("d194eacd-c38c-49df-a238-49871f9c8d1b"), "MirrorPulse/cloud-files/v1"u8.ToArray());
             MirrorPulseShellRegistrationProfile profile = MirrorPulseShellSyncRootRegistrar.CreateCurrentUserProfile(definition);
             StorageProviderSyncRootInfo original = StorageProviderSyncRootManager.GetSyncRootInformationForId(profile.RegistrationId);
-            MirrorPulseShellProbeHostRoot.RequireRegistration(root, definition.ProviderId, original.Path.Path, original.ProviderId);
+            MirrorPulseShellProbeHostRoot.RequireRegistration(root, definition.ProviderId, original.Path.Path, original.ProviderId,
+                    () => MirrorPulseShellSyncRootRegistrar.RequireMatchingRegistration(profile));
             MirrorPulseShellRegistrationProfile restore = profile with
             {
                 DisplayName = original.DisplayNameResource,
@@ -56,7 +57,8 @@ internal static class MirrorPulsePackagedShellProbe
             {
                 await MirrorPulseShellSyncRootRegistrar.RegisterAsync(restore);
                 StorageProviderSyncRootInfo restored = StorageProviderSyncRootManager.GetSyncRootInformationForId(profile.RegistrationId);
-                MirrorPulseShellProbeHostRoot.RequireRegistration(root, definition.ProviderId, restored.Path.Path, restored.ProviderId);
+                MirrorPulseShellProbeHostRoot.RequireRegistration(root, definition.ProviderId, restored.Path.Path, restored.ProviderId,
+                    () => MirrorPulseShellSyncRootRegistrar.RequireMatchingRegistration(profile));
                 if (restored.DisplayNameResource != restore.DisplayName)
                     throw new InvalidDataException("The original Host Shell label was not restored.");
             });

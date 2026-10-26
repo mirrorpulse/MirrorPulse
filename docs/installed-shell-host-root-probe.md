@@ -9,10 +9,13 @@ from the Host launch environment (`MIRRORPULSE_SYNC_ROOT`) or the same default
 processes' working directories.
 
 The probe requires that directory to exist. Before changing a label, it reads the
-actual fixed current-user registration and checks its path and product Provider
-ID against those expected values. It never infers ownership from a discovered
-registration. The production registrar's different-path and different-provider
-guards remain unchanged.
+actual fixed current-user registration and checks its exact ID and path. A
+nonempty Provider ID must equal the expected product GUID. An empty GUID also
+requires the production registrar's fresh public Cloud Files root identity
+check: exact native root path, nonzero file ID, product provider name and exact
+configured root identity bytes. Missing, foreign or failed evidence refuses the
+change. The Host retains those expected bytes rather than inferring ownership
+from a discovered path or label. See [registration identity](shell-registration-identity.md).
 
 The probe performs both real registrations and both real Shell label readbacks.
 It then restores the original label, icon resource and provider version, and

@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Security.Principal;
+using CfSharp;
 using MirrorPulse.Core.CloudFiles;
 using Windows.Security.Cryptography;
 using Windows.Storage;
@@ -14,7 +15,11 @@ public sealed record MirrorPulseShellRegistrationProfile(
     Guid ProviderId,
     string DisplayName,
     string ProviderVersion,
-    string IconResource);
+    string IconResource)
+{
+    // Immutable expected bytes from the Host definition; never inferred from a path.
+    internal string? CloudFilesRootIdentity { get; init; }
+}
 
 /// <summary>
 /// Registers the single MP root with Explorer's Shell integration. CfSharp owns the separate
@@ -44,7 +49,10 @@ public static class MirrorPulseShellSyncRootRegistrar
             definition.ProviderId,
             displayName.Trim(),
             definition.ProviderVersion,
-            iconResource.Trim());
+            iconResource.Trim())
+        {
+            CloudFilesRootIdentity = Convert.ToBase64String(definition.Identity),
+        };
     }
 
     public static MirrorPulseShellRegistrationProfile CreateCurrentUserProfile(
@@ -82,8 +90,7 @@ public static class MirrorPulseShellSyncRootRegistrar
         {
             throw new InvalidOperationException("The MirrorPulse Shell registration belongs to another sync root.");
         }
-        if (alreadyRegistered && StorageProviderSyncRootManager.GetSyncRootInformationForId(profile.RegistrationId).ProviderId != profile.ProviderId)
-            throw new InvalidOperationException("The existing Shell registration belongs to another provider.");
+        if (alreadyRegistered) RequireMatchingRegistration(profile);
 
         StorageFolder folder = await StorageFolder.GetFolderFromPathAsync(path);
         cancellationToken.ThrowIfCancellationRequested();
@@ -135,6 +142,19 @@ public static class MirrorPulseShellSyncRootRegistrar
                 exception);
         }
         return alreadyRegistered;
+    }
+
+    /// <summary>Checks an existing Shell root against its exact current public registration identities.</summary>
+    public static void RequireMatchingRegistration(MirrorPulseShellRegistrationProfile profile)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        EnsureSupported();
+        var actual = StorageProviderSyncRootManager.GetSyncRootInformationForId(profile.RegistrationId);
+        MirrorPulseShellRegistrationOwnership.Require(profile, actual.Id, actual.Path.Path, actual.ProviderId, () =>
+        {
+            var cloud = CloudSyncRoot.Open(profile.SyncRootPath).GetInfo();
+            return new(cloud.Path, cloud.FileId, cloud.ProviderName, Convert.ToBase64String(cloud.SyncRootIdentity));
+        });
     }
 
     private static bool HasPackageIdentity()
