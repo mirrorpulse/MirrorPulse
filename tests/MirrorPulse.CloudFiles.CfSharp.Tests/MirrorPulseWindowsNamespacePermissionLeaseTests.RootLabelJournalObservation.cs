@@ -11,6 +11,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     {
         // Optional observation after the original assertions. No public ACK, SDK
         // mutation, rescan reset, Worker call, content read or inferred ownership.
+        object report;
         try
         {
             await using var feed = fileSystem.CreateLocalChangeFeed();
@@ -49,7 +50,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 after = page.LastScannedSequence;
                 more = page.HasMore && !loss;
             }
-            TestContext.WriteLine("RootLabelJournalOriginals: " + JsonSerializer.Serialize(new
+            report = new
             {
                 schemaVersion = 1,
                 available = true,
@@ -71,13 +72,13 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 acknowledged = false,
                 runtimeHandlerActivated = false,
                 rootNotificationOwnershipAccepted = false,
-            }));
+            };
         }
         catch (Exception failure) when (failure is not OutOfMemoryException)
         {
             // Failure of optional observation cannot replace the original native
             // matrix outcome. An unavailable observation is never a passed ACK boundary.
-            TestContext.WriteLine("RootLabelJournalOriginals: " + JsonSerializer.Serialize(new
+            report = new
             {
                 schemaVersion = 1,
                 available = false,
@@ -89,8 +90,10 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 acknowledged = false,
                 runtimeHandlerActivated = false,
                 rootNotificationOwnershipAccepted = false,
-            }));
+            };
         }
+        // Await feed disposal before emitting exactly one availability result.
+        TestContext.WriteLine("RootLabelJournalOriginals: " + JsonSerializer.Serialize(report));
     }
 
     private static bool IsRootJournalName(string? path) => !string.IsNullOrWhiteSpace(path) &&
