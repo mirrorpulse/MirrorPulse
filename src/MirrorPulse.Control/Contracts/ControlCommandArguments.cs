@@ -96,6 +96,13 @@ public sealed record RootPrepareRenameArguments(Guid RootId, string Label) : IMi
 
 public sealed record RootExecuteRenameArguments(Guid OperationId) : IMirrorPulseControlArguments;
 
+public sealed record RootCancelRenameArguments(Guid OperationId) : IMirrorPulseControlArguments;
+
+/// <summary>The original cancelled operation and an independent current namespace audit.</summary>
+public sealed record MirrorPulseControlRootCancellation(Guid OperationId, string RootId, string Phase,
+    string SourceName, string TargetName, DateTimeOffset CancelledAt, string CurrentDirectoryName,
+    int MemberCount, bool CurrentTreeAudited, bool NamespaceReady);
+
 /// <summary>A controlled product execution and its separately observed current namespace admission.</summary>
 public sealed record MirrorPulseControlRootExecution(Guid OperationId, string RootId, string Phase,
     string SourceName, string TargetName, string CurrentDirectoryName, int MemberCount, bool CurrentTreeAudited, bool NamespaceReady);

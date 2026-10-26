@@ -12,6 +12,10 @@ public sealed record MirrorPulseManagedRootRenameRestoreResult(Guid OperationId,
 public sealed record MirrorPulseManagedRootRenameExecution(MirrorPulseRootRenameIntent Intent,
     string CurrentDirectoryName, int MemberCount, bool CurrentTreeAudited, bool NamespaceReady);
 
+/// <summary>An immutable cancellation receipt, separately reporting this Host's current admission.</summary>
+public sealed record MirrorPulseManagedRootRenameCancellation(MirrorPulseRootRenameIntent Intent,
+    DateTimeOffset CancelledAt, string CurrentDirectoryName, int MemberCount, bool CurrentTreeAudited, bool NamespaceReady);
+
 /// <summary>Serializes historical root recovery with uploads and remote changes.</summary>
 [SupportedOSPlatform("windows10.0.16299")]
 public sealed class MirrorPulseManagedRootRenameService

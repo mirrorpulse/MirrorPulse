@@ -1,0 +1,171 @@
+using System.Security.Principal;
+using CfSharp;
+using MirrorPulse.Core.CloudFiles;
+using MirrorPulse.Core.Configuration;
+using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.State;
+using MirrorPulse.Core.Sync;
+
+namespace MirrorPulse.CloudFiles.CfSharp.Tests;
+
+public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
+{
+    [TestMethod]
+    [DoNotParallelize]
+    [TestCategory("NativeCloudFiles")]
+    public async Task NativePublicRuntimeCancelsOnlyUnstartedOriginalRootLabelsAcrossRolesAndRetainsLaterNames()
+    {
+        foreach (bool disabled in new[] { false, true })
+            foreach (bool newRole in new[] { false, true })
+                await ProbePublicRootLabelCancellationAsync(disabled, newRole);
+        foreach (bool disabled in new[] { false, true })
+            await ProbePublicRootLabelCancellationAsync(disabled, newRole: true, startWritten: true);
+    }
+
+    private async Task ProbePublicRootLabelCancellationAsync(bool disabled, bool newRole, bool startWritten = false)
+    {
+        if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
+            Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
+        MirrorPulseNamespaceExecutionSessionTests.AssertExpectedArchitecture();
+        string directory = Path.Combine(Path.GetTempPath(), "MirrorPulse-native-tests", Guid.NewGuid().ToString("N"));
+        var paths = new MirrorPulseStoragePaths(Path.Combine(directory, "sync"), Path.Combine(directory, "data"));
+        var registry = new CfSharpMirrorPulseCloudRootRegistry();
+        var root = AdapterRootRegistrationMapper.Map(AdapterId.Parse("example.public-root-label"), InstanceId.New(),
+            new AdapterRootDefinition("docs", "Docs", "Docs", false), RootRegistrationState.Active, identityScope: RootIdentityScope.InstanceRoot);
+        var router = new MirrorPulseRootRouter(paths.SyncRootPath, [root]);
+        using WindowsIdentity caller = WindowsIdentity.GetCurrent();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        byte[] bytes = [3, 5, 7, 11, 13, 17];
+        var source = new ProtectedPermissionNoSourceProvider();
+        var ranges = new RootLabelExecutionRejectedRanges();
+        string priorRole;
+        MirrorPulseRootRenameHistory? preparedBeforeRoleChange = null;
+        Guid fileMemberId;
+        try
+        {
+            registry.Register(new(paths.SyncRootPath, "0.1.0", Guid.NewGuid(), [4, 7, 2]));
+            await File.WriteAllTextAsync(Path.Combine(directory, ".mp-permission-fixture"), string.Empty, deadline.Token);
+            // Prepare ordinary children under a different, fully disposed owner.
+            // No Label intent or first-native start crosses this role boundary.
+            await using (var role = new MirrorPulseNamespaceExecutionSession())
+            await using (var catalog = await MirrorPulseProductCatalog.OpenAsync(paths, deadline.Token))
+            await using (var actor = new MirrorPulseNamespaceActor())
+            await using (var scheduler = new MirrorPulseInstanceScheduler())
+            await using (var permissions = new MirrorPulseNamespacePermissionCoordinator(catalog))
+            {
+                priorRole = role.RoleSid.Value;
+                var state = new MirrorPulseCfSharpStateSession(paths);
+                await using var fileSystem = new MirrorPulseCloudFileSystemBuilder(paths).WithStateStore(state).WithContentProvider(source).Build();
+                await role.RunNamespaceOperationAsync(async () => await fileSystem.StartAsync(deadline.Token));
+                await using (var feed = fileSystem.CreateLocalChangeFeed())
+                {
+                    await feed.StartAsync(deadline.Token);
+                    await new MirrorPulseRootPopulationCoordinator(fileSystem, feed).PopulateAsync(router, deadline.Token);
+                }
+                await File.WriteAllBytesAsync(fileSystem.GetFile("Docs/original.bin").FullPath, bytes, deadline.Token);
+                foreach (CloudItem item in new CloudItem[] { fileSystem.Root, fileSystem.GetDirectory("Docs"), fileSystem.GetFile("Docs/original.bin") })
+                    SetProtectedFixtureUserOwner(item, caller.User!);
+                await fileSystem.GetDirectory("Docs").SetPopulationStateAsync(CloudDirectoryPopulationState.Complete, cancellationToken: deadline.Token);
+                await SaveAcceptedIdentityFixtureTopologyAsync(catalog, root, deadline.Token);
+                await using var initialized = await new MirrorPulseNamespaceInitializationCoordinator(fileSystem, catalog, router, role,
+                    actor, scheduler, permissions).InitializeAsync(Guid.NewGuid(), deadline.Token);
+                var rootMember = (await catalog.ReadNamespaceMemberChildAsync(initialized.Completion.AnchorMemberId, "Docs", deadline.Token))!;
+                var file = (await catalog.ReadNamespaceMemberChildAsync(rootMember.MemberId, "original.bin", deadline.Token))!;
+                fileMemberId = file.MemberId;
+                var creation = new MirrorPulseNamespaceCreationCoordinator(fileSystem, state, catalog, router, role, actor);
+                var left = await creation.CreateAsync(Guid.NewGuid(), rootMember.MemberId, "left", true, deadline.Token);
+                var nested = await creation.CreateAsync(Guid.NewGuid(), left.MemberId, "nested", true, deadline.Token);
+                var moves = new MirrorPulseNamespaceMemberMoveCoordinator(fileSystem, state, catalog, router, role, actor);
+                var move = await moves.PrepareAsync(Guid.NewGuid(), file.MemberId, nested.MemberId, "pending.bin", deadline.Token);
+                await moves.ExecuteAsync(move.OperationId, deadline.Token);
+                if (disabled)
+                {
+                    await catalog.SetInstanceEnabledAsync(root.InstanceId, false, deadline.Token);
+                    root = (await catalog.ReadAdapterTopologyAsync(deadline.Token)).Roots.Single();
+                    router.ReplaceRegistrations([root], await catalog.ReadManagedRootNamesAsync(deadline.Token));
+                }
+                if (newRole)
+                {
+                    await role.RunNamespaceOperationAsync(async () => preparedBeforeRoleChange = await new MirrorPulseManagedRootRenameCoordinator(fileSystem, catalog, router)
+                        .PrepareAsync(root.RootId, "Renamed", deadline.Token));
+                    var cancellationMoves = new MirrorPulseNamespaceMemberMoveCoordinator(fileSystem, state, catalog, router, role, actor);
+                    _ = await cancellationMoves.PrepareRootLabelAsync(preparedBeforeRoleChange!.Intent.OperationId, deadline.Token);
+                    Assert.IsNull(await catalog.ReadNamespaceMemberMoveStartAsync(preparedBeforeRoleChange.Intent.OperationId, deadline.Token));
+                    if (startWritten)
+                        await catalog.RecordNamespaceMemberMoveStartAsync(new(1, preparedBeforeRoleChange.Intent.OperationId, DateTimeOffset.UtcNow), deadline.Token);
+                }
+            }
+
+            await using var currentRole = new MirrorPulseNamespaceExecutionSession();
+            Assert.AreNotEqual(priorRole, currentRole.RoleSid.Value);
+            await using var currentCatalog = await MirrorPulseProductCatalog.OpenAsync(paths, deadline.Token);
+            await using var currentActor = new MirrorPulseNamespaceActor();
+            await using var currentScheduler = new MirrorPulseInstanceScheduler();
+            await using var work = new MirrorPulseNamespaceWorkAdmission([root.RootId]);
+            var demand = new MirrorPulseDemandProvider(router, ranges, namespaceWork: work, catalog: currentCatalog);
+            var factory = new CfSharpMirrorPulseCloudRuntimeFactory(provider: demand, router: router, catalog: currentCatalog,
+                namespaceExecution: currentRole, namespaceActor: currentActor, scheduler: currentScheduler, namespaceWork: work, initializeNamespaceOnStart: true);
+            await using var runtime = factory.Create(paths);
+            await runtime.StartAsync(deadline.Token);
+            Assert.AreEqual(!newRole, runtime.NamespaceStartupResults.Single(item => item.RootId == root.RootId).Admitted);
+            await Assert.ThrowsExactlyAsync<ArgumentException>(() => runtime.CancelManagedRootRenameAsync(Guid.Empty, deadline.Token).AsTask());
+            await Assert.ThrowsExactlyAsync<FileNotFoundException>(() => runtime.CancelManagedRootRenameAsync(Guid.NewGuid(), deadline.Token).AsTask());
+            var original = preparedBeforeRoleChange ?? await runtime.PrepareManagedRootRenameAsync(root.RootId, "Renamed", deadline.Token);
+            if (startWritten)
+            {
+                var start = await currentCatalog.ReadNamespaceMemberMoveStartAsync(original.Intent.OperationId, deadline.Token);
+                Assert.IsNotNull(start);
+                await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => runtime.CancelManagedRootRenameAsync(original.Intent.OperationId, deadline.Token).AsTask());
+                Assert.AreEqual(start, await currentCatalog.ReadNamespaceMemberMoveStartAsync(original.Intent.OperationId, deadline.Token));
+                Assert.IsNull(await currentCatalog.ReadRootLabelCancellationAsync(original.Intent.OperationId, deadline.Token));
+                Assert.AreEqual(original.Intent.OperationId, (await currentCatalog.ReadPendingNamespaceMemberMoveAsync(root.RootId, deadline.Token))!.OperationId);
+                Assert.AreEqual("Docs", router.FindRegistration(root.RootId)!.DirectoryName);
+                Assert.IsFalse(Directory.Exists(Path.Combine(paths.SyncRootPath, "Renamed"))); Assert.IsFalse(work.IsAdmitted(root.RootId));
+                CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(Path.Combine(paths.SyncRootPath, "Docs/left/nested/pending.bin"), deadline.Token));
+                Assert.AreEqual(0, source.Reads); Assert.AreEqual(0, ranges.Calls);
+                TestContext.WriteLine($"PublicRootLabelCancellationRefusalActual: disabled={disabled}; newRole=True; startWrittenButUnmoved=True; originalStartPreserved=True; originalFencePreserved=True; cancellationAbsent=True; sourceReads=0.");
+                return;
+            }
+            var cancelled = await runtime.CancelManagedRootRenameAsync(original.Intent.OperationId, deadline.Token);
+            Assert.AreEqual(MirrorPulseRootRenamePhase.Cancelled, cancelled.Intent.Phase);
+            Assert.AreEqual(original.Intent.OperationId, cancelled.Intent.CancellationOperationId);
+            Assert.AreEqual("Docs", cancelled.CurrentDirectoryName); Assert.AreEqual(4, cancelled.MemberCount);
+            Assert.IsTrue(cancelled.CurrentTreeAudited); Assert.AreEqual(!disabled, cancelled.NamespaceReady);
+            var record = await currentCatalog.ReadRootLabelCancellationAsync(original.Intent.OperationId, deadline.Token);
+            Assert.IsNotNull(record); Assert.AreEqual(cancelled.CancelledAt, record.VerifiedAt);
+            Assert.IsFalse(record.NativeMoveObserved); Assert.IsFalse(record.DurableProjectionCommitted); Assert.IsFalse(record.RequiresFullRescan);
+            Assert.AreEqual(0, record.DurableStateEntriesUpdated); Assert.HasCount(4, record.Members);
+            Assert.IsNull(await currentCatalog.ReadNamespaceMemberMoveStartAsync(original.Intent.OperationId, deadline.Token));
+            Assert.IsNull(await currentCatalog.ReadNamespaceDirectoryMoveCompletionAsync(original.Intent.OperationId, deadline.Token));
+            Assert.IsFalse(Directory.Exists(Path.Combine(paths.SyncRootPath, "Renamed")));
+            var retained = await currentCatalog.ReadManagedRootRenameHistoryAsync(original.Intent.OperationId, deadline.Token);
+            Assert.IsNotNull(retained); Assert.AreEqual(original.Proof, retained.Proof); Assert.IsNull(retained.Observation);
+            var firstReplay = await runtime.CancelManagedRootRenameAsync(original.Intent.OperationId, deadline.Token);
+            Assert.AreEqual(cancelled.Intent, firstReplay.Intent); Assert.AreEqual(cancelled.CancelledAt, firstReplay.CancelledAt);
+            Assert.AreEqual(!disabled, firstReplay.NamespaceReady);
+
+            var later = await runtime.PrepareManagedRootRenameAsync(root.RootId, "FinalLabel", deadline.Token);
+            _ = await runtime.ExecuteManagedRootRenameAsync(later.Intent.OperationId, deadline.Token);
+            await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => runtime.CancelManagedRootRenameAsync(later.Intent.OperationId, deadline.Token).AsTask());
+            var replay = await runtime.CancelManagedRootRenameAsync(original.Intent.OperationId, deadline.Token);
+            Assert.AreEqual(cancelled.Intent, replay.Intent); Assert.AreEqual(cancelled.CancelledAt, replay.CancelledAt);
+            Assert.AreEqual("FinalLabel", replay.CurrentDirectoryName); Assert.IsTrue(replay.CurrentTreeAudited);
+            Assert.AreEqual(!disabled, replay.NamespaceReady);
+            Assert.AreEqual(retained, await currentCatalog.ReadManagedRootRenameHistoryAsync(original.Intent.OperationId, deadline.Token));
+            Assert.AreEqual("FinalLabel", router.FindRegistration(root.RootId)!.DirectoryName);
+            Assert.AreEqual(fileMemberId, (await runtime.InspectNamespaceMemberAsync("FinalLabel/left/nested/pending.bin", false, deadline.Token)).MemberId);
+            string payload = Path.Combine(paths.SyncRootPath, "FinalLabel", "left", "nested", "pending.bin");
+            CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(payload, deadline.Token));
+            await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() => File.Delete(payload), deadline.Token));
+            Assert.IsNull(await currentCatalog.ReadPendingNamespaceMemberMoveAsync(root.RootId, deadline.Token));
+            Assert.AreEqual(0, source.Reads); Assert.AreEqual(0, ranges.Calls);
+            TestContext.WriteLine($"PublicRootLabelCancellationActual: disabled={disabled}; newRole={newRole}; originalOperation=True; actualPublicNotMoved=True; completeMembers=4; noNativeStart=True; separateCurrentRecovery=True; freshCurrentAudit=True; activeReady={!disabled}; immutableHistoricalReplay=True; latestLabelPreserved=True; completedCancellationRefused=True; sourceReads=0; independentHostRestart=False; signedWorker=False.");
+        }
+        finally
+        {
+            registry.Unregister(paths.SyncRootPath);
+            RestoreRootLabelExecutionFixtureForCleanup(directory, paths.SyncRootPath, caller.User!, additionalRootName: "FinalLabel");
+            DeleteFixture(directory);
+        }
+    }
+}

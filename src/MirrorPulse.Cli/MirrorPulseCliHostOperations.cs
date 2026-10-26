@@ -571,6 +571,14 @@ public sealed class MirrorPulseCliHostOperations : IMirrorPulseCliHostOperations
                     human = $"Root Label {execution.Phase} · {execution.OperationId:D} · {execution.CurrentDirectoryName}";
                     exitCode = execution.Phase == "Completed" ? MirrorPulseControlExitCodes.Success : MirrorPulseControlExitCodes.Pending;
                     break;
+                case ("root", "cancel-rename"):
+                    if (command.Arguments.Count != 1 || !Guid.TryParse(command.Arguments[0], out Guid cancelRootOperation) || cancelRootOperation == Guid.Empty)
+                        throw new ArgumentException("root cancel-rename requires one non-empty original root rename operation ID.");
+                    var cancellation = await _client.CancelRootRenameAsync(cancelRootOperation, cancellationToken).ConfigureAwait(false);
+                    result = cancellation;
+                    human = $"Root Label {cancellation.Phase} · {cancellation.OperationId:D} · {cancellation.CurrentDirectoryName}";
+                    exitCode = cancellation.Phase == "Cancelled" ? MirrorPulseControlExitCodes.Success : MirrorPulseControlExitCodes.Pending;
+                    break;
                 case ("root", "recover"):
                     if (command.Arguments.Count != 1 || !Guid.TryParse(command.Arguments[0], out Guid renameOperation) || renameOperation == Guid.Empty)
                     {

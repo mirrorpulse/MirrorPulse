@@ -54,9 +54,28 @@ public sealed partial class NamespaceNonAdminControllerTests
                 param([string]$Policy,[string]$Directory,[string]$Scenario,[int]$Count)
                 $ErrorActionPreference='Stop'
                 . $Policy
-                if ($Scenario -like 'root-public-*') {
+                if ($Scenario -like 'root-cancellation-*') {
                     $catalog=Get-Content -Raw (Join-Path (Split-Path $Policy -Parent) 'test-suites.json') | ConvertFrom-Json
                     $names=@($catalog.required.namespace)
+                    $cancel='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicRuntimeCancelsOnlyUnstartedOriginalRootLabelsAcrossRolesAndRetainsLaterNames'
+                    if ($Count -ne 121 -or $names.Count -ne $Count -or @($names|Where-Object {$_ -ceq $cancel}).Count -ne 1) {throw 'Require the complete explicit cancellation catalog.'}
+                    if ($Scenario -eq 'root-cancellation-selected') {
+                        $legacy=@($names|Where-Object {$_ -cne $cancel})
+                        $prior=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 120 -TestNames $legacy
+                        $actual=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $Count -TestNames $names
+                        if ($prior -ne 4155000 -or $actual -ne $prior+6*60000) {throw 'Keep all prior native deadlines and count each of the six actual cancellation/refusal executions.'}
+                        if ((Get-OrdinaryUserNamespaceStepTimeoutMinutes -TestCount $Count -TestNames $names) -ne 81) {throw 'Preserve the five-minute diagnostic/profile cleanup margin.'}
+                    } else {
+                        $names=@($names|ForEach-Object {if($_ -ceq $cancel){'Fixture.Unrelated'}else{$_}})
+                        $rejected=$false
+                        try {Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $Count -TestNames $names|Out-Null} catch {$rejected=$true}
+                        if (-not $rejected) {throw 'The added slot cannot substitute an unrelated method.'}
+                    }
+                    exit 0
+                }
+                if ($Scenario -like 'root-public-*') {
+                    $catalog=Get-Content -Raw (Join-Path (Split-Path $Policy -Parent) 'test-suites.json') | ConvertFrom-Json
+                    $names=@($catalog.required.namespace | Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicRuntimeCancelsOnlyUnstartedOriginalRootLabelsAcrossRolesAndRetainsLaterNames'})
                     $public='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicRuntimeExecutesOnlyOriginalProtectedRootLabelsAndAuditsCurrentReadmission'
                     if ($Count -ne 120 -or $names.Count -ne $Count -or @($names|Where-Object {$_ -ceq $public}).Count -ne 1) {throw 'Require the exact additive public runtime catalog.'}
                     if ($Scenario -eq 'root-public-selected') {
@@ -73,7 +92,7 @@ public sealed partial class NamespaceNonAdminControllerTests
                 }
                 if ($Scenario -like 'root-admission-*') {
                     $catalog=Get-Content -Raw (Join-Path (Split-Path $Policy -Parent) 'test-suites.json') | ConvertFrom-Json
-                    $names=@($catalog.required.namespace | Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicRuntimeExecutesOnlyOriginalProtectedRootLabelsAndAuditsCurrentReadmission'})
+                    $names=@($catalog.required.namespace | Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicRuntimeCancelsOnlyUnstartedOriginalRootLabelsAcrossRolesAndRetainsLaterNames'} | Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicRuntimeExecutesOnlyOriginalProtectedRootLabelsAndAuditsCurrentReadmission'})
                     $admission='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeRootLabelJournalAdmissionRequiresCurrentTreeAndActualSdkReturnBeforeReadmission'
                     if ($Count -ne 119 -or $names.Count -ne $Count -or @($names|Where-Object {$_ -ceq $admission}).Count -ne 1) {throw 'Require the exact additive admission catalog.'}
                     if ($Scenario -eq 'root-admission-selected') {
@@ -220,9 +239,9 @@ public sealed partial class NamespaceNonAdminControllerTests
                     if ($Scenario -eq 'budget-rejected') {
                         if (-not $rejected) { throw 'An invalid or unbounded selection was accepted.' }
                     } else {
-                        $maximum=if ($Scenario -eq 'budget-catalog') {4155000} else {1800000}
+                        $maximum=if ($Scenario -eq 'budget-catalog') {4515000} else {1800000}
                         if ($rejected -or $budget -lt 600000 -or $budget -gt $maximum) { throw 'The whole-suite envelope is missing or unbounded.' }
-                        if ($Scenario -eq 'budget-catalog' -and $budget -ne 120000+($Count+49)*15000+18*30000+28*15000+6*45000+6*15000+4*45000) {
+                        if ($Scenario -eq 'budget-catalog' -and $budget -ne 120000+($Count+49)*15000+18*30000+28*15000+6*45000+6*15000+4*45000+5*15000+6*45000) {
                             throw 'The actual catalog lost a same/cross-instance transfer or one of its five retirement cutpoints.'
                         }
                         if ($Count -ge 52 -and $budget -le 600000) { throw 'The growing suite still has the obsolete fixed ten-minute envelope.' }
