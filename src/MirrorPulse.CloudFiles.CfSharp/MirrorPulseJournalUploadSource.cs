@@ -114,7 +114,8 @@ public sealed class MirrorPulseJournalUploadSource
         // wake-up observation, never the planning window.
         if (_planner is null && _admission is null)
         {
-            if (!_windowReader.HasPendingScan && _retiredSources?.RecoveryScanInProgress != true)
+            if (!_windowReader.HasPendingScan && _retiredSources?.RecoveryScanInProgress != true &&
+                _rootLabelJournal?.RecoveryScanInProgress != true)
             {
                 CloudLocalChangeBatch head = await _feed.ReadBatchAsync(cancellationToken).ConfigureAwait(false);
                 if (head.RequiresFullRescan)

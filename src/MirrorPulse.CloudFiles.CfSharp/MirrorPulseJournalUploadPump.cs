@@ -50,6 +50,7 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
     private readonly MirrorPulseConflictDeletionRecovery? _localRemovalRecovery;
     private readonly MirrorPulseConflictKeepBothRecovery? _keepBothRecovery;
     private readonly MirrorPulseUploadConflictActions? _conflictActions;
+    private readonly MirrorPulseRootLabelJournalRecovery? _rootLabelJournalRecovery;
 
     public MirrorPulseJournalPumpHealth Health => _runner.Health;
 
@@ -105,6 +106,7 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
         _log = new LocalRollingLogWriter(Path.Combine(dataRootPath, "logs"));
         _coalescingRecovery = new(catalog, state, _runner, _log);
         _conflictActions = conflictActions;
+        _rootLabelJournalRecovery = rootLabelJournal;
         if (conflictActions is not null) _deletionRecovery = new(catalog, conflictActions.ResumeConflictDeletionAsync, router, mayDispatch, _runner, _log);
         if (conflictActions is not null) _localRemovalRecovery = new(catalog, conflictActions.ResumeConflictLocalRemovalAsync, router, mayDispatch, _runner, _log, localOnly: true);
         if (conflictActions is not null) _keepBothRecovery = new(catalog, conflictActions.ResumeConflictKeepBothAsync, router, mayDispatch, _runner, _log, namespaceWork);
@@ -151,6 +153,7 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
 
     private async ValueTask<MirrorPulseJournalUploadBatch> ReadPendingAsync(CancellationToken cancellationToken)
     {
+        await RecoverRootLabelJournalAsync(cancellationToken).ConfigureAwait(false);
         _planningBatch = null;
         foreach (Guid original in _completedCoalescedOriginals) _runner.ClearRecoveredFault(original);
         _completedCoalescedOriginals.Clear();

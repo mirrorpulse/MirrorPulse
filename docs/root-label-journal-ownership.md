@@ -133,3 +133,19 @@ avoid waiting on an admission lease held by the same caller, preserve original
 SDK loss signals and exact ACK IDs, and require a fresh complete current-role
 audit before reopening admission. Public execution, fault cuts, concurrent work,
 independent Host restarts and signed Worker behavior remain open.
+
+The running pump also rotates up to four already accepted pending originals
+before full-rescan checks or ordinary feed planning. Its canonical original-ID
+cursor advances after each individual read or ACK failure. Candidate IDs are
+bounded SQL metadata; each original still needs its complete immutable point
+read before the actual public return. Damaged ownership is never repaired or
+used as native authority. The global integrity check still refuses native work
+when any required original is damaged.
+
+Disabled roots participate without starting a Worker. Unfinished or failed
+recovery keeps finite journal scans running instead of suspending indefinitely
+in an empty-feed wait. A failed original retains its durable fence and is
+revisited after cursor rotation; another root's metadata can progress. Only a
+successful public return followed by the durable receipt settles that original.
+Warnings contain only the original ID, failure category and HRESULT. This
+metadata progress does not reopen readiness or establish new live acceptance.

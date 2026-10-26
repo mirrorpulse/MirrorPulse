@@ -153,6 +153,23 @@ public sealed partial class MirrorPulseProductCatalog
         finally { _gate.Release(); }
     }
 
+    /// <summary>Reads bounded candidate IDs without interpreting another original's ownership payload.</summary>
+    /// <remarks>Each candidate still requires its full immutable point-read validation before any ACK.
+    /// This permits recovery to advance past one damaged original without granting native authority.</remarks>
+    public async Task<IReadOnlyList<Guid>> ReadPendingRootLabelJournalOperationIdsAsync(
+        Guid? afterOperationId = null, int limit = 8, CancellationToken token = default)
+    {
+        if (afterOperationId == Guid.Empty || limit is < 1 or > 64) throw new ArgumentException("A canonical cursor and bounded recovery size are required.");
+        await _gate.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed(); using var transaction = _connection.BeginTransaction(deferred: true);
+            var result = await ReadRootLabelJournalPendingIdsCoreAsync(null, afterOperationId, limit, transaction, token).ConfigureAwait(false);
+            transaction.Commit(); return result;
+        }
+        finally { _gate.Release(); }
+    }
+
     /// <summary>Reads a bounded original-ID recovery page; callers retain and rotate the canonical GUID cursor.</summary>
     public async Task<IReadOnlyList<MirrorPulseRootLabelJournalAcknowledgement>> ReadPendingRootLabelJournalAcknowledgementsAsync(
         Guid? afterOperationId = null, int limit = 8, CancellationToken token = default)
