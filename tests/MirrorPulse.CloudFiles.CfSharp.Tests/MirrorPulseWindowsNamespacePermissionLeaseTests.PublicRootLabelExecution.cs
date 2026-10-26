@@ -152,7 +152,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         finally
         {
             registry.Unregister(paths.SyncRootPath);
-            RestoreRootLabelExecutionFixtureForCleanup(directory, paths.SyncRootPath, caller.User!);
+            RestoreRootLabelExecutionFixtureForCleanup(directory, paths.SyncRootPath, caller.User!, additionalRootName: "FinalLabel");
             DeleteFixture(directory);
         }
     }

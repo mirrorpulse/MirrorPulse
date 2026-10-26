@@ -221,11 +221,12 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         }
     }
 
-    private static void RestoreRootLabelExecutionFixtureForCleanup(string directory, string syncRoot, SecurityIdentifier user)
+    private static void RestoreRootLabelExecutionFixtureForCleanup(string directory, string syncRoot, SecurityIdentifier user, string? additionalRootName = null)
     {
+        string[] names = RootLabelCleanupNames(additionalRootName);
         // Authenticate the exact marked GUID fixture and sync-root path first.
         RestoreSourceContextFixtureForCleanup(directory, syncRoot, user);
-        foreach (string rootName in new[] { "Docs", "Renamed" })
+        foreach (string rootName in names)
         {
             foreach (string suffix in new[] { "", "left", "left/nested" })
             {
@@ -251,6 +252,13 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         }
     }
 
+    private static string[] RootLabelCleanupNames(string? additionalRootName)
+    {
+        if (additionalRootName is null) return ["Docs", "Renamed"];
+        if (additionalRootName != "FinalLabel")
+            throw new ArgumentException("Only the fixed public root Label fixture name is allowed.", nameof(additionalRootName));
+        return ["Docs", "Renamed", "FinalLabel"];
+    }
     private sealed class RootLabelExecutionRejectedRanges : IMirrorPulseWorkerRangeTransport
     {
         internal int Calls { get; private set; }
