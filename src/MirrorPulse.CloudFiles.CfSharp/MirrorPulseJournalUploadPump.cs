@@ -308,6 +308,7 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
         }
         catch (MirrorPulseWorkerMutationConflictException conflict)
         {
+            await LogDispatchBoundaryAsync(command, dispatchPhase, conflict, cancellationToken).ConfigureAwait(false);
             return await DeferConflictAsync(command, syncRootRelativePath!,
                 conflict.ExpectedRevision, conflict.ActualRevision, cancellationToken)
                 .ConfigureAwait(false);
@@ -334,6 +335,10 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
                 new("failureCategory", exception is null ? "IO" : SafeDiagnosticPolicy.ClassifyFailure(exception.GetBaseException())),
                 new("hresult", (exception?.GetBaseException().HResult ?? 0).ToString("X8", System.Globalization.CultureInfo.InvariantCulture)),
             };
+            if (exception?.GetBaseException() is MirrorPulseUploadConflictException upload)
+                fields.Add(new("uploadConflictBoundary", upload.Boundary.ToString()));
+            else if (exception?.GetBaseException() is MirrorPulseWorkerMutationConflictException)
+                fields.Add(new("uploadConflictBoundary", "WorkerRejected"));
             if (exception?.GetBaseException() is AdapterWorkerOperationException worker)
                 fields.Add(new("workerFailureCode", worker.FailureCode));
             await _log.WriteAsync(new(LogLevel.Warning, "CloudFiles.Upload", "JournalDispatchBoundary", DateTimeOffset.UtcNow,

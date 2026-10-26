@@ -50,6 +50,7 @@ public sealed class MirrorPulseJournalUploadRevisionGuardTests
                         command, "WebDAV/note.txt"));
             Assert.AreEqual("\"base\"", conflict.ExpectedRevision);
             Assert.AreEqual("\"remote-change\"", conflict.ActualRevision);
+            Assert.AreEqual(MirrorPulseUploadConflictBoundary.RemoteRevisionMismatch, conflict.Boundary);
         }
         finally
         {
@@ -185,5 +186,37 @@ public sealed class MirrorPulseJournalUploadRevisionGuardTests
             LastPath = request.NormalizedPath;
             return ValueTask.FromResult(Revision);
         }
+    }
+
+    [TestMethod]
+    public async Task RetainedTombstoneRefusalReportsItsOriginBeforeAnyRemoteStat()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "MirrorPulse-conflict-origin", Guid.NewGuid().ToString("N"));
+        var paths = new MirrorPulseStoragePaths(Path.Combine(root, "sync"), Path.Combine(root, "data"));
+        Directory.CreateDirectory(paths.SyncRootPath);
+        try
+        {
+            await using ICloudStateStore store = await new SqliteCloudStateStoreFactory(paths.CfSharpStateDatabasePath)
+                .OpenAsync(new CloudStateStoreContext(paths.SyncRootPath));
+            Guid itemId = Guid.NewGuid();
+            await using (ICloudStateTransaction transaction = await store.BeginTransactionAsync())
+            {
+                await transaction.Items.UpsertAsync(new CloudItemState(itemId, "retained-remote", "Local/note.txt",
+                    CloudItemKind.File, "retained-base", null, true, DateTimeOffset.UtcNow));
+                await transaction.CommitAsync();
+            }
+            var command = new MirrorPulseWorkerChangeCommand(Guid.NewGuid(), 1, InstanceId.New(), "local",
+                MirrorPulseWorkerChangeKind.ContentUpdate, "note.txt", null, null, false, itemId, DateTimeOffset.UtcNow);
+            var stats = new FakeStats("current-remote");
+            var conflict = await Assert.ThrowsExactlyAsync<MirrorPulseUploadConflictException>(async () =>
+                await MirrorPulseJournalUploadRevisionGuard.ResolveAsync(store, stats, command, "Local/note.txt"));
+            Assert.AreEqual(MirrorPulseUploadConflictBoundary.AcknowledgedItemTombstone, conflict.Boundary);
+            Assert.IsNull(conflict.ExpectedRevision); Assert.IsNull(conflict.ActualRevision);
+            Assert.IsNull(stats.LastPath);
+            Assert.AreEqual("retained-base", await MirrorPulseJournalUploadRevisionGuard.ReadAcknowledgedRevisionAsync(
+                store, command, "Local/note.txt", allowTombstone: true));
+            Assert.IsNull(stats.LastPath);
+        }
+        finally { Directory.Delete(root, true); }
     }
 }

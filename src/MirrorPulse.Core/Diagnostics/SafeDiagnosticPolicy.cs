@@ -29,6 +29,7 @@ public static class SafeDiagnosticPolicy
         ["ShellRootPathMismatch"] = "The existing Shell registration belongs to another sync root.",
         ["ShellRootRegistrationFailed"] = "Windows rejected the Shell root registration.",
         ["JournalReadFailed"] = "The local journal could not be read.",
+        ["RootLabelJournalRecoveryFailed"] = "An accepted root notification requires another metadata recovery attempt.",
         ["CloudProviderRequestFailed"] = "A Windows Cloud Files request failed.",
         ["CloudFilesStartupProgress"] = "The Host reached a Cloud Files initialization boundary.",
         ["JournalCommandFailed"] = "A local journal command failed.",
@@ -151,12 +152,13 @@ public static class SafeDiagnosticPolicy
                     ? exitCode.ToString(CultureInfo.InvariantCulture) : null,
                 "workerProcessStarted" or "workerProcessStateObserved" or "workerProcessHasExited" or "workerPipeConnected" or "workerDeadlineExpired" =>
                     bool.TryParse(value, out bool workerFlag) ? workerFlag.ToString() : null,
+                "uploadConflictBoundary" => value is "RemoteRevisionMismatch" or "AcknowledgedItemTombstone" or "WorkerRejected" ? value : null,
                 "kind" => Enum.TryParse(value, out MirrorPulseWorkerChangeKind kind) && Enum.IsDefined(kind) ? kind.ToString() : null,
                 "confirmationOutcome" => Enum.TryParse(value, out MirrorPulseContentConfirmationOutcome outcome) && Enum.IsDefined(outcome) ? outcome.ToString() : null,
                 "confirmationStage" => Enum.TryParse(value, out MirrorPulseContentConfirmationStage stage) && Enum.IsDefined(stage) ? stage.ToString() : null,
                 "mutationState" => Enum.TryParse(value, out MirrorPulseMutationState state) && Enum.IsDefined(state) ? state.ToString() : null,
                 "acknowledgementPhase" => value is "ReadIntent" or "ReadMetadata" or "ValidateMetadata" or "SaveProof" or "ConfirmContent" or "SaveReceipt" or "AcknowledgeFeed" or "ProjectProduct" ? value : null,
-                "dispatchPhase" => value is "ResolvePath" or "RecoverIntent" or "ResolveRevision" or "OpenContent" or "InspectBinding" or "HashContent" or "ExecuteRemote" or "MissingLocalContent" or "AcknowledgeObservedContent" ? value : null,
+                "dispatchPhase" => value is "CoalescedExecution" or "ResolvePath" or "RecoverIntent" or "ResolveRevision" or "OpenContent" or "InspectBinding" or "HashContent" or "ExecuteRemote" or "MissingLocalContent" or "AcknowledgeObservedContent" ? value : null,
                 "nativeApplied" or "nativeVerified" or "projectionCommitted" or "proofPresent" or "hasItemReference" => bool.TryParse(value, out bool flag) ? flag.ToString() : null,
                 "redacted" => value == LogFieldPolicy.RedactedValue ? value : null,
                 "omittedFieldCount" => int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out int count) && count >= 0

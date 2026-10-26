@@ -86,7 +86,7 @@ public static class MirrorPulseJournalUploadRevisionGuard
 
         if (item?.IsTombstone == true && !allowTombstone)
         {
-            throw new MirrorPulseUploadConflictException(null, null);
+            throw new MirrorPulseUploadConflictException(null, null, MirrorPulseUploadConflictBoundary.AcknowledgedItemTombstone);
         }
 
         string? expected = string.IsNullOrEmpty(item?.RemoteRevision) ? null : item.RemoteRevision;
@@ -94,14 +94,22 @@ public static class MirrorPulseJournalUploadRevisionGuard
     }
 }
 
+public enum MirrorPulseUploadConflictBoundary { RemoteRevisionMismatch, AcknowledgedItemTombstone }
+
 public sealed class MirrorPulseUploadConflictException : IOException
 {
     public MirrorPulseUploadConflictException(string? expectedRevision, string? actualRevision)
+        : this(expectedRevision, actualRevision, MirrorPulseUploadConflictBoundary.RemoteRevisionMismatch) { }
+
+    internal MirrorPulseUploadConflictException(string? expectedRevision, string? actualRevision, MirrorPulseUploadConflictBoundary boundary)
         : base("The remote file changed since the last mutually acknowledged revision.")
     {
+        Boundary = boundary;
         ExpectedRevision = expectedRevision;
         ActualRevision = actualRevision;
     }
+
+    public MirrorPulseUploadConflictBoundary Boundary { get; }
 
     public string? ExpectedRevision { get; }
 

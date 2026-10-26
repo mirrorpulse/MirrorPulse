@@ -235,4 +235,32 @@ public sealed class SafeDiagnosticPolicyTests
         Assert.AreEqual("ReadMetadata", safe.Fields["acknowledgementPhase"]);
         Assert.IsFalse(JsonSerializer.Serialize(safe).Contains("needle", StringComparison.Ordinal));
     }
+
+    [TestMethod]
+    [DataRow("RemoteRevisionMismatch")]
+    [DataRow("AcknowledgedItemTombstone")]
+    [DataRow("WorkerRejected")]
+    public void UploadConflictOriginPreservesOnlyBoundedFactsWithoutRevisionOrPathValues(string boundary)
+    {
+        var safe = SafeDiagnosticPolicy.Sanitize(new LogEntry(LogLevel.Warning, "CloudFiles.Upload", "JournalDispatchBoundary", DateTimeOffset.UtcNow,
+            [new("uploadConflictBoundary", boundary), new("dispatchPhase", "CoalescedExecution"),
+             new("uploadConflictBoundary", "token-secret-needle"), new("expectedRevision", "revision-secret-needle"),
+             new("actualRevision", "revision-secret-needle"), new("path", "path-secret-needle")]));
+        Assert.AreEqual(boundary, safe.Fields["uploadConflictBoundary"]);
+        Assert.AreEqual("CoalescedExecution", safe.Fields["dispatchPhase"]);
+        Assert.IsFalse(JsonSerializer.Serialize(safe).Contains("needle", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public void RootMetadataRecoveryFailureHasARegisteredDescriptionWithoutAnExceptionMessage()
+    {
+        Guid original = Guid.NewGuid();
+        var safe = SafeDiagnosticPolicy.Sanitize(new LogEntry(LogLevel.Warning, "CloudFiles.Upload", "RootLabelJournalRecoveryFailed", DateTimeOffset.UtcNow,
+            [new("operationId", original.ToString("D")), new("failureCategory", "InvalidData"),
+             new("hresult", "80131501"), new("message", "token-secret-needle")]));
+        Assert.AreEqual("RootLabelJournalRecoveryFailed", safe.Code);
+        Assert.AreEqual(original.ToString("D"), safe.Fields["operationId"]);
+        Assert.AreEqual("An accepted root notification requires another metadata recovery attempt.", safe.Message);
+        Assert.IsFalse(JsonSerializer.Serialize(safe).Contains("needle", StringComparison.Ordinal));
+    }
 }

@@ -143,10 +143,12 @@ public sealed partial class MirrorPulseJournalUploadPump
         }
         catch (MirrorPulseUploadConflictException conflict)
         {
+            await LogDispatchBoundaryAsync(command, "CoalescedExecution", conflict, token).ConfigureAwait(false);
             return await DeferCoalescedConflictAsync(command, plan, conflict.ExpectedRevision, conflict.ActualRevision, token).ConfigureAwait(false);
         }
         catch (MirrorPulseWorkerMutationConflictException conflict)
         {
+            await LogDispatchBoundaryAsync(command, "CoalescedExecution", conflict, token).ConfigureAwait(false);
             return await DeferCoalescedConflictAsync(command, plan, conflict.ExpectedRevision, conflict.ActualRevision, token).ConfigureAwait(false);
         }
         catch (Exception error) when (error is not OperationCanceledException)
