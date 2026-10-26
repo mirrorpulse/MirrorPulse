@@ -36,6 +36,7 @@ public static partial class CliFixtureProbe
         var topology = await catalog.ReadAdapterTopologyAsync();
         setStage("RouteValidation");
         bool anchorOnly = IsAnchorOnlyCleanup(marker);
+        CleanupRootLabelRoute? renamedRoot = null;
         RootRegistration[] roots;
         if (anchorOnly)
         {
@@ -48,23 +49,26 @@ public static partial class CliFixtureProbe
             InstanceId instance = InstanceId.Parse(marker.InstanceId);
             var registration = topology.Roots.Single(candidate => candidate.RootId == RootId.Parse(marker.RootId));
             if (topology.Instances.Count != 1 || topology.Roots.Count != 1 || topology.Instances[0].InstanceId != instance ||
-                registration.InstanceId != instance || registration.UniquenessKey != marker.RootKey || registration.DirectoryName != marker.DirectoryName)
+                registration.InstanceId != instance || registration.UniquenessKey != marker.RootKey)
                 throw new InvalidDataException("Fixture cleanup requires the exact synthetic route.");
+            if (registration.DirectoryName != marker.DirectoryName)
+                renamedRoot = await AuthenticateRenamedCleanupRootAsync(catalog, marker, registration);
             roots = [registration];
         }
         var allowed = new Dictionary<string, bool>(StringComparer.Ordinal) { [""] = true };
         if (!anchorOnly)
         {
-            allowed.Add(marker.DirectoryName, true); allowed.Add(marker.DirectoryName + "/nested", true);
-            allowed.Add(marker.DirectoryName + "/nested/fixture.txt", false); allowed.Add(marker.DirectoryName + "/nested/fixture.bin", false);
-            allowed.Add(marker.DirectoryName + "/cli-roundtrip.txt", false); allowed.Add(marker.DirectoryName + "/queued-upload.txt", false);
+            string name = renamedRoot?.DirectoryName ?? marker.DirectoryName;
+            allowed.Add(name, true); allowed.Add(name + "/nested", true);
+            allowed.Add(name + "/nested/fixture.txt", false); allowed.Add(name + "/nested/fixture.bin", false);
+            allowed.Add(name + "/cli-roundtrip.txt", false); allowed.Add(name + "/queued-upload.txt", false);
         }
-        return await CleanupAuthenticatedInventoryAsync(root, paths, catalog, roots, allowed, setStage);
+        return await CleanupAuthenticatedInventoryAsync(root, paths, catalog, roots, allowed, setStage, renamedRoot);
     }
 
     private static async Task<CliFixtureCleanupResult> CleanupAuthenticatedInventoryAsync(string root,
         MirrorPulseStoragePaths paths, MirrorPulseProductCatalog catalog, IReadOnlyList<RootRegistration> roots,
-        IReadOnlyDictionary<string, bool> allowed, Action<string> setStage)
+        IReadOnlyDictionary<string, bool> allowed, Action<string> setStage, CleanupRootLabelRoute? renamedRoot = null)
     {
         // An unprotected fixture requires no permission restoration.
         // Every MP ACL write is preceded by a permission intent or birth intent.
@@ -108,6 +112,8 @@ public static partial class CliFixtureProbe
                     var facts = await lease.InspectAsync(CancellationToken.None);
                     if (facts.OwnerSid != owner || facts.LinkCount != 1)
                         throw new InvalidDataException("Fixture cleanup cannot change a foreign or aliased object.");
+                    if (renamedRoot is not null && relative == renamedRoot.DirectoryName && facts.LocalObject != renamedRoot.LocalObject)
+                        throw new InvalidDataException("The renamed fixture root no longer has its authenticated original binding.");
                     // Public inspection and retained object/ancestor handles reject foreign
                     // reparse points without following a directory link or reading content.
                     if (item is CloudDirectory folder)
@@ -126,6 +132,8 @@ public static partial class CliFixtureProbe
                     var facts = await leases[index].InspectAsync(CancellationToken.None);
                     if (facts.OwnerSid != owner || facts.LinkCount != 1)
                         throw new InvalidDataException("A fixture object changed before permission cleanup.");
+                    if (renamedRoot is not null && facts.RelativePath == renamedRoot.DirectoryName && facts.LocalObject != renamedRoot.LocalObject)
+                        throw new InvalidDataException("The renamed fixture root changed before permission cleanup.");
                     string access = CreateCleanupAccessDescriptor(new SecurityIdentifier(owner), facts.IsDirectory);
                     await leases[index].ApplyDaclAsync(access, CancellationToken.None);
                 }
