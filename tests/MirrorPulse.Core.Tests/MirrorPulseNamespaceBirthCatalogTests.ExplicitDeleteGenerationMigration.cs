@@ -26,7 +26,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         Assert.AreEqual(original, await ReadRemoteRetirementGenerationOriginalsAsync(fixture.Paths));
         await using var connection = Connection(fixture.Paths); await connection.OpenAsync();
         await using var query = connection.CreateCommand(); query.CommandText = "PRAGMA user_version;";
-        Assert.AreEqual(89L, await query.ExecuteScalarAsync());
+        Assert.AreEqual(90L, await query.ExecuteScalarAsync());
         Assert.IsFalse(File.Exists(fixture.Paths.CfSharpStateDatabasePath));
     }
 

@@ -83,7 +83,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         Assert.IsEmpty(await reopened.ReadNamespaceDispatchFencedRootsAsync());
         await using var connection = Connection(fixture.Paths); await connection.OpenAsync();
         await using var version = connection.CreateCommand(); version.CommandText = "PRAGMA user_version;";
-        Assert.AreEqual(89L, await version.ExecuteScalarAsync());
+        Assert.AreEqual(90L, await version.ExecuteScalarAsync());
     }
 
     private static async Task<MirrorPulseNamespaceRemoteUpdatePlan> RemoteUpdatePlanAsync(MirrorPulseProductCatalog catalog,

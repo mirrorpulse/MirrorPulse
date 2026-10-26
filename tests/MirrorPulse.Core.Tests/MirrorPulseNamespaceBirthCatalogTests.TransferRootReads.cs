@@ -90,7 +90,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         Assert.HasCount(1, await reopened.ReadPendingNamespaceTransferStatusesAsync(plan.TargetRoute.RootId));
         Assert.AreEqual(original, await ReadTransferRetirementBytesAsync(fixture.Paths));
         await using var connection = Connection(fixture.Paths); await connection.OpenAsync(); await using var version = connection.CreateCommand();
-        version.CommandText = "PRAGMA user_version;"; Assert.AreEqual(89L, await version.ExecuteScalarAsync());
+        version.CommandText = "PRAGMA user_version;"; Assert.AreEqual(90L, await version.ExecuteScalarAsync());
     }
 
     [TestMethod]

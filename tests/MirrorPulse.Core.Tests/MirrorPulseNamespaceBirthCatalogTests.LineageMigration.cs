@@ -43,7 +43,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         {
             await queryConnection.OpenAsync();
             await using var version = queryConnection.CreateCommand(); version.CommandText = "PRAGMA user_version;";
-            Assert.AreEqual(89L, await version.ExecuteScalarAsync());
+            Assert.AreEqual(90L, await version.ExecuteScalarAsync());
             version.CommandText = "PRAGMA foreign_key_check;";
             Assert.IsNull(await version.ExecuteScalarAsync());
         }

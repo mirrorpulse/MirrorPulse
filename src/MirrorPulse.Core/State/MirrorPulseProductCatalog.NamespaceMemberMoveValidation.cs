@@ -168,6 +168,8 @@ public sealed partial class MirrorPulseProductCatalog
         SqliteTransaction transaction, CancellationToken token, Guid? allowedRetirement = null, Guid? allowedBatch = null, Guid? allowedReplacement = null,
         Guid? allowedBornRecoveryInitialization = null, Guid? allowedRemoteUpdate = null, Guid? allowedTransfer = null, Guid? allowedRootRename = null)
     {
+        if (await ReadPendingRootLabelJournalForRootCoreAsync(rootId, transaction, token).ConfigureAwait(false) is not null)
+            throw new InvalidOperationException("An original root journal ACK has fenced this managed root.");
         await foreach (var transfer in ReadPendingNamespaceTransfersCoreAsync(transaction, token).ConfigureAwait(false))
             if ((transfer.Plan.SourceRoute.RootId == rootId || transfer.Plan.TargetRoute.RootId == rootId) &&
                 !(transfer.Plan.OperationId == allowedTransfer && transfer.Plan.TargetRoute.RootId == rootId))
