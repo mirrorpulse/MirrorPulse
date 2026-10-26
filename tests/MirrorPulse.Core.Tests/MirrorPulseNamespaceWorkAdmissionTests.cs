@@ -4,7 +4,7 @@ using MirrorPulse.Core.Sync;
 namespace MirrorPulse.Core.Tests;
 
 [TestClass]
-public sealed class MirrorPulseNamespaceWorkAdmissionTests
+public sealed partial class MirrorPulseNamespaceWorkAdmissionTests
 {
     [TestMethod]
     [DataRow(false)]

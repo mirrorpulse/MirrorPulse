@@ -1407,7 +1407,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             var root = (await catalog.ReadAdapterTopologyAsync(requestCancellation).ConfigureAwait(false)).Roots.Single(item => item.RootId == rootId);
             using var stop = CancellationTokenSource.CreateLinkedTokenSource(requestCancellation, _admissionShutdown.Token);
             await using var admission = await MirrorPulseRootLabelFailureDiagnostics.AtPreparationStageAsync(MirrorPulseRootLabelPreparationStage.RootWorkDrain,
-                () => namespaceWork.BeginRecoveryAsync([rootId], stop.Token)).ConfigureAwait(false);
+                () => namespaceWork.WaitForRecoveryAsync([rootId], stop.Token)).ConfigureAwait(false);
             return await MirrorPulseRootLabelFailureDiagnostics.AtPreparationStageAsync(MirrorPulseRootLabelPreparationStage.InstanceLibrary,
                 () => WithInstanceLibraryAsync(root.InstanceId, async token =>
             {
@@ -1453,7 +1453,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                 ?? throw new InvalidOperationException("The original Label root is no longer configured.");
             MirrorPulseManagedRootRenameExecution result;
             // Do not own instance/library serialization while earlier work drains.
-            await using (var drained = await namespaceWork.BeginRecoveryAsync([root.RootId], stop.Token).ConfigureAwait(false))
+            await using (var drained = await namespaceWork.WaitForRecoveryAsync([root.RootId], stop.Token).ConfigureAwait(false))
             {
                 result = await WithInstanceLibraryAsync(root.InstanceId, async token =>
                 {
@@ -1503,7 +1503,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             var root = router.FindRegistration(original.Intent.RootId)
                 ?? throw new InvalidOperationException("The original Label root is no longer configured.");
             MirrorPulseManagedRootRenameCancellation result;
-            await using (var drained = await namespaceWork.BeginRecoveryAsync([root.RootId], stop.Token).ConfigureAwait(false))
+            await using (var drained = await namespaceWork.WaitForRecoveryAsync([root.RootId], stop.Token).ConfigureAwait(false))
             {
                 result = await WithAdmittedInstanceLibraryAsync(root.InstanceId, async (instances, token) =>
                 {

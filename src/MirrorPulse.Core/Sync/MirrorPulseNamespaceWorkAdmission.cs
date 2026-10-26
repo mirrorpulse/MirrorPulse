@@ -5,7 +5,7 @@ namespace MirrorPulse.Core.Sync;
 /// <summary>Coordinates ordinary work and fresh recovery for each stable root in one Host lifetime.</summary>
 /// <remarks>Roots start closed. Only the owner of a drained recovery scope may request reopening
 /// after an actual fresh audit. Persistent historical completion is not live admission.</remarks>
-public sealed class MirrorPulseNamespaceWorkAdmission : IAsyncDisposable
+public sealed partial class MirrorPulseNamespaceWorkAdmission : IAsyncDisposable
 {
     private readonly object _gate = new();
     private readonly Dictionary<RootId, RootState> _roots = [];
@@ -33,7 +33,7 @@ public sealed class MirrorPulseNamespaceWorkAdmission : IAsyncDisposable
 
     public bool IsAdmitted(RootId root)
     {
-        lock (_gate) return !_closing && _roots.TryGetValue(root, out var state) && state.Ready && state.RecoveryOwner is null;
+        lock (_gate) return !_closing && _roots.TryGetValue(root, out var state) && state.Ready && state.RecoveryOwner is null && !HasQueuedRecovery(root);
     }
 
     /// <summary>Retains ordinary work through all awaited operations and lazy-body disposal.</summary>
@@ -54,7 +54,7 @@ public sealed class MirrorPulseNamespaceWorkAdmission : IAsyncDisposable
             lease = null;
             if (requested.Any(root => !_roots.ContainsKey(root))) return false;
             var states = requested.Select(RequireRoot).ToArray();
-            if (states.Any(state => !state.Ready || state.RecoveryOwner is not null))
+            if (states.Any(state => !state.Ready || state.RecoveryOwner is not null) || requested.Any(HasQueuedRecovery))
                 return false;
             foreach (var state in states) state.Active++;
             _operations++; lease = new(this, requested); return true;
@@ -106,15 +106,9 @@ public sealed class MirrorPulseNamespaceWorkAdmission : IAsyncDisposable
         {
             ObjectDisposedException.ThrowIf(_closing, this);
             var states = requested.Select(RequireRoot).ToArray();
-            if (states.Any(state => state.RecoveryOwner is not null))
+            if (states.Any(state => state.RecoveryOwner is not null) || requested.Any(HasQueuedRecovery))
                 throw new InvalidOperationException("An existing recovery scope owns one of the selected roots.");
-            foreach (var state in states)
-            {
-                state.Ready = false; state.RecoveryOwner = owner;
-                state.Drained = new(TaskCreationOptions.RunContinuationsAsynchronously);
-                if (state.Active == 0) state.Drained.TrySetResult();
-            }
-            _operations++; pending = states.Select(state => state.Drained!.Task).ToArray();
+            pending = ClaimRecovery(requested, owner, countOperation: true);
         }
         try
         {
@@ -149,9 +143,10 @@ public sealed class MirrorPulseNamespaceWorkAdmission : IAsyncDisposable
             {
                 var state = _roots[root];
                 if (state.RecoveryOwner != owner) throw new InvalidOperationException("The recovery scope lost its root ownership.");
-                state.RecoveryOwner = null; state.Drained = null; state.Ready = audited && !_closing;
+                state.RecoveryOwner = null; state.Drained = null; state.Ready = audited && !_closing && !HasQueuedRecovery(root);
             }
             ExitOperation();
+            PulseRecoveryWaiters();
         }
     }
 
@@ -167,6 +162,7 @@ public sealed class MirrorPulseNamespaceWorkAdmission : IAsyncDisposable
             if (_disposeTask is not null) return new(_disposeTask);
             _closing = true;
             foreach (var state in _roots.Values) state.Ready = false;
+            PulseRecoveryWaiters();
             if (_operations == 0) _drained.TrySetResult();
             _disposeTask = _drained.Task; return new(_disposeTask);
         }
