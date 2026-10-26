@@ -252,6 +252,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Verify signed official packages and native ARM64 Workers
+        if: (success() || failure()) && github.event_name == 'workflow_dispatch'
         run: |
           dotnet test tests/MirrorPulse.Core.Tests/MirrorPulse.Core.Tests.csproj --configuration Release --no-restore --filter FullyQualifiedName~SignedPackageProcessTests --logger trx --results-directory artifacts/test-results/signed
           if ($LASTEXITCODE -ne 0) { throw 'Signed ARM64 Worker tests failed.' }
@@ -305,6 +306,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Verify ARM64 namespace identity and strict Cloud Files ACLs
+        if: (success() || failure()) && github.event_name == 'workflow_dispatch'
         shell: pwsh
         run: pwsh ./eng/verify-namespace.ps1 -ExpectedArchitecture Arm64
 
@@ -317,6 +319,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Determine ordinary-user verification envelope
+        if: (success() || failure()) && github.event_name == 'workflow_dispatch'
         id: namespace-nonadmin-budget
         shell: pwsh
         run: |
@@ -326,6 +329,7 @@ jobs:
           "timeout_minutes=$minutes" >> $env:GITHUB_OUTPUT
 
       - name: Verify strict Cloud Files ACLs as a fresh non-administrator user
+        if: (success() || failure()) && github.event_name == 'workflow_dispatch' && steps.namespace-nonadmin-budget.outcome == 'success'
         shell: pwsh
         timeout-minutes: ${{ fromJSON(steps.namespace-nonadmin-budget.outputs.timeout_minutes) }}
         run: pwsh ./eng/verify-namespace-nonadmin.ps1 -ExpectedArchitecture Arm64
@@ -339,7 +343,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Verify installed ARM64 MSIX on Windows 11 desktop
-        if: github.event_name == 'workflow_dispatch'
+        if: (success() || failure()) && github.event_name == 'workflow_dispatch'
         shell: pwsh
         env:
           MIRRORPULSE_VERIFY_SHELL: ${{ inputs.verify_shell }}
