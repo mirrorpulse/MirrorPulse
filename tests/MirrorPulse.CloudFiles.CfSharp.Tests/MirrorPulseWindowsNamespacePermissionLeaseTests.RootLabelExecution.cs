@@ -203,6 +203,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 string payload = fileSystem.GetFile("RENAMED/left/nested/pending.bin").FullPath;
                 CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(payload, deadline.Token));
                 await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() => File.Delete(payload), deadline.Token));
+                await ObserveRootLabelJournalOriginalsAsync(fileSystem, intent.ItemId, root.State, cut, deadline.Token);
                 Assert.AreEqual(0, setupSource.Reads); Assert.AreEqual(0, ranges.Calls);
             }
             TestContext.WriteLine($"ProtectedRootLabelExecution: state={root.State}; cut={cut}; originalProof=True; productionRootPolicy=True; entireProtectedTree=True; originalFactsImmutable=True; atomicAllPositionsAndLabel=True; caseOnlyNextLabel=True; historicalReplayPreservesCurrent=True; ordinaryDeleteDenied=True; sourceReads=0; owners=3; newRoleRecovery=False; hostIntegrated=False.");
