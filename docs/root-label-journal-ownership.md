@@ -67,7 +67,20 @@ Recovery pages contain 1 through 64 originals, default 8, ordered by canonical
 GUID with an exclusive continuation cursor. Separate partial indexes cover
 unfinished status and unfinished JSON payload. Their bounded union makes a
 disagreement visible instead of allowing a corrupt status to hide a pending
-owner. Per-root lookup reads at most two IDs. Global fence discovery rejects
+owner. Selected-root recovery uses the unique pending-status root index and a
+derived `(root_id, operation_id)` unfinished-payload index. Both branches seek
+this root and read at most two IDs. An exclusive recovery cursor uses an indexed
+`operation_id > cursor` predicate, so later pages do not rescan the earlier
+pending prefix. The additional index can be rebuilt from original payloads
+without changing schema 90, owner bytes or ACK receipts; a substituted definition
+is refused. The original schema-90 table and three mandatory indexes retain
+their strict loss checks.
+
+`ReadPendingRootLabelJournalAcknowledgementAsync` reads only one stable root's
+immutable pending metadata. It grants no current-role, dispatch or native
+authority. A healthy selected-root result cannot replace the global integrity
+and fresh admission checks, which still reject damaged foreign originals.
+Global fence discovery rejects
 more than the Host's 4096-root inventory bound. These limits do not close the
 remaining S06 requirements for total inventory, SQL, dependency, sorting,
 coalescing and per-turn fairness across the complete runtime.

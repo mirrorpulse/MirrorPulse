@@ -137,6 +137,22 @@ public sealed partial class MirrorPulseProductCatalog
         finally { _gate.Release(); }
     }
 
+    /// <summary>Reads this root's pending original ACK metadata without granting dispatch or native authority.</summary>
+    /// <remarks>Global inventory validation and current-role admission remain separate operations.</remarks>
+    public async Task<MirrorPulseRootLabelJournalAcknowledgement?> ReadPendingRootLabelJournalAcknowledgementAsync(
+        RootId rootId, CancellationToken token = default)
+    {
+        if (rootId.Value == Guid.Empty) throw new ArgumentException("A stable root ID is required.", nameof(rootId));
+        await _gate.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed(); using var transaction = _connection.BeginTransaction(deferred: true);
+            var result = await ReadPendingRootLabelJournalForRootCoreAsync(rootId, transaction, token).ConfigureAwait(false);
+            transaction.Commit(); return result;
+        }
+        finally { _gate.Release(); }
+    }
+
     /// <summary>Reads a bounded original-ID recovery page; callers retain and rotate the canonical GUID cursor.</summary>
     public async Task<IReadOnlyList<MirrorPulseRootLabelJournalAcknowledgement>> ReadPendingRootLabelJournalAcknowledgementsAsync(
         Guid? afterOperationId = null, int limit = 8, CancellationToken token = default)

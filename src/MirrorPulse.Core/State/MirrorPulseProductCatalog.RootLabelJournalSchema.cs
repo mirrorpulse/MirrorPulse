@@ -28,7 +28,12 @@ public sealed partial class MirrorPulseProductCatalog
         query.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE (type='table' AND name='root_label_journal_acknowledgements') OR (type='index' AND name IN ('root_label_journal_pending_status','root_label_journal_pending_payload','root_label_journal_pending_root'));";
         if (originalVersion >= 90 && (long)(await query.ExecuteScalarAsync(token).ConfigureAwait(false))! != 4)
             throw new InvalidDataException("Schema90 lost original root journal ownership or a required bounded recovery index.");
-        foreach (var definition in RootLabelJournalSchema)
+        // This additional root-leading index derives only from original payloads.
+        // Rebuilding it changes no schema version, original owner or ACK receipt;
+        // the four schema90 definitions above retain their strict loss checks.
+        var rootReadIndex = (Type: "index", Name: "root_label_journal_pending_payload_root",
+            Sql: "CREATE INDEX root_label_journal_pending_payload_root ON root_label_journal_acknowledgements(root_id,operation_id) WHERE " + RootLabelJournalUnfinishedPayload);
+        foreach (var definition in RootLabelJournalSchema.Append(rootReadIndex))
         {
             query.Parameters.Clear(); query.CommandText = "SELECT sql FROM sqlite_master WHERE type=$type AND name=$name;";
             query.Parameters.AddWithValue("$type", definition.Type); query.Parameters.AddWithValue("$name", definition.Name);
@@ -59,20 +64,25 @@ public sealed partial class MirrorPulseProductCatalog
         int limit, SqliteTransaction transaction, CancellationToken token)
     {
         await using var query = _connection.CreateCommand(); query.Transaction = transaction;
-        query.CommandText = """
+        string statusIndex = root is null ? "root_label_journal_pending_status" : "root_label_journal_pending_root";
+        string payloadIndex = root is null ? "root_label_journal_pending_payload" : "root_label_journal_pending_payload_root";
+        string predicate = (root is null ? "" : " AND root_id=$root") + (after is null ? "" : " AND operation_id>$after");
+        // SQL shape selects fixed index names and predicates. An optional-parameter OR
+        // would scan unrelated roots or the already visited canonical cursor prefix.
+        query.CommandText = $$"""
             SELECT operation_id FROM (
-                SELECT operation_id FROM root_label_journal_acknowledgements INDEXED BY root_label_journal_pending_status
-                WHERE status=0 AND ($root IS NULL OR root_id=$root) AND ($after IS NULL OR operation_id>$after)
+                SELECT operation_id FROM root_label_journal_acknowledgements INDEXED BY {{statusIndex}}
+                WHERE status=0{{predicate}}
                 ORDER BY operation_id LIMIT $limit)
             UNION SELECT operation_id FROM (
-                SELECT operation_id FROM root_label_journal_acknowledgements INDEXED BY root_label_journal_pending_payload
+                SELECT operation_id FROM root_label_journal_acknowledgements INDEXED BY {{payloadIndex}}
                 WHERE (json_type(CAST(payload AS TEXT),'$.AcknowledgedAt') IS NULL OR json_type(CAST(payload AS TEXT),'$.AcknowledgedAt')='null')
-                    AND ($root IS NULL OR root_id=$root) AND ($after IS NULL OR operation_id>$after)
+                    {{predicate}}
                 ORDER BY operation_id LIMIT $limit)
             ORDER BY operation_id LIMIT $limit;
             """;
-        query.Parameters.AddWithValue("$root", (object?)root?.ToString() ?? DBNull.Value);
-        query.Parameters.AddWithValue("$after", (object?)after?.ToString("D") ?? DBNull.Value);
+        if (root is not null) query.Parameters.AddWithValue("$root", root.Value.ToString());
+        if (after is not null) query.Parameters.AddWithValue("$after", after.Value.ToString("D"));
         query.Parameters.AddWithValue("$limit", limit);
         var result = new List<Guid>();
         await using var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
