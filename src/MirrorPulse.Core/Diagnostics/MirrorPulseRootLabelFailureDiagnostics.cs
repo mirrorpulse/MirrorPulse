@@ -5,12 +5,43 @@ namespace MirrorPulse.Core.Diagnostics;
 
 public enum MirrorPulseRootLabelFailureBoundary
 {
-    Unknown, CurrentAuditFenced, LiveGuard, NativeIdentity, OriginalOwnership, CompletedPlacement, CurrentTree
+    Unknown, CurrentAuditFenced, LiveGuard, NativeIdentity, OriginalOwnership, CompletedPlacement, CurrentTree,
+    PendingRemoteBatch, PendingTransition, UnavailableRoot
 }
+
+public enum MirrorPulseRootLabelPreparationStage { Unknown, RootWorkDrain, InstanceLibrary, OriginalOwnership, CurrentTreeAudit, PublicProof }
 
 /// <summary>Fixed diagnostic classifications only; these values grant no namespace authority.</summary>
 public static class MirrorPulseRootLabelFailureDiagnostics
 {
+    private static readonly object PreparationStageKey = new();
+
+    public static void MarkPreparationStage(Exception failure, MirrorPulseRootLabelPreparationStage stage)
+    {
+        ArgumentNullException.ThrowIfNull(failure);
+        if (!Enum.IsDefined(stage)) throw new ArgumentOutOfRangeException(nameof(stage));
+        failure.Data[PreparationStageKey] = stage;
+    }
+
+    public static MirrorPulseRootLabelPreparationStage PreparationStage(Exception failure)
+    {
+        ArgumentNullException.ThrowIfNull(failure);
+        return failure.Data[PreparationStageKey] is MirrorPulseRootLabelPreparationStage stage && Enum.IsDefined(stage)
+            ? stage : MirrorPulseRootLabelPreparationStage.Unknown;
+    }
+
+    public static async ValueTask<T> AtPreparationStageAsync<T>(MirrorPulseRootLabelPreparationStage stage, Func<ValueTask<T>> action)
+    {
+        if (!Enum.IsDefined(stage)) throw new ArgumentOutOfRangeException(nameof(stage));
+        ArgumentNullException.ThrowIfNull(action);
+        try { return await action().ConfigureAwait(false); }
+        catch (Exception original) when (original is not StackOverflowException and not OutOfMemoryException)
+        {
+            if (PreparationStage(original) == MirrorPulseRootLabelPreparationStage.Unknown) MarkPreparationStage(original, stage);
+            throw;
+        }
+    }
+
     public static async ValueTask<T> RunPreparationAsync<T>(Guid rootId, Func<ValueTask<T>> action,
         Func<LogEntry, ValueTask> observe)
     {
@@ -23,6 +54,7 @@ public static class MirrorPulseRootLabelFailureDiagnostics
             {
                 await observe(new(LogLevel.Warning, "host", "RootLabelPreparationFailed", DateTimeOffset.UtcNow,
                     [new("rootId", rootId.ToString("D")), new("rootLabelFailureBoundary", Classify(original).ToString()),
+                     new("rootLabelPreparationStage", PreparationStage(original).ToString()),
                      new("failureCategory", SafeDiagnosticPolicy.ClassifyFailure(original)),
                      new("hresult", original.HResult.ToString("X8", CultureInfo.InvariantCulture))])).ConfigureAwait(false);
             }
@@ -38,6 +70,17 @@ public static class MirrorPulseRootLabelFailureDiagnostics
         // library, Worker or user messages never become structured log values.
         return failure switch
         {
+            InvalidOperationException { Message: "The original remote batch must converge before preparing a root rename." } => MirrorPulseRootLabelFailureBoundary.PendingRemoteBatch,
+            InvalidOperationException
+            {
+                Message: "The managed root has a pending namespace transition." or
+                "An existing recovery scope owns one of the selected roots."
+            } => MirrorPulseRootLabelFailureBoundary.PendingTransition,
+            InvalidOperationException
+            {
+                Message: "The managed root cannot be renamed in its current state." or
+                "The root is not registered in this Host's namespace admission owner."
+            } => MirrorPulseRootLabelFailureBoundary.UnavailableRoot,
             InvalidOperationException
             {
                 Message: "New root preparation requires its current unfenced Host audit." or

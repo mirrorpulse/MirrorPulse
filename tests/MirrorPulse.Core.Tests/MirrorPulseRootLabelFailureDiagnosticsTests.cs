@@ -13,6 +13,9 @@ public sealed class MirrorPulseRootLabelFailureDiagnosticsTests
     [DataRow("Root readmission requires a complete unfenced audit under the live Host role.", MirrorPulseRootLabelFailureBoundary.CurrentAuditFenced)]
     [DataRow("The current Host has no live startup guard.", MirrorPulseRootLabelFailureBoundary.LiveGuard)]
     [DataRow("The original root notification already has immutable local-policy ownership.", MirrorPulseRootLabelFailureBoundary.OriginalOwnership)]
+    [DataRow("The original remote batch must converge before preparing a root rename.", MirrorPulseRootLabelFailureBoundary.PendingRemoteBatch)]
+    [DataRow("The managed root has a pending namespace transition.", MirrorPulseRootLabelFailureBoundary.PendingTransition)]
+    [DataRow("The managed root cannot be renamed in its current state.", MirrorPulseRootLabelFailureBoundary.UnavailableRoot)]
     [DataRow("Root journal policy requires its completed original protected Label and whole-subtree placement.", MirrorPulseRootLabelFailureBoundary.CompletedPlacement)]
     [DataRow("PRIVATE_PATH token=PRIVATE_SECRET", MirrorPulseRootLabelFailureBoundary.Unknown)]
     public void RootLabelGuardClassificationRequiresAnExactProductDescription(string message, MirrorPulseRootLabelFailureBoundary expected)
@@ -80,6 +83,45 @@ public sealed class MirrorPulseRootLabelFailureDiagnosticsTests
         var safe = SafeDiagnosticPolicy.Sanitize(new LogEntry(LogLevel.Warning, "host", "RootLabelPreparationFailed", DateTimeOffset.UtcNow,
             [new("rootLabelFailureBoundary", value), new("exceptionMessage", "PRIVATE_SECRET")]));
         Assert.IsFalse(safe.Fields.ContainsKey("rootLabelFailureBoundary"));
+        Assert.DoesNotContain("PRIVATE", JsonSerializer.Serialize(safe));
+    }
+
+    [TestMethod]
+    public async Task PreparationStageRetainsTheDeepestOriginalFailureWithoutReplacingItOrLoggingPrivateFields()
+    {
+        var original = new InvalidOperationException("PRIVATE_PATH token=PRIVATE_SECRET");
+        SafeLogEntry? observed = null;
+        var retained = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
+            MirrorPulseRootLabelFailureDiagnostics.RunPreparationAsync<int>(Guid.NewGuid(),
+                () => MirrorPulseRootLabelFailureDiagnostics.AtPreparationStageAsync(MirrorPulseRootLabelPreparationStage.InstanceLibrary,
+                    () => MirrorPulseRootLabelFailureDiagnostics.AtPreparationStageAsync<int>(MirrorPulseRootLabelPreparationStage.CurrentTreeAudit, () => throw original)),
+                entry => { observed = SafeDiagnosticPolicy.Sanitize(entry); return ValueTask.CompletedTask; }).AsTask());
+        Assert.AreSame(original, retained); Assert.IsNotNull(observed);
+        Assert.AreEqual("Unknown", observed.Fields["rootLabelFailureBoundary"]);
+        Assert.AreEqual("CurrentTreeAudit", observed.Fields["rootLabelPreparationStage"]);
+        Assert.DoesNotContain("PRIVATE", JsonSerializer.Serialize(observed));
+    }
+
+    [TestMethod]
+    public async Task PreparationStagePreservesCancellationAndSuccessfulResults()
+    {
+        var original = new OperationCanceledException();
+        var retained = await Assert.ThrowsExactlyAsync<OperationCanceledException>(() =>
+            MirrorPulseRootLabelFailureDiagnostics.AtPreparationStageAsync<int>(MirrorPulseRootLabelPreparationStage.RootWorkDrain, () => throw original).AsTask());
+        Assert.AreSame(original, retained);
+        Assert.AreEqual(MirrorPulseRootLabelPreparationStage.RootWorkDrain, MirrorPulseRootLabelFailureDiagnostics.PreparationStage(retained));
+        Assert.AreEqual(7, await MirrorPulseRootLabelFailureDiagnostics.AtPreparationStageAsync(MirrorPulseRootLabelPreparationStage.PublicProof, () => ValueTask.FromResult(7)));
+    }
+
+    [TestMethod]
+    [DataRow("1")]
+    [DataRow("CurrentTreeAudit, PublicProof")]
+    [DataRow("PRIVATE_PATH")]
+    public void PreparationStageRejectsArbitraryOrNoncanonicalDiagnosticValues(string value)
+    {
+        var safe = SafeDiagnosticPolicy.Sanitize(new LogEntry(LogLevel.Warning, "host", "RootLabelPreparationFailed", DateTimeOffset.UtcNow,
+            [new("rootLabelPreparationStage", value)]));
+        Assert.IsFalse(safe.Fields.ContainsKey("rootLabelPreparationStage"));
         Assert.DoesNotContain("PRIVATE", JsonSerializer.Serialize(safe));
     }
 }

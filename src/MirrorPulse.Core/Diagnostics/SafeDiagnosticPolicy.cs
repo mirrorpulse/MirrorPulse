@@ -125,6 +125,7 @@ public static class SafeDiagnosticPolicy
                 "transferFailureBoundary" => Enum.TryParse(value, out MirrorPulseTransferFailureBoundary transferBoundary) && Enum.IsDefined(transferBoundary) && value == transferBoundary.ToString() ? value : null,
                 "transferFailureKind" => value is "Native" or "Disposed" or "InvalidData" or "InvalidOperation" or "Authorization" or "Cancelled" or "IO" or "Argument" or "Other" ? value : null,
                 "rootLabelFailureBoundary" => Enum.TryParse(value, out MirrorPulseRootLabelFailureBoundary rootLabelBoundary) && Enum.IsDefined(rootLabelBoundary) && value == rootLabelBoundary.ToString() ? value : null,
+                "rootLabelPreparationStage" => Enum.TryParse(value, out MirrorPulseRootLabelPreparationStage rootLabelStage) && Enum.IsDefined(rootLabelStage) && value == rootLabelStage.ToString() ? value : null,
                 "nativeErrorCode" => int.TryParse(value, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out int nativeCode) ? nativeCode.ToString(CultureInfo.InvariantCulture) : null,
                 "attempt" or "bytesTransferred" or "totalBytes" or "pendingCount" =>
                     long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out long count) && count >= 0

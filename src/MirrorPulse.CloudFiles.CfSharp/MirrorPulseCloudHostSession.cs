@@ -8,6 +8,7 @@ using MirrorPulse.Core.CloudFiles;
 using MirrorPulse.Core.Configuration;
 using MirrorPulse.Core.Conflicts;
 using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.Diagnostics;
 using MirrorPulse.Core.Host;
 using MirrorPulse.Core.State;
 using MirrorPulse.Core.Sync;
@@ -1400,25 +1401,33 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             ArgumentException.ThrowIfNullOrWhiteSpace(label);
             var root = (await catalog.ReadAdapterTopologyAsync(requestCancellation).ConfigureAwait(false)).Roots.Single(item => item.RootId == rootId);
             using var stop = CancellationTokenSource.CreateLinkedTokenSource(requestCancellation, _admissionShutdown.Token);
-            await using var admission = await namespaceWork.BeginRecoveryAsync([rootId], stop.Token).ConfigureAwait(false);
-            return await WithInstanceLibraryAsync(root.InstanceId, async token =>
+            await using var admission = await MirrorPulseRootLabelFailureDiagnostics.AtPreparationStageAsync(MirrorPulseRootLabelPreparationStage.RootWorkDrain,
+                () => namespaceWork.BeginRecoveryAsync([rootId], stop.Token)).ConfigureAwait(false);
+            return await MirrorPulseRootLabelFailureDiagnostics.AtPreparationStageAsync(MirrorPulseRootLabelPreparationStage.InstanceLibrary,
+                () => WithInstanceLibraryAsync(root.InstanceId, async token =>
             {
                 var coordinator = new MirrorPulseManagedRootRenameCoordinator(fileSystem, catalog, router);
                 if (await catalog.ReadManagedRootRenameAsync(rootId, token).ConfigureAwait(false) is { IsPending: true })
-                    return await coordinator.PrepareAsync(rootId, label, token).ConfigureAwait(false);
+                    return await MirrorPulseRootLabelFailureDiagnostics.AtPreparationStageAsync(MirrorPulseRootLabelPreparationStage.OriginalOwnership,
+                        () => coordinator.PrepareAsync(rootId, label, token)).ConfigureAwait(false);
                 var anchorMember = await catalog.ReadNamespaceMemberByBindingAsync(anchor.Original.LocalObject, token).ConfigureAwait(false)
                     ?? throw new InvalidDataException("Root preparation lost its live sync-root anchor.");
-                var audit = await new MirrorPulseNamespaceCurrentTreeAuditCoordinator(fileSystem, catalog, router, _namespaceExecution,
-                    _namespaceActor, _permissions).AuditRootAsync(anchorMember.MemberId, anchor, rootId, token).ConfigureAwait(false);
+                var audit = await MirrorPulseRootLabelFailureDiagnostics.AtPreparationStageAsync(MirrorPulseRootLabelPreparationStage.CurrentTreeAudit,
+                    () => new MirrorPulseNamespaceCurrentTreeAuditCoordinator(fileSystem, catalog, router, _namespaceExecution,
+                        _namespaceActor, _permissions).AuditRootAsync(anchorMember.MemberId, anchor, rootId, token)).ConfigureAwait(false);
                 if (audit.Inventory.FencedRoots.Count != 0 || _startupProtection != anchor)
                     throw new InvalidOperationException("New root preparation requires its current unfenced Host audit.");
                 MirrorPulseRootRenameHistory prepared = null!;
                 // This captures read-only public proof. First native execution still
                 // requires a separately sealed whole-tree admission under the actor.
-                await _namespaceExecution.RunNamespaceOperationAsync(async () =>
-                    prepared = await coordinator.PrepareAsync(rootId, label, token).ConfigureAwait(false)).ConfigureAwait(false);
+                _ = await MirrorPulseRootLabelFailureDiagnostics.AtPreparationStageAsync(MirrorPulseRootLabelPreparationStage.PublicProof, async () =>
+                {
+                    await _namespaceExecution.RunNamespaceOperationAsync(async () =>
+                        prepared = await coordinator.PrepareAsync(rootId, label, token).ConfigureAwait(false)).ConfigureAwait(false);
+                    return true;
+                }).ConfigureAwait(false);
                 return prepared;
-            }, stop.Token).ConfigureAwait(false);
+            }, stop.Token)).ConfigureAwait(false);
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
