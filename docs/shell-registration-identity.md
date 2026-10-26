@@ -36,3 +36,13 @@ Microsoft describes the [ProviderId property](https://learn.microsoft.com/en-us/
 as the storage provider GUID. Its documentation does not explain this observed
 empty readback. Managed boundary tests simulate the public registration facts;
 actual packaged registration and restoration require the clean installed CI.
+
+The Shell `Context` buffer contains the sync-root identity, as specified by
+[Microsoft's Context documentation](https://learn.microsoft.com/en-us/uwp/api/windows.storage.provider.storageprovidersyncrootinfo.context?view=winrt-26100).
+Every registration writes the same configured identity bytes retained in the
+profile, including custom-label updates and restoration. Encoding the directory
+path in that field would supply a different identity. Missing or damaged
+configured bytes refuse before the Windows registration call; each buffer is a
+fresh copy and a display-name change cannot replace its contents. This product
+correction does not establish a CfSharp defect; the clean installed probe must
+still confirm actual custom, unified and restored registration behavior.

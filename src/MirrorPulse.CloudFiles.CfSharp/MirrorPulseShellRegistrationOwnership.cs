@@ -5,6 +5,13 @@ internal sealed record MirrorPulseShellCloudFilesRoot(string Path, long FileId, 
 
 internal static class MirrorPulseShellRegistrationOwnership
 {
+    internal static byte[] CreateContextIdentity(MirrorPulseShellRegistrationProfile profile)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        if (string.IsNullOrEmpty(profile.CloudFilesRootIdentity))
+            throw new InvalidOperationException("Shell registration requires the configured Cloud Files root identity bytes.");
+        return Convert.FromBase64String(profile.CloudFilesRootIdentity);
+    }
     internal static void Require(MirrorPulseShellRegistrationProfile expected, string registeredId, string registeredPath,
         Guid registeredProvider, Func<MirrorPulseShellCloudFilesRoot> readCloudFilesRoot)
     {

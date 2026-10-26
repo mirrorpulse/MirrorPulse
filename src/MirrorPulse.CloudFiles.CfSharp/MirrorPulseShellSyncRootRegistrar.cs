@@ -109,7 +109,7 @@ public static class MirrorPulseShellSyncRootRegistrar
             Version = profile.ProviderVersion,
             AllowPinning = true,
             ShowSiblingsAsGroup = false,
-            Context = CryptographicBuffer.ConvertStringToBinary(path, BinaryStringEncoding.Utf8),
+            Context = CryptographicBuffer.CreateFromByteArray(MirrorPulseShellRegistrationOwnership.CreateContextIdentity(profile)),
         };
         try
         {
