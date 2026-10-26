@@ -70,13 +70,18 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             await using var scheduler = new MirrorPulseInstanceScheduler();
             await using var work = new MirrorPulseNamespaceWorkAdmission([sourceRoot.RootId, targetRoot.RootId]);
             using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+            var transferClock = System.Diagnostics.Stopwatch.StartNew();
+            void NoteTransferStage(string stage) => TestContext.WriteLine($"HostTransferProgress: sameInstance={sameInstance}; deleteSource={deleteSource}; retireLocal={retireLocal}; completeOriginals={completeOriginals}; stage={stage}; elapsedMs={transferClock.ElapsedMilliseconds}; cancellationRequested={deadline.IsCancellationRequested}.");
             var provider = new ProtectedPermissionNoSourceProvider();
             byte[] bytes = sameInstance ? deleteSource ? new byte[4097] : [] : new byte[2_097_409]; new Random(517).NextBytes(bytes);
             try
             {
+                NoteTransferStage("FixtureSetup");
                 registry.Register(new(paths.SyncRootPath, "0.1.0", Guid.NewGuid(), [7, 4, 7]));
                 await File.WriteAllTextAsync(Path.Combine(directory, ".mp-permission-fixture"), string.Empty, deadline.Token);
+                NoteTransferStage("InitialCatalogOpen");
                 await using var catalog = await MirrorPulseProductCatalog.OpenAsync(paths, deadline.Token);
+                NoteTransferStage("InitialCatalogOpened");
                 var state = new MirrorPulseCfSharpStateSession(paths);
                 await using var fileSystem = new MirrorPulseCloudFileSystemBuilder(paths).WithStateStore(state).WithContentProvider(provider).Build();
                 await role.RunNamespaceOperationAsync(async () => await fileSystem.StartAsync(deadline.Token));
@@ -230,10 +235,12 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         TransferSourceRetirementCheckpoint = RetirementCheckpoint,
                         TransferAcknowledgementCheckpoint = acknowledgementFault.CheckpointAsync
                     }.Create(paths);
+                NoteTransferStage("ProtectedMembershipReady");
                 Guid operation = Guid.NewGuid(); MirrorPulseNamespaceTransferCopy verified; MirrorPulseNamespaceRetirement? retired = null;
                 await using (var runtime = factory.Create(paths))
                 {
                     await runtime.StartAsync(deadline.Token);
+                    NoteTransferStage("RuntimeStarted");
                     CloudLocalChangeFeed journal = originalJournal ?? throw new AssertFailedException("The transfer-only Host did not start its original public journal.");
                     await Assert.ThrowsExactlyAsync<InvalidOperationException>(async () =>
                         await runtime.PrepareNamespaceTransferAsync(operation, member.MemberId, target.MemberId, "moved.bin", deadline.Token));
@@ -245,7 +252,9 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     await File.WriteAllBytesAsync(sourcePath, [31], deadline.Token);
                     await File.WriteAllBytesAsync(sourcePath, bytes, deadline.Token);
                     var originalContentIds = await WaitForTransferOriginalContentJournalAsync(journal, nativeBefore.ItemId!.Value, deadline.Token);
+                    NoteTransferStage("OriginalJournalObserved");
                     var prepared = await runtime.PrepareNamespaceTransferAsync(operation, member.MemberId, target.MemberId, "moved.bin", deadline.Token);
+                    NoteTransferStage("CommandPrepared");
                     Assert.AreEqual(2, prepared.Plan.Version); Assert.IsNotNull(prepared.Plan.CommandOrigin);
                     Assert.AreEqual(operation, prepared.Plan.CommandOrigin.CommandId);
                     Assert.AreEqual(member.MemberId, prepared.Plan.CommandOrigin.SourceMemberId);
@@ -275,6 +284,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     await Assert.ThrowsExactlyAsync<MirrorPulseMutationAmbiguousException>(async () =>
                         await runtime.PrepareNamespaceTransferTargetBirthAsync(operation, deadline.Token));
                     await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() => File.Delete(sourcePath), deadline.Token));
+                    NoteTransferStage("CopyFaultChecksBegin");
                     if (sameInstance)
                     {
                         await File.WriteAllBytesAsync(sourcePath, [9], deadline.Token);
@@ -296,6 +306,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     }
                     await File.WriteAllBytesAsync(sourcePath, bytes, deadline.Token);
                     var accepted = await runtime.CopyNamespaceTransferAsync(operation, deadline.Token);
+                    NoteTransferStage("CopyReturned");
                     Assert.AreEqual("target-v1", accepted.AcceptedRevision);
                     Assert.IsNotNull(accepted.JournalClaim);
                     Assert.AreEqual(prepared.JournalClaim, accepted.JournalClaim,
@@ -308,6 +319,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     }
                     Assert.IsTrue(accepted.JournalClaim.CapturedAt <= accepted.CopyStartedAt);
                     verified = await runtime.VerifyNamespaceTransferTargetAsync(operation, deadline.Token);
+                    NoteTransferStage("TargetVerified");
                     Assert.IsNotNull(verified.TargetVerification); Assert.AreEqual("target:original", verified.TargetVerification.RemoteId);
                     verified = await runtime.PrepareNamespaceTransferTargetBirthAsync(operation, deadline.Token);
                     Assert.IsNotNull(verified.TargetBirth);
@@ -366,6 +378,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                             finally { await ExecuteTransferPublicationFixtureSqlAsync(paths, "DROP TRIGGER fail_transfer_publication;", CancellationToken.None); }
                         }
                         verified = await publishing.PublishNamespaceTransferTargetAsync(operation, deadline.Token);
+                        NoteTransferStage("TargetPublished");
                         Assert.IsNotNull(verified.TargetPublication);
                         Assert.IsNotNull(verified.TargetBirth);
                         Assert.AreEqual(verified.TargetBirth.Birth.OperationId, verified.TargetPublication.MemberId);
@@ -388,6 +401,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                             Assert.AreEqual(beforeHydration, Volatile.Read(ref worker.RangeReads));
                             if (recoveryWork is not null) Assert.IsFalse(recoveryWork.IsAdmitted(targetRoot.RootId), "An empty-file read cannot reopen the recovered root.");
                         }
+                        NoteTransferStage("TargetHydrated");
                         var targetAfter = await publishing.InspectNamespaceMemberAsync("Archive/moved.bin", false, deadline.Token);
                         Assert.AreEqual(targetBefore.MemberId, targetAfter.MemberId); Assert.AreEqual(verified.TargetPublication.MemberId, targetAfter.MemberId);
                         Assert.AreEqual(targetBefore.ActualParentMemberId, targetAfter.ActualParentMemberId);
@@ -521,6 +535,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     await using var input = await new MirrorPulseLocalTransferContentStore(paths).OpenLeaseAsync(prepared.Plan, deadline.Token);
                     CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(input.Data.Name, deadline.Token));
                 }
+                NoteTransferStage("OriginalRuntimeStopped");
                 Assert.IsNotNull(originalJournal); Assert.IsFalse(originalJournal.IsStarted);
                 if (retireLocal)
                 {
@@ -536,14 +551,18 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         originalBinding.SyncRootFileId, originalBinding.LocalFileId), retired.TransferReceipt.LocalObject);
                     await read.RollbackAsync(deadline.Token);
                 }
+                NoteTransferStage("OriginalCatalogClose");
                 await catalog.DisposeAsync();
+                NoteTransferStage("ReopenCatalogBegin");
                 await using var nextCatalog = await MirrorPulseProductCatalog.OpenAsync(paths, deadline.Token);
+                NoteTransferStage("ReopenCatalogOpened");
                 var nextTransport = new MirrorPulseNormalUserWorkerTransport(nextRole, worker, worker, worker, worker, worker);
                 await using var nextWork = new MirrorPulseNamespaceWorkAdmission([sourceRoot.RootId, targetRoot.RootId]);
                 var nextFactory = new CfSharpMirrorPulseCloudRuntimeFactory(router: router, catalog: nextCatalog, mayDispatch: _ => false,
                     scheduler: scheduler, namespaceExecution: nextRole, namespaceActor: actor, namespaceWork: completeOriginals ? nextWork : work,
                     transfers: Services(nextTransport));
                 await using var reopened = nextFactory.Create(paths); await reopened.StartAsync(deadline.Token);
+                NoteTransferStage("ReopenedRuntimeStarted");
                 int beforeOfflineRead = Volatile.Read(ref worker.RangeReads);
                 string publishedTarget = Path.Combine(paths.SyncRootPath, "Archive", "moved.bin");
                 CollectionAssert.AreEqual(completeOriginals ? TransferAcknowledgementLaterTarget : bytes, await File.ReadAllBytesAsync(publishedTarget, deadline.Token));
@@ -583,6 +602,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             }
             finally
             {
+                NoteTransferStage("FixtureEnd");
                 registry.Unregister(paths.SyncRootPath);
                 RestoreSourceContextFixtureForCleanup(directory, paths.SyncRootPath, caller.User!);
                 RestoreTransferArchiveForCleanup(paths.SyncRootPath, caller.User!);
