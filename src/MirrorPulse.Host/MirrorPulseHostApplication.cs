@@ -584,8 +584,13 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
     {
         if (arguments.RootId == Guid.Empty) throw new ArgumentException("A root ID is required.", nameof(arguments));
         ArgumentException.ThrowIfNullOrWhiteSpace(arguments.Label);
-        var history = await _session.PrepareManagedRootRenameAsync(
-            RootId.Parse(arguments.RootId.ToString("D")), arguments.Label, cancellationToken).ConfigureAwait(false);
+        var history = await MirrorPulseRootLabelFailureDiagnostics.RunPreparationAsync(arguments.RootId,
+            () => _session.PrepareManagedRootRenameAsync(RootId.Parse(arguments.RootId.ToString("D")), arguments.Label, cancellationToken),
+            async entry =>
+            {
+                using var log = new LocalRollingLogWriter(Path.Combine(_paths.DataRootPath, "logs", "root-labels"));
+                await log.WriteAsync(entry, CancellationToken.None).ConfigureAwait(false);
+            }).ConfigureAwait(false);
         return new(history.Intent.OperationId.ToString("D"), history.Intent.RootId.ToString(), history.Intent.SourceName,
             history.Intent.TargetName, history.Intent.Phase.ToString(), history.Intent.UpdatedAt);
     }

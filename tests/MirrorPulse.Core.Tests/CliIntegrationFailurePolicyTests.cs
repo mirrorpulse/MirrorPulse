@@ -105,6 +105,9 @@ public sealed class CliIntegrationFailurePolicyTests
                     $evidence=Join-Path $FixtureRoot 'evidence/cli-regression.json'
                     New-Item -ItemType Directory -Path (Join-Path $data 'logs') -Force | Out-Null
                     'safe structured diagnostic' | Set-Content -LiteralPath (Join-Path $data 'logs/mirrorpulse.log')
+                    New-Item -ItemType Directory -Path (Join-Path $data 'logs/root-labels') -Force | Out-Null
+                    1..40 | ForEach-Object { [ordered]@{index=$_;rootLabelFailureBoundary='CurrentAuditFenced'} | ConvertTo-Json -Compress } |
+                        Set-Content -LiteralPath (Join-Path $data 'logs/root-labels/mirrorpulse.log')
                     try { throw [IO.IOException]::new("Original failure at $FixtureRoot/synthetic.txt") } catch { $original=$_ }
                     try { throw [ArgumentException]::new('Independent cleanup failure.') } catch { $secondary=$_ }
                     Write-CliFixtureFailure -Failure $original -Phase Execution -EvidencePath $evidence -FixtureRoot $FixtureRoot -DataRoot $data
@@ -124,6 +127,8 @@ public sealed class CliIntegrationFailurePolicyTests
                         execution=(Get-Content -Raw -LiteralPath (Join-Path $originals 'execution.json') | ConvertFrom-Json)
                         cleanup=(Get-Content -Raw -LiteralPath (Join-Path $originals 'cleanup.json') | ConvertFrom-Json)
                         log=(Get-Content -Raw -LiteralPath (Join-Path $originals 'execution-logs-mirrorpulse.log'))
+                        rootLabelLog=@(Get-Content -LiteralPath (Join-Path $originals 'execution-logs-root-labels-mirrorpulse.log') | ConvertFrom-Json)
+                        cleanupRootLabelLog=@(Get-Content -LiteralPath (Join-Path $originals 'cleanup-logs-root-labels-mirrorpulse.log') | ConvertFrom-Json)
                     } | ConvertTo-Json -Compress -Depth 5
                     return
                 }
@@ -173,6 +178,13 @@ public sealed class CliIntegrationFailurePolicyTests
                     Assert.IsFalse(json.RootElement.GetProperty("execution").GetProperty(field).GetString()!.Contains(directory, StringComparison.OrdinalIgnoreCase));
                 StringAssert.Contains(json.RootElement.GetProperty("execution").GetProperty("message").GetString()!, "<fixture>");
                 StringAssert.Contains(json.RootElement.GetProperty("log").GetString()!, "safe structured diagnostic");
+                foreach (string name in new[] { "rootLabelLog", "cleanupRootLabelLog" })
+                {
+                    var lines = json.RootElement.GetProperty(name).EnumerateArray().ToArray();
+                    Assert.HasCount(32, lines); Assert.AreEqual(9, lines[0].GetProperty("index").GetInt32());
+                    Assert.AreEqual(40, lines[^1].GetProperty("index").GetInt32());
+                    Assert.IsTrue(lines.All(line => line.GetProperty("rootLabelFailureBoundary").GetString() == "CurrentAuditFenced"));
+                }
                 return;
             }
             if (scenario is "lifecycle" or "lifecycle-observer-failure")

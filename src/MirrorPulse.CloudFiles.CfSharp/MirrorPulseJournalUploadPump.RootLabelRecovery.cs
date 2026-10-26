@@ -20,6 +20,7 @@ public sealed partial class MirrorPulseJournalUploadPump
                     await _log.WriteAsync(new(LogLevel.Warning, "CloudFiles.Upload", "RootLabelJournalRecoveryFailed", DateTimeOffset.UtcNow,
                         [new("operationId", attempt.OperationId.ToString("D")),
                      new("failureCategory", SafeDiagnosticPolicy.ClassifyFailure(attempt.Failure)),
+                     new("rootLabelFailureBoundary", MirrorPulseRootLabelFailureDiagnostics.Classify(attempt.Failure).ToString()),
                      new("hresult", attempt.Failure.HResult.ToString("X8", System.Globalization.CultureInfo.InvariantCulture))]), token).ConfigureAwait(false);
                 }
                 catch (Exception loggingFailure) when (loggingFailure is not OperationCanceledException) { }
@@ -32,6 +33,7 @@ public sealed partial class MirrorPulseJournalUploadPump
                 {
                     await _log.WriteAsync(new(LogLevel.Warning, "CloudFiles.Upload", "RootLabelJournalAdmissionFailed", DateTimeOffset.UtcNow,
                         [new("operationId", failure.OperationId.ToString("D")), new("failureCategory", SafeDiagnosticPolicy.ClassifyFailure(failure.Failure)),
+                         new("rootLabelFailureBoundary", MirrorPulseRootLabelFailureDiagnostics.Classify(failure.Failure).ToString()),
                          new("hresult", failure.Failure.HResult.ToString("X8", System.Globalization.CultureInfo.InvariantCulture))]), token).ConfigureAwait(false);
                 }
                 catch (Exception loggingFailure) when (loggingFailure is not OperationCanceledException) { }
@@ -43,6 +45,7 @@ public sealed partial class MirrorPulseJournalUploadPump
                 {
                     await _log.WriteAsync(new(LogLevel.Warning, "CloudFiles.Upload", "RootLabelJournalReadmissionFailed", DateTimeOffset.UtcNow,
                         [new("rootId", attempt.RootId.ToString()), new("failureCategory", SafeDiagnosticPolicy.ClassifyFailure(attempt.Failure)),
+                         new("rootLabelFailureBoundary", MirrorPulseRootLabelFailureDiagnostics.Classify(attempt.Failure).ToString()),
                          new("hresult", attempt.Failure.HResult.ToString("X8", System.Globalization.CultureInfo.InvariantCulture))]), token).ConfigureAwait(false);
                 }
                 catch (Exception loggingFailure) when (loggingFailure is not OperationCanceledException) { }

@@ -38,7 +38,7 @@ function Write-CliFixtureFailure {
         scriptStack=([string]$Failure.ScriptStackTrace).Replace($FixtureRoot, '<fixture>')
     }
     $record | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $directory ($Phase.ToLowerInvariant()+'.json')) -Encoding utf8
-    foreach ($relative in @('logs/mirrorpulse.log','logs/cloud-files/mirrorpulse.log','logs/workers/mirrorpulse.log')) {
+    foreach ($relative in @('logs/mirrorpulse.log','logs/cloud-files/mirrorpulse.log','logs/workers/mirrorpulse.log','logs/root-labels/mirrorpulse.log')) {
         $log = Join-Path $DataRoot $relative
         if (Test-Path -LiteralPath $log -PathType Leaf) {
             $name = $relative.Replace('/', '-')
