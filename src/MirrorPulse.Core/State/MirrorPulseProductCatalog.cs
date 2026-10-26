@@ -104,7 +104,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                 version.CommandText = "PRAGMA user_version;";
                 currentVersion = (long)(await version.ExecuteScalarAsync(cancellationToken)
                     .ConfigureAwait(false) ?? 0L);
-                if (currentVersion > 90)
+                if (currentVersion > 91)
                 {
                     throw new InvalidDataException("The MP product catalog schema is newer than this Host supports.");
                 }
@@ -470,6 +470,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
             await EnsureNamespaceNameEpochSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
             await EnsureRetiredTransferObservationSchemaAsync(connection, currentVersion, stampVersion: false, cancellationToken).ConfigureAwait(false);
             await EnsureRootLabelJournalSchemaAsync(connection, currentVersion, stampVersion: false, cancellationToken).ConfigureAwait(false);
+            await EnsureRootLabelCancellationSchemaAsync(connection, currentVersion, stampVersion: false, cancellationToken).ConfigureAwait(false);
             var catalog = new MirrorPulseProductCatalog(owner, connection);
             await EnsureNamespaceRemoteUpdateSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
             await EnsureRemoteDeleteResolutionSchemaAsync(connection, cancellationToken, stampVersion: false).ConfigureAwait(false);
@@ -488,6 +489,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
             await EnsureNamespaceTransferRootReadIndexesAsync(connection, cancellationToken).ConfigureAwait(false);
             await EnsureControlledRetirementGenerationSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
             await EnsureRootLabelJournalSchemaAsync(connection, currentVersion, stampVersion: true, cancellationToken).ConfigureAwait(false);
+            await EnsureRootLabelCancellationSchemaAsync(connection, currentVersion, stampVersion: true, cancellationToken).ConfigureAwait(false);
             return catalog;
         }
         catch

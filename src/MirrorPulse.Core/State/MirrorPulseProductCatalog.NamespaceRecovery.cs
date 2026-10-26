@@ -90,7 +90,18 @@ public sealed partial class MirrorPulseProductCatalog
         await foreach (var update in ReadPendingRemoteUpdatesCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
             if (update.Plan.OperationId != admittedRemoteUpdateId) roots.Add(update.Plan.Child.Context.Member.RootId!.Value);
         foreach (var rename in await ReadManagedRootRenamesCoreAsync(cancellationToken, transaction).ConfigureAwait(false))
+        {
             if (rename.IsPending) roots.Add(rename.RootId);
+            else if (rename.Phase == MirrorPulseRootRenamePhase.Cancelled)
+            {
+                // A sealed cancellation must retain both original owners. Missing
+                // pending rows alone never turn an unfinished move into readiness.
+                var move = await ReadNamespaceMemberMoveCoreAsync(rename.OperationId, transaction, cancellationToken).ConfigureAwait(false);
+                if (rename.CancellationOperationId is not null && (move is null ||
+                    await ReadRootLabelCancellationRowAsync(rename.OperationId, transaction, cancellationToken).ConfigureAwait(false) is null))
+                    throw new InvalidDataException("The cancelled protected Label lost its original guarded terminal ownership.");
+            }
+        }
         await foreach (var transfer in ReadPendingNamespaceTransfersCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
             if (transfer.Plan.OperationId != admittedTransferId)
             {

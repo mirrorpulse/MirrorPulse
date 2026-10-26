@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Data.Sqlite;
 using MirrorPulse.Core.Contracts;
 
@@ -11,6 +12,10 @@ public sealed record MirrorPulseRootRenameIntent(Guid OperationId, RootId RootId
     string TargetName, MirrorPulseRootRenamePhase Phase, DateTimeOffset UpdatedAt)
 {
     public bool IsPending => Phase is not (MirrorPulseRootRenamePhase.Completed or MirrorPulseRootRenamePhase.Cancelled);
+
+    /// <summary>The explicit original guarded cancellation owner for a sealed, never-started Label.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? CancellationOperationId { get; init; }
 }
 
 public sealed partial class MirrorPulseProductCatalog
@@ -69,7 +74,8 @@ public sealed partial class MirrorPulseProductCatalog
                 ?? throw new InvalidDataException("The managed root rename intent is invalid.");
             if (intent.OperationId == Guid.Empty || intent.RootId.Value == Guid.Empty || !Enum.IsDefined(intent.Phase) ||
                 intent.UpdatedAt == default || intent.RootId.ToString() != rootId ||
-                operationId is not null && intent.OperationId.ToString() != operationId)
+                operationId is not null && intent.OperationId.ToString() != operationId ||
+                intent.CancellationOperationId is { } cancellation && (cancellation != intent.OperationId || intent.Phase != MirrorPulseRootRenamePhase.Cancelled))
                 throw new InvalidDataException("The managed root rename intent does not match its indexed owner.");
             return intent;
         }

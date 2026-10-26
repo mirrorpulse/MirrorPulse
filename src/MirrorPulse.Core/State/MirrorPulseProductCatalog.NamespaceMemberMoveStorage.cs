@@ -35,7 +35,10 @@ public sealed partial class MirrorPulseProductCatalog
                 var rejection = await ReadNamespaceRemoteMoveRejectionRowAsync(operationId, transaction, token).ConfigureAwait(false);
                 if (rejection is not null)
                     await ValidateNamespaceRemoteMoveRejectionReferencesAsync(intent, rejection, transaction, token).ConfigureAwait(false);
-                await ValidateNamespaceMovePredecessorClaimAsync(intent, rejection, transaction, token).ConfigureAwait(false);
+                var cancellation = await ReadRootLabelCancellationRowAsync(operationId, transaction, token).ConfigureAwait(false);
+                if (cancellation is not null)
+                    await ValidateRootLabelCancellationReferencesAsync(intent, cancellation, current: false, transaction, token).ConfigureAwait(false);
+                await ValidateNamespaceMovePredecessorClaimAsync(intent, rejection, cancellation is not null, transaction, token).ConfigureAwait(false);
             }
             if (validateRelocationChain && !reads.MoveChains.Contains(operationId))
             {

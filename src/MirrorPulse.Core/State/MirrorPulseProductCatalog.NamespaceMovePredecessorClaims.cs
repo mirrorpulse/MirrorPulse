@@ -5,15 +5,17 @@ namespace MirrorPulse.Core.State;
 public sealed partial class MirrorPulseProductCatalog
 {
     private async Task ValidateNamespaceMovePredecessorClaimAsync(MirrorPulseNamespaceMemberMoveIntent intent,
-        MirrorPulseNamespaceRemoteMoveRejection? rejection, SqliteTransaction transaction, CancellationToken token)
+        MirrorPulseNamespaceRemoteMoveRejection? rejection, bool cancelled, SqliteTransaction transaction, CancellationToken token)
     {
+        if (cancelled && rejection is not null) throw new InvalidDataException("One original move cannot be both remotely rejected and locally cancelled.");
+        bool terminalWithoutMove = rejection is not null || cancelled;
         await using var query = _connection.CreateCommand(); query.Transaction = transaction;
         query.CommandText = "SELECT previous_move_id FROM namespace_member_move_predecessor_claims WHERE operation_id=$operation;";
         query.Parameters.AddWithValue("$operation", intent.OperationId.ToString("D"));
         var claim = await query.ExecuteScalarAsync(token).ConfigureAwait(false) as string;
-        if (claim != (rejection is null ? intent.PreviousMoveOperationId?.ToString("D") : null))
+        if (claim != (!terminalWithoutMove ? intent.PreviousMoveOperationId?.ToString("D") : null))
             throw new InvalidDataException("The move lost its exclusive live predecessor claim.");
-        if (rejection is null)
+        if (!terminalWithoutMove)
         {
             query.CommandText = """
                 SELECT EXISTS(SELECT 1 FROM namespace_member_move_completions WHERE operation_id=$operation),
@@ -33,7 +35,7 @@ public sealed partial class MirrorPulseProductCatalog
             LIMIT 1;
             """;
         if (await query.ExecuteScalarAsync(token).ConfigureAwait(false) is not null)
-            throw new InvalidDataException("A rejected move still owns an active pending or name reservation.");
+            throw new InvalidDataException("A rejected or cancelled move still owns an active pending or name reservation.");
     }
 
     private static async Task EnsureNamespaceMoveRejectionSchemaAsync(SqliteConnection connection, long originalVersion,
