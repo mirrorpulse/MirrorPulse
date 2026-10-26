@@ -168,7 +168,10 @@ try {
         $shellOutputPrepared = $true
         $env:MIRRORPULSE_PACKAGED_SHELL_PROBE_RESULT = $resultPath
         try {
-            $probeProcess = [Diagnostics.Process]::Start((New-InstalledShellProbeStartInfo -ExecutablePath $appExe -ResultPath $resultPath))
+            $expectedHostRoot = if ($env:MIRRORPULSE_SYNC_ROOT) { $env:MIRRORPULSE_SYNC_ROOT } else {
+                Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)) 'MirrorPulse'
+            }
+            $probeProcess = [Diagnostics.Process]::Start((New-InstalledShellProbeStartInfo -ExecutablePath $appExe -ResultPath $resultPath -ExpectedHostRoot $expectedHostRoot))
             $deadline = [DateTime]::UtcNow.AddMinutes(2)
             $probeObservation = Wait-InstalledShellProbeResult -Process $probeProcess -ResultPath $resultPath -DeadlineUtc $deadline
         }

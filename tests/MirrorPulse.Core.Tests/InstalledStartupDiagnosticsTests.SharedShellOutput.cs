@@ -9,16 +9,26 @@ public sealed partial class InstalledStartupDiagnosticsTests
         await RunSharedShellOutputProbeAsync("environment", """
             $executable=Join-Path $Directory 'app with spaces.exe'
             $parentGuiErrors=[Environment]::GetEnvironmentVariable('DOTNET_DISABLE_GUI_ERRORS')
-            $start=New-InstalledShellProbeStartInfo -ExecutablePath $executable -ResultPath $resultPath
+            $parentRoot=[Environment]::GetEnvironmentVariable('MIRRORPULSE_PACKAGED_SHELL_PROBE_ROOT')
+            $expectedRoot=Join-Path $Directory 'Host root with spaces'
+            $start=New-InstalledShellProbeStartInfo -ExecutablePath $executable -ResultPath $resultPath -ExpectedHostRoot $expectedRoot
             if ($start.FileName -cne $executable -or $start.UseShellExecute -or -not $start.CreateNoWindow -or
                 $start.WindowStyle -ne [Diagnostics.ProcessWindowStyle]::Hidden -or
                 $start.Environment['MIRRORPULSE_PACKAGED_SHELL_PROBE_RESULT'] -cne $resultPath -or
+                $start.Environment['MIRRORPULSE_PACKAGED_SHELL_PROBE_ROOT'] -cne $expectedRoot -or
+                [Environment]::GetEnvironmentVariable('MIRRORPULSE_PACKAGED_SHELL_PROBE_ROOT') -cne $parentRoot -or
                 $start.Environment['DOTNET_DISABLE_GUI_ERRORS'] -cne '1' -or
                 [Environment]::GetEnvironmentVariable('DOTNET_DISABLE_GUI_ERRORS') -cne $parentGuiErrors -or
                 $start.ArgumentList.Count -ne 0 -or $start.Arguments.Length -ne 0) {
                 throw 'The observed executable must receive its exact private output environment without shell activation or command interpolation.'
             }
             if (Test-Path -LiteralPath $resultPath) { throw 'Constructing launch information cannot report a probe result.' }
+            $withoutRoot=New-InstalledShellProbeStartInfo -ExecutablePath $executable -ResultPath $resultPath
+            if ($withoutRoot.Environment.ContainsKey('MIRRORPULSE_PACKAGED_SHELL_PROBE_ROOT')) { throw 'A root cannot be inferred from an inherited probe environment.' }
+            $rejected=$false
+            try { New-InstalledShellProbeStartInfo -ExecutablePath $executable -ResultPath $resultPath -ExpectedHostRoot 'relative-root'|Out-Null }
+            catch { $rejected=$true }
+            if (-not $rejected) { throw 'Relative Host roots are ambiguous between the verifier and Host processes.' }
             """);
     }
 

@@ -2,12 +2,20 @@
 # may redirect newly created AppData files; opening an existing real file retains
 # its actual cross-process location. Empty files are never probe completion.
 function New-InstalledShellProbeStartInfo {
-    param([Parameter(Mandatory)][string]$ExecutablePath,[Parameter(Mandatory)][string]$ResultPath)
+    param([Parameter(Mandatory)][string]$ExecutablePath,[Parameter(Mandatory)][string]$ResultPath,
+        [string]$ExpectedHostRoot)
     $start=[Diagnostics.ProcessStartInfo]::new($ExecutablePath)
     $start.UseShellExecute=$false
     $start.CreateNoWindow=$true
     $start.WindowStyle=[Diagnostics.ProcessWindowStyle]::Hidden
     $start.Environment['MIRRORPULSE_PACKAGED_SHELL_PROBE_RESULT']=$ResultPath
+    if ($ExpectedHostRoot) {
+        if (-not [IO.Path]::IsPathFullyQualified($ExpectedHostRoot)) { throw 'The expected Host root must be absolute.' }
+        $start.Environment['MIRRORPULSE_PACKAGED_SHELL_PROBE_ROOT']=[IO.Path]::GetFullPath($ExpectedHostRoot)
+    } else {
+        # Never inherit a stale root from the verifier's environment.
+        $start.Environment.Remove('MIRRORPULSE_PACKAGED_SHELL_PROBE_ROOT')|Out-Null
+    }
     # Native apphost errors precede CLR/SDK initialization. Preserve their exit
     # code instead of waiting for a dialog in this disposable CI child.
     $start.Environment['DOTNET_DISABLE_GUI_ERRORS']='1'
