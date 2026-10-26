@@ -142,6 +142,7 @@ public sealed class MirrorPulseHostStartupLifetimeTests
     }
 
     [TestMethod]
+    [DoNotParallelize] // Preserve the original 250ms request budget without unrelated parallel fixture startup.
     public async Task ReadinessTimeoutLeavesTheActualControlListenerQueryableAndAbleToComplete()
     {
         string state = "Starting";
