@@ -42,7 +42,7 @@ public static class MirrorPulseCliCommandLine
             ["host"] = NewSet("status", "start", "stop", "restart"),
             ["instance"] = NewSet("list", "create", "configure", "enable", "disable", "select-version"),
             ["operation"] = NewSet("get", "watch", "cancel"),
-            ["root"] = NewSet("list", "prepare-rename", "recover"),
+            ["root"] = NewSet("list", "prepare-rename", "execute-rename", "recover"),
             ["namespace"] = NewSet("member", "birth", "protection", "remote", "transfer"),
             ["sync"] = NewSet("status", "refresh")
         };
@@ -224,6 +224,8 @@ public static class MirrorPulseCliHelp
           root list                      Inspect managed roots and namespace recovery.
           root prepare-rename ROOT_ID LABEL
                                          Prepare a Label-only managed root rename.
+          root execute-rename OPERATION_ID
+                                         Execute an original protected root Label preparation.
           root recover OPERATION_ID      Retry an original managed root rename proof.
           namespace member inspect RELATIVE_PATH [--directory]
                                          Look up a registered native member and its parent.

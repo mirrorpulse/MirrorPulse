@@ -200,6 +200,11 @@ public interface IMirrorPulseCloudRuntime : IAsyncDisposable
         CancellationToken cancellationToken) => ValueTask.FromException<MirrorPulseRootRenameHistory>(
             new NotSupportedException("This Cloud Files runtime does not prepare managed root renames."));
 
+    [SupportedOSPlatform("windows10.0.26100")]
+    ValueTask<MirrorPulseManagedRootRenameExecution> ExecuteManagedRootRenameAsync(Guid operationId,
+        CancellationToken cancellationToken) => ValueTask.FromException<MirrorPulseManagedRootRenameExecution>(
+            new NotSupportedException("This Cloud Files runtime does not execute protected root renames."));
+
     ValueTask<MirrorPulseCloudStatusSnapshot> ReadStatusAsync(
         IEnumerable<InstanceId> instanceIds,
         CancellationToken cancellationToken) =>
@@ -1387,12 +1392,86 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         public async ValueTask<MirrorPulseRootRenameHistory> PrepareManagedRootRenameAsync(RootId rootId, string label,
             CancellationToken requestCancellation)
         {
-            if (router is null || catalog is null) throw new NotSupportedException("Managed root rename requires the Host namespace boundary.");
+            if (router is null || catalog is null || namespaceWork is null || _namespaceExecution is null ||
+                _namespaceActor is null || _permissions is null || _startupProtection is not { } anchor)
+                throw new NotSupportedException("Managed root rename requires the current protected Host namespace boundary.");
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
+            if (rootId.Value == Guid.Empty) throw new ArgumentException("A stable root ID is required.", nameof(rootId));
+            ArgumentException.ThrowIfNullOrWhiteSpace(label);
             var root = (await catalog.ReadAdapterTopologyAsync(requestCancellation).ConfigureAwait(false)).Roots.Single(item => item.RootId == rootId);
-            using var admission = namespaceWork?.Enter([rootId]);
-            return await WithInstanceLibraryAsync(root.InstanceId, token =>
-                new MirrorPulseManagedRootRenameCoordinator(fileSystem, catalog, router).PrepareAsync(rootId, label, token), requestCancellation).ConfigureAwait(false);
+            using var stop = CancellationTokenSource.CreateLinkedTokenSource(requestCancellation, _admissionShutdown.Token);
+            await using var admission = await namespaceWork.BeginRecoveryAsync([rootId], stop.Token).ConfigureAwait(false);
+            return await WithInstanceLibraryAsync(root.InstanceId, async token =>
+            {
+                var coordinator = new MirrorPulseManagedRootRenameCoordinator(fileSystem, catalog, router);
+                if (await catalog.ReadManagedRootRenameAsync(rootId, token).ConfigureAwait(false) is { IsPending: true })
+                    return await coordinator.PrepareAsync(rootId, label, token).ConfigureAwait(false);
+                var anchorMember = await catalog.ReadNamespaceMemberByBindingAsync(anchor.Original.LocalObject, token).ConfigureAwait(false)
+                    ?? throw new InvalidDataException("Root preparation lost its live sync-root anchor.");
+                var audit = await new MirrorPulseNamespaceCurrentTreeAuditCoordinator(fileSystem, catalog, router, _namespaceExecution,
+                    _namespaceActor, _permissions).AuditRootAsync(anchorMember.MemberId, anchor, rootId, token).ConfigureAwait(false);
+                if (audit.Inventory.FencedRoots.Count != 0 || _startupProtection != anchor)
+                    throw new InvalidOperationException("New root preparation requires its current unfenced Host audit.");
+                MirrorPulseRootRenameHistory prepared = null!;
+                // This captures read-only public proof. First native execution still
+                // requires a separately sealed whole-tree admission under the actor.
+                await _namespaceExecution.RunNamespaceOperationAsync(async () =>
+                    prepared = await coordinator.PrepareAsync(rootId, label, token).ConfigureAwait(false)).ConfigureAwait(false);
+                return prepared;
+            }, stop.Token).ConfigureAwait(false);
+        }
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        public async ValueTask<MirrorPulseManagedRootRenameExecution> ExecuteManagedRootRenameAsync(Guid operationId,
+            CancellationToken cancellationToken)
+        {
+            if (operationId == Guid.Empty) throw new ArgumentException("The original Label operation is required.", nameof(operationId));
+            if (router is null || catalog is null || namespaceWork is null || _namespaceExecution is null ||
+                _namespaceActor is null || _permissions is null || _startupProtection is not { } anchor)
+                throw new NotSupportedException("Root execution requires the current protected Host namespace boundary.");
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
+            using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _admissionShutdown.Token);
+            var history = await catalog.ReadManagedRootRenameHistoryAsync(operationId, stop.Token).ConfigureAwait(false)
+                ?? throw new FileNotFoundException("The original Label preparation is missing.");
+            if (history.Intent.Phase == MirrorPulseRootRenamePhase.Cancelled)
+                throw new InvalidOperationException("A cancelled Label operation cannot execute.");
+            var root = router.FindRegistration(history.Intent.RootId)
+                ?? throw new InvalidOperationException("The original Label root is no longer configured.");
+            MirrorPulseManagedRootRenameExecution result;
+            // Do not own instance/library serialization while earlier work drains.
+            await using (var drained = await namespaceWork.BeginRecoveryAsync([root.RootId], stop.Token).ConfigureAwait(false))
+            {
+                result = await WithInstanceLibraryAsync(root.InstanceId, async token =>
+                {
+                    var moves = new MirrorPulseNamespaceMemberMoveCoordinator(fileSystem, state, catalog, router, _namespaceExecution, _namespaceActor);
+                    _ = await moves.PrepareRootLabelAsync(operationId, token).ConfigureAwait(false);
+                    _ = await moves.ExecuteRootLabelAsync(operationId, token).ConfigureAwait(false);
+                    var completed = await catalog.ReadManagedRootRenameHistoryAsync(operationId, token).ConfigureAwait(false)
+                        ?? throw new InvalidDataException("Root execution lost its original Label receipt.");
+                    var subtree = await catalog.ReadNamespaceDirectoryMoveCompletionAsync(operationId, token).ConfigureAwait(false)
+                        ?? throw new InvalidDataException("Root execution lost its original complete subtree receipt.");
+                    if (completed.Intent.Phase != MirrorPulseRootRenamePhase.Completed || _startupProtection != anchor)
+                        throw new InvalidOperationException("Root execution requires atomic Label settlement and this Host's current guard.");
+                    var member = await catalog.ReadNamespaceMemberByBindingAsync(anchor.Original.LocalObject, token).ConfigureAwait(false)
+                        ?? throw new InvalidDataException("Root execution lost its current registered sync-root anchor.");
+                    string currentName = string.Empty;
+                    await new MirrorPulseNamespaceCurrentTreeAuditCoordinator(fileSystem, catalog, router, _namespaceExecution, _namespaceActor, _permissions)
+                        .AuditRetainedRootAsync(member.MemberId, anchor, root.RootId, (audit, _) =>
+                        {
+                            _namespaceActor.AssertAccess();
+                            var current = router.FindRegistration(root.RootId) ?? throw new InvalidOperationException("The executed root lost its current route.");
+                            if (_startupProtection != anchor || audit.Inventory.FencedRoots.Count != 0 || audit.RoleSid != _namespaceExecution.RoleSid.Value)
+                                throw new InvalidOperationException("Executed-root readmission requires its fresh current unfenced audit.");
+                            currentName = current.DirectoryName;
+                            if (current.State == RootRegistrationState.Active) drained.CompleteAfterFreshAudit();
+                            return Task.CompletedTask;
+                        }, token).ConfigureAwait(false);
+                    // Notification acceptance belongs to the ordinary pump after this
+                    // work scope exits. Waiting for its ACK here would drain ourselves.
+                    return new MirrorPulseManagedRootRenameExecution(completed.Intent, currentName, subtree.Entries.Count, true, false);
+                }, stop.Token).ConfigureAwait(false);
+            }
+            return result with { NamespaceReady = namespaceWork.IsAdmitted(root.RootId) };
         }
 
         public async ValueTask<MirrorPulseConflictResolution> ApplyUploadConflictAsync(
@@ -2161,6 +2240,14 @@ public sealed class MirrorPulseCloudHostSession : IAsyncDisposable
     {
         if (!_started || _runtime is null) throw new InvalidOperationException("The Cloud Files Host session has not started.");
         return _runtime.PrepareManagedRootRenameAsync(rootId, label, cancellationToken);
+    }
+
+    [SupportedOSPlatform("windows10.0.26100")]
+    public ValueTask<MirrorPulseManagedRootRenameExecution> ExecuteManagedRootRenameAsync(Guid operationId,
+        CancellationToken cancellationToken = default)
+    {
+        if (!_started || _runtime is null) throw new InvalidOperationException("The Cloud Files Host session has not started.");
+        return _runtime.ExecuteManagedRootRenameAsync(operationId, cancellationToken);
     }
 
     public ValueTask<CloudRemoteApplyResult> ApplyRemoteBatchAsync(

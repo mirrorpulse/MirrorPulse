@@ -54,9 +54,26 @@ public sealed partial class NamespaceNonAdminControllerTests
                 param([string]$Policy,[string]$Directory,[string]$Scenario,[int]$Count)
                 $ErrorActionPreference='Stop'
                 . $Policy
-                if ($Scenario -like 'root-admission-*') {
+                if ($Scenario -like 'root-public-*') {
                     $catalog=Get-Content -Raw (Join-Path (Split-Path $Policy -Parent) 'test-suites.json') | ConvertFrom-Json
                     $names=@($catalog.required.namespace)
+                    $public='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicRuntimeExecutesOnlyOriginalProtectedRootLabelsAndAuditsCurrentReadmission'
+                    if ($Count -ne 120 -or $names.Count -ne $Count -or @($names|Where-Object {$_ -ceq $public}).Count -ne 1) {throw 'Require the exact additive public runtime catalog.'}
+                    if ($Scenario -eq 'root-public-selected') {
+                        $actual=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $Count -TestNames $names
+                        if ($actual -ne 3915000+4*60000) {throw 'All four active/disabled and case-only public runtime executions retain sixty-second deadlines.'}
+                        if ((Get-OrdinaryUserNamespaceStepTimeoutMinutes -TestCount $Count -TestNames $names) -ne 75) {throw 'Retain diagnostics and disposable-user cleanup after the bounded child.'}
+                    } else {
+                        $names=@($names|ForEach-Object {if($_ -ceq $public){'Fixture.Unrelated'}else{$_}})
+                        $rejected=$false
+                        try {Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $Count -TestNames $names|Out-Null} catch {$rejected=$true}
+                        if (-not $rejected) {throw 'The expanded slot must require the actual public runtime method.'}
+                    }
+                    exit 0
+                }
+                if ($Scenario -like 'root-admission-*') {
+                    $catalog=Get-Content -Raw (Join-Path (Split-Path $Policy -Parent) 'test-suites.json') | ConvertFrom-Json
+                    $names=@($catalog.required.namespace | Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicRuntimeExecutesOnlyOriginalProtectedRootLabelsAndAuditsCurrentReadmission'})
                     $admission='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeRootLabelJournalAdmissionRequiresCurrentTreeAndActualSdkReturnBeforeReadmission'
                     if ($Count -ne 119 -or $names.Count -ne $Count -or @($names|Where-Object {$_ -ceq $admission}).Count -ne 1) {throw 'Require the exact additive admission catalog.'}
                     if ($Scenario -eq 'root-admission-selected') {
@@ -203,9 +220,9 @@ public sealed partial class NamespaceNonAdminControllerTests
                     if ($Scenario -eq 'budget-rejected') {
                         if (-not $rejected) { throw 'An invalid or unbounded selection was accepted.' }
                     } else {
-                        $maximum=if ($Scenario -eq 'budget-catalog') {3915000} else {1800000}
+                        $maximum=if ($Scenario -eq 'budget-catalog') {4155000} else {1800000}
                         if ($rejected -or $budget -lt 600000 -or $budget -gt $maximum) { throw 'The whole-suite envelope is missing or unbounded.' }
-                        if ($Scenario -eq 'budget-catalog' -and $budget -ne 120000+($Count+46)*15000+18*30000+28*15000+6*45000+6*15000) {
+                        if ($Scenario -eq 'budget-catalog' -and $budget -ne 120000+($Count+49)*15000+18*30000+28*15000+6*45000+6*15000+4*45000) {
                             throw 'The actual catalog lost a same/cross-instance transfer or one of its five retirement cutpoints.'
                         }
                         if ($Count -ge 52 -and $budget -le 600000) { throw 'The growing suite still has the obsolete fixed ten-minute envelope.' }

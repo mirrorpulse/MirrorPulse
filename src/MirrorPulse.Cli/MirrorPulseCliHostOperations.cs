@@ -563,6 +563,14 @@ public sealed class MirrorPulseCliHostOperations : IMirrorPulseCliHostOperations
                     human = $"Staged birth recovery {birthRecovery.Outcome} · {birthRecovery.RecoveryId:D} · verification recorded: {birthRecovery.VerificationRecorded}";
                     exitCode = birthRecovery.VerificationRecorded ? MirrorPulseControlExitCodes.Success : MirrorPulseControlExitCodes.Pending;
                     break;
+                case ("root", "execute-rename"):
+                    if (command.Arguments.Count != 1 || !Guid.TryParse(command.Arguments[0], out Guid executeRootOperation) || executeRootOperation == Guid.Empty)
+                        throw new ArgumentException("root execute-rename requires one non-empty root rename operation ID.");
+                    var execution = await _client.ExecuteRootRenameAsync(executeRootOperation, cancellationToken).ConfigureAwait(false);
+                    result = execution;
+                    human = $"Root Label {execution.Phase} · {execution.OperationId:D} · {execution.CurrentDirectoryName}";
+                    exitCode = execution.Phase == "Completed" ? MirrorPulseControlExitCodes.Success : MirrorPulseControlExitCodes.Pending;
+                    break;
                 case ("root", "recover"):
                     if (command.Arguments.Count != 1 || !Guid.TryParse(command.Arguments[0], out Guid renameOperation) || renameOperation == Guid.Empty)
                     {

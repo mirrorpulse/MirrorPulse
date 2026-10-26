@@ -8,6 +8,10 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 public sealed record MirrorPulseManagedRootRenameRestoreResult(Guid OperationId,
     MirrorPulseManagedRootRenameRecovery? Recovery, string? ErrorCode = null, int? FailureHResult = null);
 
+/// <summary>Separates the original local Label receipt from this Host's fresh current-tree admission.</summary>
+public sealed record MirrorPulseManagedRootRenameExecution(MirrorPulseRootRenameIntent Intent,
+    string CurrentDirectoryName, int MemberCount, bool CurrentTreeAudited, bool NamespaceReady);
+
 /// <summary>Serializes historical root recovery with uploads and remote changes.</summary>
 [SupportedOSPlatform("windows10.0.16299")]
 public sealed class MirrorPulseManagedRootRenameService

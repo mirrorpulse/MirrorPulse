@@ -94,6 +94,12 @@ public sealed record RootRecoverArguments(Guid OperationId) : IMirrorPulseContro
 
 public sealed record RootPrepareRenameArguments(Guid RootId, string Label) : IMirrorPulseControlArguments;
 
+public sealed record RootExecuteRenameArguments(Guid OperationId) : IMirrorPulseControlArguments;
+
+/// <summary>A controlled product execution and its separately observed current namespace admission.</summary>
+public sealed record MirrorPulseControlRootExecution(Guid OperationId, string RootId, string Phase,
+    string SourceName, string TargetName, string CurrentDirectoryName, int MemberCount, bool CurrentTreeAudited, bool NamespaceReady);
+
 public sealed record NamespaceMemberMoveArguments(Guid OperationId) : IMirrorPulseControlArguments;
 
 public sealed record NamespaceMemberMoveStatusArguments(Guid OperationId) : IMirrorPulseControlArguments;

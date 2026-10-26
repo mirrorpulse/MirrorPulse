@@ -9,7 +9,8 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
     /// <summary>Seals current protected members for the same original Label proof, without native movement.</summary>
     /// <remarks>
     /// The caller owns root and instance admission. This internal prerequisite does not activate
-    /// protected root execution in the public generic member-move or Host/Control/CLI entry.
+    /// protected root execution in the public generic member-move entry. The Host
+    /// root command supplies separate root and instance/library quiescence.
     /// </remarks>
     internal async ValueTask<MirrorPulseNamespaceMemberMoveIntent> PrepareRootLabelAsync(Guid originalOperationId,
         CancellationToken cancellationToken = default)

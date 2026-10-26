@@ -5,7 +5,7 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 
 public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
 {
-    // Candidate only. The caller must retain instance/root/library quiescence.
+    // The Host root command must retain instance/root/library quiescence.
     internal async ValueTask<MirrorPulseNamespaceMemberMoveCompletion> ExecuteRootLabelAsync(Guid operationId,
         CancellationToken cancellationToken = default)
     {

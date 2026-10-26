@@ -1,5 +1,5 @@
 function Get-OrdinaryUserNamespaceBudgetMilliseconds {
-    param([Parameter(Mandatory)][ValidateRange(1, 119)][int]$TestCount, [string[]]$TestNames)
+    param([Parameter(Mandatory)][ValidateRange(1, 120)][int]$TestCount, [string[]]$TestNames)
     $preparation = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeRootRenamePreparationCutsRetainOnlyCompleteOriginalProductProofAcrossOwners'
     $approval = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeDefaultProviderApprovesOnlyTheCurrentOriginalRootRenameAndRetainsRecoveryAcrossOwners'
     $rootPreparation = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeRootLabelPreparationSealsOnlyItsOriginalProtectedSubtreeAcrossOwners'
@@ -7,7 +7,8 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
     $rootRecovery = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeObservedRootLabelRecoverySettlesOnlyOriginalMovedMembersUnderANewRoleAcrossOwners'
     $rootRuntime = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeRuntimeSettlesOriginalObservedRootLabelBeforeNewRoleStartupAudit'
     $rootAdmission = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeRootLabelJournalAdmissionRequiresCurrentTreeAndActualSdkReturnBeforeReadmission'
-    $additionalSelections = @(@($preparation,$approval,$rootPreparation,$rootExecution,$rootRecovery,$rootRuntime,$rootAdmission) | Where-Object {$_ -cin $TestNames}).Count
+    $rootPublic = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicRuntimeExecutesOnlyOriginalProtectedRootLabelsAndAuditsCurrentReadmission'
+    $additionalSelections = @(@($preparation,$approval,$rootPreparation,$rootExecution,$rootRecovery,$rootRuntime,$rootAdmission,$rootPublic) | Where-Object {$_ -cin $TestNames}).Count
     if ($TestCount -gt 112 -and (-not $PSBoundParameters.ContainsKey('TestNames') -or $additionalSelections -lt $TestCount-112)) {
         throw 'The additional namespace case requires its explicit original preparation selection.'
     }
@@ -30,6 +31,7 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
         $repeated.Add($rootRecovery, 8)
         $repeated.Add($rootRuntime, 6)
         $repeated.Add($rootAdmission, 6)
+        $repeated.Add($rootPublic, 4)
         foreach ($name in $TestNames) {
             if ([string]::IsNullOrWhiteSpace($name) -or $name.Length -gt 512 -or $name -cnotmatch '^[A-Za-z0-9_.]+$' -or -not $selected.Add($name)) {
                 throw 'The namespace budget requires distinct, bounded test names.'
@@ -39,24 +41,25 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
                 # Each original transfer scope/cutpoint already owns a 45-second
                 # native deadline. The aggregate controller must preserve it;
                 # its ordinary 15-second per-case estimate cannot replace it.
-                $additional = if ($name -ceq $rootRuntime) { 45000 } elseif ($name -cin @($preparation,$approval,$rootPreparation,$rootExecution,$rootRecovery,$rootAdmission)) { 15000 } else { 30000 }
+                $additional = if ($name -cin @($rootRuntime,$rootPublic)) { 45000 } elseif ($name -cin @($preparation,$approval,$rootPreparation,$rootExecution,$rootRecovery,$rootAdmission)) { 15000 } else { 30000 }
                 $transferDeadlineMilliseconds += $repeated[$name] * $additional
             }
         }
     }
     # Count both scopes inside the five selected transfer methods, including the
     # retirement matrix and ACK retries inside their original native deadlines.
-    # At most 119 names plus 46 repeated executions, the existing 45-second
+    # At most 120 names plus 49 repeated executions, the existing 45-second
     # deadlines for all 18 transfer executions and twenty-eight 30-second preparation, execution and
     # callback executions, six 60-second runtime recoveries and six 30-second
-    # root admission executions give a bounded 65m15s child envelope. Count-only callers retain
+    # root admission executions and four 60-second public runtime executions
+    # give a bounded 69m15s child envelope. Count-only callers retain
     # the original 112-name/30-minute bound; the step adds five minutes
     # for controller diagnostics and disposable-account/profile cleanup.
     return [Math]::Max(600000, 120000 + $executions * 15000 + $transferDeadlineMilliseconds)
 }
 
 function Get-OrdinaryUserNamespaceStepTimeoutMinutes {
-    param([Parameter(Mandatory)][ValidateRange(1, 119)][int]$TestCount, [string[]]$TestNames)
+    param([Parameter(Mandatory)][ValidateRange(1, 120)][int]$TestCount, [string[]]$TestNames)
     # The workflow must let the existing child budget expire and allow the
     # controller to preserve diagnostics and remove its disposable user/profile.
     $parameters = @{ TestCount = $TestCount }
