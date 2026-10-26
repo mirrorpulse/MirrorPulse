@@ -64,6 +64,9 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 await using var fileSystem = new MirrorPulseCloudFileSystemBuilder(paths).WithStateStore(state).WithContentProvider(provider).Build();
                 await role.RunNamespaceOperationAsync(async () => await fileSystem.StartAsync(deadline.Token));
                 var coordinator = new MirrorPulseNamespaceMemberMoveCoordinator(fileSystem, state, catalog, router, role, actor);
+                await using var journal = owner == 0 ? null : new RootLabelJournalObservation(TestContext, fileSystem,
+                    intent.ItemId, root.State, cut, owner);
+                if (journal is not null) await journal.StartAsync(deadline.Token);
                 if (owner == 0)
                 {
                     await using (var feed = fileSystem.CreateLocalChangeFeed())
@@ -166,6 +169,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         Assert.IsTrue((await fileSystem.GetDirectory("Docs").InspectAsync(deadline.Token)).Exists);
                         Assert.IsFalse((await fileSystem.GetDirectory("Renamed").InspectAsync(deadline.Token)).Exists);
                     }
+                    await journal!.CaptureAsync(cut == "start-write" ? "Docs" : "Renamed", deadline.Token);
                     continue;
                 }
                 var completion = await coordinator.ExecuteRootLabelAsync(intent.OperationId, deadline.Token);
@@ -203,7 +207,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 string payload = fileSystem.GetFile("RENAMED/left/nested/pending.bin").FullPath;
                 CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(payload, deadline.Token));
                 await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() => File.Delete(payload), deadline.Token));
-                await ObserveRootLabelJournalOriginalsAsync(fileSystem, intent.ItemId, root.State, cut, deadline.Token);
+                await journal!.CaptureAsync("RENAMED", deadline.Token);
                 Assert.AreEqual(0, setupSource.Reads); Assert.AreEqual(0, ranges.Calls);
             }
             TestContext.WriteLine($"ProtectedRootLabelExecution: state={root.State}; cut={cut}; originalProof=True; productionRootPolicy=True; entireProtectedTree=True; originalFactsImmutable=True; atomicAllPositionsAndLabel=True; caseOnlyNextLabel=True; historicalReplayPreservesCurrent=True; ordinaryDeleteDenied=True; sourceReads=0; owners=3; newRoleRecovery=False; hostIntegrated=False.");
