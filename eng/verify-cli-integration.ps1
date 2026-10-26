@@ -13,6 +13,8 @@ param(
 $ErrorActionPreference = "Stop"
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 . (Join-Path $PSScriptRoot 'cli-integration-failure-policy.ps1')
+. (Join-Path $PSScriptRoot 'cli-root-label-lifecycle.ps1')
+. (Join-Path $PSScriptRoot 'cli-root-label-evidence-policy.ps1')
 $primaryFailure = $null
 $runRoot = Join-Path ([IO.Path]::GetTempPath()) "MirrorPulse-cli-integration-$([guid]::NewGuid().ToString('N'))"
 $cliRoot = Join-Path $runRoot "cli"
@@ -28,6 +30,7 @@ $hydrationAudits = [Collections.Generic.List[object]]::new()
 $namespaceAudits = [Collections.Generic.List[object]]::new()
 $script:firstNamespaceMember = $null
 $script:firstAnchorMember = $null
+$rootLabelLifecycle = $null
 
 function Invoke-CliFixtureProbe {
     param([Parameter(Mandatory)][ValidateSet('read', 'audit', 'inspect', 'cleanup')][string]$Mode, [Parameter(Mandatory)][string]$Phase)
@@ -452,6 +455,14 @@ try {
                 "Phase=$($instanceStatus.phase); Error=$($instanceStatus.lastErrorCode)."
         }
 
+        $rootLabelLifecycle = Invoke-CliRootLabelLifecycle -InvokeCli { param($arguments) Invoke-MirrorPulseCli $arguments } `
+            -RootId $registeredRoot.rootId -InstanceId $instanceId -DirectoryName $rootDirectory `
+            -SyncRoot $syncRoot -SourceRoot $sourceRoot -EvidencePath $EvidencePath
+        if ($EvidencePath) {
+            $rootLabelOriginals = Join-Path ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($EvidencePath))) 'cli-regression.originals/root-labels'
+            Assert-CliRootLabelLifecycleEvidence -Evidence $rootLabelLifecycle -OriginalsDirectory $rootLabelOriginals
+        }
+
         # Both sides change while the Host is stopped. The conflict must survive another restart.
         Invoke-MirrorPulseCli @("--json", "--developer-mode", "host", "stop") | Out-Null
         Wait-MirrorPulseHostStopped
@@ -564,5 +575,6 @@ if ($EvidencePath) {
         conflictPersisted=$Regression.IsPresent;cursorPersisted=$Regression.IsPresent
         hydration=[ordered]@{reads=@($hydrationReads.ToArray());audits=@($hydrationAudits.ToArray())}
         namespace=[ordered]@{defaultHostIntegrated=$true;audits=@($namespaceAudits.ToArray())}
+        rootLabels=$rootLabelLifecycle
     } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $EvidencePath -Encoding utf8
 }
