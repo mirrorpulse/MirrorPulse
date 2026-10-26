@@ -36,6 +36,18 @@ correctly refused; the separate minimal registration succeeded. These facts do
 not establish a CfSharp defect. Installed acceptance still requires a new clean
 Windows CI run for the corrected source.
 
+The subsequent source-bound run40251472494 passed its x64 native202, ARM64
+namespace118 and fresh ordinary-user118 tests, but the packaged probe refused
+the existing registration's Provider ID before changing any label. Its original
+failure artifact and raw log are retained. That diagnostic did not include the
+actual GUID, so it cannot establish why the IDs differ or a CfSharp defect.
+The refusal now includes both public provider GUIDs. The separate minimal
+WinRT-only diagnostic explicitly requests the product Provider ID and records
+its real label and GUID readbacks. It performs no CfSharp registration. These
+observations distinguish the existing Host registration from an independent
+Shell registration without accepting a foreign provider, replacing the original
+failure, or claiming that the discrepancy has been fixed.
+
 Local tests exercise expected-root rejection and non-ownership with ordinary
 private directories, original failure preservation and awaited restoration, and
 the verifier's exact child-only root environment. They do not register Cloud

@@ -26,7 +26,9 @@ public sealed class InstalledShellHostRootTests
     }
 
     [TestMethod]
-    public void ExistingRegistrationMustMatchTheExpectedHostPathAndProviderWithoutTakingOwnership()
+    [DataRow(false)]
+    [DataRow(true)]
+    public void ExistingRegistrationMustMatchTheExpectedHostPathAndProviderWithoutTakingOwnership(bool emptyProvider)
     {
         string directory = Path.Combine(Path.GetTempPath(), "MirrorPulse-shell-root-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
@@ -38,7 +40,10 @@ public sealed class InstalledShellHostRootTests
             Guid provider = Guid.NewGuid();
             MirrorPulseShellProbeHostRoot.RequireRegistration(root, provider, directory.ToUpperInvariant(), provider);
             Assert.ThrowsExactly<InvalidOperationException>(() => MirrorPulseShellProbeHostRoot.RequireRegistration(root, provider, directory + "-foreign", provider));
-            Assert.ThrowsExactly<InvalidOperationException>(() => MirrorPulseShellProbeHostRoot.RequireRegistration(root, provider, directory, Guid.NewGuid()));
+            Guid actualProvider = emptyProvider ? Guid.Empty : Guid.NewGuid();
+            var failure = Assert.ThrowsExactly<InvalidOperationException>(() => MirrorPulseShellProbeHostRoot.RequireRegistration(root, provider, directory, actualProvider));
+            StringAssert.Contains(failure.Message, $"expected={provider:D}");
+            StringAssert.Contains(failure.Message, $"actual={actualProvider:D}");
             Assert.AreEqual("host data", File.ReadAllText(sentinel));
         }
         finally { Directory.Delete(directory, recursive: true); }

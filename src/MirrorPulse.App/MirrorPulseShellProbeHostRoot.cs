@@ -20,7 +20,7 @@ internal static class MirrorPulseShellProbeHostRoot
         if (!string.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(registeredRoot)), expectedRoot, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("The Shell probe registration does not match the expected Host root.");
         if (registeredProvider != expectedProvider)
-            throw new InvalidOperationException("The Shell probe registration does not match the Host provider.");
+            throw new InvalidOperationException($"The Shell probe registration does not match the Host provider: expected={expectedProvider:D}; actual={registeredProvider:D}.");
     }
 
     internal static async Task VerifyAndRestoreAsync(Func<Task> verify, Func<Task> restore)

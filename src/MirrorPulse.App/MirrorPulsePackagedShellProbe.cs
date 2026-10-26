@@ -107,10 +107,12 @@ internal static class MirrorPulsePackagedShellProbe
             MirrorPulsePackagedShellProbeProgress.Record(resultPath, MirrorPulsePackagedShellProbeStage.MinimalFolderStarted);
             StorageFolder folder = await StorageFolder.GetFolderFromPathAsync(path);
             MirrorPulsePackagedShellProbeProgress.Record(resultPath, MirrorPulsePackagedShellProbeStage.MinimalFolderReady);
+            Guid expectedProvider = Guid.Parse("d194eacd-c38c-49df-a238-49871f9c8d1b");
             var info = new StorageProviderSyncRootInfo
             {
                 Id = registrationId,
                 Path = folder,
+                ProviderId = expectedProvider,
                 DisplayNameResource = "MirrorPulse probe",
                 IconResource = "%SystemRoot%\\system32\\charmap.exe,0",
                 HydrationPolicy = StorageProviderHydrationPolicy.Full,
@@ -130,9 +132,10 @@ internal static class MirrorPulsePackagedShellProbe
             StorageProviderSyncRootInfo actual = StorageProviderSyncRootManager
                 .GetSyncRootInformationForId(registrationId);
             MirrorPulsePackagedShellProbeProgress.Record(resultPath, MirrorPulsePackagedShellProbeStage.MinimalReadbackCompleted);
-            return actual.DisplayNameResource == info.DisplayNameResource
-                ? "success"
-                : "registered but display name differs";
+            bool labelMatches = actual.DisplayNameResource == info.DisplayNameResource;
+            bool providerMatches = actual.ProviderId == expectedProvider;
+            string outcome = labelMatches && providerMatches ? "success" : "registered with differing readback";
+            return $"{outcome}; labelMatches={labelMatches}; expectedProvider={expectedProvider:D}; actualProvider={actual.ProviderId:D}";
         }
         catch (Exception exception)
         {
