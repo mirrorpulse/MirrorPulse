@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Data.Sqlite;
+using MirrorPulse.Core.Contracts;
 
 namespace MirrorPulse.Core.State;
 
@@ -133,13 +134,18 @@ public sealed partial class MirrorPulseProductCatalog
         return snapshot;
     }
 
-    private async Task RequireNamespaceDirectoryMoveEntryHistoryAsync(MirrorPulseNamespaceDirectoryMoveEntry entry,
+    private Task RequireNamespaceDirectoryMoveEntryHistoryAsync(MirrorPulseNamespaceDirectoryMoveEntry entry,
         MirrorPulseNamespaceMemberRegistration member, MirrorPulseNamespaceMemberMoveIntent intent,
+        SqliteTransaction transaction, CancellationToken token) =>
+        RequireNamespaceDirectoryMoveEntryHistoryAsync(entry, member, intent.RootId, intent.PreparedAt, transaction, token);
+
+    private async Task RequireNamespaceDirectoryMoveEntryHistoryAsync(MirrorPulseNamespaceDirectoryMoveEntry entry,
+        MirrorPulseNamespaceMemberRegistration member, RootId rootId, DateTimeOffset preparedAt,
         SqliteTransaction transaction, CancellationToken token)
     {
         if (entry.PreviousPositionOperationId is { } positionId)
         {
-            var evidence = await ReadNamespaceMemberPositionEvidenceCoreAsync(member, positionId, intent.PreparedAt, transaction, token).ConfigureAwait(false);
+            var evidence = await ReadNamespaceMemberPositionEvidenceCoreAsync(member, positionId, preparedAt, transaction, token).ConfigureAwait(false);
             if (evidence.RelativePath != entry.RelativePath || evidence.ParentMemberId != entry.ParentMemberId ||
                 evidence.CompletedMoveOperationId != entry.PreviousMoveOperationId)
                 throw new InvalidDataException("The sealed member lost its exact completed position and direct move head.");
@@ -151,7 +157,7 @@ public sealed partial class MirrorPulseProductCatalog
             var completion = await ReadNamespaceMemberMoveCompletionCoreAsync(previousId, transaction, token).ConfigureAwait(false)
                 ?? throw new InvalidDataException("The sealed member relocation is incomplete.");
             if (previous.MemberId != member.MemberId || previous.Target.ParentMemberId != entry.ParentMemberId ||
-                completion.RelativePath != entry.RelativePath || completion.VerifiedAt > intent.PreparedAt)
+                completion.RelativePath != entry.RelativePath || completion.VerifiedAt > preparedAt)
                 throw new InvalidDataException("The sealed member position disagrees with its completed predecessor.");
         }
         else if (member.RelativePath != entry.RelativePath || member.ParentMemberId != entry.ParentMemberId)
@@ -162,8 +168,8 @@ public sealed partial class MirrorPulseProductCatalog
         {
             var accepted = await ReadNamespaceIdentityAcceptanceCoreAsync(acceptanceId, transaction, token).ConfigureAwait(false)
                 ?? throw new InvalidDataException("The sealed member lost its accepted identity.");
-            if (accepted.MemberId != member.MemberId || accepted.RootId != intent.RootId ||
-                accepted.Proof.UploadBinding.LocalObject != member.LocalObject || accepted.Confirmation.ObservedAt > intent.PreparedAt)
+            if (accepted.MemberId != member.MemberId || accepted.RootId != rootId ||
+                accepted.Proof.UploadBinding.LocalObject != member.LocalObject || accepted.Confirmation.ObservedAt > preparedAt)
                 throw new InvalidDataException("The sealed identity must belong to the same object before admission.");
             itemId = accepted.Proof.AcceptedItemId; remoteId = accepted.Proof.RemoteId;
         }

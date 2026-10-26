@@ -100,6 +100,9 @@ public sealed partial class MirrorPulseProductCatalog
                 if (rename.CancellationOperationId is not null && (move is null ||
                     await ReadRootLabelCancellationRowAsync(rename.OperationId, transaction, cancellationToken).ConfigureAwait(false) is null))
                     throw new InvalidDataException("The cancelled protected Label lost its original guarded terminal ownership.");
+                if (rename.UnsealedCancellationOperationId is not null && (move is not null ||
+                    await ReadUnsealedRootLabelCancellationCoreAsync(rename.OperationId, transaction, cancellationToken).ConfigureAwait(false) is null))
+                    throw new InvalidDataException("The cancelled unsealed Label lost its original guarded terminal ownership.");
             }
         }
         await foreach (var transfer in ReadPendingNamespaceTransfersCoreAsync(transaction, cancellationToken).ConfigureAwait(false))

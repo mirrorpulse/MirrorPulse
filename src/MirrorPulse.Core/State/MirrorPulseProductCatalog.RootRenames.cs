@@ -16,6 +16,10 @@ public sealed record MirrorPulseRootRenameIntent(Guid OperationId, RootId RootId
     /// <summary>The explicit original guarded cancellation owner for a sealed, never-started Label.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Guid? CancellationOperationId { get; init; }
+
+    /// <summary>The original guarded cancellation owner when no namespace move was ever sealed.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? UnsealedCancellationOperationId { get; init; }
 }
 
 public sealed partial class MirrorPulseProductCatalog
@@ -75,7 +79,9 @@ public sealed partial class MirrorPulseProductCatalog
             if (intent.OperationId == Guid.Empty || intent.RootId.Value == Guid.Empty || !Enum.IsDefined(intent.Phase) ||
                 intent.UpdatedAt == default || intent.RootId.ToString() != rootId ||
                 operationId is not null && intent.OperationId.ToString() != operationId ||
-                intent.CancellationOperationId is { } cancellation && (cancellation != intent.OperationId || intent.Phase != MirrorPulseRootRenamePhase.Cancelled))
+                intent.CancellationOperationId is { } cancellation && (cancellation != intent.OperationId || intent.Phase != MirrorPulseRootRenamePhase.Cancelled) ||
+                intent.UnsealedCancellationOperationId is { } unsealedCancellation && (unsealedCancellation != intent.OperationId ||
+                    intent.Phase != MirrorPulseRootRenamePhase.Cancelled || intent.CancellationOperationId is not null))
                 throw new InvalidDataException("The managed root rename intent does not match its indexed owner.");
             return intent;
         }

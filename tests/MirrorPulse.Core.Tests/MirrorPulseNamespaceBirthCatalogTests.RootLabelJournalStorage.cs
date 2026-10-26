@@ -102,7 +102,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         await Assert.ThrowsExactlyAsync<InvalidDataException>(() => MirrorPulseProductCatalog.OpenAsync(fixture.Paths));
         await using var connection = Connection(fixture.Paths); await connection.OpenAsync();
         await using var command = connection.CreateCommand(); command.CommandText = "PRAGMA user_version;";
-        Assert.AreEqual(loss == "downgraded-nonempty" ? 89L : 91L, await command.ExecuteScalarAsync());
+        Assert.AreEqual(loss == "downgraded-nonempty" ? 89L : 92L, await command.ExecuteScalarAsync());
         if (loss != "table")
         {
             command.CommandText = "SELECT operation_id FROM root_label_journal_acknowledgements;";
@@ -126,7 +126,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         Assert.IsEmpty(await migrated.ReadPendingRootLabelJournalAcknowledgementsAsync());
         await using var connection = Connection(fixture.Paths); await connection.OpenAsync();
         await using var command = connection.CreateCommand(); command.CommandText = "PRAGMA user_version;";
-        Assert.AreEqual(91L, await command.ExecuteScalarAsync());
+        Assert.AreEqual(92L, await command.ExecuteScalarAsync());
         command.CommandText = "SELECT COUNT(*) FROM root_label_journal_acknowledgements;";
         Assert.AreEqual(0L, await command.ExecuteScalarAsync());
     }

@@ -74,8 +74,12 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
         catch { await result.DisposeAsync().ConfigureAwait(false); throw; }
     }
 
+    private Task RequireExactLocalDirectoryTreeAsync(IReadOnlyList<MirrorPulseNamespaceDirectoryMoveEntry> entries,
+        MirrorPulseNamespaceMemberMoveIntent intent, bool atTarget, CancellationToken token) =>
+        RequireExactLocalDirectoryTreeAsync(entries, entry => DirectoryMoveMemberPath(entry, intent, atTarget), token);
+
     private async Task RequireExactLocalDirectoryTreeAsync(IReadOnlyList<MirrorPulseNamespaceDirectoryMoveEntry> entries,
-        MirrorPulseNamespaceMemberMoveIntent intent, bool atTarget, CancellationToken token)
+        Func<MirrorPulseNamespaceDirectoryMoveEntry, string> path, CancellationToken token)
     {
         var children = entries.ToLookup(entry => entry.ParentMemberId);
         int total = 0;
@@ -84,10 +88,10 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
         // directories instead of treating the library's recursion as a complete managed tree.
         foreach (var directory in entries.Where(entry => entry.IsDirectory))
         {
-            var expected = children[directory.MemberId].Select(entry => DirectoryMoveMemberPath(entry, intent, atTarget))
+            var expected = children[directory.MemberId].Select(path)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
             int count = expected.Count, found = 0;
-            CloudDirectory local = _fileSystem.GetDirectory(DirectoryMoveMemberPath(directory, intent, atTarget));
+            CloudDirectory local = _fileSystem.GetDirectory(path(directory));
             await foreach (var item in local.EnumerateLocalChildrenAsync(CloudDirectoryEnumerationOptions.Default, token).ConfigureAwait(false))
             {
                 if (!expected.Remove(item.RelativePath.Replace('\\', '/')) || ++found > count)

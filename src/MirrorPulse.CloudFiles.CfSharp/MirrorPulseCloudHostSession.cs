@@ -1508,15 +1508,15 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                 result = await WithAdmittedInstanceLibraryAsync(root.InstanceId, async (instances, token) =>
                 {
                     var moves = new MirrorPulseNamespaceMemberMoveCoordinator(fileSystem, state, catalog, router, _namespaceExecution, _namespaceActor);
-                    // A current-role preparation can seal its still-unstarted whole tree.
-                    // Older unsealed roles remain fenced if this prerequisite cannot pass;
-                    // do not manufacture an old role or a replacement public proof.
-                    if (await catalog.ReadNamespaceMemberMoveAsync(operationId, token).ConfigureAwait(false) is null)
-                        _ = await moves.PrepareRootLabelAsync(operationId, token).ConfigureAwait(false);
-                    var cancellation = await moves.CancelRootLabelAsync(operationId, token).ConfigureAwait(false);
+                    // Unsealed public preparations have their own guarded cancellation
+                    // evidence. Never manufacture a move admission just to cancel one.
+                    var cancellation = await catalog.ReadNamespaceMemberMoveAsync(operationId, token).ConfigureAwait(false) is null
+                        ? (await moves.CancelUnsealedRootLabelAsync(operationId, token).ConfigureAwait(false)).Observation
+                        : await moves.CancelRootLabelAsync(operationId, token).ConfigureAwait(false);
                     var cancelled = await catalog.ReadManagedRootRenameHistoryAsync(operationId, token).ConfigureAwait(false)
                         ?? throw new InvalidDataException("Cancellation lost its original Label receipt.");
-                    if (cancelled.Intent.Phase != MirrorPulseRootRenamePhase.Cancelled || cancelled.Intent.CancellationOperationId != operationId)
+                    if (cancelled.Intent.Phase != MirrorPulseRootRenamePhase.Cancelled ||
+                        cancelled.Intent.CancellationOperationId != operationId && cancelled.Intent.UnsealedCancellationOperationId != operationId)
                         throw new InvalidDataException("Cancellation requires the original atomic Label receipt.");
                     router.ReplaceRegistrations((await catalog.ReadAdapterTopologyAsync(token).ConfigureAwait(false)).Roots,
                         await catalog.ReadManagedRootNamesAsync(token).ConfigureAwait(false));

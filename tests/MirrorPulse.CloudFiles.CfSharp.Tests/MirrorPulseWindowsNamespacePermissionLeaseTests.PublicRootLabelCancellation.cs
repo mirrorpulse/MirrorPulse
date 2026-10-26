@@ -22,7 +22,17 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             await ProbePublicRootLabelCancellationAsync(disabled, newRole: true, startWritten: true);
     }
 
-    private async Task ProbePublicRootLabelCancellationAsync(bool disabled, bool newRole, bool startWritten = false)
+    [TestMethod]
+    [DoNotParallelize]
+    [TestCategory("NativeCloudFiles")]
+    public async Task NativePublicRuntimeCancelsOriginalUnsealedRootPreparationsAfterIndependentRoleDisposal()
+    {
+        foreach (bool disabled in new[] { false, true })
+            await ProbePublicRootLabelCancellationAsync(disabled, newRole: true, unsealedBeforeRoleChange: true);
+    }
+
+    private async Task ProbePublicRootLabelCancellationAsync(bool disabled, bool newRole, bool startWritten = false,
+        bool unsealedBeforeRoleChange = false)
     {
         if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
             Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
@@ -88,8 +98,12 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 {
                     await role.RunNamespaceOperationAsync(async () => preparedBeforeRoleChange = await new MirrorPulseManagedRootRenameCoordinator(fileSystem, catalog, router)
                         .PrepareAsync(root.RootId, "Renamed", deadline.Token));
-                    var cancellationMoves = new MirrorPulseNamespaceMemberMoveCoordinator(fileSystem, state, catalog, router, role, actor);
-                    _ = await cancellationMoves.PrepareRootLabelAsync(preparedBeforeRoleChange!.Intent.OperationId, deadline.Token);
+                    if (!unsealedBeforeRoleChange)
+                    {
+                        var cancellationMoves = new MirrorPulseNamespaceMemberMoveCoordinator(fileSystem, state, catalog, router, role, actor);
+                        _ = await cancellationMoves.PrepareRootLabelAsync(preparedBeforeRoleChange!.Intent.OperationId, deadline.Token);
+                    }
+                    else Assert.IsNull(await catalog.ReadNamespaceMemberMoveAsync(preparedBeforeRoleChange!.Intent.OperationId, deadline.Token));
                     Assert.IsNull(await catalog.ReadNamespaceMemberMoveStartAsync(preparedBeforeRoleChange.Intent.OperationId, deadline.Token));
                     if (startWritten)
                         await catalog.RecordNamespaceMemberMoveStartAsync(new(1, preparedBeforeRoleChange.Intent.OperationId, DateTimeOffset.UtcNow), deadline.Token);
@@ -128,11 +142,19 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             }
             var cancelled = await runtime.CancelManagedRootRenameAsync(original.Intent.OperationId, deadline.Token);
             Assert.AreEqual(MirrorPulseRootRenamePhase.Cancelled, cancelled.Intent.Phase);
-            Assert.AreEqual(original.Intent.OperationId, cancelled.Intent.CancellationOperationId);
+            Assert.IsTrue(cancelled.Intent.CancellationOperationId == original.Intent.OperationId ||
+                cancelled.Intent.UnsealedCancellationOperationId == original.Intent.OperationId);
             Assert.AreEqual("Docs", cancelled.CurrentDirectoryName); Assert.AreEqual(4, cancelled.MemberCount);
             Assert.IsTrue(cancelled.CurrentTreeAudited); Assert.AreEqual(!disabled, cancelled.NamespaceReady);
-            var record = await currentCatalog.ReadRootLabelCancellationAsync(original.Intent.OperationId, deadline.Token);
+            var unsealedRecord = await currentCatalog.ReadUnsealedRootLabelCancellationAsync(original.Intent.OperationId, deadline.Token);
+            var record = await currentCatalog.ReadRootLabelCancellationAsync(original.Intent.OperationId, deadline.Token) ?? unsealedRecord?.Observation;
             Assert.IsNotNull(record); Assert.AreEqual(cancelled.CancelledAt, record.VerifiedAt);
+            if (!newRole || unsealedBeforeRoleChange)
+            {
+                Assert.IsNotNull(unsealedRecord); Assert.HasCount(4, unsealedRecord.Inventory.Entries);
+                Assert.IsNull(await currentCatalog.ReadNamespaceMemberMoveAsync(original.Intent.OperationId, deadline.Token));
+                Assert.IsNull(await currentCatalog.ReadNamespaceDirectoryMoveSnapshotAsync(original.Intent.OperationId, deadline.Token));
+            }
             Assert.IsFalse(record.NativeMoveObserved); Assert.IsFalse(record.DurableProjectionCommitted); Assert.IsFalse(record.RequiresFullRescan);
             Assert.AreEqual(0, record.DurableStateEntriesUpdated); Assert.HasCount(4, record.Members);
             Assert.IsNull(await currentCatalog.ReadNamespaceMemberMoveStartAsync(original.Intent.OperationId, deadline.Token));
@@ -159,7 +181,10 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() => File.Delete(payload), deadline.Token));
             Assert.IsNull(await currentCatalog.ReadPendingNamespaceMemberMoveAsync(root.RootId, deadline.Token));
             Assert.AreEqual(0, source.Reads); Assert.AreEqual(0, ranges.Calls);
-            TestContext.WriteLine($"PublicRootLabelCancellationActual: disabled={disabled}; newRole={newRole}; originalOperation=True; actualPublicNotMoved=True; completeMembers=4; noNativeStart=True; separateCurrentRecovery=True; freshCurrentAudit=True; activeReady={!disabled}; immutableHistoricalReplay=True; latestLabelPreserved=True; completedCancellationRefused=True; sourceReads=0; independentHostRestart=False; signedWorker=False.");
+            if (unsealedBeforeRoleChange)
+                TestContext.WriteLine($"PublicUnsealedRootCancellationActual: disabled={disabled}; newRole=True; originalOperation=True; actualPublicNotMoved=True; completeMembers=4; noMoveAdmission=True; noNativeStart=True; separateCurrentRecovery=True; freshCurrentAudit=True; activeReady={!disabled}; immutableHistoricalReplay=True; latestLabelPreserved=True; sourceReads=0; independentHostRestart=False; signedWorker=False.");
+            else
+                TestContext.WriteLine($"PublicRootLabelCancellationActual: disabled={disabled}; newRole={newRole}; originalOperation=True; actualPublicNotMoved=True; completeMembers=4; noNativeStart=True; separateCurrentRecovery=True; freshCurrentAudit=True; activeReady={!disabled}; immutableHistoricalReplay=True; latestLabelPreserved=True; completedCancellationRefused=True; sourceReads=0; independentHostRestart=False; signedWorker=False.");
         }
         finally
         {
