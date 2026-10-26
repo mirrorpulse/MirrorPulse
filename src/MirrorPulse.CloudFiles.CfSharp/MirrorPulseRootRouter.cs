@@ -16,7 +16,8 @@ public sealed class MirrorPulseRootRouter
     private sealed record RoutingSnapshot(Dictionary<string, RootRegistration> Roots,
         Dictionary<string, RootRegistration> HistoricalNames,
         Dictionary<(InstanceId Instance, string Key), RootRegistration?> Routes,
-        Dictionary<RootId, RootRegistration> StableIds, IReadOnlyList<RootRegistration> Registrations);
+        Dictionary<RootId, RootRegistration> StableIds, Dictionary<Guid, RootRegistration> PublicRootIds,
+        IReadOnlyList<RootRegistration> Registrations);
     private RoutingSnapshot _snapshot;
     private readonly MirrorPulseRemoteIdentityResolver? _identityResolver;
     public IReadOnlyList<RootRegistration> Registrations => Volatile.Read(ref _snapshot).Registrations;
@@ -80,7 +81,8 @@ public sealed class MirrorPulseRootRouter
             // duplicate must never silently select either registered object.
             if (!routes.TryAdd(key, root)) routes[key] = null;
         }
-        return new(roots, names, routes, byId, Array.AsReadOnly(roots.Values.ToArray()));
+        var publicRootIds = roots.Values.ToDictionary(root => CreateRootIdentity(root).ItemId);
+        return new(roots, names, routes, byId, publicRootIds, Array.AsReadOnly(roots.Values.ToArray()));
     }
 
     public RootRegistration GetRegistration(InstanceId instanceId, string rootKey)
@@ -92,6 +94,10 @@ public sealed class MirrorPulseRootRouter
 
     internal RootRegistration? FindRegistration(RootId rootId) =>
         Volatile.Read(ref _snapshot).StableIds.GetValueOrDefault(rootId);
+
+    // Identity classification grants neither source access nor native admission.
+    internal RootRegistration? FindRootByPublicItemId(Guid itemId) =>
+        Volatile.Read(ref _snapshot).PublicRootIds.GetValueOrDefault(itemId);
 
     public CloudPlaceholderIdentity CreateFileIdentity(InstanceId instanceId, string rootKey, string remoteId, string? revision = null) =>
         MirrorPulsePlaceholderIdentity.CreateForRoot(GetRegistration(instanceId, rootKey), remoteId, revision).ToCfSharp();

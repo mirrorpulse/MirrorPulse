@@ -24,8 +24,15 @@ public sealed partial class MirrorPulseProductCatalog
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            ThrowIfDisposed();
-            await using var command = _connection.CreateCommand();
+            ThrowIfDisposed(); using var transaction = _connection.BeginTransaction();
+            if (operation.Reason is MirrorPulseLocalOperationBlockReason.RootReconciliationRequired or MirrorPulseLocalOperationBlockReason.RequestIdentityMismatch)
+            {
+                MirrorPulseRootLabelJournalAcknowledgement? original = null;
+                try { original = await ReadRootLabelJournalCoreAsync(operation.OperationId, transaction, cancellationToken).ConfigureAwait(false); }
+                catch (InvalidDataException) { } // Damage cannot supply a completed ACK receipt or repair its owner.
+                if (original?.AcknowledgedAt is not null) { transaction.Commit(); return; }
+            }
+            await using var command = _connection.CreateCommand(); command.Transaction = transaction;
             command.CommandText = """
                 INSERT INTO blocked_local_operations (operation_id, instance_id, relative_path, reason, observed_utc)
                 VALUES ($operation, $instance, $path, $reason, $observed)
@@ -38,6 +45,7 @@ public sealed partial class MirrorPulseProductCatalog
             command.Parameters.AddWithValue("$reason", (int)operation.Reason);
             command.Parameters.AddWithValue("$observed", operation.ObservedAt.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            transaction.Commit();
         }
         finally { _gate.Release(); }
     }

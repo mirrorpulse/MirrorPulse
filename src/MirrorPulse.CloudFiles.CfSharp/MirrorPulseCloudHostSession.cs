@@ -1332,6 +1332,15 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             if (ordinaryUploads)
             {
                 CloudLocalChangeFeed feed = _transferJournal ?? throw new InvalidOperationException("The Host journal did not start.");
+                MirrorPulseRootLabelJournalAdmission? rootAdmission = null;
+                if (_rootLabelJournalRecovery is not null && _namespaceExecution is not null && _namespaceActor is not null &&
+                    _permissions is not null && namespaceWork is not null)
+                {
+                    if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
+                        throw new PlatformNotSupportedException("Protected root metadata admission requires Windows 11 24H2 or later.");
+                    rootAdmission = new(fileSystem, catalog!, router!, _namespaceExecution, _namespaceActor, _permissions,
+                        namespaceWork, _rootLabelJournalRecovery, () => _startupProtection);
+                }
                 var completion = new MirrorPulseJournalUploadCompletion(
                     feed, state, new BackoffPolicy(TimeSpan.FromSeconds(2), TimeSpan.FromMinutes(5)));
                 _conflictActions = new MirrorPulseUploadConflictActions(catalog!, state, feed,
@@ -1342,7 +1351,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                 _uploadPump = new MirrorPulseJournalUploadPump(feed, router!, catalog!, uploads!, stats!, state,
                     syncRootPath, dataRootPath, mayDispatch!, completion, conflicts, notifications, mutations,
                     uploads as IMirrorPulseWorkerRangeTransport, uploads as IMirrorPulseWorkerDirectoryPageSource, fileSystem, _scheduler,
-                    _namespaceActor, _namespaceExecution, namespaceWork, _conflictActions, _retiredSourceObservations, _rootLabelJournalRecovery);
+                    _namespaceActor, _namespaceExecution, namespaceWork, _conflictActions, _retiredSourceObservations, _rootLabelJournalRecovery, rootAdmission);
                 await _uploadPump.StartAsync(cancellationToken).ConfigureAwait(false);
             }
 

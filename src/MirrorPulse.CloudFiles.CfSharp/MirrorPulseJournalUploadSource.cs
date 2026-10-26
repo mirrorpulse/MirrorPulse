@@ -47,6 +47,7 @@ public sealed class MirrorPulseJournalUploadSource
     private readonly MirrorPulseNamespaceWorkAdmission? _namespaceWork;
     private readonly IMirrorPulseRetiredTransferObservationHandler? _retiredSources;
     private readonly MirrorPulseRootLabelJournalRecovery? _rootLabelJournal;
+    private readonly MirrorPulseRootLabelJournalAdmission? _rootLabelAdmission;
     public bool RequiresFullRescan { get; private set; }
     public void ClearFullRescanRequest()
     {
@@ -66,7 +67,8 @@ public sealed class MirrorPulseJournalUploadSource
         int scanPagesPerRead = 8,
         int planningObservationsPerRead = 2048,
         int admissionOperationsPerRead = 2048,
-        MirrorPulseRootLabelJournalRecovery? rootLabelJournal = null)
+        MirrorPulseRootLabelJournalRecovery? rootLabelJournal = null,
+        MirrorPulseRootLabelJournalAdmission? rootLabelAdmission = null)
     {
         ArgumentNullException.ThrowIfNull(feed);
         ArgumentNullException.ThrowIfNull(router);
@@ -94,6 +96,7 @@ public sealed class MirrorPulseJournalUploadSource
         _namespaceWork = namespaceWork;
         _retiredSources = retiredSources;
         _rootLabelJournal = rootLabelJournal;
+        _rootLabelAdmission = rootLabelAdmission;
     }
 
     public async ValueTask<MirrorPulseJournalUploadBatch> ReadPendingAsync(
@@ -115,7 +118,8 @@ public sealed class MirrorPulseJournalUploadSource
         if (_planner is null && _admission is null)
         {
             if (!_windowReader.HasPendingScan && _retiredSources?.RecoveryScanInProgress != true &&
-                _rootLabelJournal?.RecoveryScanInProgress != true)
+                _rootLabelJournal?.RecoveryScanInProgress != true &&
+                !(OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100) && _rootLabelAdmission?.HasPendingReadmission == true))
             {
                 CloudLocalChangeBatch head = await _feed.ReadBatchAsync(cancellationToken).ConfigureAwait(false);
                 if (head.RequiresFullRescan)
@@ -238,8 +242,24 @@ public sealed class MirrorPulseJournalUploadSource
     {
         // Durable original-ID ownership precedes mutable SDK identity references and
         // ordinary or retired Worker planning. This accepts no new root notification.
-        if (_rootLabelJournal is not null && await _rootLabelJournal.TryReplayOwnedAsync(observation.OperationId, token).ConfigureAwait(false))
-            return false;
+        try
+        {
+            if (_rootLabelJournal is not null && await _rootLabelJournal.TryReplayOwnedAsync(observation.OperationId, token).ConfigureAwait(false))
+                return false;
+            if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100) && _rootLabelAdmission is not null &&
+                await _rootLabelAdmission.TryAcceptAsync(observation, token).ConfigureAwait(false))
+                return false;
+        }
+        catch (Exception failure) when (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100) && _rootLabelAdmission is not null &&
+            !token.IsCancellationRequested && failure is (IOException or InvalidDataException or InvalidOperationException or
+                UnauthorizedAccessException or System.ComponentModel.Win32Exception or Microsoft.Data.Sqlite.SqliteException or OperationCanceledException))
+        {
+            // One root's failed native audit or uncertain ACK must not abort the
+            // whole finite window or dispatch that original as ordinary work.
+            await _rootLabelAdmission.RecordDeferredAsync(observation, failure, token).ConfigureAwait(false);
+            _retiredHeld.Add(observation.OperationId);
+            return true;
+        }
         if (observation.ItemId is not { } itemId) return true;
         var candidates = await _catalog.ReadNamespaceTransferSourceGenerationsAsync(itemId, token).ConfigureAwait(false);
         if (candidates.Count == 0) return true;

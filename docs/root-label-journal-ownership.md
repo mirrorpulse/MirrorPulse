@@ -125,14 +125,35 @@ corrected 53-case check retained every original case and passed without skips.
 Neither check creates a sync-root directory or a CfSharp database, executes a
 native rename, installs an App, or proves a successful public SDK ACK.
 
-Runtime integration must classify root notifications before ordinary ownership,
-recover accepted original ACKs before startup role rotation, and retain the
-normal-owner actor plus fresh protected anchor and whole-tree handles through
-new acceptance. It must close and drain root work before adding a durable fence,
-avoid waiting on an admission lease held by the same caller, preserve original
-SDK loss signals and exact ACK IDs, and require a fresh complete current-role
-audit before reopening admission. Public execution, fault cuts, concurrent work,
-independent Host restarts and signed Worker behavior remain open.
+The ordinary pump classifies new root notifications by an atomically published
+stable public root-item index, after original-ID replay and before ordinary
+Worker planning. A matching ID is classification only. A new assigned directory
+move requires the current Host's retained startup guard, a drained root-work
+scope and a complete selected-root native audit under this Host's current role.
+An additional whole-tree owner remains retained through the final inventory
+fingerprint check, fresh public root identity read and durable first start. The
+shared actor is entered once; the audit core asserts its existing admission.
+
+Native audit authority expires before the normal-owner public SDK ACK. Only its
+actual successful return permits a receipt. Active work reopens after another
+complete current-role unfenced audit; disabled roots remain closed. A failed or
+cancelled attempt leaves the root closed and the original unchanged. The pump
+fairly revisits its own closed roots in bounded turns, including when the feed
+is empty or requests a full rescan. A retained metadata fence prevents reopening
+after a lost ACK return. Controlled-transfer readers receive original-only
+recovery and never wait for the work lease their caller may already hold.
+An individual admission or replay failure retains its blocked original and
+allows classification of other roots in the same finite window to continue.
+
+The native admission fixture exercises enabled/disabled roots, actual public
+ACK returns, a lost return after actual SDK success and failure after the durable
+ACK receipt. A later readmission failure cannot recreate a pending-journal block
+for an already completed original. The fixture retains first starts, fresh
+readmission, born directories and moved original bytes. Execution
+of that fixture requires the disposable native CI environment. Discovery or
+managed callbacks do not prove its native assertions. Public command coverage,
+all fault cuts, concurrent work, independent Host restarts and signed Worker
+behavior remain separate required acceptance.
 
 The running pump also rotates up to four already accepted pending originals
 before full-rescan checks or ordinary feed planning. Its canonical original-ID

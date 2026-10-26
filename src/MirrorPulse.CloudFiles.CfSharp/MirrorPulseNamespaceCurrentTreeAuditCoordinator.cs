@@ -58,76 +58,105 @@ public sealed class MirrorPulseNamespaceCurrentTreeAuditCoordinator(CloudFileSys
         RootId? scopeRoot = null)
     {
         ArgumentNullException.ThrowIfNull(anchorGuard);
-        return actor.RunAsync(async token =>
+        return actor.RunAsync(token => AuditUnderActorAsync(anchorMemberId, anchorGuard, onAudited, scopeRoot, token), cancellationToken);
+    }
+
+    // The caller drains root work before entering. Keep an additional complete native
+    // tree owner through the permission coordinator's final fingerprint and callback;
+    // its inner audit leases expire before that callback. No actor reentry is needed.
+    internal ValueTask<MirrorPulseNamespaceCurrentTreeAudit> AuditRetainedRootAsync(Guid anchorMemberId,
+        MirrorPulseNamespaceAnchorProtection anchorGuard, RootId rootId,
+        Func<MirrorPulseNamespaceCurrentTreeAudit, CancellationToken, Task> onAudited, CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(anchorGuard);
+        ArgumentNullException.ThrowIfNull(onAudited);
+        return actor.RunAsync(async stop =>
         {
+            actor.AssertAccess();
+            var root = router.FindRegistration(rootId) ?? throw new InvalidOperationException("The audit root is no longer configured.");
             MirrorPulseNamespaceCurrentTreeAudit result = null!;
             await execution.RunNamespaceOperationAsync(async () =>
             {
-                result = await permissions.RunCurrentTreeAuditAsync(anchorMemberId, async (admission, stop) =>
-                {
-                    actor.AssertAccess();
-                    var inventory = admission.Inventory;
-                    var members = inventory.Members.ToDictionary(member => member.Context.Member.MemberId);
-                    var anchor = members[anchorMemberId];
-                    if (members.Values.Any(member => member.Context.Protection.RoleSid != execution.RoleSid.Value ||
-                        member.Context.Member.OwnerSid != execution.OwnerSid.Value))
-                        throw new InvalidOperationException("Every current member requires this Host's live role and original current-user owner.");
-                    var before = await anchorGuard.InspectAsync(stop).ConfigureAwait(false);
-                    if (before.LocalObject != anchor.Context.Member.LocalObject || before.OwnerSid != execution.OwnerSid.Value ||
-                        before.RootId is not null || before.RelativePath.Length != 0 || !before.IsDirectory || before.LinkCount != 1 ||
-                        before.Dacl != anchor.Context.Verification.Dacl || anchorGuard.Original.LocalObject != before.LocalObject)
-                        throw new InvalidDataException("The current audit lost its live protected sync-root and ancestor guard.");
-                    var roots = inventory.Members.Where(member => member.Context.Location.ParentMemberId == anchorMemberId).ToArray();
-                    var registrations = router.Registrations.Where(root => scopeRoot is null || root.RootId == scopeRoot)
-                        .ToDictionary(root => root.RootId);
-                    if (roots.Length != registrations.Count || roots.Any(member => !member.Context.Member.IsDirectory ||
-                        member.Context.Member.RootId is not { } id || !registrations.TryGetValue(id, out var root) ||
-                        member.Context.Location.RelativePath != root.DirectoryName))
-                        throw new InvalidDataException("The current graph does not match the complete configured root layout.");
-                    var actualRootNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                    var selectedNames = roots.Select(root => root.Context.Location.RelativePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
-                    await foreach (var item in fileSystem.Root.EnumerateLocalChildrenAsync(cancellationToken: stop).ConfigureAwait(false))
-                    {
-                        if (scopeRoot is not null && !selectedNames.Contains(item.RelativePath.Replace('\\', '/'))) continue;
-                        if (item.Kind != CloudItemKind.Directory || !actualRootNames.Add(item.RelativePath.Replace('\\', '/')))
-                            throw new InvalidDataException("The actual sync-root contains an unexpected first-level entry.");
-                    }
-                    if (!actualRootNames.SetEquals(roots.Select(root => root.Context.Location.RelativePath)))
-                        throw new InvalidDataException("The actual first-level roots differ from the current graph.");
-                    foreach (var member in inventory.Members)
-                    {
-                        var location = member.Context.Location;
-                        CloudItem item = member.Context.Member.IsDirectory ? fileSystem.GetDirectory(location.RelativePath) : fileSystem.GetFile(location.RelativePath);
-                        var parent = location.ParentMemberId is { } parentId ? members[parentId] : null;
-                        await MirrorPulseNamespaceMemberRegistrar.InspectCurrentAuditAsync(admission, member, parent, item,
-                            parent is null ? null : fileSystem.GetDirectory(parent.Context.Location.RelativePath), router, actor, stop).ConfigureAwait(false);
-                    }
-                    foreach (var root in roots)
-                    {
-                        var expected = inventory.Members.Where(member => member.Context.Member.RootId == root.Context.Member.RootId)
-                            .ToDictionary(member => member.Context.Location.RelativePath, StringComparer.OrdinalIgnoreCase);
-                        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                        await using var lease = await MirrorPulseWindowsNamespacePermissionTreeLease.OpenAsync(
-                            fileSystem.GetDirectory(root.Context.Location.RelativePath), router, stop).ConfigureAwait(false);
-                        await foreach (var actual in lease.InspectObjectsAsync(stop).ConfigureAwait(false))
-                        {
-                            if (!expected.TryGetValue(actual.RelativePath, out var retained) || !seen.Add(actual.RelativePath) ||
-                                actual.LocalObject != retained.Context.Member.LocalObject || actual.OwnerSid != retained.Context.Member.OwnerSid ||
-                                actual.RootId != retained.Context.Member.RootId || actual.IsDirectory != retained.Context.Member.IsDirectory || actual.LinkCount != 1 ||
-                                actual.Dacl != retained.Context.Verification.Dacl)
-                                throw new InvalidDataException("The complete actual local inventory differs from its current protected membership.");
-                            // Repeat the mature public identity check after final local enumeration.
-                            var observed = await lease.GetItem(actual.RelativePath).InspectAsync(stop).ConfigureAwait(false);
-                            MirrorPulseNamespaceBirthProtectionVerifier.RequireRegisteredPublicIdentity(observed, retained.Identity,
-                                retained.Context.Member.Origin == MirrorPulseNamespaceMemberOrigin.ProtectedBirth);
-                        }
-                        if (seen.Count != expected.Count) throw new InvalidDataException("The actual current tree lost a registered member.");
-                    }
-                    MirrorPulseNamespaceBirthProtectionVerifier.RequireUnchangedParent(before, await anchorGuard.InspectAsync(stop).ConfigureAwait(false));
-                    actor.AssertAccess(); return new MirrorPulseNamespaceCurrentTreeAudit(inventory, execution.RoleSid.Value, DateTimeOffset.UtcNow);
-                }, token, onAudited, scopeRoot).ConfigureAwait(false);
+                await using var retained = await MirrorPulseWindowsNamespacePermissionTreeLease.OpenAsync(
+                    fileSystem.GetDirectory(root.DirectoryName), router, stop).ConfigureAwait(false);
+                result = await AuditUnderActorAsync(anchorMemberId, anchorGuard, onAudited, rootId, stop).ConfigureAwait(false);
             }).ConfigureAwait(false);
             return result;
-        }, cancellationToken);
+        }, token);
+    }
+
+    private async ValueTask<MirrorPulseNamespaceCurrentTreeAudit> AuditUnderActorAsync(Guid anchorMemberId,
+        MirrorPulseNamespaceAnchorProtection anchorGuard,
+        Func<MirrorPulseNamespaceCurrentTreeAudit, CancellationToken, Task>? onAudited, RootId? scopeRoot, CancellationToken token)
+    {
+        actor.AssertAccess();
+        MirrorPulseNamespaceCurrentTreeAudit result = null!;
+        await execution.RunNamespaceOperationAsync(async () =>
+        {
+            result = await permissions.RunCurrentTreeAuditAsync(anchorMemberId, async (admission, stop) =>
+            {
+                actor.AssertAccess();
+                var inventory = admission.Inventory;
+                var members = inventory.Members.ToDictionary(member => member.Context.Member.MemberId);
+                var anchor = members[anchorMemberId];
+                if (members.Values.Any(member => member.Context.Protection.RoleSid != execution.RoleSid.Value ||
+                    member.Context.Member.OwnerSid != execution.OwnerSid.Value))
+                    throw new InvalidOperationException("Every current member requires this Host's live role and original current-user owner.");
+                var before = await anchorGuard.InspectAsync(stop).ConfigureAwait(false);
+                if (before.LocalObject != anchor.Context.Member.LocalObject || before.OwnerSid != execution.OwnerSid.Value ||
+                    before.RootId is not null || before.RelativePath.Length != 0 || !before.IsDirectory || before.LinkCount != 1 ||
+                    before.Dacl != anchor.Context.Verification.Dacl || anchorGuard.Original.LocalObject != before.LocalObject)
+                    throw new InvalidDataException("The current audit lost its live protected sync-root and ancestor guard.");
+                var roots = inventory.Members.Where(member => member.Context.Location.ParentMemberId == anchorMemberId).ToArray();
+                var registrations = router.Registrations.Where(root => scopeRoot is null || root.RootId == scopeRoot)
+                    .ToDictionary(root => root.RootId);
+                if (roots.Length != registrations.Count || roots.Any(member => !member.Context.Member.IsDirectory ||
+                    member.Context.Member.RootId is not { } id || !registrations.TryGetValue(id, out var root) ||
+                    member.Context.Location.RelativePath != root.DirectoryName))
+                    throw new InvalidDataException("The current graph does not match the complete configured root layout.");
+                var actualRootNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var selectedNames = roots.Select(root => root.Context.Location.RelativePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                await foreach (var item in fileSystem.Root.EnumerateLocalChildrenAsync(cancellationToken: stop).ConfigureAwait(false))
+                {
+                    if (scopeRoot is not null && !selectedNames.Contains(item.RelativePath.Replace('\\', '/'))) continue;
+                    if (item.Kind != CloudItemKind.Directory || !actualRootNames.Add(item.RelativePath.Replace('\\', '/')))
+                        throw new InvalidDataException("The actual sync-root contains an unexpected first-level entry.");
+                }
+                if (!actualRootNames.SetEquals(roots.Select(root => root.Context.Location.RelativePath)))
+                    throw new InvalidDataException("The actual first-level roots differ from the current graph.");
+                foreach (var member in inventory.Members)
+                {
+                    var location = member.Context.Location;
+                    CloudItem item = member.Context.Member.IsDirectory ? fileSystem.GetDirectory(location.RelativePath) : fileSystem.GetFile(location.RelativePath);
+                    var parent = location.ParentMemberId is { } parentId ? members[parentId] : null;
+                    await MirrorPulseNamespaceMemberRegistrar.InspectCurrentAuditAsync(admission, member, parent, item,
+                        parent is null ? null : fileSystem.GetDirectory(parent.Context.Location.RelativePath), router, actor, stop).ConfigureAwait(false);
+                }
+                foreach (var root in roots)
+                {
+                    var expected = inventory.Members.Where(member => member.Context.Member.RootId == root.Context.Member.RootId)
+                        .ToDictionary(member => member.Context.Location.RelativePath, StringComparer.OrdinalIgnoreCase);
+                    var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    await using var lease = await MirrorPulseWindowsNamespacePermissionTreeLease.OpenAsync(
+                        fileSystem.GetDirectory(root.Context.Location.RelativePath), router, stop).ConfigureAwait(false);
+                    await foreach (var actual in lease.InspectObjectsAsync(stop).ConfigureAwait(false))
+                    {
+                        if (!expected.TryGetValue(actual.RelativePath, out var retained) || !seen.Add(actual.RelativePath) ||
+                            actual.LocalObject != retained.Context.Member.LocalObject || actual.OwnerSid != retained.Context.Member.OwnerSid ||
+                            actual.RootId != retained.Context.Member.RootId || actual.IsDirectory != retained.Context.Member.IsDirectory || actual.LinkCount != 1 ||
+                            actual.Dacl != retained.Context.Verification.Dacl)
+                            throw new InvalidDataException("The complete actual local inventory differs from its current protected membership.");
+                        // Repeat the mature public identity check after final local enumeration.
+                        var observed = await lease.GetItem(actual.RelativePath).InspectAsync(stop).ConfigureAwait(false);
+                        MirrorPulseNamespaceBirthProtectionVerifier.RequireRegisteredPublicIdentity(observed, retained.Identity,
+                            retained.Context.Member.Origin == MirrorPulseNamespaceMemberOrigin.ProtectedBirth);
+                    }
+                    if (seen.Count != expected.Count) throw new InvalidDataException("The actual current tree lost a registered member.");
+                }
+                MirrorPulseNamespaceBirthProtectionVerifier.RequireUnchangedParent(before, await anchorGuard.InspectAsync(stop).ConfigureAwait(false));
+                actor.AssertAccess(); return new MirrorPulseNamespaceCurrentTreeAudit(inventory, execution.RoleSid.Value, DateTimeOffset.UtcNow);
+            }, token, onAudited, scopeRoot).ConfigureAwait(false);
+        }).ConfigureAwait(false);
+        return result;
     }
 }

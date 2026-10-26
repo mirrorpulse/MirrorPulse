@@ -30,6 +30,8 @@ public static class SafeDiagnosticPolicy
         ["ShellRootRegistrationFailed"] = "Windows rejected the Shell root registration.",
         ["JournalReadFailed"] = "The local journal could not be read.",
         ["RootLabelJournalRecoveryFailed"] = "An accepted root notification requires another metadata recovery attempt.",
+        ["RootLabelJournalReadmissionFailed"] = "A root remains closed until its current Host namespace audit succeeds.",
+        ["RootLabelJournalAdmissionFailed"] = "A root notification remains pending until its current Host admission succeeds.",
         ["CloudProviderRequestFailed"] = "A Windows Cloud Files request failed.",
         ["CloudFilesStartupProgress"] = "The Host reached a Cloud Files initialization boundary.",
         ["JournalCommandFailed"] = "A local journal command failed.",
@@ -114,7 +116,7 @@ public static class SafeDiagnosticPolicy
         {
             string? accepted = name switch
             {
-                "operationId" or "instanceId" or "diagnosticId" or "correlationId" or "workerSessionId" or "planId" or "commandId" =>
+                "operationId" or "instanceId" or "rootId" or "diagnosticId" or "correlationId" or "workerSessionId" or "planId" or "commandId" =>
                     Guid.TryParse(value, out Guid id) ? id.ToString("D") : null,
                 "hresult" => value.Length == 8 && uint.TryParse(value, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out uint number)
                     ? number.ToString("X8", CultureInfo.InvariantCulture) : null,

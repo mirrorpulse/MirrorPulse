@@ -51,6 +51,7 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
     private readonly MirrorPulseConflictKeepBothRecovery? _keepBothRecovery;
     private readonly MirrorPulseUploadConflictActions? _conflictActions;
     private readonly MirrorPulseRootLabelJournalRecovery? _rootLabelJournalRecovery;
+    private readonly MirrorPulseRootLabelJournalAdmission? _rootLabelAdmission;
 
     public MirrorPulseJournalPumpHealth Health => _runner.Health;
 
@@ -77,7 +78,8 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
         MirrorPulseNamespaceWorkAdmission? namespaceWork = null,
         MirrorPulseUploadConflictActions? conflictActions = null,
         IMirrorPulseRetiredTransferObservationHandler? retiredSources = null,
-        MirrorPulseRootLabelJournalRecovery? rootLabelJournal = null)
+        MirrorPulseRootLabelJournalRecovery? rootLabelJournal = null,
+        MirrorPulseRootLabelJournalAdmission? rootLabelAdmission = null)
     {
         _feed = feed ?? throw new ArgumentNullException(nameof(feed));
         _router = router ?? throw new ArgumentNullException(nameof(router));
@@ -107,12 +109,13 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
         _coalescingRecovery = new(catalog, state, _runner, _log);
         _conflictActions = conflictActions;
         _rootLabelJournalRecovery = rootLabelJournal;
+        _rootLabelAdmission = rootLabelAdmission;
         if (conflictActions is not null) _deletionRecovery = new(catalog, conflictActions.ResumeConflictDeletionAsync, router, mayDispatch, _runner, _log);
         if (conflictActions is not null) _localRemovalRecovery = new(catalog, conflictActions.ResumeConflictLocalRemovalAsync, router, mayDispatch, _runner, _log, localOnly: true);
         if (conflictActions is not null) _keepBothRecovery = new(catalog, conflictActions.ResumeConflictKeepBothAsync, router, mayDispatch, _runner, _log, namespaceWork);
         _completion = completion ?? throw new ArgumentNullException(nameof(completion));
         _source = new MirrorPulseJournalUploadSource(feed, router, catalog, mayDispatch, _completion, namespaceWork, retiredSources,
-            rootLabelJournal: rootLabelJournal);
+            rootLabelJournal: rootLabelJournal, rootLabelAdmission: rootLabelAdmission);
     }
 
     public async ValueTask StartAsync(CancellationToken cancellationToken = default)

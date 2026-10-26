@@ -15,6 +15,45 @@ public sealed class MirrorPulseRootRouterTests
     private static readonly string[] ExpectedTopLevelNames = ["Backup", "Documents", "Photos"];
 
     [TestMethod]
+    public void PublicRootItemLookupRetainsStableOwnershipAcrossLabelsAndRemovesOldSnapshotsAtomically()
+    {
+        string path = Path.Combine(Path.GetTempPath(), "MirrorPulse-tests", Guid.NewGuid().ToString("N"));
+        var original = CreateRoot(InstanceId.New(), "Documents");
+        var router = new MirrorPulseRootRouter(path, [original]);
+        Guid item = router.CreateRootPage().Children.Single().Identity.ItemId;
+        Assert.AreEqual(original, router.FindRootByPublicItemId(item));
+        Assert.IsNull(router.FindRootByPublicItemId(Guid.Empty));
+        Assert.IsNull(router.FindRootByPublicItemId(Guid.NewGuid()));
+        var renamed = new RootRegistration(original.AdapterId, original.InstanceId, original.RootId, original.UniquenessKey,
+            "Renamed", "Renamed", original.CustomEntry, RootRegistrationState.Disabled, original.RegisteredAt, original.IdentityScope);
+        router.ReplaceRegistrations([renamed], [new(original.RootId, "Documents")]);
+        Assert.AreEqual(renamed, router.FindRootByPublicItemId(item));
+        Assert.AreEqual(item, router.CreateRootPage().Children.Single().Identity.ItemId);
+        Assert.ThrowsExactly<IOException>(() => router.ResolveUploadPath(original.InstanceId, original.UniquenessKey, "child.txt"));
+        var replacement = CreateRoot(InstanceId.New(), "Renamed");
+        router.ReplaceRegistrations([replacement]);
+        Assert.IsNull(router.FindRootByPublicItemId(item));
+        Assert.AreEqual(replacement, router.FindRootByPublicItemId(router.CreateRootPage().Children.Single().Identity.ItemId));
+    }
+
+    [TestMethod]
+    public void FailedPublicRootSnapshotReplacementPreservesEveryOriginalIndex()
+    {
+        string path = Path.Combine(Path.GetTempPath(), "MirrorPulse-tests", Guid.NewGuid().ToString("N"));
+        var first = CreateRoot(InstanceId.New(), "One");
+        var second = CreateRoot(InstanceId.New(), "Two");
+        var router = new MirrorPulseRootRouter(path, [first, second]);
+        Guid[] items = router.CreateRootPage().Children.Select(child => child.Identity.ItemId).ToArray();
+        var duplicateId = new RootRegistration(second.AdapterId, second.InstanceId, first.RootId, second.UniquenessKey,
+            second.Label, second.DirectoryName, second.CustomEntry, second.State, second.RegisteredAt, second.IdentityScope);
+        Assert.ThrowsExactly<ArgumentException>(() => router.ReplaceRegistrations([first, duplicateId]));
+        Assert.AreEqual(first, router.FindRootByPublicItemId(items[0]));
+        Assert.AreEqual(second, router.FindRootByPublicItemId(items[1]));
+        Assert.AreEqual(first, router.FindRegistration(first.RootId));
+        Assert.AreEqual(second, router.FindRegistration(second.RootId));
+    }
+
+    [TestMethod]
     public void HistoricalJournalNamesFollowTheStableRootButCannotAuthorizeNativeCallbacks()
     {
         string syncRoot = Path.Combine(Path.GetTempPath(), "MirrorPulse-tests", Guid.NewGuid().ToString("N"));

@@ -263,4 +263,19 @@ public sealed class SafeDiagnosticPolicyTests
         Assert.AreEqual("An accepted root notification requires another metadata recovery attempt.", safe.Message);
         Assert.IsFalse(JsonSerializer.Serialize(safe).Contains("needle", StringComparison.Ordinal));
     }
+
+    [TestMethod]
+    [DataRow("RootLabelJournalReadmissionFailed", "A root remains closed until its current Host namespace audit succeeds.")]
+    [DataRow("RootLabelJournalAdmissionFailed", "A root notification remains pending until its current Host admission succeeds.")]
+    public void RootReadmissionDiagnosticsKeepOnlyAnActualStableRootIdAndBoundedFailureFacts(string code, string description)
+    {
+        Guid root = Guid.NewGuid();
+        var safe = SafeDiagnosticPolicy.Sanitize(new LogEntry(LogLevel.Warning, "CloudFiles.Upload", code, DateTimeOffset.UtcNow,
+            [new("rootId", root.ToString("D")), new("rootId", "path-secret-needle"),
+             new("failureCategory", "InvalidData"), new("hresult", "80131501"), new("message", "token-secret-needle")]));
+        Assert.AreEqual(code, safe.Code);
+        Assert.AreEqual(root.ToString("D"), safe.Fields["rootId"]);
+        Assert.AreEqual(description, safe.Message);
+        Assert.IsFalse(JsonSerializer.Serialize(safe).Contains("needle", StringComparison.Ordinal));
+    }
 }
