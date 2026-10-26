@@ -376,6 +376,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         private MirrorPulseManagedRootRenameService? _rootRenames;
         private MirrorPulseNamespaceAnchorProtection? _scopedAnchorProtection;
         private MirrorPulseNamespaceAnchorProtection? _startupProtection;
+        private MirrorPulseRootLabelJournalRecovery? _rootLabelJournalRecovery;
         public IReadOnlyList<MirrorPulseNamespaceStartupRoot> NamespaceStartupResults { get; private set; } = [];
         public IReadOnlyList<MirrorPulseManagedRootRenameRestoreResult> RootRenameRecoveryResults { get; private set; } = [];
         public MirrorPulseJournalPumpHealth? JournalHealth => _uploadPump?.Health;
@@ -1216,6 +1217,19 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         [SupportedOSPlatform("windows10.0.26100")]
         private async ValueTask<bool> BootstrapNamespaceAsync(IMirrorPulseInstanceScheduler instances, CancellationToken token)
         {
+            // Already accepted original ACKs are metadata settlement under the normal
+            // owner, before role rotation. Completion grants no root admission; startup
+            // still requires the complete fresh current-role/native audit below.
+            if (_rootLabelJournalRecovery is { } rootJournal)
+                foreach (var root in router!.Registrations)
+                {
+                    try { _ = await rootJournal.RecoverRootAsync(root.RootId, token).ConfigureAwait(false); }
+                    catch (Exception error) when (error is IOException or InvalidOperationException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+                    {
+                        // The original remains pending and fences this root. Its current
+                        // startup outcome reports required recovery without inventing a return.
+                    }
+                }
             // Reconcile already committed SDK update outcomes before rotating the old
             // coherent role graph. Uncertain starts retain their original closed root.
             var updateRecovery = new MirrorPulseRemoteUpdateCoordinator(fileSystem, state, catalog!, router!, _namespaceExecution!, _namespaceActor!);
@@ -1301,11 +1315,19 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                 {
                     if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
                         throw new PlatformNotSupportedException("Retired source observation settlement requires Windows 11 24H2 or later.");
+                    _rootLabelJournalRecovery = new MirrorPulseRootLabelJournalRecovery(catalog!, _namespaceActor,
+                        (id, stop) =>
+                        {
+                            if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
+                                throw new PlatformNotSupportedException("Protected root ACK replay requires Windows 11 24H2 or later.");
+                            return _namespaceExecution.RunNormalUserOperationAsync(async () =>
+                                await feed.AcknowledgeAsync([new CloudLocalChangeAcknowledgement(id, null)], stop).ConfigureAwait(false));
+                        });
                     _retiredSourceObservations = new MirrorPulseRetiredTransferObservationHandler(fileSystem, feed, state, catalog!, router!,
                         _namespaceExecution, _namespaceActor, namespaceWork, mayDispatch!);
                 }
                 transferJournalSourceReady?.Invoke(new MirrorPulseJournalUploadSource(feed, router!, catalog!, mayDispatch!,
-                    namespaceWork: namespaceWork, retiredSources: _retiredSourceObservations));
+                    namespaceWork: namespaceWork, retiredSources: _retiredSourceObservations, rootLabelJournal: _rootLabelJournalRecovery));
             }
             if (ordinaryUploads)
             {
@@ -1320,7 +1342,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                 _uploadPump = new MirrorPulseJournalUploadPump(feed, router!, catalog!, uploads!, stats!, state,
                     syncRootPath, dataRootPath, mayDispatch!, completion, conflicts, notifications, mutations,
                     uploads as IMirrorPulseWorkerRangeTransport, uploads as IMirrorPulseWorkerDirectoryPageSource, fileSystem, _scheduler,
-                    _namespaceActor, _namespaceExecution, namespaceWork, _conflictActions, _retiredSourceObservations);
+                    _namespaceActor, _namespaceExecution, namespaceWork, _conflictActions, _retiredSourceObservations, _rootLabelJournalRecovery);
                 await _uploadPump.StartAsync(cancellationToken).ConfigureAwait(false);
             }
 

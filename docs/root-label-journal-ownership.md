@@ -2,9 +2,10 @@
 
 This catalog boundary retains the meaning of an original CfSharp root-directory
 move notification before the Host invokes the public null-revision ACK. It does
-not yet connect a runtime journal handler, expose public root execution, invoke
-the SDK ACK, or grant namespace readiness. Those integrations and their actual
-native and signed Host checks remain separate S06 work.
+not invoke the SDK ACK or grant namespace readiness itself. The Host's
+original-only replay invokes the public ACK as described below. Accepting new
+live notifications, public root execution, and their complete native and signed
+Host checks remain separate S06 work.
 
 ## Accepting an original notification
 
@@ -54,6 +55,24 @@ Historical replay validates the original Label, member, full binding and whole
 subtree receipt. Later Labels, name reuse or role rotation cannot reinterpret an
 already accepted notification. Reading its metadata grants no current native
 authority and never turns an old role SID into a usable token.
+
+The Host binds `MirrorPulseRootLabelJournalRecovery` to its existing running
+public feed. Replay holds the shared namespace actor and invokes the exact
+original ID with a null revision under the normal Host owner. A successful SDK
+return precedes the catalog receipt. Caller cancellation after that return does
+not abandon the receipt write. A failed or lost return retains the first start;
+if receipt persistence fails after SDK success, another actual idempotent ACK
+return is required. An earlier completed receipt retains its original timestamp.
+
+Startup settles already owned pending IDs before role rotation and the current
+tree audit. The upload and transfer journal sources classify owned original IDs
+before checking nullable SDK ItemId or ordinary/retired Worker ownership. A
+stale finite window can therefore retain a completed owned ID without creating
+an ordinary Worker request. Replay does not accept an unknown notification,
+derive an ItemId from a path, drain caller-held work, inspect native objects,
+change revisions, or reopen admission. Disabled-root metadata can settle while
+the configured instance remains disabled. New live acceptance still requires
+its retained fresh whole-tree/current-role/native proof.
 
 ## Storage and bounded discovery
 

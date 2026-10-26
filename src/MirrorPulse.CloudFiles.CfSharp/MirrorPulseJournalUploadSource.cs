@@ -46,6 +46,7 @@ public sealed class MirrorPulseJournalUploadSource
     private readonly MirrorPulseJournalUploadCompletion? _completion;
     private readonly MirrorPulseNamespaceWorkAdmission? _namespaceWork;
     private readonly IMirrorPulseRetiredTransferObservationHandler? _retiredSources;
+    private readonly MirrorPulseRootLabelJournalRecovery? _rootLabelJournal;
     public bool RequiresFullRescan { get; private set; }
     public void ClearFullRescanRequest()
     {
@@ -64,7 +65,8 @@ public sealed class MirrorPulseJournalUploadSource
         IMirrorPulseRetiredTransferObservationHandler? retiredSources = null,
         int scanPagesPerRead = 8,
         int planningObservationsPerRead = 2048,
-        int admissionOperationsPerRead = 2048)
+        int admissionOperationsPerRead = 2048,
+        MirrorPulseRootLabelJournalRecovery? rootLabelJournal = null)
     {
         ArgumentNullException.ThrowIfNull(feed);
         ArgumentNullException.ThrowIfNull(router);
@@ -91,6 +93,7 @@ public sealed class MirrorPulseJournalUploadSource
         _completion = completion;
         _namespaceWork = namespaceWork;
         _retiredSources = retiredSources;
+        _rootLabelJournal = rootLabelJournal;
     }
 
     public async ValueTask<MirrorPulseJournalUploadBatch> ReadPendingAsync(
@@ -232,6 +235,10 @@ public sealed class MirrorPulseJournalUploadSource
     private async ValueTask<bool> IncludeOriginalAsync(MirrorPulseLocalChangeObservation observation,
         HashSet<RootId> pendingRoots, CancellationToken token)
     {
+        // Durable original-ID ownership precedes mutable SDK identity references and
+        // ordinary or retired Worker planning. This accepts no new root notification.
+        if (_rootLabelJournal is not null && await _rootLabelJournal.TryReplayOwnedAsync(observation.OperationId, token).ConfigureAwait(false))
+            return false;
         if (observation.ItemId is not { } itemId) return true;
         var candidates = await _catalog.ReadNamespaceTransferSourceGenerationsAsync(itemId, token).ConfigureAwait(false);
         if (candidates.Count == 0) return true;
