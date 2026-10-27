@@ -43,9 +43,7 @@ public sealed partial class MirrorPulseProductCatalog
                 await ValidateRootLabelCancellationReferencesAsync(intent, replay, current: false, transaction, cancellationToken).ConfigureAwait(false);
                 transaction.Commit(); return replay;
             }
-            var pending = await ReadPendingNamespaceMemberMoveCoreAsync(intent.RootId, transaction, cancellationToken).ConfigureAwait(false);
-            if (pending?.OperationId != intent.OperationId)
-                throw new InvalidOperationException("Only the original pending Label can release its own namespace ownership.");
+            _ = await RequireUnstartedRootLabelCancellationAdmissionCoreAsync(intent.OperationId, transaction, cancellationToken).ConfigureAwait(false);
             await ValidateRootLabelCancellationReferencesAsync(intent, cancellation, current: true, transaction, cancellationToken).ConfigureAwait(false);
             var history = await ReadManagedRootRenameHistoryCoreAsync(intent.OperationId, cancellationToken, transaction).ConfigureAwait(false);
             var current = (await ReadManagedRootRenamesCoreAsync(cancellationToken, transaction).ConfigureAwait(false))

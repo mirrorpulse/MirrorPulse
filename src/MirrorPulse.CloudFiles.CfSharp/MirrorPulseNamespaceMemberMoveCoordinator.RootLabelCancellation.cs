@@ -24,7 +24,7 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
             throw new InvalidOperationException("Cancellation requires the original local Label and current-user owner.");
         var replay = await _catalog.ReadRootLabelCancellationAsync(operationId, token).ConfigureAwait(false);
         if (replay is not null) return replay;
-        intent = await _catalog.ValidateNamespaceMemberMoveExecutionAsync(operationId, token).ConfigureAwait(false);
+        intent = await _catalog.ValidateUnstartedRootLabelCancellationAsync(operationId, token).ConfigureAwait(false);
         if (await _catalog.ReadNamespaceMemberMoveStartAsync(operationId, token).ConfigureAwait(false) is not null ||
             await _catalog.ReadNamespaceMemberMoveObservationAsync(operationId, token).ConfigureAwait(false) is not null ||
             await _catalog.ReadNamespaceMemberMoveProjectionAsync(operationId, token).ConfigureAwait(false) is not null ||
@@ -40,7 +40,9 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
         RequireDirectoryMoveProof(publicProof, intent);
         var snapshot = await _catalog.ReadNamespaceDirectoryMoveSnapshotAsync(operationId, token).ConfigureAwait(false)
             ?? throw new InvalidDataException("Cancellation lost the original complete sealed tree.");
+        var cancellationTree = await _catalog.ReadRootLabelCancellationTreeAsync(operationId, token).ConfigureAwait(false);
         var anchorSnapshot = await ReadRootLabelCancellationAnchorAsync(intent, token).ConfigureAwait(false);
+        if (anchorSnapshot != cancellationTree.Anchor) throw new InvalidOperationException("Cancellation lost its coherent current anchor metadata.");
         var anchorProof = MirrorPulseNamespaceProtectionProofReader.FromSnapshot(anchorSnapshot);
         MirrorPulseRootLabelCancellation cancelled = null!;
         // Metadata-only reads under the normal owner cannot acquire either the
@@ -53,7 +55,7 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
             await using var anchor = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(_fileSystem.Root, _router, token).ConfigureAwait(false);
             RequireRootLabelCancellationAnchor(await anchor.InspectAsync(token).ConfigureAwait(false), anchorProof, intent);
             await RequireOriginalRootSpellingAsync(intent.Source.RelativePath, token).ConfigureAwait(false);
-            await using var objects = await OpenDirectoryMoveObjectsAsync(snapshot.Entries, intent, atTarget: false, token).ConfigureAwait(false);
+            await using var objects = await OpenRootCancellationObjectsAsync(snapshot.Entries, cancellationTree, intent.RootId, intent.OwnerSid, intent, token).ConfigureAwait(false);
             if (!objects.Objects[0].Snapshot.PlaceholderIdentity.Span.SequenceEqual(publicProof.ExpectedPlaceholderIdentity.Span))
                 throw new InvalidDataException("Cancellation lost its original complete public root identity.");
             foreach (var item in objects.Objects)
@@ -65,7 +67,7 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
                 unmoved.Error is not null || unmoved.NativeHResult is not null)
                 throw new InvalidOperationException("Cancellation requires an actual successful public NotMoved result without progress or uncertainty.");
             DateTimeOffset publicAt = DateTimeOffset.UtcNow;
-            await ReinspectDirectoryMoveObjectsAsync(objects, intent, atTarget: false, token).ConfigureAwait(false);
+            await ReinspectRootCancellationObjectsAsync(objects, cancellationTree, intent.RootId, intent.OwnerSid, intent, token).ConfigureAwait(false);
             await RequireOriginalRootSpellingAsync(intent.Source.RelativePath, token).ConfigureAwait(false);
             if (await ReadRootLabelCancellationAnchorAsync(intent, token).ConfigureAwait(false) != anchorSnapshot)
                 throw new InvalidOperationException("Cancellation anchor protection changed during guarded inspection.");

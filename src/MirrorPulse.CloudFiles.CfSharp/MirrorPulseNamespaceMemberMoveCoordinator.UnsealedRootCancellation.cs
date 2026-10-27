@@ -37,8 +37,11 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
         if (!member.IsDirectory || member.RootId != root.RootId || member.OwnerSid != _execution.OwnerSid.Value ||
             location.RelativePath != history.Intent.SourceName || location.ParentMemberId is not { } anchorMember)
             throw new InvalidDataException("The original preparation no longer names its protected current-user root and direct anchor.");
-        var entries = await ReadDirectoryMoveEntriesAsync(member.MemberId, token).ConfigureAwait(false);
+        var cancellationTree = await _catalog.ReadRootLabelCancellationTreeAsync(operationId, token).ConfigureAwait(false);
+        if (cancellationTree.RootMemberId != member.MemberId) throw new InvalidDataException("Cancellation lost its original root inventory.");
+        var entries = RootCancellationEntries(cancellationTree);
         var anchorSnapshot = await ReadUnsealedCancellationAnchorAsync(anchorMember, member, token).ConfigureAwait(false);
+        if (anchorSnapshot != cancellationTree.Anchor) throw new InvalidOperationException("Cancellation lost its coherent current anchor metadata.");
         var anchorProof = MirrorPulseNamespaceProtectionProofReader.FromSnapshot(anchorSnapshot);
         MirrorPulseRootLabelUnsealedCancellation cancelled = null!;
         await _execution.RunNormalUserOperationAsync(async () =>
@@ -49,7 +52,7 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
             RequireUnsealedCancellationObject(await anchor.InspectAsync(token).ConfigureAwait(false), await _fileSystem.Root.InspectAsync(token).ConfigureAwait(false),
                 anchorProof, anchorSnapshot.Context.Member.LocalObject, member.OwnerSid, null, "", true);
             await RequireOriginalRootSpellingAsync(history.Intent.SourceName, token).ConfigureAwait(false);
-            await using var objects = await OpenUnsealedCancellationObjectsAsync(entries, root.RootId, member.OwnerSid, token).ConfigureAwait(false);
+            await using var objects = await OpenRootCancellationObjectsAsync(entries, cancellationTree, root.RootId, member.OwnerSid, null, token).ConfigureAwait(false);
             var rootObject = objects.Objects.Single(item => item.Entry.MemberId == member.MemberId);
             if (rootObject.Snapshot.ItemId != proof.RootItemId ||
                 !rootObject.Snapshot.PlaceholderIdentity.Span.SequenceEqual(proof.ExpectedPlaceholderIdentity.Span))
@@ -59,11 +62,11 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
                 unmoved.RequiresFullRescan || unmoved.DurableStateEntriesUpdated != 0 || unmoved.Error is not null || unmoved.NativeHResult is not null)
                 throw new InvalidOperationException("Unsealed cancellation requires actual public NotMoved without progress or uncertainty.");
             DateTimeOffset publicAt = DateTimeOffset.UtcNow;
-            var observations = new List<MirrorPulseRootLabelCancellationMember>(entries.Count);
+            await ReinspectRootCancellationObjectsAsync(objects, cancellationTree, root.RootId, member.OwnerSid, null, token).ConfigureAwait(false);
+            var observations = new List<MirrorPulseRootLabelCancellationMember>(entries.Length);
             foreach (var item in objects.Objects)
             {
-                var current = await ReadUnsealedCancellationProtectionAsync(item.Entry, root.RootId, member.OwnerSid, token).ConfigureAwait(false);
-                if (current != item.Proof) throw new InvalidOperationException("Unsealed cancellation member protection changed during guarded inspection.");
+                var current = item.Proof;
                 var facts = await item.Lease.InspectAsync(token).ConfigureAwait(false);
                 var snapshot = await item.Item.InspectAsync(token).ConfigureAwait(false);
                 RequireUnsealedCancellationObject(facts, snapshot, current, item.Entry.LocalObject, member.OwnerSid,
@@ -100,47 +103,6 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
             member.LocalObject.LocalFileId != root.LocalObject.SyncRootFileId || member.LocalObject.SyncRootFileId != root.LocalObject.SyncRootFileId)
             throw new InvalidDataException("Unsealed cancellation cannot replace the original physical anchor.");
         return snapshot;
-    }
-
-    private async Task<MirrorPulseNamespaceProtectionProof> ReadUnsealedCancellationProtectionAsync(MirrorPulseNamespaceDirectoryMoveEntry entry,
-        RootId root, string owner, CancellationToken token)
-    {
-        var snapshot = await _catalog.ReadNamespaceMemberProtectionSnapshotAsync(entry.MemberId, token).ConfigureAwait(false)
-            ?? throw new InvalidDataException("The guarded unsealed cancellation member is missing.");
-        var context = snapshot.Context; var proof = MirrorPulseNamespaceProtectionProofReader.FromSnapshot(snapshot);
-        if (context.Member.RootId != root || context.Member.LocalObject != entry.LocalObject || context.Member.OwnerSid != owner ||
-            context.Member.IsDirectory != entry.IsDirectory || context.Location.ParentMemberId != entry.ParentMemberId ||
-            context.Location.RelativePath != entry.RelativePath || context.Location.CompletedMoveOperationId != entry.PreviousMoveOperationId ||
-            context.Location.PositionOperationId != entry.PreviousPositionOperationId || snapshot.Identity != entry.Identity ||
-            proof.ProtectionId != entry.ProtectionId || proof.Verification.ObservedAt != entry.ProtectionVerifiedAt)
-            throw new InvalidDataException("Unsealed cancellation cannot replace current membership, position, identity or protection provenance.");
-        return proof;
-    }
-
-    private async Task<DirectoryMoveObjects> OpenUnsealedCancellationObjectsAsync(IReadOnlyList<MirrorPulseNamespaceDirectoryMoveEntry> entries,
-        RootId root, string owner, CancellationToken token)
-    {
-        var result = new DirectoryMoveObjects([]);
-        try
-        {
-            foreach (var entry in entries)
-            {
-                var proof = await ReadUnsealedCancellationProtectionAsync(entry, root, owner, token).ConfigureAwait(false);
-                CloudItem item = entry.IsDirectory ? _fileSystem.GetDirectory(entry.RelativePath) : _fileSystem.GetFile(entry.RelativePath);
-                var lease = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(item, _router, token).ConfigureAwait(false);
-                try
-                {
-                    var facts = await lease.InspectAsync(token).ConfigureAwait(false); var snapshot = await item.InspectAsync(token).ConfigureAwait(false);
-                    RequireUnsealedCancellationObject(facts, snapshot, proof, entry.LocalObject, owner, root, entry.RelativePath, entry.IsDirectory);
-                    MirrorPulseNamespaceBirthProtectionVerifier.RequireRegisteredPublicIdentity(snapshot, entry.Identity, requirePlaceholder: true);
-                    result.Add(new(entry, item, lease, proof, facts, snapshot));
-                }
-                catch { await lease.DisposeAsync().ConfigureAwait(false); throw; }
-            }
-            await RequireExactLocalDirectoryTreeAsync(entries, entry => entry.RelativePath, token).ConfigureAwait(false);
-            return result;
-        }
-        catch { await result.DisposeAsync().ConfigureAwait(false); throw; }
     }
 
     private static void RequireUnsealedCancellationObject(MirrorPulseNamespacePermissionObject facts, CloudItemSnapshot snapshot,

@@ -53,6 +53,7 @@ public sealed partial class MirrorPulseProductCatalog
         bool current, SqliteTransaction transaction, CancellationToken token)
     {
         var observation = cancellation.Observation;
+        if (current) _ = await ReadRootLabelCancellationTreeCoreAsync(observation.OperationId, transaction, token).ConfigureAwait(false);
         var history = await ReadManagedRootRenameHistoryCoreAsync(observation.OperationId, token, transaction).ConfigureAwait(false);
         var rootEntry = cancellation.Inventory.Entries.Single(entry => entry.MemberId == cancellation.RootMemberId);
         if (history.Proof is not { DirectoryMoveEvidence: { } evidence } proof || history.Observation is not null ||
@@ -89,7 +90,7 @@ public sealed partial class MirrorPulseProductCatalog
             {
                 var location = await ReadNamespaceMemberLocationCoreAsync(member, transaction, token).ConfigureAwait(false);
                 var identity = await ReadNamespaceMemberIdentityCoreAsync(member, transaction, token).ConfigureAwait(false);
-                var protection = await ReadNamespaceMemberProofAsync(member, true, transaction, token, entry.ProtectionId, observation.VerifiedAt).ConfigureAwait(false);
+                var protection = (await ReadNamespaceMemberContextProtectionAsync(member, transaction, token).ConfigureAwait(false)).Proof;
                 if (location.ParentMemberId != entry.ParentMemberId || location.RelativePath != entry.RelativePath ||
                     location.CompletedMoveOperationId != entry.PreviousMoveOperationId || location.PositionOperationId != entry.PreviousPositionOperationId ||
                     identity != entry.Identity || protection.VerifiedAt != entry.ProtectionVerifiedAt)
