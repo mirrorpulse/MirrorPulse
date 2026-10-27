@@ -30,3 +30,14 @@ closed after cancellation. Active readiness requires separate current-role
 recovery and a fresh complete native audit; Disabled stays closed. Full legacy
 recovery, native mixed-epoch and independent Host fault/restart acceptance remain
 required beyond the managed catalog tests.
+
+The legacy initializer native fixture interrupts actual current-root recovery
+after the original root's role settles. Enabled and Disabled scenarios then
+require guarded public NotMoved cancellation to retain that exact pending
+initializer witness, explicitly resume the original initializer, complete a fresh
+current-role audit and preserve stable identities, latest bytes and later Label
+history. It uses no Worker or independent Host process. The two scenarios each
+keep a 60-second deadline; their explicit controller selection adds only their
+120-second total to the aggregate budget. Prior selections and deadlines remain
+unchanged. Adding the fixture is not evidence that it has passed; original clean
+Windows x64, ARM64 and disposable ordinary-user reports must prove that result.

@@ -31,8 +31,18 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             await ProbePublicRootLabelCancellationAsync(disabled, newRole: true, unsealedBeforeRoleChange: true);
     }
 
+    [TestMethod]
+    [DoNotParallelize]
+    [TestCategory("NativeCloudFiles")]
+    public async Task NativePublicCancellationRetainsAndResumesItsOriginalPartiallyRotatedInitializer()
+    {
+        foreach (bool disabled in new[] { false, true })
+            await ProbePublicRootLabelCancellationAsync(disabled, newRole: true, unsealedBeforeRoleChange: true,
+                retainedPartialInitializer: true);
+    }
+
     private async Task ProbePublicRootLabelCancellationAsync(bool disabled, bool newRole, bool startWritten = false,
-        bool unsealedBeforeRoleChange = false)
+        bool unsealedBeforeRoleChange = false, bool retainedPartialInitializer = false)
     {
         if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
             Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
@@ -50,7 +60,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         var ranges = new RootLabelExecutionRejectedRanges();
         string priorRole;
         MirrorPulseRootRenameHistory? preparedBeforeRoleChange = null;
-        Guid fileMemberId;
+        Guid fileMemberId; Guid? retainedInitializer = null;
         try
         {
             registry.Register(new(paths.SyncRootPath, "0.1.0", Guid.NewGuid(), [4, 7, 2]));
@@ -115,6 +125,28 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             await using var currentCatalog = await MirrorPulseProductCatalog.OpenAsync(paths, deadline.Token);
             await using var currentActor = new MirrorPulseNamespaceActor();
             await using var currentScheduler = new MirrorPulseInstanceScheduler();
+            if (retainedPartialInitializer)
+            {
+                retainedInitializer = Guid.NewGuid();
+                await using var partialPermissions = new MirrorPulseNamespacePermissionCoordinator(currentCatalog);
+                var partialState = new MirrorPulseCfSharpStateSession(paths);
+                await using var partialFileSystem = new MirrorPulseCloudFileSystemBuilder(paths).WithStateStore(partialState).WithContentProvider(source).Build();
+                await currentRole.RunNamespaceOperationAsync(async () => await partialFileSystem.StartAsync(deadline.Token));
+                var partialRecovery = new MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(partialFileSystem, currentCatalog, router,
+                    currentRole, currentActor, currentScheduler, partialPermissions)
+                {
+                    Progress = phase =>
+                    {
+                        if (phase == "NamespaceOriginalMemberCompleted")
+                            throw new IOException("Deliberate fixture interruption after the original root role settles.");
+                    }
+                };
+                var interruption = await Assert.ThrowsExactlyAsync<IOException>(() => partialRecovery.RecoverRootAsync(
+                    retainedInitializer.Value, root.RootId, deadline.Token).AsTask());
+                Assert.AreEqual("Deliberate fixture interruption after the original root role settles.", interruption.Message);
+                Assert.IsNull((await currentCatalog.ReadNamespaceInitializationStatusAsync(retainedInitializer.Value, deadline.Token)).Completion);
+                Assert.IsTrue((await currentCatalog.ReadNamespaceDispatchFencedRootsAsync(deadline.Token)).Contains(root.RootId));
+            }
             await using var work = new MirrorPulseNamespaceWorkAdmission([root.RootId]);
             var demand = new MirrorPulseDemandProvider(router, ranges, namespaceWork: work, catalog: currentCatalog);
             var factory = new CfSharpMirrorPulseCloudRuntimeFactory(provider: demand, router: router, catalog: currentCatalog,
@@ -140,12 +172,27 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 TestContext.WriteLine($"PublicRootLabelCancellationRefusalActual: disabled={disabled}; newRole=True; startWrittenButUnmoved=True; originalStartPreserved=True; originalFencePreserved=True; cancellationAbsent=True; sourceReads=0.");
                 return;
             }
+            var initializerBeforeCancellation = retainedInitializer is { } retainedOperation
+                ? await currentCatalog.ReadNamespaceInitializationStatusAsync(retainedOperation, deadline.Token) : null;
+            var expectedInitializerOwner = retainedPartialInitializer
+                ? await currentCatalog.ReadRootLabelCancellationRecoveryOwnerAsync(original.Intent.OperationId, deadline.Token) : null;
+            if (retainedPartialInitializer)
+            {
+                var partialTree = await currentCatalog.ReadRootLabelCancellationTreeAsync(original.Intent.OperationId, deadline.Token);
+                Assert.AreEqual(expectedInitializerOwner, partialTree.RecoveryOwner);
+                Assert.HasCount(4, partialTree.Members);
+                Assert.AreEqual(currentRole.RoleSid.Value,
+                    partialTree.Members.Single(item => item.Context.Member.MemberId == partialTree.RootMemberId).Context.Protection.RoleSid);
+                Assert.IsTrue(partialTree.Members.Any(item => item.Context.Member.MemberId != partialTree.RootMemberId &&
+                    item.Context.Protection.RoleSid != currentRole.RoleSid.Value));
+            }
             var cancelled = await runtime.CancelManagedRootRenameAsync(original.Intent.OperationId, deadline.Token);
             Assert.AreEqual(MirrorPulseRootRenamePhase.Cancelled, cancelled.Intent.Phase);
             Assert.IsTrue(cancelled.Intent.CancellationOperationId == original.Intent.OperationId ||
                 cancelled.Intent.UnsealedCancellationOperationId == original.Intent.OperationId);
             Assert.AreEqual("Docs", cancelled.CurrentDirectoryName); Assert.AreEqual(4, cancelled.MemberCount);
-            Assert.IsTrue(cancelled.CurrentTreeAudited); Assert.AreEqual(!disabled, cancelled.NamespaceReady);
+            Assert.AreEqual(!retainedPartialInitializer, cancelled.CurrentTreeAudited);
+            Assert.AreEqual(!disabled && !retainedPartialInitializer, cancelled.NamespaceReady);
             var unsealedRecord = await currentCatalog.ReadUnsealedRootLabelCancellationAsync(original.Intent.OperationId, deadline.Token);
             var record = await currentCatalog.ReadRootLabelCancellationAsync(original.Intent.OperationId, deadline.Token) ?? unsealedRecord?.Observation;
             Assert.IsNotNull(record); Assert.AreEqual(cancelled.CancelledAt, record.VerifiedAt);
@@ -164,7 +211,26 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             Assert.IsNotNull(retained); Assert.AreEqual(original.Proof, retained.Proof); Assert.IsNull(retained.Observation);
             var firstReplay = await runtime.CancelManagedRootRenameAsync(original.Intent.OperationId, deadline.Token);
             Assert.AreEqual(cancelled.Intent, firstReplay.Intent); Assert.AreEqual(cancelled.CancelledAt, firstReplay.CancelledAt);
-            Assert.AreEqual(!disabled, firstReplay.NamespaceReady);
+            Assert.AreEqual(!disabled && !retainedPartialInitializer, firstReplay.NamespaceReady);
+            if (retainedInitializer is { } originalInitializer)
+            {
+                Assert.IsNotNull(unsealedRecord); Assert.AreEqual(2, unsealedRecord.Version);
+                Assert.AreEqual(originalInitializer, unsealedRecord.RecoveryOwner!.InitializationOperationId);
+                Assert.AreEqual(expectedInitializerOwner, unsealedRecord.RecoveryOwner);
+                var pendingInitializer = await currentCatalog.ReadNamespaceInitializationStatusAsync(originalInitializer, deadline.Token);
+                Assert.AreEqual(System.Text.Json.JsonSerializer.Serialize(initializerBeforeCancellation),
+                    System.Text.Json.JsonSerializer.Serialize(pendingInitializer));
+                Assert.IsFalse(work.IsAdmitted(root.RootId));
+                var completedInitializer = await runtime.RecoverNamespaceRootAsync(originalInitializer, root.RootId, deadline.Token);
+                Assert.AreEqual(originalInitializer, completedInitializer.OperationId);
+                Assert.AreEqual(currentRole.RoleSid.Value, completedInitializer.RoleSid);
+                Assert.AreEqual(root.RootId, completedInitializer.ScopeRoot);
+                Assert.IsEmpty(await currentCatalog.ReadNamespaceDispatchFencedRootsAsync(deadline.Token));
+                Assert.AreEqual(System.Text.Json.JsonSerializer.Serialize(unsealedRecord),
+                    System.Text.Json.JsonSerializer.Serialize(await currentCatalog.ReadUnsealedRootLabelCancellationAsync(original.Intent.OperationId, deadline.Token)));
+                if (disabled) Assert.ThrowsExactly<IOException>(() => router.ResolveUploadPath(root.InstanceId, root.UniquenessKey, "source.bin"));
+                Assert.AreEqual(0, source.Reads); Assert.AreEqual(0, ranges.Calls);
+            }
 
             var later = await runtime.PrepareManagedRootRenameAsync(root.RootId, "FinalLabel", deadline.Token);
             _ = await runtime.ExecuteManagedRootRenameAsync(later.Intent.OperationId, deadline.Token);
@@ -181,7 +247,9 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() => File.Delete(payload), deadline.Token));
             Assert.IsNull(await currentCatalog.ReadPendingNamespaceMemberMoveAsync(root.RootId, deadline.Token));
             Assert.AreEqual(0, source.Reads); Assert.AreEqual(0, ranges.Calls);
-            if (unsealedBeforeRoleChange)
+            if (retainedPartialInitializer)
+                TestContext.WriteLine($"PublicLegacyInitializerCancellationActual: disabled={disabled}; originalInitializer=True; originalIntentFingerprint=True; mixedVerifiedRoles=True; actualPublicNotMoved=True; wholeMembers=4; originalCancellationKeepsInitializerPending=True; explicitOriginalInitializerResumed=True; freshCurrentRoleAudit=True; laterLabelAndHistoricalCancellationPreserved=True; sourceReads=0; independentHostRestart=False; signedWorker=False.");
+            else if (unsealedBeforeRoleChange)
                 TestContext.WriteLine($"PublicUnsealedRootCancellationActual: disabled={disabled}; newRole=True; originalOperation=True; actualPublicNotMoved=True; completeMembers=4; noMoveAdmission=True; noNativeStart=True; separateCurrentRecovery=True; freshCurrentAudit=True; activeReady={!disabled}; immutableHistoricalReplay=True; latestLabelPreserved=True; sourceReads=0; independentHostRestart=False; signedWorker=False.");
             else
                 TestContext.WriteLine($"PublicRootLabelCancellationActual: disabled={disabled}; newRole={newRole}; originalOperation=True; actualPublicNotMoved=True; completeMembers=4; noNativeStart=True; separateCurrentRecovery=True; freshCurrentAudit=True; activeReady={!disabled}; immutableHistoricalReplay=True; latestLabelPreserved=True; completedCancellationRefused=True; sourceReads=0; independentHostRestart=False; signedWorker=False.");
