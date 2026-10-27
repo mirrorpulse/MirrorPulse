@@ -62,8 +62,8 @@ public sealed partial class NamespaceNonAdminControllerTests
                     if ($Scenario -eq 'legacy-initializer-selected') {
                         $prior=@($names|Where-Object {$_ -cne $legacyInitializer})
                         if ((Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 122 -TestNames $prior) -ne 4635000) {throw 'Every original deadline must remain exact.'}
-                        if ((Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $Count -TestNames $names) -ne 4755000+4*60000) {throw 'Retain both original executions and add only the four Prepared/Applied active/disabled60-second executions.'}
-                        if ((Get-OrdinaryUserNamespaceStepTimeoutMinutes -TestCount $Count -TestNames $names) -ne 89) {throw 'Preserve the five-minute diagnostic/profile cleanup margin.'}
+                        if ((Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $Count -TestNames $names) -ne 4755000+4*60000+10*60000) {throw 'Retain all six original executions and add only ten born-recovery cut60-second executions.'}
+                        if ((Get-OrdinaryUserNamespaceStepTimeoutMinutes -TestCount $Count -TestNames $names) -ne 99) {throw 'Preserve the five-minute diagnostic/profile cleanup margin.'}
                     } else {
                         $parameters=@{TestCount=$Count;TestNames=$names}
                         switch ($Scenario) {
@@ -282,9 +282,9 @@ public sealed partial class NamespaceNonAdminControllerTests
                     if ($Scenario -eq 'budget-rejected') {
                         if (-not $rejected) { throw 'An invalid or unbounded selection was accepted.' }
                     } else {
-                        $maximum=if ($Scenario -eq 'budget-catalog') {4755000+4*60000} else {1800000}
+                        $maximum=if ($Scenario -eq 'budget-catalog') {4755000+4*60000+10*60000} else {1800000}
                         if ($rejected -or $budget -lt 600000 -or $budget -gt $maximum) { throw 'The whole-suite envelope is missing or unbounded.' }
-                        if ($Scenario -eq 'budget-catalog' -and $budget -ne 120000+($Count+51)*15000+18*30000+28*15000+6*45000+6*15000+4*45000+5*15000+6*45000+2*45000+2*45000+4*60000) {
+                        if ($Scenario -eq 'budget-catalog' -and $budget -ne 120000+($Count+51)*15000+18*30000+28*15000+6*45000+6*15000+4*45000+5*15000+6*45000+2*45000+2*45000+4*60000+10*60000) {
                             throw 'The actual catalog lost a same/cross-instance transfer or one of its five retirement cutpoints.'
                         }
                         if ($Count -ge 52 -and $budget -le 600000) { throw 'The growing suite still has the obsolete fixed ten-minute envelope.' }

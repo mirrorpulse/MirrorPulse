@@ -37,7 +37,7 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
         $repeated.Add($rootPublic, 4)
         $repeated.Add($rootCancellation, 6)
         $repeated.Add($unsealedCancellation, 2)
-        $repeated.Add($legacyInitializer, 6)
+        $repeated.Add($legacyInitializer, 16)
         foreach ($name in $TestNames) {
             if ([string]::IsNullOrWhiteSpace($name) -or $name.Length -gt 512 -or $name -cnotmatch '^[A-Za-z0-9_.]+$' -or -not $selected.Add($name)) {
                 throw 'The namespace budget requires distinct, bounded test names.'
@@ -53,11 +53,11 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
         }
     }
     # Every selected native fixture keeps its original deadline. The full123-name
-    # catalog includes60 repeated executions and an83m15s child envelope. The step
+    # catalog includes70 repeated executions and a93m15s child envelope. The step
     # adds five minutes for controller diagnostics and disposable-user cleanup.
     # The legacy-initializer fixture retains its two original 60-second
-    # executions and adds four Prepared/Applied active/disabled executions.
-    # Each original deadline remains; only the aggregate grows by four minutes.
+    # executions, four Prepared/Applied executions and ten born-recovery cut executions.
+    # Each original deadline remains; the cut matrix adds exactly ten minutes.
     # count-only callers still retain their original 112-name/30-minute bound.
     return [Math]::Max(600000, 120000 + $executions * 15000 + $transferDeadlineMilliseconds)
 }

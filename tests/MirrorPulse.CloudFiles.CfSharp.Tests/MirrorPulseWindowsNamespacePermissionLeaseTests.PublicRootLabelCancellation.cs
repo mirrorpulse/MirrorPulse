@@ -44,10 +44,17 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             foreach (bool disabled in new[] { false, true })
                 await ProbePublicRootLabelCancellationAsync(disabled, newRole: true, unsealedBeforeRoleChange: true,
                     retainedPartialInitializer: true, pendingOriginalPhase: phase);
+        foreach (var cut in new[] { MirrorPulseNamespaceBornMemberRecoveryCheckpoint.AfterActionPrepared,
+            MirrorPulseNamespaceBornMemberRecoveryCheckpoint.BeforeProtectedCallbackReturns, MirrorPulseNamespaceBornMemberRecoveryCheckpoint.AfterScopeDrained,
+            MirrorPulseNamespaceBornMemberRecoveryCheckpoint.AfterProtectionReadback, MirrorPulseNamespaceBornMemberRecoveryCheckpoint.AfterCompletionRecorded })
+            foreach (bool disabled in new[] { false, true })
+                await ProbePublicRootLabelCancellationAsync(disabled, newRole: true, unsealedBeforeRoleChange: true,
+                    retainedPartialInitializer: true, bornRecoveryCut: cut);
     }
 
     private async Task ProbePublicRootLabelCancellationAsync(bool disabled, bool newRole, bool startWritten = false,
-        bool unsealedBeforeRoleChange = false, bool retainedPartialInitializer = false, MirrorPulseNamespacePermissionPhase? pendingOriginalPhase = null)
+        bool unsealedBeforeRoleChange = false, bool retainedPartialInitializer = false, MirrorPulseNamespacePermissionPhase? pendingOriginalPhase = null,
+        MirrorPulseNamespaceBornMemberRecoveryCheckpoint? bornRecoveryCut = null)
     {
         if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
             Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
@@ -66,6 +73,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         string priorRole;
         MirrorPulseRootRenameHistory? preparedBeforeRoleChange = null;
         Guid fileMemberId; Guid? retainedInitializer = null; MirrorPulseNamespacePermissionIntent? pendingOriginalIntent = null;
+        CancellationBornCut? retainedBornCut = null;
         try
         {
             registry.Register(new(paths.SyncRootPath, "0.1.0", Guid.NewGuid(), [4, 7, 2]));
@@ -157,6 +165,9 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         currentActor, partialPermissions, root, retainedInitializer.Value, pendingOriginalPhase.Value, deadline.Token);
                 Assert.IsNull((await currentCatalog.ReadNamespaceInitializationStatusAsync(retainedInitializer.Value, deadline.Token)).Completion);
                 Assert.IsTrue((await currentCatalog.ReadNamespaceDispatchFencedRootsAsync(deadline.Token)).Contains(root.RootId));
+                if (bornRecoveryCut is { } cut)
+                    retainedBornCut = await InterruptOriginalCancellationBornFixtureAsync(partialFileSystem, currentCatalog, router, currentRole,
+                        currentActor, currentScheduler, partialPermissions, root, preparedBeforeRoleChange!.Intent.OperationId, cut, deadline.Token);
             }
             await using var work = new MirrorPulseNamespaceWorkAdmission([root.RootId]);
             var demand = new MirrorPulseDemandProvider(router, ranges, namespaceWork: work, catalog: currentCatalog);
@@ -187,7 +198,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 ? await currentCatalog.ReadNamespaceInitializationStatusAsync(retainedOperation, deadline.Token) : null;
             var expectedInitializerOwner = retainedPartialInitializer
                 ? await currentCatalog.ReadRootLabelCancellationRecoveryOwnerAsync(original.Intent.OperationId, deadline.Token) : null;
-            if (retainedPartialInitializer && pendingOriginalPhase is null)
+            if (retainedPartialInitializer && pendingOriginalPhase is null && bornRecoveryCut is null)
             {
                 var partialTree = await currentCatalog.ReadRootLabelCancellationTreeAsync(original.Intent.OperationId, deadline.Token);
                 Assert.AreEqual(expectedInitializerOwner, partialTree.RecoveryOwner);
@@ -250,6 +261,16 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             Assert.AreEqual(!disabled && !retainedPartialInitializer, firstReplay.NamespaceReady);
             if (retainedInitializer is { } originalInitializer)
             {
+                if (retainedBornCut is not null)
+                {
+                    var actionHistory = await currentCatalog.ReadNamespaceBornMemberRecoveryActionsAsync(retainedBornCut.Action.Child.Member.MemberId, deadline.Token);
+                    var originalAction = actionHistory.Single(action => action.ActionId == retainedBornCut.Action.ActionId);
+                    Assert.AreEqual(System.Text.Json.JsonSerializer.Serialize(retainedBornCut.Action), System.Text.Json.JsonSerializer.Serialize(originalAction));
+                    var completedAction = await currentCatalog.ReadNamespaceBornMemberRecoveryCompletionAsync(originalAction.ActionId, deadline.Token);
+                    Assert.IsNotNull(completedAction); Assert.AreEqual(originalAction.ActionId, completedAction.ProtectionId);
+                    if (retainedBornCut.Completion is not null) Assert.AreEqual(retainedBornCut.Completion, completedAction);
+                    TestContext.WriteLine($"PublicCancellationBornCutRecoveredActual: disabled={disabled}; cut={bornRecoveryCut}; originalActionPreserved=True; sameActionCompleted=True; originalCompletionNotRefreshed=True; hostRuntimeResumed=True; independentProcessRestart=False.");
+                }
                 if (pendingOriginalIntent is not null)
                 {
                     var settledPermission = await currentCatalog.ReadNamespacePermissionChangeAsync(pendingOriginalIntent.OperationId, deadline.Token);

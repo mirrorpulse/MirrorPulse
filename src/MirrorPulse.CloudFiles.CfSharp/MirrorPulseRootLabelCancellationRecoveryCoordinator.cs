@@ -15,6 +15,8 @@ internal sealed class MirrorPulseRootLabelCancellationRecoveryCoordinator(CloudF
     MirrorPulseProductCatalog catalog, MirrorPulseRootRouter router, MirrorPulseNamespaceExecutionSession execution,
     MirrorPulseNamespaceActor actor, IMirrorPulseInstanceScheduler scheduler, MirrorPulseNamespacePermissionCoordinator permissions)
 {
+    internal Func<MirrorPulseNamespaceBornMemberRecoveryCheckpoint, CancellationToken, ValueTask>? BornCheckpoint { get; init; }
+
     internal async ValueTask ReplayAsync(Guid operationId, CancellationToken cancellationToken)
     {
         // Permission replay owns its actor turn and execution scope. Do not nest either.
@@ -38,7 +40,8 @@ internal sealed class MirrorPulseRootLabelCancellationRecoveryCoordinator(CloudF
             throw new InvalidOperationException("Cancellation recovery requires its original local lifecycle.");
         router.RefreshLocalCommandLifecycleRegistration(root);
         var owner = new MirrorPulseNamespaceBornRootLabelRecoveryOwner(operationId, plan.Owner);
-        var recovery = new MirrorPulseNamespaceBornMemberRecoveryCoordinator(fileSystem, catalog, router, execution, actor, scheduler, permissions);
+        var recovery = new MirrorPulseNamespaceBornMemberRecoveryCoordinator(fileSystem, catalog, router, execution, actor, scheduler, permissions)
+        { Checkpoint = BornCheckpoint };
         int settled = 0;
         foreach (Guid memberId in plan.BornMembers)
         {

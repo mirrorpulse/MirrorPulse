@@ -6,7 +6,7 @@ using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.CloudFiles.CfSharp;
 
-internal enum MirrorPulseNamespaceBornMemberRecoveryCheckpoint { AfterActionPrepared, AfterScopeDrained, AfterProtectionReadback, AfterCompletionRecorded }
+internal enum MirrorPulseNamespaceBornMemberRecoveryCheckpoint { AfterActionPrepared, AfterScopeDrained, AfterProtectionReadback, AfterCompletionRecorded, BeforeProtectedCallbackReturns }
 
 public sealed record MirrorPulseNamespaceBornMemberRecoveryResult(Guid ActionId,
     MirrorPulseNamespaceBornMemberRecoveryCompletion? Completion, CloudProtectedLocalOperationResult? Receipt,
@@ -139,6 +139,7 @@ public sealed class MirrorPulseNamespaceBornMemberRecoveryCoordinator(CloudFileS
                     var after = await lease.InspectAsync(scopeToken).ConfigureAwait(false); RequireObject(member, child.Location, after);
                     if (!MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(target, after.Dacl))
                         throw new InvalidDataException("Born recovery did not retain the admitted inherited descriptor.");
+                    if (Checkpoint is not null) await Checkpoint(MirrorPulseNamespaceBornMemberRecoveryCheckpoint.BeforeProtectedCallbackReturns, scopeToken).ConfigureAwait(false);
                 }, permissionToken), stop).ConfigureAwait(false);
             Progress?.Invoke("NamespaceBornRecoveryScopeCompleted");
             if (receipt.Outcome != CloudProtectedLocalOperationOutcome.Completed || !receipt.Drained)
