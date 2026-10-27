@@ -110,8 +110,10 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                 }
             }
 
+            using (SqliteTransaction initialSchema = connection.BeginTransaction())
             await using (SqliteCommand schema = connection.CreateCommand())
             {
+                schema.Transaction = initialSchema;
                 schema.CommandText = """
                     CREATE TABLE IF NOT EXISTS full_rescan_checkpoint (
                         singleton INTEGER PRIMARY KEY CHECK (singleton=1),
@@ -375,6 +377,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                     );
                     """;
                 await schema.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                initialSchema.Commit();
             }
 
             await using (SqliteCommand column = connection.CreateCommand())
