@@ -601,7 +601,13 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
         CancellationToken cancellationToken)
     {
         if (arguments.OperationId == Guid.Empty) throw new ArgumentException("The original Label operation is required.", nameof(arguments));
-        var result = await _session.ExecuteManagedRootRenameAsync(arguments.OperationId, cancellationToken).ConfigureAwait(false);
+        var result = await MirrorPulseRootLabelExecutionFailureDiagnostics.RunAsync(arguments.OperationId,
+            () => _session.ExecuteManagedRootRenameAsync(arguments.OperationId, cancellationToken),
+            async entry =>
+            {
+                using var log = new LocalRollingLogWriter(Path.Combine(_paths.DataRootPath, "logs", "root-labels"));
+                await log.WriteAsync(entry, CancellationToken.None).ConfigureAwait(false);
+            }).ConfigureAwait(false);
         return new(result.Intent.OperationId, result.Intent.RootId.ToString(), result.Intent.Phase.ToString(),
             result.Intent.SourceName, result.Intent.TargetName, result.CurrentDirectoryName, result.MemberCount,
             result.CurrentTreeAudited, result.NamespaceReady);

@@ -1453,13 +1453,13 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                 ?? throw new InvalidOperationException("The original Label root is no longer configured.");
             MirrorPulseManagedRootRenameExecution result;
             // Do not own instance/library serialization while earlier work drains.
-            await using (var drained = await namespaceWork.WaitForRecoveryAsync([root.RootId], stop.Token).ConfigureAwait(false))
+            await using (var drained = await MirrorPulseRootLabelExecutionFailureDiagnostics.AtStageAsync(MirrorPulseRootLabelExecutionStage.RootWorkDrain, () => namespaceWork.WaitForRecoveryAsync([root.RootId], stop.Token)).ConfigureAwait(false))
             {
-                result = await WithInstanceLibraryAsync(root.InstanceId, async token =>
+                result = await MirrorPulseRootLabelExecutionFailureDiagnostics.AtStageAsync(MirrorPulseRootLabelExecutionStage.InstanceLibrary, () => WithInstanceLibraryAsync(root.InstanceId, async token =>
                 {
                     var moves = new MirrorPulseNamespaceMemberMoveCoordinator(fileSystem, state, catalog, router, _namespaceExecution, _namespaceActor);
-                    _ = await moves.PrepareRootLabelAsync(operationId, token).ConfigureAwait(false);
-                    _ = await moves.ExecuteRootLabelAsync(operationId, token).ConfigureAwait(false);
+                    _ = await MirrorPulseRootLabelExecutionFailureDiagnostics.AtStageAsync(MirrorPulseRootLabelExecutionStage.SubtreePreparation, () => moves.PrepareRootLabelAsync(operationId, token)).ConfigureAwait(false);
+                    _ = await MirrorPulseRootLabelExecutionFailureDiagnostics.AtStageAsync(MirrorPulseRootLabelExecutionStage.OriginalExecution, () => moves.ExecuteRootLabelAsync(operationId, token)).ConfigureAwait(false);
                     var completed = await catalog.ReadManagedRootRenameHistoryAsync(operationId, token).ConfigureAwait(false)
                         ?? throw new InvalidDataException("Root execution lost its original Label receipt.");
                     var subtree = await catalog.ReadNamespaceDirectoryMoveCompletionAsync(operationId, token).ConfigureAwait(false)
@@ -1469,21 +1469,25 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                     var member = await catalog.ReadNamespaceMemberByBindingAsync(anchor.Original.LocalObject, token).ConfigureAwait(false)
                         ?? throw new InvalidDataException("Root execution lost its current registered sync-root anchor.");
                     string currentName = string.Empty;
-                    await new MirrorPulseNamespaceCurrentTreeAuditCoordinator(fileSystem, catalog, router, _namespaceExecution, _namespaceActor, _permissions)
-                        .AuditRetainedRootAsync(member.MemberId, anchor, root.RootId, (audit, _) =>
-                        {
-                            _namespaceActor.AssertAccess();
-                            var current = router.FindRegistration(root.RootId) ?? throw new InvalidOperationException("The executed root lost its current route.");
-                            if (_startupProtection != anchor || audit.Inventory.FencedRoots.Count != 0 || audit.RoleSid != _namespaceExecution.RoleSid.Value)
-                                throw new InvalidOperationException("Executed-root readmission requires its fresh current unfenced audit.");
-                            currentName = current.DirectoryName;
-                            if (current.State == RootRegistrationState.Active) drained.CompleteAfterFreshAudit();
-                            return Task.CompletedTask;
-                        }, token).ConfigureAwait(false);
+                    _ = await MirrorPulseRootLabelExecutionFailureDiagnostics.AtStageAsync(MirrorPulseRootLabelExecutionStage.CurrentTreeAudit, async () =>
+                    {
+                        await new MirrorPulseNamespaceCurrentTreeAuditCoordinator(fileSystem, catalog, router, _namespaceExecution, _namespaceActor, _permissions)
+                            .AuditRetainedRootAsync(member.MemberId, anchor, root.RootId, (audit, _) =>
+                            {
+                                _namespaceActor.AssertAccess();
+                                var current = router.FindRegistration(root.RootId) ?? throw new InvalidOperationException("The executed root lost its current route.");
+                                if (_startupProtection != anchor || audit.Inventory.FencedRoots.Count != 0 || audit.RoleSid != _namespaceExecution.RoleSid.Value)
+                                    throw new InvalidOperationException("Executed-root readmission requires its fresh current unfenced audit.");
+                                currentName = current.DirectoryName;
+                                if (current.State == RootRegistrationState.Active) drained.CompleteAfterFreshAudit();
+                                return Task.CompletedTask;
+                            }, token).ConfigureAwait(false);
+                        return true;
+                    }).ConfigureAwait(false);
                     // Notification acceptance belongs to the ordinary pump after this
                     // work scope exits. Waiting for its ACK here would drain ourselves.
                     return new MirrorPulseManagedRootRenameExecution(completed.Intent, currentName, subtree.Entries.Count, true, false);
-                }, stop.Token).ConfigureAwait(false);
+                }, stop.Token)).ConfigureAwait(false);
             }
             return result with { NamespaceReady = namespaceWork.IsAdmitted(root.RootId) };
         }
