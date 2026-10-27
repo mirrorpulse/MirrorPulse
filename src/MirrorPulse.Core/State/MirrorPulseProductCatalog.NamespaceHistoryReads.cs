@@ -20,6 +20,7 @@ public sealed partial class MirrorPulseProductCatalog
         internal NamespaceHistoryCache<MirrorPulseNamespacePermissionBaseline> PermissionBaselines { get; } = new();
         internal NamespaceHistoryCache<MirrorPulseNamespaceMemberRegistration> MemberRegistrations { get; } = new();
         internal NamespaceHistoryCache<MirrorPulseNamespaceBirthProtection> UnlocatedBirthProtections { get; } = new();
+        internal NamespaceHistoryCache<(Guid MemberId, Guid OperationId), MirrorPulseNamespaceMemberPosition> PositionRows { get; } = new();
         internal NamespaceHistoryCache<MirrorPulseNamespaceBirthProtection> LocatedBirthGraphs { get; } = new();
         internal NamespaceHistoryCache<MirrorPulseNamespaceMemberMoveIntent> Moves { get; } = new();
         internal NamespaceHistorySet MoveChains { get; } = new();
@@ -31,20 +32,22 @@ public sealed partial class MirrorPulseProductCatalog
     private sealed record NamespaceDirectoryHistoryGraph(MirrorPulseNamespaceDirectoryMoveCompletion Completion,
         MirrorPulseNamespaceDirectoryMoveSnapshot Snapshot, IReadOnlyDictionary<Guid, int> MemberIndexes);
 
-    private sealed class NamespaceHistoryCache<T>
+    private sealed class NamespaceHistoryCache<T> : NamespaceHistoryCache<Guid, T> { }
+
+    private class NamespaceHistoryCache<TKey, T> where TKey : notnull
     {
         private const int Capacity = 16;
-        private readonly Dictionary<Guid, T> _entries = new();
+        private readonly Dictionary<TKey, T> _entries = new();
         internal int Count => _entries.Count;
 
-        internal bool TryGetValue(Guid id, [MaybeNullWhen(false)] out T value) => _entries.TryGetValue(id, out value);
+        internal bool TryGetValue(TKey id, [MaybeNullWhen(false)] out T value) => _entries.TryGetValue(id, out value);
 
-        internal void Add(Guid id, T value)
+        internal void Add(TKey id, T value)
         {
             if (_entries.Count < Capacity || _entries.ContainsKey(id)) _entries.Add(id, value);
         }
 
-        internal T this[Guid id]
+        internal T this[TKey id]
         {
             set
             {
@@ -52,7 +55,7 @@ public sealed partial class MirrorPulseProductCatalog
             }
         }
 
-        internal bool Remove(Guid id) => _entries.Remove(id);
+        internal bool Remove(TKey id) => _entries.Remove(id);
     }
 
     private sealed class NamespaceHistorySet

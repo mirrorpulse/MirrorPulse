@@ -176,6 +176,9 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task<MirrorPulseNamespaceMemberPosition?> ReadNamespaceMemberPositionRowAsync(Guid memberId,
         Guid operationId, SqliteTransaction transaction, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
+        var reads = _namespaceHistoryReads.GetOrCreateValue(transaction);
+        if (reads.PositionRows.TryGetValue((memberId, operationId), out var retained)) return retained;
         await using SqliteCommand query = _connection.CreateCommand();
         query.Transaction = transaction;
         query.CommandText = "SELECT member_id,operation_id,previous_operation_id,payload,fingerprint FROM namespace_member_positions WHERE member_id=$member AND operation_id=$id;";
@@ -189,6 +192,9 @@ public sealed partial class MirrorPulseProductCatalog
             reader.GetString(1) != operationId.ToString("D") ||
             (reader.IsDBNull(2) ? null : reader.GetString(2)) != position.PreviousPositionOperationId?.ToString("D"))
             throw new InvalidDataException("The member position indexes disagree with the retained fact.");
+        // Retain only a canonical immutable row under its complete composite key.
+        // Missing rows, current heads and subsequent reference validation stay live.
+        reads.PositionRows.Add((memberId, operationId), position);
         return position;
     }
 
