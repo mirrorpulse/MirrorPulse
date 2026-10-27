@@ -1526,9 +1526,11 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                         await catalog.ReadManagedRootNamesAsync(token).ConfigureAwait(false));
                     var anchorMember = await catalog.ReadNamespaceMemberByBindingAsync(startupAnchor.Original.LocalObject, token).ConfigureAwait(false)
                         ?? throw new InvalidDataException("Cancellation lost its current registered sync-root anchor.");
-                    var inventory = await catalog.ReadNamespaceCurrentRootSnapshotAsync(anchorMember.MemberId, root.RootId, token).ConfigureAwait(false);
+                    // Original cancellation settles its own owner. Current-role recovery
+                    // must inspect durable fences before requiring an already recovered tree.
+                    var fences = await catalog.ReadNamespaceDispatchFencedRootsAsync(token).ConfigureAwait(false);
                     var current = router.FindRegistration(root.RootId) ?? throw new InvalidOperationException("The cancelled root lost its current route.");
-                    if (inventory.FencedRoots.Count != 0)
+                    if (fences.Contains(root.RootId))
                         return new MirrorPulseManagedRootRenameCancellation(cancelled.Intent, cancellation.VerifiedAt,
                             current.DirectoryName, cancellation.Members.Count, false, false);
                     // Historical cancellation grants no current native authority. Its guards

@@ -38,3 +38,19 @@ descendant epoch and lost reservation after a valid admission and require final
 refusal. These are synthetic catalog facts. The original six-case native
 producer and independently restarted signed Host evidence remain required;
 managed results alone do not close P078 or S06.
+
+Startup pending discovery retains an original unsealed Label as its own recovery
+reference. It must not reserve a new initializer just because no member-move seal
+exists. A seal already represented as the same original Move remains one reference;
+terminal history cannot hide a newer pending Label. Existing reference values,
+ordering, bounded discovery and ownership validation remain in force.
+
+After cancellation, durable selected-root fence metadata determines whether a
+separate current-role recovery may begin. The preflight does not require an
+already recovered current-role inventory. Recovery still holds its original
+ownership and must pass the complete fresh native audit before Active readmission;
+Disabled remains closed. Historical cancellation cannot clear a later fence.
+
+Legacy partial initialization and mixed per-object role recovery require their
+own retained-owner and native acceptance. The discovery prevention and metadata
+preflight alone do not establish that remaining boundary.
