@@ -122,6 +122,7 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task RequireBornMemberRecoveryHistoryReferencesAsync(MirrorPulseNamespaceBornMemberRecoveryAction action,
         SqliteTransaction transaction, CancellationToken token)
     {
+        await ValidateBornRootLabelRecoveryHistoryAsync(action, transaction, token).ConfigureAwait(false);
         var child = await ReadNamespaceMemberCoreAsync(action.Child.Member.MemberId, transaction, token).ConfigureAwait(false);
         var parent = await ReadNamespaceMemberCoreAsync(action.Parent.Context.Member.MemberId, transaction, token).ConfigureAwait(false);
         if (child is null || parent is null || child != action.Child.Member || parent != action.Parent.Context.Member ||

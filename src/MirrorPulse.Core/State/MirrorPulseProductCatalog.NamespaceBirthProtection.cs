@@ -46,7 +46,7 @@ public sealed partial class MirrorPulseProductCatalog
 
     private async Task<MirrorPulseNamespaceBirthProtection> RecordNamespaceBirthProtectionCoreAsync(
         MirrorPulseNamespaceBirthProtection protection, SqliteTransaction transaction, CancellationToken cancellationToken, Guid? allowedReplacement = null,
-        Guid? allowedBornRecoveryInitialization = null)
+        Guid? allowedBornRecoveryInitialization = null, Guid? allowedRootRename = null)
     {
         var replay = await ReadNamespaceBirthProtectionCoreAsync(protection.ProtectionId, transaction, cancellationToken).ConfigureAwait(false);
         if (replay is not null)
@@ -68,7 +68,8 @@ public sealed partial class MirrorPulseProductCatalog
             if (latest is null || protection.Verification.ObservedAt <= latest.Verification.ObservedAt)
                 throw new InvalidOperationException("Located birth protection requires an earlier retained protection epoch.");
             await RequireNamespaceMoveRootUnfencedAsync(birth.RootId, null, transaction, cancellationToken,
-                allowedReplacement: allowedReplacement, allowedBornRecoveryInitialization: allowedBornRecoveryInitialization).ConfigureAwait(false);
+                allowedReplacement: allowedReplacement, allowedBornRecoveryInitialization: allowedBornRecoveryInitialization,
+                allowedRootRename: allowedRootRename).ConfigureAwait(false);
             await ValidateNamespaceLocatedBirthCurrentAsync(protection, transaction, cancellationToken, admission: true).ConfigureAwait(false);
             var lineage = await ReadNamespaceMemberProtectionLineageCoreAsync(protection.Placement.ParentMemberId, transaction, cancellationToken,
                 requireUnfenced: allowedReplacement is null && allowedBornRecoveryInitialization is null).ConfigureAwait(false);

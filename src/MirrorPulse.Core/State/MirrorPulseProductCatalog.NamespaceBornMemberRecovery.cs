@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text.Json.Serialization;
 using Microsoft.Data.Sqlite;
 
 namespace MirrorPulse.Core.State;
@@ -7,7 +8,12 @@ namespace MirrorPulse.Core.State;
 /// <remarks>Descriptors are owned targets, not proof of a native write. First birth facts and verified protection remain separate.</remarks>
 public sealed record MirrorPulseNamespaceBornMemberRecoveryAction(int Version, Guid ActionId, Guid InitializationOperationId,
     Guid? PreviousActionId, MirrorPulseNamespaceMemberRecoveryContext Child,
-    MirrorPulseNamespaceMemberProtectionSnapshot Parent, string TargetDacl, DateTimeOffset PreparedAt);
+    MirrorPulseNamespaceMemberProtectionSnapshot Parent, string TargetDacl, DateTimeOffset PreparedAt)
+{
+    /// <summary>The exact original unsealed Label and initializer for a version 2 action.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public MirrorPulseNamespaceBornRootLabelRecoveryOwner? RootLabelRecoveryOwner { get; init; }
+}
 
 /// <summary>References verified existing birth protection after a drained native scope; no root fence is released.</summary>
 public sealed record MirrorPulseNamespaceBornMemberRecoveryCompletion(int Version, Guid ActionId, Guid ProtectionId,
@@ -113,14 +119,16 @@ public sealed partial class MirrorPulseProductCatalog
         var parent = await ReadNamespaceMemberProtectionSnapshotCoreAsync(action.Parent.Context.Member.MemberId, transaction, token).ConfigureAwait(false);
         if (!SameNamespaceReplacementPayload(current, action.Child) || parent is null || !SameNamespaceReplacementPayload(parent, action.Parent))
             throw new InvalidOperationException("Born recovery lost its admitted current object, position, identity or protected parent.");
+        await ValidateBornRootLabelRecoveryCurrentAsync(action, transaction, token).ConfigureAwait(false);
         await RequireNamespaceMoveRootUnfencedAsync(action.Child.Member.RootId!.Value, null, transaction, token,
-            allowedBornRecoveryInitialization: action.InitializationOperationId).ConfigureAwait(false);
+            allowedBornRecoveryInitialization: action.InitializationOperationId,
+            allowedRootRename: action.RootLabelRecoveryOwner?.RootLabelOperationId).ConfigureAwait(false);
     }
 
     private static void ValidateBornMemberRecoveryAction(MirrorPulseNamespaceBornMemberRecoveryAction action)
     {
         ArgumentNullException.ThrowIfNull(action); ArgumentNullException.ThrowIfNull(action.Child); ArgumentNullException.ThrowIfNull(action.Parent);
-        if (action.Version != 1 || action.ActionId == Guid.Empty || action.InitializationOperationId == Guid.Empty ||
+        if (action.Version is not (1 or 2) || action.ActionId == Guid.Empty || action.InitializationOperationId == Guid.Empty ||
             action.ActionId == action.InitializationOperationId || action.PreviousActionId == Guid.Empty || action.PreviousActionId == action.ActionId ||
             action.Child.Member.Origin != MirrorPulseNamespaceMemberOrigin.ProtectedBirth || action.Child.BirthProtection is null ||
             action.Child.BirthObservation is null || action.Child.Original is not null || action.Child.Permission is not null ||
@@ -130,6 +138,7 @@ public sealed partial class MirrorPulseProductCatalog
             action.PreparedAt <= action.Child.Member.RegisteredAt || action.PreparedAt <= action.Child.BirthProtection.Verification.ObservedAt ||
             action.PreparedAt <= action.Parent.Context.Protection.VerifiedAt || NamespaceReplacementPayload(action).Length > 524_288)
             throw new ArgumentException("Born recovery requires complete registered provenance, current parent and ordered before-write admission.", nameof(action));
+        ValidateBornRootLabelRecoveryOwner(action);
         ValidatePermissionDacl(action.TargetDacl);
     }
 

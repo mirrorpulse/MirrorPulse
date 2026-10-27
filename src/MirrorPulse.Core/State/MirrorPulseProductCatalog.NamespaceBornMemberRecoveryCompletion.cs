@@ -30,7 +30,8 @@ public sealed partial class MirrorPulseProductCatalog
             await RequireBornMemberRecoveryCurrentAsync(action, transaction, cancellationToken).ConfigureAwait(false);
             RequireBornMemberRecoveryProjection(action, protection, completion);
             await RecordNamespaceBirthProtectionCoreAsync(protection, transaction, cancellationToken,
-                allowedBornRecoveryInitialization: action.InitializationOperationId).ConfigureAwait(false);
+                allowedBornRecoveryInitialization: action.InitializationOperationId,
+                allowedRootRename: action.RootLabelRecoveryOwner?.RootLabelOperationId).ConfigureAwait(false);
             byte[] payload = NamespaceReplacementPayload(completion);
             await using var insert = _connection.CreateCommand(); insert.Transaction = transaction;
             insert.CommandText = "INSERT INTO namespace_born_member_recovery_completions(action_id,payload,fingerprint) VALUES($id,$payload,$hash);";
