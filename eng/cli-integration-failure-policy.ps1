@@ -42,7 +42,8 @@ function Write-CliFixtureFailure {
         $log = Join-Path $DataRoot $relative
         if (Test-Path -LiteralPath $log -PathType Leaf) {
             $name = $relative.Replace('/', '-')
-            Get-Content -LiteralPath $log -Tail 32 | Set-Content -LiteralPath (Join-Path $directory ($Phase.ToLowerInvariant()+'-'+$name)) -Encoding utf8
+            $tail = if ($relative -ceq 'logs/cloud-files/mirrorpulse.log') { 256 } else { 32 }
+            Get-Content -LiteralPath $log -Tail $tail | Set-Content -LiteralPath (Join-Path $directory ($Phase.ToLowerInvariant()+'-'+$name)) -Encoding utf8
         }
     }
 }
