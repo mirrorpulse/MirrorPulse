@@ -387,6 +387,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         private MirrorPulseManagedRootRenameService? _rootRenames;
         private MirrorPulseNamespaceAnchorProtection? _scopedAnchorProtection;
         private MirrorPulseNamespaceAnchorProtection? _startupProtection;
+        private CloudFileSystem? _startupProtectionOwner;
         private MirrorPulseRootLabelJournalRecovery? _rootLabelJournalRecovery;
         public IReadOnlyList<MirrorPulseNamespaceStartupRoot> NamespaceStartupResults { get; private set; } = [];
         public IReadOnlyList<MirrorPulseManagedRootRenameRestoreResult> RootRenameRecoveryResults { get; private set; } = [];
@@ -696,6 +697,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             await ReopenLibraryForNamespaceRecoveryAsync(instances, token).ConfigureAwait(false);
         }
 
+        [SupportedOSPlatform("windows10.0.26100")]
         private async Task ReopenLibraryForNamespaceRecoveryAsync(IMirrorPulseInstanceScheduler instances, CancellationToken token)
         {
             // Application leases do not cover the native transfer and official projection
@@ -709,7 +711,46 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             fileSystem = new MirrorPulseCloudFileSystemBuilder(paths).WithStateStore(stateStoreDecorator?.Invoke(state) ?? state)
                 .WithContentProvider(provider).Build();
             await StartLibraryAsync(token).ConfigureAwait(false);
+            await RefreshStartupAnchorForCurrentLibraryAsync(token).ConfigureAwait(false);
             await StartLibraryServicesAsync(token, instances).ConfigureAwait(false);
+        }
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        private async Task RefreshStartupAnchorForCurrentLibraryAsync(CancellationToken token)
+        {
+            if (_startupProtection is not { } prior) return;
+            if (catalog is null || router is null || _namespaceExecution is null || _namespaceActor is null || _permissions is null)
+                throw new InvalidOperationException("The protected startup anchor lost its Host ownership boundary.");
+            var current = await new MirrorPulseNamespaceAnchorProtectionCoordinator(fileSystem, catalog, router,
+                _namespaceExecution, _namespaceActor, _permissions).ProtectAsync(token).ConfigureAwait(false);
+            bool transferred = false;
+            try
+            {
+                if (current.Original != prior.Original || current.Change.Intent.RoleSid != _namespaceExecution.RoleSid.Value ||
+                    current.Result.Permission?.Outcome is not (MirrorPulseNamespacePermissionOutcome.Verified or MirrorPulseNamespacePermissionOutcome.AlreadyVerified) ||
+                    current.Result.Receipt is not { Outcome: CloudProtectedLocalOperationOutcome.Completed, Drained: true })
+                    throw new InvalidDataException("Library recovery must retain the original anchor and a fresh drained protection check under this Host role.");
+                // The old native handles still protect the anchor until the new owner's
+                // actual guard has been verified. No tree admission or ACK is granted.
+                _startupProtection = current; _startupProtectionOwner = fileSystem; transferred = true;
+                var scoped = _scopedAnchorProtection; _scopedAnchorProtection = null;
+                var initialized = _initializationProtection; _initializationProtection = null;
+                try { if (scoped is not null) await scoped.DisposeAsync().ConfigureAwait(false); }
+                finally
+                {
+                    try { if (initialized is not null) await initialized.DisposeAsync().ConfigureAwait(false); }
+                    finally { await prior.DisposeAsync().ConfigureAwait(false); }
+                }
+            }
+            finally { if (!transferred) await current.DisposeAsync().ConfigureAwait(false); }
+        }
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        private MirrorPulseNamespaceAnchorProtection RequireCurrentStartupAnchor()
+        {
+            if (_startupProtection is not { } guard || !ReferenceEquals(_startupProtectionOwner, fileSystem))
+                throw new InvalidOperationException("The current library requires its own verified startup anchor before namespace authority.");
+            return guard;
         }
 
         private async ValueTask<T> WithCurrentLibraryAsync<T>(Func<CancellationToken, ValueTask<T>> operation, CancellationToken token)
@@ -1257,6 +1298,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             var started = await new MirrorPulseNamespaceStartupCoordinator(fileSystem, catalog!, router!, _namespaceExecution!,
                 _namespaceActor!, instances, _permissions!, namespaceWork!, NoteStartup, RecoverRemoteDeleteBeforeAuditAsync).StartAsync(token).ConfigureAwait(false);
             _startupProtection = started.Guard; NamespaceStartupResults = started.Roots;
+            _startupProtectionOwner = fileSystem;
             return true;
         }
 
@@ -1399,7 +1441,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             CancellationToken requestCancellation)
         {
             if (router is null || catalog is null || namespaceWork is null || _namespaceExecution is null ||
-                _namespaceActor is null || _permissions is null || _startupProtection is not { } anchor)
+                _namespaceActor is null || _permissions is null || _startupProtection is null)
                 throw new NotSupportedException("Managed root rename requires the current protected Host namespace boundary.");
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
             if (rootId.Value == Guid.Empty) throw new ArgumentException("A stable root ID is required.", nameof(rootId));
@@ -1415,6 +1457,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                 if (await catalog.ReadManagedRootRenameAsync(rootId, token).ConfigureAwait(false) is { IsPending: true })
                     return await MirrorPulseRootLabelFailureDiagnostics.AtPreparationStageAsync(MirrorPulseRootLabelPreparationStage.OriginalOwnership,
                         () => coordinator.PrepareAsync(rootId, label, token)).ConfigureAwait(false);
+                var anchor = RequireCurrentStartupAnchor();
                 var anchorMember = await catalog.ReadNamespaceMemberByBindingAsync(anchor.Original.LocalObject, token).ConfigureAwait(false)
                     ?? throw new InvalidDataException("Root preparation lost its live sync-root anchor.");
                 var audit = await MirrorPulseRootLabelFailureDiagnostics.AtPreparationStageAsync(MirrorPulseRootLabelPreparationStage.CurrentTreeAudit,
@@ -1441,7 +1484,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         {
             if (operationId == Guid.Empty) throw new ArgumentException("The original Label operation is required.", nameof(operationId));
             if (router is null || catalog is null || namespaceWork is null || _namespaceExecution is null ||
-                _namespaceActor is null || _permissions is null || _startupProtection is not { } anchor)
+                _namespaceActor is null || _permissions is null || _startupProtection is null)
                 throw new NotSupportedException("Root execution requires the current protected Host namespace boundary.");
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
             using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _admissionShutdown.Token);
@@ -1457,6 +1500,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             {
                 result = await MirrorPulseRootLabelExecutionFailureDiagnostics.AtStageAsync(MirrorPulseRootLabelExecutionStage.InstanceLibrary, () => WithInstanceLibraryAsync(root.InstanceId, async token =>
                 {
+                    var anchor = RequireCurrentStartupAnchor();
                     var moves = new MirrorPulseNamespaceMemberMoveCoordinator(fileSystem, state, catalog, router, _namespaceExecution, _namespaceActor);
                     _ = await MirrorPulseRootLabelExecutionFailureDiagnostics.AtStageAsync(MirrorPulseRootLabelExecutionStage.SubtreePreparation, () => moves.PrepareRootLabelAsync(operationId, token)).ConfigureAwait(false);
                     _ = await MirrorPulseRootLabelExecutionFailureDiagnostics.AtStageAsync(MirrorPulseRootLabelExecutionStage.OriginalExecution, () => moves.ExecuteRootLabelAsync(operationId, token)).ConfigureAwait(false);
@@ -1498,7 +1542,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         {
             if (operationId == Guid.Empty) throw new ArgumentException("The original Label operation is required.", nameof(operationId));
             if (router is null || catalog is null || namespaceWork is null || _namespaceExecution is null ||
-                _namespaceActor is null || _permissions is null || _startupProtection is not { } startupAnchor)
+                _namespaceActor is null || _permissions is null || _startupProtection is null)
                 throw new NotSupportedException("Root cancellation requires the current protected Host namespace boundary.");
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
             using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _admissionShutdown.Token);
@@ -1511,6 +1555,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             {
                 result = await WithAdmittedInstanceLibraryAsync(root.InstanceId, async (instances, token) =>
                 {
+                    var startupAnchor = RequireCurrentStartupAnchor();
                     var moves = new MirrorPulseNamespaceMemberMoveCoordinator(fileSystem, state, catalog, router, _namespaceExecution, _namespaceActor);
                     // Unsealed public preparations have their own guarded cancellation
                     // evidence. Never manufacture a move admission just to cancel one.
