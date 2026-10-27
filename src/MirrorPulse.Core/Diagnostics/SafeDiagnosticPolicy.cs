@@ -153,6 +153,13 @@ public static class SafeDiagnosticPolicy
                     "NamespaceAnchorInitializationBegin" or "NamespaceAnchorInitializationCompleted" or "NamespaceAnchorProtectionBegin" or "NamespaceAnchorProtectionCompleted" or
                     "NamespaceAnchorRegistrationBegin" or "NamespaceAnchorRegistrationCompleted" or "NamespaceEmptyInventoryRecoveryBegin" or "NamespaceEmptyInventoryRecoveryCompleted" or
                     "NamespaceRootBegin" or "NamespaceRootCompleted" or "NamespaceOriginalMemberBegin" or "NamespaceOriginalMemberCompleted" or
+                    "NamespaceBornRecoveryHistoryBegin" or "NamespaceBornRecoveryHistoryCompleted" or
+                    "NamespaceBornRecoveryContextBegin" or "NamespaceBornRecoveryContextCompleted" or
+                    "NamespaceBornRecoveryGuardsBegin" or "NamespaceBornRecoveryGuardsCompleted" or
+                    "NamespaceBornRecoveryActionBegin" or "NamespaceBornRecoveryActionCompleted" or
+                    "NamespaceBornRecoveryScopeBegin" or "NamespaceBornRecoveryScopeCompleted" or
+                    "NamespaceBornRecoveryReadbackBegin" or "NamespaceBornRecoveryReadbackCompleted" or
+                    "NamespaceBornRecoveryCommitBegin" or "NamespaceBornRecoveryCommitCompleted" or
                     "NamespaceBornMemberBegin" or "NamespaceBornMemberCompleted" or "NamespaceAuditBegin" or "NamespaceAuditCompleted" or
                     "RetainedRemoteRecoveryBegin" or "RetainedRemoteRecoveryCompleted" or "Started" ? value : null,
                 "workerProcessExitCode" or "workerNativeErrorCode" => int.TryParse(value, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out int exitCode)

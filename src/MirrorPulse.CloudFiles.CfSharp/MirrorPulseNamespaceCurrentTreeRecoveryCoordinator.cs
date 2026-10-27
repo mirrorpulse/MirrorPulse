@@ -65,7 +65,7 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
                 throw new InvalidDataException("Current recovery lost the registered original sync-root anchor.");
             var graph = await catalog.ReadNamespaceMemberTreeAsync(anchorMember.MemberId, cancellationToken).ConfigureAwait(false);
             var originals = new MirrorPulseNamespaceOriginalMemberRecoveryCoordinator(fileSystem, catalog, router, execution, actor, scheduler, permissions);
-            var born = new MirrorPulseNamespaceBornMemberRecoveryCoordinator(fileSystem, catalog, router, execution, actor, scheduler, permissions);
+            var born = new MirrorPulseNamespaceBornMemberRecoveryCoordinator(fileSystem, catalog, router, execution, actor, scheduler, permissions) { Progress = Progress };
             foreach (var entry in graph.Where(entry => entry.MemberId != anchorMember.MemberId))
             {
                 cancellationToken.ThrowIfCancellationRequested();
