@@ -65,7 +65,8 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
     {
         var current = await _catalog.ReadRootLabelCancellationTreeAsync(original.OperationId, token).ConfigureAwait(false);
         var byId = current.Members.ToDictionary(snapshot => snapshot.Context.Member.MemberId);
-        if (current.RootMemberId != original.RootMemberId || current.Anchor != original.Anchor || byId.Count != original.Members.Count ||
+        if (current.RecoveryOwner != original.RecoveryOwner || current.RootMemberId != original.RootMemberId ||
+            current.Anchor != original.Anchor || byId.Count != original.Members.Count ||
             original.Members.Any(snapshot => !byId.TryGetValue(snapshot.Context.Member.MemberId, out var latest) || latest != snapshot))
             throw new InvalidOperationException("The complete cancellation inventory changed during guarded public reconciliation.");
         foreach (var item in objects.Objects)

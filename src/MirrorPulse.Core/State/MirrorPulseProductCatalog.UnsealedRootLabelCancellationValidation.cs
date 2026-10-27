@@ -11,7 +11,9 @@ public sealed partial class MirrorPulseProductCatalog
         ArgumentNullException.ThrowIfNull(value.Observation); ArgumentNullException.ThrowIfNull(value.Inventory);
         ValidateRootLabelCancellation(value.Observation);
         var observation = value.Observation; var inventory = value.Inventory;
-        if (value.Version != 1 || value.RootMemberId == Guid.Empty || inventory.Version != 1 ||
+        if (value.Version is not (1 or 2) ||
+            (value.Version == 1 ? value.RecoveryOwner is not null : value.RecoveryOwner is null) ||
+            value.RootMemberId == Guid.Empty || inventory.Version != 1 ||
             inventory.OperationId != observation.OperationId || inventory.PublicEvidenceSha256 != observation.PublicEvidenceSha256 ||
             inventory.Entries is null || inventory.Entries.Count != observation.Members.Count)
             throw new ArgumentException("Unsealed cancellation requires its complete original public preparation and guarded inventory.");
@@ -53,7 +55,14 @@ public sealed partial class MirrorPulseProductCatalog
         bool current, SqliteTransaction transaction, CancellationToken token)
     {
         var observation = cancellation.Observation;
-        if (current) _ = await ReadRootLabelCancellationTreeCoreAsync(observation.OperationId, transaction, token).ConfigureAwait(false);
+        if (current)
+        {
+            var inventory = await ReadRootLabelCancellationTreeCoreAsync(observation.OperationId, transaction, token).ConfigureAwait(false);
+            if (inventory.RecoveryOwner != cancellation.RecoveryOwner)
+                throw new InvalidOperationException("Unsealed cancellation cannot replace its original initialization owner.");
+        }
+        if (cancellation.RecoveryOwner is { } owner)
+            await ValidateRootCancellationRecoveryOwnerCoreAsync(owner, observation.RootId, current, transaction, token).ConfigureAwait(false);
         var history = await ReadManagedRootRenameHistoryCoreAsync(observation.OperationId, token, transaction).ConfigureAwait(false);
         var rootEntry = cancellation.Inventory.Entries.Single(entry => entry.MemberId == cancellation.RootMemberId);
         if (history.Proof is not { DirectoryMoveEvidence: { } evidence } proof || history.Observation is not null ||

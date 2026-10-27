@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Data.Sqlite;
 
 namespace MirrorPulse.Core.State;
@@ -7,7 +8,12 @@ namespace MirrorPulse.Core.State;
 /// <summary>The complete guarded cancellation of a public preparation that never acquired a namespace move.</summary>
 /// <remarks>The retained inventory is cancellation evidence, not a fabricated move admission or native authority.</remarks>
 public sealed record MirrorPulseRootLabelUnsealedCancellation(int Version, Guid RootMemberId,
-    MirrorPulseRootLabelCancellation Observation, MirrorPulseNamespaceDirectoryMoveSnapshot Inventory);
+    MirrorPulseRootLabelCancellation Observation, MirrorPulseNamespaceDirectoryMoveSnapshot Inventory)
+{
+    /// <summary>The exact original initializer retained by a version 2 cancellation.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public MirrorPulseRootLabelCancellationRecoveryOwner? RecoveryOwner { get; init; }
+}
 
 public sealed partial class MirrorPulseProductCatalog
 {

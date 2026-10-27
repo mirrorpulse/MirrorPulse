@@ -85,8 +85,9 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
             var observation = new MirrorPulseRootLabelCancellation(1, operationId, root.RootId, hash, publicAt, DateTimeOffset.UtcNow,
                 false, false, false, 0, anchorMember, anchorProof.ProtectionId,
                 new(finalAnchor.LocalObject, finalAnchor.OwnerSid, finalAnchor.Dacl, finalAnchor.ObservedAt), observations.AsReadOnly());
-            cancelled = await _catalog.CancelUnsealedRootLabelAsync(new(1, member.MemberId, observation,
-                new(1, operationId, hash, entries)), token).ConfigureAwait(false);
+            cancelled = await _catalog.CancelUnsealedRootLabelAsync(new(cancellationTree.RecoveryOwner is null ? 1 : 2, member.MemberId, observation,
+                new(1, operationId, hash, entries))
+            { RecoveryOwner = cancellationTree.RecoveryOwner }, token).ConfigureAwait(false);
         }).ConfigureAwait(false);
         return cancelled;
     }

@@ -6,7 +6,10 @@ namespace MirrorPulse.Core.State;
 /// <summary>A coherent metadata inventory scoped to one original prepared Label cancellation.</summary>
 /// <remarks>This is not current move, permission, byte, readiness or journal authority.</remarks>
 public sealed record MirrorPulseRootLabelCancellationTree(Guid OperationId, Guid RootMemberId,
-    MirrorPulseNamespaceMemberProtectionSnapshot Anchor, IReadOnlyList<MirrorPulseNamespaceMemberProtectionSnapshot> Members);
+    MirrorPulseNamespaceMemberProtectionSnapshot Anchor, IReadOnlyList<MirrorPulseNamespaceMemberProtectionSnapshot> Members)
+{
+    public MirrorPulseRootLabelCancellationRecoveryOwner? RecoveryOwner { get; init; }
+}
 
 public sealed partial class MirrorPulseProductCatalog
 {
@@ -45,6 +48,8 @@ public sealed partial class MirrorPulseProductCatalog
                 throw new InvalidOperationException("Cancellation metadata cannot replace its original sealed ownership or reservation.");
             await RequireUnstartedRootLabelCancellationNoProgressAsync(operationId, transaction, token).ConfigureAwait(false);
         }
+        var recoveryOwner = move is null
+            ? await ReadRootLabelCancellationRecoveryOwnerCoreAsync(operationId, transaction, token).ConfigureAwait(false) : null;
         await RequireNamespaceMoveRootUnfencedAsync(history.Intent.RootId, move?.OperationId, transaction, token,
             allowedRootRename: operationId).ConfigureAwait(false);
         await using var query = _connection.CreateCommand(); query.Transaction = transaction;
@@ -86,7 +91,7 @@ public sealed partial class MirrorPulseProductCatalog
         {
             var member = await ReadNamespaceMemberCoreAsync(entry.MemberId, transaction, token).ConfigureAwait(false)
                 ?? throw new InvalidDataException("The current cancellation tree lost a registered member.");
-            var snapshot = await ReadRootCancellationMemberSnapshotCoreAsync(member, transaction, token).ConfigureAwait(false);
+            var snapshot = await ReadRootCancellationMemberSnapshotCoreAsync(member, transaction, token, recoveryOwner).ConfigureAwait(false);
             var context = snapshot.Context;
             if (member.RootId != root.RootId || member.OwnerSid != root.OwnerSid || member.LocalObject != entry.LocalObject ||
                 member.IsDirectory != entry.IsDirectory || context.Location.ParentMemberId != entry.ParentMemberId ||
@@ -98,7 +103,8 @@ public sealed partial class MirrorPulseProductCatalog
                 if (parentId != anchorId || entry.Depth != 0 || context.Location.RelativePath != history.Intent.SourceName)
                     throw new InvalidOperationException("Only the original first-level root may cross the retained anchor role boundary.");
             }
-            else RequireNamespaceCurrentProtectionParent(context, parent);
+            else if (recoveryOwner is null) RequireNamespaceCurrentProtectionParent(context, parent);
+            else RequireRootCancellationRecoveryParent(context, parent);
             if (!contexts.TryAdd(member.MemberId, context)) throw new InvalidDataException("The cancellation inventory repeats a member.");
             members.Add(snapshot);
         }
@@ -119,11 +125,29 @@ public sealed partial class MirrorPulseProductCatalog
                     throw new InvalidOperationException("Cancellation metadata must retain all sealed descendant identity, position and protection epochs.");
             }
         }
-        return new(operationId, root.MemberId, anchor, members.AsReadOnly());
+        return new(operationId, root.MemberId, anchor, members.AsReadOnly()) { RecoveryOwner = recoveryOwner };
+    }
+
+    // Metadata only, scoped by the exact pending initializer above. Every
+    // object's own verified descriptor is inspected natively before cancellation.
+    // This does not authorize ordinary current-role work or release any fence.
+    private static void RequireRootCancellationRecoveryParent(MirrorPulseNamespaceMemberProtectionContext child,
+        MirrorPulseNamespaceMemberProtectionContext parent)
+    {
+        int separator = child.Location.RelativePath.LastIndexOf('/');
+        string parentPath = separator < 0 ? string.Empty : child.Location.RelativePath[..separator];
+        if (child.Location.ParentMemberId != parent.Member.MemberId || !parent.Member.IsDirectory ||
+            parentPath != parent.Location.RelativePath ||
+            parent.Member.RootId is { } parentRoot && parentRoot != child.Member.RootId ||
+            parent.Member.LocalObject.VolumeSerialNumber != child.Member.LocalObject.VolumeSerialNumber ||
+            parent.Member.LocalObject.SyncRootFileId != child.Member.LocalObject.SyncRootFileId ||
+            parent.Member.OwnerSid != child.Member.OwnerSid)
+            throw new InvalidOperationException("Cancellation recovery requires the actual committed direct parent and retained original object scope.");
     }
 
     private async Task<MirrorPulseNamespaceMemberProtectionSnapshot> ReadRootCancellationMemberSnapshotCoreAsync(
-        MirrorPulseNamespaceMemberRegistration member, SqliteTransaction transaction, CancellationToken token)
+        MirrorPulseNamespaceMemberRegistration member, SqliteTransaction transaction, CancellationToken token,
+        MirrorPulseRootLabelCancellationRecoveryOwner? recoveryOwner = null)
     {
         if (await ReadCompletedNamespaceRetirementForMemberCoreAsync(member.MemberId, transaction, token).ConfigureAwait(false))
             throw new FileNotFoundException("Cancellation metadata cannot adopt a retired member.");
@@ -133,7 +157,10 @@ public sealed partial class MirrorPulseProductCatalog
         if (member.Origin == MirrorPulseNamespaceMemberOrigin.ProtectedBirth)
         {
             var epoch = await ReadNamespaceBirthProtectionRowAsync(retained.Proof.ProtectionId, transaction, token).ConfigureAwait(false);
-            if (epoch?.Protection.Placement is not null)
+            // Historical lineage was validated by the retained context reader. A
+            // pending original initializer may have rotated this actual parent;
+            // its current committed position is still validated below.
+            if (epoch?.Protection.Placement is not null && recoveryOwner is null)
                 await ValidateNamespaceLocatedBirthCurrentAsync(epoch.Value.Protection, transaction, token).ConfigureAwait(false);
         }
         var position = await ValidateNamespaceContextPositionAsync(member, location, retained.Proof, retained.Verification,
