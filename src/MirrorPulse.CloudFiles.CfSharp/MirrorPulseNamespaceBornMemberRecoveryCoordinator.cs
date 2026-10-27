@@ -89,7 +89,9 @@ public sealed class MirrorPulseNamespaceBornMemberRecoveryCoordinator(CloudFileS
                 throw new InvalidDataException("The admitted born member or root layout changed before recovery.");
             var parent = await catalog.ReadNamespaceMemberProtectionSnapshotAsync(child.Location.ParentMemberId!.Value, stop).ConfigureAwait(false)
                 ?? throw new InvalidDataException("The born parent requires coherent recovery first.");
-            if (parent.Context.Protection.RoleSid != execution.RoleSid.Value || member.OwnerSid != execution.OwnerSid.Value)
+            if (owner is not null && await catalog.ReadRootLabelCancellationRecoveryOwnerAsync(owner.RootLabelOperationId, stop).ConfigureAwait(false) != owner.Initialization)
+                throw new InvalidOperationException("Born cancellation recovery lost its original Label and initializer witness.");
+            if (owner is null && parent.Context.Protection.RoleSid != execution.RoleSid.Value || member.OwnerSid != execution.OwnerSid.Value)
                 throw new InvalidOperationException("Born recovery requires the live parent role and original current-user owner.");
             string target = MirrorPulseWindowsNamespaceInheritance.CreateInheritedDacl(parent.Context.Verification.Dacl, member.IsDirectory);
             Progress?.Invoke("NamespaceBornRecoveryContextCompleted");
@@ -146,8 +148,11 @@ public sealed class MirrorPulseNamespaceBornMemberRecoveryCoordinator(CloudFileS
             if (Checkpoint is not null) await Checkpoint(MirrorPulseNamespaceBornMemberRecoveryCheckpoint.AfterScopeDrained, stop).ConfigureAwait(false);
             Progress?.Invoke("NamespaceBornRecoveryReadbackBegin");
             MirrorPulseNamespaceBirthProtectionVerifier.RequireUnchangedParent(parentBefore, await parentGuard.InspectAsync(stop).ConfigureAwait(false));
-            var observed = await MirrorPulseNamespaceBirthProtectionVerifier.InspectRegisteredAsync(catalog, actionId, memberId, item, parentItem,
-                router, actor, parent, stop).ConfigureAwait(false);
+            var observed = owner is null
+                ? await MirrorPulseNamespaceBirthProtectionVerifier.InspectRegisteredAsync(catalog, actionId, memberId, item, parentItem,
+                    router, actor, parent, stop).ConfigureAwait(false)
+                : await MirrorPulseNamespaceBirthProtectionVerifier.InspectRootLabelRecoveryAsync(catalog, action, item, parentItem,
+                    router, actor, stop).ConfigureAwait(false);
             Progress?.Invoke("NamespaceBornRecoveryReadbackCompleted");
             if (Checkpoint is not null) await Checkpoint(MirrorPulseNamespaceBornMemberRecoveryCheckpoint.AfterProtectionReadback, stop).ConfigureAwait(false);
             Progress?.Invoke("NamespaceBornRecoveryCommitBegin");

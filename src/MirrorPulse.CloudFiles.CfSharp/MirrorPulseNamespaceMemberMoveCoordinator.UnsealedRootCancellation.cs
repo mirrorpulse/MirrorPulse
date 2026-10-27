@@ -27,6 +27,8 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
             await _catalog.ReadNamespaceMemberMoveAsync(operationId, token).ConfigureAwait(false) is not null)
             throw new InvalidOperationException("Unsealed cancellation cannot replace a started, sealed or completed original.");
         var root = (await _catalog.ReadAdapterTopologyAsync(token).ConfigureAwait(false)).Roots.Single(item => item.RootId == history.Intent.RootId);
+        if (root.State is RootRegistrationState.Active or RootRegistrationState.Disabled)
+            _router.RefreshLocalCommandLifecycleRegistration(root);
         if (root.State is not (RootRegistrationState.Active or RootRegistrationState.Disabled) || root.DirectoryName != history.Intent.SourceName ||
             _router.FindRegistration(root.RootId) != root)
             throw new InvalidOperationException("Unsealed cancellation requires its unchanged original source route.");

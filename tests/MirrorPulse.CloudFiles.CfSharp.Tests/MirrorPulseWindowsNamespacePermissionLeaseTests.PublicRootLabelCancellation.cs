@@ -40,10 +40,14 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         foreach (bool disabled in new[] { false, true })
             await ProbePublicRootLabelCancellationAsync(disabled, newRole: true, unsealedBeforeRoleChange: true,
                 retainedPartialInitializer: true);
+        foreach (var phase in new[] { MirrorPulseNamespacePermissionPhase.Prepared, MirrorPulseNamespacePermissionPhase.Applied })
+            foreach (bool disabled in new[] { false, true })
+                await ProbePublicRootLabelCancellationAsync(disabled, newRole: true, unsealedBeforeRoleChange: true,
+                    retainedPartialInitializer: true, pendingOriginalPhase: phase);
     }
 
     private async Task ProbePublicRootLabelCancellationAsync(bool disabled, bool newRole, bool startWritten = false,
-        bool unsealedBeforeRoleChange = false, bool retainedPartialInitializer = false)
+        bool unsealedBeforeRoleChange = false, bool retainedPartialInitializer = false, MirrorPulseNamespacePermissionPhase? pendingOriginalPhase = null)
     {
         if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
             Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
@@ -61,7 +65,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         var ranges = new RootLabelExecutionRejectedRanges();
         string priorRole;
         MirrorPulseRootRenameHistory? preparedBeforeRoleChange = null;
-        Guid fileMemberId; Guid? retainedInitializer = null;
+        Guid fileMemberId; Guid? retainedInitializer = null; MirrorPulseNamespacePermissionIntent? pendingOriginalIntent = null;
         try
         {
             registry.Register(new(paths.SyncRootPath, "0.1.0", Guid.NewGuid(), [4, 7, 2]));
@@ -133,18 +137,24 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 var partialState = new MirrorPulseCfSharpStateSession(paths);
                 await using var partialFileSystem = new MirrorPulseCloudFileSystemBuilder(paths).WithStateStore(partialState).WithContentProvider(source).Build();
                 await currentRole.RunNamespaceOperationAsync(async () => await partialFileSystem.StartAsync(deadline.Token));
-                var partialRecovery = new MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(partialFileSystem, currentCatalog, router,
-                    currentRole, currentActor, currentScheduler, partialPermissions)
+                if (pendingOriginalPhase is null)
                 {
-                    Progress = phase =>
+                    var partialRecovery = new MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(partialFileSystem, currentCatalog, router,
+                        currentRole, currentActor, currentScheduler, partialPermissions)
                     {
-                        if (phase == "NamespaceOriginalMemberCompleted")
-                            throw new IOException("Deliberate fixture interruption after the original root role settles.");
-                    }
-                };
-                var interruption = await Assert.ThrowsExactlyAsync<IOException>(() => partialRecovery.RecoverRootAsync(
-                    retainedInitializer.Value, root.RootId, deadline.Token).AsTask());
-                Assert.AreEqual("Deliberate fixture interruption after the original root role settles.", interruption.Message);
+                        Progress = phase =>
+                        {
+                            if (phase == "NamespaceOriginalMemberCompleted")
+                                throw new IOException("Deliberate fixture interruption after the original root role settles.");
+                        }
+                    };
+                    var interruption = await Assert.ThrowsExactlyAsync<IOException>(() => partialRecovery.RecoverRootAsync(
+                        retainedInitializer.Value, root.RootId, deadline.Token).AsTask());
+                    Assert.AreEqual("Deliberate fixture interruption after the original root role settles.", interruption.Message);
+                }
+                else
+                    pendingOriginalIntent = await PreparePendingOriginalCancellationFixtureAsync(partialFileSystem, currentCatalog, router,
+                        currentActor, partialPermissions, root, retainedInitializer.Value, pendingOriginalPhase.Value, deadline.Token);
                 Assert.IsNull((await currentCatalog.ReadNamespaceInitializationStatusAsync(retainedInitializer.Value, deadline.Token)).Completion);
                 Assert.IsTrue((await currentCatalog.ReadNamespaceDispatchFencedRootsAsync(deadline.Token)).Contains(root.RootId));
             }
@@ -177,7 +187,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 ? await currentCatalog.ReadNamespaceInitializationStatusAsync(retainedOperation, deadline.Token) : null;
             var expectedInitializerOwner = retainedPartialInitializer
                 ? await currentCatalog.ReadRootLabelCancellationRecoveryOwnerAsync(original.Intent.OperationId, deadline.Token) : null;
-            if (retainedPartialInitializer)
+            if (retainedPartialInitializer && pendingOriginalPhase is null)
             {
                 var partialTree = await currentCatalog.ReadRootLabelCancellationTreeAsync(original.Intent.OperationId, deadline.Token);
                 Assert.AreEqual(expectedInitializerOwner, partialTree.RecoveryOwner);
@@ -240,6 +250,17 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             Assert.AreEqual(!disabled && !retainedPartialInitializer, firstReplay.NamespaceReady);
             if (retainedInitializer is { } originalInitializer)
             {
+                if (pendingOriginalIntent is not null)
+                {
+                    var settledPermission = await currentCatalog.ReadNamespacePermissionChangeAsync(pendingOriginalIntent.OperationId, deadline.Token);
+                    Assert.IsNotNull(settledPermission); Assert.AreEqual(pendingOriginalIntent, settledPermission.Intent);
+                    Assert.AreEqual(MirrorPulseNamespacePermissionPhase.Verified, settledPermission.Phase);
+                    Assert.AreNotEqual(currentRole.RoleSid.Value, settledPermission.Intent.RoleSid);
+                    Assert.IsNotNull(unsealedRecord);
+                    var rootObservation = unsealedRecord.Observation.Members.Single(item => item.ProtectionId == pendingOriginalIntent.OperationId);
+                    Assert.AreEqual(settledPermission.Verification!.Dacl, rootObservation.Native.Dacl);
+                    Assert.IsTrue(MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(pendingOriginalIntent.TargetDacl, rootObservation.Native.Dacl));
+                }
                 Assert.IsNotNull(unsealedRecord); Assert.AreEqual(2, unsealedRecord.Version);
                 Assert.AreEqual(originalInitializer, unsealedRecord.RecoveryOwner!.InitializationOperationId);
                 Assert.AreEqual(expectedInitializerOwner, unsealedRecord.RecoveryOwner);

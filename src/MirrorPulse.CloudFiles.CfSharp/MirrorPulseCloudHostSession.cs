@@ -1514,7 +1514,11 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                     var moves = new MirrorPulseNamespaceMemberMoveCoordinator(fileSystem, state, catalog, router, _namespaceExecution, _namespaceActor);
                     // Unsealed public preparations have their own guarded cancellation
                     // evidence. Never manufacture a move admission just to cancel one.
-                    var cancellation = await catalog.ReadNamespaceMemberMoveAsync(operationId, token).ConfigureAwait(false) is null
+                    bool unsealed = await catalog.ReadNamespaceMemberMoveAsync(operationId, token).ConfigureAwait(false) is null;
+                    if (unsealed)
+                        await new MirrorPulseRootLabelCancellationRecoveryCoordinator(fileSystem, catalog, router, _namespaceExecution,
+                            _namespaceActor, instances, _permissions).ReplayAsync(operationId, token).ConfigureAwait(false);
+                    var cancellation = unsealed
                         ? (await moves.CancelUnsealedRootLabelAsync(operationId, token).ConfigureAwait(false)).Observation
                         : await moves.CancelRootLabelAsync(operationId, token).ConfigureAwait(false);
                     var cancelled = await catalog.ReadManagedRootRenameHistoryAsync(operationId, token).ConfigureAwait(false)

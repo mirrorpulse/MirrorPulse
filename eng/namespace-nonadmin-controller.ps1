@@ -37,7 +37,7 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
         $repeated.Add($rootPublic, 4)
         $repeated.Add($rootCancellation, 6)
         $repeated.Add($unsealedCancellation, 2)
-        $repeated.Add($legacyInitializer, 2)
+        $repeated.Add($legacyInitializer, 6)
         foreach ($name in $TestNames) {
             if ([string]::IsNullOrWhiteSpace($name) -or $name.Length -gt 512 -or $name -cnotmatch '^[A-Za-z0-9_.]+$' -or -not $selected.Add($name)) {
                 throw 'The namespace budget requires distinct, bounded test names.'
@@ -52,18 +52,12 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
             }
         }
     }
-    # Count both scopes inside the five selected transfer methods, including the
-    # retirement matrix and ACK retries inside their original native deadlines.
-    # At most 122 names plus 55 repeated executions, the existing 45-second
-    # deadlines for all 18 transfer executions and twenty-eight 30-second preparation, execution and
-    # callback executions, six 60-second runtime recoveries and six 30-second
-    # root admission executions, four 60-second public executions and six
-    # 60-second cancellation/refusal executions and two 60-second unsealed
-    # cancellations give a bounded 77m15s child envelope. Count-only callers retain
-    # the original 112-name/30-minute bound; the step adds five minutes
-    # for controller diagnostics and disposable-account/profile cleanup.
-    # The legacy-initializer fixture adds exactly two original 60-second
-    # executions. All existing names, repeated counts and deadlines remain;
+    # Every selected native fixture keeps its original deadline. The full123-name
+    # catalog includes60 repeated executions and an83m15s child envelope. The step
+    # adds five minutes for controller diagnostics and disposable-user cleanup.
+    # The legacy-initializer fixture retains its two original 60-second
+    # executions and adds four Prepared/Applied active/disabled executions.
+    # Each original deadline remains; only the aggregate grows by four minutes.
     # count-only callers still retain their original 112-name/30-minute bound.
     return [Math]::Max(600000, 120000 + $executions * 15000 + $transferDeadlineMilliseconds)
 }

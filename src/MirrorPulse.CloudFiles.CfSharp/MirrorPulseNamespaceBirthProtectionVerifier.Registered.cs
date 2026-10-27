@@ -24,9 +24,32 @@ public static partial class MirrorPulseNamespaceBirthProtectionVerifier
 
     // Recovery projects this observation only after its drained scope and in the same
     // product transaction as completion. Ordinary verification retains unfenced admission.
-    internal static async Task<MirrorPulseNamespaceBirthProtection> InspectRegisteredAsync(MirrorPulseProductCatalog catalog,
+    internal static Task<MirrorPulseNamespaceBirthProtection> InspectRegisteredAsync(MirrorPulseProductCatalog catalog,
         Guid protectionId, Guid memberId, CloudItem item, CloudDirectory parent, MirrorPulseRootRouter router,
         MirrorPulseNamespaceActor namespaceActor, MirrorPulseNamespaceMemberProtectionSnapshot? recoveryParent,
+        CancellationToken cancellationToken) => InspectRegisteredCoreAsync(catalog, protectionId, memberId, item, parent, router,
+            namespaceActor, recoveryParent, requireParentRole: true, cancellationToken);
+
+    // This narrow path settles the exact original Label/initializer action under the
+    // current user's native owner rights. It does not rotate the parent's older role.
+    internal static async Task<MirrorPulseNamespaceBirthProtection> InspectRootLabelRecoveryAsync(MirrorPulseProductCatalog catalog,
+        MirrorPulseNamespaceBornMemberRecoveryAction action, CloudItem item, CloudDirectory parent, MirrorPulseRootRouter router,
+        MirrorPulseNamespaceActor namespaceActor, CancellationToken cancellationToken)
+    {
+        namespaceActor.AssertAccess();
+        if (action.RootLabelRecoveryOwner is null ||
+            await catalog.ValidateNamespaceBornMemberRecoveryExecutionAsync(action.ActionId, cancellationToken).ConfigureAwait(false) != action)
+            throw new InvalidOperationException("Label recovery verification requires its exact currently admitted original action.");
+        var observed = await InspectRegisteredCoreAsync(catalog, action.ActionId, action.Child.Member.MemberId, item, parent, router,
+            namespaceActor, action.Parent, requireParentRole: false, cancellationToken).ConfigureAwait(false);
+        if (await catalog.ValidateNamespaceBornMemberRecoveryExecutionAsync(action.ActionId, cancellationToken).ConfigureAwait(false) != action)
+            throw new InvalidOperationException("The original Label recovery action changed during native verification.");
+        return observed;
+    }
+
+    private static async Task<MirrorPulseNamespaceBirthProtection> InspectRegisteredCoreAsync(MirrorPulseProductCatalog catalog,
+        Guid protectionId, Guid memberId, CloudItem item, CloudDirectory parent, MirrorPulseRootRouter router,
+        MirrorPulseNamespaceActor namespaceActor, MirrorPulseNamespaceMemberProtectionSnapshot? recoveryParent, bool requireParentRole,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(catalog);
@@ -54,7 +77,7 @@ public static partial class MirrorPulseNamespaceBirthProtectionVerifier
         var parentIdentity = await catalog.ReadNamespaceMemberIdentityAsync(retainedParent.Member.MemberId, cancellationToken).ConfigureAwait(false);
         using WindowsIdentity caller = WindowsIdentity.GetCurrent();
         if (caller.User?.Value != original.OwnerSid ||
-            !new WindowsPrincipal(caller).IsInRole(new SecurityIdentifier(retainedParent.Protection.RoleSid)))
+            requireParentRole && !new WindowsPrincipal(caller).IsInRole(new SecurityIdentifier(retainedParent.Protection.RoleSid)))
             throw new UnauthorizedAccessException("The current parent namespace role and original owner are required.");
         if (member.LocalObject != original.LocalObject || member.OwnerSid != original.OwnerSid ||
             item.Parent is null || !string.Equals(item.Parent.FullPath, parent.FullPath, StringComparison.OrdinalIgnoreCase))
