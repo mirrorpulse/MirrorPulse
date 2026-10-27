@@ -463,7 +463,7 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
                 pending.SourceName, pending.TargetName, pending.Phase.ToString(), pending.UpdatedAt);
             bool ready = _namespaceWork.IsAdmitted(id);
             var startup = _session.NamespaceStartupResults.SingleOrDefault(result => result.RootId == id);
-            return new MirrorPulseControlRootStatus(root, pending is null && ready ? root.State : "NamespaceRecovery",
+            return new MirrorPulseControlRootStatus(root, pending is null && (ready || root.State == nameof(RootRegistrationState.Disabled)) ? root.State : "NamespaceRecovery",
                 deferred.Contains(id) || pending is not null, rename, ready,
                 ready ? null : startup?.OperationId, ready ? null : startup?.RecoveryCode);
         }).ToArray();

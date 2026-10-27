@@ -39,3 +39,13 @@ remain equal. Atomic snapshot publication preserves historical names, ambiguous
 routes, other roots and old immutable views; the original complete source guard
 still runs afterward. This refresh grants no source access, native protection or
 readiness. Complete signed lifecycle acceptance still requires actual CI evidence.
+
+The following CI40450729829 execution completes the disabled case-only rename and
+returns its six-member audited receipt with `namespaceReady=false`. The following
+state assertion fails because `root list` projects `NamespaceRecovery` whenever
+readiness is false, although the registration is Disabled and its Worker is
+offline. Root status now preserves Disabled when no Label is pending. Readiness,
+recovery operation/code, deferred-rescan and pending-rename fields retain their
+existing values; a pending Label still takes precedence as NamespaceRecovery.
+This status projection grants no work admission. Complete signed lifecycle and
+later enabled recovery still require their own original evidence.
