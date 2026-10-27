@@ -155,6 +155,9 @@ public static class SafeDiagnosticPolicy
                     "NamespaceRootBegin" or "NamespaceRootCompleted" or "NamespaceOriginalMemberBegin" or "NamespaceOriginalMemberCompleted" or
                     "NamespaceBornRecoveryHistoryBegin" or "NamespaceBornRecoveryHistoryCompleted" or
                     "NamespaceBornRecoveryContextBegin" or "NamespaceBornRecoveryContextCompleted" or
+                    "NamespaceBornRecoveryContextHistoryCompleted" or "NamespaceBornRecoveryContextLineageBegin" or "NamespaceBornRecoveryContextLineageCompleted" or
+                    "NamespaceBornRecoveryContextParentBegin" or "NamespaceBornRecoveryContextParentCompleted" or
+                    "NamespaceBornRecoveryContextInheritanceBegin" or "NamespaceBornRecoveryContextInheritanceCompleted" or
                     "NamespaceBornRecoveryGuardsBegin" or "NamespaceBornRecoveryGuardsCompleted" or
                     "NamespaceBornRecoveryActionBegin" or "NamespaceBornRecoveryActionCompleted" or
                     "NamespaceBornRecoveryScopeBegin" or "NamespaceBornRecoveryScopeCompleted" or
