@@ -20,3 +20,12 @@ bounded rolling logs and original CI failure retention remain in use.
 These diagnostics change no move, permission, identity, admission, journal or
 readiness check and extend no timeout. Actual original CI evidence must establish
 the failing boundary before a product correction or CfSharp issue is justified.
+
+CI40434803541 at `a8f4689` locates the same original disabled case-only failure at
+`SubtreePreparation` with the original exception HRESULT `80131509`. The exact
+underlying cause remains unproven. Additional closed stages distinguish original
+ownership, protection snapshots, complete member inventory, anchor inspection,
+public unmoved reconciliation, member inspection, official projection checks,
+member/anchor reinspection and the atomic catalog seal. They preserve all original
+calls and guards. A reconciliation stage alone proves no native move or library
+defect; actual original results must determine the next correction.

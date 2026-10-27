@@ -3,7 +3,7 @@ using MirrorPulse.Core.Contracts;
 
 namespace MirrorPulse.Core.Diagnostics;
 
-public enum MirrorPulseRootLabelExecutionStage { Unknown, RootWorkDrain, InstanceLibrary, SubtreePreparation, OriginalExecution, CurrentTreeAudit }
+public enum MirrorPulseRootLabelExecutionStage { Unknown, RootWorkDrain, InstanceLibrary, SubtreePreparation, OriginalExecution, CurrentTreeAudit, SubtreeOriginalOwnership, SubtreeProtectionInventory, SubtreeMemberInventory, SubtreeAnchorInspection, SubtreePublicReconciliation, SubtreeMemberInspection, SubtreeProjectionInspection, SubtreeMemberReinspection, SubtreeAnchorReinspection, SubtreeCatalogSeal }
 
 /// <summary>Observes fixed root execution boundaries without changing the original operation or exception.</summary>
 public static class MirrorPulseRootLabelExecutionFailureDiagnostics
