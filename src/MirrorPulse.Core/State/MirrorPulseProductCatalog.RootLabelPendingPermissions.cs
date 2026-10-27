@@ -6,7 +6,11 @@ namespace MirrorPulse.Core.State;
 /// <summary>Retained original permission intents that must settle before guarded cancellation.</summary>
 /// <remarks>These are recovery inputs only; native facts and tree readiness are not implied.</remarks>
 public sealed record MirrorPulseRootLabelPendingPermissionRecovery(MirrorPulseRootLabelCancellationRecoveryOwner Owner,
-    Guid RootMemberId, IReadOnlyList<MirrorPulseNamespaceMemberRecoveryContext> PendingOriginals);
+    Guid RootMemberId, IReadOnlyList<MirrorPulseNamespaceMemberRecoveryContext> PendingOriginals)
+{
+    /// <summary>Registered born member IDs in direct parent-first order; no native protection is implied.</summary>
+    public IReadOnlyList<Guid> BornMembers { get; init; } = [];
+}
 
 public sealed partial class MirrorPulseProductCatalog
 {
@@ -45,6 +49,7 @@ public sealed partial class MirrorPulseProductCatalog
                 registration.State is not (MirrorPulse.Core.Contracts.RootRegistrationState.Active or MirrorPulse.Core.Contracts.RootRegistrationState.Disabled))
                 throw new InvalidOperationException("Pending permission recovery cannot reinterpret the original root mapping or lifecycle.");
             var pending = new List<MirrorPulseNamespaceMemberRecoveryContext>();
+            var born = new List<Guid>();
             var admitted = new HashSet<Guid> { root.MemberId };
             var queue = new Queue<(Guid MemberId, Guid? ParentId)>();
             queue.Enqueue((root.MemberId, rootLocation.ParentMemberId));
@@ -63,6 +68,7 @@ public sealed partial class MirrorPulseProductCatalog
                         throw new InvalidOperationException("A conflicted original permission or explicit restoration requires separate recovery.");
                     pending.Add(context);
                 }
+                if (context.Member.Origin == MirrorPulseNamespaceMemberOrigin.ProtectedBirth) born.Add(context.Member.MemberId);
                 string after = string.Empty;
                 while (true)
                 {
@@ -94,7 +100,7 @@ public sealed partial class MirrorPulseProductCatalog
                     after = page[^1].NameKey;
                 }
             }
-            transaction.Commit(); return new(owner, root.MemberId, pending.AsReadOnly());
+            transaction.Commit(); return new(owner, root.MemberId, pending.AsReadOnly()) { BornMembers = born.AsReadOnly() };
         }
         finally { _gate.Release(); }
     }
