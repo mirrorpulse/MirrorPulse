@@ -1,3 +1,4 @@
+using System.Security.AccessControl;
 using System.Security.Principal;
 using CfSharp;
 using MirrorPulse.Core.CloudFiles;
@@ -185,6 +186,31 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     partialTree.Members.Single(item => item.Context.Member.MemberId == partialTree.RootMemberId).Context.Protection.RoleSid);
                 Assert.IsTrue(partialTree.Members.Any(item => item.Context.Member.MemberId != partialTree.RootMemberId &&
                     item.Context.Protection.RoleSid != currentRole.RoleSid.Value));
+                // Closed metadata observations precede the original native cancellation guard.
+                // Predicted inheritance is diagnostic only; it never replaces verified protection.
+                var inventory = partialTree.Members.Append(partialTree.Anchor).ToDictionary(item => item.Context.Member.MemberId);
+                foreach (var observedMember in partialTree.Members)
+                {
+                    var context = observedMember.Context;
+                    var selected = await runtime.InspectNamespaceMemberAsync(context.Location.RelativePath, context.Member.IsDirectory, deadline.Token);
+                    string localPath = Path.Combine(paths.SyncRootPath, context.Location.RelativePath.Replace('/', Path.DirectorySeparatorChar));
+                    FileSystemSecurity actual = context.Member.IsDirectory
+                        ? new DirectoryInfo(localPath).GetAccessControl(AccessControlSections.Access | AccessControlSections.Owner)
+                        : new FileInfo(localPath).GetAccessControl(AccessControlSections.Access | AccessControlSections.Owner);
+                    string dacl = actual.GetSecurityDescriptorSddlForm(AccessControlSections.Access);
+                    var parent = inventory[context.Location.ParentMemberId!.Value];
+                    string parentPath = Path.Combine(paths.SyncRootPath, parent.Context.Location.RelativePath.Replace('/', Path.DirectorySeparatorChar));
+                    string parentDacl = new DirectoryInfo(parentPath).GetAccessControl(AccessControlSections.Access)
+                        .GetSecurityDescriptorSddlForm(AccessControlSections.Access);
+                    string inherited = MirrorPulseWindowsNamespaceInheritance.CreateInheritedDacl(parentDacl, context.Member.IsDirectory);
+                    TestContext.WriteLine($"LegacyCancellationObjectObservation: disabled={disabled}; origin={context.Member.Origin}; directory={context.Member.IsDirectory}; " +
+                        $"nativeMemberMatches={selected.MemberId == context.Member.MemberId}; parentMatches={selected.ActualParentMemberId == context.Location.ParentMemberId}; " +
+                        $"pathMatches={selected.RelativePath == context.Location.RelativePath}; ownerMatches={actual.GetOwner(typeof(SecurityIdentifier))?.Value == context.Member.OwnerSid}; " +
+                        $"verifiedDaclMatches={dacl == context.Verification.Dacl}; expectedDaclMatches={MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(observedMember.ExpectedDacl, dacl)}; " +
+                        $"actualParentInheritanceMatches={MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(inherited, dacl)}; " +
+                        $"nativeDaclProtected={new RawSecurityDescriptor(dacl).ControlFlags.HasFlag(ControlFlags.DiscretionaryAclProtected)}; " +
+                        $"retainedCurrentRole={context.Protection.RoleSid == currentRole.RoleSid.Value}; diagnosticOnly=True.");
+                }
             }
             var cancelled = await runtime.CancelManagedRootRenameAsync(original.Intent.OperationId, deadline.Token);
             Assert.AreEqual(MirrorPulseRootRenamePhase.Cancelled, cancelled.Intent.Phase);
