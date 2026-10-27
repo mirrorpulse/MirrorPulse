@@ -46,6 +46,9 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
                 }
                 return await _catalog.ValidateNamespaceMemberMoveExecutionAsync(operationId, token).ConfigureAwait(false);
             }
+            if (history.Intent.Phase == MirrorPulseRootRenamePhase.Prepared &&
+                root.State is RootRegistrationState.Active or RootRegistrationState.Disabled && root.DirectoryName == history.Intent.SourceName)
+                _router.RefreshLocalCommandLifecycleRegistration(root);
             if (history.Intent.Phase != MirrorPulseRootRenamePhase.Prepared ||
                 root.State is not (RootRegistrationState.Active or RootRegistrationState.Disabled) || root.DirectoryName != history.Intent.SourceName ||
                 _router.FindRegistration(root.RootId) != root)

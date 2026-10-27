@@ -29,3 +29,13 @@ public unmoved reconciliation, member inspection, official projection checks,
 member/anchor reinspection and the atomic catalog seal. They preserve all original
 calls and guards. A reconciliation stage alone proves no native move or library
 defect; actual original results must determine the next correction.
+
+CI40446643467 retains the failure at `SubtreeOriginalOwnership`. The Host's
+instance switch writes the catalog, while the local router can retain its prior
+Active/Disabled value. A controlled original Label now refreshes only that
+lifecycle value under its existing root drain and instance/library admission.
+Every retained scope, identity, name, root key and registration timestamp must
+remain equal. Atomic snapshot publication preserves historical names, ambiguous
+routes, other roots and old immutable views; the original complete source guard
+still runs afterward. This refresh grants no source access, native protection or
+readiness. Complete signed lifecycle acceptance still requires actual CI evidence.
