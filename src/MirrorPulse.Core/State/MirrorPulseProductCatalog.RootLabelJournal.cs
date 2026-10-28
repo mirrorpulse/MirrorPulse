@@ -81,7 +81,7 @@ public sealed partial class MirrorPulseProductCatalog
             await RequireRootLabelJournalTopologyAsync(rootId, root.Context.Location.RelativePath, transaction, token).ConfigureAwait(false);
             long epoch = await ReadNamespaceNameEpochCoreAsync(current.AnchorMemberId, root.Context.Location.RelativePath, transaction, token).ConfigureAwait(false);
             var witness = new MirrorPulseRootLabelJournalWitness(rootId, current.AnchorMemberId, root.Context.Member.MemberId,
-                labelId, root.PermissionOperationId, observation.ItemId!.Value, root.Context.Member.LocalObject,
+                labelId, root.Context.Protection.ProtectionId, observation.ItemId!.Value, root.Context.Member.LocalObject,
                 root.Context.Member.OwnerSid, roleSid, root.Context.Location.RelativePath, nativeRoot.PlaceholderIdentity, epoch, current.Fingerprint,
                 RootLabelJournalDigest(history), await ReadRootLabelDirectoryDigestAsync(labelId, transaction, token).ConfigureAwait(false),
                 current.Members.Count, auditedAt, nativeRoot.ObservedAt);
