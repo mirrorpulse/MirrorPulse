@@ -278,6 +278,27 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     Assert.AreEqual(MirrorPulseNamespacePermissionPhase.Verified, settledPermission.Phase);
                     Assert.AreNotEqual(currentRole.RoleSid.Value, settledPermission.Intent.RoleSid);
                     Assert.IsNotNull(unsealedRecord);
+                    try
+                    {
+                        var witness = unsealedRecord.Observation.Members.SingleOrDefault(item => item.Native.LocalObject == pendingOriginalIntent.LocalObject);
+                        var witnessedPermission = witness is null ? null
+                            : await currentCatalog.ReadNamespacePermissionChangeAsync(witness.ProtectionId, deadline.Token);
+                        var verified = witnessedPermission?.Verification;
+                        TestContext.WriteLine($"PendingOriginalCancellationWitnessObservation: disabled={disabled}; phase={pendingOriginalPhase}; " +
+                            $"sameBinding={witness is not null}; originalOperationSelected={witness?.ProtectionId == pendingOriginalIntent.OperationId}; " +
+                            $"witnessedPermissionExists={witnessedPermission is not null}; sameOriginalEvidence={witnessedPermission?.Intent.EvidenceId == pendingOriginalIntent.EvidenceId}; " +
+                            $"witnessedRoleMatchesCurrent={witnessedPermission?.Intent.RoleSid == currentRole.RoleSid.Value}; " +
+                            $"witnessedPermissionVerified={witnessedPermission?.Phase == MirrorPulseNamespacePermissionPhase.Verified}; " +
+                            $"witnessedNativeMatchesVerification={verified is not null && witness is not null && verified.Dacl == witness.Native.Dacl}; " +
+                            $"witnessedNativeMatchesOriginalTarget={witness is not null && MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(pendingOriginalIntent.TargetDacl, witness.Native.Dacl)}; " +
+                            $"witnessedExpectedMatchesOriginalTarget={witnessedPermission is not null && MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(pendingOriginalIntent.TargetDacl, witnessedPermission.Intent.ExpectedDacl)}; " +
+                            $"witnessedVerificationAfterOriginal={verified is not null && verified.ObservedAt > settledPermission.Verification!.ObservedAt}; diagnosticOnly=True.");
+                    }
+                    catch (Exception error) when (error is not OutOfMemoryException)
+                    {
+                        TestContext.WriteLine($"PendingOriginalCancellationWitnessObservation: disabled={disabled}; phase={pendingOriginalPhase}; " +
+                            $"observationUnavailable=True; failureKind={error.GetType().Name}; diagnosticOnly=True.");
+                    }
                     var rootObservation = unsealedRecord.Observation.Members.Single(item => item.ProtectionId == pendingOriginalIntent.OperationId);
                     Assert.AreEqual(settledPermission.Verification!.Dacl, rootObservation.Native.Dacl);
                     Assert.IsTrue(MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(pendingOriginalIntent.TargetDacl, rootObservation.Native.Dacl));
