@@ -30,6 +30,29 @@ protection provenance. Any move ownership or uncertain actual state refuses
 this path. An independently recovered current anchor can have a newer protection
 epoch than the untouched original descendants.
 
+A first-level root that originated through protected birth can itself retain a
+located protection epoch under that older anchor role. The cancellation metadata
+reader selects this root from the original public proof's binding and permits
+that one historical root epoch. It still validates the exact pending Label,
+source route, physical anchor, complete member graph, historical protection
+lineage and committed positions. Descendants keep their ordinary current-parent
+checks unless the separately validated original initializer owns their recovery.
+Ordinary current-tree readers remain strict. This metadata exception grants no
+native move, permission write, cancellation receipt or readiness; the existing
+retained-object inspections, public `NotMoved` reconciliation, atomic receipt
+and separate fresh current-role recovery remain required.
+
+The independent signed Host fixture at source015ae65 retained an active
+preparation across process exit and restart, then received exit70 /
+`mp.control.internalFailure` from public cancellation in
+[CI40681797485](https://github.com/mirrorpulse/MirrorPulse/actions/runs/40681797485).
+Its exact inner exception and native error were not exposed. Six private catalog
+cases separately reproduced four later-anchor refusals with two unchanged-anchor
+controls; all six pass after the selected-root metadata correction. These local
+results do not establish that the original signed failure is repaired. The
+unchanged signed fixture must run again, and this evidence establishes no new
+CfSharp defect or complete fault/race acceptance.
+
 After historical inspection guards expire, a separate current-tree recovery
 operation and fresh retained audit may admit an active root. Disabled roots
 remain closed. Another current fence returns the immutable cancellation with

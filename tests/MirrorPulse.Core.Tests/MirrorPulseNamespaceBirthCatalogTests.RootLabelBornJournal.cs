@@ -56,7 +56,8 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         Assert.IsFalse(File.Exists(fixture.Paths.CfSharpStateDatabasePath));
     }
 
-    private static async Task<RootSubtreeFixture> PrepareBornRootJournalFixtureAsync(MirrorPulseProductCatalog catalog, bool enabled, bool nested)
+    private static async Task<RootSubtreeFixture> PrepareBornRootJournalFixtureAsync(MirrorPulseProductCatalog catalog, bool enabled, bool nested,
+        Func<MirrorPulseProductCatalog, IReadOnlyList<MirrorPulseNamespaceMemberRegistration>, Task>? beforePrepare = null)
     {
         var manifest = new AdapterManifest(1, AdapterId.Parse("example.born-root-journal"), "Example", "1.0.0", new(1, 1),
             new Dictionary<string, string> { ["win-x64"] = "worker/adapter.exe", ["win-arm64"] = "worker/adapter.exe" },
@@ -83,6 +84,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             var leafBirth = await AddBornAsync(catalog, NestedBirth(childBirth, "leaf.bin", false));
             members.Add(await catalog.RegisterNamespaceMemberAsync(BornMember(leafBirth, child)));
         }
+        if (beforePrepare is not null) await beforePrepare(catalog, members.AsReadOnly());
         if (!enabled)
         {
             await catalog.SetInstanceEnabledAsync(registration.InstanceId, false);

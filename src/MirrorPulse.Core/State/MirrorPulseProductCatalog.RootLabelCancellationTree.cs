@@ -91,7 +91,7 @@ public sealed partial class MirrorPulseProductCatalog
         {
             var member = await ReadNamespaceMemberCoreAsync(entry.MemberId, transaction, token).ConfigureAwait(false)
                 ?? throw new InvalidDataException("The current cancellation tree lost a registered member.");
-            var snapshot = await ReadRootCancellationMemberSnapshotCoreAsync(member, transaction, token, recoveryOwner).ConfigureAwait(false);
+            var snapshot = await ReadRootCancellationMemberSnapshotCoreAsync(member, transaction, token, recoveryOwner, root.MemberId).ConfigureAwait(false);
             var context = snapshot.Context;
             if (member.RootId != root.RootId || member.OwnerSid != root.OwnerSid || member.LocalObject != entry.LocalObject ||
                 member.IsDirectory != entry.IsDirectory || context.Location.ParentMemberId != entry.ParentMemberId ||
@@ -147,7 +147,7 @@ public sealed partial class MirrorPulseProductCatalog
 
     private async Task<MirrorPulseNamespaceMemberProtectionSnapshot> ReadRootCancellationMemberSnapshotCoreAsync(
         MirrorPulseNamespaceMemberRegistration member, SqliteTransaction transaction, CancellationToken token,
-        MirrorPulseRootLabelCancellationRecoveryOwner? recoveryOwner = null)
+        MirrorPulseRootLabelCancellationRecoveryOwner? recoveryOwner = null, Guid? originalRootMemberId = null)
     {
         if (await ReadCompletedNamespaceRetirementForMemberCoreAsync(member.MemberId, transaction, token).ConfigureAwait(false))
             throw new FileNotFoundException("Cancellation metadata cannot adopt a retired member.");
@@ -157,10 +157,12 @@ public sealed partial class MirrorPulseProductCatalog
         if (member.Origin == MirrorPulseNamespaceMemberOrigin.ProtectedBirth)
         {
             var epoch = await ReadNamespaceBirthProtectionRowAsync(retained.Proof.ProtectionId, transaction, token).ConfigureAwait(false);
-            // Historical lineage was validated by the retained context reader. A
-            // pending original initializer may have rotated this actual parent;
-            // its current committed position is still validated below.
-            if (epoch?.Protection.Placement is not null && recoveryOwner is null)
+            // The original first-level root can retain a located epoch under an
+            // older physical-anchor role. Historical lineage and committed position
+            // remain mandatory; native cancellation inspects its exact old descriptor.
+            // Descendants still require their actual current parent unless owned by
+            // the separately validated original initializer.
+            if (epoch?.Protection.Placement is not null && recoveryOwner is null && member.MemberId != originalRootMemberId)
                 await ValidateNamespaceLocatedBirthCurrentAsync(epoch.Value.Protection, transaction, token).ConfigureAwait(false);
         }
         var position = await ValidateNamespaceContextPositionAsync(member, location, retained.Proof, retained.Verification,
