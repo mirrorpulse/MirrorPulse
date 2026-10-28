@@ -7,7 +7,10 @@ public enum MirrorPulseRootLabelCancellationStage
 {
     Unknown, RootWorkDrain, InstanceLibrary, OriginalOwnership, PendingPermissionRecovery, OriginalCancellation,
     MetadataInventory, AnchorMetadata, AnchorInspection, MemberInspection, PublicReconciliation, MemberReinspection,
-    FinalNativeObservations, CatalogCancellation, CurrentTreeRecovery, CurrentTreeAudit
+    FinalNativeObservations, CatalogCancellation, CurrentTreeRecovery, CurrentTreeAudit,
+    MemberProvenance, MemberMetadata, MemberNativeObject, MemberPublicIdentity, MemberSealedObject, MemberInventory,
+    OriginalRootIdentity, ObjectSnapshot, ObjectNativeBinding, ObjectRetainedBinding, ObjectOwner, ObjectRoot,
+    ObjectPath, ObjectKind, ObjectLinkCount, ObjectRetainedDescriptor, ObjectDescriptorPolicy
 }
 
 /// <summary>Observes fixed cancellation boundaries while retaining the original operation and exception.</summary>

@@ -1,5 +1,6 @@
 using CfSharp;
 using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.Diagnostics;
 using MirrorPulse.Core.State;
 
 namespace MirrorPulse.CloudFiles.CfSharp;
@@ -36,28 +37,40 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
         _actor.AssertAccess(); var result = new DirectoryMoveObjects([]);
         var byId = tree.Members.ToDictionary(snapshot => snapshot.Context.Member.MemberId);
         if (entries.Count != byId.Count) throw new InvalidDataException("Cancellation inspection requires the complete coherent inventory.");
+        var stage = MirrorPulseRootLabelCancellationStage.MemberProvenance;
         try
         {
             foreach (var entry in entries)
             {
+                stage = MirrorPulseRootLabelCancellationStage.MemberProvenance;
                 if (!byId.TryGetValue(entry.MemberId, out var retained)) throw new InvalidDataException("Cancellation lost a guarded member.");
                 var proof = RootCancellationProof(entry, retained, root, owner, intent);
+                stage = MirrorPulseRootLabelCancellationStage.MemberMetadata;
                 CloudItem item = entry.IsDirectory ? _fileSystem.GetDirectory(entry.RelativePath) : _fileSystem.GetFile(entry.RelativePath);
                 var lease = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(item, _router, token).ConfigureAwait(false);
                 try
                 {
                     var facts = await lease.InspectAsync(token).ConfigureAwait(false); var snapshot = await item.InspectAsync(token).ConfigureAwait(false);
+                    stage = MirrorPulseRootLabelCancellationStage.MemberNativeObject;
                     RequireUnsealedCancellationObject(facts, snapshot, proof, entry.LocalObject, owner, root, entry.RelativePath, entry.IsDirectory);
+                    stage = MirrorPulseRootLabelCancellationStage.MemberPublicIdentity;
                     MirrorPulseNamespaceBirthProtectionVerifier.RequireRegisteredPublicIdentity(snapshot, entry.Identity, requirePlaceholder: true);
+                    stage = MirrorPulseRootLabelCancellationStage.MemberSealedObject;
                     if (intent is not null) RequireDirectoryMoveObject(entry, entry.RelativePath, facts, snapshot, proof, intent);
                     result.Add(new(entry, item, lease, proof, facts, snapshot));
                 }
                 catch { await lease.DisposeAsync().ConfigureAwait(false); throw; }
             }
+            stage = MirrorPulseRootLabelCancellationStage.MemberInventory;
             await RequireExactLocalDirectoryTreeAsync(entries, entry => entry.RelativePath, token).ConfigureAwait(false);
             return result;
         }
-        catch { await result.DisposeAsync().ConfigureAwait(false); throw; }
+        catch (Exception original)
+        {
+            if (original is not StackOverflowException and not OutOfMemoryException)
+                MirrorPulseRootLabelCancellationFailureDiagnostics.MarkStage(original, stage);
+            await result.DisposeAsync().ConfigureAwait(false); throw;
+        }
     }
 
     private async Task ReinspectRootCancellationObjectsAsync(DirectoryMoveObjects objects, MirrorPulseRootLabelCancellationTree original,

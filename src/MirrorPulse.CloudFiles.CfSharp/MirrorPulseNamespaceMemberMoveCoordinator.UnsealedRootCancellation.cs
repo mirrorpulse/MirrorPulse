@@ -64,9 +64,9 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
                 stage = MirrorPulseRootLabelCancellationStage.MemberInspection;
                 await using var objects = await OpenRootCancellationObjectsAsync(entries, cancellationTree, root.RootId, member.OwnerSid, null, token).ConfigureAwait(false);
                 var rootObject = objects.Objects.Single(item => item.Entry.MemberId == member.MemberId);
-                if (rootObject.Snapshot.ItemId != proof.RootItemId ||
-                    !rootObject.Snapshot.PlaceholderIdentity.Span.SequenceEqual(proof.ExpectedPlaceholderIdentity.Span))
-                    throw new InvalidDataException("Unsealed cancellation lost the exact original public root identity.");
+                stage = MirrorPulseRootLabelCancellationStage.OriginalRootIdentity;
+                MirrorPulseRootLabelCancellationIdentity.RequireOriginal(proof.RootItemId, rootObject.Snapshot.ItemId,
+                    rootObject.Snapshot.PlaceholderIdentity.Span, proof.ExpectedPlaceholderIdentity.Span);
                 stage = MirrorPulseRootLabelCancellationStage.PublicReconciliation;
                 var unmoved = await _fileSystem.GetDirectory(proof.SourceRelativePath).ReconcileMoveAsync(proof, token).ConfigureAwait(false);
                 if (unmoved.Outcome != CloudDirectoryMoveReconciliationOutcome.NotMoved || unmoved.NativeMoveObserved || unmoved.DurableProjectionCommitted ||
@@ -135,6 +135,7 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
             facts.RootId != root || proof.RootId != root || facts.RelativePath != path || proof.RelativePath != path ||
             facts.IsDirectory != directory || proof.IsDirectory != directory || (snapshot.Kind == CloudItemKind.Directory) != directory || facts.LinkCount != 1 ||
             facts.Dacl != proof.Verification.Dacl || !MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(proof.ExpectedDacl, facts.Dacl))
-            throw new InvalidDataException("Unsealed cancellation lost its actual retained binding, owner, path, kind, link count or verified descriptor.");
+            throw ObserveCancellationObjectFailure(new InvalidDataException("Unsealed cancellation lost its actual retained binding, owner, path, kind, link count or verified descriptor."),
+                facts, snapshot, proof, binding, owner, root, path, directory);
     }
 }
