@@ -124,9 +124,13 @@ public sealed class MirrorPulseNamespaceBornMemberRecoveryCoordinator(CloudFileS
             if (Checkpoint is not null) await Checkpoint(MirrorPulseNamespaceBornMemberRecoveryCheckpoint.AfterActionPrepared, stop).ConfigureAwait(false);
             Progress?.Invoke("NamespaceBornRecoveryScopeBegin");
             var receipt = await permissions.RunAdmittedBornMemberRecoveryAsync(actionId, (current, permissionToken) =>
-                MirrorPulseWindowsNamespacePermissionLease.RunOwnedProtectedAsync(item, router, member.LocalObject, async (lease, scopeToken) =>
+            {
+                Progress?.Invoke("NamespaceBornRecoveryAdmissionCompleted");
+                return MirrorPulseWindowsNamespacePermissionLease.RunOwnedProtectedAsync(item, router, member.LocalObject, async (lease, scopeToken) =>
                 {
+                    Progress?.Invoke("NamespaceBornRecoveryCallbackBegin");
                     var before = await lease.InspectAsync(scopeToken).ConfigureAwait(false); RequireObject(member, child.Location, before);
+                    Progress?.Invoke("NamespaceBornRecoveryFirstInspectionCompleted");
                     var known = history.Select(value => value.TargetDacl).Append(current.Child.BirthProtection!.Verification.Dacl).Append(target);
                     if (!known.Any(dacl => MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(dacl, before.Dacl)))
                         throw new InvalidDataException("Born recovery cannot overwrite an unowned descriptor.");
@@ -146,8 +150,10 @@ public sealed class MirrorPulseNamespaceBornMemberRecoveryCoordinator(CloudFileS
                     var after = await lease.InspectAsync(scopeToken).ConfigureAwait(false); RequireObject(member, child.Location, after);
                     if (!MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(target, after.Dacl))
                         throw new InvalidDataException("Born recovery did not retain the admitted inherited descriptor.");
+                    Progress?.Invoke("NamespaceBornRecoveryCallbackWorkCompleted");
                     if (Checkpoint is not null) await Checkpoint(MirrorPulseNamespaceBornMemberRecoveryCheckpoint.BeforeProtectedCallbackReturns, scopeToken).ConfigureAwait(false);
-                }, permissionToken), stop).ConfigureAwait(false);
+                }, permissionToken);
+            }, stop).ConfigureAwait(false);
             Progress?.Invoke("NamespaceBornRecoveryScopeCompleted");
             if (receipt.Outcome != CloudProtectedLocalOperationOutcome.Completed || !receipt.Drained)
             {
