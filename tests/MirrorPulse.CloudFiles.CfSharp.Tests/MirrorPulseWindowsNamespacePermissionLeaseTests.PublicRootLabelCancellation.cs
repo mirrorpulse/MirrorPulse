@@ -299,9 +299,47 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         TestContext.WriteLine($"PendingOriginalCancellationWitnessObservation: disabled={disabled}; phase={pendingOriginalPhase}; " +
                             $"observationUnavailable=True; failureKind={error.GetType().Name}; diagnosticOnly=True.");
                     }
-                    var rootObservation = unsealedRecord.Observation.Members.Single(item => item.ProtectionId == pendingOriginalIntent.OperationId);
-                    Assert.AreEqual(settledPermission.Verification!.Dacl, rootObservation.Native.Dacl);
-                    Assert.IsTrue(MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(pendingOriginalIntent.TargetDacl, rootObservation.Native.Dacl));
+                    var originalVerification = settledPermission.Verification;
+                    Assert.IsNotNull(originalVerification);
+                    Assert.IsTrue(MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(pendingOriginalIntent.TargetDacl, originalVerification.Dacl));
+                    var rootObservation = unsealedRecord.Observation.Members.Single(item => item.MemberId == unsealedRecord.RootMemberId &&
+                        item.Native.LocalObject == pendingOriginalIntent.LocalObject);
+                    var cancellationPermission = await currentCatalog.ReadNamespacePermissionChangeAsync(rootObservation.ProtectionId, deadline.Token);
+                    Assert.IsNotNull(cancellationPermission);
+                    Assert.AreEqual(MirrorPulseNamespacePermissionPhase.Verified, cancellationPermission.Phase);
+                    var cancellationVerification = cancellationPermission.Verification;
+                    Assert.IsNotNull(cancellationVerification);
+                    Assert.AreEqual(pendingOriginalIntent.LocalObject, cancellationVerification.LocalObject);
+                    Assert.AreEqual(originalVerification.OwnerSid, rootObservation.Native.OwnerSid);
+                    Assert.AreEqual(cancellationVerification.OwnerSid, rootObservation.Native.OwnerSid);
+                    Assert.AreEqual(cancellationVerification.Dacl, rootObservation.Native.Dacl);
+                    Assert.IsTrue(MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(cancellationPermission.Intent.TargetDacl, rootObservation.Native.Dacl));
+                    if (rootObservation.ProtectionId == pendingOriginalIntent.OperationId)
+                    {
+                        Assert.AreEqual(settledPermission, cancellationPermission);
+                        Assert.AreEqual(settledPermission.Verification!.Dacl, rootObservation.Native.Dacl);
+                        Assert.IsTrue(MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(pendingOriginalIntent.TargetDacl, rootObservation.Native.Dacl));
+                    }
+                    else
+                    {
+                        // Cancellation records the current verified epoch. A disposed-role original
+                        // remains immutable when original-member recovery rotates this SAME root.
+                        var expectedSuccessor = pendingOriginalIntent with
+                        {
+                            OperationId = cancellationPermission.Intent.OperationId,
+                            Kind = MirrorPulseNamespacePermissionChangeKind.RotateRole,
+                            RoleSid = currentRole.RoleSid.Value,
+                            ExpectedDacl = originalVerification.Dacl,
+                            TargetDacl = MirrorPulseNamespacePermissionPolicy.CreateProtectedDacl(currentRole, true),
+                            PreparedAt = cancellationPermission.Intent.PreparedAt
+                        };
+                        Assert.AreEqual(expectedSuccessor, cancellationPermission.Intent);
+                        Assert.IsTrue(cancellationPermission.Intent.PreparedAt >= originalVerification.ObservedAt);
+                        Assert.IsTrue(cancellationVerification.ObservedAt > originalVerification.ObservedAt);
+                    }
+                    Assert.AreEqual(settledPermission, await currentCatalog.ReadNamespacePermissionChangeAsync(pendingOriginalIntent.OperationId, deadline.Token));
+                    TestContext.WriteLine($"PendingOriginalCancellationPermissionChainActual: disabled={disabled}; phase={pendingOriginalPhase}; originalIntentAndVerificationRetained=True; " +
+                        $"sameRootBinding=True; selectedOriginalOrExactCurrentRoleSuccessor=True; nativeMatchesSelectedVerification=True; rootPermissionChainOnly=True.");
                 }
                 Assert.IsNotNull(unsealedRecord); Assert.AreEqual(2, unsealedRecord.Version);
                 Assert.AreEqual(originalInitializer, unsealedRecord.RecoveryOwner!.InitializationOperationId);
