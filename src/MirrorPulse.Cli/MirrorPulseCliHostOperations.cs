@@ -51,7 +51,7 @@ public static class MirrorPulseCliHostPathResolver
     }
 }
 
-public sealed class MirrorPulseCliHostOperations : IMirrorPulseCliHostOperations,
+public sealed partial class MirrorPulseCliHostOperations : IMirrorPulseCliHostOperations,
     IMirrorPulseCliCommandOperations, IAsyncDisposable
 {
     private readonly MirrorPulseHostStartupCoordinator _startup;
@@ -636,18 +636,14 @@ public sealed class MirrorPulseCliHostOperations : IMirrorPulseCliHostOperations
                     human = $"Adapter instance version selected: {installId}";
                     break;
                 case ("conflict", "list"):
-                    result = await _client.GetConflictsAsync(cancellationToken: cancellationToken)
-                        .ConfigureAwait(false);
+                    var conflictPage = ParseConflictListArguments(command.Arguments);
+                    result = await _client.GetConflictsAsync(conflictPage.Limit, conflictPage.Cursor, cancellationToken).ConfigureAwait(false);
                     human = $"Conflicts: {((MirrorPulseControlConflictList)result).Items.Count}";
+                    if (((MirrorPulseControlConflictList)result).NextCursor is { } nextConflictCursor) human += $"; next cursor: {nextConflictCursor}";
                     break;
                 case ("conflict", "show"):
                     string conflictId = GetRequiredOption(command.Arguments, "conflict-id");
-                    MirrorPulseControlConflictList allConflicts = await _client.GetConflictsAsync(
-                        cancellationToken: cancellationToken).ConfigureAwait(false);
-                    MirrorPulseControlConflict? selected = allConflicts.Items.SingleOrDefault(item =>
-                        item.ConflictId.Equals(conflictId, StringComparison.OrdinalIgnoreCase));
-                    if (selected is null)
-                        throw new FileNotFoundException("The conflict was not found.");
+                    MirrorPulseControlConflict selected = await FindConflictAsync(conflictId, cancellationToken).ConfigureAwait(false);
                     result = selected;
                     human = $"Conflict {selected.ConflictId}: {selected.RelativePath} ({selected.Source})";
                     break;

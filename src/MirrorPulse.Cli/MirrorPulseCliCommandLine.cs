@@ -292,8 +292,9 @@ public static class MirrorPulseCliHelp
                                          Continue one admitted Delete page using its original command.
           namespace birth recover RECOVERY_ID
                                          Retry an already retained staged-file recovery.
-          conflict list|show|snooze|resolve
-                                         Inspect and resolve conflicts.
+          conflict list [--limit 1..1000] [--cursor CURSOR]
+                                         Read a bounded pending-conflict page.
+          conflict show|snooze|resolve    Inspect or resolve a conflict by ID.
           operation get|watch|cancel      Inspect long-running operations.
           config                         Read or update settings.
           developer-mode                 Read or update developer mode.

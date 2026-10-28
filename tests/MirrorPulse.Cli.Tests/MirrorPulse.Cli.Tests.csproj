@@ -13,6 +13,7 @@
 
   <ItemGroup>
     <Using Include="Microsoft.VisualStudio.TestTools.UnitTesting" />
+    <Compile Include="../../src/MirrorPulse.Host/MirrorPulseConflictQueries.cs" Link="HostQueries/MirrorPulseConflictQueries.cs" />
   </ItemGroup>
 
   <ItemGroup>

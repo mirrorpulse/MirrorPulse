@@ -377,6 +377,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                     );
                     """;
                 await schema.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                await EnsureConflictPageIndexesAsync(connection, initialSchema, cancellationToken).ConfigureAwait(false);
                 initialSchema.Commit();
             }
 

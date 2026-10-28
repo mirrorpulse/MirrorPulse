@@ -1114,26 +1114,9 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
         return await ReadStatusAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task<MirrorPulseControlConflictList> ReadConflictsAsync(
-        ConflictListArguments arguments,
-        CancellationToken cancellationToken)
-    {
-        var conflicts = (await _catalog.ReadRemoteConflictProjectionsAsync(cancellationToken)
-                .ConfigureAwait(false))
-            .Concat(await _catalog.ReadUploadConflictsAsync(cancellationToken: cancellationToken)
-                .ConfigureAwait(false))
-            .OrderByDescending(item => item.DetectedAt)
-            .Select(ToControlConflict)
-            .ToList();
-        int limit = arguments.Limit is > 0 and <= 1000 ? arguments.Limit.Value : 100;
-        return new(conflicts.Take(limit).ToArray(), conflicts.Count > limit
-            ? limit.ToString(System.Globalization.CultureInfo.InvariantCulture) : null);
-    }
-
-    private static MirrorPulseControlConflict ToControlConflict(MirrorPulseConflictRecord conflict) =>
-        new(conflict.ConflictId.ToString("D"), conflict.InstanceId.ToString(), conflict.RelativePath,
-            conflict.Reason.ToString(), conflict.Status.ToString(), conflict.Source.ToString(),
-            conflict.LocalRevision, conflict.RemoteRevision, conflict.DetectedAt);
+    private Task<MirrorPulseControlConflictList> ReadConflictsAsync(
+        ConflictListArguments arguments, CancellationToken cancellationToken) =>
+        MirrorPulseConflictQueries.ReadAsync(_catalog, arguments, cancellationToken);
 
     private async Task<MirrorPulseControlOperation> GetOperationAsync(
         OperationIdArguments arguments,
