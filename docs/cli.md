@@ -71,6 +71,8 @@ The default output is concise human-readable text. Automation should use `--json
 | `mp root list` | Inspect managed root IDs, labels, availability, required rescans, and pending namespace recovery. | `mp --json root list` |
 | `mp root recover OPERATION_ID` | Retry the original managed root rename proof through the Host. | operation ID from `root list`; `--json` includes separate native and durable projection facts |
 | `mp root prepare-rename ROOT_ID LABEL` | Prepare a Label-only managed root rename. | preserves the source directory and returns an operation ID for recovery |
+| `mp root execute-rename OPERATION_ID` | Execute or resume the original prepared Label change through the Host. | retains the original operation and complete member graph; incomplete execution returns exit `11` |
+| `mp root cancel-rename OPERATION_ID` | Cancel only an original preparation proven not to have started its native move. | refuses durable native starts and observed/completed moves; the cancellation receipt alone does not grant current root readiness |
 | `mp namespace member create PARENT_ID NAME [--directory] [--operation-id GUID]` | Create an empty local file or directory under a registered protected directory. | retain `operationId` for retry; this does not prove remote acceptance |
 | `mp namespace member prepare-import PARENT_ID NAME SOURCE_PATH [--operation-id GUID]` | Capture a private input and retain an immutable file import plan without creating the destination. | `SOURCE_PATH` is resolved by the CLI; keep `operationId` |
 | `mp namespace member import OPERATION_ID` | Execute or resume the original import without reopening the source file. | completed replay preserves newer local bytes; no remote acceptance claim |

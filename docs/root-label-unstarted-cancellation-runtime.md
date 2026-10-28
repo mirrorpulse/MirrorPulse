@@ -46,9 +46,16 @@ cross role disposal with only their original public proof. It requires actual
 public `NotMoved`, the complete four-member graph, immutable replay and later
 Label preservation, while asserting that no namespace move or snapshot was
 manufactured. Both additional cases retain individual 60-second deadlines.
-This fixture uses separate runtime roles, not an independent full Host process
-or signed Worker. Actual native results, full fault/rollback cuts, concurrency
-and independent signed Host restart acceptance remain pending until verified.
+The partial-initializer producer additionally retains sixteen internal scenarios,
+including four original Prepared/Applied permission successor chains and ten
+born-recovery checkpoint/lifecycle combinations. Source25a1464 passed all 123
+ARM64 namespace methods in [CI40649435116](https://github.com/mirrorpulse/MirrorPulse/actions/runs/40649435116).
+The original archive and all sixteen scenarios, ten cuts and eight exact-old
+inherited-descriptor seed/readback sets were authenticated. The fixture-only
+seed correction preserves actual production Access writes and all prior guards.
+This evidence uses separate runtime roles; it does not establish independent
+signed Host process crash recovery. Other producer results, the full fault/race
+matrix and signed final-reenabled startup acceptance remain separate obligations.
 
 The preparation diagnostic also records a closed stage: root work drain,
 instance/library serialization, original ownership, current-tree audit or public

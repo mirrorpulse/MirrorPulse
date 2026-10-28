@@ -18,9 +18,11 @@ retirements, batches or born-member histories. Existing catalog bytes, schema
 version, SDK policy and public result ordering remain unchanged.
 
 This removes lists of all complete owner graphs from those internal iterators.
-Each of the 13 transaction history cache families retains at most 16 successfully
-validated immutable entries. A full cache declines new retention; readers still
-load and validate every original fact. Directory position and protection readers
+Each transaction history cache family retains at most 16 successfully validated
+immutable entries. Within that one SQLite snapshot, a hit marks an entry as
+recently read and a full cache replaces its least recently read entry. A miss
+still loads and validates its original fact before retention. No current head,
+name, absence or native observation is cached. Directory position and protection readers
 use their returned validated graph directly, including graphs beyond cache
 capacity. A new transaction starts without prior cached facts.
 
