@@ -24,14 +24,15 @@ public static partial class CliFixtureProbe
             location.CurrentPositionOperationId != label.OperationId)
             throw new InvalidDataException("Renamed fixture cleanup requires the committed current placement head.");
 
+        var cancellationLineage = CliFixtureRootCancellationCleanupLineage.Select(marker.DirectoryName, registration.DirectoryName);
         Guid? operation = label.OperationId;
         string name = registration.DirectoryName;
         var seen = new HashSet<Guid>();
-        // The signed fixture executes exactly three Labels. A longer or cyclic
-        // chain is outside its fixed inventory and never grants cleanup authority.
+        // The original lifecycle keeps its three-move bound. The two additional
+        // cancellation Labels require their exact bounded transition sequence.
         while (operation is { } id)
         {
-            if (!seen.Add(id) || seen.Count > 3)
+            if (!seen.Add(id) || seen.Count > (cancellationLineage?.ExpectedMoves ?? 3))
                 throw new InvalidDataException("The fixture Label lineage is cyclic or exceeds its fixed bound.");
             var history = await catalog.ReadManagedRootRenameHistoryAsync(id);
             var move = await catalog.ReadNamespaceMemberMoveAsync(id);
@@ -47,9 +48,11 @@ public static partial class CliFixtureProbe
                 completion.PublicEvidenceSha256 != Convert.ToHexString(SHA256.HashData(Convert.FromBase64String(evidence))) ||
                 history.Intent.UpdatedAt != completion.Root.VerifiedAt)
                 throw new InvalidDataException("The fixture Label lineage lost its original complete protected subtree receipt.");
+            cancellationLineage?.RequireTransition(seen.Count - 1, move.Source.RelativePath, move.Target.RelativePath);
             name = move.Source.RelativePath;
             operation = move.SourcePositionOperationId ?? move.PreviousMoveOperationId;
         }
+        cancellationLineage?.RequireComplete(seen.Count);
         if (name != marker.DirectoryName)
             throw new InvalidDataException("The fixture Label lineage does not end at the exact original marker.");
         return new(registration.DirectoryName, member.LocalObject);

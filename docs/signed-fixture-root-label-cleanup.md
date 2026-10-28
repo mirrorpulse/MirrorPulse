@@ -15,7 +15,20 @@ required. The renamed native root must still have the original authenticated
 binding before any restoration and immediately before its own permission write.
 The transfer fixture continues to use its separate authenticated inventory.
 
-The change addresses the secondary RouteValidation cleanup failure retained from
-CI 40339651595. The primary disabled case-only preparation failure remains open;
-successful cleanup never turns the failed execution into a passing regression.
-Actual native cleanup and the full signed lifecycle require clean Windows CI.
+The change initially addressed the secondary RouteValidation cleanup failure
+retained from CI 40339651595. That original run remains a failed execution.
+The later dd33024 source passed the complete original signed lifecycle, final
+reenabled startup and authenticated cleanup in
+[CI40666379728](https://github.com/mirrorpulse/MirrorPulse/actions/runs/40666379728).
+Additional cancellation process boundaries require their own clean CI evidence;
+successful cleanup cannot turn an execution failure into a passing regression.
+
+The independent Host cancellation fixture additionally admits only the exact
+` After active` and ` After disabled` endpoint spellings. They require exactly
+four or six original completed moves, respectively, including the original three
+Label transitions and the intervening restoration. Every source and target must
+match that fixed reverse sequence. Missing, added, reordered, case-changed or
+foreign transitions refuse cleanup. Other endpoint names retain the original
+three-move bound. This additional shape check never replaces the existing
+proof, atomic completion, stable identity, native binding or complete inventory
+checks, and supplies no authority to adopt pending or cancelled moves.
