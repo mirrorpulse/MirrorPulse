@@ -66,7 +66,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                                 Assert.AreEqual(current.Child.Member.IsDirectory, actual.IsDirectory); Assert.AreEqual(1u, actual.LinkCount);
                                 Assert.IsTrue(MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(current.TargetDacl, actual.Dacl) ||
                                     MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(current.Child.BirthProtection!.Verification.Dacl, actual.Dacl));
-                                await lease.ApplyDaclAsync(current.Child.BirthProtection!.Verification.Dacl, scopeToken);
+                                scopeToken.ThrowIfCancellationRequested();
+                                SeedRetainedInheritedCancellationFixtureDacl(item, current.Child.BirthProtection!.Verification.Dacl);
                                 var seedReadback = await lease.InspectAsync(scopeToken);
                                 try
                                 {
@@ -79,6 +80,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                                 { Console.WriteLine($"CancellationBornSeedObservation: cut={cut}; stage=SeedReadback; observationUnavailable=True; failureKind={diagnosticFailure.GetType().Name}; diagnosticOnly=True."); }
                                 Assert.IsTrue(MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(current.Child.BirthProtection.Verification.Dacl,
                                     seedReadback.Dacl));
+                                Assert.IsFalse(MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(current.TargetDacl, seedReadback.Dacl));
+                                Assert.AreEqual(actual.LocalObject, seedReadback.LocalObject); Assert.AreEqual(actual.OwnerSid, seedReadback.OwnerSid);
                             }, admitted), stop);
                     Console.WriteLine($"CancellationBornSeedObservation: cut={cut}; stage=ScopeResult; scopeCompleted={seed.Outcome == CloudProtectedLocalOperationOutcome.Completed}; drained={seed.Drained}; diagnosticOnly=True.");
                     Assert.AreEqual(CloudProtectedLocalOperationOutcome.Completed, seed.Outcome); Assert.IsTrue(seed.Drained);
