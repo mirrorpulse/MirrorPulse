@@ -126,7 +126,7 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
         return snapshot;
     }
 
-    private static void RequireUnsealedCancellationObject(MirrorPulseNamespacePermissionObject facts, CloudItemSnapshot snapshot,
+    private void RequireUnsealedCancellationObject(MirrorPulseNamespacePermissionObject facts, CloudItemSnapshot snapshot,
         MirrorPulseNamespaceProtectionProof proof, MirrorPulseLocalFileBinding binding, string owner, RootId? root, string path, bool directory)
     {
         if (!snapshot.Exists || snapshot.IsTombstone || snapshot.LocalBinding is not { } actual ||

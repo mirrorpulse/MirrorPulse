@@ -131,6 +131,10 @@ public static class SafeDiagnosticPolicy
                 "rootLabelFailureBoundary" => Enum.TryParse(value, out MirrorPulseRootLabelFailureBoundary rootLabelBoundary) && Enum.IsDefined(rootLabelBoundary) && value == rootLabelBoundary.ToString() ? value : null,
                 "rootLabelExecutionStage" => Enum.TryParse(value, out MirrorPulseRootLabelExecutionStage executionStage) && Enum.IsDefined(executionStage) && value == executionStage.ToString() ? value : null,
                 "rootLabelCancellationStage" => Enum.TryParse(value, out MirrorPulseRootLabelCancellationStage cancellationStage) && Enum.IsDefined(cancellationStage) && value == cancellationStage.ToString() ? value : null,
+                "rootLabelCancellationObjectScope" => Enum.TryParse(value, out MirrorPulseCancellationObjectScope objectScope) && Enum.IsDefined(objectScope) && value == objectScope.ToString() ? value : null,
+                "rootLabelCancellationObjectOrigin" => Enum.TryParse(value, out MirrorPulseCancellationObjectOrigin objectOrigin) && Enum.IsDefined(objectOrigin) && value == objectOrigin.ToString() ? value : null,
+                "rootLabelCancellationDescriptorDifference" => Enum.TryParse(value, out MirrorPulseCancellationDescriptorDifference descriptorDifference) && Enum.IsDefined(descriptorDifference) && value == descriptorDifference.ToString() ? value : null,
+                "rootLabelCancellationCurrentRoleReference" => Enum.TryParse(value, out MirrorPulseCancellationRoleReference roleReference) && Enum.IsDefined(roleReference) && value == roleReference.ToString() ? value : null,
                 "rootLabelPreparationStage" => Enum.TryParse(value, out MirrorPulseRootLabelPreparationStage rootLabelStage) && Enum.IsDefined(rootLabelStage) && value == rootLabelStage.ToString() ? value : null,
                 "nativeErrorCode" => int.TryParse(value, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out int nativeCode) ? nativeCode.ToString(CultureInfo.InvariantCulture) : null,
                 "attempt" or "bytesTransferred" or "totalBytes" or "pendingCount" =>

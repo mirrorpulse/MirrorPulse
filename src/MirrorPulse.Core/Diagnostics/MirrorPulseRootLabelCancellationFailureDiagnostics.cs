@@ -57,7 +57,8 @@ public static class MirrorPulseRootLabelCancellationFailureDiagnostics
                      new("rootLabelFailureBoundary", MirrorPulseRootLabelFailureDiagnostics.Classify(original).ToString()),
                      new("rootLabelCancellationStage", Stage(original).ToString()),
                      new("failureCategory", SafeDiagnosticPolicy.ClassifyFailure(original)),
-                     new("hresult", original.HResult.ToString("X8", CultureInfo.InvariantCulture))])).ConfigureAwait(false);
+                     new("hresult", original.HResult.ToString("X8", CultureInfo.InvariantCulture)),
+                     .. MirrorPulseRootLabelCancellationObjectDiagnostics.Fields(original)])).ConfigureAwait(false);
             }
             catch (Exception observationFailure) when (observationFailure is not StackOverflowException and not OutOfMemoryException) { }
             throw;

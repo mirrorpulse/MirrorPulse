@@ -9,12 +9,21 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
 {
     // Classify only an already rejected immutable read. No new inspection, native
     // operation, catalog read, descriptor normalization or admission occurs here.
-    private static InvalidDataException ObserveCancellationObjectFailure(InvalidDataException original,
+    private InvalidDataException ObserveCancellationObjectFailure(InvalidDataException original,
         MirrorPulseNamespacePermissionObject facts, CloudItemSnapshot snapshot, MirrorPulseNamespaceProtectionProof proof,
         MirrorPulseLocalFileBinding binding, string owner, RootId? root, string path, bool directory)
     {
         var stage = ClassifyCancellationObjectFailure(facts, snapshot, proof, binding, owner, root, path, directory);
         MirrorPulseRootLabelCancellationFailureDiagnostics.MarkStage(original, stage);
+        try
+        {
+            MirrorPulseRootLabelCancellationObjectDiagnostics.Mark(original, MirrorPulseRootLabelCancellationObjectInspection.Observe(
+                path.Length == 0 ? MirrorPulseCancellationObjectScope.Anchor
+                    : path.Contains('/') ? MirrorPulseCancellationObjectScope.Descendant : MirrorPulseCancellationObjectScope.Root,
+                proof.BornParent is null ? MirrorPulseCancellationObjectOrigin.CapturedOriginal : MirrorPulseCancellationObjectOrigin.ProtectedBirth,
+                proof.Verification.Dacl, facts.Dacl, _execution.RoleSid.Value));
+        }
+        catch (Exception observationFailure) when (observationFailure is not StackOverflowException and not OutOfMemoryException) { }
         return original;
     }
 

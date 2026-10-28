@@ -60,3 +60,13 @@ establish the exact object or prove this bounded Windows normalization caused
 the signed failure. The correction is independently covered by unchanged
 sealed/unsealed, enabled/disabled, original/born, anchor/root/leaf catalog tests
 and native-policy boundary tests. A new signed reproduction remains required.
+
+An object-verification rejection can additionally record four closed values:
+anchor/root/descendant scope, original/born provenance, the descriptor difference
+category, and whether its existing ACEs reference the current execution role.
+These observations inspect only the already captured descriptors. They issue no
+native read, permission write or catalog query, and grant no authority. A role
+reference does not mean that the role is allowed access or that recovery owns it.
+Raw descriptors, principals, paths and identity bytes remain omitted. Failed
+classification cannot replace the original product exception. The same original
+object and permission guards still reject the request.
