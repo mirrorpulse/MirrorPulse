@@ -76,7 +76,7 @@ public sealed class MirrorPulseJournalPumpRunner
         // repeated global Any scans and skipped round-robin turns.
         var eligibleRoutes = new Queue<int>(routes.Length);
         for (int offset = 0; offset < routes.Length; offset++) eligibleRoutes.Enqueue((route + offset) % routes.Length);
-        var acceptedOperations = new HashSet<Guid>();
+        var dependencies = new MirrorPulseJournalDispatchOrder(ordered);
         int inspected = 0;
         while (inspected < _maximumCommandsPerCycle && eligibleRoutes.Count > 0)
         {
@@ -90,8 +90,7 @@ public sealed class MirrorPulseJournalPumpRunner
             // An earlier operation outside this cycle's budget still fences its
             // affected objects/subtree. Round-robin ordering is safe only for
             // commands independent of every earlier, unaccepted original ID.
-            if (ordered.TakeWhile(earlier => earlier != command)
-                .Any(earlier => !acceptedOperations.Contains(earlier.OperationId) && MirrorPulseJournalOrderPolicy.DependsOn(command, earlier)))
+            if (dependencies.HasEarlierDependency(command))
                 continue;
             try
             {
@@ -99,7 +98,7 @@ public sealed class MirrorPulseJournalPumpRunner
                 progressed |= accepted;
                 if (accepted)
                 {
-                    acceptedOperations.Add(command.OperationId);
+                    dependencies.Accept(command.OperationId);
                     _faults.TryRemove(command.OperationId, out _);
                 }
             }
