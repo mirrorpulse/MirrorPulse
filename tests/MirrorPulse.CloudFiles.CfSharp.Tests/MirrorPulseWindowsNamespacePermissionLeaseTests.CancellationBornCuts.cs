@@ -34,6 +34,14 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     // the following production scope must perform a real Access write.
                     var actions = await catalog.ReadNamespaceBornMemberRecoveryActionsAsync(memberId, stop);
                     var preparedAction = actions[^1];
+                    try
+                    {
+                        Console.WriteLine($"CancellationBornSeedObservation: cut={cut}; stage=Prepared; " +
+                            $"sameOriginalOwner={preparedAction.RootLabelRecoveryOwner == new MirrorPulseNamespaceBornRootLabelRecoveryOwner(operationId, plan.Owner)}; " +
+                            $"targetMatchesRetained={MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(preparedAction.TargetDacl, preparedAction.Child.BirthProtection!.Verification.Dacl)}; diagnosticOnly=True.");
+                    }
+                    catch (Exception diagnosticFailure) when (diagnosticFailure is not OutOfMemoryException)
+                    { Console.WriteLine($"CancellationBornSeedObservation: cut={cut}; stage=Prepared; observationUnavailable=True; failureKind={diagnosticFailure.GetType().Name}; diagnosticOnly=True."); }
                     Assert.AreEqual(new MirrorPulseNamespaceBornRootLabelRecoveryOwner(operationId, plan.Owner), preparedAction.RootLabelRecoveryOwner);
                     Assert.IsFalse(MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(preparedAction.TargetDacl, preparedAction.Child.BirthProtection!.Verification.Dacl));
                     CloudItem item = preparedAction.Child.Member.IsDirectory ? fileSystem.GetDirectory(preparedAction.Child.Location.RelativePath) : fileSystem.GetFile(preparedAction.Child.Location.RelativePath);
@@ -42,15 +50,37 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                             async (lease, scopeToken) =>
                             {
                                 var actual = await lease.InspectAsync(scopeToken);
+                                try
+                                {
+                                    Console.WriteLine($"CancellationBornSeedObservation: cut={cut}; stage=BeforeSeed; " +
+                                        $"sameBinding={current.Child.Member.LocalObject == actual.LocalObject}; sameOwner={current.Child.Member.OwnerSid == actual.OwnerSid}; " +
+                                        $"samePath={current.Child.Location.RelativePath == actual.RelativePath}; sameRoot={current.Child.Member.RootId == actual.RootId}; " +
+                                        $"sameKind={current.Child.Member.IsDirectory == actual.IsDirectory}; singleLink={actual.LinkCount == 1}; " +
+                                        $"targetMatchesNative={MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(current.TargetDacl, actual.Dacl)}; " +
+                                        $"retainedMatchesNative={MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(current.Child.BirthProtection!.Verification.Dacl, actual.Dacl)}; diagnosticOnly=True.");
+                                }
+                                catch (Exception diagnosticFailure) when (diagnosticFailure is not OutOfMemoryException)
+                                { Console.WriteLine($"CancellationBornSeedObservation: cut={cut}; stage=BeforeSeed; observationUnavailable=True; failureKind={diagnosticFailure.GetType().Name}; diagnosticOnly=True."); }
                                 Assert.AreEqual(current.Child.Member.LocalObject, actual.LocalObject); Assert.AreEqual(current.Child.Member.OwnerSid, actual.OwnerSid);
                                 Assert.AreEqual(current.Child.Location.RelativePath, actual.RelativePath); Assert.AreEqual(current.Child.Member.RootId, actual.RootId);
                                 Assert.AreEqual(current.Child.Member.IsDirectory, actual.IsDirectory); Assert.AreEqual(1u, actual.LinkCount);
                                 Assert.IsTrue(MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(current.TargetDacl, actual.Dacl) ||
                                     MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(current.Child.BirthProtection!.Verification.Dacl, actual.Dacl));
                                 await lease.ApplyDaclAsync(current.Child.BirthProtection!.Verification.Dacl, scopeToken);
+                                var seedReadback = await lease.InspectAsync(scopeToken);
+                                try
+                                {
+                                    Console.WriteLine($"CancellationBornSeedObservation: cut={cut}; stage=SeedReadback; " +
+                                        $"sameBinding={current.Child.Member.LocalObject == seedReadback.LocalObject}; sameOwner={current.Child.Member.OwnerSid == seedReadback.OwnerSid}; " +
+                                        $"targetMatchesNative={MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(current.TargetDacl, seedReadback.Dacl)}; " +
+                                        $"retainedMatchesNative={MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(current.Child.BirthProtection.Verification.Dacl, seedReadback.Dacl)}; diagnosticOnly=True.");
+                                }
+                                catch (Exception diagnosticFailure) when (diagnosticFailure is not OutOfMemoryException)
+                                { Console.WriteLine($"CancellationBornSeedObservation: cut={cut}; stage=SeedReadback; observationUnavailable=True; failureKind={diagnosticFailure.GetType().Name}; diagnosticOnly=True."); }
                                 Assert.IsTrue(MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(current.Child.BirthProtection.Verification.Dacl,
-                                    (await lease.InspectAsync(scopeToken)).Dacl));
+                                    seedReadback.Dacl));
                             }, admitted), stop);
+                    Console.WriteLine($"CancellationBornSeedObservation: cut={cut}; stage=ScopeResult; scopeCompleted={seed.Outcome == CloudProtectedLocalOperationOutcome.Completed}; drained={seed.Drained}; diagnosticOnly=True.");
                     Assert.AreEqual(CloudProtectedLocalOperationOutcome.Completed, seed.Outcome); Assert.IsTrue(seed.Drained);
                     seededOriginalDescriptor = true;
                 }
