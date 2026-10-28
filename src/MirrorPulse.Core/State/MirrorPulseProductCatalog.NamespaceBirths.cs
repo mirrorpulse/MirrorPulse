@@ -132,8 +132,7 @@ public sealed partial class MirrorPulseProductCatalog
         var history = transaction is null ? null : _namespaceHistoryReads.GetOrCreateValue(transaction);
         if (history?.BirthIntentRows.TryGetValue(operationId, out var retained) == true)
         {
-            await ValidateNamespaceRemoteBirthReferenceIndexAsync(retained, transaction, token).ConfigureAwait(false);
-            await ValidateNamespaceTransferBirthReferenceIndexAsync(retained, transaction, token).ConfigureAwait(false);
+            await ValidateNamespaceBirthReferenceIndexesAsync(retained, transaction, token).ConfigureAwait(false);
             return retained;
         }
         MirrorPulseNamespaceBirthIntent intent;
@@ -173,8 +172,7 @@ public sealed partial class MirrorPulseProductCatalog
                 !JsonSerializer.SerializeToUtf8Bytes(intent, TopologyJsonOptions).AsSpan().SequenceEqual(payload))
                 throw new InvalidDataException("The birth admission's index or canonical payload is inconsistent.");
         }
-        await ValidateNamespaceRemoteBirthReferenceIndexAsync(intent, transaction, token).ConfigureAwait(false);
-        await ValidateNamespaceTransferBirthReferenceIndexAsync(intent, transaction, token).ConfigureAwait(false);
+        await ValidateNamespaceBirthReferenceIndexesAsync(intent, transaction, token).ConfigureAwait(false);
         history?.BirthIntentRows.Add(operationId, intent);
         return intent;
     }
