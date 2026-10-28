@@ -96,6 +96,8 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task<MirrorPulseNamespaceBirthConversionPreparation?> ReadNamespaceBirthConversionRowAsync(Guid operationId,
         SqliteTransaction? transaction, CancellationToken token)
     {
+        var history = transaction is null ? null : _namespaceHistoryReads.GetOrCreateValue(transaction);
+        if (history?.BirthConversionRows.TryGetValue(operationId, out var retained) == true) return retained;
         MirrorPulseNamespaceBirthConversionPreparation preparation;
         await using (SqliteCommand query = _connection.CreateCommand())
         {
@@ -126,6 +128,7 @@ public sealed partial class MirrorPulseProductCatalog
                 !JsonSerializer.SerializeToUtf8Bytes(preparation, TopologyJsonOptions).AsSpan().SequenceEqual(payload))
                 throw new InvalidDataException("The ordinary birth preparation's index or canonical payload is inconsistent.");
         }
+        history?.BirthConversionRows.Add(operationId, preparation);
         return preparation;
     }
 

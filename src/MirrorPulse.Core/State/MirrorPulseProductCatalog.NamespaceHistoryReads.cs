@@ -15,6 +15,9 @@ public sealed partial class MirrorPulseProductCatalog
     {
         internal NamespaceHistoryCache<(long Sequence, MirrorPulseNamespaceBirthProtection Protection)> BirthProtectionRows { get; } = new();
         internal NamespaceHistoryCache<MirrorPulseNamespaceBirthIntent> BirthIntentRows { get; } = new();
+        internal NamespaceHistoryCache<MirrorPulseNamespaceBirthPlan> BirthPlanRows { get; } = new();
+        internal NamespaceHistoryCache<MirrorPulseNamespaceBirthStart> BirthStartRows { get; } = new();
+        internal NamespaceHistoryCache<MirrorPulseNamespaceBirthConversionPreparation> BirthConversionRows { get; } = new();
         internal NamespaceHistoryCache<MirrorPulseNamespaceBirthObservation> BirthObservationRows { get; } = new();
         internal NamespaceHistoryCache<MirrorPulseNamespacePermissionChange> VerifiedPermissionRows { get; } = new();
         internal NamespaceHistoryCache<MirrorPulseNamespacePermissionBaseline> PermissionBaselines { get; } = new();

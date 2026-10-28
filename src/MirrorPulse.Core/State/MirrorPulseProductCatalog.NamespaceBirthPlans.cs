@@ -166,6 +166,8 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task<MirrorPulseNamespaceBirthPlan?> ReadNamespaceBirthPlanRowAsync(Guid operationId,
         SqliteTransaction? transaction, CancellationToken token)
     {
+        var history = transaction is null ? null : _namespaceHistoryReads.GetOrCreateValue(transaction);
+        if (history?.BirthPlanRows.TryGetValue(operationId, out var retained) == true) return retained;
         var artifact = await ReadNamespaceBirthArtifactCoreAsync(operationId, isPlan: true, transaction, token).ConfigureAwait(false);
         if (artifact is null) return null;
         MirrorPulseNamespaceBirthPlan plan;
@@ -180,6 +182,7 @@ public sealed partial class MirrorPulseProductCatalog
         if (plan.OperationId != operationId || plan.ItemId.ToString("D") != artifact.Value.ItemId ||
             !JsonSerializer.SerializeToUtf8Bytes(plan, TopologyJsonOptions).AsSpan().SequenceEqual(artifact.Value.Payload))
             throw new InvalidDataException("The birth identity plan's index or canonical payload is inconsistent.");
+        history?.BirthPlanRows.Add(operationId, plan);
         return plan;
     }
 
@@ -197,6 +200,8 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task<MirrorPulseNamespaceBirthStart?> ReadNamespaceBirthStartRowAsync(Guid operationId,
         SqliteTransaction? transaction, CancellationToken token)
     {
+        var history = transaction is null ? null : _namespaceHistoryReads.GetOrCreateValue(transaction);
+        if (history?.BirthStartRows.TryGetValue(operationId, out var retained) == true) return retained;
         var artifact = await ReadNamespaceBirthArtifactCoreAsync(operationId, isPlan: false, transaction, token).ConfigureAwait(false);
         if (artifact is null) return null;
         MirrorPulseNamespaceBirthStart start;
@@ -211,6 +216,7 @@ public sealed partial class MirrorPulseProductCatalog
         if (start.OperationId != operationId || !JsonSerializer.SerializeToUtf8Bytes(start, TopologyJsonOptions)
             .AsSpan().SequenceEqual(artifact.Value.Payload))
             throw new InvalidDataException("The birth start intent's index or canonical payload is inconsistent.");
+        history?.BirthStartRows.Add(operationId, start);
         return start;
     }
 
