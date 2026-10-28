@@ -8,7 +8,8 @@ public sealed partial class MirrorPulseProductCatalog
 {
     // A transaction sees one SQLite snapshot. Reuse only validated immutable facts,
     // never current names, protection heads, absence or native state. Full caches
-    // decline new entries; the caller still reads and validates their originals.
+    // replace their least recently read immutable fact, retaining at most sixteen.
+    // A later miss still reads and validates its original before adding it again.
     private readonly ConditionalWeakTable<SqliteTransaction, NamespaceHistoryReads> _namespaceHistoryReads = new();
 
     private sealed class NamespaceHistoryReads
@@ -41,24 +42,49 @@ public sealed partial class MirrorPulseProductCatalog
     {
         private const int Capacity = 16;
         private readonly Dictionary<TKey, T> _entries = new();
+        private readonly List<TKey> _recent = new(Capacity);
         internal int Count => _entries.Count;
 
-        internal bool TryGetValue(TKey id, [MaybeNullWhen(false)] out T value) => _entries.TryGetValue(id, out value);
+        internal bool TryGetValue(TKey id, [MaybeNullWhen(false)] out T value)
+        {
+            if (!_entries.TryGetValue(id, out value)) return false;
+            _recent.Remove(id);
+            _recent.Add(id);
+            return true;
+        }
 
         internal void Add(TKey id, T value)
         {
-            if (_entries.Count < Capacity || _entries.ContainsKey(id)) _entries.Add(id, value);
+            if (_entries.ContainsKey(id)) throw new ArgumentException("The immutable history key is already retained.", nameof(id));
+            MakeRoom();
+            _entries.Add(id, value);
+            _recent.Add(id);
         }
 
         internal T this[TKey id]
         {
             set
             {
-                if (_entries.Count < Capacity || _entries.ContainsKey(id)) _entries[id] = value;
+                if (_entries.ContainsKey(id)) _recent.Remove(id);
+                else MakeRoom();
+                _entries[id] = value;
+                _recent.Add(id);
             }
         }
 
-        internal bool Remove(TKey id) => _entries.Remove(id);
+        internal bool Remove(TKey id)
+        {
+            if (!_entries.Remove(id)) return false;
+            _recent.Remove(id);
+            return true;
+        }
+
+        private void MakeRoom()
+        {
+            if (_entries.Count < Capacity) return;
+            _entries.Remove(_recent[0]);
+            _recent.RemoveAt(0);
+        }
     }
 
     private sealed class NamespaceHistorySet
