@@ -15,6 +15,8 @@ $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 . (Join-Path $PSScriptRoot 'cli-integration-failure-policy.ps1')
 . (Join-Path $PSScriptRoot 'cli-root-label-lifecycle.ps1')
 . (Join-Path $PSScriptRoot 'cli-root-label-evidence-policy.ps1')
+. (Join-Path $PSScriptRoot 'cli-root-label-cancellation.ps1')
+. (Join-Path $PSScriptRoot 'cli-root-label-cancellation-policy.ps1')
 $primaryFailure = $null
 $runRoot = Join-Path ([IO.Path]::GetTempPath()) "MirrorPulse-cli-integration-$([guid]::NewGuid().ToString('N'))"
 $cliRoot = Join-Path $runRoot "cli"
@@ -31,6 +33,7 @@ $namespaceAudits = [Collections.Generic.List[object]]::new()
 $script:firstNamespaceMember = $null
 $script:firstAnchorMember = $null
 $rootLabelLifecycle = $null
+$rootLabelCancellations = $null
 
 function Invoke-CliFixtureProbe {
     param([Parameter(Mandatory)][ValidateSet('read', 'audit', 'inspect', 'cleanup')][string]$Mode, [Parameter(Mandatory)][string]$Phase)
@@ -463,6 +466,14 @@ try {
             Assert-CliRootLabelLifecycleEvidence -Evidence $rootLabelLifecycle -OriginalsDirectory $rootLabelOriginals
         }
 
+        $rootLabelCancellations = Invoke-CliRootLabelCancellationLifecycle -InvokeCli { param($arguments) Invoke-MirrorPulseCli $arguments } `
+            -RootId $registeredRoot.rootId -InstanceId $instanceId -DirectoryName $rootDirectory `
+            -SyncRoot $syncRoot -SourceRoot $sourceRoot -EvidencePath $EvidencePath
+        if ($EvidencePath) {
+            $cancellationOriginals = Join-Path ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($EvidencePath))) 'cli-regression.originals/root-cancellations'
+            Assert-CliRootLabelCancellationEvidence -Evidence $rootLabelCancellations -OriginalsDirectory $cancellationOriginals
+        }
+
         # Both sides change while the Host is stopped. The conflict must survive another restart.
         Invoke-MirrorPulseCli @("--json", "--developer-mode", "host", "stop") | Out-Null
         Wait-MirrorPulseHostStopped
@@ -576,5 +587,6 @@ if ($EvidencePath) {
         hydration=[ordered]@{reads=@($hydrationReads.ToArray());audits=@($hydrationAudits.ToArray())}
         namespace=[ordered]@{defaultHostIntegrated=$true;audits=@($namespaceAudits.ToArray())}
         rootLabels=$rootLabelLifecycle
+        rootCancellations=$rootLabelCancellations
     } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $EvidencePath -Encoding utf8
 }

@@ -28,3 +28,9 @@ receipt and cannot infer acknowledgement from an empty queue. Those fault,
 role-replacement, concurrency and receipt boundaries still need their own proof.
 Local verification is limited to syntax, evidence-policy tests and static gates;
 actual product Host, Cloud Files and signed Worker execution belongs to clean CI.
+
+The regression separately runs the [independent Host cancellation fixture](root-label-signed-cancellation-fixture.md)
+after this lifecycle. Its original preparations, cancellations, later Labels and
+restorations have their own evidence directory and policy. They do not change
+this fixture's three-command/three-restart boundary or add native interruption
+and journal receipt claims to its result.
