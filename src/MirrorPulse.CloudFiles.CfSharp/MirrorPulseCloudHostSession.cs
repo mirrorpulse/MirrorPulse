@@ -1551,9 +1551,11 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             var root = router.FindRegistration(original.Intent.RootId)
                 ?? throw new InvalidOperationException("The original Label root is no longer configured.");
             MirrorPulseManagedRootRenameCancellation result;
-            await using (var drained = await namespaceWork.WaitForRecoveryAsync([root.RootId], stop.Token).ConfigureAwait(false))
+            await using (var drained = await MirrorPulseRootLabelCancellationFailureDiagnostics.AtStageAsync(MirrorPulseRootLabelCancellationStage.RootWorkDrain,
+                () => namespaceWork.WaitForRecoveryAsync([root.RootId], stop.Token)).ConfigureAwait(false))
             {
-                result = await WithAdmittedInstanceLibraryAsync(root.InstanceId, async (instances, token) =>
+                result = await MirrorPulseRootLabelCancellationFailureDiagnostics.AtStageAsync(MirrorPulseRootLabelCancellationStage.InstanceLibrary,
+                    () => WithAdmittedInstanceLibraryAsync(root.InstanceId, async (instances, token) =>
                 {
                     var startupAnchor = RequireCurrentStartupAnchor();
                     var moves = new MirrorPulseNamespaceMemberMoveCoordinator(fileSystem, state, catalog, router, _namespaceExecution, _namespaceActor);
@@ -1561,11 +1563,16 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                     // evidence. Never manufacture a move admission just to cancel one.
                     bool unsealed = await catalog.ReadNamespaceMemberMoveAsync(operationId, token).ConfigureAwait(false) is null;
                     if (unsealed)
-                        await new MirrorPulseRootLabelCancellationRecoveryCoordinator(fileSystem, catalog, router, _namespaceExecution,
-                            _namespaceActor, instances, _permissions).ReplayAsync(operationId, token).ConfigureAwait(false);
-                    var cancellation = unsealed
-                        ? (await moves.CancelUnsealedRootLabelAsync(operationId, token).ConfigureAwait(false)).Observation
-                        : await moves.CancelRootLabelAsync(operationId, token).ConfigureAwait(false);
+                        _ = await MirrorPulseRootLabelCancellationFailureDiagnostics.AtStageAsync(MirrorPulseRootLabelCancellationStage.PendingPermissionRecovery, async () =>
+                        {
+                            await new MirrorPulseRootLabelCancellationRecoveryCoordinator(fileSystem, catalog, router, _namespaceExecution,
+                                _namespaceActor, instances, _permissions).ReplayAsync(operationId, token).ConfigureAwait(false);
+                            return true;
+                        }).ConfigureAwait(false);
+                    var cancellation = await MirrorPulseRootLabelCancellationFailureDiagnostics.AtStageAsync(MirrorPulseRootLabelCancellationStage.OriginalCancellation,
+                        async () => unsealed
+                            ? (await moves.CancelUnsealedRootLabelAsync(operationId, token).ConfigureAwait(false)).Observation
+                            : await moves.CancelRootLabelAsync(operationId, token).ConfigureAwait(false)).ConfigureAwait(false);
                     var cancelled = await catalog.ReadManagedRootRenameHistoryAsync(operationId, token).ConfigureAwait(false)
                         ?? throw new InvalidDataException("Cancellation lost its original Label receipt.");
                     if (cancelled.Intent.Phase != MirrorPulseRootRenamePhase.Cancelled ||
@@ -1586,23 +1593,28 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                     // have expired; recover and audit today's graph through a new operation.
                     var recovery = new MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(fileSystem, catalog, router,
                         _namespaceExecution, _namespaceActor, instances, _permissions);
-                    await using var restored = await recovery.RecoverRootAsync(Guid.NewGuid(), root.RootId, token).ConfigureAwait(false);
+                    await using var restored = await MirrorPulseRootLabelCancellationFailureDiagnostics.AtStageAsync(MirrorPulseRootLabelCancellationStage.CurrentTreeRecovery,
+                        async () => await recovery.RecoverRootAsync(Guid.NewGuid(), root.RootId, token).ConfigureAwait(false)).ConfigureAwait(false);
                     var freshAnchor = restored.TransferAnchor();
                     var prior = _scopedAnchorProtection; _scopedAnchorProtection = freshAnchor;
                     if (prior is not null) await prior.DisposeAsync().ConfigureAwait(false);
-                    await new MirrorPulseNamespaceCurrentTreeAuditCoordinator(fileSystem, catalog, router, _namespaceExecution, _namespaceActor, _permissions)
-                        .AuditRetainedRootAsync(anchorMember.MemberId, freshAnchor, root.RootId, (audit, _) =>
-                        {
-                            _namespaceActor.AssertAccess();
-                            current = router.FindRegistration(root.RootId) ?? throw new InvalidOperationException("The cancelled root lost its current route.");
-                            if (_startupProtection != startupAnchor || audit.Inventory.FencedRoots.Count != 0 || audit.RoleSid != _namespaceExecution.RoleSid.Value)
-                                throw new InvalidOperationException("Cancelled-root readmission requires a fresh current unfenced audit.");
-                            if (current.State == RootRegistrationState.Active) drained.CompleteAfterFreshAudit();
-                            return Task.CompletedTask;
-                        }, token).ConfigureAwait(false);
+                    _ = await MirrorPulseRootLabelCancellationFailureDiagnostics.AtStageAsync(MirrorPulseRootLabelCancellationStage.CurrentTreeAudit, async () =>
+                    {
+                        await new MirrorPulseNamespaceCurrentTreeAuditCoordinator(fileSystem, catalog, router, _namespaceExecution, _namespaceActor, _permissions)
+                            .AuditRetainedRootAsync(anchorMember.MemberId, freshAnchor, root.RootId, (audit, _) =>
+                            {
+                                _namespaceActor.AssertAccess();
+                                current = router.FindRegistration(root.RootId) ?? throw new InvalidOperationException("The cancelled root lost its current route.");
+                                if (_startupProtection != startupAnchor || audit.Inventory.FencedRoots.Count != 0 || audit.RoleSid != _namespaceExecution.RoleSid.Value)
+                                    throw new InvalidOperationException("Cancelled-root readmission requires a fresh current unfenced audit.");
+                                if (current.State == RootRegistrationState.Active) drained.CompleteAfterFreshAudit();
+                                return Task.CompletedTask;
+                            }, token).ConfigureAwait(false);
+                        return true;
+                    }).ConfigureAwait(false);
                     return new MirrorPulseManagedRootRenameCancellation(cancelled.Intent, cancellation.VerifiedAt,
                         current.DirectoryName, cancellation.Members.Count, true, false);
-                }, stop.Token).ConfigureAwait(false);
+                }, stop.Token)).ConfigureAwait(false);
             }
             return result with { NamespaceReady = namespaceWork.IsAdmitted(root.RootId) };
         }

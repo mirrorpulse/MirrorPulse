@@ -33,6 +33,7 @@ public static class SafeDiagnosticPolicy
         ["RootLabelJournalReadmissionFailed"] = "A root remains closed until its current Host namespace audit succeeds.",
         ["RootLabelJournalAdmissionFailed"] = "A root notification remains pending until its current Host admission succeeds.",
         ["RootLabelExecutionFailed"] = "The original root Label execution stopped at a protected namespace boundary.",
+        ["RootLabelCancellationFailed"] = "The original root Label cancellation stopped at a protected namespace boundary.",
         ["RootLabelPreparationFailed"] = "The root Label preparation stopped at a protected namespace boundary.",
         ["CloudProviderRequestFailed"] = "A Windows Cloud Files request failed.",
         ["CloudFilesStartupProgress"] = "The Host reached a Cloud Files initialization boundary.",
@@ -129,6 +130,7 @@ public static class SafeDiagnosticPolicy
                 "journalReadFailureKind" => value is "Native" or "Disposed" or "InvalidData" or "InvalidOperation" or "Authorization" or "Cancelled" or "IO" or "Argument" or "Other" ? value : null,
                 "rootLabelFailureBoundary" => Enum.TryParse(value, out MirrorPulseRootLabelFailureBoundary rootLabelBoundary) && Enum.IsDefined(rootLabelBoundary) && value == rootLabelBoundary.ToString() ? value : null,
                 "rootLabelExecutionStage" => Enum.TryParse(value, out MirrorPulseRootLabelExecutionStage executionStage) && Enum.IsDefined(executionStage) && value == executionStage.ToString() ? value : null,
+                "rootLabelCancellationStage" => Enum.TryParse(value, out MirrorPulseRootLabelCancellationStage cancellationStage) && Enum.IsDefined(cancellationStage) && value == cancellationStage.ToString() ? value : null,
                 "rootLabelPreparationStage" => Enum.TryParse(value, out MirrorPulseRootLabelPreparationStage rootLabelStage) && Enum.IsDefined(rootLabelStage) && value == rootLabelStage.ToString() ? value : null,
                 "nativeErrorCode" => int.TryParse(value, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out int nativeCode) ? nativeCode.ToString(CultureInfo.InvariantCulture) : null,
                 "attempt" or "bytesTransferred" or "totalBytes" or "pendingCount" =>
