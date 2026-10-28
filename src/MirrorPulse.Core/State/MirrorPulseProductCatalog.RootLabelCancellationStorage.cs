@@ -102,7 +102,7 @@ public sealed partial class MirrorPulseProductCatalog
             : await ReadNamespaceMemberProofAsync(member, false, transaction, token, protectionId, cancellation.VerifiedAt).ConfigureAwait(false);
         var verification = await ReadNamespaceMoveRetainedVerificationAsync(member, protectionId, transaction, token).ConfigureAwait(false);
         if (proof.ProtectionId != protectionId || proof.VerifiedAt > cancellation.PublicNotMovedAt || native.LocalObject != member.LocalObject ||
-            native.OwnerSid != member.OwnerSid || native.Dacl != verification.Dacl)
+            native.OwnerSid != member.OwnerSid || !MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(verification.Dacl, native.Dacl))
             throw new InvalidOperationException("Cancellation requires final guarded native facts matching each exact current or retained protection epoch.");
     }
 }

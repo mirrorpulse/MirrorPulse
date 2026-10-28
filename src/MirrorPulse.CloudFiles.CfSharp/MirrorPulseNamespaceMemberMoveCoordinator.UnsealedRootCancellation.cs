@@ -134,7 +134,7 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
             facts.LocalObject != binding || facts.LocalObject != proof.Verification.LocalObject || facts.OwnerSid != owner || proof.OwnerSid != owner ||
             facts.RootId != root || proof.RootId != root || facts.RelativePath != path || proof.RelativePath != path ||
             facts.IsDirectory != directory || proof.IsDirectory != directory || (snapshot.Kind == CloudItemKind.Directory) != directory || facts.LinkCount != 1 ||
-            facts.Dacl != proof.Verification.Dacl || !MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(proof.ExpectedDacl, facts.Dacl))
+            !MirrorPulseRootLabelCancellationDescriptor.MatchesVerified(proof.ExpectedDacl, proof.Verification.Dacl, facts.Dacl))
             throw ObserveCancellationObjectFailure(new InvalidDataException("Unsealed cancellation lost its actual retained binding, owner, path, kind, link count or verified descriptor."),
                 facts, snapshot, proof, binding, owner, root, path, directory);
     }

@@ -20,8 +20,9 @@ object verification, public identity, sealed admission, complete local inventory
 and the original public root proof. An already rejected native object reports the
 first failed fixed check: snapshot availability, native or retained binding,
 owner, root, path, kind, link count, retained descriptor or descriptor policy.
-Only the closed check name is recorded. All original guard predicates and the
-exception type, message and HRESULT remain unchanged. These details never record
+Only the closed check name is recorded. Diagnostic observation retains the
+original exception type, message and HRESULT. The two bounded identity and
+descriptor policy corrections are described below. These details never record
 a member path, identity bytes, SID or descriptor, and add no successful-path read.
 
 These observations grant no cancellation, native or readiness authority. They add
@@ -42,3 +43,20 @@ missing native identity or any changed opaque identity byte still fails. The
 same original membership, owner, native binding, descriptor, complete inventory
 and successful public `NotMoved` checks continue to apply. A missing projection
 does not establish another root's identity or grant namespace authority.
+
+Unstarted cancellation compares a fresh native descriptor to both its retained
+verification and its requested policy using the existing bounded Windows
+read-back rule. The only accepted difference is Windows adding the automatic
+inheritance completion flag. Removing that flag, changing an ACE, rights, owner
+or execution role, removing protection or adding an inheritance request still
+fails. The atomic catalog boundary applies the same directional rule to the
+retained protection epoch. Original protection records are never rewritten;
+the cancellation receipt retains the actual read-back, and replay must match
+that immutable receipt exactly.
+
+The retained `9478450` signed failure stopped at `ObjectRetainedDescriptor`.
+That identifies unequal actual and retained descriptor strings; it does not
+establish the exact object or prove this bounded Windows normalization caused
+the signed failure. The correction is independently covered by unchanged
+sealed/unsealed, enabled/disabled, original/born, anchor/root/leaf catalog tests
+and native-policy boundary tests. A new signed reproduction remains required.

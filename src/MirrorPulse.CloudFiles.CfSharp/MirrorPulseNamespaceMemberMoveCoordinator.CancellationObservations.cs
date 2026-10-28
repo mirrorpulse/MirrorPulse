@@ -34,8 +34,8 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
         if (facts.IsDirectory != directory || proof.IsDirectory != directory || (snapshot.Kind == CloudItemKind.Directory) != directory)
             return MirrorPulseRootLabelCancellationStage.ObjectKind;
         if (facts.LinkCount != 1) return MirrorPulseRootLabelCancellationStage.ObjectLinkCount;
-        if (facts.Dacl != proof.Verification.Dacl) return MirrorPulseRootLabelCancellationStage.ObjectRetainedDescriptor;
-        // The unchanged original compound guard already rejected this read. If
+        if (!MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(proof.Verification.Dacl, facts.Dacl)) return MirrorPulseRootLabelCancellationStage.ObjectRetainedDescriptor;
+        // The compound guard already rejected this immutable read. If
         // every earlier predicate matched, its final descriptor-policy check failed.
         return MirrorPulseRootLabelCancellationStage.ObjectDescriptorPolicy;
     }
