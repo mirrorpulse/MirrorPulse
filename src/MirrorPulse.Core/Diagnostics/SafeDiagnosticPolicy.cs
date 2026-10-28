@@ -125,6 +125,8 @@ public static class SafeDiagnosticPolicy
                 "transferCommandPhase" => Enum.TryParse(value, out MirrorPulseTransferCommandPhase transferPhase) && Enum.IsDefined(transferPhase) && value == transferPhase.ToString() ? value : null,
                 "transferFailureBoundary" => Enum.TryParse(value, out MirrorPulseTransferFailureBoundary transferBoundary) && Enum.IsDefined(transferBoundary) && value == transferBoundary.ToString() ? value : null,
                 "transferFailureKind" => value is "Native" or "Disposed" or "InvalidData" or "InvalidOperation" or "Authorization" or "Cancelled" or "IO" or "Argument" or "Other" ? value : null,
+                "journalReadStage" => Enum.TryParse(value, out MirrorPulseJournalReadStage journalStage) && Enum.IsDefined(journalStage) && value == journalStage.ToString() ? value : null,
+                "journalReadFailureKind" => value is "Native" or "Disposed" or "InvalidData" or "InvalidOperation" or "Authorization" or "Cancelled" or "IO" or "Argument" or "Other" ? value : null,
                 "rootLabelFailureBoundary" => Enum.TryParse(value, out MirrorPulseRootLabelFailureBoundary rootLabelBoundary) && Enum.IsDefined(rootLabelBoundary) && value == rootLabelBoundary.ToString() ? value : null,
                 "rootLabelExecutionStage" => Enum.TryParse(value, out MirrorPulseRootLabelExecutionStage executionStage) && Enum.IsDefined(executionStage) && value == executionStage.ToString() ? value : null,
                 "rootLabelPreparationStage" => Enum.TryParse(value, out MirrorPulseRootLabelPreparationStage rootLabelStage) && Enum.IsDefined(rootLabelStage) && value == rootLabelStage.ToString() ? value : null,

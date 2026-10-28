@@ -156,35 +156,35 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
 
     private async ValueTask<MirrorPulseJournalUploadBatch> ReadPendingAsync(CancellationToken cancellationToken)
     {
-        await RecoverRootLabelJournalAsync(cancellationToken).ConfigureAwait(false);
+        await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.RootLabelRecovery, async () => await RecoverRootLabelJournalAsync(cancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
         _planningBatch = null;
         foreach (Guid original in _completedCoalescedOriginals) _runner.ClearRecoveredFault(original);
         _completedCoalescedOriginals.Clear();
-        if (_deletionRecovery is not null) await _deletionRecovery.RepairAsync(cancellationToken).ConfigureAwait(false);
-        if (_localRemovalRecovery is not null) await _localRemovalRecovery.RepairAsync(cancellationToken).ConfigureAwait(false);
-        if (_keepBothRecovery is not null) await _keepBothRecovery.RepairAsync(cancellationToken).ConfigureAwait(false);
-        await _coalescingRecovery.RepairAsync(cancellationToken).ConfigureAwait(false);
+        if (_deletionRecovery is not null) await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.ConflictDeletionRecovery, async () => await _deletionRecovery.RepairAsync(cancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
+        if (_localRemovalRecovery is not null) await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.LocalRemovalRecovery, async () => await _localRemovalRecovery.RepairAsync(cancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
+        if (_keepBothRecovery is not null) await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.KeepBothRecovery, async () => await _keepBothRecovery.RepairAsync(cancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
+        await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.CoalescingRecovery, async () => await _coalescingRecovery.RepairAsync(cancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
         var recovery = new MirrorPulseMutationProjectionRecovery(_catalog);
-        IReadOnlyList<Guid> repaired = await recovery.RepairAsync(async (operationId, token) =>
+        IReadOnlyList<Guid> repaired = await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.MutationProjectionRecovery, () => recovery.RepairAsync(async (operationId, token) =>
         {
             await using ICloudStateTransaction transaction = await _state.OpenStore.BeginTransactionAsync(token).ConfigureAwait(false);
             bool pending = await transaction.Operations.GetAsync(operationId, token).ConfigureAwait(false) is not null;
             await transaction.RollbackAsync(token).ConfigureAwait(false);
             return pending;
-        }, ProjectAcceptedAsync, cancellationToken).ConfigureAwait(false);
+        }, ProjectAcceptedAsync, cancellationToken)).ConfigureAwait(false);
         foreach (Guid operationId in repaired) _runner.ClearRecoveredFault(operationId);
-        IReadOnlyList<RootId> deferred = await _catalog.ReadDeferredRescanRootsAsync(cancellationToken).ConfigureAwait(false);
-        HashSet<RootId> pendingRoots = (await _catalog.ReadNamespaceDispatchFencedRootsAsync(cancellationToken).ConfigureAwait(false)).ToHashSet();
+        IReadOnlyList<RootId> deferred = await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.RescanDecision, async () => await _catalog.ReadDeferredRescanRootsAsync(cancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
+        HashSet<RootId> pendingRoots = (await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.RescanDecision, async () => await _catalog.ReadNamespaceDispatchFencedRootsAsync(cancellationToken).ConfigureAwait(false)).ConfigureAwait(false)).ToHashSet();
         bool enabledDeferredRoot = _router.Registrations.Any(root => root.State == RootRegistrationState.Active &&
             _mayDispatch(root.InstanceId) && deferred.Contains(root.RootId) && !pendingRoots.Contains(root.RootId));
         MirrorPulseJournalUploadBatch batch = _source.RequiresFullRescan || enabledDeferredRoot ||
-            await _catalog.ReadFullRescanAsync(cancellationToken).ConfigureAwait(false) is not null ? new([], 0, true) :
-            await _source.ReadPendingAsync(cancellationToken).ConfigureAwait(false);
+            await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.RescanDecision, async () => await _catalog.ReadFullRescanAsync(cancellationToken).ConfigureAwait(false)).ConfigureAwait(false) is not null ? new([], 0, true) :
+            await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.JournalSource, async () => await _source.ReadPendingAsync(cancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
         if (!batch.RequiresFullRescan) { _planningBatch = batch; return batch; }
         foreach (RootRegistration root in _router.Registrations)
             await _catalog.SaveInstanceRuntimeStateAsync(new(root.InstanceId, "Reconciling", true, null), cancellationToken).ConfigureAwait(false);
         if (_rescan is null) throw new NotSupportedException("The Host requires a full rescan service.");
-        await _rescan.RunAsync(new MirrorPulseLocalChangeSignal(true), cancellationToken).ConfigureAwait(false);
+        await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.FullRescan, async () => await _rescan.RunAsync(new MirrorPulseLocalChangeSignal(true), cancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
         _source.ClearFullRescanRequest();
         return new([], 0, false);
     }
@@ -595,6 +595,14 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
                 new("failureCategory", SafeDiagnosticPolicy.ClassifyFailure(exception)),
                 new("hresult", exception.HResult.ToString("X8", System.Globalization.CultureInfo.InvariantCulture)),
             };
+            if (message == "JournalReadFailed")
+            {
+                fields.Add(new("journalReadStage", MirrorPulseJournalReadDiagnostics.Stage(exception).ToString()));
+                fields.Add(new("journalReadFailureKind", MirrorPulseJournalReadDiagnostics.Kind(exception)));
+                fields.Add(new("rootLabelFailureBoundary", MirrorPulseRootLabelFailureDiagnostics.Classify(exception).ToString()));
+                if (exception is System.ComponentModel.Win32Exception native)
+                    fields.Add(new("nativeErrorCode", native.NativeErrorCode.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            }
             if (command is not null)
             {
                 fields.Add(new("operationId", command.OperationId.ToString("D")));

@@ -1,6 +1,7 @@
 using System.Runtime.Versioning;
 using CfSharp;
 using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.Diagnostics;
 using MirrorPulse.Core.State;
 using MirrorPulse.Core.Sync;
 
@@ -67,10 +68,10 @@ public sealed class MirrorPulseRootLabelJournalAdmission
 
         // Drain outside the shared actor and outside namespace impersonation. A
         // cancelled waiter leaves the original journal row untouched for retry.
-        await using var drained = await _work.BeginRecoveryAsync([root.RootId], token).ConfigureAwait(false);
+        await using var drained = await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.RootWorkDrain, async () => await _work.BeginRecoveryAsync([root.RootId], token).ConfigureAwait(false)).ConfigureAwait(false);
         _closed.Add(root.RootId);
         if (_queued.Add(root.RootId)) _retry.Enqueue(root.RootId);
-        await _audit.AuditRetainedRootAsync(await ReadAnchorMemberAsync(anchor, token).ConfigureAwait(false), anchor, root.RootId,
+        await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.RootNativeAudit, async () => await _audit.AuditRetainedRootAsync(await ReadAnchorMemberAsync(anchor, token).ConfigureAwait(false), anchor, root.RootId,
             async (audit, stop) =>
             {
                 _actor.AssertAccess();
@@ -91,14 +92,14 @@ public sealed class MirrorPulseRootLabelJournalAdmission
                 _ = await _catalog.StartRootLabelJournalAcknowledgementAsync(audit.Inventory, _execution.RoleSid.Value, audit.ObservedAt,
                     identity, new(observation.OperationId, observation.Sequence, MirrorPulseWorkerChangeKind.Move, observation.ItemId,
                         observation.RelativePath, observation.PreviousRelativePath, true, observation.ObservedAt), DateTimeOffset.UtcNow, stop).ConfigureAwait(false);
-            }, token).ConfigureAwait(false);
+            }, token).ConfigureAwait(false)).ConfigureAwait(false);
 
         // The native/permission audit scope has expired. Only the actual normal-owner
         // public SDK return can finish this immutable first start.
-        if (!await _recovery.TryReplayOwnedAsync(observation.OperationId, token).ConfigureAwait(false))
+        if (!await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.RootAcknowledgement, async () => await _recovery.TryReplayOwnedAsync(observation.OperationId, token).ConfigureAwait(false)).ConfigureAwait(false))
             throw new InvalidDataException("The accepted root observation lost its original metadata owner.");
         if (AfterAcknowledgement is not null) await AfterAcknowledgement(token).ConfigureAwait(false);
-        await ReadmitAsync(root.RootId, drained, token).ConfigureAwait(false);
+        await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.RootReadmissionAudit, async () => await ReadmitAsync(root.RootId, drained, token).ConfigureAwait(false)).ConfigureAwait(false);
         _closed.Remove(root.RootId);
         return true;
     }
@@ -117,8 +118,8 @@ public sealed class MirrorPulseRootLabelJournalAdmission
             if (_router.FindRegistration(id) is null) { _closed.Remove(id); continue; }
             try
             {
-                await using var drained = await _work.BeginRecoveryAsync([id], token).ConfigureAwait(false);
-                await ReadmitAsync(id, drained, token).ConfigureAwait(false);
+                await using var drained = await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.RootWorkDrain, async () => await _work.BeginRecoveryAsync([id], token).ConfigureAwait(false)).ConfigureAwait(false);
+                await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.RootReadmissionAudit, async () => await ReadmitAsync(id, drained, token).ConfigureAwait(false)).ConfigureAwait(false);
                 _closed.Remove(id); results.Add(new(id, null));
             }
             catch (Exception failure) when (!token.IsCancellationRequested && failure is
@@ -133,7 +134,7 @@ public sealed class MirrorPulseRootLabelJournalAdmission
     private async Task ReadmitAsync(RootId id, MirrorPulseNamespaceWorkAdmission.RecoveryLease drained, CancellationToken token)
     {
         var anchor = _anchor() ?? throw new InvalidOperationException("The current Host has no live startup guard.");
-        await _audit.AuditRetainedRootAsync(await ReadAnchorMemberAsync(anchor, token).ConfigureAwait(false), anchor, id,
+        await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.RootReadmissionAudit, async () => await _audit.AuditRetainedRootAsync(await ReadAnchorMemberAsync(anchor, token).ConfigureAwait(false), anchor, id,
             (audit, _) =>
             {
                 _actor.AssertAccess();
@@ -142,7 +143,7 @@ public sealed class MirrorPulseRootLabelJournalAdmission
                     throw new InvalidOperationException("Root readmission requires a complete unfenced audit under the live Host role.");
                 if (current.State == RootRegistrationState.Active) drained.CompleteAfterFreshAudit();
                 return Task.CompletedTask;
-            }, token).ConfigureAwait(false);
+            }, token).ConfigureAwait(false)).ConfigureAwait(false);
     }
 
     private async Task<Guid> ReadAnchorMemberAsync(MirrorPulseNamespaceAnchorProtection anchor, CancellationToken token) =>

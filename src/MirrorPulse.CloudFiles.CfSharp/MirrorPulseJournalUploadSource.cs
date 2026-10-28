@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using CfSharp;
 using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.Diagnostics;
 using MirrorPulse.Core.State;
 using MirrorPulse.Core.Sync;
 
@@ -110,7 +111,7 @@ public sealed class MirrorPulseJournalUploadSource
 
     private async ValueTask<MirrorPulseJournalUploadBatch> ReadPendingCoreAsync(CancellationToken cancellationToken)
     {
-        if (_retiredSources is not null) await _retiredSources.RecoverPendingAsync(cancellationToken).ConfigureAwait(false);
+        if (_retiredSources is not null) await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.RetiredSourceRecovery, async () => await _retiredSources.RecoverPendingAsync(cancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
         // Preserve the feed's wait-for-notification behavior when the journal is
         // empty and recovery has finished its root scan. Otherwise continue finite
         // scans even without another journal notification. This head is only a
@@ -121,7 +122,7 @@ public sealed class MirrorPulseJournalUploadSource
                 _rootLabelJournal?.RecoveryScanInProgress != true &&
                 !(OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100) && _rootLabelAdmission?.HasPendingReadmission == true))
             {
-                CloudLocalChangeBatch head = await _feed.ReadBatchAsync(cancellationToken).ConfigureAwait(false);
+                CloudLocalChangeBatch head = await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.FeedHead, async () => await _feed.ReadBatchAsync(cancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
                 if (head.RequiresFullRescan)
                 {
                     _windowReader.Reset(); RequiresFullRescan = true;
@@ -134,7 +135,7 @@ public sealed class MirrorPulseJournalUploadSource
             // Read the finite public window completely before planning, over bounded
             // turns so a large backlog does not monopolize one scheduling call. The
             // continuation is ephemeral; the official journal remains the authority.
-            var readWindow = await _windowReader.ReadAsync(cancellationToken).ConfigureAwait(false);
+            var readWindow = await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.FeedWindow, async () => await _windowReader.ReadAsync(cancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
             if (readWindow.RequiresFullRescan)
             {
                 RequiresFullRescan = true;
@@ -151,17 +152,17 @@ public sealed class MirrorPulseJournalUploadSource
 
         // Classification can span turns. Recheck the feed's current loss marker
         // without extending the original finite window or waiting for another row.
-        var currentScan = await _feed.BeginScanAsync(cancellationToken).ConfigureAwait(false);
+        var currentScan = await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.FeedLossCheck, async () => await _feed.BeginScanAsync(cancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
         if (currentScan.RequiresFullRescan)
         {
             ResetPlanning(); RequiresFullRescan = true; return new([], 0, true);
         }
-        HashSet<RootId> pendingRoots = (await _catalog.ReadNamespaceDispatchFencedRootsAsync(cancellationToken).ConfigureAwait(false)).ToHashSet();
+        HashSet<RootId> pendingRoots = (await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.PendingRootRead, async () => await _catalog.ReadNamespaceDispatchFencedRootsAsync(cancellationToken).ConfigureAwait(false)).ConfigureAwait(false)).ToHashSet();
         if (_admission is null)
         {
-            if (!await _planner!.AdvanceAsync((observation, token) => IncludeOriginalAsync(observation, pendingRoots, token), cancellationToken).ConfigureAwait(false))
-                return new([], 0, false) { PlanningInProgress = true, WindowUpperSequence = _planner.UpperSequence };
-            MirrorPulseLocalBatchPlan plan = _planner.Plan;
+            if (!await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.JournalClassification, async () => await _planner!.AdvanceAsync((observation, token) => IncludeOriginalAsync(observation, pendingRoots, token), cancellationToken).ConfigureAwait(false)).ConfigureAwait(false))
+                return new([], 0, false) { PlanningInProgress = true, WindowUpperSequence = _planner!.UpperSequence };
+            MirrorPulseLocalBatchPlan plan = _planner!.Plan;
             long upperSequence = _planner.UpperSequence;
             _planner = null;
             if (plan.RequiresFullRescan)
@@ -169,10 +170,10 @@ public sealed class MirrorPulseJournalUploadSource
                 ResetPlanning(); RequiresFullRescan = true; return new([], 0, true);
             }
             _admission = new(plan, upperSequence, _admissionBudget);
-            pendingRoots = (await _catalog.ReadNamespaceDispatchFencedRootsAsync(cancellationToken).ConfigureAwait(false)).ToHashSet();
+            pendingRoots = (await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.PendingRootRead, async () => await _catalog.ReadNamespaceDispatchFencedRootsAsync(cancellationToken).ConfigureAwait(false)).ConfigureAwait(false)).ToHashSet();
         }
-        if (!await _admission.AdvanceAsync((blocked, token) => RecordBlockedAsync(blocked, pendingRoots, token),
-            (command, token) => PrepareCommandAsync(command, pendingRoots, token), cancellationToken).ConfigureAwait(false))
+        if (!await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.JournalAdmission, () => _admission.AdvanceAsync((blocked, token) => RecordBlockedAsync(blocked, pendingRoots, token),
+            (command, token) => PrepareCommandAsync(command, pendingRoots, token), cancellationToken)).ConfigureAwait(false))
             return new([], 0, false) { AdmissionInProgress = true, WindowUpperSequence = _admission.UpperSequence };
         var result = _admission.Result;
         _admission = null; _retiredHeld = [];
