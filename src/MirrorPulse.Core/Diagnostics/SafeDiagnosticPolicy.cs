@@ -34,6 +34,7 @@ public static class SafeDiagnosticPolicy
         ["RootLabelJournalAdmissionFailed"] = "A root notification remains pending until its current Host admission succeeds.",
         ["RootLabelExecutionFailed"] = "The original root Label execution stopped at a protected namespace boundary.",
         ["RootLabelCancellationFailed"] = "The original root Label cancellation stopped at a protected namespace boundary.",
+        ["RootLabelCancellationProgress"] = "The original root Label cancellation reached a protected namespace boundary.",
         ["RootLabelPreparationFailed"] = "The root Label preparation stopped at a protected namespace boundary.",
         ["CloudProviderRequestFailed"] = "A Windows Cloud Files request failed.",
         ["CloudFilesStartupProgress"] = "The Host reached a Cloud Files initialization boundary.",
@@ -152,7 +153,8 @@ public static class SafeDiagnosticPolicy
                 "workerElapsedMs" or "workerStageElapsedMs" =>
                     int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out int elapsed) && elapsed >= 0
                         ? elapsed.ToString(CultureInfo.InvariantCulture) : null,
-                "startupElapsedMs" or "startupSequence" =>
+                "cancellationProgressPhase" => value is "Begin" or "Completed" or "Failed" ? value : null,
+                "cancellationElapsedMs" or "cancellationSequence" or "startupElapsedMs" or "startupSequence" =>
                     long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out long startupCount) && startupCount >= 0
                         ? startupCount.ToString(CultureInfo.InvariantCulture) : null,
                 "startupStage" => value is "LibraryStartBegin" or "LibraryStartCompleted" or "LibraryServicesBegin" or "LibraryServicesCompleted" or

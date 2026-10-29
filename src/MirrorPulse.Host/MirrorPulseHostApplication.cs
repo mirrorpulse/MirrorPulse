@@ -617,7 +617,7 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
         CancellationToken cancellationToken)
     {
         if (arguments.OperationId == Guid.Empty) throw new ArgumentException("The original Label operation is required.", nameof(arguments));
-        var result = await MirrorPulseRootLabelCancellationFailureDiagnostics.RunAsync(arguments.OperationId,
+        var result = await MirrorPulseRootLabelCancellationFailureDiagnostics.RunWithProgressAsync(arguments.OperationId,
             () => _session.CancelManagedRootRenameAsync(arguments.OperationId, cancellationToken),
             async entry =>
             {
