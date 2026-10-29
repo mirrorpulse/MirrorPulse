@@ -30,8 +30,8 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
         var retained = await catalog.ReadNamespaceInitializationAsync(operationId, cancellationToken).ConfigureAwait(false);
         if (retained?.RequestedInventoryKind is { } requested && requested != MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory)
             throw new InvalidOperationException("The pending initializer requires original-inventory recovery.");
-        if (retained is not null && (selectedRoot is { } selected ? retained.Version != 4 || retained.Roots.Count != 1 ||
-            retained.Roots[0].RootId != selected : retained.Version == 4))
+        if (retained is not null && (selectedRoot is { } selected ? retained.Version is not (4 or 5) || retained.Roots.Count != 1 ||
+            retained.Roots[0].RootId != selected : retained.Version is 4 or 5))
             throw new InvalidOperationException("The retained initializer requires its explicit complete or selected-root recovery route.");
         if (await catalog.ReadNamespaceInitializationCompletionAsync(operationId, cancellationToken).ConfigureAwait(false) is { } historical)
         {

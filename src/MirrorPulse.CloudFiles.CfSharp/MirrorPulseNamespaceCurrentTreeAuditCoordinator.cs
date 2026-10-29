@@ -44,7 +44,7 @@ public sealed class MirrorPulseNamespaceCurrentTreeAuditCoordinator(CloudFileSys
         MirrorPulseNamespaceInitializationCompletion completion = null!;
         var intent = await catalog.ReadNamespaceInitializationAsync(operationId, cancellationToken).ConfigureAwait(false)
             ?? throw new FileNotFoundException("Current audit requires its retained initialization admission.");
-        RootId? scope = intent.Version == 4 ? intent.Roots[0].RootId : null;
+        RootId? scope = intent.Version is 4 or 5 ? intent.Roots[0].RootId : null;
         _ = await AuditAdmittedAsync(anchorMemberId, anchorGuard, async (audit, token) =>
         {
             actor.AssertAccess();

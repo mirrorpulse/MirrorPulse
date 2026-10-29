@@ -48,6 +48,15 @@ internal sealed class MirrorPulseNamespaceStartupCoordinator(CloudFileSystem fil
             {
                 if (pending.Intent.RequestedInventoryKind is null || pending.Intent.Roots.Any(root => !configured.ContainsKey(root.RootId)))
                     throw new InvalidDataException("Startup cannot replace an unclassified or no-longer-configured initialization admission.");
+                if (pending.Intent.RootLabelCancellation is { } purpose &&
+                    (await catalog.ReadManagedRootRenameHistoryAsync(purpose.RootLabelOperationId, cancellationToken).ConfigureAwait(false))?.Intent.Phase == MirrorPulseRootRenamePhase.Prepared)
+                {
+                    // Only the original cancellation executor may settle this purpose.
+                    // Startup keeps admission closed and preserves its immutable owner.
+                    var root = pending.Intent.Roots[0];
+                    outcomes[root.RootId] = new(root.RootId, purpose.RootLabelOperationId, false, "PendingNamespaceOperationRecoveryRequired");
+                    continue;
+                }
                 var selected = new MirrorPulseRootRouter(fileSystem.Root.FullPath,
                     pending.Intent.Roots.Select(root => configured[root.RootId]));
                 await using var recovery = await work.BeginRecoveryAsync(pending.Intent.Roots.Select(root => root.RootId), cancellationToken).ConfigureAwait(false);
@@ -60,7 +69,7 @@ internal sealed class MirrorPulseNamespaceStartupCoordinator(CloudFileSystem fil
                     else
                     {
                         var coordinator = new MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(fileSystem, catalog, selected, execution, actor, scheduler, permissions) { Progress = progress };
-                        result = pending.Intent.Version == 4
+                        result = pending.Intent.Version is 4 or 5
                             ? await coordinator.RecoverRootAsync(pending.Intent.OperationId, pending.Intent.Roots[0].RootId, cancellationToken).ConfigureAwait(false)
                             : await coordinator.RecoverAsync(pending.Intent.OperationId, cancellationToken).ConfigureAwait(false);
                     }

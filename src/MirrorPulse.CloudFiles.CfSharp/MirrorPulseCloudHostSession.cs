@@ -1586,7 +1586,19 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                     // must inspect durable fences before requiring an already recovered tree.
                     var fences = await catalog.ReadNamespaceDispatchFencedRootsAsync(token).ConfigureAwait(false);
                     var current = router.FindRegistration(root.RootId) ?? throw new InvalidOperationException("The cancelled root lost its current route.");
-                    if (fences.Contains(root.RootId))
+                    Guid recoveryOperationId = Guid.NewGuid();
+                    bool dedicatedCancellationInitializer = false;
+                    if (unsealed && await catalog.ReadUnsealedRootLabelCancellationAsync(operationId, token).ConfigureAwait(false) is { RecoveryOwner: { } owner })
+                    {
+                        var status = await catalog.ReadNamespaceInitializationStatusAsync(owner.InitializationOperationId, token).ConfigureAwait(false);
+                        if (status.Completion is null && status.Intent.RootLabelCancellation is { } purpose &&
+                            purpose.RootLabelOperationId == operationId && status.Intent.Roots[0].RootId == root.RootId)
+                        {
+                            recoveryOperationId = status.Intent.OperationId;
+                            dedicatedCancellationInitializer = true;
+                        }
+                    }
+                    if (fences.Contains(root.RootId) && !dedicatedCancellationInitializer)
                         return new MirrorPulseManagedRootRenameCancellation(cancelled.Intent, cancellation.VerifiedAt,
                             current.DirectoryName, cancellation.Members.Count, false, false);
                     // Historical cancellation grants no current native authority. Its guards
@@ -1594,7 +1606,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                     var recovery = new MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(fileSystem, catalog, router,
                         _namespaceExecution, _namespaceActor, instances, _permissions);
                     await using var restored = await MirrorPulseRootLabelCancellationFailureDiagnostics.AtStageAsync(MirrorPulseRootLabelCancellationStage.CurrentTreeRecovery,
-                        async () => await recovery.RecoverRootAsync(Guid.NewGuid(), root.RootId, token).ConfigureAwait(false)).ConfigureAwait(false);
+                        async () => await recovery.RecoverRootAsync(recoveryOperationId, root.RootId, token).ConfigureAwait(false)).ConfigureAwait(false);
                     var freshAnchor = restored.TransferAnchor();
                     var prior = _scopedAnchorProtection; _scopedAnchorProtection = freshAnchor;
                     if (prior is not null) await prior.DisposeAsync().ConfigureAwait(false);

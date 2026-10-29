@@ -49,17 +49,19 @@ public sealed partial class MirrorPulseProductCatalog
         if (stored is not string text || !Guid.TryParseExact(text, "D", out Guid initialization) || initialization == Guid.Empty)
             throw new InvalidDataException("The selected cancellation initializer index is invalid.");
         return await ReadRootCancellationInitializerFingerprintCoreAsync(initialization, history.Intent.RootId,
-            requirePending: true, transaction, token).ConfigureAwait(false);
+            requirePending: true, transaction, token, operationId).ConfigureAwait(false);
     }
 
     private async Task<MirrorPulseRootLabelCancellationRecoveryOwner> ReadRootCancellationInitializerFingerprintCoreAsync(
-        Guid initialization, RootId root, bool requirePending, SqliteTransaction transaction, CancellationToken token)
+        Guid initialization, RootId root, bool requirePending, SqliteTransaction transaction, CancellationToken token,
+        Guid? expectedLabelOperationId = null)
     {
         var status = await ReadNamespaceInitializationStatusCoreAsync(initialization, transaction, token).ConfigureAwait(false);
         if (requirePending && status.Completion is not null ||
             status.Intent.RequestedInventoryKind != MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory ||
             !status.Intent.Roots.Any(candidate => candidate.RootId == root))
             throw new InvalidOperationException("Cancellation recovery requires its original current-inventory initializer and exact selected root.");
+        await RequireRootLabelCancellationInitializationHistoryAsync(status.Intent, expectedLabelOperationId, transaction, token).ConfigureAwait(false);
         await using var query = _connection.CreateCommand(); query.Transaction = transaction;
         query.CommandText = "SELECT fingerprint FROM namespace_initialization_intents WHERE operation_id=$operation;";
         query.Parameters.AddWithValue("$operation", initialization.ToString("D"));

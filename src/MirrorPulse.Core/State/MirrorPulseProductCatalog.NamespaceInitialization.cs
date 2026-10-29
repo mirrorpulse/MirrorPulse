@@ -18,13 +18,18 @@ public sealed record MirrorPulseNamespaceInitializationRoot(RootId RootId, Guid 
 /// <summary>Immutable initialization admission; this is neither permission evidence nor tree readiness.</summary>
 /// <remarks>Version 3 explicitly admits an empty Adapter inventory with a selected recovery route.
 /// Versions 1 and 2 retain their nonempty root requirements and historical payloads.
-/// Version 4 explicitly selects one current root.</remarks>
+/// Version 4 explicitly selects one current root. Version 5 binds that selection
+/// to the original unsealed Label cancellation and registered born root.</remarks>
 public sealed record MirrorPulseNamespaceInitializationIntent(int Version, Guid OperationId,
     IReadOnlyList<MirrorPulseNamespaceInitializationRoot> Roots, DateTimeOffset PreparedAt)
 {
     /// <summary>The chosen recovery route; absent legacy values remain unclassified.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public MirrorPulseNamespaceInitializationInventoryKind? RequestedInventoryKind { get; init; }
+
+    /// <summary>The exact original cancellation purpose of a version 5 admission.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public MirrorPulseRootLabelCancellationInitialization? RootLabelCancellation { get; init; }
 }
 
 public enum MirrorPulseNamespaceInitializationInventoryKind { OriginalInventory, CurrentInventory }
@@ -36,7 +41,7 @@ public sealed record MirrorPulseNamespaceInitializationCompletion(Guid Operation
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public MirrorPulseNamespaceInitializationInventoryKind InventoryKind { get; init; }
 
-    /// <summary>The selected root for version 4; null denotes the complete-inventory contract.</summary>
+    /// <summary>The selected root for versions 4 and 5; null denotes the complete-inventory contract.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public RootId? ScopeRoot { get; init; }
 }
@@ -52,6 +57,8 @@ public sealed partial class MirrorPulseProductCatalog
         MirrorPulseNamespaceInitializationIntent intent, CancellationToken cancellationToken = default)
     {
         ValidateNamespaceInitialization(intent);
+        if (intent.Version == 5)
+            throw new InvalidOperationException("Cancellation initialization requires its original Label admission boundary.");
         intent = intent with { Roots = Array.AsReadOnly(intent.Roots.ToArray()) };
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -69,25 +76,7 @@ public sealed partial class MirrorPulseProductCatalog
             }
             foreach (var root in intent.Roots.Where(root => root.BornRootMemberId is not null))
                 await RequireNamespaceInitializationBornRootAsync(root, intent.PreparedAt, transaction, cancellationToken).ConfigureAwait(false);
-            byte[] payload = JsonSerializer.SerializeToUtf8Bytes(intent, TopologyJsonOptions);
-            await using (SqliteCommand insert = _connection.CreateCommand())
-            {
-                insert.Transaction = transaction;
-                insert.CommandText = "INSERT INTO namespace_initialization_intents(operation_id,payload,fingerprint) VALUES($id,$payload,$hash);";
-                insert.Parameters.AddWithValue("$id", intent.OperationId.ToString("D"));
-                insert.Parameters.AddWithValue("$payload", payload); insert.Parameters.AddWithValue("$hash", SHA256.HashData(payload));
-                await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-            }
-            foreach (var root in intent.Roots)
-            {
-                await using SqliteCommand reserve = _connection.CreateCommand(); reserve.Transaction = transaction;
-                reserve.CommandText = "INSERT INTO namespace_initialization_roots(root_id,operation_id,manifest_id,born_member_id) VALUES($root,$id,$manifest,$born);";
-                reserve.Parameters.AddWithValue("$root", root.RootId.Value.ToString("D"));
-                reserve.Parameters.AddWithValue("$id", intent.OperationId.ToString("D"));
-                reserve.Parameters.AddWithValue("$manifest", root.ManifestId == Guid.Empty ? DBNull.Value : root.ManifestId.ToString("D"));
-                reserve.Parameters.AddWithValue("$born", (object?)root.BornRootMemberId?.ToString("D") ?? DBNull.Value);
-                await reserve.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-            }
+            await InsertNamespaceInitializationCoreAsync(intent, transaction, cancellationToken).ConfigureAwait(false);
             transaction.Commit(); return intent;
         }
         finally { _gate.Release(); }
@@ -205,7 +194,7 @@ public sealed partial class MirrorPulseProductCatalog
         MirrorPulseNamespaceInitializationCompletion completion, SqliteTransaction transaction, CancellationToken token)
     {
         if ((intent.Version == 3 ? completion.MemberCount != 1 : completion.MemberCount < 2) ||
-            (intent.Version == 4 ? completion.ScopeRoot != intent.Roots[0].RootId : completion.ScopeRoot is not null) ||
+            (intent.Version is 4 or 5 ? completion.ScopeRoot != intent.Roots[0].RootId : completion.ScopeRoot is not null) ||
             completion.CompletedAt < intent.PreparedAt || intent.RequestedInventoryKind is { } requested && requested != completion.InventoryKind)
             throw new InvalidDataException("Initialization completion disagrees with its admission chronology or requested inventory kind.");
         await using SqliteCommand query = _connection.CreateCommand(); query.Transaction = transaction;
@@ -217,21 +206,22 @@ public sealed partial class MirrorPulseProductCatalog
 
     private static bool SameNamespaceInitialization(MirrorPulseNamespaceInitializationIntent left, MirrorPulseNamespaceInitializationIntent right) =>
         left.Version == right.Version && left.OperationId == right.OperationId && left.PreparedAt == right.PreparedAt &&
-        left.RequestedInventoryKind == right.RequestedInventoryKind && left.Roots.SequenceEqual(right.Roots);
+        left.RequestedInventoryKind == right.RequestedInventoryKind && left.RootLabelCancellation == right.RootLabelCancellation && left.Roots.SequenceEqual(right.Roots);
 
     private static void ValidateNamespaceInitialization(MirrorPulseNamespaceInitializationIntent intent)
     {
         ArgumentNullException.ThrowIfNull(intent);
-        if (intent.Version is not (1 or 2 or 3 or 4) || intent.OperationId == Guid.Empty || intent.PreparedAt == default || intent.Roots is null ||
+        if (intent.Version is not (1 or 2 or 3 or 4 or 5) || intent.OperationId == Guid.Empty || intent.PreparedAt == default || intent.Roots is null ||
             intent.RequestedInventoryKind is { } requested && !Enum.IsDefined(requested) ||
-            intent.Version is 2 or 4 && intent.RequestedInventoryKind != MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory ||
-            intent.Version == 4 && intent.Roots.Count != 1 ||
+            intent.Version is 2 or 4 or 5 && intent.RequestedInventoryKind != MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory ||
+            intent.Version is 4 or 5 && intent.Roots.Count != 1 ||
             intent.Version == 3 && (intent.Roots.Count != 0 || intent.RequestedInventoryKind is null) ||
             intent.Version != 3 && intent.Roots.Count == 0 || intent.Roots.Count > 4096 || intent.Roots.Any(root => root is null || root.RootId.Value == Guid.Empty ||
-                (root.BornRootMemberId is { } born ? intent.Version is not (2 or 4) || born == Guid.Empty || root.ManifestId != Guid.Empty : root.ManifestId == Guid.Empty)) ||
+                (root.BornRootMemberId is { } born ? intent.Version is not (2 or 4 or 5) || born == Guid.Empty || root.ManifestId != Guid.Empty : root.ManifestId == Guid.Empty)) ||
             intent.Roots.Select(root => root.RootId).Distinct().Count() != intent.Roots.Count ||
             intent.Roots.Where(root => root.BornRootMemberId is null).Select(root => root.ManifestId).Distinct().Count() != intent.Roots.Count(root => root.BornRootMemberId is null) ||
-            intent.Roots.Where(root => root.BornRootMemberId is not null).Select(root => root.BornRootMemberId).Distinct().Count() != intent.Roots.Count(root => root.BornRootMemberId is not null))
+            intent.Roots.Where(root => root.BornRootMemberId is not null).Select(root => root.BornRootMemberId).Distinct().Count() != intent.Roots.Count(root => root.BornRootMemberId is not null) ||
+            !HasValidRootLabelCancellationInitializationPurpose(intent))
             throw new ArgumentException("Initialization requires distinct stable roots and explicit retained capture or born-root provenance.", nameof(intent));
     }
 

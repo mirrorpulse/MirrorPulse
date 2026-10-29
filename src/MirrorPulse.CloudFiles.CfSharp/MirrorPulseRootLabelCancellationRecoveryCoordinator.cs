@@ -19,6 +19,12 @@ internal sealed class MirrorPulseRootLabelCancellationRecoveryCoordinator(CloudF
 
     internal async ValueTask ReplayAsync(Guid operationId, CancellationToken cancellationToken)
     {
+        // A born first-level root can inherit a later anchor role even when startup
+        // correctly leaves its original Label closed. Persist that exact recovery
+        // purpose before any native work; retries retain the original initializer.
+        if (await catalog.ReadUnsealedRootLabelCancellationAsync(operationId, cancellationToken).ConfigureAwait(false) is not null) return;
+        _ = await catalog.PrepareRootLabelCancellationInitializationAsync(operationId, Guid.NewGuid(),
+            DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false);
         // Permission replay owns its actor turn and execution scope. Do not nest either.
         await new MirrorPulseRootLabelPendingPermissionRecoveryCoordinator(fileSystem, catalog, router, execution, actor, permissions)
             .ReplayAsync(operationId, cancellationToken).ConfigureAwait(false);

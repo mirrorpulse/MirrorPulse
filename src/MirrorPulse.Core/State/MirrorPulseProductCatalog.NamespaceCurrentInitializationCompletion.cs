@@ -30,7 +30,16 @@ public sealed partial class MirrorPulseProductCatalog
                 transaction.Commit(); return replay;
             }
             await RequireNamespaceInitializationRootsAsync(intent, transaction, cancellationToken).ConfigureAwait(false);
-            Contracts.RootId? scope = intent.Version == 4 ? intent.Roots[0].RootId : null;
+            Contracts.RootId? scope = intent.Version is 4 or 5 ? intent.Roots[0].RootId : null;
+            if (intent.RootLabelCancellation is { } purpose)
+            {
+                await RequireRootLabelCancellationInitializationHistoryAsync(intent, purpose.RootLabelOperationId, transaction, cancellationToken).ConfigureAwait(false);
+                var cancellation = await ReadUnsealedRootLabelCancellationCoreAsync(purpose.RootLabelOperationId, transaction, cancellationToken).ConfigureAwait(false);
+                var owner = await ReadRootCancellationInitializerFingerprintCoreAsync(operationId, intent.Roots[0].RootId,
+                    requirePending: true, transaction, cancellationToken, purpose.RootLabelOperationId).ConfigureAwait(false);
+                if (cancellation is null || cancellation.RootMemberId != purpose.RootMemberId || cancellation.RecoveryOwner != owner)
+                    throw new InvalidOperationException("Cancellation initialization requires its exact original atomic unsealed cancellation before current-tree completion.");
+            }
             if (auditedInventory.ScopeRoot != scope)
                 throw new InvalidDataException("The audited inventory does not match its explicit complete or selected-root admission.");
             var current = await ReadNamespaceCurrentTreeSnapshotCoreAsync(auditedInventory.AnchorMemberId, transaction, cancellationToken, scope).ConfigureAwait(false);

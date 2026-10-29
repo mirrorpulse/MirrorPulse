@@ -1,5 +1,5 @@
 function Get-OrdinaryUserNamespaceBudgetMilliseconds {
-    param([Parameter(Mandatory)][ValidateRange(1, 123)][int]$TestCount, [string[]]$TestNames)
+    param([Parameter(Mandatory)][ValidateRange(1, 124)][int]$TestCount, [string[]]$TestNames)
     $preparation = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeRootRenamePreparationCutsRetainOnlyCompleteOriginalProductProofAcrossOwners'
     $approval = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeDefaultProviderApprovesOnlyTheCurrentOriginalRootRenameAndRetainsRecoveryAcrossOwners'
     $rootPreparation = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeRootLabelPreparationSealsOnlyItsOriginalProtectedSubtreeAcrossOwners'
@@ -11,7 +11,8 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
     $rootCancellation = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicRuntimeCancelsOnlyUnstartedOriginalRootLabelsAcrossRolesAndRetainsLaterNames'
     $unsealedCancellation = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicRuntimeCancelsOriginalUnsealedRootPreparationsAfterIndependentRoleDisposal'
     $legacyInitializer = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicCancellationRetainsAndResumesItsOriginalPartiallyRotatedInitializer'
-    $additionalSelections = @(@($preparation,$approval,$rootPreparation,$rootExecution,$rootRecovery,$rootRuntime,$rootAdmission,$rootPublic,$rootCancellation,$unsealedCancellation,$legacyInitializer) | Where-Object {$_ -cin $TestNames}).Count
+    $bornCancellation = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicCancellationRecoversAnInheritedBornRootThroughItsOriginalPurposeAfterRoleDisposal'
+    $additionalSelections = @(@($preparation,$approval,$rootPreparation,$rootExecution,$rootRecovery,$rootRuntime,$rootAdmission,$rootPublic,$rootCancellation,$unsealedCancellation,$legacyInitializer,$bornCancellation) | Where-Object {$_ -cin $TestNames}).Count
     if ($TestCount -gt 112 -and (-not $PSBoundParameters.ContainsKey('TestNames') -or $additionalSelections -lt $TestCount-112)) {
         throw 'The additional namespace case requires its explicit original preparation selection.'
     }
@@ -38,6 +39,7 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
         $repeated.Add($rootCancellation, 6)
         $repeated.Add($unsealedCancellation, 2)
         $repeated.Add($legacyInitializer, 16)
+        $repeated.Add($bornCancellation, 2)
         foreach ($name in $TestNames) {
             if ([string]::IsNullOrWhiteSpace($name) -or $name.Length -gt 512 -or $name -cnotmatch '^[A-Za-z0-9_.]+$' -or -not $selected.Add($name)) {
                 throw 'The namespace budget requires distinct, bounded test names.'
@@ -47,23 +49,25 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
                 # Each original transfer scope/cutpoint already owns a 45-second
                 # native deadline. The aggregate controller must preserve it;
                 # its ordinary 15-second per-case estimate cannot replace it.
-                $additional = if ($name -cin @($rootRuntime,$rootPublic,$rootCancellation,$unsealedCancellation,$legacyInitializer)) { 45000 } elseif ($name -cin @($preparation,$approval,$rootPreparation,$rootExecution,$rootRecovery,$rootAdmission)) { 15000 } else { 30000 }
+                $additional = if ($name -cin @($rootRuntime,$rootPublic,$rootCancellation,$unsealedCancellation,$legacyInitializer,$bornCancellation)) { 45000 } elseif ($name -cin @($preparation,$approval,$rootPreparation,$rootExecution,$rootRecovery,$rootAdmission)) { 15000 } else { 30000 }
                 $transferDeadlineMilliseconds += $repeated[$name] * $additional
             }
         }
     }
-    # Every selected native fixture keeps its original deadline. The full123-name
-    # catalog includes70 repeated executions and a93m15s child envelope. The step
+    # Every selected native fixture keeps its original deadline. The full124-name
+    # catalog includes72 repeated executions and a95m15s child envelope. The step
     # adds five minutes for controller diagnostics and disposable-user cleanup.
     # The legacy-initializer fixture retains its two original 60-second
     # executions, four Prepared/Applied executions and ten born-recovery cut executions.
     # Each original deadline remains; the cut matrix adds exactly ten minutes.
+    # The inherited born-root cancellation adds two 60-second executions;
+    # the original 123-name catalog retains its exact prior bound.
     # count-only callers still retain their original 112-name/30-minute bound.
     return [Math]::Max(600000, 120000 + $executions * 15000 + $transferDeadlineMilliseconds)
 }
 
 function Get-OrdinaryUserNamespaceStepTimeoutMinutes {
-    param([Parameter(Mandatory)][ValidateRange(1, 123)][int]$TestCount, [string[]]$TestNames)
+    param([Parameter(Mandatory)][ValidateRange(1, 124)][int]$TestCount, [string[]]$TestNames)
     # The workflow must let the existing child budget expire and allow the
     # controller to preserve diagnostics and remove its disposable user/profile.
     $parameters = @{ TestCount = $TestCount }
