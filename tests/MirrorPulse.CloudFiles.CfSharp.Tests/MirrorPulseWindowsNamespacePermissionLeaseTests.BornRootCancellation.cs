@@ -136,6 +136,10 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 var action = actions[0];
                 Assert.AreEqual(receipt.RecoveryOwner.InitializationOperationId, action.InitializationOperationId);
                 Assert.AreEqual(new MirrorPulseNamespaceBornRootLabelRecoveryOwner(original.Intent.OperationId, receipt.RecoveryOwner), action.RootLabelRecoveryOwner);
+                Assert.IsNotNull(action.Child.BirthProtection);
+                Assert.AreEqual(priorRole, action.Child.BirthProtection.RoleSid);
+                Assert.AreEqual(currentRole.RoleSid.Value, action.Parent.Context.Protection.RoleSid);
+                Assert.AreNotEqual(action.Child.BirthProtection.RoleSid, action.Parent.Context.Protection.RoleSid);
                 var completed = await currentCatalog.ReadNamespaceBornMemberRecoveryCompletionAsync(action.ActionId, deadline.Token);
                 Assert.IsNotNull(completed); Assert.IsTrue(completed.Drained);
                 var protection = await currentCatalog.ReadLatestNamespaceBirthProtectionAsync(action.Child.Member.OriginId, deadline.Token);
@@ -143,6 +147,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 Assert.AreEqual(currentRole.RoleSid.Value, protection.RoleSid);
             }
             TestContext.WriteLine($"PublicBornRootCancellationRetention: disabled={disabled}; completedActions=4; repeatedBornRecoveryActions=0; sameInitializer=True; currentRole=True; finalFreshNativeAudit=True; readinessAfterAuditOnly=True.");
+            TestContext.WriteLine($"PublicBornRootCancellationRequiredRecovery: disabled={disabled}; originalChildRoleDiffersFromCurrentParent=4; completeProtectedRecoveryAndReadback=4; noRetainedProtectionShortcut=True.");
             var replay = await runtime.CancelManagedRootRenameAsync(original.Intent.OperationId, deadline.Token);
             Assert.AreEqual(cancelled.Intent, replay.Intent); Assert.AreEqual(cancelled.CancelledAt, replay.CancelledAt);
             var later = await runtime.PrepareManagedRootRenameAsync(root.RootId, "FinalLabel", deadline.Token);

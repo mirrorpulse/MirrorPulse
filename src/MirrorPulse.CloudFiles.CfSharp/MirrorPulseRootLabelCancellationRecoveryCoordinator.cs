@@ -70,10 +70,12 @@ internal sealed class MirrorPulseRootLabelCancellationRecoveryCoordinator(CloudF
                 throw new InvalidOperationException("Cancellation cannot adopt another original born recovery owner.");
             var parent = await catalog.ReadNamespaceMemberProtectionSnapshotAsync(context.Location.ParentMemberId!.Value, token).ConfigureAwait(false)
                 ?? throw new InvalidDataException("Born cancellation recovery requires its direct parent to settle first.");
-            // A new Host role alone does not invalidate an older native verification.
-            // An unfinished action still has to settle even when its descriptor matches.
-            bool retainedProtection = await HasRetainedNativeProtectionAsync(owner, context, parent, token).ConfigureAwait(false);
-            if (!unfinished && retainedProtection) continue;
+            // An unfinished action or changed parent role requires recovery. Keep
+            // the original pre-write native/public identity checks, then avoid
+            // the extra retention-only reinspection before full protected recovery.
+            bool requiresRecovery = unfinished || context.BirthProtection.RoleSid != parent.Context.Protection.RoleSid;
+            bool retainedProtection = await HasRetainedNativeProtectionAsync(owner, context, parent, requiresRecovery, token).ConfigureAwait(false);
+            if (!requiresRecovery && retainedProtection) continue;
             Guid actionId = unfinished && latest!.RootLabelRecoveryOwner == owner &&
                 SamePayload(latest.Child, context) && SamePayload(latest.Parent, parent) ? latest.ActionId : Guid.NewGuid();
             var result = await recovery.RecoverRootLabelAdmittedAsync(plan.Owner.InitializationOperationId, actionId, memberId, owner, token).ConfigureAwait(false);
@@ -88,7 +90,7 @@ internal sealed class MirrorPulseRootLabelCancellationRecoveryCoordinator(CloudF
     }
 
     private async Task<bool> HasRetainedNativeProtectionAsync(MirrorPulseNamespaceBornRootLabelRecoveryOwner owner,
-        MirrorPulseNamespaceMemberRecoveryContext child, MirrorPulseNamespaceMemberProtectionSnapshot parent, CancellationToken token)
+        MirrorPulseNamespaceMemberRecoveryContext child, MirrorPulseNamespaceMemberProtectionSnapshot parent, bool requiresRecovery, CancellationToken token)
     {
         actor.AssertAccess();
         bool matches = false;
@@ -106,6 +108,10 @@ internal sealed class MirrorPulseRootLabelCancellationRecoveryCoordinator(CloudF
                 throw new InvalidDataException("Native cancellation inspection requires its settled direct parent's verified descriptor.");
             var before = await guard.InspectAsync(token).ConfigureAwait(false);
             RequireObject(child.Member, child.Location, before, await item.InspectAsync(token).ConfigureAwait(false), child.Identity);
+            // Required recovery independently revalidates the admitted owner and
+            // context, protects the object, and reads back its final native facts.
+            // The first public identity checks above must still precede any write.
+            if (requiresRecovery) return;
             var after = await guard.InspectAsync(token).ConfigureAwait(false);
             RequireObject(child.Member, child.Location, after, await item.InspectAsync(token).ConfigureAwait(false), child.Identity);
             if (after.Dacl != before.Dacl)
