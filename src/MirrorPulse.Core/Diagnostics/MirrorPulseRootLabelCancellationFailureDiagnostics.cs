@@ -10,7 +10,9 @@ public enum MirrorPulseRootLabelCancellationStage
     FinalNativeObservations, CatalogCancellation, CurrentTreeRecovery, CurrentTreeAudit,
     MemberProvenance, MemberMetadata, MemberNativeObject, MemberPublicIdentity, MemberSealedObject, MemberInventory,
     OriginalRootIdentity, ObjectSnapshot, ObjectNativeBinding, ObjectRetainedBinding, ObjectOwner, ObjectRoot,
-    ObjectPath, ObjectKind, ObjectLinkCount, ObjectRetainedDescriptor, ObjectDescriptorPolicy
+    ObjectPath, ObjectKind, ObjectLinkCount, ObjectRetainedDescriptor, ObjectDescriptorPolicy,
+    PendingCancellationInitialization, PendingOriginalPermissions, PendingBornPermissions,
+    CurrentTreeAnchorRecovery, CurrentTreeMemberRecovery, CurrentTreeInitializationAudit
 }
 
 /// <summary>Observes fixed cancellation boundaries while retaining the original operation and exception.</summary>

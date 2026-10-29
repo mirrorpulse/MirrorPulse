@@ -20,7 +20,10 @@ internal static class MirrorPulseRootLabelCancellationProgressDiagnostics
         Current.Value is { } scope && stage is MirrorPulseRootLabelCancellationStage.RootWorkDrain or
             MirrorPulseRootLabelCancellationStage.InstanceLibrary or MirrorPulseRootLabelCancellationStage.PendingPermissionRecovery or
             MirrorPulseRootLabelCancellationStage.OriginalCancellation or MirrorPulseRootLabelCancellationStage.CurrentTreeRecovery or
-            MirrorPulseRootLabelCancellationStage.CurrentTreeAudit
+            MirrorPulseRootLabelCancellationStage.CurrentTreeAudit or MirrorPulseRootLabelCancellationStage.PendingCancellationInitialization or
+            MirrorPulseRootLabelCancellationStage.PendingOriginalPermissions or MirrorPulseRootLabelCancellationStage.PendingBornPermissions or
+            MirrorPulseRootLabelCancellationStage.CurrentTreeAnchorRecovery or MirrorPulseRootLabelCancellationStage.CurrentTreeMemberRecovery or
+            MirrorPulseRootLabelCancellationStage.CurrentTreeInitializationAudit
                 ? scope.ReportAsync(stage, phase) : ValueTask.CompletedTask;
 
     internal sealed class Scope(Guid operationId, Func<LogEntry, ValueTask> observe, Scope? previous) : IDisposable

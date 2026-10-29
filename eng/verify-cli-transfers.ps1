@@ -54,11 +54,12 @@ function Wait-TransferHostStopped {
 }
 
 function Invoke-TransferProbe {
-    param([Parameter(Mandatory)][ValidateSet('audit', 'cleanup')][string]$Mode)
+    param([Parameter(Mandatory)][ValidateSet('audit', 'cleanup', 'failure-observation')][string]$Mode)
     $start = [Diagnostics.ProcessStartInfo]::new('dotnet')
     $start.UseShellExecute = $false; $start.CreateNoWindow = $true
     $start.RedirectStandardOutput = $true; $start.RedirectStandardError = $true
-    foreach ($argument in @($script:transferProbe, "--$Mode-cli-transfer-fixture", $fixture)) { $start.ArgumentList.Add($argument) }
+    $probeArgument = if ($Mode -ceq 'failure-observation') { '--observe-cli-transfer-failure' } else { "--$Mode-cli-transfer-fixture" }
+    foreach ($argument in @($script:transferProbe, $probeArgument, $fixture)) { $start.ArgumentList.Add($argument) }
     $process = [Diagnostics.Process]::Start($start)
     try {
         $output = $process.StandardOutput.ReadToEndAsync(); $errorOutput = $process.StandardError.ReadToEndAsync()
@@ -409,6 +410,11 @@ try {
             if ($script:ownedTransferHost -or $ownedHostAlive) {
                 & $script:transferCli --json --developer-mode --no-start host stop 2>$null | Out-Null
                 Wait-TransferHostStopped
+            }
+            if ($null -ne $primaryFailure -and $null -ne $script:transferProbe -and (Test-Path -LiteralPath $fixture)) {
+                try {
+                    Write-TransferOriginal -Name 'stopped-upload-failure-observations' -Value (Invoke-TransferProbe -Mode failure-observation)
+                } catch { Write-Host 'The original transfer upload-intent observer was unavailable.' }
             }
             Stop-TransferWebDav
             if (Test-Path -LiteralPath $fixture) {

@@ -9,7 +9,8 @@ namespace MirrorPulse.Core.Tests;
 [TestClass]
 public sealed class MirrorPulseRootLabelCancellationProgressDiagnosticsTests
 {
-    private static readonly string[] RequestStageNames = ["Unknown", "RootWorkDrain", "InstanceLibrary", "PendingPermissionRecovery", "OriginalCancellation", "CurrentTreeRecovery", "CurrentTreeAudit"];
+    private static readonly string[] RequestStageNames = ["Unknown", "RootWorkDrain", "InstanceLibrary", "PendingPermissionRecovery", "OriginalCancellation", "CurrentTreeRecovery", "CurrentTreeAudit",
+        "PendingCancellationInitialization", "PendingOriginalPermissions", "PendingBornPermissions", "CurrentTreeAnchorRecovery", "CurrentTreeMemberRecovery", "CurrentTreeInitializationAudit"];
     private static readonly string[] FourSequenceValues = ["1", "2", "3", "4"];
 
     [TestMethod]
@@ -51,7 +52,7 @@ public sealed class MirrorPulseRootLabelCancellationProgressDiagnosticsTests
     }
 
     [TestMethod]
-    public async Task OnlySixRequestBoundariesProduceFixedTypedProgress()
+    public async Task OnlyRequestAndRecoveryBoundariesProduceFixedTypedProgress()
     {
         var records = new List<SafeLogEntry>();
         Guid operation = Guid.NewGuid();
@@ -62,7 +63,7 @@ public sealed class MirrorPulseRootLabelCancellationProgressDiagnosticsTests
             return 19;
         }, entry => { records.Add(SafeDiagnosticPolicy.Sanitize(entry)); return ValueTask.CompletedTask; });
         Assert.AreEqual(19, result);
-        Assert.HasCount(14, records);
+        Assert.HasCount(26, records);
         CollectionAssert.AreEqual(RequestStageNames,
             records.Select(record => record.Fields["rootLabelCancellationStage"]).Distinct().ToArray());
         long elapsed = 0;

@@ -2,6 +2,7 @@ using System.Runtime.Versioning;
 using System.Text.Json;
 using CfSharp;
 using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.Diagnostics;
 using MirrorPulse.Core.State;
 using MirrorPulse.Core.Sync;
 
@@ -23,12 +24,15 @@ internal sealed class MirrorPulseRootLabelCancellationRecoveryCoordinator(CloudF
         // correctly leaves its original Label closed. Persist that exact recovery
         // purpose before any native work; retries retain the original initializer.
         if (await catalog.ReadUnsealedRootLabelCancellationAsync(operationId, cancellationToken).ConfigureAwait(false) is not null) return;
-        _ = await catalog.PrepareRootLabelCancellationInitializationAsync(operationId, Guid.NewGuid(),
-            DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false);
+        _ = await MirrorPulseRootLabelCancellationFailureDiagnostics.AtStageAsync(MirrorPulseRootLabelCancellationStage.PendingCancellationInitialization,
+            async () => await catalog.PrepareRootLabelCancellationInitializationAsync(operationId, Guid.NewGuid(),
+                DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
         // Permission replay owns its actor turn and execution scope. Do not nest either.
-        await new MirrorPulseRootLabelPendingPermissionRecoveryCoordinator(fileSystem, catalog, router, execution, actor, permissions)
-            .ReplayAsync(operationId, cancellationToken).ConfigureAwait(false);
-        await actor.RunAsync(token => ReplayBornAdmittedAsync(operationId, token), cancellationToken).ConfigureAwait(false);
+        _ = await MirrorPulseRootLabelCancellationFailureDiagnostics.AtStageAsync(MirrorPulseRootLabelCancellationStage.PendingOriginalPermissions,
+            () => new MirrorPulseRootLabelPendingPermissionRecoveryCoordinator(fileSystem, catalog, router, execution, actor, permissions)
+                .ReplayAsync(operationId, cancellationToken)).ConfigureAwait(false);
+        _ = await MirrorPulseRootLabelCancellationFailureDiagnostics.AtStageAsync(MirrorPulseRootLabelCancellationStage.PendingBornPermissions,
+            () => actor.RunAsync(token => ReplayBornAdmittedAsync(operationId, token), cancellationToken)).ConfigureAwait(false);
     }
 
     private async ValueTask<int> ReplayBornAdmittedAsync(Guid operationId, CancellationToken token)

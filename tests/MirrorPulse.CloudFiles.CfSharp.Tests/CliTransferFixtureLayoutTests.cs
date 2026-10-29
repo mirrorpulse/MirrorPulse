@@ -9,7 +9,7 @@ using MirrorPulse.Core.State;
 namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 
 [TestClass]
-public sealed class CliTransferFixtureLayoutTests
+public sealed partial class CliTransferFixtureLayoutTests
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
