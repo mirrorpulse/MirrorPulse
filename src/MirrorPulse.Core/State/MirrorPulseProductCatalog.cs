@@ -2,6 +2,7 @@ using Microsoft.Data.Sqlite;
 using MirrorPulse.Core.Configuration;
 using MirrorPulse.Core.Conflicts;
 using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.Diagnostics;
 using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.Core.State;
@@ -59,6 +60,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(paths);
+        var openObservation = MirrorPulseCatalogOpenObservation.Begin();
         string path = paths.ProductCatalogDatabasePath;
         if (string.Equals(path, paths.CfSharpStateDatabasePath, StringComparison.OrdinalIgnoreCase))
         {
@@ -67,6 +69,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
 
         string directory = Path.GetDirectoryName(path)
             ?? throw new InvalidDataException("The product catalog has no parent directory.");
+        openObservation.Mark(MirrorPulseCatalogOpenPhase.OwnerLeaseOpening);
         Directory.CreateDirectory(directory);
         FileStream owner = new(
             path + ".owner",
@@ -75,6 +78,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
             FileShare.None,
             1,
             FileOptions.DeleteOnClose);
+        openObservation.Mark(MirrorPulseCatalogOpenPhase.OwnerLeaseOpened);
         SqliteConnection? connection = null;
         try
         {
@@ -87,7 +91,10 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                 ForeignKeys = true,
             };
             connection = new SqliteConnection(settings.ToString());
+            openObservation.Mark(MirrorPulseCatalogOpenPhase.ConnectionOpening);
             await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+            openObservation.Mark(MirrorPulseCatalogOpenPhase.ConnectionOpened);
+            openObservation.Mark(MirrorPulseCatalogOpenPhase.JournalModeSelecting);
             await using (SqliteCommand mode = connection.CreateCommand())
             {
                 mode.CommandText = "PRAGMA journal_mode=WAL;";
@@ -98,6 +105,8 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                 }
             }
 
+            openObservation.Mark(MirrorPulseCatalogOpenPhase.JournalModeSelected);
+            openObservation.Mark(MirrorPulseCatalogOpenPhase.SchemaVersionReading);
             long currentVersion;
             await using (SqliteCommand version = connection.CreateCommand())
             {
@@ -110,6 +119,8 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                 }
             }
 
+            openObservation.Mark(MirrorPulseCatalogOpenPhase.SchemaVersionRead);
+            openObservation.Mark(MirrorPulseCatalogOpenPhase.BaseSchemaCreating);
             using (SqliteTransaction initialSchema = connection.BeginTransaction())
             await using (SqliteCommand schema = connection.CreateCommand())
             {
@@ -381,6 +392,8 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                 initialSchema.Commit();
             }
 
+            openObservation.Mark(MirrorPulseCatalogOpenPhase.BaseSchemaCreated);
+            openObservation.Mark(MirrorPulseCatalogOpenPhase.LegacyColumnsChecking);
             await using (SqliteCommand column = connection.CreateCommand())
             {
                 column.CommandText = "SELECT 1 FROM pragma_table_info('instance_runtime') WHERE name = 'last_error_code';";
@@ -432,6 +445,8 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                     alter.CommandText = "ALTER TABLE worker_requests ADD COLUMN stable_fingerprint BLOB NULL;";
                     await alter.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
                 }
+                openObservation.Mark(MirrorPulseCatalogOpenPhase.LegacyColumnsChecked);
+                openObservation.Mark(MirrorPulseCatalogOpenPhase.NamespaceSchemaPreparing);
                 await EnsureNamespaceBirthParentSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
                 await EnsureNamespaceBirthRecoveryActionSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
                 await EnsureNamespaceBirthRecoveryVerificationSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
@@ -468,6 +483,8 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                 await EnsureConflictKeepBothSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
             }
 
+            openObservation.Mark(MirrorPulseCatalogOpenPhase.NamespaceSchemaPrepared);
+            openObservation.Mark(MirrorPulseCatalogOpenPhase.TransferSchemaPreparing);
             await EnsureNamespaceTransferSchemaAsync(connection, stampVersion: false, requireExisting: currentVersion >= 80, cancellationToken).ConfigureAwait(false);
             await EnsureNamespaceTransferBirthSchemaAsync(connection, requireExisting: currentVersion >= 81, stampVersion: false, cancellationToken).ConfigureAwait(false);
             await EnsureNamespaceTransferJournalSchemaAsync(connection, requireExisting: currentVersion >= 82, stampVersion: false, cancellationToken).ConfigureAwait(false);
@@ -476,6 +493,8 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
             await EnsureRootLabelJournalSchemaAsync(connection, currentVersion, stampVersion: false, cancellationToken).ConfigureAwait(false);
             await EnsureRootLabelCancellationSchemaAsync(connection, currentVersion, stampVersion: false, cancellationToken).ConfigureAwait(false);
             await EnsureUnsealedRootLabelCancellationSchemaAsync(connection, currentVersion, stampVersion: false, cancellationToken).ConfigureAwait(false);
+            openObservation.Mark(MirrorPulseCatalogOpenPhase.TransferSchemaPrepared);
+            openObservation.Mark(MirrorPulseCatalogOpenPhase.RecoverySchemaPreparing);
             var catalog = new MirrorPulseProductCatalog(owner, connection);
             await EnsureNamespaceRemoteUpdateSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
             await EnsureRemoteDeleteResolutionSchemaAsync(connection, cancellationToken, stampVersion: false).ConfigureAwait(false);
@@ -496,6 +515,8 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
             await EnsureRootLabelJournalSchemaAsync(connection, currentVersion, stampVersion: true, cancellationToken).ConfigureAwait(false);
             await EnsureRootLabelCancellationSchemaAsync(connection, currentVersion, stampVersion: true, cancellationToken).ConfigureAwait(false);
             await EnsureUnsealedRootLabelCancellationSchemaAsync(connection, currentVersion, stampVersion: true, cancellationToken).ConfigureAwait(false);
+            openObservation.Mark(MirrorPulseCatalogOpenPhase.RecoverySchemaPrepared);
+            openObservation.Mark(MirrorPulseCatalogOpenPhase.Completed);
             return catalog;
         }
         catch

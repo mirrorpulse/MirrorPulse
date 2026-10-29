@@ -31,6 +31,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         var registry = new CfSharpMirrorPulseCloudRootRegistry();
         using WindowsIdentity user = WindowsIdentity.GetCurrent();
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        using var catalogOpenCapture = new MirrorPulseCatalogOpenCapture((phase, trace, elapsed) =>
+            TestContext.WriteLine($"ScopedRecoveryCatalogOpenProgress: trace={trace:D}; phase={phase}; elapsedMs={elapsed}."));
         string firstPath = Path.Combine(paths.SyncRootPath, "First", "note.txt"), secondPath = Path.Combine(paths.SyncRootPath, "Second", "note.txt");
         MirrorPulseNamespaceMemberRegistration[] originals = []; string initialRole = string.Empty;
         try

@@ -72,6 +72,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(45));
             var transferClock = System.Diagnostics.Stopwatch.StartNew();
             void NoteTransferStage(string stage) => TestContext.WriteLine($"HostTransferProgress: sameInstance={sameInstance}; deleteSource={deleteSource}; retireLocal={retireLocal}; completeOriginals={completeOriginals}; stage={stage}; elapsedMs={transferClock.ElapsedMilliseconds}; cancellationRequested={deadline.IsCancellationRequested}.");
+            using var catalogOpenCapture = new MirrorPulseCatalogOpenCapture((phase, trace, elapsed) =>
+                TestContext.WriteLine($"HostTransferCatalogOpenProgress: sameInstance={sameInstance}; deleteSource={deleteSource}; retireLocal={retireLocal}; completeOriginals={completeOriginals}; trace={trace:D}; phase={phase}; elapsedMs={elapsed}."));
             var provider = new ProtectedPermissionNoSourceProvider();
             byte[] bytes = sameInstance ? deleteSource ? new byte[4097] : [] : new byte[2_097_409]; new Random(517).NextBytes(bytes);
             try
