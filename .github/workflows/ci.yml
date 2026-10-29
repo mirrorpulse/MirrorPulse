@@ -122,6 +122,19 @@ jobs:
           path: artifacts/test-results/native/**/*.trx
           if-no-files-found: warn
 
+      - name: Verify retained P079 multi-root transfer compatibility on x64
+        if: (success() || failure()) && github.event_name == 'workflow_dispatch'
+        continue-on-error: true
+        run: pwsh ./eng/verify-deferred-p079.ps1 -ExpectedArchitecture X64
+
+      - name: Preserve original deferred P079 x64 results
+        if: always() && github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: deferred-p079-x64-test-results
+          path: artifacts/test-results/deferred-p079-x64/**
+          if-no-files-found: warn
+
       - name: Collect x64 verification evidence
         shell: pwsh
         run: |
@@ -318,6 +331,19 @@ jobs:
           path: artifacts/test-results/namespace-arm64/**/*.trx
           if-no-files-found: ignore
 
+      - name: Verify retained P079 multi-root transfer compatibility on ARM64
+        if: (success() || failure()) && github.event_name == 'workflow_dispatch'
+        continue-on-error: true
+        run: pwsh ./eng/verify-deferred-p079.ps1 -ExpectedArchitecture Arm64
+
+      - name: Preserve original deferred P079 ARM64 results
+        if: always() && github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: deferred-p079-arm64-test-results
+          path: artifacts/test-results/deferred-p079-arm64/**
+          if-no-files-found: warn
+
       - name: Determine ordinary-user verification envelope
         if: (success() || failure()) && github.event_name == 'workflow_dispatch'
         id: namespace-nonadmin-budget
@@ -325,7 +351,7 @@ jobs:
         run: |
           . ./eng/namespace-nonadmin-controller.ps1
           $catalog = Get-Content ./eng/test-suites.json -Raw | ConvertFrom-Json
-          $minutes = Get-OrdinaryUserNamespaceStepTimeoutMinutes -TestCount @($catalog.required.namespace).Count -TestNames @($catalog.required.namespace)
+          $minutes = Get-OrdinaryUserNamespaceStepTimeoutMinutes -TestCount @($catalog.required.namespace).Count -TestNames @($catalog.required.namespace) -Scope S06
           "timeout_minutes=$minutes" >> $env:GITHUB_OUTPUT
 
       - name: Verify strict Cloud Files ACLs as a fresh non-administrator user

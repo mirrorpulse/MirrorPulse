@@ -1,5 +1,9 @@
 function Get-OrdinaryUserNamespaceBudgetMilliseconds {
-    param([Parameter(Mandatory)][ValidateRange(1, 124)][int]$TestCount, [string[]]$TestNames)
+    param([Parameter(Mandatory)][ValidateRange(1, 124)][int]$TestCount, [string[]]$TestNames,
+        [ValidateSet('AllRetained', 'S06')][string]$Scope = 'AllRetained')
+    if ($Scope -ceq 'S06' -and -not $PSBoundParameters.ContainsKey('TestNames')) {
+        throw 'S06 scope requires its explicit selected test names.'
+    }
     $preparation = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeRootRenamePreparationCutsRetainOnlyCompleteOriginalProductProofAcrossOwners'
     $approval = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeDefaultProviderApprovesOnlyTheCurrentOriginalRootRenameAndRetainsRecoveryAcrossOwners'
     $rootPreparation = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeRootLabelPreparationSealsOnlyItsOriginalProtectedSubtreeAcrossOwners'
@@ -28,6 +32,17 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
         $repeated.Add($prefix + 'NativeHostTransferRetiresOriginalSourceThroughTheSdkAndKeepsPrivateBytesAndBothFences', 2)
         $repeated.Add($prefix + 'NativeHostTransferSourceRetirementResumesOriginalNativeAndReceiptBoundariesAcrossStoreOwners', 10)
         $repeated.Add($prefix + 'NativeHostTransferAcknowledgesOriginalClaimAndRecoversSdkReturnBeforeReceiptAcrossStoreOwners', 2)
+        if ($Scope -ceq 'S06') {
+            # The original methods now select only their cross-instance leg. The
+            # other nine 45-second executions remain in the separate P079 suite.
+            foreach ($method in @('NativeHostTransferRetainsSourceAndBothFencesAfterOriginalCopyAndWholeTargetVerification',
+                'NativeHostTransferDeletesOnlyOriginalRemoteSourceWhileRetainingGuardedLocalBytes',
+                'NativeHostTransferRetiresOriginalSourceThroughTheSdkAndKeepsPrivateBytesAndBothFences',
+                'NativeHostTransferSourceRetirementResumesOriginalNativeAndReceiptBoundariesAcrossStoreOwners',
+                'NativeHostTransferAcknowledgesOriginalClaimAndRecoversSdkReturnBeforeReceiptAcrossStoreOwners')) {
+                $repeated[$prefix + $method] = [int]($repeated[$prefix + $method] / 2)
+            }
+        }
         $repeated.Add($preparation, 2)
         $repeated.Add($approval, 2)
         $repeated.Add($rootPreparation, 2)
@@ -62,16 +77,20 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
     # Each original deadline remains; the cut matrix adds exactly ten minutes.
     # The inherited born-root cancellation adds two 60-second executions;
     # the original 123-name catalog retains its exact prior bound.
+    # AllRetained keeps that exact historical envelope. S06 selects 63 repeated
+    # executions and an 88m30s envelope, retaining every selected fixture deadline.
     # count-only callers still retain their original 112-name/30-minute bound.
     return [Math]::Max(600000, 120000 + $executions * 15000 + $transferDeadlineMilliseconds)
 }
 
 function Get-OrdinaryUserNamespaceStepTimeoutMinutes {
-    param([Parameter(Mandatory)][ValidateRange(1, 124)][int]$TestCount, [string[]]$TestNames)
+    param([Parameter(Mandatory)][ValidateRange(1, 124)][int]$TestCount, [string[]]$TestNames,
+        [ValidateSet('AllRetained', 'S06')][string]$Scope = 'AllRetained')
     # The workflow must let the existing child budget expire and allow the
     # controller to preserve diagnostics and remove its disposable user/profile.
     $parameters = @{ TestCount = $TestCount }
     if ($PSBoundParameters.ContainsKey('TestNames')) { $parameters.TestNames = $TestNames }
+    if ($PSBoundParameters.ContainsKey('Scope')) { $parameters.Scope = $Scope }
     $childMilliseconds = Get-OrdinaryUserNamespaceBudgetMilliseconds @parameters
     return [int][Math]::Ceiling($childMilliseconds / 60000.0) + 5
 }

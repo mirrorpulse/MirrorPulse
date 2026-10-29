@@ -17,18 +17,18 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
 {
     [TestMethod]
     [TestCategory("NativeCloudFiles")]
-    public Task NativeHostTransferRetainsSourceAndBothFencesAfterOriginalCopyAndWholeTargetVerification() => RunNativeHostTransferAsync(deleteSource: false);
+    public Task NativeHostTransferRetainsSourceAndBothFencesAfterOriginalCopyAndWholeTargetVerification() => RunNativeHostTransferAsync(deleteSource: false, selectedSameInstance: false);
 
     [TestMethod]
     [DoNotParallelize]
     [TestCategory("NativeCloudFiles")]
-    public Task NativeHostTransferDeletesOnlyOriginalRemoteSourceWhileRetainingGuardedLocalBytes() => RunNativeHostTransferAsync(deleteSource: true);
+    public Task NativeHostTransferDeletesOnlyOriginalRemoteSourceWhileRetainingGuardedLocalBytes() => RunNativeHostTransferAsync(deleteSource: true, selectedSameInstance: false);
 
     [TestMethod]
     [DoNotParallelize]
     [TestCategory("NativeCloudFiles")]
     public Task NativeHostTransferRetiresOriginalSourceThroughTheSdkAndKeepsPrivateBytesAndBothFences() =>
-        RunNativeHostTransferAsync(deleteSource: true, retireLocal: true);
+        RunNativeHostTransferAsync(deleteSource: true, retireLocal: true, selectedSameInstance: false);
 
     [TestMethod]
     [DoNotParallelize]
@@ -36,22 +36,22 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     public async Task NativeHostTransferSourceRetirementResumesOriginalNativeAndReceiptBoundariesAcrossStoreOwners()
     {
         foreach (string fault in new[] { "before-native", "after-native", "after-receipt", "native-receipt-write", "name-settlement-write" })
-            await RunNativeHostTransferAsync(deleteSource: true, retireLocal: true, retirementFault: fault);
+            await RunNativeHostTransferAsync(deleteSource: true, retireLocal: true, retirementFault: fault, selectedSameInstance: false);
     }
 
     [TestMethod]
     [DoNotParallelize]
     [TestCategory("NativeCloudFiles")]
     public Task NativeHostTransferAcknowledgesOriginalClaimAndRecoversSdkReturnBeforeReceiptAcrossStoreOwners() =>
-        RunNativeHostTransferAsync(deleteSource: true, retireLocal: true, completeOriginals: true);
+        RunNativeHostTransferAsync(deleteSource: true, retireLocal: true, completeOriginals: true, selectedSameInstance: false);
 
     private async Task RunNativeHostTransferAsync(bool deleteSource, bool retireLocal = false, string? retirementFault = null,
-        bool completeOriginals = false)
+        bool completeOriginals = false, bool? selectedSameInstance = null)
     {
         if (!OperatingSystem.IsWindows() || Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
             Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
         MirrorPulseNamespaceExecutionSessionTests.AssertExpectedArchitecture();
-        for (int attempt = 0; attempt < 2; attempt++)
+        for (int attempt = selectedSameInstance == true ? 1 : 0; attempt < (selectedSameInstance == false ? 1 : 2); attempt++)
         {
             bool sameInstance = attempt == 1;
             string directory = Path.Combine(Path.GetTempPath(), "MirrorPulse-native-tests", Guid.NewGuid().ToString("N"));

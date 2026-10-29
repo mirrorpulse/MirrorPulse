@@ -25,6 +25,11 @@ public sealed class TestResultGateTests
     [DataRow("cfsharpRecreation", "Failed", false, false, false)]
     [DataRow("cfsharpRecreation", "Passed", true, false, false)]
     [DataRow("cfsharpRecreation", "Passed", false, true, false)]
+    [DataRow("deferredP079", "Passed", false, false, true)]
+    [DataRow("deferredP079", "NotExecuted", false, false, false)]
+    [DataRow("deferredP079", "Failed", false, false, false)]
+    [DataRow("deferredP079", "Passed", true, false, false)]
+    [DataRow("deferredP079", "Passed", false, true, false)]
     public async Task DedicatedGateRejectsSkippedOrMissingRequiredResults(string suite, string outcome, bool omitLast, bool repeatFirst, bool succeeds)
     {
         string repository = SftpProtocolFixture.FindRepositoryRoot();

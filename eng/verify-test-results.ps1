@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$ResultsDirectory,
-    [ValidateSet("managed", "native", "official", "signed", "packaged", "namespace", "cfsharpDelete", "cfsharpRecreation")][string]$Suite = "managed",
+    [ValidateSet("managed", "native", "official", "signed", "packaged", "namespace", "cfsharpDelete", "cfsharpRecreation", "deferredP079")][string]$Suite = "managed",
     [string]$OutputPath
 )
 
@@ -21,8 +21,8 @@ $results = @(
             if ($null -eq $definition) { throw "A TRX result has no test definition." }
             $name = "$($definition.TestMethod.className.Split(',')[0]).$($definition.TestMethod.name)"
             $category = "managed"
-            foreach ($candidate in @("native", "official", "signed", "packaged")) {
-                if ($catalog.required.$candidate -contains $name) { $category = $candidate; break }
+            foreach ($candidate in @("native", "official", "signed", "packaged", "deferredP079")) {
+                if ($catalog.required.$candidate -contains $name) { $category = if ($candidate -ceq 'deferredP079') { 'native' } else { $candidate }; break }
             }
             [pscustomobject][ordered]@{
                 name = $name
@@ -56,7 +56,7 @@ if ($Suite -eq "managed") {
         }
     }
     if ($skipped.Count -ne 0) { throw "The $Suite gate contains skipped tests." }
-    if ($Suite -in @('namespace', 'cfsharpDelete', 'cfsharpRecreation') -and $results.Count -ne @($catalog.required.$Suite).Count) {
+    if ($Suite -in @('namespace', 'cfsharpDelete', 'cfsharpRecreation', 'deferredP079') -and $results.Count -ne @($catalog.required.$Suite).Count) {
         throw "The $Suite gate must select exactly the required tests."
     }
 }
