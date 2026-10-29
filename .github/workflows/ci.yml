@@ -264,6 +264,26 @@ jobs:
             artifacts/evidence/cli-regression.originals/**
           if-no-files-found: ignore
 
+      - name: Verify independent signed ARM64 coalesced KeepBoth through the default Host
+        if: (success() || failure()) && github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        timeout-minutes: 10
+        env:
+          MIRRORPULSE_NATIVE_TEST: '1'
+        run: |
+          $packages = @(Get-ChildItem -LiteralPath artifacts/official-local -Recurse -Filter '*.mpadapter' -File)
+          if ($packages.Count -ne 1 -or -not (Test-Path -LiteralPath ($packages[0].FullName + '.signature.json'))) { throw 'The exact frozen signed Local package is required.' }
+          New-Item -ItemType Directory -Path artifacts/evidence/cli-coalescing -Force | Out-Null
+          pwsh ./eng/verify-cli-integration.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName -Coalescing -EvidencePath artifacts/evidence/cli-coalescing/report.json
+          if ($LASTEXITCODE -ne 0) { throw 'The independent real signed coalescing conflict choice failed.' }
+
+      - name: Preserve independent signed ARM64 coalescing results and failures
+        if: always() && github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: cli-coalescing-arm64-originals
+          path: artifacts/evidence/cli-coalescing/**
+          if-no-files-found: ignore
       - name: Verify signed official packages and native ARM64 Workers
         if: (success() || failure()) && github.event_name == 'workflow_dispatch'
         run: |

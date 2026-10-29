@@ -5,18 +5,24 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$PackagePath,
     [switch]$Regression,
+    [switch]$Coalescing,
     [ValidateSet("Debug", "Release")]
     [string]$Configuration = "Release",
     [string]$EvidencePath
 )
 
 $ErrorActionPreference = "Stop"
+if ($Coalescing -and ($Regression -or [string]::IsNullOrWhiteSpace($EvidencePath) -or $env:MIRRORPULSE_NATIVE_TEST -cne '1')) {
+    throw 'The independent coalescing fixture requires its own evidence path and explicitly enabled disposable native environment.'
+}
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 . (Join-Path $PSScriptRoot 'cli-integration-failure-policy.ps1')
 . (Join-Path $PSScriptRoot 'cli-root-label-lifecycle.ps1')
 . (Join-Path $PSScriptRoot 'cli-root-label-evidence-policy.ps1')
 . (Join-Path $PSScriptRoot 'cli-root-label-cancellation.ps1')
 . (Join-Path $PSScriptRoot 'cli-root-label-cancellation-policy.ps1')
+. (Join-Path $PSScriptRoot 'cli-coalescing-content.ps1')
+. (Join-Path $PSScriptRoot 'cli-coalescing-commands.ps1')
 $primaryFailure = $null
 $runRoot = Join-Path ([IO.Path]::GetTempPath()) "MirrorPulse-cli-integration-$([guid]::NewGuid().ToString('N'))"
 $cliRoot = Join-Path $runRoot "cli"
@@ -34,6 +40,7 @@ $script:firstNamespaceMember = $null
 $script:firstAnchorMember = $null
 $rootLabelLifecycle = $null
 $rootLabelCancellations = $null
+$coalescingEvidence = $null
 
 function Invoke-CliFixtureProbe {
     param([Parameter(Mandatory)][ValidateSet('read', 'audit', 'inspect', 'cleanup')][string]$Mode, [Parameter(Mandatory)][string]$Phase)
@@ -303,6 +310,15 @@ try {
         throw "The Cloud Files range read returned the wrong bytes."
     }
 
+    if ($Coalescing) {
+        $coalescingEvidence = Invoke-CliCoalescingContentConflict -InvokeCli { param($arguments) Invoke-MirrorPulseCli $arguments } `
+            -WaitHostStopped { Wait-MirrorPulseHostStopped } `
+            -ReadStoppedAudit { param($completed) Invoke-CliStoppedCoalescingOracle -ProbeAssembly $script:probeAssembly -FixtureRoot $runRoot -Completed $completed } `
+            -ResolveKeepBoth { param($conflict) Invoke-CliCoalescingKeepBoth -CliPath $script:cliExecutable -FixtureRoot $runRoot -ConflictId $conflict } `
+            -InstanceId $instanceId -MappedRoot $mappedRoot -SourceRoot $sourceRoot -EvidencePath $EvidencePath
+        $coalescingEvidence.packageSha256 = (Get-FileHash -LiteralPath $PackagePath).Hash
+        $coalescingEvidence.signatureSha256 = (Get-FileHash -LiteralPath ($PackagePath + '.signature.json')).Hash
+    }
     if ($Regression) {
         $onlineRead = Invoke-CliFixtureProbe -Mode read -Phase Online
         $deadline = [DateTime]::UtcNow.AddSeconds(30)
@@ -578,6 +594,11 @@ finally {
         if (Test-Path -LiteralPath $cleanupRoot) { throw 'The isolated CLI fixture workspace was not removed.' }
     }
     }
+}
+if ($Coalescing) {
+    $coalescingEvidence.teardownCompleted = $true
+    $coalescingEvidence | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $EvidencePath -Encoding utf8
+    return
 }
 if ($EvidencePath) {
     [ordered]@{
