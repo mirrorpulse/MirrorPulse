@@ -25,7 +25,9 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinator
                     action.Child.Member.MemberId, cancellationToken).ConfigureAwait(false);
                 var top = lineage.SingleOrDefault(member => member.Member.MemberId == bornRootId);
                 var anchor = lineage[^1];
-                if (current != action || admission.Completion is not null || admission.Intent.Version is not (2 or 4) ||
+                // Version 5 retains the original Label cancellation purpose, already
+                // validated with the current action before entering this root scope.
+                if (current != action || admission.Completion is not null || admission.Intent.Version is not (2 or 4 or 5) ||
                     admission.Intent.RequestedInventoryKind != MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory ||
                     root.ManifestId != Guid.Empty || top is null || top.Member.RootId != root.RootId || !top.Member.IsDirectory ||
                     top.Member.Origin != MirrorPulseNamespaceMemberOrigin.ProtectedBirth ||
