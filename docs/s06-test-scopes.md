@@ -22,3 +22,20 @@ the existing five-minute cleanup margin (94 minutes for the workflow step).
 `-Scope AllRetained` preserves the historical 5,715,000 ms calculation and 101-minute
 step envelope for reviewing the original combined scope. Neither scope changes
 the 30-second public control request deadline.
+
+The managed CI gate retains its three exact Release test assemblies and the
+same-source `test-suites.json` before the existing `dotnet test` command. An
+`always()` collector preserves the raw TRX files, any original gate summary, and
+every result's name, outcome and multiplicity. It binds each TRX definition's
+`storage` and `codeBase` to an unchanged prepared assembly, including its length,
+SHA256, assembly identity and informational version. CI also requires the checked
+out revision and clean tracked source to match the preparation. Preparation
+refuses old results; each retained TRX must have started after preparation. Paths remain
+inside the workspace; reparse points, XML DTDs and unbound assemblies are refused.
+
+The `managed-test-originals` artifact is uploaded even when the original test or
+collection step fails. A partial archive remains a partial observation. The
+collector retains failures and skips without declaring the gate successful; the
+existing test command and test-result policy still determine its result. This
+evidence applies only to the source revision that produced it and does not repair
+the missing raw evidence in older CI runs.

@@ -90,11 +90,26 @@ jobs:
       - name: Install SFTP fixture dependencies
         run: pwsh ./eng/setup-test-environment.ps1
 
+      - name: Retain managed test assemblies before execution
+        run: pwsh ./eng/collect-managed-test-originals.ps1 -Phase Prepare
+
       - name: Test
         run: |
           dotnet test MirrorPulse.sln --configuration Release --no-build --logger trx --results-directory artifacts/test-results/managed
           if ($LASTEXITCODE -ne 0) { throw 'Managed tests failed.' }
           pwsh ./eng/verify-test-results.ps1 -Suite managed -ResultsDirectory artifacts/test-results/managed
+
+      - name: Collect original managed results and assembly bindings
+        if: always()
+        run: pwsh ./eng/collect-managed-test-originals.ps1 -Phase Collect
+
+      - name: Upload original managed results and assemblies
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: managed-test-originals
+          path: artifacts/test-results/managed-originals/**
+          if-no-files-found: error
 
       - name: Verify CLI completion gate
         run: pwsh ./eng/verify-cli-complete.ps1 -Configuration Release
