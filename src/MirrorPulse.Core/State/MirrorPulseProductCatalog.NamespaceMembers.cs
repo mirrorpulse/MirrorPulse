@@ -299,6 +299,9 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task<MirrorPulseNamespaceMemberRegistration?> ReadNamespaceMemberCoreAsync(Guid id,
         SqliteTransaction transaction, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
+        _namespaceRecoveryReadSnapshots.TryGetValue(transaction, out var snapshot);
+        if (snapshot?.Members.TryGetValue(id, out var retained) == true) return retained;
         var first = await ReadNamespaceMemberRowAsync(id, transaction, token).ConfigureAwait(false);
         if (first is null) return null;
         try
@@ -319,6 +322,7 @@ public sealed partial class MirrorPulseProductCatalog
         }
         catch (Exception exception) when (exception is InvalidOperationException or FileNotFoundException)
         { throw new InvalidDataException("Membership lost its historical provenance or direct parent.", exception); }
+        if (snapshot is not null) snapshot.Members[id] = first;
         return first;
     }
 

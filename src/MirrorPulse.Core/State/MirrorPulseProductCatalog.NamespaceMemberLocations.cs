@@ -39,13 +39,21 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task<MirrorPulseNamespaceMemberLocation> ReadNamespaceMemberLocationCoreAsync(
         MirrorPulseNamespaceMemberRegistration member, SqliteTransaction transaction, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
+        _namespaceRecoveryReadSnapshots.TryGetValue(transaction, out var snapshot);
+        if (snapshot?.Locations.TryGetValue(member, out var retained) == true) return retained;
         var direct = await ReadNamespaceMemberDirectMoveLocationCoreAsync(member, transaction, token).ConfigureAwait(false);
         var position = await ReadLatestNamespaceMemberPositionCoreAsync(member, transaction, token).ConfigureAwait(false);
-        if (position is null) return direct;
-        if (position.CompletedMoveOperationId != direct.CompletedMoveOperationId)
-            throw new InvalidDataException("The current position has lost the member's completed direct relocation head.");
-        return new(member.MemberId, position.ParentMemberId, position.RelativePath, position.CompletedMoveOperationId)
-        { PositionOperationId = position.OperationId == position.CompletedMoveOperationId ? null : position.OperationId };
+        var result = direct;
+        if (position is not null)
+        {
+            if (position.CompletedMoveOperationId != direct.CompletedMoveOperationId)
+                throw new InvalidDataException("The current position has lost the member's completed direct relocation head.");
+            result = new(member.MemberId, position.ParentMemberId, position.RelativePath, position.CompletedMoveOperationId)
+            { PositionOperationId = position.OperationId == position.CompletedMoveOperationId ? null : position.OperationId };
+        }
+        if (snapshot is not null) snapshot.Locations[member] = result;
+        return result;
     }
 
     private async Task<MirrorPulseNamespaceMemberLocation> ReadNamespaceMemberDirectMoveLocationCoreAsync(
