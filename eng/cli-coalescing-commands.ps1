@@ -62,3 +62,32 @@ function Invoke-CliStoppedCoalescingOracle {
         $process.Dispose()
     }
 }
+
+function Invoke-CliCoalescingEditFailureObservation {
+    param([Parameter(Mandatory)][string]$ProbeAssembly,[Parameter(Mandatory)][string]$FixtureRoot,[Parameter(Mandatory)][string]$EvidencePath)
+    $root=Assert-CliCoalescingEnvironment $FixtureRoot
+    if([IO.Path]::GetFullPath($ProbeAssembly) -ine (Join-Path $root 'probe/MirrorPulse.CfSharp.CrashProbe.dll')){
+        throw 'The edit observer must be the current isolated fixture publication.'
+    }
+    $start=[Diagnostics.ProcessStartInfo]::new('dotnet')
+    $start.UseShellExecute=$false;$start.CreateNoWindow=$true;$start.RedirectStandardOutput=$true;$start.RedirectStandardError=$true
+    foreach($argument in @($ProbeAssembly,'--observe-cli-coalescing-edit',$root)){$start.ArgumentList.Add($argument)}
+    $process=[Diagnostics.Process]::Start($start)
+    try{
+        $stdout=$process.StandardOutput.ReadToEndAsync();$stderr=$process.StandardError.ReadToEndAsync()
+        if(-not $process.WaitForExit(30000)){throw 'The stopped edit observation exceeded its30s observation window.'}
+        $text=$stdout.GetAwaiter().GetResult();$errorText=$stderr.GetAwaiter().GetResult()
+        if($process.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($text) -or $text.Length -gt 1048576){throw 'The stopped edit observer refused the original fixture.'}
+        $result=$text|ConvertFrom-Json
+        if($result.schemaVersion -ne 1 -or $result.exclusiveCatalogOwner -ne $true -or $result.nativeInspected -ne $true -or
+            $result.originalSdkAcknowledgementExecuted -ne $false -or $result.mutationExecuted -ne $false -or @($result.journal).Count -gt 2048){
+            throw 'The stopped edit observer crossed its bounded read-only boundary.'
+        }
+        $directory=Join-Path ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($EvidencePath))) 'coalescing.originals'
+        New-Item -ItemType Directory -Path $directory -Force|Out-Null
+        $result|ConvertTo-Json -Depth 8|Set-Content -LiteralPath (Join-Path $directory 'failed-edit-state.json') -Encoding utf8
+    }finally{
+        if(-not $process.HasExited){$process.Kill($true);$process.WaitForExit()}
+        $process.Dispose()
+    }
+}

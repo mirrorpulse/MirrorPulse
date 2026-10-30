@@ -30,7 +30,7 @@ public sealed record CliCoalescingObservedVersionAudit(int Version, Guid Observa
     DateTimeOffset StartedAt, DateTimeOffset ObservedAt);
 
 /// <summary>Reads actual retained coalescing facts only in an authenticated stopped synthetic Host fixture.</summary>
-public static class CliCoalescingFixtureProbe
+public static partial class CliCoalescingFixtureProbe
 {
     private sealed record Marker(int SchemaVersion, string InstanceId, string RootId, string RootKey, string DirectoryName);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);

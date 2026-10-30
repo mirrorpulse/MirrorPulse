@@ -52,6 +52,11 @@ function Invoke-CliCoalescingContentConflict {
         if($status.data.pendingUploads -gt $baseline){break}
         Start-Sleep -Milliseconds 100
     }while([DateTimeOffset]::UtcNow -lt $deadline)
+    try {
+        $status|ConvertTo-Json -Depth 12|Set-Content -LiteralPath (Join-Path $originals 'first-edit-status.json') -Encoding utf8
+        @{schemaVersion=1;expectedSha256=([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($first)));actualSha256=(Get-FileHash -LiteralPath $local).Hash;length=(Get-Item -LiteralPath $local).Length;baselinePendingUploads=$baseline;observedPendingUploads=$status.data.pendingUploads}|
+            ConvertTo-Json|Set-Content -LiteralPath (Join-Path $originals 'first-edit-bytes.json') -Encoding utf8
+    } catch { Write-Host "First edit observation also failed: $($_.Exception.GetType().Name)." }
     if($status.data.pendingUploads -le $baseline){throw 'The first actual local edit did not enter the original journal.'}
     $firstCount=[long]$status.data.pendingUploads
     [IO.File]::WriteAllBytes($local,$latest)
@@ -61,6 +66,11 @@ function Invoke-CliCoalescingContentConflict {
         if($status.data.pendingUploads -gt $firstCount){break}
         Start-Sleep -Milliseconds 100
     }while([DateTimeOffset]::UtcNow -lt $deadline)
+    try {
+        $status|ConvertTo-Json -Depth 12|Set-Content -LiteralPath (Join-Path $originals 'second-edit-status.json') -Encoding utf8
+        @{schemaVersion=1;expectedSha256=([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($latest)));actualSha256=(Get-FileHash -LiteralPath $local).Hash;length=(Get-Item -LiteralPath $local).Length;baselinePendingUploads=$firstCount;observedPendingUploads=$status.data.pendingUploads}|
+            ConvertTo-Json|Set-Content -LiteralPath (Join-Path $originals 'second-edit-bytes.json') -Encoding utf8
+    } catch { Write-Host "Second edit observation also failed: $($_.Exception.GetType().Name)." }
     if($status.data.pendingUploads -le $firstCount){throw 'The second actual local edit did not retain a distinct original notification.'}
     Invoke-CoalescingCli 'queued-status' @('--json','--developer-mode','status')|Out-Null
     [IO.File]::WriteAllBytes($source,$remote)

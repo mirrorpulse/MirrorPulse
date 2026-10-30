@@ -551,6 +551,13 @@ catch {
             $text | ConvertFrom-Json
         }
     } catch { Write-Host "Startup observation recording also failed: $($_.Exception.GetType().Name)." }
+    if ($Coalescing) {
+        try {
+            Invoke-MirrorPulseCli @('--json', '--developer-mode', 'host', 'stop') | Out-Null
+            Wait-MirrorPulseHostStopped
+            Invoke-CliCoalescingEditFailureObservation -ProbeAssembly $script:probeAssembly -FixtureRoot $runRoot -EvidencePath $EvidencePath
+        } catch { Write-Host "Stopped coalescing edit observation also failed: $($_.Exception.GetType().Name)." }
+    }
     throw $primaryFailure
 }
 finally {
