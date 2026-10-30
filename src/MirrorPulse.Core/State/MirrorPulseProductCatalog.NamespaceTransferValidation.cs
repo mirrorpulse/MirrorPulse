@@ -136,7 +136,7 @@ public sealed partial class MirrorPulseProductCatalog
             UNION ALL SELECT 1 FROM journal_coalescing_steps WHERE operation_id=$id
             UNION ALL SELECT 1 FROM journal_coalescing_retries WHERE operation_id=$id OR followup_operation_id=$id
             UNION ALL SELECT 1 FROM conflict_deletion_members WHERE original_id=$id
-            UNION ALL SELECT 1 FROM conflict_local_removal_members WHERE original_id=$id
+            UNION ALL SELECT 1 FROM conflict_local_removal_members WHERE original_id=$id UNION ALL SELECT 1 FROM conflict_keep_remote_members WHERE original_id=$id
             UNION ALL SELECT 1 FROM conflict_keep_both_members WHERE original_id=$id
             LIMIT 1;
             """;

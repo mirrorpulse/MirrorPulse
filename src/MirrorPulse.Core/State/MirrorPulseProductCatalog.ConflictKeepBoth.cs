@@ -75,7 +75,7 @@ public sealed partial class MirrorPulseProductCatalog
             foreach (Guid original in selection.Originals)
             {
                 await using var owner = _connection.CreateCommand(); owner.Transaction = transaction;
-                owner.CommandText = "SELECT 1 FROM conflict_deletion_members WHERE original_id=$id UNION ALL SELECT 1 FROM conflict_local_removal_members WHERE original_id=$id UNION ALL SELECT 1 FROM conflict_keep_both_owners WHERE original_id=$id LIMIT 1;";
+                owner.CommandText = "SELECT 1 FROM conflict_deletion_members WHERE original_id=$id UNION ALL SELECT 1 FROM conflict_local_removal_members WHERE original_id=$id UNION ALL SELECT 1 FROM conflict_keep_remote_members WHERE original_id=$id UNION ALL SELECT 1 FROM conflict_keep_both_owners WHERE original_id=$id LIMIT 1;";
                 owner.Parameters.AddWithValue("$id", original.ToString("D"));
                 if (await owner.ExecuteScalarAsync(token).ConfigureAwait(false) is not null) throw new InvalidOperationException("An original group already belongs to another conflict decision.");
             }

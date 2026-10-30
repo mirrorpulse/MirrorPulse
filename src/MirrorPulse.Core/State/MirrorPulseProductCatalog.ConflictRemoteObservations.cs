@@ -77,7 +77,7 @@ public sealed partial class MirrorPulseProductCatalog
                     throw new InvalidDataException("The original missing-version conflict group or observation ordering changed.");
                 errorExpected = previous.LocalRevision;
                 await using var owner = _connection.CreateCommand(); owner.Transaction = transaction;
-                owner.CommandText = "SELECT 1 FROM conflict_deletion_members WHERE original_id=$id UNION ALL SELECT 1 FROM conflict_local_removal_members WHERE original_id=$id UNION ALL SELECT 1 FROM conflict_keep_both_owners WHERE original_id=$id LIMIT 1;";
+                owner.CommandText = "SELECT 1 FROM conflict_deletion_members WHERE original_id=$id UNION ALL SELECT 1 FROM conflict_local_removal_members WHERE original_id=$id UNION ALL SELECT 1 FROM conflict_keep_remote_members WHERE original_id=$id UNION ALL SELECT 1 FROM conflict_keep_both_owners WHERE original_id=$id LIMIT 1;";
                 owner.Parameters.AddWithValue("$id", selection.Originals[index].ToString("D"));
                 if (await owner.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null)
                     throw new InvalidOperationException("An existing user decision already owns this original group.");
