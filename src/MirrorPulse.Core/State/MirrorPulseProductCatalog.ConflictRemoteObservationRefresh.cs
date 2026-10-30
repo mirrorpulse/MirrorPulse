@@ -34,7 +34,9 @@ public sealed partial class MirrorPulseProductCatalog
             foreach (Guid original in selection.Originals)
                 await RequireUnownedRemoteObservationOriginalAsync(original, transaction, cancellationToken).ConfigureAwait(false);
             var current = await ReadConflictRemoteObservationCoreAsync(rejected.OperationId, transaction, cancellationToken).ConfigureAwait(false);
-            transaction.Commit(); return new(conflictId, plan.InstanceId, plan.ItemId, plan.RootKey, conflict.RelativePath, rejected, current?.ObservationId);
+            MirrorPulseConflictRemoteSource.ValidatePath(selection.RemoteTarget);
+            transaction.Commit(); return new(conflictId, plan.InstanceId, plan.ItemId, plan.RootKey, conflict.RelativePath, rejected, current?.ObservationId)
+            { LocalRootRelativePath = plan.FinalPath, RemoteRelativePath = selection.RemoteTarget };
         }
         finally { _gate.Release(); }
     }

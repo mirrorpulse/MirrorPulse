@@ -129,7 +129,8 @@ public sealed partial class PendingOracleBoundaryTests
             foreach (var original in window)
                 await catalog.SaveUploadConflictAsync(new(Guid.NewGuid(), route.InstanceId, original.OperationId.ToString("D"),
                     route.DirectoryName + (change == "foreign-conflict" ? "/PRIVATE_FOREIGN_PATH" : "/cli-roundtrip.txt"),
-                    MirrorPulseConflictReason.StaleRemoteRevision, MirrorPulseVersionComparison.Diverged, "PRIVATE_ORIGINAL_REVISION", "PRIVATE_SELECTED_REVISION", now));
+                    MirrorPulseConflictReason.StaleRemoteRevision, MirrorPulseVersionComparison.Diverged,
+                    change == "missing-version" ? null : "PRIVATE_ORIGINAL_REVISION", change == "missing-version" ? null : "PRIVATE_SELECTED_REVISION", now));
             if (change != "missing-sdk")
             {
                 await using var store = await MirrorPulseCfSharpStateStoreFactory.Create(paths).OpenAsync(new(paths.SyncRootPath));

@@ -49,6 +49,7 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
     private readonly MirrorPulseConflictDeletionRecovery? _deletionRecovery;
     private readonly MirrorPulseConflictDeletionRecovery? _localRemovalRecovery;
     private readonly MirrorPulseConflictKeepBothRecovery? _keepBothRecovery;
+    private readonly MirrorPulseConflictRemoteObservationRecovery? _remoteObservationRecovery;
     private readonly MirrorPulseUploadConflictActions? _conflictActions;
     private readonly MirrorPulseRootLabelJournalRecovery? _rootLabelJournalRecovery;
     private readonly MirrorPulseRootLabelJournalAdmission? _rootLabelAdmission;
@@ -113,6 +114,8 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
         if (conflictActions is not null) _deletionRecovery = new(catalog, conflictActions.ResumeConflictDeletionAsync, router, mayDispatch, _runner, _log);
         if (conflictActions is not null) _localRemovalRecovery = new(catalog, conflictActions.ResumeConflictLocalRemovalAsync, router, mayDispatch, _runner, _log, localOnly: true);
         if (conflictActions is not null) _keepBothRecovery = new(catalog, conflictActions.ResumeConflictKeepBothAsync, router, mayDispatch, _runner, _log, namespaceWork);
+        if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
+            _remoteObservationRecovery = new(catalog, router, stats, mayDispatch, _scheduler, _log, conflicts, notifications, namespaceWork, namespaceExecution);
         _completion = completion ?? throw new ArgumentNullException(nameof(completion));
         _source = new MirrorPulseJournalUploadSource(feed, router, catalog, mayDispatch, _completion, namespaceWork, retiredSources,
             rootLabelJournal: rootLabelJournal, rootLabelAdmission: rootLabelAdmission);
@@ -163,6 +166,13 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
         if (_deletionRecovery is not null) await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.ConflictDeletionRecovery, async () => await _deletionRecovery.RepairAsync(cancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
         if (_localRemovalRecovery is not null) await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.LocalRemovalRecovery, async () => await _localRemovalRecovery.RepairAsync(cancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
         if (_keepBothRecovery is not null) await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.KeepBothRecovery, async () => await _keepBothRecovery.RepairAsync(cancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
+        if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100) && _remoteObservationRecovery is not null)
+            await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.ConflictRemoteObservationRecovery,
+                async () =>
+                {
+                    if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100)) throw new PlatformNotSupportedException();
+                    await _remoteObservationRecovery.RepairAsync(cancellationToken).ConfigureAwait(false);
+                }).ConfigureAwait(false);
         await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.CoalescingRecovery, async () => await _coalescingRecovery.RepairAsync(cancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
         var recovery = new MirrorPulseMutationProjectionRecovery(_catalog);
         IReadOnlyList<Guid> repaired = await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.MutationProjectionRecovery, () => recovery.RepairAsync(async (operationId, token) =>

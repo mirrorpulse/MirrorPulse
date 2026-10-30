@@ -30,6 +30,7 @@ public sealed partial class MirrorPulseJournalCoalescingExecutorTests
             first = await catalog.PrepareCoalescedConflictRemoteObservationAsync(previous[0], fixture.Plan.ItemId, fixture.Plan.FinalPath, request);
             var target = await catalog.ReadCoalescedConflictRemoteTargetAsync(first.SelectedConflictIds[0]);
             Assert.AreEqual(first.ObservationId, target.CurrentObservationId); Assert.AreEqual(request.RejectedEffect, target.RejectedEffect);
+            Assert.AreEqual(fixture.Plan.FinalPath, target.LocalRootRelativePath); Assert.AreEqual(first.RemoteRelativePath, target.RemoteRelativePath);
             command = Guid.NewGuid(); await catalog.SaveUserCommandAsync(new(command, "refreshconflict", first.SelectedConflictIds[0].ToString("D"), "pending"));
             secondInput = LaterObservation(request, "current-after-another-remote-change");
             second = await catalog.RefreshCoalescedConflictRemoteObservationAsync(command, first.SelectedConflictIds[0], fixture.Plan.ItemId, fixture.Plan.FinalPath, secondInput);

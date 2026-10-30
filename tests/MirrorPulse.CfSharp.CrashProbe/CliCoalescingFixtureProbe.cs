@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using CfSharp;
 using Microsoft.Data.Sqlite;
@@ -15,7 +16,18 @@ public sealed record CliCoalescingFixtureAudit(int SchemaVersion, bool Exclusive
     Guid PlanId, IReadOnlyList<Guid> OriginalOperationIds, int OriginalCount, int PendingOriginalCount,
     int AcknowledgedOriginalCount, bool OriginalExpectedRevisionPresent, string OriginalEffectState,
     Guid RejectedEffectId, Guid? CommandId, Guid? AuthorizedEffectId, string? LocalSha256,
-    string? PreservedRemoteSha256, bool ActualNativeConfirmation);
+    string? PreservedRemoteSha256, bool ActualNativeConfirmation)
+{
+    public CliCoalescingObservedVersionAudit? SelectedRemoteObservation { get; init; }
+}
+
+public sealed record CliCoalescingObservedVersionAudit(int Version, Guid ObservationId, Guid RejectedEffectId,
+    Guid? PreviousObservationId, Guid? RefreshCommandId, IReadOnlyList<Guid> OriginalOperationIds,
+    IReadOnlyList<Guid> PreviousConflictIds, IReadOnlyList<Guid> SelectedConflictIds,
+    string? OriginalRequestExpectedRevisionSha256, bool OriginalErrorExpectedRevisionPresent,
+    string? OriginalErrorExpectedRevisionSha256, bool OriginalErrorActualRevisionPresent,
+    string? OriginalErrorActualRevisionSha256, string SelectedRemoteRevisionSha256,
+    DateTimeOffset StartedAt, DateTimeOffset ObservedAt);
 
 /// <summary>Reads actual retained coalescing facts only in an authenticated stopped synthetic Host fixture.</summary>
 public static class CliCoalescingFixtureProbe
@@ -66,6 +78,10 @@ public static class CliCoalescingFixtureProbe
         if (originalIds.Contains(rejectedId) || rejected is not { State: MirrorPulseMutationState.Conflict } ||
             rejected.Intent.Origin != MirrorPulseMutationOrigin.CoalescedJournal || rejected.Intent.ExpectedRevision != execution.ExpectedRevision)
             throw new InvalidDataException("The original rejected effect must remain distinct and unchanged.");
+        var selectedObservation = await catalog.ReadCoalescedConflictRemoteObservationAsync(rejectedId);
+        if (selectedObservation is not null && (selectedObservation.PlanId != plan.PlanId ||
+            selectedObservation.RejectedEffect != rejected.Intent || !selectedObservation.OriginalOperationIds.SequenceEqual(originalIds)))
+            throw new InvalidDataException("The separate observed version must retain the exact rejected effect and original group.");
         RequireExistingUnredirected(paths.CfSharpStateDatabasePath);
         await using var store = await MirrorPulseCfSharpStateStoreFactory.Create(paths).OpenAsync(new(paths.SyncRootPath));
         int pending = 0;
@@ -99,6 +115,9 @@ public static class CliCoalescingFixtureProbe
                 !decision.RetryAuthorized || !decision.OriginalRetriesPrepared || decision.Copy is null || decision.Intent.PlanId != plan.PlanId ||
                 !originalIds.SequenceEqual(decision.Intent.OriginalOperationIds) || decision.Intent.RejectedEffect != rejected.Intent)
                 throw new InvalidDataException("The resolved command must retain its complete original decision and copy proof.");
+            if (selectedObservation is not null && (!selectedObservation.SelectedConflictIds.Contains(decision.Intent.ConflictId) ||
+                selectedObservation.RemoteRevision != decision.Intent.RemoteSource.RemoteRevision))
+                throw new InvalidDataException("The actual choice cannot replace the separately selected remote version.");
             var conflict = await catalog.ReadUploadConflictAsync(decision.Intent.ConflictId)
                 ?? throw new InvalidDataException("The selected remote conflict disappeared.");
             await using var copy = await new MirrorPulseConflictCopyStore(paths).OpenRemoteDecisionAsync(commandId.Value, conflict, decision.Intent.RemoteSource);
@@ -134,10 +153,21 @@ public static class CliCoalescingFixtureProbe
         }
         var result = new CliCoalescingFixtureAudit(1, true, plan.Effect.ToString(), plan.PlanId, originalIds, originalIds.Length,
             pending, originalIds.Length - pending, true, rejected.State.ToString(), rejectedId, commandId, acceptedId,
-            localHash, preservedHash, completed);
+            localHash, preservedHash, completed)
+        {
+            SelectedRemoteObservation = selectedObservation is null ? null : new(selectedObservation.Version, selectedObservation.ObservationId,
+                selectedObservation.RejectedEffect.OperationId, selectedObservation.PreviousObservationId, selectedObservation.RefreshCommandId,
+                selectedObservation.OriginalOperationIds, selectedObservation.PreviousConflictIds, selectedObservation.SelectedConflictIds,
+                HashRevision(selectedObservation.RejectedEffect.ExpectedRevision), selectedObservation.OriginalErrorExpectedRevision is not null,
+                HashRevision(selectedObservation.OriginalErrorExpectedRevision), selectedObservation.OriginalErrorActualRevision is not null,
+                HashRevision(selectedObservation.OriginalErrorActualRevision), HashRevision(selectedObservation.RemoteRevision)!,
+                selectedObservation.StartedAt, selectedObservation.ObservedAt)
+        };
         Console.WriteLine(JsonSerializer.Serialize(result, JsonOptions));
         return 0;
     }
+
+    private static string? HashRevision(string? revision) => revision is null ? null : Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(revision)));
 
     private static void RequireExistingUnredirected(string path)
     {

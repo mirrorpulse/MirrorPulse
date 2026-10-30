@@ -7,7 +7,7 @@ public enum MirrorPulseJournalReadStage
     Unknown, RootLabelRecovery, ConflictDeletionRecovery, LocalRemovalRecovery, KeepBothRecovery,
     CoalescingRecovery, MutationProjectionRecovery, RescanDecision, JournalSource, FullRescan,
     RetiredSourceRecovery, FeedHead, FeedWindow, FeedLossCheck, PendingRootRead, JournalClassification,
-    JournalAdmission, RootWorkDrain, RootNativeAudit, RootAcknowledgement, RootReadmissionAudit
+    JournalAdmission, RootWorkDrain, RootNativeAudit, RootAcknowledgement, RootReadmissionAudit, ConflictRemoteObservationRecovery
 }
 
 /// <summary>Retains fixed read-failure observations without changing an operation, exception or retry.</summary>

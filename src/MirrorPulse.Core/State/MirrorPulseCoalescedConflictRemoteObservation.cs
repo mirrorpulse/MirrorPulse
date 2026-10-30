@@ -11,7 +11,11 @@ public sealed record MirrorPulsePostRejectionRemoteVersion(int Version, Guid Obs
 /// <summary>The current complete rejected group captured without preparing or authorizing another mutation.</summary>
 public sealed record MirrorPulseCoalescedConflictRemoteTarget(Guid ConflictId, InstanceId InstanceId,
     Guid ItemId, string RootKey, string LocalRelativePath, MirrorPulseMutationIntent RejectedEffect,
-    Guid? CurrentObservationId);
+    Guid? CurrentObservationId)
+{
+    public string LocalRootRelativePath { get; init; } = string.Empty;
+    public string RemoteRelativePath { get; init; } = string.Empty;
+}
 
 /// <summary>The immutable observation and complete new conflict epoch selected for one rejected group.</summary>
 /// <remarks>Previous conflicts and their optional response fields remain in the catalog.

@@ -71,7 +71,10 @@ function Invoke-CliCoalescingContentConflict {
     do {
         $listed=& $InvokeCli @('--json','--developer-mode','conflict','list')
         $selected=@($listed.data.items|Where-Object {$_.instanceId -ceq $InstanceId -and $_.relativePath.Replace('\','/').EndsWith('/cli-roundtrip.txt',[StringComparison]::Ordinal)})
-        if($selected.Count -gt 0){$conflict=$selected[0];break}
+        if($selected.Count -gt 0){
+            $conflict=$selected[0]
+            if(-not [string]::IsNullOrEmpty($conflict.localRevision) -and -not [string]::IsNullOrEmpty($conflict.remoteRevision)){break}
+        }
         Start-Sleep -Milliseconds 100
     }while([DateTimeOffset]::UtcNow -lt $deadline)
     if($null -eq $conflict -or $conflict.source -cne 'Upload' -or $conflict.reason -cne 'StaleRemoteRevision'){
@@ -89,6 +92,22 @@ function Invoke-CliCoalescingContentConflict {
     $pending|ConvertTo-Json -Depth 8|Set-Content -LiteralPath (Join-Path $originals 'pending-before-choice.json') -Encoding utf8
     if([string]::IsNullOrEmpty($conflict.localRevision) -or [string]::IsNullOrEmpty($conflict.remoteRevision)){
         throw 'The actual conflict did not expose the selected revisions required for KeepBoth; original intent evidence was retained without fabricating response revisions.'
+    }
+    $observation=$pending.selectedRemoteObservation
+    if($null -ne $observation){
+        $selectedRevisionHash=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($conflict.remoteRevision)))
+        $requestRevisionHash=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($conflict.localRevision)))
+        if($observation.version -ne 1 -or $observation.rejectedEffectId -cne $pending.rejectedEffectId -or
+            $null -ne $observation.previousObservationId -or $null -ne $observation.refreshCommandId -or
+            $observation.originalErrorActualRevisionPresent -ne $false -or $null -ne $observation.originalErrorActualRevisionSha256 -or
+            $observation.selectedRemoteRevisionSha256 -cne $selectedRevisionHash -or
+            $observation.originalRequestExpectedRevisionSha256 -cne $requestRevisionHash -or
+            @($observation.originalOperationIds).Count -ne $pending.originalCount -or
+            @(Compare-Object @($observation.originalOperationIds) @($pending.originalOperationIds) -CaseSensitive).Count -ne 0 -or
+            @($observation.selectedConflictIds).Count -ne $pending.originalCount -or
+            @($observation.selectedConflictIds|Where-Object {$_ -ceq $conflict.conflictId}).Count -ne 1){
+            throw 'The selected current version did not retain its separate observation and exact original error/group provenance.'
+        }
     }
     Invoke-CoalescingCli 'restart-before-choice' @('--json','--developer-mode','host','start')|Out-Null
     $deadline=[DateTimeOffset]::UtcNow.AddSeconds(30)

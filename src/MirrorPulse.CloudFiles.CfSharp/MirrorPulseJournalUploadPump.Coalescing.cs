@@ -205,6 +205,18 @@ public sealed partial class MirrorPulseJournalUploadPump
             if (record.State != MirrorPulseMutationState.Acknowledged) break;
         }
         if (rejected.Count != 1) throw new InvalidDataException("A rejected group requires the actual current effect conflict.");
+        var retainedObservation = await _catalog.ReadCoalescedConflictRemoteObservationAsync(rejected[0].Intent.OperationId, token).ConfigureAwait(false);
+        if (retainedObservation is not null)
+        {
+            // Retrying the rejected program must not recreate dismissed error epochs
+            // or overwrite their original nullable response facts and detection times.
+            if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100) && _remoteObservationRecovery is not null)
+                await _remoteObservationRecovery.PublishAsync(retainedObservation, token).ConfigureAwait(false);
+            foreach (var member in plan.Members)
+                await _completion.DeferFailedUploadAsync(member.OperationId, DateTimeOffset.UtcNow, token).ConfigureAwait(false);
+            return false;
+        }
+        Guid entryConflict = Guid.Empty;
         foreach (var member in plan.Members)
         {
             string path = _router.ResolveUploadPath(plan.InstanceId, plan.RootKey, plan.FinalPath);
@@ -214,6 +226,7 @@ public sealed partial class MirrorPulseJournalUploadPump
                 Path.GetRelativePath(_syncRootPath, path).Replace(Path.DirectorySeparatorChar, '/'),
                 MirrorPulseConflictReason.StaleRemoteRevision, MirrorPulseVersionComparison.Diverged, expected, actual, DateTimeOffset.UtcNow);
             await _catalog.SaveUploadConflictAsync(conflict, token).ConfigureAwait(false);
+            if (entryConflict == Guid.Empty) entryConflict = conflict.ConflictId;
             _conflicts?.Upsert(conflict);
             if (_notifications is not null)
             {
@@ -222,6 +235,9 @@ public sealed partial class MirrorPulseJournalUploadPump
             }
             await _completion.DeferFailedUploadAsync(member.OperationId, DateTimeOffset.UtcNow, token).ConfigureAwait(false);
         }
+        if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100) && _remoteObservationRecovery is not null && entryConflict != Guid.Empty)
+            _ = await _remoteObservationRecovery.TryObserveAdmittedAsync(entryConflict,
+                _router.GetRegistration(plan.InstanceId, plan.RootKey).RootId, token).ConfigureAwait(false);
         return false;
     }
 

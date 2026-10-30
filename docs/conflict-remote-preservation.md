@@ -90,8 +90,19 @@ these future records refuses upgrade; a current catalog missing one of these
 tables refuses to recreate it. Failed writes roll back epochs, the head and
 command completion together.
 
-These catalog APIs are the persistence boundary. This change does not add a
-Control or CLI refresh command or an automatic Host observation pass. Callers
-must retain normal root admission, enabled-instance policy and normal-user
-transport execution. A null or failed `Stat` cannot select an empty revision or
-authorize absence, and refreshing cannot bypass an existing decision owner.
+The default Host observes a missing version after retaining every original
+conflict and its SDK retry metadata. It also recovers persisted groups through
+the existing indexed keyset conflict query, reading at most 64 pending rows per
+pump scan and deduplicating groups within that page. Failed groups do not hold
+the cursor at the head. Disabled instances, disabled roots and roots awaiting
+fresh admission cannot reach the source. The root lease and instance scheduler
+cover the observation, and Worker `Stat` runs in the normal-user context. The
+conflict center receives the new pending epochs after the observation commits.
+Revisiting an already observed rejected effect does not rewrite its historical
+error rows or select another version.
+
+There is no Control or CLI refresh command in this change. Explicit later refresh
+still requires its separate owner-side integration. A null or failed `Stat`
+cannot select an empty revision or authorize absence; an existing decision owner
+cannot be bypassed. This recovery never authorizes a mutation or acknowledges an
+original SDK journal ID.
