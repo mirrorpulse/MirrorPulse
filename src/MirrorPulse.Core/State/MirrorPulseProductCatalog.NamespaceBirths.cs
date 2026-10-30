@@ -115,6 +115,10 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task<MirrorPulseNamespaceBirthIntent?> ReadNamespaceBirthCoreAsync(Guid operationId,
         SqliteTransaction? transaction, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
+        NamespaceRecoveryReadSnapshot? snapshot = null;
+        if (transaction is not null) _namespaceRecoveryReadSnapshots.TryGetValue(transaction, out snapshot);
+        if (snapshot?.ValidatedBirths.TryGetValue(operationId, out var retained) == true) return retained;
         var intent = await ReadNamespaceBirthRowAsync(operationId, transaction, token).ConfigureAwait(false);
         if (intent is null) return null;
         try { _ = await ValidateNamespaceBirthParentAsync(intent, transaction, token).ConfigureAwait(false); }
@@ -122,6 +126,7 @@ public sealed partial class MirrorPulseProductCatalog
         {
             throw new InvalidDataException("The historical birth admission lost its direct parent protection.", exception);
         }
+        if (snapshot is not null) snapshot.ValidatedBirths[operationId] = intent;
         return intent;
     }
 

@@ -7,6 +7,10 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task ValidateNamespaceBirthReferenceIndexesAsync(MirrorPulseNamespaceBirthIntent birth,
         SqliteTransaction? transaction, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
+        NamespaceRecoveryReadSnapshot? snapshot = null;
+        if (transaction is not null) _namespaceRecoveryReadSnapshots.TryGetValue(transaction, out snapshot);
+        if (snapshot?.BirthReferenceIndexes.TryGetValue(birth, out _) == true) return;
         if (birth.RemoteEntry is null && birth.TransferEntry is null)
         {
             await using var query = _connection.CreateCommand(); query.Transaction = transaction;
@@ -15,11 +19,16 @@ public sealed partial class MirrorPulseProductCatalog
                 UNION ALL SELECT 1 FROM namespace_transfer_target_births WHERE birth_id=$operation LIMIT 1;
                 """;
             query.Parameters.AddWithValue("$operation", birth.OperationId.ToString("D"));
-            // Recheck both indexes on every invocation, including within a writer
-            // transaction. An unexpected row must still pass the original validators.
-            if (await query.ExecuteScalarAsync(token).ConfigureAwait(false) is null) return;
+            // Writers and ordinary reads recheck every invocation. Explicitly
+            // read-only snapshots may retain this fully validated reference state.
+            if (await query.ExecuteScalarAsync(token).ConfigureAwait(false) is null)
+            {
+                if (snapshot is not null) snapshot.BirthReferenceIndexes[birth] = true;
+                return;
+            }
         }
         await ValidateNamespaceRemoteBirthReferenceIndexAsync(birth, transaction, token).ConfigureAwait(false);
         await ValidateNamespaceTransferBirthReferenceIndexAsync(birth, transaction, token).ConfigureAwait(false);
+        if (snapshot is not null) snapshot.BirthReferenceIndexes[birth] = true;
     }
 }

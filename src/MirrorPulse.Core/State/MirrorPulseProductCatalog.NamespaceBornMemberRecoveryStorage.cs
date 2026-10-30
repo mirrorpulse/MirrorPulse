@@ -26,6 +26,13 @@ public sealed partial class MirrorPulseProductCatalog
         SqliteTransaction transaction, CancellationToken token, Guid? selectedActionId = null,
         List<MirrorPulseNamespaceBornMemberRecoveryAction>? requestedHistory = null)
     {
+        token.ThrowIfCancellationRequested();
+        _namespaceRecoveryReadSnapshots.TryGetValue(transaction, out var snapshot);
+        if (requestedHistory is null && snapshot?.BornRecoverySummaries.TryGetValue(memberId, out var retained) == true)
+        {
+            if (selectedActionId is null) return retained.Summary with { Selected = null };
+            if (selectedActionId == retained.SelectedActionId) return retained.Summary;
+        }
         int count = 0;
         MirrorPulseNamespaceBornMemberRecoveryAction? latest = null, selected = null;
         long after = long.MinValue;
@@ -89,7 +96,10 @@ public sealed partial class MirrorPulseProductCatalog
             if (unfinished ? pendingId != latest!.ActionId.ToString("D") || pendingRoot != latest.Child.Member.RootId!.Value.Value.ToString("D") : pendingId is not null)
                 throw new InvalidDataException("Born recovery lost its pending ownership or retained a completed reservation.");
         }
-        return new(count, latest, selected);
+        var result = new BornMemberRecoveryHistory(count, latest, selected);
+        if (snapshot is not null && requestedHistory is null && count > 0 && (selectedActionId is null || selected is not null))
+            snapshot.BornRecoverySummaries[memberId] = (selectedActionId, result);
+        return result;
     }
 
     private async Task<MirrorPulseNamespaceBornMemberRecoveryAction> ReadBornMemberRecoveryActionRowCoreAsync(Guid memberId,

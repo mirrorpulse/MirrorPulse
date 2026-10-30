@@ -89,11 +89,16 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task<MirrorPulseNamespaceInitializationStatus> ReadNamespaceInitializationStatusCoreAsync(Guid operationId,
         SqliteTransaction transaction, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
+        _namespaceRecoveryReadSnapshots.TryGetValue(transaction, out var snapshot);
+        if (snapshot?.Initializations.TryGetValue(operationId, out var retained) == true) return retained;
         var intent = await ReadNamespaceInitializationCoreAsync(operationId, transaction, token).ConfigureAwait(false)
             ?? throw new FileNotFoundException("The initialization admission is missing.");
         var completion = await ReadNamespaceInitializationCompletionCoreAsync(operationId, transaction, token).ConfigureAwait(false);
         if (completion is null) await RequireNamespaceInitializationRootsAsync(intent, transaction, token).ConfigureAwait(false);
         else await RequireNamespaceInitializationTerminalAsync(intent, completion, transaction, token).ConfigureAwait(false);
-        return new(intent, completion);
+        var result = new MirrorPulseNamespaceInitializationStatus(intent, completion);
+        if (snapshot is not null) snapshot.Initializations[operationId] = result;
+        return result;
     }
 }

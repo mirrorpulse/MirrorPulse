@@ -14,6 +14,11 @@ public sealed partial class MirrorPulseProductCatalog
     {
         internal NamespaceHistoryCache<MirrorPulseNamespaceMemberRegistration> Members { get; } = new();
         internal NamespaceHistoryCache<MirrorPulseNamespaceMemberRegistration, MirrorPulseNamespaceMemberLocation> Locations { get; } = new();
+        internal NamespaceHistoryCache<MirrorPulseNamespaceBirthIntent, bool> BirthReferenceIndexes { get; } = new();
+        internal NamespaceHistoryCache<MirrorPulseNamespaceInitializationStatus> Initializations { get; } = new();
+        internal NamespaceHistoryCache<MirrorPulseNamespaceBirthIntent> ValidatedBirths { get; } = new();
+        internal NamespaceHistoryCache<MirrorPulseNamespaceBirthObservation> ValidatedBirthObservations { get; } = new();
+        internal NamespaceHistoryCache<(Guid? SelectedActionId, BornMemberRecoveryHistory Summary)> BornRecoverySummaries { get; } = new();
     }
 
     private SqliteTransaction BeginNamespaceRecoveryReadSnapshot()

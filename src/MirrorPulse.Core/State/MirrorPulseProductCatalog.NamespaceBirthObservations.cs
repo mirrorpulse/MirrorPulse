@@ -93,11 +93,16 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task<MirrorPulseNamespaceBirthObservation?> ReadNamespaceBirthObservationCoreAsync(Guid operationId,
         SqliteTransaction? transaction, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
+        NamespaceRecoveryReadSnapshot? snapshot = null;
+        if (transaction is not null) _namespaceRecoveryReadSnapshots.TryGetValue(transaction, out snapshot);
+        if (snapshot?.ValidatedBirthObservations.TryGetValue(operationId, out var retained) == true) return retained;
         var observation = await ReadNamespaceBirthObservationRowAsync(operationId, transaction, token).ConfigureAwait(false);
         if (observation is null) return null;
         try { await ValidateNamespaceBirthObservationReferencesAsync(observation, transaction, token).ConfigureAwait(false); }
         catch (Exception exception) when (exception is InvalidOperationException or FileNotFoundException)
         { throw new InvalidDataException("The birth observation lost its original references.", exception); }
+        if (snapshot is not null) snapshot.ValidatedBirthObservations[operationId] = observation;
         return observation;
     }
 
