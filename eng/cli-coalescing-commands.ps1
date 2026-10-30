@@ -63,8 +63,8 @@ function Invoke-CliStoppedCoalescingOracle {
     }
 }
 
-function Invoke-CliCoalescingEditFailureObservation {
-    param([Parameter(Mandatory)][string]$ProbeAssembly,[Parameter(Mandatory)][string]$FixtureRoot,[Parameter(Mandatory)][string]$EvidencePath)
+function Read-CliStoppedCoalescingEdit {
+    param([Parameter(Mandatory)][string]$ProbeAssembly,[Parameter(Mandatory)][string]$FixtureRoot)
     $root=Assert-CliCoalescingEnvironment $FixtureRoot
     if([IO.Path]::GetFullPath($ProbeAssembly) -ine (Join-Path $root 'probe/MirrorPulse.CfSharp.CrashProbe.dll')){
         throw 'The edit observer must be the current isolated fixture publication.'
@@ -83,11 +83,17 @@ function Invoke-CliCoalescingEditFailureObservation {
             $result.originalSdkAcknowledgementExecuted -ne $false -or $result.mutationExecuted -ne $false -or @($result.journal).Count -gt 2048){
             throw 'The stopped edit observer crossed its bounded read-only boundary.'
         }
-        $directory=Join-Path ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($EvidencePath))) 'coalescing.originals'
-        New-Item -ItemType Directory -Path $directory -Force|Out-Null
-        $result|ConvertTo-Json -Depth 8|Set-Content -LiteralPath (Join-Path $directory 'failed-edit-state.json') -Encoding utf8
+        return $result
     }finally{
         if(-not $process.HasExited){$process.Kill($true);$process.WaitForExit()}
         $process.Dispose()
     }
+}
+
+function Invoke-CliCoalescingEditFailureObservation {
+    param([Parameter(Mandatory)][string]$ProbeAssembly,[Parameter(Mandatory)][string]$FixtureRoot,[Parameter(Mandatory)][string]$EvidencePath)
+    $result=Read-CliStoppedCoalescingEdit -ProbeAssembly $ProbeAssembly -FixtureRoot $FixtureRoot
+    $directory=Join-Path ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($EvidencePath))) 'coalescing.originals'
+    New-Item -ItemType Directory -Path $directory -Force|Out-Null
+    $result|ConvertTo-Json -Depth 8|Set-Content -LiteralPath (Join-Path $directory 'failed-edit-state.json') -Encoding utf8
 }

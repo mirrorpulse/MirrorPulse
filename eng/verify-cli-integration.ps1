@@ -23,6 +23,7 @@ $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 . (Join-Path $PSScriptRoot 'cli-root-label-cancellation-policy.ps1')
 . (Join-Path $PSScriptRoot 'cli-coalescing-content.ps1')
 . (Join-Path $PSScriptRoot 'cli-coalescing-commands.ps1')
+. (Join-Path $PSScriptRoot 'cli-coalescing-edit-witness.ps1')
 $primaryFailure = $null
 $runRoot = Join-Path ([IO.Path]::GetTempPath()) "MirrorPulse-cli-integration-$([guid]::NewGuid().ToString('N'))"
 $cliRoot = Join-Path $runRoot "cli"
@@ -314,6 +315,7 @@ try {
         $coalescingEvidence = Invoke-CliCoalescingContentConflict -InvokeCli { param($arguments) Invoke-MirrorPulseCli $arguments } `
             -WaitHostStopped { Wait-MirrorPulseHostStopped } `
             -ReadStoppedAudit { param($completed) Invoke-CliStoppedCoalescingOracle -ProbeAssembly $script:probeAssembly -FixtureRoot $runRoot -Completed $completed } `
+            -ReadStoppedEdit { Read-CliStoppedCoalescingEdit -ProbeAssembly $script:probeAssembly -FixtureRoot $runRoot } `
             -ResolveKeepBoth { param($conflict) Invoke-CliCoalescingKeepBoth -CliPath $script:cliExecutable -FixtureRoot $runRoot -ConflictId $conflict } `
             -InstanceId $instanceId -MappedRoot $mappedRoot -SourceRoot $sourceRoot -EvidencePath $EvidencePath
         $coalescingEvidence.packageSha256 = (Get-FileHash -LiteralPath $PackagePath).Hash

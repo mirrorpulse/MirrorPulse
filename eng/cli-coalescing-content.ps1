@@ -4,6 +4,7 @@ function Invoke-CliCoalescingContentConflict {
         [Parameter(Mandatory)][scriptblock]$InvokeCli,
         [Parameter(Mandatory)][scriptblock]$WaitHostStopped,
         [Parameter(Mandatory)][scriptblock]$ReadStoppedAudit,
+        [Parameter(Mandatory)][scriptblock]$ReadStoppedEdit,
         [Parameter(Mandatory)][scriptblock]$ResolveKeepBoth,
         [Parameter(Mandatory)][string]$InstanceId,
         [Parameter(Mandatory)][string]$MappedRoot,
@@ -17,6 +18,20 @@ function Invoke-CliCoalescingContentConflict {
         if($result.kind -cne 'result'){throw 'The signed coalescing fixture requires an original result envelope.'}
         $result|ConvertTo-Json -Depth 12|Set-Content -LiteralPath (Join-Path $originals ($Name+'.json')) -Encoding utf8
         $result.data
+    }
+    function Read-CoalescingEdit([string]$Name) {
+        $observation=& $ReadStoppedEdit
+        Assert-CliCoalescingEditSnapshot $observation
+        $observation|ConvertTo-Json -Depth 8|Set-Content -LiteralPath (Join-Path $originals ($Name+'.json')) -Encoding utf8
+        return $observation
+    }
+    function Confirm-CoalescingDisabled([string]$Name) {
+        $status=Invoke-CoalescingCli $Name @('--json','--developer-mode','status')
+        $instance=@($status.instances|Where-Object instanceId -CEQ $InstanceId)
+        if($instance.Count -ne 1 -or $instance[0].enabled -ne $false -or $instance[0].workerConnected -ne $false){
+            throw 'Both actual edits require the retained disabled instance without a connected Worker.'
+        }
+        return $status
     }
     function Assert-CoalescingHash([string]$Path,[string]$Expected,[bool]$Refresh) {
         $deadline=[DateTimeOffset]::UtcNow.AddSeconds(30)
@@ -45,11 +60,18 @@ function Invoke-CliCoalescingContentConflict {
     $entry=@($disabled.instances|Where-Object instanceId -CEQ $InstanceId)
     if($entry.Count -ne 1 -or $entry[0].enabled -ne $false){throw 'The real instance must be disabled before edits.'}
     $baseline=[long]$disabled.pendingUploads
+    Invoke-CoalescingCli 'stop-before-edit-baseline' @('--json','--developer-mode','host','stop')|Out-Null
+    & $WaitHostStopped
+    $editBaseline=Read-CoalescingEdit 'edit-baseline'
+    Invoke-CoalescingCli 'start-before-first-edit' @('--json','--developer-mode','host','start')|Out-Null
+    $baseline=[long](Confirm-CoalescingDisabled 'before-first-edit-status').pendingUploads
+    $firstWrittenAt=[DateTimeOffset]::UtcNow
     [IO.File]::WriteAllBytes($local,$first)
     $deadline=[DateTimeOffset]::UtcNow.AddSeconds(30)
     do {
         $status=& $InvokeCli @('--json','--developer-mode','status')
-        if($status.data.pendingUploads -gt $baseline){break}
+        # Global totals remain diagnostics. The original30s window allows actual
+        # notifications to settle before the stopped owner supplies exact IDs.
         Start-Sleep -Milliseconds 100
     }while([DateTimeOffset]::UtcNow -lt $deadline)
     try {
@@ -57,13 +79,19 @@ function Invoke-CliCoalescingContentConflict {
         @{schemaVersion=1;expectedSha256=([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($first)));actualSha256=(Get-FileHash -LiteralPath $local).Hash;length=(Get-Item -LiteralPath $local).Length;baselinePendingUploads=$baseline;observedPendingUploads=$status.data.pendingUploads}|
             ConvertTo-Json|Set-Content -LiteralPath (Join-Path $originals 'first-edit-bytes.json') -Encoding utf8
     } catch { Write-Host "First edit observation also failed: $($_.Exception.GetType().Name)." }
-    if($status.data.pendingUploads -le $baseline){throw 'The first actual local edit did not enter the original journal.'}
+    Invoke-CoalescingCli 'stop-after-first-edit' @('--json','--developer-mode','host','stop')|Out-Null
+    & $WaitHostStopped
+    $firstOriginals=Read-CoalescingEdit 'first-edit-originals'
+    $firstWitness=Get-CliCoalescingEditWitness -Before $editBaseline -After $firstOriginals -WrittenAt $firstWrittenAt -LocalPath $local -ExpectedContent $first
+    $firstWitness|ConvertTo-Json -Depth 8|Set-Content -LiteralPath (Join-Path $originals 'first-edit-witness.json') -Encoding utf8
     $firstCount=[long]$status.data.pendingUploads
+    Invoke-CoalescingCli 'start-before-second-edit' @('--json','--developer-mode','host','start')|Out-Null
+    $firstCount=[long](Confirm-CoalescingDisabled 'before-second-edit-status').pendingUploads
+    $secondWrittenAt=[DateTimeOffset]::UtcNow
     [IO.File]::WriteAllBytes($local,$latest)
     $deadline=[DateTimeOffset]::UtcNow.AddSeconds(30)
     do {
         $status=& $InvokeCli @('--json','--developer-mode','status')
-        if($status.data.pendingUploads -gt $firstCount){break}
         Start-Sleep -Milliseconds 100
     }while([DateTimeOffset]::UtcNow -lt $deadline)
     try {
@@ -71,7 +99,11 @@ function Invoke-CliCoalescingContentConflict {
         @{schemaVersion=1;expectedSha256=([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($latest)));actualSha256=(Get-FileHash -LiteralPath $local).Hash;length=(Get-Item -LiteralPath $local).Length;baselinePendingUploads=$firstCount;observedPendingUploads=$status.data.pendingUploads}|
             ConvertTo-Json|Set-Content -LiteralPath (Join-Path $originals 'second-edit-bytes.json') -Encoding utf8
     } catch { Write-Host "Second edit observation also failed: $($_.Exception.GetType().Name)." }
-    if($status.data.pendingUploads -le $firstCount){throw 'The second actual local edit did not retain a distinct original notification.'}
+    Invoke-CoalescingCli 'stop-after-second-edit' @('--json','--developer-mode','host','stop')|Out-Null
+    & $WaitHostStopped
+    $secondOriginals=Read-CoalescingEdit 'second-edit-originals'
+    $secondWitness=Get-CliCoalescingEditWitness -Before $firstOriginals -After $secondOriginals -WrittenAt $secondWrittenAt -LocalPath $local -ExpectedContent $latest -RequiredOriginalIds $firstWitness.originalOperationIds
+    $secondWitness|ConvertTo-Json -Depth 8|Set-Content -LiteralPath (Join-Path $originals 'second-edit-witness.json') -Encoding utf8
     Invoke-CoalescingCli 'queued-status' @('--json','--developer-mode','status')|Out-Null
     [IO.File]::WriteAllBytes($source,$remote)
     Invoke-CoalescingCli 'enable' @('--json','--developer-mode','instance','enable','--instance-id',$InstanceId)|Out-Null
@@ -94,6 +126,9 @@ function Invoke-CliCoalescingContentConflict {
     Invoke-CoalescingCli 'stop-before-choice' @('--json','--developer-mode','host','stop')|Out-Null
     & $WaitHostStopped
     $pending=& $ReadStoppedAudit $false
+    foreach($id in @($firstWitness.originalOperationIds)+@($secondWitness.originalOperationIds)){
+        if($id -cnotin @($pending.originalOperationIds)){throw 'The retained conflict group lost an actual first or second edit original.'}
+    }
     if($pending.rawEffect -cne 'UpdateFile' -or $pending.originalCount -lt 2 -or
         $pending.pendingOriginalCount -ne $pending.originalCount -or $pending.originalExpectedRevisionPresent -ne $true -or
         $pending.originalEffectState -cne 'Conflict'){
@@ -184,6 +219,8 @@ function Invoke-CliCoalescingContentConflict {
     }
     [ordered]@{schemaVersion=1;sourceSha=$env:GITHUB_SHA;runId=$env:GITHUB_RUN_ID;defaultHostIntegrated=$true;signedWorker=$true;
         rawEffect='UpdateFile';action='KeepBoth';originalCount=$before.originalCount;actualNativeConfirmation=$true;
+        firstEditOriginalOperationIds=@($firstWitness.originalOperationIds);secondEditOriginalOperationIds=@($secondWitness.originalOperationIds);
+        actualEditOriginalJournalWitness=$true;globalPendingCountUsedAsEditProof=$false;
         localSha256=$latestHash;preservedRemoteSha256=$remoteHash;unchangedRetainedFactsAfterActualRestart=$true;
         fullSevenEffectMatrixAccepted=$false;fullP076Accepted=$false;teardownCompleted=$false}
 }
