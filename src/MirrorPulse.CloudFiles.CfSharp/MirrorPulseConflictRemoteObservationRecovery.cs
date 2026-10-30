@@ -83,22 +83,8 @@ internal sealed class MirrorPulseConflictRemoteObservationRecovery(
         return observed;
     }
 
-    internal async Task PublishAsync(MirrorPulseCoalescedConflictRemoteObservation observed, CancellationToken token)
-    {
-        foreach (Guid previous in observed.PreviousConflictIds) center?.Remove(previous);
-        foreach (Guid selected in observed.SelectedConflictIds)
-        {
-            var conflict = await catalog.ReadUploadConflictAsync(selected, token).ConfigureAwait(false)
-                ?? throw new InvalidDataException("A committed remote version observation lost its selected epoch.");
-            if (!conflict.IsPending) { center?.Remove(selected); continue; }
-            center?.Upsert(conflict);
-            if (notifications is not null)
-            {
-                try { await notifications.NotifyAsync(conflict, token).ConfigureAwait(false); }
-                catch (Exception error) when (error is not OperationCanceledException) { }
-            }
-        }
-    }
+    internal Task PublishAsync(MirrorPulseCoalescedConflictRemoteObservation observed, CancellationToken token) =>
+        MirrorPulseConflictRemoteObservationProjection.PublishAsync(catalog, observed, center, notifications, token);
 
     private RootRegistration RequireRoot(MirrorPulseCoalescedConflictRemoteTarget target, RootId admittedRoot)
     {

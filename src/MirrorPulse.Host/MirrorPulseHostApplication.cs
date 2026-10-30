@@ -511,6 +511,9 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
             .Register(dispatcher);
         dispatcher.Register<ControlEmptyArguments, IReadOnlyList<MirrorPulseControlRootStatus>>(
             MirrorPulseControlCommands.RootList, async (_, token) => await ReadRootsAsync(token).ConfigureAwait(false));
+        dispatcher.Register<ConflictRefreshVersionArguments, MirrorPulseControlConflictVersionRefresh>(
+            MirrorPulseControlCommands.ConflictRefreshVersion, async (arguments, token) =>
+                await RefreshConflictVersionAsync(arguments, token).ConfigureAwait(false));
         dispatcher.Register<RootRecoverArguments, MirrorPulseControlRootRecovery>(
             MirrorPulseControlCommands.RootRecover, RecoverRootRenameAsync);
         dispatcher.Register<RootPrepareRenameArguments, MirrorPulseControlRootRenamePreparation>(

@@ -557,6 +557,11 @@ public sealed class MirrorPulseControlClient
             MirrorPulseControlCommands.ConflictResolve,
             new(conflictId, action, preservedPath), cancellationToken);
 
+    public Task<MirrorPulseControlConflictVersionRefresh> RefreshConflictVersionAsync(Guid commandId, Guid conflictId,
+        CancellationToken cancellationToken = default) =>
+        SendAsync<ConflictRefreshVersionArguments, MirrorPulseControlConflictVersionRefresh>(
+            MirrorPulseControlCommands.ConflictRefreshVersion, new(commandId, conflictId), cancellationToken);
+
     private async Task<System.IO.Pipes.NamedPipeClientStream> ConnectAsync(
         CancellationToken cancellationToken)
     {

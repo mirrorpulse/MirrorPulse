@@ -101,8 +101,26 @@ conflict center receives the new pending epochs after the observation commits.
 Revisiting an already observed rejected effect does not rewrite its historical
 error rows or select another version.
 
-There is no Control or CLI refresh command in this change. Explicit later refresh
-still requires its separate owner-side integration. A null or failed `Stat`
-cannot select an empty revision or authorize absence; an existing decision owner
-cannot be bypassed. This recovery never authorizes a mutation or acknowledges an
-original SDK journal ID.
+Use `conflict refresh-version --conflict-id GUID --operation-id GUID` to request
+a new current-version selection through `conflict.refreshVersion`. Supply a new
+operation ID for a new choice, and reuse that exact ID and target after a lost
+return. Preparation inserts the request once. Replaying a completed request
+returns its retained observation even if the root is now disabled or a later
+choice has advanced the head; it does not reset the command or contact a Worker.
+
+New execution requires the current complete unowned group, an enabled and
+freshly admitted root, the instance scheduler and the current library lifetime.
+Worker Stat runs through the Host's normal-user execution boundary. A null or
+empty result returns a pending command (CLI exit 11) and preserves the previous
+selection. Failed or canceled observation also leaves that request pending.
+Repeat the same request only while its selected conflict is still current; it
+cannot be redirected to a newer conflict. The response distinguishes the
+original request baseline and nullable error fields from the separate selected
+version and its observation times. A completed refresh selects new pending
+epochs; it does not complete a remote mutation or acknowledge any original SDK
+journal ID.
+
+An existing preservation or deletion decision still owns its selected source
+and refuses refresh. Safe explicit supersession, additional conflict policies
+and full signed default-Host, installed and ordinary-user acceptance remain
+separate S06 requirements.

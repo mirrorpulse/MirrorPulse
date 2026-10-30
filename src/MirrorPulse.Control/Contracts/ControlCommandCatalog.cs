@@ -65,6 +65,7 @@ public static class MirrorPulseControlCommands
     public const string ConflictList = "conflict.list";
     public const string ConflictSnooze = "conflict.snooze";
     public const string ConflictResolve = "conflict.resolve";
+    public const string ConflictRefreshVersion = "conflict.refreshVersion";
 
     public const string OperationGet = "operation.get";
     public const string OperationWatch = "operation.watch";
@@ -133,6 +134,7 @@ public static class MirrorPulseControlCommands
         new(ConflictList, "conflict", false, false),
         new(ConflictSnooze, "conflict", true, false),
         new(ConflictResolve, "conflict", true, false),
+        new(ConflictRefreshVersion, "conflict", true, false),
         new(OperationGet, "operation", false, false),
         new(OperationWatch, "operation", false, false),
         new(OperationCancel, "operation", true, false),

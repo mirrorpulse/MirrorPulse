@@ -11,7 +11,7 @@ using MirrorPulse.Core.Sync;
 namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 
 [TestClass]
-public sealed class MirrorPulseConflictRemoteObservationRecoveryTests
+public sealed partial class MirrorPulseConflictRemoteObservationRecoveryTests
 {
     [TestMethod]
     public async Task MissingVersionRecoveryPublishesTheCompleteGroupAndRestartDoesNotReobserveOrAuthorizeIt()

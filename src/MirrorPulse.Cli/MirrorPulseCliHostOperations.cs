@@ -653,6 +653,15 @@ public sealed partial class MirrorPulseCliHostOperations : IMirrorPulseCliHostOp
                         .ConfigureAwait(false);
                     human = $"Conflict snoozed: {conflictId}";
                     break;
+                case ("conflict", "refresh-version"):
+                    var refresh = ParseConflictRefreshArguments(command.Arguments);
+                    var refreshed = await _client.RefreshConflictVersionAsync(refresh.CommandId, refresh.ConflictId, cancellationToken).ConfigureAwait(false);
+                    ValidateConflictRefreshOutcome(refresh, refreshed);
+                    result = refreshed;
+                    human = refreshed.State == "resolved" ? $"Conflict version refreshed: {refreshed.ConflictId:D}" :
+                        $"Conflict version refresh pending: {refreshed.ConflictId:D}; operation {refreshed.CommandId:D}";
+                    exitCode = refreshed.State == "resolved" ? MirrorPulseControlExitCodes.Success : MirrorPulseControlExitCodes.Pending;
+                    break;
                 case ("conflict", "resolve"):
                     conflictId = GetRequiredOption(command.Arguments, "conflict-id");
                     if (!Enum.TryParse(GetRequiredOption(command.Arguments, "action"), true,

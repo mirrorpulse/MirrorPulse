@@ -38,7 +38,7 @@ public static class MirrorPulseCliCommandLine
         new(StringComparer.OrdinalIgnoreCase)
         {
             ["adapter"] = NewSet("list", "install", "remove", "update", "uninstall"),
-            ["conflict"] = NewSet("list", "show", "snooze", "resolve"),
+            ["conflict"] = NewSet("list", "show", "snooze", "resolve", "refresh-version"),
             ["host"] = NewSet("status", "start", "stop", "restart"),
             ["instance"] = NewSet("list", "create", "configure", "enable", "disable", "select-version"),
             ["operation"] = NewSet("get", "watch", "cancel"),
@@ -293,6 +293,7 @@ public static class MirrorPulseCliHelp
           namespace birth recover RECOVERY_ID
                                          Retry an already retained staged-file recovery.
           conflict list [--limit 1..1000] [--cursor CURSOR]
+          conflict refresh-version --conflict-id GUID --operation-id GUID
                                          Read a bounded pending-conflict page.
           conflict show|snooze|resolve    Inspect or resolve a conflict by ID.
           operation get|watch|cancel      Inspect long-running operations.

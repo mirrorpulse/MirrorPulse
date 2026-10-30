@@ -233,6 +233,11 @@ public interface IMirrorPulseCloudRuntime : IAsyncDisposable
         CloudRemoteApplyOptions? options, CancellationToken cancellationToken) => ValueTask.FromException<CloudRemoteApplyResult>(
             new NotSupportedException("This Cloud Files runtime does not project incoming Adapter batches."));
 
+    [SupportedOSPlatform("windows10.0.26100")]
+    ValueTask<MirrorPulseCoalescedConflictRemoteObservation?> RefreshConflictVersionAsync(Guid commandId, Guid conflictId,
+        CancellationToken cancellationToken) => ValueTask.FromException<MirrorPulseCoalescedConflictRemoteObservation?>(
+            new NotSupportedException("This Cloud Files runtime does not explicitly refresh conflict versions."));
+
     ValueTask<MirrorPulseConflictResolution> ApplyUploadConflictAsync(
         Guid conflictId,
         MirrorPulseConflictAction action,
@@ -368,6 +373,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         private bool _ownsTransferJournal;
         private MirrorPulseRetainedRemoteBatchRecoveryPump? _retainedRecovery;
         private MirrorPulseUploadConflictActions? _conflictActions;
+        private MirrorPulseConflictRemoteVersionRefresh? _remoteVersionRefresh;
         private MirrorPulseRemoteConflictActions? _remoteConflictActions;
         private MirrorPulseCloudProviderDiagnostics? _providerDiagnostics;
         private long _startupCheckpoint;
@@ -1405,6 +1411,14 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                     syncRootPath, dataRootPath, mayDispatch!, completion, conflicts, notifications, mutations,
                     uploads as IMirrorPulseWorkerRangeTransport, uploads as IMirrorPulseWorkerDirectoryPageSource, fileSystem, _scheduler,
                     _namespaceActor, _namespaceExecution, namespaceWork, _conflictActions, _retiredSourceObservations, _rootLabelJournalRecovery, rootAdmission);
+                if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100) && _namespaceExecution is not null)
+                    _remoteVersionRefresh = new(catalog!, router!, async (request, stop) =>
+                    {
+                        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100)) throw new PlatformNotSupportedException();
+                        return await _namespaceExecution.RunNormalUserOperationAsync(async () =>
+                            await stats!.StatAsync(request, stop).ConfigureAwait(false)).ConfigureAwait(false);
+                    }, mayDispatch!, namespaceWork, (observed, stop) =>
+                        MirrorPulseConflictRemoteObservationProjection.PublishAsync(catalog!, observed, conflicts, notifications, stop));
                 await _uploadPump.StartAsync(cancellationToken).ConfigureAwait(false);
             }
 
@@ -1631,6 +1645,23 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             return result with { NamespaceReady = namespaceWork.IsAdmitted(root.RootId) };
         }
 
+        [SupportedOSPlatform("windows10.0.26100")]
+        public async ValueTask<MirrorPulseCoalescedConflictRemoteObservation?> RefreshConflictVersionAsync(Guid commandId, Guid conflictId,
+            CancellationToken cancellationToken)
+        {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
+            var service = _remoteVersionRefresh ?? throw new NotSupportedException("The explicit conflict version service has not started.");
+            var completed = await service.ReadCompletedAsync(commandId, conflictId, cancellationToken).ConfigureAwait(false);
+            if (completed is not null) return completed;
+            using var admission = await service.RetainAsync(conflictId, cancellationToken).ConfigureAwait(false);
+            return await WithInstanceLibraryAsync(admission.Target.InstanceId, token =>
+            {
+                if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100)) throw new PlatformNotSupportedException();
+                return (_remoteVersionRefresh ?? throw new InvalidOperationException("The current explicit version service has not started."))
+                    .ExecuteAdmittedAsync(admission, commandId, token);
+            }, cancellationToken).ConfigureAwait(false);
+        }
+
         public async ValueTask<MirrorPulseConflictResolution> ApplyUploadConflictAsync(
             Guid conflictId,
             MirrorPulseConflictAction action,
@@ -1838,7 +1869,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         private async Task StopJournalServicesAsync()
         {
             var pump = _uploadPump; var feed = _transferJournal; bool owned = _ownsTransferJournal;
-            _uploadPump = null; _transferJournal = null; _ownsTransferJournal = false; _retiredSourceObservations = null;
+            _uploadPump = null; _remoteVersionRefresh = null; _transferJournal = null; _ownsTransferJournal = false; _retiredSourceObservations = null;
             try { if (pump is not null) await pump.DisposeAsync().ConfigureAwait(false); }
             finally { if (owned && feed is not null) await feed.DisposeAsync().ConfigureAwait(false); }
         }
@@ -2439,6 +2470,14 @@ public sealed class MirrorPulseCloudHostSession : IAsyncDisposable
     {
         if (!_started || _runtime is null) throw new InvalidOperationException("The Cloud Files Host session has not started.");
         return _runtime.ApplyAdapterRemoteBatchAsync(instanceId, batch, catalog, center, notifications, options, cancellationToken);
+    }
+
+    [SupportedOSPlatform("windows10.0.26100")]
+    public ValueTask<MirrorPulseCoalescedConflictRemoteObservation?> RefreshConflictVersionAsync(Guid commandId, Guid conflictId,
+        CancellationToken cancellationToken = default)
+    {
+        if (!_started || _runtime is null) throw new InvalidOperationException("The Cloud Files Host session has not started.");
+        return _runtime.RefreshConflictVersionAsync(commandId, conflictId, cancellationToken);
     }
 
     public ValueTask<MirrorPulseConflictResolution> ApplyUploadConflictAsync(
