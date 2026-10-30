@@ -93,6 +93,9 @@ jobs:
       - name: Retain managed test assemblies before execution
         run: pwsh ./eng/collect-managed-test-originals.ps1 -Phase Prepare
 
+      - name: Retain unfiltered compiled test case discovery
+        run: pwsh ./eng/collect-compiled-test-inventory.ps1 -Phase Discover
+
       - name: Test
         run: |
           dotnet test MirrorPulse.sln --configuration Release --no-build --logger trx --results-directory artifacts/test-results/managed
@@ -102,6 +105,10 @@ jobs:
       - name: Collect original managed results and assembly bindings
         if: always()
         run: pwsh ./eng/collect-managed-test-originals.ps1 -Phase Collect
+
+      - name: Reconcile every compiled case with its original result
+        if: always()
+        run: pwsh ./eng/collect-compiled-test-inventory.ps1 -Phase Reconcile
 
       - name: Upload original managed results and assemblies
         if: always()

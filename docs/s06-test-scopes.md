@@ -39,3 +39,23 @@ collector retains failures and skips without declaring the gate successful; the
 existing test command and test-result policy still determine its result. This
 evidence applies only to the source revision that produced it and does not repair
 the missing raw evidence in older CI runs.
+
+Compiled case discovery is retained separately before the original managed test
+command. `collect-compiled-test-inventory.ps1 -Phase Discover` runs unfiltered
+discovery against each of the three unchanged prepared assemblies, without
+executing tests. The retained VSTest discovery messages include every case ID,
+fully qualified method, display name and source assembly, including data rows.
+An aborted or partial discovery, duplicate ID, foreign source or incomplete
+completion count fails this step. The FQN-only listing cannot replace this
+inventory because it can collapse data rows that share a method.
+
+After the original collector runs, `-Phase Reconcile` checks the retained
+discovery, original TRX files and collected result index against the same
+assembly hashes. Every discovered case must have exactly one original result
+with its original ID and names. Missing, extra or substituted cases fail the
+check; failed and skipped results retain their outcomes. Discovery traces,
+manifests and reconciliation receipts are included under `discovery/` in the
+same managed originals artifact. A reconciliation success establishes coverage
+of the discovered compiled cases, while the existing test command and policy
+still decide whether their outcomes pass. It does not establish native,
+installed-package or full S06 acceptance.
