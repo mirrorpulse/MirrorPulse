@@ -14,6 +14,11 @@ public sealed class CompiledTestInventoryTests
 
     [TestMethod]
     [DataRow("complete", true)]
+    [DataRow("encodedControl", true)]
+    [DataRow("literalEscape", true)]
+    [DataRow("changedEncodedControl", false)]
+    [DataRow("encodedSupplementary", true)]
+    [DataRow("changedEncodedSupplementary", false)]
     [DataRow("omittedResult", false)]
     [DataRow("extraResult", false)]
     [DataRow("duplicateResult", false)]
@@ -74,12 +79,18 @@ public sealed class CompiledTestInventoryTests
                 for (int i = 0; i < 3; i++)
                 {
                     string id = Guid.NewGuid().ToString("D"); string display = $"SameMethod ({i})";
+                    if (selected && i == 0 && boundary is "encodedControl" or "changedEncodedControl") display = "SameMethod (\u0001)";
+                    if (selected && i == 0 && boundary == "literalEscape") display = @"SameMethod (\u0001)";
+                    if (selected && i == 0 && boundary is "encodedSupplementary" or "changedEncodedSupplementary") display = "SameMethod (\U0001F600)";
+                    string xmlDisplay = display.Replace("\u0001", boundary == "changedEncodedControl" ? @"\u0002" : @"\u0001", StringComparison.Ordinal);
+                    if (selected && i == 0 && boundary is "encodedSupplementary" or "changedEncodedSupplementary")
+                        xmlDisplay = boundary == "changedEncodedSupplementary" ? @"SameMethod (\ud83d\ude01)" : @"SameMethod (\ud83d\ude00)";
                     cases.Add(new JsonObject { ["testId"] = id, ["fullyQualifiedName"] = "Fixture.RepeatedCase.SameMethod", ["displayName"] = display, ["source"] = path });
                     discovered.Add(new JsonObject { ["Id"] = id, ["FullyQualifiedName"] = "Fixture.RepeatedCase.SameMethod", ["DisplayName"] = display, ["Source"] = path });
                     definitions.Add(new XElement(Ns + "UnitTest", new XAttribute("id", id), new XAttribute("storage", path),
                         new XElement(Ns + "TestMethod", new XAttribute("codeBase", path), new XAttribute("className", "Fixture.RepeatedCase"), new XAttribute("name", "SameMethod"))));
                     executions.Add(new XElement(Ns + "UnitTestResult", new XAttribute("testId", id), new XAttribute("executionId", Guid.NewGuid()),
-                        new XAttribute("testName", display), new XAttribute("outcome", Outcomes[i])));
+                        new XAttribute("testName", xmlDisplay), new XAttribute("outcome", Outcomes[i])));
                 }
                 var payload = new JsonObject
                 {

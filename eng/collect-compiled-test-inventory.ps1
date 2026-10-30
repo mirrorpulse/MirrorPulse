@@ -124,9 +124,9 @@ $counts = @(foreach ($assembly in $prepared.assemblies) {
         if ($row.assemblySha256 -cne $assembly.sha256) { throw 'An original case lost its executing assembly hash.' }
         @{ testId = $row.testId; fullyQualifiedName = $row.className + '.' + $row.method; displayName = $row.name; source = $path }
     })
-    Assert-CompiledTestCaseInventory -Discovered $discovered -Actual $actual -AssemblyPath $path
+    Assert-CompiledTestCaseInventory -Discovered $discovered -Actual $actual -AssemblyPath $path -OriginalTrxRepresentation
     $rawCases = @($rawResults | Where-Object { $_.source -ieq $path })
-    Assert-CompiledTestCaseInventory -Discovered $discovered -Actual $rawCases -AssemblyPath $path
+    Assert-CompiledTestCaseInventory -Discovered $discovered -Actual $rawCases -AssemblyPath $path -OriginalTrxRepresentation
     [ordered]@{ assembly = $assembly.path; assemblySha256 = $assembly.sha256; discovered = $discovered.Count; originalResults = $rows.Count }
 })
 if (@($collected.results | Where-Object { $_.assembly -cnotin $prepared.assemblies.path }).Count -or

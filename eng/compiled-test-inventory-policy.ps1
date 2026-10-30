@@ -53,13 +53,28 @@ function Read-CompiledTestDiscovery {
     return $cases.ToArray()
 }
 
+function ConvertTo-TrxDisplayName {
+    param([Parameter(Mandatory)][string]$Name)
+    $encoded = [Text.StringBuilder]::new()
+    for ($index = 0; $index -lt $Name.Length; $index++) {
+        $character = $Name[$index]
+        if ([Xml.XmlConvert]::IsXmlChar($character)) { [void]$encoded.Append($character) }
+        else {
+            [void]$encoded.Append('\u')
+            [void]$encoded.Append(([int]$character).ToString('x4', [Globalization.CultureInfo]::InvariantCulture))
+        }
+    }
+    return $encoded.ToString()
+}
+
 function Assert-CompiledTestCaseInventory {
     param([Parameter(Mandatory)][object[]]$Discovered, [Parameter(Mandatory)][object[]]$Actual,
-        [Parameter(Mandatory)][string]$AssemblyPath)
+        [Parameter(Mandatory)][string]$AssemblyPath, [switch]$OriginalTrxRepresentation)
     $expected = [Collections.Generic.Dictionary[guid, string]]::new()
     foreach ($value in $Discovered) {
         $case = ConvertTo-CompiledTestCase -Case $value -AssemblyPath $AssemblyPath
-        if (-not $expected.TryAdd([guid]$case.testId, ($case.fullyQualifiedName + [char]0 + $case.displayName))) {
+        $display = if ($OriginalTrxRepresentation) { ConvertTo-TrxDisplayName $case.displayName } else { $case.displayName }
+        if (-not $expected.TryAdd([guid]$case.testId, ($case.fullyQualifiedName + [char]0 + $display))) {
             throw 'A discovered test case ID is duplicated.'
         }
     }

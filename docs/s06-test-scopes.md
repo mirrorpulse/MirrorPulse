@@ -53,7 +53,10 @@ After the original collector runs, `-Phase Reconcile` checks the retained
 discovery, original TRX files and collected result index against the same
 assembly hashes. Every discovered case must have exactly one original result
 with its original ID and names. Missing, extra or substituted cases fail the
-check; failed and skipped results retain their outcomes. Discovery traces,
+check. For TRX comparisons only, XML-invalid display-name characters use the
+logger's exact `\uXXXX` representation; the discovery's original characters,
+case IDs and fully qualified methods remain retained and compared. A literal
+backslash escape is preserved. Failed and skipped results retain their outcomes. Discovery traces,
 manifests and reconciliation receipts are included under `discovery/` in the
 same managed originals artifact. A reconciliation success establishes coverage
 of the discovered compiled cases, while the existing test command and policy
