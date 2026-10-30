@@ -181,8 +181,9 @@ public sealed class CliIntegrationFailurePolicyTests
                 foreach (string name in new[] { "rootLabelLog", "cleanupRootLabelLog" })
                 {
                     var lines = json.RootElement.GetProperty(name).EnumerateArray().ToArray();
-                    Assert.HasCount(32, lines); Assert.AreEqual(9, lines[0].GetProperty("index").GetInt32());
+                    Assert.HasCount(40, lines); Assert.AreEqual(1, lines[0].GetProperty("index").GetInt32());
                     Assert.AreEqual(40, lines[^1].GetProperty("index").GetInt32());
+                    CollectionAssert.AreEqual(Enumerable.Range(1, 40).ToArray(), lines.Select(line => line.GetProperty("index").GetInt32()).ToArray());
                     Assert.IsTrue(lines.All(line => line.GetProperty("rootLabelFailureBoundary").GetString() == "CurrentAuditFenced"));
                 }
                 return;
