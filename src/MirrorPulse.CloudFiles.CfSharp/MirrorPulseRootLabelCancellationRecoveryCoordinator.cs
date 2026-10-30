@@ -51,7 +51,7 @@ internal sealed class MirrorPulseRootLabelCancellationRecoveryCoordinator(CloudF
         router.RefreshLocalCommandLifecycleRegistration(root);
         var owner = new MirrorPulseNamespaceBornRootLabelRecoveryOwner(operationId, plan.Owner);
         var recovery = new MirrorPulseNamespaceBornMemberRecoveryCoordinator(fileSystem, catalog, router, execution, actor, scheduler, permissions)
-        { Checkpoint = BornCheckpoint };
+        { Checkpoint = BornCheckpoint, Progress = MirrorPulseRootLabelCancellationBornDiagnostics.Capture };
         int settled = 0;
         foreach (Guid memberId in plan.BornMembers)
         {
@@ -78,7 +78,9 @@ internal sealed class MirrorPulseRootLabelCancellationRecoveryCoordinator(CloudF
             if (!requiresRecovery && retainedProtection) continue;
             Guid actionId = unfinished && latest!.RootLabelRecoveryOwner == owner &&
                 SamePayload(latest.Child, context) && SamePayload(latest.Parent, parent) ? latest.ActionId : Guid.NewGuid();
-            var result = await recovery.RecoverRootLabelAdmittedAsync(plan.Owner.InitializationOperationId, actionId, memberId, owner, token).ConfigureAwait(false);
+            MirrorPulseNamespaceBornMemberRecoveryResult result;
+            try { result = await recovery.RecoverRootLabelAdmittedAsync(plan.Owner.InitializationOperationId, actionId, memberId, owner, token).ConfigureAwait(false); }
+            finally { await MirrorPulseRootLabelCancellationBornDiagnostics.FlushAsync().ConfigureAwait(false); }
             if (result.Completion is null || !result.IsHistoricalReplay &&
                 result.Receipt is not { Outcome: CloudProtectedLocalOperationOutcome.Completed, Drained: true })
                 throw new IOException("The original born cancellation recovery did not complete and drain its protected work.");
