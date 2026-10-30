@@ -5,7 +5,7 @@ namespace MirrorPulse.Core.State;
 
 public sealed partial class MirrorPulseProductCatalog
 {
-    // These three recovery reads never write within their transaction. Reuse only
+    // Recovery and current-inventory reads never write within their transaction. Reuse only
     // successfully validated results from that exact SQLite snapshot. Write paths
     // and later API/native boundaries never receive this cache, including misses.
     private readonly ConditionalWeakTable<SqliteTransaction, NamespaceRecoveryReadSnapshot> _namespaceRecoveryReadSnapshots = new();
