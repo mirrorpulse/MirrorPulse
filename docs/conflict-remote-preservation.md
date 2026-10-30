@@ -56,3 +56,42 @@ This path requires an observed existing remote file version. `KeepRemote`,
 single-observation `KeepBoth`, absent-remote variants, directory choices and
 multiple remote occupants retain their separate implementation and acceptance
 requirements; the coalesced file path does not certify those cases.
+
+## Separate post-rejection version observations
+
+An Adapter's conflict response can omit either revision field. The rejected
+request's expected revision and the optional error fields retain their original
+meaning. A later successful `Stat` is a separate observation of the current
+remote version; it cannot supply missing historical error metadata.
+
+The Host catalog supports an immutable observation history for a complete
+coalesced file group. `ReadCoalescedConflictRemoteTargetAsync` captures its
+current rejected effect and selected epochs without preparing another effect.
+The owner performs the actual root-scoped `Stat` outside the catalog transaction.
+`PrepareCoalescedConflictRemoteObservationAsync` can retain the first observation
+for a group whose error omitted the actual revision. The transaction creates
+one new pending conflict epoch per original and dismisses the previous epochs.
+It preserves the original execution, mutation, nullable error facts and journal
+IDs. It neither authorizes a retry nor acknowledges any SDK operation.
+
+Selecting another version requires a distinct explicit `refreshconflict` user
+command targeting a current pending epoch. The catalog's
+`RefreshCoalescedConflictRemoteObservationAsync` appends an observation, links
+the complete previous selection, atomically advances the current head and
+resolves that refresh command. Active preservation or deletion decisions refuse
+replacement. Existing observations remain readable by observation ID. Replaying
+an earlier refresh command returns its retained observation without changing a
+later current head or contacting the Worker again.
+
+Schema 93 retains observations, their complete epoch membership and the current
+head separately. Missing ownership, altered layouts, mixed groups and stale
+heads cannot authorize KeepBoth or another retry. An older catalog containing
+these future records refuses upgrade; a current catalog missing one of these
+tables refuses to recreate it. Failed writes roll back epochs, the head and
+command completion together.
+
+These catalog APIs are the persistence boundary. This change does not add a
+Control or CLI refresh command or an automatic Host observation pass. Callers
+must retain normal root admission, enabled-instance policy and normal-user
+transport execution. A null or failed `Stat` cannot select an empty revision or
+authorize absence, and refreshing cannot bypass an existing decision owner.

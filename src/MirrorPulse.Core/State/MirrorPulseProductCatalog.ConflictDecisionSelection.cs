@@ -97,6 +97,7 @@ public sealed partial class MirrorPulseProductCatalog
             if (evidence.InstanceId != selected.InstanceId || evidence.Revision != selected.Revision || evidence.LocalPath != localPath)
                 throw new InvalidDataException("The complete group's conflict provenance or observed remote revisions disagree.");
         }
+        await RequireCurrentObservedConflictEpochsAsync(conflicts, planId, rejected?.OperationId, transaction, token).ConfigureAwait(false);
         return new(selected.InstanceId, planId, fingerprint, remoteTarget, selected.Revision, rejected,
             originals.AsReadOnly(), conflicts.AsReadOnly());
     }

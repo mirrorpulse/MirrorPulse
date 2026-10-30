@@ -160,7 +160,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         Assert.AreEqual(originalBytes, await ReadTransferRetirementBytesAsync(fixture.Paths));
         await using var connection = Connection(fixture.Paths); await connection.OpenAsync();
         await using var version = connection.CreateCommand(); version.CommandText = "PRAGMA user_version;";
-        Assert.AreEqual(92L, await version.ExecuteScalarAsync());
+        Assert.AreEqual(93L, await version.ExecuteScalarAsync());
         Assert.HasCount(2, await migrated.ReadNamespaceDispatchFencedRootsAsync());
     }
 

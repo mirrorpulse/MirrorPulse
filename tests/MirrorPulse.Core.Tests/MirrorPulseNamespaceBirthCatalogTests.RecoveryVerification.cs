@@ -347,7 +347,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         Assert.IsNull(entry.LatestRecoveryVerification); Assert.IsNull(entry.Observation); Assert.IsTrue(entry.OwnsNameReservation);
         await using var connection = Connection(fixture.Paths); await connection.OpenAsync();
         await using var query = connection.CreateCommand(); query.CommandText = "PRAGMA user_version;";
-        Assert.AreEqual(92L, await query.ExecuteScalarAsync());
+        Assert.AreEqual(93L, await query.ExecuteScalarAsync());
         Assert.AreEqual(RecoveryVerification(action, plan), await current.RecordNamespaceBirthRecoveryVerificationAsync(RecoveryVerification(action, plan)));
     }
 

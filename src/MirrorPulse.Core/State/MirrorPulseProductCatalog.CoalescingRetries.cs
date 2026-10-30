@@ -130,6 +130,7 @@ public sealed partial class MirrorPulseProductCatalog
                     observed = revision;
                 }
                 if (!conflicts.Contains(conflictId)) throw new InvalidOperationException("The selected conflict is not the current pending group epoch.");
+                await RequireCurrentObservedConflictEpochsAsync(conflicts, plan.PlanId, intent.OperationId, transaction, cancellationToken).ConfigureAwait(false);
                 var kind = execution.Steps[ordinal].Kind;
                 bool moveOnly = originalExecution.IsMoveOnly && ordinal == 0;
                 bool moveContent = moveOnly && (content is not null || execution.HasMoveContent);

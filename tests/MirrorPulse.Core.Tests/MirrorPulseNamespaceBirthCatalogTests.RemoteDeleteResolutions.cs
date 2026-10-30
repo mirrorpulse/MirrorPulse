@@ -37,7 +37,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         var step = typeof(MirrorPulseProductCatalog).GetMethod("EnsureRemoteConflictActionSchemaAsync", BindingFlags.Static | BindingFlags.NonPublic)!;
         await (Task)step.Invoke(null, [connection, CancellationToken.None])!;
         await using var version = connection.CreateCommand(); version.CommandText = "PRAGMA user_version;";
-        Assert.AreEqual(92L, (long)(await version.ExecuteScalarAsync())!);
+        Assert.AreEqual(93L, (long)(await version.ExecuteScalarAsync())!);
     }
 
     [TestMethod]
