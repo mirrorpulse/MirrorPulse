@@ -29,6 +29,8 @@ $filter = (@($catalog.required.namespace) | ForEach-Object { 'FullyQualifiedName
 $evidenceDirectory = Join-Path $repository ('artifacts/test-results/namespace-nonadmin-' + $ExpectedArchitecture.ToLowerInvariant())
 New-Item -ItemType Directory -Path $evidenceDirectory -Force | Out-Null
 $identifier = [guid]::NewGuid().ToString('N')
+$nativeOriginalsDirectory = Join-Path $repository ('artifacts/test-results/namespace-nonadmin-' + $ExpectedArchitecture.ToLowerInvariant() + '-originals/' + $identifier)
+. (Join-Path $PSScriptRoot 'native-test-original-bundle.ps1')
 $baseDirectory = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData)) 'MirrorPulseCi'
 $scratch = [IO.Path]::GetFullPath((Join-Path $baseDirectory $identifier))
 if ([IO.Path]::GetDirectoryName($scratch) -cne [IO.Path]::GetFullPath($baseDirectory)) { throw 'The disposable workspace is outside its designated parent.' }
@@ -42,6 +44,7 @@ $userRemoved = $false
 $profileRemoved = $false
 $workspaceRemoved = $false
 $primaryFailure = $null
+$nativeCollectorHash = $null
 $cleanupFailures = [Collections.Generic.List[Exception]]::new()
 $childStopped = $true
 try {
@@ -69,6 +72,13 @@ try {
         Copy-Item -LiteralPath $file.FullName -Destination $destination
     }
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'run-namespace-nonadmin.ps1') -Destination (Join-Path $scratch 'run.ps1')
+    $nativeCollector = Join-Path $PSScriptRoot 'native-test-originals.ps1'
+    $nativeCollectorHash = (Get-FileHash -LiteralPath $nativeCollector).Hash
+    Copy-Item -LiteralPath $nativeCollector -Destination (Join-Path $scratch 'native-test-originals.ps1')
+    if ((Get-FileHash -LiteralPath $nativeCollector).Hash -cne $nativeCollectorHash -or
+        (Get-FileHash -LiteralPath (Join-Path $scratch 'native-test-originals.ps1')).Hash -cne $nativeCollectorHash) {
+        throw 'The ordinary-user native collector changed while being copied.'
+    }
     $assemblyHash = (Get-FileHash -LiteralPath (Join-Path $payload $assemblyName) -Algorithm SHA256).Hash.ToLowerInvariant()
     if ((Get-FileHash -LiteralPath (Join-Path $copiedPayload $assemblyName) -Algorithm SHA256).Hash.ToLowerInvariant() -cne $assemblyHash) {
         throw 'The copied test assembly differs from the compiled source.'
@@ -87,6 +97,7 @@ try {
         $configuration = Join-Path $scratch 'configuration.json'
         [ordered]@{ schemaVersion=1; expectedArchitecture=$ExpectedArchitecture; expectedUserSid=$user.SID.Value;
             expectedUserName=$userName; workDirectory=$work; testAssembly=(Join-Path $copiedPayload $assemblyName);
+            sourceSha=$sourceSha; testAssemblySha256=$assemblyHash;
             filter=$filter; dotnetPath=(Get-Command dotnet -CommandType Application).Source;
             systemRoot=$env:SystemRoot; computerName=$env:COMPUTERNAME } |
             ConvertTo-Json | Set-Content -LiteralPath $configuration -Encoding utf8
@@ -135,6 +146,9 @@ try {
         }
         & (Join-Path $PSScriptRoot 'verify-test-results.ps1') -Suite namespace -ResultsDirectory $evidenceDirectory `
             -OutputPath (Join-Path $evidenceDirectory 'test-evidence.json')
+        Copy-OrdinaryUserNativeOriginals -Workspace $scratch -Identifier $identifier -SourceSha $sourceSha `
+            -ExpectedTestAssemblySha256 $assemblyHash -ExpectedCollectorSha256 $nativeCollectorHash `
+            -DestinationWorkspace $repository -DestinationDirectory $nativeOriginalsDirectory -RequireCollection $true
         $success = $true
     } finally { $credential = $null; $password.Dispose() }
 } catch {
@@ -152,6 +166,13 @@ try {
     if (-not $success -and $childStopped -and (Test-Path -LiteralPath $marker -PathType Leaf)) {
         try { Copy-OrdinaryUserNamespaceFailureEvidence -Workspace $scratch -Identifier $identifier -EvidenceDirectory $evidenceDirectory }
         catch { $cleanupFailures.Add($_.Exception) }
+        if ($assemblyHash -and $nativeCollectorHash) {
+            try {
+                Copy-OrdinaryUserNativeOriginals -Workspace $scratch -Identifier $identifier -SourceSha $sourceSha `
+                    -ExpectedTestAssemblySha256 $assemblyHash -ExpectedCollectorSha256 $nativeCollectorHash `
+                    -DestinationWorkspace $repository -DestinationDirectory $nativeOriginalsDirectory
+            } catch { $cleanupFailures.Add($_.Exception) }
+        }
     }
     try {
         if ($null -ne $user) {

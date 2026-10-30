@@ -51,7 +51,13 @@ try {
     New-Item -ItemType Directory -Path $env:TEMP -Force | Out-Null
     [ordered]@{ schemaVersion=1; architecture=$architecture; nonAdministrator=$true; expectedUserMatched=$true;
         profileLoaded=$true } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $configuration.workDirectory 'context.json') -Encoding utf8
-    & $configuration.dotnetPath test $configuration.testAssembly --filter $configuration.filter --logger 'trx;LogFileName=namespace.trx' --logger 'console;verbosity=normal' `
-        --results-directory (Join-Path $configuration.workDirectory 'results')
-    if ($LASTEXITCODE -ne 0) { throw 'The ordinary-user namespace tests failed.' }
+    . (Join-Path $PSScriptRoot 'native-test-originals.ps1')
+    Invoke-NativeTestWithOriginals -Workspace ([IO.Path]::GetDirectoryName($configuration.workDirectory)) `
+        -SourceSha $configuration.sourceSha -Suite namespace-nonadmin -TestAssembly $configuration.testAssembly `
+        -ResultsDirectory (Join-Path $configuration.workDirectory 'results') -OutputDirectory (Join-Path $configuration.workDirectory 'native-originals') `
+        -ExpectedTestAssemblySha256 $configuration.testAssemblySha256 -Action {
+        & $configuration.dotnetPath test $configuration.testAssembly --filter $configuration.filter --logger 'trx;LogFileName=namespace.trx' --logger 'console;verbosity=normal' `
+            --results-directory (Join-Path $configuration.workDirectory 'results')
+        if ($LASTEXITCODE -ne 0) { throw 'The ordinary-user namespace tests failed.' }
+    }
 } finally { $identity.Dispose() }

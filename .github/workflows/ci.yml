@@ -144,6 +144,14 @@ jobs:
           path: artifacts/test-results/native/**/*.trx
           if-no-files-found: warn
 
+      - name: Preserve original native executing inputs
+        if: always() && github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: native-executing-originals
+          path: artifacts/test-results/native-originals/**
+          if-no-files-found: warn
+
       - name: Verify retained P079 multi-root transfer compatibility on x64
         if: (success() || failure()) && github.event_name == 'workflow_dispatch'
         continue-on-error: true
@@ -373,6 +381,14 @@ jobs:
           path: artifacts/test-results/namespace-arm64/**/*.trx
           if-no-files-found: ignore
 
+      - name: Preserve original ARM64 namespace executing inputs
+        if: always() && github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: namespace-arm64-executing-originals
+          path: artifacts/test-results/namespace-arm64-originals/**
+          if-no-files-found: warn
+
       - name: Verify retained P079 multi-root transfer compatibility on ARM64
         if: (success() || failure()) && github.event_name == 'workflow_dispatch'
         continue-on-error: true
@@ -409,6 +425,14 @@ jobs:
           name: namespace-nonadmin-arm64-test-results
           path: artifacts/test-results/namespace-nonadmin-arm64/**
           if-no-files-found: ignore
+
+      - name: Preserve original ordinary-user executing inputs
+        if: always() && github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: namespace-nonadmin-arm64-executing-originals
+          path: artifacts/test-results/namespace-nonadmin-arm64-originals/**
+          if-no-files-found: warn
 
       - name: Verify installed ARM64 MSIX on Windows 11 desktop
         if: (success() || failure()) && github.event_name == 'workflow_dispatch'
