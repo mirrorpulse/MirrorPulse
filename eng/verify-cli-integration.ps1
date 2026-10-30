@@ -248,9 +248,6 @@ try {
         ConvertTo-Json | Set-Content -LiteralPath (Join-Path $runRoot '.mp-cli-fixture.json') -Encoding utf8
 
     # A new instance is admitted when the Host is composed on the next start.
-    # The coalescing oracle deliberately returns with the Host stopped.
-    # Restore the running precondition for the shared restart assertion.
-    if ($Coalescing) { Invoke-MirrorPulseCli @('--json', '--developer-mode', 'host', 'start') | Out-Null }
     $restart = Invoke-MirrorPulseCli @("--json", "--developer-mode", "host", "restart")
     if ($restart.kind -ne "result") { throw "The CLI Host restart response is invalid." }
     Wait-MirrorPulseHostStopped
@@ -516,6 +513,9 @@ try {
         $conflictId = $conflict.conflictId
     }
 
+    # The coalescing oracle deliberately returns with the Host stopped.
+    # Restore the running precondition for this shared restart assertion.
+    if ($Coalescing) { Invoke-MirrorPulseCli @('--json', '--developer-mode', 'host', 'start') | Out-Null }
     $restart = Invoke-MirrorPulseCli @("--json", "--developer-mode", "host", "restart")
     if ($restart.kind -ne "result") { throw "The CLI Host restart response is invalid." }
     Wait-MirrorPulseHostStopped
