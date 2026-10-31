@@ -28,7 +28,7 @@ public static partial class MirrorPulseNamespaceBirthProtectionVerifier
         Guid protectionId, Guid memberId, CloudItem item, CloudDirectory parent, MirrorPulseRootRouter router,
         MirrorPulseNamespaceActor namespaceActor, MirrorPulseNamespaceMemberProtectionSnapshot? recoveryParent,
         CancellationToken cancellationToken) => InspectRegisteredCoreAsync(catalog, protectionId, memberId, item, parent, router,
-            namespaceActor, recoveryParent, requireParentRole: true, cancellationToken);
+            namespaceActor, recoveryParent, requireParentRole: true, recoveryAction: null, cancellationToken);
 
     // This narrow path settles the exact original Label/initializer action under the
     // current user's native owner rights. It does not rotate the parent's older role.
@@ -37,20 +37,15 @@ public static partial class MirrorPulseNamespaceBirthProtectionVerifier
         MirrorPulseNamespaceActor namespaceActor, CancellationToken cancellationToken)
     {
         namespaceActor.AssertAccess();
-        if (action.RootLabelRecoveryOwner is null ||
-            await catalog.ValidateNamespaceBornMemberRecoveryExecutionAsync(action.ActionId, cancellationToken).ConfigureAwait(false) != action)
-            throw new InvalidOperationException("Label recovery verification requires its exact currently admitted original action.");
         var observed = await InspectRegisteredCoreAsync(catalog, action.ActionId, action.Child.Member.MemberId, item, parent, router,
-            namespaceActor, action.Parent, requireParentRole: false, cancellationToken).ConfigureAwait(false);
-        if (await catalog.ValidateNamespaceBornMemberRecoveryExecutionAsync(action.ActionId, cancellationToken).ConfigureAwait(false) != action)
-            throw new InvalidOperationException("The original Label recovery action changed during native verification.");
+            namespaceActor, action.Parent, requireParentRole: false, action, cancellationToken).ConfigureAwait(false);
         return observed;
     }
 
     private static async Task<MirrorPulseNamespaceBirthProtection> InspectRegisteredCoreAsync(MirrorPulseProductCatalog catalog,
         Guid protectionId, Guid memberId, CloudItem item, CloudDirectory parent, MirrorPulseRootRouter router,
         MirrorPulseNamespaceActor namespaceActor, MirrorPulseNamespaceMemberProtectionSnapshot? recoveryParent, bool requireParentRole,
-        CancellationToken cancellationToken)
+        MirrorPulseNamespaceBornMemberRecoveryAction? recoveryAction, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(catalog);
         ArgumentNullException.ThrowIfNull(item);
@@ -61,7 +56,7 @@ public static partial class MirrorPulseNamespaceBirthProtectionVerifier
             throw new ArgumentException("A protection epoch and registered member ID are required.");
         cancellationToken.ThrowIfCancellationRequested();
         namespaceActor.AssertAccess();
-        var retained = await catalog.ReadRegisteredNamespaceBirthSnapshotAsync(memberId, recoveryParent, cancellationToken).ConfigureAwait(false);
+        var retained = await ReadSnapshotAsync().ConfigureAwait(false);
         var member = retained.Member;
         var birth = retained.Birth;
         var original = retained.Original;
@@ -105,7 +100,7 @@ public static partial class MirrorPulseNamespaceBirthProtectionVerifier
         RequireRegisteredPublicIdentity(snapshotAfter, identity, requirePlaceholder: true);
         if (facts.Dacl != after.Dacl)
             throw new InvalidDataException("The born object's descriptor changed during verification.");
-        var retainedAfter = await catalog.ReadRegisteredNamespaceBirthSnapshotAsync(memberId, recoveryParent, cancellationToken).ConfigureAwait(false);
+        var retainedAfter = await ReadSnapshotAsync().ConfigureAwait(false);
         if (location != retainedAfter.Location || identity != retainedAfter.Identity ||
             parentIdentity != retainedAfter.ParentIdentity || retainedParent != retainedAfter.Parent)
             throw new InvalidDataException("Current membership, identity or parent protection changed during native verification.");
@@ -126,6 +121,10 @@ public static partial class MirrorPulseNamespaceBirthProtectionVerifier
             latest.ProtectionId, birth.ParentPermissionOperationId, retainedParent.Protection.RoleSid,
             new(facts.LocalObject, facts.OwnerSid, facts.Dacl, after.ObservedAt), true, facts.LinkCount!.Value)
         { BornParent = birth.BornParent, Placement = placement };
+
+        Task<MirrorPulseRegisteredNamespaceBirthSnapshot> ReadSnapshotAsync() => recoveryAction is null
+            ? catalog.ReadRegisteredNamespaceBirthSnapshotAsync(memberId, recoveryParent, cancellationToken)
+            : catalog.ReadRootLabelBornRecoverySnapshotAsync(recoveryAction, cancellationToken);
     }
 
     private static void RequireRegisteredNativeObject(MirrorPulseNamespacePermissionObject facts, CloudItemSnapshot snapshot,

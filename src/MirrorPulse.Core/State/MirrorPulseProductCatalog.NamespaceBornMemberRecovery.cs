@@ -104,14 +104,21 @@ public sealed partial class MirrorPulseProductCatalog
         try
         {
             ThrowIfDisposed(); using var transaction = BeginNamespaceRecoveryReadSnapshot();
-            var action = await RequireBornMemberRecoveryActionCoreAsync(actionId, transaction, cancellationToken).ConfigureAwait(false);
-            var history = await ReadBornMemberRecoverySummaryCoreAsync(action.Child.Member.MemberId, transaction, cancellationToken).ConfigureAwait(false);
-            if (history.Latest?.ActionId != actionId || await ReadBornMemberRecoveryCompletionCoreAsync(actionId, action, transaction, cancellationToken).ConfigureAwait(false) is not null)
-                throw new InvalidOperationException("Native execution requires the latest unfinished born recovery action.");
-            await RequireBornMemberRecoveryCurrentAsync(action, transaction, cancellationToken).ConfigureAwait(false);
+            var action = await ValidateBornMemberRecoveryExecutionCoreAsync(actionId, transaction, cancellationToken).ConfigureAwait(false);
             transaction.Commit(); return action;
         }
         finally { _gate.Release(); }
+    }
+
+    private async Task<MirrorPulseNamespaceBornMemberRecoveryAction> ValidateBornMemberRecoveryExecutionCoreAsync(Guid actionId,
+        SqliteTransaction transaction, CancellationToken cancellationToken)
+    {
+        var action = await RequireBornMemberRecoveryActionCoreAsync(actionId, transaction, cancellationToken).ConfigureAwait(false);
+        var history = await ReadBornMemberRecoverySummaryCoreAsync(action.Child.Member.MemberId, transaction, cancellationToken).ConfigureAwait(false);
+        if (history.Latest?.ActionId != actionId || await ReadBornMemberRecoveryCompletionCoreAsync(actionId, action, transaction, cancellationToken).ConfigureAwait(false) is not null)
+            throw new InvalidOperationException("Native execution requires the latest unfinished born recovery action.");
+        await RequireBornMemberRecoveryCurrentAsync(action, transaction, cancellationToken).ConfigureAwait(false);
+        return action;
     }
 
     private async Task RequireBornMemberRecoveryCurrentAsync(MirrorPulseNamespaceBornMemberRecoveryAction action,
