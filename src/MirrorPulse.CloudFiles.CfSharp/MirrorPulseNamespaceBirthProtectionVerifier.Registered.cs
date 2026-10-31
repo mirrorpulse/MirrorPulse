@@ -61,20 +61,14 @@ public static partial class MirrorPulseNamespaceBirthProtectionVerifier
             throw new ArgumentException("A protection epoch and registered member ID are required.");
         cancellationToken.ThrowIfCancellationRequested();
         namespaceActor.AssertAccess();
-        var member = await catalog.ReadNamespaceMemberAsync(memberId, cancellationToken).ConfigureAwait(false)
-            ?? throw new FileNotFoundException("The born namespace member is not registered.");
-        if (member.Origin != MirrorPulseNamespaceMemberOrigin.ProtectedBirth)
-            throw new ArgumentException("Registered birth verification requires born provenance.", nameof(memberId));
-        var birth = await catalog.ReadNamespaceBirthAsync(member.OriginId, cancellationToken).ConfigureAwait(false)
-            ?? throw new FileNotFoundException("The original birth admission is missing.");
-        var original = await catalog.ReadNamespaceBirthObservationAsync(member.OriginId, cancellationToken).ConfigureAwait(false)
-            ?? throw new FileNotFoundException("The first native birth observation is missing.");
-        var location = await catalog.ReadNamespaceMemberLocationAsync(memberId, cancellationToken).ConfigureAwait(false);
-        if (location.ParentMemberId is not { } parentMemberId)
-            throw new InvalidDataException("A registered born object requires a retained actual parent.");
-        var retainedParent = await ReadRegisteredParentContextAsync(catalog, parentMemberId, recoveryParent, cancellationToken).ConfigureAwait(false);
-        var identity = await catalog.ReadNamespaceMemberIdentityAsync(memberId, cancellationToken).ConfigureAwait(false);
-        var parentIdentity = await catalog.ReadNamespaceMemberIdentityAsync(retainedParent.Member.MemberId, cancellationToken).ConfigureAwait(false);
+        var retained = await catalog.ReadRegisteredNamespaceBirthSnapshotAsync(memberId, recoveryParent, cancellationToken).ConfigureAwait(false);
+        var member = retained.Member;
+        var birth = retained.Birth;
+        var original = retained.Original;
+        var location = retained.Location;
+        var retainedParent = retained.Parent;
+        var identity = retained.Identity;
+        var parentIdentity = retained.ParentIdentity;
         using WindowsIdentity caller = WindowsIdentity.GetCurrent();
         if (caller.User?.Value != original.OwnerSid ||
             requireParentRole && !new WindowsPrincipal(caller).IsInRole(new SecurityIdentifier(retainedParent.Protection.RoleSid)))
@@ -111,17 +105,15 @@ public static partial class MirrorPulseNamespaceBirthProtectionVerifier
         RequireRegisteredPublicIdentity(snapshotAfter, identity, requirePlaceholder: true);
         if (facts.Dacl != after.Dacl)
             throw new InvalidDataException("The born object's descriptor changed during verification.");
-        if (location != await catalog.ReadNamespaceMemberLocationAsync(memberId, cancellationToken).ConfigureAwait(false) ||
-            identity != await catalog.ReadNamespaceMemberIdentityAsync(memberId, cancellationToken).ConfigureAwait(false) ||
-            parentIdentity != await catalog.ReadNamespaceMemberIdentityAsync(retainedParent.Member.MemberId, cancellationToken).ConfigureAwait(false) ||
-            retainedParent != await ReadRegisteredParentContextAsync(catalog, retainedParent.Member.MemberId, recoveryParent, cancellationToken).ConfigureAwait(false))
+        var retainedAfter = await catalog.ReadRegisteredNamespaceBirthSnapshotAsync(memberId, recoveryParent, cancellationToken).ConfigureAwait(false);
+        if (location != retainedAfter.Location || identity != retainedAfter.Identity ||
+            parentIdentity != retainedAfter.ParentIdentity || retainedParent != retainedAfter.Parent)
             throw new InvalidDataException("Current membership, identity or parent protection changed during native verification.");
         namespaceActor.AssertAccess();
         var placement = new MirrorPulseNamespaceBirthProtectionPlacement(memberId, location.CurrentPositionOperationId,
             retainedParent.Member.MemberId, retainedParent.Protection.ProtectionId,
             retainedParent.Location.CurrentPositionOperationId, location.RelativePath);
-        var latest = await catalog.ReadLatestNamespaceBirthProtectionAsync(member.OriginId, cancellationToken).ConfigureAwait(false)
-            ?? throw new InvalidDataException("A registered born object lost its earlier protection epoch.");
+        var latest = retainedAfter.LatestProtection;
         if (latest.ProtectionId == protectionId)
         {
             if (latest.Version != 3 || latest.Placement != placement || latest.RoleSid != retainedParent.Protection.RoleSid ||
@@ -134,16 +126,6 @@ public static partial class MirrorPulseNamespaceBirthProtectionVerifier
             latest.ProtectionId, birth.ParentPermissionOperationId, retainedParent.Protection.RoleSid,
             new(facts.LocalObject, facts.OwnerSid, facts.Dacl, after.ObservedAt), true, facts.LinkCount!.Value)
         { BornParent = birth.BornParent, Placement = placement };
-    }
-
-    private static async Task<MirrorPulseNamespaceMemberProtectionContext> ReadRegisteredParentContextAsync(MirrorPulseProductCatalog catalog,
-        Guid parentId, MirrorPulseNamespaceMemberProtectionSnapshot? recoveryParent, CancellationToken token)
-    {
-        if (recoveryParent is null) return (await catalog.ReadNamespaceMemberProtectionLineageAsync(parentId, token).ConfigureAwait(false))[0];
-        var current = await catalog.ReadNamespaceMemberProtectionSnapshotAsync(parentId, token).ConfigureAwait(false);
-        if (current is null || current != recoveryParent)
-            throw new InvalidDataException("The admitted recovery parent changed during native verification.");
-        return current.Context;
     }
 
     private static void RequireRegisteredNativeObject(MirrorPulseNamespacePermissionObject facts, CloudItemSnapshot snapshot,
