@@ -36,7 +36,7 @@ public sealed class MirrorPulseConflictRemoteCopyLease : IAsyncDisposable
 }
 
 /// <summary>Preserves one selected side in MP's private data root before a destructive decision.</summary>
-public sealed class MirrorPulseConflictCopyStore
+public sealed partial class MirrorPulseConflictCopyStore
 {
     private readonly MirrorPulseStoragePaths _paths;
     private readonly Action<MirrorPulseConflictCopyCheckpoint>? _checkpoint;
