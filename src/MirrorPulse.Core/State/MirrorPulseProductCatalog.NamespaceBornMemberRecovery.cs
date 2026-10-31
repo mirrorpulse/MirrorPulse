@@ -111,20 +111,26 @@ public sealed partial class MirrorPulseProductCatalog
     }
 
     private async Task<MirrorPulseNamespaceBornMemberRecoveryAction> ValidateBornMemberRecoveryExecutionCoreAsync(Guid actionId,
+        SqliteTransaction transaction, CancellationToken cancellationToken) =>
+        (await ReadBornMemberRecoveryAdmissionCoreAsync(actionId, transaction, cancellationToken).ConfigureAwait(false)).Action;
+
+    private async Task<MirrorPulseBornMemberRecoveryAdmission> ReadBornMemberRecoveryAdmissionCoreAsync(Guid actionId,
         SqliteTransaction transaction, CancellationToken cancellationToken)
     {
         var action = await RequireBornMemberRecoveryActionCoreAsync(actionId, transaction, cancellationToken).ConfigureAwait(false);
         var history = await ReadBornMemberRecoverySummaryCoreAsync(action.Child.Member.MemberId, transaction, cancellationToken).ConfigureAwait(false);
         if (history.Latest?.ActionId != actionId || await ReadBornMemberRecoveryCompletionCoreAsync(actionId, action, transaction, cancellationToken).ConfigureAwait(false) is not null)
             throw new InvalidOperationException("Native execution requires the latest unfinished born recovery action.");
-        await RequireBornMemberRecoveryCurrentAsync(action, transaction, cancellationToken).ConfigureAwait(false);
-        return action;
+        var lineage = await RequireBornMemberRecoveryCurrentAsync(action, transaction, cancellationToken).ConfigureAwait(false);
+        var initialization = await ReadNamespaceInitializationStatusCoreAsync(action.InitializationOperationId, transaction, cancellationToken).ConfigureAwait(false);
+        return new(action, initialization, lineage);
     }
 
-    private async Task RequireBornMemberRecoveryCurrentAsync(MirrorPulseNamespaceBornMemberRecoveryAction action,
+    private async Task<IReadOnlyList<MirrorPulseNamespaceMemberRecoveryContext>> RequireBornMemberRecoveryCurrentAsync(MirrorPulseNamespaceBornMemberRecoveryAction action,
         SqliteTransaction transaction, CancellationToken token)
     {
-        var current = (await ReadNamespaceMemberRecoveryLineageCoreAsync(action.InitializationOperationId, action.Child.Member.MemberId, transaction, token).ConfigureAwait(false))[0];
+        var lineage = await ReadNamespaceMemberRecoveryLineageCoreAsync(action.InitializationOperationId, action.Child.Member.MemberId, transaction, token).ConfigureAwait(false);
+        var current = lineage[0];
         var parent = await ReadNamespaceMemberProtectionSnapshotCoreAsync(action.Parent.Context.Member.MemberId, transaction, token).ConfigureAwait(false);
         if (!SameNamespaceReplacementPayload(current, action.Child) || parent is null || !SameNamespaceReplacementPayload(parent, action.Parent))
             throw new InvalidOperationException("Born recovery lost its admitted current object, position, identity or protected parent.");
@@ -132,6 +138,7 @@ public sealed partial class MirrorPulseProductCatalog
         await RequireNamespaceMoveRootUnfencedAsync(action.Child.Member.RootId!.Value, null, transaction, token,
             allowedBornRecoveryInitialization: action.InitializationOperationId,
             allowedRootRename: action.RootLabelRecoveryOwner?.RootLabelOperationId).ConfigureAwait(false);
+        return lineage;
     }
 
     private static void ValidateBornMemberRecoveryAction(MirrorPulseNamespaceBornMemberRecoveryAction action)

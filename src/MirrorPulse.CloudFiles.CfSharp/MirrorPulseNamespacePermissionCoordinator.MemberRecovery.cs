@@ -7,8 +7,9 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinator
     internal async Task<T> RunAdmittedBornMemberRecoveryAsync<T>(Guid actionId,
         Func<MirrorPulseNamespaceBornMemberRecoveryAction, CancellationToken, Task<T>> work, CancellationToken cancellationToken)
     {
-        var action = await _catalog.ValidateNamespaceBornMemberRecoveryExecutionAsync(actionId, cancellationToken).ConfigureAwait(false);
-        var admission = await _catalog.ReadNamespaceInitializationStatusAsync(action.InitializationOperationId, cancellationToken).ConfigureAwait(false);
+        var initial = await _catalog.ReadNamespaceBornMemberRecoveryAdmissionAsync(actionId, cancellationToken).ConfigureAwait(false);
+        var action = initial.Action;
+        var admission = initial.Initialization;
         var root = admission.Intent.Roots.Single(root => root.RootId == action.Child.Member.RootId);
         if (root.BornRootMemberId is { } bornRootId)
         {
@@ -20,9 +21,9 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinator
             try
             {
                 await _gate.WaitAsync(cancellationToken).ConfigureAwait(false); entered = true;
-                var current = await _catalog.ValidateNamespaceBornMemberRecoveryExecutionAsync(actionId, cancellationToken).ConfigureAwait(false);
-                var lineage = await _catalog.ReadNamespaceMemberRecoveryLineageAsync(action.InitializationOperationId,
-                    action.Child.Member.MemberId, cancellationToken).ConfigureAwait(false);
+                var admitted = await _catalog.ReadNamespaceBornMemberRecoveryAdmissionAsync(actionId, cancellationToken).ConfigureAwait(false);
+                var current = admitted.Action;
+                var lineage = admitted.Lineage;
                 var top = lineage.SingleOrDefault(member => member.Member.MemberId == bornRootId);
                 var anchor = lineage[^1];
                 // Version 5 retains the original Label cancellation purpose, already
@@ -48,7 +49,7 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinator
         Guid manifest = root.ManifestId;
         return await RunAdmittedTreeWorkAsync(manifest, async tree =>
         {
-            var current = await _catalog.ValidateNamespaceBornMemberRecoveryExecutionAsync(actionId, cancellationToken).ConfigureAwait(false);
+            var current = (await _catalog.ReadNamespaceBornMemberRecoveryAdmissionAsync(actionId, cancellationToken).ConfigureAwait(false)).Action;
             if (current != action || tree.Definition.Anchor.Intent.RootId != action.Child.Member.RootId ||
                 tree.Definition.Anchor.Baseline.LocalObject.VolumeSerialNumber != action.Child.Member.LocalObject.VolumeSerialNumber ||
                 tree.Definition.Anchor.Baseline.LocalObject.SyncRootFileId != action.Child.Member.LocalObject.SyncRootFileId)
