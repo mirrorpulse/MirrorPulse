@@ -40,6 +40,15 @@ public sealed class CliCoalescingEditWitnessTests
     [DataRow("scanIncomplete", false)]
     [DataRow("missingAttempt", false)]
     [DataRow("badTimestamp", false)]
+    [DataRow("dateTimeOffsetSameSecond", true)]
+    [DataRow("utcDateTimeSameSecond", true)]
+    [DataRow("localDateTimeSameSecond", true)]
+    [DataRow("jsonDefaultSameSecond", true)]
+    [DataRow("stringSameSecond", true)]
+    [DataRow("jsonDefaultOldSameSecond", false)]
+    [DataRow("dateTimeOffsetOldSameSecond", false)]
+    [DataRow("unspecifiedDateTime", false)]
+    [DataRow("timestampWithoutOffset", false)]
     public async Task ExactEditWitnessRequiresFreshTargetOriginalsCompleteBytesAndRetainedEarlierEdits(string boundary, bool succeeds)
     {
         string root = Path.Combine(Path.GetTempPath(), "MirrorPulse-edit-witness-" + Guid.NewGuid().ToString("N"));
@@ -98,6 +107,7 @@ public sealed class CliCoalescingEditWitnessTests
         . (Join-Path $PSScriptRoot 'witness.ps1')
         $target='aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';$other='bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'
         $written=[DateTimeOffset]::Parse('2026-10-30T12:00:00Z')
+        if($Boundary.EndsWith('SameSecond',[StringComparison]::Ordinal)){$written=$written.AddTicks(5000000)}
         function Row([string]$Id,[long]$Sequence,[string]$Item,[DateTimeOffset]$Created){
           [pscustomobject]@{operationId=$Id;sequence=$Sequence;kind='ContentUpdate';itemId=$Item;associatedWithTarget=($Item -ceq $target);attemptCount=0;createdAt=$Created.ToString('o');payloadSha256=('A'*64)}
         }
@@ -137,6 +147,19 @@ public sealed class CliCoalescingEditWitnessTests
           'scanIncomplete' {$after.lastScannedSequence=1}
           'missingAttempt' {$new.attemptCount=$null}
           'badTimestamp' {$new.createdAt='INVALID'}
+          'dateTimeOffsetSameSecond' {$new.createdAt=$written.AddTicks(1)}
+          'utcDateTimeSameSecond' {$new.createdAt=$written.AddTicks(1).UtcDateTime}
+          'localDateTimeSameSecond' {$new.createdAt=$written.AddTicks(1).LocalDateTime}
+          'jsonDefaultSameSecond' {$new.createdAt=$written.AddTicks(1).ToString('o')}
+          'stringSameSecond' {$new.createdAt=$written.AddTicks(1).ToString('o')}
+          'jsonDefaultOldSameSecond' {$new.createdAt=$written.AddTicks(-1).ToString('o')}
+          'dateTimeOffsetOldSameSecond' {$new.createdAt=$written.AddTicks(-1)}
+          'unspecifiedDateTime' {$new.createdAt=[DateTime]::SpecifyKind($written.AddSeconds(1).DateTime,[DateTimeKind]::Unspecified)}
+          'timestampWithoutOffset' {$new.createdAt=$written.AddSeconds(1).UtcDateTime.ToString('yyyy-MM-ddTHH:mm:ss.fffffff',[Globalization.CultureInfo]::InvariantCulture)}
+        }
+        if($Boundary.StartsWith('jsonDefault',[StringComparison]::Ordinal)){
+          $before=$before|ConvertTo-Json -Depth 8|ConvertFrom-Json
+          $after=$after|ConvertTo-Json -Depth 8|ConvertFrom-Json
         }
         $beforeText=$before|ConvertTo-Json -Depth 6 -Compress;$afterText=$after|ConvertTo-Json -Depth 6 -Compress
         $witness=Get-CliCoalescingEditWitness -Before $before -After $after -WrittenAt $written -LocalPath (Join-Path $PSScriptRoot 'local.bin') -ExpectedContent ([Convert]::FromBase64String($ExpectedBase64)) -RequiredOriginalIds $required

@@ -76,7 +76,7 @@ function Invoke-CliCoalescingContentConflict {
     }while([DateTimeOffset]::UtcNow -lt $deadline)
     try {
         $status|ConvertTo-Json -Depth 12|Set-Content -LiteralPath (Join-Path $originals 'first-edit-status.json') -Encoding utf8
-        @{schemaVersion=1;expectedSha256=([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($first)));actualSha256=(Get-FileHash -LiteralPath $local).Hash;length=(Get-Item -LiteralPath $local).Length;baselinePendingUploads=$baseline;observedPendingUploads=$status.data.pendingUploads}|
+        @{schemaVersion=1;writtenAt=$firstWrittenAt.ToString('o');expectedSha256=([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($first)));actualSha256=(Get-FileHash -LiteralPath $local).Hash;length=(Get-Item -LiteralPath $local).Length;baselinePendingUploads=$baseline;observedPendingUploads=$status.data.pendingUploads}|
             ConvertTo-Json|Set-Content -LiteralPath (Join-Path $originals 'first-edit-bytes.json') -Encoding utf8
     } catch { Write-Host "First edit observation also failed: $($_.Exception.GetType().Name)." }
     Invoke-CoalescingCli 'stop-after-first-edit' @('--json','--developer-mode','host','stop')|Out-Null
@@ -96,7 +96,7 @@ function Invoke-CliCoalescingContentConflict {
     }while([DateTimeOffset]::UtcNow -lt $deadline)
     try {
         $status|ConvertTo-Json -Depth 12|Set-Content -LiteralPath (Join-Path $originals 'second-edit-status.json') -Encoding utf8
-        @{schemaVersion=1;expectedSha256=([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($latest)));actualSha256=(Get-FileHash -LiteralPath $local).Hash;length=(Get-Item -LiteralPath $local).Length;baselinePendingUploads=$firstCount;observedPendingUploads=$status.data.pendingUploads}|
+        @{schemaVersion=1;writtenAt=$secondWrittenAt.ToString('o');expectedSha256=([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($latest)));actualSha256=(Get-FileHash -LiteralPath $local).Hash;length=(Get-Item -LiteralPath $local).Length;baselinePendingUploads=$firstCount;observedPendingUploads=$status.data.pendingUploads}|
             ConvertTo-Json|Set-Content -LiteralPath (Join-Path $originals 'second-edit-bytes.json') -Encoding utf8
     } catch { Write-Host "Second edit observation also failed: $($_.Exception.GetType().Name)." }
     Invoke-CoalescingCli 'stop-after-second-edit' @('--json','--developer-mode','host','stop')|Out-Null

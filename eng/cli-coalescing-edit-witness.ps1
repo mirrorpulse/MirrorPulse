@@ -1,3 +1,15 @@
+function ConvertTo-CliCoalescingEditTimestamp {
+    param([Parameter(Mandatory)][AllowNull()][object]$Value)
+    if($Value -is [DateTimeOffset]){return $Value}
+    if($Value -is [DateTime] -and $Value.Kind -ne [DateTimeKind]::Unspecified){return [DateTimeOffset]::new($Value)}
+    $parsed=[DateTimeOffset]::MinValue
+    if($Value -isnot [string] -or $Value -cnotmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,7})?(Z|[+-]\d{2}:\d{2})$' -or
+        -not [DateTimeOffset]::TryParse($Value,[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::None,[ref]$parsed)){
+        throw 'The edit witness requires an original timestamp with its offset and full precision.'
+    }
+    return $parsed
+}
+
 function Assert-CliCoalescingEditSnapshot {
     param([Parameter(Mandatory)][object]$Observation)
     $target=[guid]::Empty
@@ -11,14 +23,15 @@ function Assert-CliCoalescingEditSnapshot {
         @($Observation.journal).Count -gt 2048){throw 'The edit witness requires a complete original journal from its exclusive stopped owner.'}
     $ids=[Collections.Generic.HashSet[guid]]::new();$previous=0L
     foreach($row in @($Observation.journal)){
-        $id=[guid]::Empty;$item=[guid]::Empty;$created=[DateTimeOffset]::MinValue
+        $id=[guid]::Empty;$item=[guid]::Empty
         if(-not [guid]::TryParse([string]$row.operationId,[ref]$id) -or $id -eq [guid]::Empty -or -not $ids.Add($id) -or
             ($row.sequence -isnot [long] -and $row.sequence -isnot [int]) -or
             ($row.attemptCount -isnot [long] -and $row.attemptCount -isnot [int]) -or
             $row.sequence -le $previous -or $row.sequence -gt $Observation.throughSequence -or $row.attemptCount -lt 0 -or
-            $row.payloadSha256 -cnotmatch '^[A-F0-9]{64}$' -or -not [DateTimeOffset]::TryParse([string]$row.createdAt,[ref]$created)){
+            $row.payloadSha256 -cnotmatch '^[A-F0-9]{64}$'){
             throw 'The edit witness lost an original operation ID, sequence, timestamp or payload fingerprint.'
         }
+        [void](ConvertTo-CliCoalescingEditTimestamp $row.createdAt)
         $matches=[guid]::TryParse([string]$row.itemId,[ref]$item) -and $item -eq $target
         if($row.associatedWithTarget -isnot [bool] -or $row.associatedWithTarget -ne $matches){throw 'The edit witness changed its exact target association.'}
         $previous=[long]$row.sequence
@@ -62,7 +75,7 @@ function Get-CliCoalescingEditWitness {
     $added=@($After.journal|Where-Object {
         $_.associatedWithTarget -eq $true -and $_.kind -ceq 'ContentUpdate' -and $_.attemptCount -eq 0 -and
         $_.sequence -gt $Before.throughSequence -and -not $beforeRows.ContainsKey([string]$_.operationId) -and
-        [DateTimeOffset]::Parse([string]$_.createdAt) -ge $WrittenAt
+        (ConvertTo-CliCoalescingEditTimestamp $_.createdAt) -ge $WrittenAt
     })
     if($added.Count -eq 0){throw 'The actual edit has no fresh target content-update original after its retained baseline.'}
     $expected=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($ExpectedContent))
