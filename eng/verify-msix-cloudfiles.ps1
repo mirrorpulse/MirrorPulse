@@ -13,6 +13,7 @@ $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot 'installed-shell-observations.ps1')
 . (Join-Path $PSScriptRoot 'installed-shell-process-boundary.ps1')
 . (Join-Path $PSScriptRoot 'installed-runtime-layout.ps1')
+. (Join-Path $PSScriptRoot 'installed-runtime-originals.ps1')
 if (-not $IsWindows) {
     throw "MSIX Cloud Files verification requires Windows."
 }
@@ -38,6 +39,14 @@ $shellAttemptedAt = $null
 $probeProcess = $null
 $shellOutputPrepared = $false
 $shellEntryPointVerified = $false
+$installedInputPreparation = $null
+$installedInputCompletion = $null
+$workspaceRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$installedSourceSha = $env:GITHUB_SHA
+if ([string]::IsNullOrEmpty($installedSourceSha)) { $installedSourceSha = git -C $workspaceRoot rev-parse HEAD }
+if ($installedSourceSha -cnotmatch '^[0-9a-f]{40}$' -or (git -C $workspaceRoot rev-parse HEAD) -cne $installedSourceSha) {
+    throw 'Installed runtime verification requires the exact checked-out source revision.'
+}
 
 if (Get-AppxPackage -Name $packageName | Select-Object -First 1) {
     throw "The verification user already has MirrorPulse installed; use a clean test user."
@@ -95,6 +104,9 @@ try {
     if ($null -eq $installed) {
         throw "The test MSIX package was not installed for the current user."
     }
+    $installedInputPreparation = Start-InstalledRuntimeOriginals -Workspace $workspaceRoot -PackagePath $package.FullName `
+        -InstallLocation $installed.InstallLocation -Runtime $Runtime -SourceSha $installedSourceSha `
+        -OutputDirectory (Join-Path $workspaceRoot 'artifacts/test-results/installed-msix-originals')
 
     [xml]$manifest = Get-AppxPackageManifest -Package $installed.PackageFullName
     $namespace = New-Object System.Xml.XmlNamespaceManager($manifest.NameTable)
@@ -191,6 +203,9 @@ try {
         Write-Output "Verified packaged Shell registration for $($installed.PackageFullName)."
     }
 
+    $installedInputCompletion = Complete-InstalledRuntimeOriginals -Workspace $workspaceRoot -SourceSha $installedSourceSha `
+        -InstallLocation $installed.InstallLocation -OutputDirectory $installedInputPreparation.outputDirectory `
+        -PreparedSha256 $installedInputPreparation.preparedSha256
     Write-Output "Verified installed MSIX $($installed.PackageFullName), mp.exe alias, packaged Host auto-start, Cloud Files, and .mpadapter identities."
 }
 catch {
@@ -253,11 +268,12 @@ finally {
 }
 if ($EvidencePath) {
     [ordered]@{
-        schemaVersion=1;runtime=$Runtime;packageSha256=$packageSha256
+        schemaVersion=1;runtime=$Runtime;packageSha256=$packageSha256;sourceSha=$installedSourceSha;runId=$env:GITHUB_RUN_ID
         osVersion=$osVersion;osProductType=[int]$os.ProductType;minimumVersion="10.0.26100.0"
         installedIdentity=$true;cliAlias=$true;hostAutoStart=$true
         cloudFilesExtension=$true;adapterAssociation=$true;uninstalled=$true
         shellRegistration=$VerifyShell.IsPresent
         shellEntryPointVerified=$shellEntryPointVerified
-    } | ConvertTo-Json | Set-Content -LiteralPath $EvidencePath -Encoding utf8
+        runtimeInputOriginals=$installedInputCompletion
+    } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $EvidencePath -Encoding utf8
 }
