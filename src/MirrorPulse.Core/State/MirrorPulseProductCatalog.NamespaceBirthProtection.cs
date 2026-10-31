@@ -48,6 +48,7 @@ public sealed partial class MirrorPulseProductCatalog
         MirrorPulseNamespaceBirthProtection protection, SqliteTransaction transaction, CancellationToken cancellationToken, Guid? allowedReplacement = null,
         Guid? allowedBornRecoveryInitialization = null, Guid? allowedRootRename = null)
     {
+        using var validation = BeginNamespaceRecoveryValidationReadPhase(transaction);
         var replay = await ReadNamespaceBirthProtectionCoreAsync(protection.ProtectionId, transaction, cancellationToken).ConfigureAwait(false);
         if (replay is not null)
         {
@@ -76,6 +77,7 @@ public sealed partial class MirrorPulseProductCatalog
             if (lineage[0].Protection.RoleSid != protection.RoleSid)
                 throw new InvalidOperationException("Located birth protection requires the current parent lineage's role.");
         }
+        validation.Dispose();
         byte[] payload = JsonSerializer.SerializeToUtf8Bytes(protection, TopologyJsonOptions);
         if (payload.Length > 131_072) throw new ArgumentException("Birth protection must be bounded.", nameof(protection));
         await using SqliteCommand insert = _connection.CreateCommand();

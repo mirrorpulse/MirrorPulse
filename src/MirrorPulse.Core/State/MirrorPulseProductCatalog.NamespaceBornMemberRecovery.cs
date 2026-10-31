@@ -29,6 +29,7 @@ public sealed partial class MirrorPulseProductCatalog
         try
         {
             ThrowIfDisposed(); using var transaction = _connection.BeginTransaction();
+            using var validation = BeginNamespaceRecoveryValidationReadPhase(transaction);
             var history = await ReadBornMemberRecoverySummaryCoreAsync(action.Child.Member.MemberId, transaction, cancellationToken,
                 selectedActionId: action.ActionId).ConfigureAwait(false);
             var replay = history.Selected;
@@ -43,6 +44,7 @@ public sealed partial class MirrorPulseProductCatalog
             await RequireBornMemberRecoveryCurrentAsync(action, transaction, cancellationToken).ConfigureAwait(false);
             if (await ReadNamespaceBirthProtectionRowAsync(action.ActionId, transaction, cancellationToken).ConfigureAwait(false) is not null)
                 throw new InvalidOperationException("A new recovery action cannot adopt an already observed protection epoch.");
+            validation.Dispose();
             byte[] payload = NamespaceReplacementPayload(action);
             await using var insert = _connection.CreateCommand(); insert.Transaction = transaction;
             insert.CommandText = """

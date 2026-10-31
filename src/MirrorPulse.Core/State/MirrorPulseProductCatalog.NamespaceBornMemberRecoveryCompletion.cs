@@ -16,6 +16,7 @@ public sealed partial class MirrorPulseProductCatalog
         try
         {
             ThrowIfDisposed(); using var transaction = _connection.BeginTransaction();
+            using var validation = BeginNamespaceRecoveryValidationReadPhase(transaction);
             var action = await RequireBornMemberRecoveryActionCoreAsync(actionId, transaction, cancellationToken).ConfigureAwait(false);
             var replay = await ReadBornMemberRecoveryCompletionCoreAsync(actionId, action, transaction, cancellationToken).ConfigureAwait(false);
             if (replay is not null)
@@ -29,6 +30,7 @@ public sealed partial class MirrorPulseProductCatalog
             if (history.Latest?.ActionId != actionId) throw new InvalidOperationException("A superseded born recovery action cannot complete.");
             await RequireBornMemberRecoveryCurrentAsync(action, transaction, cancellationToken).ConfigureAwait(false);
             RequireBornMemberRecoveryProjection(action, protection, completion);
+            validation.Dispose();
             await RecordNamespaceBirthProtectionCoreAsync(protection, transaction, cancellationToken,
                 allowedBornRecoveryInitialization: action.InitializationOperationId,
                 allowedRootRename: action.RootLabelRecoveryOwner?.RootLabelOperationId).ConfigureAwait(false);
