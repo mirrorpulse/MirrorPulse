@@ -82,6 +82,10 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
         SqliteConnection? connection = null;
         try
         {
+            // CreateNew proves this process supplied an empty file. An existing file, including
+            // an empty or partial older catalog, always follows the original migration path.
+            using FileStream? freshCatalog = cancellationToken.IsCancellationRequested || File.Exists(path) ? null : new FileStream(path,
+                FileMode.CreateNew, FileAccess.ReadWrite, FileShare.ReadWrite, 1, FileOptions.None);
             var settings = new SqliteConnectionStringBuilder
             {
                 DataSource = path,
@@ -121,6 +125,12 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
 
             openObservation.Mark(MirrorPulseCatalogOpenPhase.SchemaVersionRead);
             openObservation.Mark(MirrorPulseCatalogOpenPhase.BaseSchemaCreating);
+            if (freshCatalog is not null)
+            {
+                if (currentVersion != 0) throw new InvalidDataException("A newly created product catalog unexpectedly contains a schema version.");
+                await CreateFreshCatalogSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+                currentVersion = FreshCatalogSchemaVersion;
+            }
             using (SqliteTransaction initialSchema = connection.BeginTransaction())
             await using (SqliteCommand schema = connection.CreateCommand())
             {
