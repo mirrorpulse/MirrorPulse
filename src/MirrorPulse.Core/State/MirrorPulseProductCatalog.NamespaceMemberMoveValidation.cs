@@ -168,6 +168,8 @@ public sealed partial class MirrorPulseProductCatalog
         SqliteTransaction transaction, CancellationToken token, Guid? allowedRetirement = null, Guid? allowedBatch = null, Guid? allowedReplacement = null,
         Guid? allowedBornRecoveryInitialization = null, Guid? allowedRemoteUpdate = null, Guid? allowedTransfer = null, Guid? allowedRootRename = null)
     {
+        if (await ReadPendingKeepRemoteFileStartForRootCoreAsync(rootId, transaction, token).ConfigureAwait(false) is not null)
+            throw new InvalidOperationException("An unfinished KeepRemote file application has fenced this managed root.");
         if (await ReadPendingRootLabelJournalForRootCoreAsync(rootId, transaction, token).ConfigureAwait(false) is not null)
             throw new InvalidOperationException("An original root journal ACK has fenced this managed root.");
         await foreach (var transfer in ReadPendingNamespaceTransfersCoreAsync(transaction, token).ConfigureAwait(false))
