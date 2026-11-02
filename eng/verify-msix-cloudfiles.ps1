@@ -41,6 +41,8 @@ $shellOutputPrepared = $false
 $shellEntryPointVerified = $false
 $installedInputPreparation = $null
 $installedInputCompletion = $null
+$installedProcessImageBindings = @()
+$installedProcessImageCompletion = $null
 $workspaceRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $installedSourceSha = $env:GITHUB_SHA
 if ([string]::IsNullOrEmpty($installedSourceSha)) { $installedSourceSha = git -C $workspaceRoot rev-parse HEAD }
@@ -107,6 +109,9 @@ try {
     $installedInputPreparation = Start-InstalledRuntimeOriginals -Workspace $workspaceRoot -PackagePath $package.FullName `
         -InstallLocation $installed.InstallLocation -Runtime $Runtime -SourceSha $installedSourceSha `
         -OutputDirectory (Join-Path $workspaceRoot 'artifacts/test-results/installed-msix-originals')
+    . (Join-Path $PSScriptRoot 'installed-process-images.ps1')
+    Initialize-InstalledProcessImageReader
+    $installedInputManifest = Get-Content -LiteralPath (Join-Path $installedInputPreparation.outputDirectory 'prepared.json') -Raw | ConvertFrom-Json -DateKind String
 
     [xml]$manifest = Get-AppxPackageManifest -Package $installed.PackageFullName
     $namespace = New-Object System.Xml.XmlNamespaceManager($manifest.NameTable)
@@ -150,8 +155,11 @@ try {
     }
     $verificationPhase = 'HostAutoStart'
     $hostAttemptedAt = [DateTimeOffset]::UtcNow
-    $statusOutput = (& $mpCommand.Source --json status 2>&1 | Out-String).Trim()
-    $statusExitCode = $LASTEXITCODE
+    $statusProcess = Invoke-InstalledStatusWithImageBinding -AliasPath $mpCommand.Source -Prepared $installedInputManifest `
+        -ExpectedPackageFullName $installed.PackageFullName -PreparedSha256 $installedInputPreparation.preparedSha256
+    $statusOutput = $statusProcess.output
+    $statusExitCode = $statusProcess.exitCode
+    $installedProcessImageBindings += $statusProcess.imageBinding
     if ($statusExitCode -ne 0) {
         throw "The installed CLI did not auto-start its packaged Host: $statusOutput"
     }
@@ -159,6 +167,16 @@ try {
     if ($status.kind -ne "result" -or $null -eq $status.data.instances) {
         throw "The packaged CLI status result is invalid."
     }
+    $hostStatusOutput = (& $mpCommand.Source --json host status 2>&1 | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0) { throw 'The original installed Host lifecycle status could not identify its running process.' }
+    $hostStatus = $hostStatusOutput | ConvertFrom-Json
+    if ($hostStatus.kind -cne 'result' -or $hostStatus.data.processId -le 0) { throw 'The original installed Host lifecycle status has no process identity.' }
+    $installedHostProcess = [Diagnostics.Process]::GetProcessById([int]$hostStatus.data.processId)
+    try {
+        $installedProcessImageBindings += Get-InstalledProcessImageBinding -Process $installedHostProcess -Prepared $installedInputManifest `
+            -Role Host -RelativePath 'host/MirrorPulse.Host.exe' -ExpectedPackageFullName $installed.PackageFullName `
+            -PreparedSha256 $installedInputPreparation.preparedSha256
+    } finally { $installedHostProcess.Dispose() }
     & $mpCommand.Source --json host stop 2>$null | Out-Null
     $verificationPhase = 'Shell'
 
@@ -185,6 +203,9 @@ try {
             }
             $probeProcess = [Diagnostics.Process]::Start((New-InstalledShellProbeStartInfo -ExecutablePath $appExe -ResultPath $resultPath -ExpectedHostRoot $expectedHostRoot))
             $deadline = [DateTime]::UtcNow.AddMinutes(2)
+            $installedProcessImageBindings += Get-InstalledProcessImageBinding -Process $probeProcess -Prepared $installedInputManifest `
+                -Role App -RelativePath 'MirrorPulse.App.exe' -ExpectedPackageFullName $installed.PackageFullName `
+                -PreparedSha256 $installedInputPreparation.preparedSha256
             $probeObservation = Wait-InstalledShellProbeResult -Process $probeProcess -ResultPath $resultPath -DeadlineUtc $deadline
         }
         finally {
@@ -206,6 +227,10 @@ try {
     $installedInputCompletion = Complete-InstalledRuntimeOriginals -Workspace $workspaceRoot -SourceSha $installedSourceSha `
         -InstallLocation $installed.InstallLocation -OutputDirectory $installedInputPreparation.outputDirectory `
         -PreparedSha256 $installedInputPreparation.preparedSha256
+    $installedProcessImageCompletion = Complete-InstalledProcessImageBindings -Workspace $workspaceRoot `
+        -OutputDirectory $installedInputPreparation.outputDirectory -Prepared $installedInputManifest -Bindings $installedProcessImageBindings `
+        -PreparedSha256 $installedInputPreparation.preparedSha256 -CollectedSha256 $installedInputCompletion.collectedSha256 `
+        -ExpectedPackageFullName $installed.PackageFullName -VerifyShell $VerifyShell.IsPresent
     Write-Output "Verified installed MSIX $($installed.PackageFullName), mp.exe alias, packaged Host auto-start, Cloud Files, and .mpadapter identities."
 }
 catch {
@@ -275,5 +300,6 @@ if ($EvidencePath) {
         shellRegistration=$VerifyShell.IsPresent
         shellEntryPointVerified=$shellEntryPointVerified
         runtimeInputOriginals=$installedInputCompletion
+        processImageOriginals=$installedProcessImageCompletion
     } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $EvidencePath -Encoding utf8
 }
