@@ -52,6 +52,13 @@ public sealed partial class MirrorPulseConflictKeepRemoteJournalTests
             return ChangeObservations?.Invoke(Observations) ?? Observations;
         });
 
+        internal async Task ReopenOwnersAsync()
+        {
+            await Store.DisposeAsync(); await Catalog.DisposeAsync();
+            Catalog = await MirrorPulseProductCatalog.OpenAsync(Paths);
+            Store = await new MirrorPulseCfSharpStateSession(Paths).OpenAsync(new(Paths.SyncRootPath));
+        }
+
         private async Task PrepareAsync(MirrorPulseCoalescedEffect effect)
         {
             Guid item = Guid.NewGuid(); var now = DateTimeOffset.UtcNow;

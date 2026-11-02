@@ -20,7 +20,7 @@ internal sealed record MirrorPulseKeepRemoteJournalSnapshot(Guid CommandId, Guid
 /// payloads, acknowledges rows, changes retry state or supplies native execution authority.
 /// The feed's scan scope identifies a consumer lifetime and is deliberately not retained as a store identity.
 /// </remarks>
-internal sealed class MirrorPulseConflictKeepRemoteJournal(ICloudStateStore store, MirrorPulseProductCatalog catalog,
+internal sealed partial class MirrorPulseConflictKeepRemoteJournal(ICloudStateStore store, MirrorPulseProductCatalog catalog,
     MirrorPulseRootRouter router,
     Func<IReadOnlyList<MirrorPulseJournalOperationReference>, CancellationToken, ValueTask<IReadOnlyList<MirrorPulseLocalChangeObservation>>> readOriginals)
 {
