@@ -10,16 +10,23 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 public sealed class MirrorPulseCfSharpStateSession : ICloudStateStoreFactory
 {
     private readonly ICloudStateStoreFactory _inner;
+    private readonly string _databasePath;
     private ICloudStateStore? _store;
 
     public MirrorPulseCfSharpStateSession(MirrorPulseStoragePaths paths)
     {
         ArgumentNullException.ThrowIfNull(paths);
+        _databasePath = paths.CfSharpStateDatabasePath;
         _inner = MirrorPulseCfSharpStateStoreFactory.Create(paths);
     }
 
     public ICloudStateStore OpenStore => Volatile.Read(ref _store)
         ?? throw new InvalidOperationException("The CfSharp state store has not opened.");
+
+    /// <summary>Retains the opened official SQLite file, without inspecting its schema or claiming journal authority.</summary>
+    [System.Runtime.Versioning.SupportedOSPlatform("windows10.0.16299")]
+    internal ValueTask<MirrorPulseCfSharpStoreFileLease> OpenStoreFileLeaseAsync(CancellationToken cancellationToken = default) =>
+        MirrorPulseCfSharpStoreFileLease.OpenAsync(OpenStore, _databasePath, cancellationToken);
 
     public async ValueTask<ICloudStateStore> OpenAsync(
         CloudStateStoreContext context,
