@@ -3,6 +3,7 @@ namespace MirrorPulse.Core.Tests;
 public sealed partial class InstalledStartupDiagnosticsTests
 {
     [TestMethod]
+    [DoNotParallelize]
     [DataRow("running")]
     [DataRow("same-bytes-other-path")]
     [DataRow("hash")]
