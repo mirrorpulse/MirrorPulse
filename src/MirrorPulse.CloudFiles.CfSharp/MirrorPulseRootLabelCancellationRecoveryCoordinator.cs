@@ -58,18 +58,17 @@ internal sealed class MirrorPulseRootLabelCancellationRecoveryCoordinator(CloudF
             token.ThrowIfCancellationRequested();
             if (await catalog.ReadRootLabelCancellationRecoveryOwnerAsync(operationId, token).ConfigureAwait(false) != plan.Owner)
                 throw new InvalidOperationException("Born cancellation recovery cannot replace its original initializer.");
-            var context = (await catalog.ReadNamespaceMemberRecoveryLineageAsync(plan.Owner.InitializationOperationId, memberId, token).ConfigureAwait(false))[0];
+            var selection = await catalog.ReadNamespaceBornMemberRecoverySelectionAsync(plan.Owner.InitializationOperationId, memberId, token).ConfigureAwait(false);
+            var context = selection.Lineage[0];
             if (context.Member.Origin != MirrorPulseNamespaceMemberOrigin.ProtectedBirth || context.Member.RootId != root.RootId ||
                 context.Member.OwnerSid != execution.OwnerSid.Value || context.BirthProtection is null)
                 throw new InvalidDataException("Cancellation recovery lost a selected born member's original scope or provenance.");
-            var history = await catalog.ReadNamespaceBornMemberRecoveryActionsAsync(memberId, token).ConfigureAwait(false);
-            var latest = history.Count == 0 ? null : history[^1];
-            bool unfinished = latest is not null && await catalog.ReadNamespaceBornMemberRecoveryCompletionAsync(latest.ActionId, token).ConfigureAwait(false) is null;
+            var latest = selection.LatestAction;
+            bool unfinished = latest is not null && selection.LatestCompletion is null;
             if (unfinished && (latest!.InitializationOperationId != plan.Owner.InitializationOperationId ||
                 latest.RootLabelRecoveryOwner is { } previousOwner && previousOwner != owner))
                 throw new InvalidOperationException("Cancellation cannot adopt another original born recovery owner.");
-            var parent = await catalog.ReadNamespaceMemberProtectionSnapshotAsync(context.Location.ParentMemberId!.Value, token).ConfigureAwait(false)
-                ?? throw new InvalidDataException("Born cancellation recovery requires its direct parent to settle first.");
+            var parent = selection.Parent;
             // An unfinished action or changed parent role requires recovery. Keep
             // the original pre-write native/public identity checks, then avoid
             // the extra retention-only reinspection before full protected recovery.

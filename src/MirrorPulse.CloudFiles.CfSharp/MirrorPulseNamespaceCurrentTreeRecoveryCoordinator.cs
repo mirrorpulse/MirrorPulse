@@ -93,11 +93,10 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
                     else
                     {
                         Progress?.Invoke("NamespaceBornMemberBegin");
-                        var child = (await catalog.ReadNamespaceMemberRecoveryLineageAsync(operationId, member.MemberId, cancellationToken).ConfigureAwait(false))[0];
-                        var parent = await catalog.ReadNamespaceMemberProtectionSnapshotAsync(child.Location.ParentMemberId!.Value, cancellationToken).ConfigureAwait(false)
-                            ?? throw new InvalidDataException("Current born recovery requires its already recovered direct parent.");
-                        var history = await catalog.ReadNamespaceBornMemberRecoveryActionsAsync(member.MemberId, cancellationToken).ConfigureAwait(false);
-                        var latest = history.Count == 0 ? null : history[^1];
+                        var selection = await catalog.ReadNamespaceBornMemberRecoverySelectionAsync(operationId, member.MemberId, cancellationToken).ConfigureAwait(false);
+                        var child = selection.Lineage[0];
+                        var parent = selection.Parent;
+                        var latest = selection.LatestAction;
                         // A cancellation can have just completed this initializer's born work.
                         // Retain that exact drained epoch when its current parent and live role
                         // still match. This only avoids repeating recovery; the complete fresh
@@ -107,7 +106,7 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
                             child.BirthProtection is { } protection && protection.RoleSid == execution.RoleSid.Value &&
                             member.OwnerSid == execution.OwnerSid.Value && parent.Context.Protection.RoleSid == execution.RoleSid.Value &&
                             SamePayload(latest.Parent, parent) &&
-                            await catalog.ReadNamespaceBornMemberRecoveryCompletionAsync(latest.ActionId, cancellationToken).ConfigureAwait(false) is { Drained: true } completed &&
+                            selection.LatestCompletion is { Drained: true } completed &&
                             completed.ActionId == latest.ActionId && completed.ProtectionId == protection.ProtectionId &&
                             MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(latest.TargetDacl, protection.Verification.Dacl))
                         {
@@ -115,7 +114,7 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
                             continue;
                         }
                         bool resume = latest is not null && latest.InitializationOperationId == operationId && latest.Child == child && latest.Parent == parent &&
-                            await catalog.ReadNamespaceBornMemberRecoveryCompletionAsync(latest.ActionId, cancellationToken).ConfigureAwait(false) is null;
+                            selection.LatestCompletion is null;
                         var restored = await born.RecoverAsync(operationId, resume ? latest!.ActionId : Guid.NewGuid(), member.MemberId, cancellationToken).ConfigureAwait(false);
                         if (restored.Completion is null) throw new IOException("A registered born object requires pending native recovery before the current graph can complete.");
                         Progress?.Invoke("NamespaceBornMemberCompleted");
