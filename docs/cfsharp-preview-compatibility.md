@@ -1,14 +1,26 @@
 # CfSharp Preview Compatibility Report
 
-MirrorPulse pins `CfSharp` and `CfSharp.Storage.Sqlite` to `0.1.0-preview.8` from
+MirrorPulse pins `CfSharp` and `CfSharp.Storage.Sqlite` to `0.1.0-preview.9` from
 NuGet.org. The integration project owns CfSharp types and lifecycle; Core exposes
 MirrorPulse contracts to Adapters and the product UI.
 
 The core, SQLite provider and native NuGet publications identify the same source
-commit, `ee593578dba3c666cf59f4a922f0e220f115bf7f`. Package and lock updates do
+commit, `a252ea88439475986242691797bc3c1453d30118`. Package and lock updates do
 not establish native acceptance. Earlier native evidence remains bound to its
-original preview and MirrorPulse source. Preview.8 requires its own clean Windows
+original preview and MirrorPulse source. Preview.9 requires its own clean Windows
 native, signed Worker, installed and ordinary-user acceptance.
+
+Preview.9 binds official-provider ownership to the physical main/WAL/SHM files.
+Pre-existing multiple-hard-link files are rejected with `InvalidPath`; retained
+exclusive file locks prevent a second owner through an alias added after opening.
+An active owner's path still fails with `AlreadyInUse`. This addresses the
+preview.8 alias-ownership defect reported separately. Valid single-link stores
+require no additional schema or data migration. Preserve an invalid store's full
+database and sidecar set for offline ownership reconciliation; do not delete its
+lock, WAL or SHM files to make opening succeed. Older providers do not participate
+in this locking protocol. The locks do not attest arbitrary database integrity or
+exclude unrelated direct writers. See the pinned upstream
+[ownership contract](https://github.com/mirrorpulse/cfsharp/blob/a252ea88439475986242691797bc3c1453d30118/docs/state-store-sqlite.md#choose-a-safe-location).
 
 Preview.8 addresses distinct births at retired paths (CF-009). Its official SQLite
 schema 9 retains original tombstones and paths, permits one live owner at each
@@ -48,14 +60,14 @@ regressions explicitly authorize deletion of their disposable originals; additio
 native cases require default preservation to retain one conflict across store owners.
 See the [upstream Delete contract](https://github.com/mirrorpulse/cfsharp/blob/137d6e2a9c1b15f337e8e7ca3566d5e3f29fcdb9/docs/remote-change-application.md).
 
-New product birth, retirement and file-move admissions record preview.8 provenance.
-Historical preview.6 and preview.7 records keep their exact original version,
-source and policy. Readers accept the three audited version/source pairs and reject
+New product birth, retirement and file-move admissions record preview.9 provenance.
+Historical preview.6, preview.7 and preview.8 records keep their exact original version,
+source and policy. Readers accept the four audited version/source pairs and reject
 mixed or unknown publications;
 this compatibility does not confer native completion or reauthorize a Delete.
 Retained remote updates and sealed explicit Delete decisions can replay their
-unchanged original preview.7 publication. New updates and new sealed Delete
-inventories require preview.8. Changing a retained command to the current
+unchanged original supported publication. New updates and new sealed Delete
+inventories require preview.9. Changing a retained command to the current
 publication is rejected; its original start, conflict, inventory and root fence
 remain intact. Preview.6 cannot acquire the sealed Delete recovery protocol
 introduced in preview.7.
@@ -122,7 +134,7 @@ transaction rolled back and `PRAGMA integrity_check` returned `ok`.
 The earlier `CF-001`, `API-001`, and `API-002` gaps were retested after pinning
 preview.2. MirrorPulse uses the public CfSharp batch and conflict contracts and
 does not read or mutate CfSharp's private SQLite tables or conflict payload
-format. Preview.8 remains a prerelease dependency until CfSharp 1.0.0 is published
+format. Preview.9 remains a prerelease dependency until CfSharp 1.0.0 is published
 and validated for the release candidate.
 
 Preview.2 also exposes a confirmation limitation: coordination USNs can be zero,

@@ -23,8 +23,8 @@
     {
       "type": "library",
       "name": "CfSharp.Native",
-      "version": "0.1.0-preview.8",
-      "purl": "pkg:nuget/CfSharp.Native@0.1.0-preview.8",
+      "version": "0.1.0-preview.9",
+      "purl": "pkg:nuget/CfSharp.Native@0.1.0-preview.9",
       "licenses": [
         {
           "expression": "Apache-2.0"
@@ -32,7 +32,7 @@
       ],
       "hashes": [
         {
-          "content": "96aa9d99a3e4ab0282404d73714b15968e3ffd8fe9b8fb09c302fff45f4ace2c6c2ce0a48bb701fe164ff69b2ac522222b78596602702c4193796cdaef83ff64",
+          "content": "069f5466cb44dff275193ffeeb69dcc3abd88c068f0b062572f4d366a085a353db232de610c43f7c10582f81e499a20c76c7193491f151186a67bec12883fd5a",
           "alg": "SHA-512"
         }
       ]
@@ -40,8 +40,8 @@
     {
       "type": "library",
       "name": "CfSharp.Storage.Sqlite",
-      "version": "0.1.0-preview.8",
-      "purl": "pkg:nuget/CfSharp.Storage.Sqlite@0.1.0-preview.8",
+      "version": "0.1.0-preview.9",
+      "purl": "pkg:nuget/CfSharp.Storage.Sqlite@0.1.0-preview.9",
       "licenses": [
         {
           "expression": "Apache-2.0"
@@ -49,7 +49,7 @@
       ],
       "hashes": [
         {
-          "content": "9f3e898844f73ca103d4595108d631c0617883d64ff6733b27cca60f6782b1f4f009ec95e4d899ddd1618cf4ab68615ab16e188c0fa6f75852b489d1dd798555",
+          "content": "32689b8370e37d0010ec90ad57720dd6f217a9eac82fb2ab45b89189660e393b6162db032501fe5e656725cd69fa4c4d6faf63ba869bc90f82e768c8bbd02129",
           "alg": "SHA-512"
         }
       ]
@@ -57,8 +57,8 @@
     {
       "type": "library",
       "name": "CfSharp",
-      "version": "0.1.0-preview.8",
-      "purl": "pkg:nuget/CfSharp@0.1.0-preview.8",
+      "version": "0.1.0-preview.9",
+      "purl": "pkg:nuget/CfSharp@0.1.0-preview.9",
       "licenses": [
         {
           "expression": "Apache-2.0"
@@ -66,7 +66,7 @@
       ],
       "hashes": [
         {
-          "content": "7c9ff9bc4cb8b1982ed44bf0024cbab94598d33a5f7e6b980cb8e842b62102e3db352540845823ba17321b52881ba7c99b20a4aa044647ad003626d5ce179fc9",
+          "content": "f319967df2a284ead6d6f6d9f3943369785091e9788a2fb9fc34331cb817305b9d58dd4d41d57d399c0994424c5b6baf33b3b7d7aac8f19c0d688df623eacdba",
           "alg": "SHA-512"
         }
       ]

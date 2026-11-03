@@ -92,9 +92,16 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
     [DataRow(false)]
     [DataRow(true)]
     public async Task Preview7ProtocolHistoryRemainsOriginalAfterPreview8Admission(bool retirement)
+        => await AssertProtocolHistoryRemainsOriginalAsync(retirement, "0.1.0-preview.7", "137d6e2a9c1b15f337e8e7ca3566d5e3f29fcdb9");
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task Preview8ProtocolHistoryRemainsOriginalAfterPreview9Admission(bool retirement)
+        => await AssertProtocolHistoryRemainsOriginalAsync(retirement, "0.1.0-preview.8", "ee593578dba3c666cf59f4a922f0e220f115bf7f");
+
+    private static async Task AssertProtocolHistoryRemainsOriginalAsync(bool retirement, string historicalVersion, string historicalSource)
     {
-        const string historicalVersion = "0.1.0-preview.7";
-        const string historicalSource = "137d6e2a9c1b15f337e8e7ca3566d5e3f29fcdb9";
         using var fixture = new Fixture();
         MirrorPulseNamespaceBirthIntent? birth = null;
         MirrorPulseNamespaceRetirementIntent? intent = null;
