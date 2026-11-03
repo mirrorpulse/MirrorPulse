@@ -17,6 +17,7 @@ public sealed partial class MirrorPulseProductCatalog
         try
         {
             ThrowIfDisposed(); using var transaction = _connection.BeginTransaction();
+            using var validation = BeginNamespaceRecoveryValidationReadPhase(transaction);
             var intent = await ReadNamespaceInitializationCoreAsync(operationId, transaction, cancellationToken).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The current initialization admission is missing.");
             if (intent.RequestedInventoryKind is { } requested && requested != MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory)
@@ -114,6 +115,7 @@ public sealed partial class MirrorPulseProductCatalog
                 current.Members.Count, current.Fingerprint, observedAt)
             { InventoryKind = MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory, ScopeRoot = scope };
             byte[] payload = JsonSerializer.SerializeToUtf8Bytes(completed, TopologyJsonOptions);
+            validation.Dispose();
             await using (var insert = _connection.CreateCommand())
             {
                 insert.Transaction = transaction;

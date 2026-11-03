@@ -29,6 +29,7 @@ public sealed partial class MirrorPulseProductCatalog
         try
         {
             ThrowIfDisposed(); using var transaction = _connection.BeginTransaction();
+            using var validation = BeginNamespaceRecoveryValidationReadPhase(transaction);
             var observation = cancellation.Observation;
             var replay = await ReadUnsealedRootLabelCancellationRowAsync(observation.OperationId, transaction, cancellationToken).ConfigureAwait(false);
             if (replay is not null)
@@ -40,6 +41,7 @@ public sealed partial class MirrorPulseProductCatalog
             }
             await ValidateUnsealedRootLabelCancellationReferencesAsync(cancellation, true, transaction, cancellationToken).ConfigureAwait(false);
             var history = await ReadManagedRootRenameHistoryCoreAsync(observation.OperationId, cancellationToken, transaction).ConfigureAwait(false);
+            validation.Dispose();
             await using (var write = _connection.CreateCommand())
             {
                 write.Transaction = transaction;
@@ -60,6 +62,7 @@ public sealed partial class MirrorPulseProductCatalog
                 UpdatedAt = observation.VerifiedAt,
                 UnsealedCancellationOperationId = observation.OperationId
             }, cancellationToken, transaction).ConfigureAwait(false);
+            using var completedValidation = BeginNamespaceRecoveryValidationReadPhase(transaction);
             await ValidateUnsealedRootLabelCancellationReferencesAsync(cancellation, false, transaction, cancellationToken).ConfigureAwait(false);
             transaction.Commit(); return cancellation;
         }
@@ -73,7 +76,7 @@ public sealed partial class MirrorPulseProductCatalog
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            ThrowIfDisposed(); using var transaction = _connection.BeginTransaction(deferred: true);
+            ThrowIfDisposed(); using var transaction = BeginNamespaceRecoveryReadSnapshot();
             var result = await ReadUnsealedRootLabelCancellationCoreAsync(operationId, transaction, cancellationToken).ConfigureAwait(false);
             transaction.Commit(); return result;
         }

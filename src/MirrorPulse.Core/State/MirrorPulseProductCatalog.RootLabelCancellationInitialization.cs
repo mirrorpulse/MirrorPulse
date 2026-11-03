@@ -23,6 +23,7 @@ public sealed partial class MirrorPulseProductCatalog
         try
         {
             ThrowIfDisposed(); using var transaction = _connection.BeginTransaction();
+            using var validation = BeginNamespaceRecoveryValidationReadPhase(transaction);
             var owner = await ReadRootLabelCancellationRecoveryOwnerCoreAsync(operationId, transaction, cancellationToken).ConfigureAwait(false);
             if (owner is not null)
             {
@@ -48,6 +49,7 @@ public sealed partial class MirrorPulseProductCatalog
             };
             ValidateNamespaceInitialization(intent);
             await RequireNamespaceInitializationBornRootAsync(intent.Roots[0], intent.PreparedAt, transaction, cancellationToken).ConfigureAwait(false);
+            validation.Dispose();
             await InsertNamespaceInitializationCoreAsync(intent, transaction, cancellationToken).ConfigureAwait(false);
             transaction.Commit(); return intent;
         }
