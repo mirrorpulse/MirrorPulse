@@ -156,6 +156,9 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task<(MirrorPulseNamespaceMemberMoveCompletion Completion, Guid MemberId)?> ReadNamespaceMemberMoveCompletionRowAsync(
         Guid operationId, SqliteTransaction transaction, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
+        _namespaceRecoveryReadSnapshots.TryGetValue(transaction, out var snapshot);
+        if (snapshot?.MoveCompletionRows.TryGetValue(operationId, out var retained) == true) return retained;
         await using SqliteCommand query = _connection.CreateCommand();
         query.Transaction = transaction;
         query.CommandText = "SELECT operation_id,member_id,payload,fingerprint FROM namespace_member_move_completions WHERE operation_id=$id;";
@@ -166,7 +169,9 @@ public sealed partial class MirrorPulseProductCatalog
             (byte[])reader[2], (byte[])reader[3], NamespaceMemberMoveFactLimit, ValidateNamespaceMemberMoveCompletion);
         if (completion.OperationId != operationId || reader.GetString(0) != operationId.ToString("D"))
             throw new InvalidDataException("The move completion index is invalid.");
-        return (completion, ParseNamespaceMemberId(reader.GetString(1)));
+        var result = (completion, ParseNamespaceMemberId(reader.GetString(1)));
+        if (snapshot is not null) snapshot.MoveCompletionRows[operationId] = result;
+        return result;
     }
 
     private async Task ValidateNamespaceMemberMoveCompletionReferencesAsync(MirrorPulseNamespaceMemberMoveCompletion completion,

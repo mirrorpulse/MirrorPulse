@@ -77,6 +77,9 @@ public sealed partial class MirrorPulseProductCatalog
         ReadNamespaceMemberContextProtectionAsync(MirrorPulseNamespaceMemberRegistration member,
             SqliteTransaction transaction, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
+        _namespaceRecoveryReadSnapshots.TryGetValue(transaction, out var snapshot);
+        if (snapshot?.MemberContextProtections.TryGetValue(member, out var retained) == true) return retained;
         Guid protectionId;
         MirrorPulseNamespacePermissionVerification verification;
         Guid? epochPositionId = null;
@@ -104,7 +107,9 @@ public sealed partial class MirrorPulseProductCatalog
         }
         var proof = await ReadNamespaceMemberProofAsync(member, current: false, transaction, token,
             protectionId, verification.ObservedAt).ConfigureAwait(false);
-        return (proof, verification, epochPositionId);
+        var result = (proof, verification, epochPositionId);
+        if (snapshot is not null) snapshot.MemberContextProtections[member] = result;
+        return result;
     }
 
     private async Task<MirrorPulseNamespacePermissionVerification?> ValidateNamespaceContextPositionAsync(

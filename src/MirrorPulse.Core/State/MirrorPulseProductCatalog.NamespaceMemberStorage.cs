@@ -97,7 +97,10 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task RequireNamespaceMemberNameAsync(MirrorPulseNamespaceMemberRegistration member,
         SqliteTransaction transaction, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
         if (member.ParentMemberId is null) return;
+        _namespaceRecoveryReadSnapshots.TryGetValue(transaction, out var snapshot);
+        if (snapshot?.ValidatedMemberNames.TryGetValue(member, out _) == true) return;
         await using SqliteCommand query = _connection.CreateCommand();
         query.Transaction = transaction;
         query.CommandText = "SELECT parent_member_id,child_name_key FROM namespace_member_names WHERE member_id=$id;";
@@ -112,6 +115,7 @@ public sealed partial class MirrorPulseProductCatalog
             (currentParent.RootId is not null && currentParent.RootId != member.RootId) ||
             !await IsCurrentNamespaceMemberNameAsync(member, currentParentId, reader.GetString(1), transaction, token).ConfigureAwait(false))
             throw new InvalidDataException("The current member name points outside its managed directory.");
+        if (snapshot is not null) snapshot.ValidatedMemberNames[member] = true;
     }
 
     private async Task<bool> IsCurrentNamespaceMemberNameAsync(MirrorPulseNamespaceMemberRegistration member, Guid parentMemberId, string nameKey,

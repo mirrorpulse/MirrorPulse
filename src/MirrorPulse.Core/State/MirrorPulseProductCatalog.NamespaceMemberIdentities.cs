@@ -112,6 +112,9 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task<MirrorPulseNamespaceMemberIdentity> ReadNamespaceMemberIdentityCoreAsync(
         MirrorPulseNamespaceMemberRegistration member, SqliteTransaction transaction, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
+        _namespaceRecoveryReadSnapshots.TryGetValue(transaction, out var snapshot);
+        if (snapshot?.MemberIdentities.TryGetValue(member, out var retained) == true) return retained;
         var original = await ReadOriginalNamespaceMemberIdentityAsync(member, transaction, token).ConfigureAwait(false);
         Guid? head = null; long total;
         await using (var query = _connection.CreateCommand())
@@ -136,13 +139,17 @@ public sealed partial class MirrorPulseProductCatalog
         if (head is null)
         {
             if (total != 0) throw new InvalidDataException("The member's accepted identity history has no head.");
-            return new(member.MemberId, original.ItemId, original.RemoteId, null, original.ItemId, original.RemoteId);
+            var result = new MirrorPulseNamespaceMemberIdentity(member.MemberId, original.ItemId, original.RemoteId, null, original.ItemId, original.RemoteId);
+            if (snapshot is not null) snapshot.MemberIdentities[member] = result;
+            return result;
         }
         var accepted = await ReadNamespaceIdentityAcceptanceRowAsync(head.Value, transaction, token).ConfigureAwait(false)
             ?? throw new InvalidDataException("The accepted identity head disappeared.");
         long length = await ValidateNamespaceIdentityAcceptanceChainAsync(accepted, transaction, token).ConfigureAwait(false);
         if (accepted.MemberId != member.MemberId || length != total) throw new InvalidDataException("Accepted identities do not form one continuous member history.");
-        return new(member.MemberId, accepted.Proof.AcceptedItemId, accepted.Proof.RemoteId, head, original.ItemId, original.RemoteId);
+        var identity = new MirrorPulseNamespaceMemberIdentity(member.MemberId, accepted.Proof.AcceptedItemId, accepted.Proof.RemoteId, head, original.ItemId, original.RemoteId);
+        if (snapshot is not null) snapshot.MemberIdentities[member] = identity;
+        return identity;
     }
 
     private async Task<(Guid? ItemId, string? RemoteId)> ReadOriginalNamespaceMemberIdentityAsync(

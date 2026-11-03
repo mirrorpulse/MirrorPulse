@@ -54,6 +54,9 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task<MirrorPulseNamespaceMemberMoveIntent?> ReadNamespaceMemberMoveRowAsync(Guid operationId,
         SqliteTransaction transaction, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
+        _namespaceRecoveryReadSnapshots.TryGetValue(transaction, out var snapshot);
+        if (snapshot?.MoveRows.TryGetValue(operationId, out var retained) == true) return retained;
         MirrorPulseNamespaceMemberMoveIntent intent;
         await using (SqliteCommand query = _connection.CreateCommand())
         {
@@ -75,6 +78,7 @@ public sealed partial class MirrorPulseProductCatalog
                 throw new InvalidDataException("The move indexes disagree with the retained intent.");
         }
         await ValidateNamespaceRemoteMoveReferenceIndexAsync(intent, transaction, token).ConfigureAwait(false);
+        if (snapshot is not null) snapshot.MoveRows[operationId] = intent;
         return intent;
     }
 
@@ -133,6 +137,10 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task<MirrorPulseNamespaceMemberMoveStart?> ReadNamespaceMemberMoveStartCoreAsync(Guid operationId,
         SqliteTransaction transaction, CancellationToken token, bool validateRelocationChain = true)
     {
+        token.ThrowIfCancellationRequested();
+        _namespaceRecoveryReadSnapshots.TryGetValue(transaction, out var snapshot);
+        var key = (operationId, validateRelocationChain);
+        if (snapshot?.MoveStarts.TryGetValue(key, out var retained) == true) return retained;
         MirrorPulseNamespaceMemberMoveStart start;
         await using (SqliteCommand query = _connection.CreateCommand())
         {
@@ -155,6 +163,7 @@ public sealed partial class MirrorPulseProductCatalog
         if (start.StartedAt < intent.PreparedAt) throw new InvalidDataException("The start predates its original move admission.");
         if (start.Version == 2 && intent.RemoteEntry is null)
             throw new InvalidDataException("A retained ordinary move start cannot acquire a remote projection baseline.");
+        if (snapshot is not null) snapshot.MoveStarts[key] = start;
         return start;
     }
 
