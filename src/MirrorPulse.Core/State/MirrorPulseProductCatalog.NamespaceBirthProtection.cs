@@ -118,6 +118,10 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task<MirrorPulseNamespaceBirthProtection?> ReadLatestNamespaceBirthProtectionCoreAsync(Guid birthOperationId,
         SqliteTransaction? transaction, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
+        NamespaceRecoveryReadSnapshot? snapshot = null;
+        if (transaction is not null) _namespaceRecoveryReadSnapshots.TryGetValue(transaction, out snapshot);
+        if (snapshot?.LatestBirthProtections.TryGetValue(birthOperationId, out var retained) == true) return retained;
         await using SqliteCommand query = _connection.CreateCommand();
         query.Transaction = transaction;
         query.CommandText = "SELECT protection_id FROM namespace_birth_protections WHERE birth_operation_id=$birth ORDER BY sequence DESC LIMIT 1;";
@@ -130,6 +134,7 @@ public sealed partial class MirrorPulseProductCatalog
             ?? throw new InvalidDataException("The latest birth protection is missing.");
         if (protection.BirthOperationId != birthOperationId)
             throw new InvalidDataException("The latest birth protection belongs to another birth.");
+        if (snapshot is not null) snapshot.LatestBirthProtections[birthOperationId] = protection;
         return protection;
     }
 
@@ -137,6 +142,9 @@ public sealed partial class MirrorPulseProductCatalog
         SqliteTransaction? transaction, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
+        NamespaceRecoveryReadSnapshot? snapshot = null;
+        if (transaction is not null) _namespaceRecoveryReadSnapshots.TryGetValue(transaction, out snapshot);
+        if (snapshot?.LocatedBirthProtections.TryGetValue(protectionId, out var retained) == true) return retained;
         var history = transaction is null ? null : _namespaceHistoryReads.GetOrCreateValue(transaction);
         if (history?.UnlocatedBirthProtections.TryGetValue(protectionId, out var verified) == true) return verified;
         var row = await ReadNamespaceBirthProtectionRowAsync(protectionId, transaction, token).ConfigureAwait(false);
@@ -160,9 +168,11 @@ public sealed partial class MirrorPulseProductCatalog
             throw new InvalidDataException("The historical birth protection lost its original references.", error);
         }
         // Reuse only the completed historical proof in this SQLite snapshot. Located
-        // history and every current parent, latest epoch and execution fence keep
-        // their own validation; this entry grants no current namespace authority.
+        // history keeps its complete current-reference validation inside a scoped
+        // read phase only; writes and later API/native boundaries revalidate it.
+        // Neither entry grants current namespace authority.
         if (protection.Placement is null) history?.UnlocatedBirthProtections.Add(protectionId, protection);
+        else if (snapshot is not null) snapshot.LocatedBirthProtections[protectionId] = protection;
         return protection;
     }
 

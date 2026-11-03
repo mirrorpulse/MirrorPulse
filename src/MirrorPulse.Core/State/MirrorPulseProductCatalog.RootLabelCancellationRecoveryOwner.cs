@@ -17,7 +17,7 @@ public sealed partial class MirrorPulseProductCatalog
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            ThrowIfDisposed(); using var transaction = _connection.BeginTransaction(deferred: true);
+            ThrowIfDisposed(); using var transaction = BeginNamespaceRecoveryReadSnapshot();
             var owner = await ReadRootLabelCancellationRecoveryOwnerCoreAsync(operationId, transaction, cancellationToken).ConfigureAwait(false);
             transaction.Commit(); return owner;
         }
@@ -27,6 +27,9 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task<MirrorPulseRootLabelCancellationRecoveryOwner?> ReadRootLabelCancellationRecoveryOwnerCoreAsync(
         Guid operationId, SqliteTransaction transaction, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
+        _namespaceRecoveryReadSnapshots.TryGetValue(transaction, out var snapshot);
+        if (snapshot?.CancellationOwners.TryGetValue(operationId, out var retained) == true) return retained;
         var history = await ReadManagedRootRenameHistoryCoreAsync(operationId, token, transaction).ConfigureAwait(false);
         MirrorPulseRootRenameIntent? current;
         await using (var selected = _connection.CreateCommand())
@@ -48,14 +51,20 @@ public sealed partial class MirrorPulseProductCatalog
         if (stored is null) return null;
         if (stored is not string text || !Guid.TryParseExact(text, "D", out Guid initialization) || initialization == Guid.Empty)
             throw new InvalidDataException("The selected cancellation initializer index is invalid.");
-        return await ReadRootCancellationInitializerFingerprintCoreAsync(initialization, history.Intent.RootId,
+        var result = await ReadRootCancellationInitializerFingerprintCoreAsync(initialization, history.Intent.RootId,
             requirePending: true, transaction, token, operationId).ConfigureAwait(false);
+        if (snapshot is not null) snapshot.CancellationOwners[operationId] = result;
+        return result;
     }
 
     private async Task<MirrorPulseRootLabelCancellationRecoveryOwner> ReadRootCancellationInitializerFingerprintCoreAsync(
         Guid initialization, RootId root, bool requirePending, SqliteTransaction transaction, CancellationToken token,
         Guid? expectedLabelOperationId = null)
     {
+        token.ThrowIfCancellationRequested();
+        _namespaceRecoveryReadSnapshots.TryGetValue(transaction, out var snapshot);
+        var key = (initialization, root, requirePending, expectedLabelOperationId);
+        if (snapshot?.CancellationInitializers.TryGetValue(key, out var retained) == true) return retained;
         var status = await ReadNamespaceInitializationStatusCoreAsync(initialization, transaction, token).ConfigureAwait(false);
         if (requirePending && status.Completion is not null ||
             status.Intent.RequestedInventoryKind != MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory ||
@@ -67,7 +76,9 @@ public sealed partial class MirrorPulseProductCatalog
         query.Parameters.AddWithValue("$operation", initialization.ToString("D"));
         if (await query.ExecuteScalarAsync(token).ConfigureAwait(false) is not byte[] { Length: 32 } fingerprint)
             throw new InvalidDataException("The cancellation initializer lost its authenticated original intent fingerprint.");
-        return new(initialization, Convert.ToHexString(fingerprint));
+        var result = new MirrorPulseRootLabelCancellationRecoveryOwner(initialization, Convert.ToHexString(fingerprint));
+        if (snapshot is not null) snapshot.CancellationInitializers[key] = result;
+        return result;
     }
 
     private async Task ValidateRootCancellationRecoveryOwnerCoreAsync(MirrorPulseRootLabelCancellationRecoveryOwner owner,

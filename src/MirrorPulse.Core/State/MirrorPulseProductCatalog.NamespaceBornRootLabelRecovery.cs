@@ -29,7 +29,10 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task<BornRootLabelRecoveryScope?> ValidateBornRootLabelRecoveryHistoryAsync(MirrorPulseNamespaceBornMemberRecoveryAction action,
         SqliteTransaction transaction, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
         if (action.RootLabelRecoveryOwner is not { } owner) return null;
+        _namespaceRecoveryReadSnapshots.TryGetValue(transaction, out var snapshot);
+        if (snapshot?.BornRootLabelScopes.TryGetValue(action, out var retained) == true) return retained;
         await ValidateRootCancellationRecoveryOwnerCoreAsync(owner.Initialization, action.Child.Member.RootId!.Value,
             requirePending: false, transaction, token).ConfigureAwait(false);
         var history = await ReadManagedRootRenameHistoryCoreAsync(owner.RootLabelOperationId, token, transaction).ConfigureAwait(false);
@@ -71,7 +74,9 @@ public sealed partial class MirrorPulseProductCatalog
                 throw new InvalidOperationException("Historical born recovery lost its later original sealed cancellation receipt.");
             await ValidateRootLabelCancellationReferencesAsync(sealedMove, cancellation, current: false, transaction, token).ConfigureAwait(false);
         }
-        return new(history, root);
+        var result = new BornRootLabelRecoveryScope(history, root);
+        if (snapshot is not null) snapshot.BornRootLabelScopes[action] = result;
+        return result;
     }
 
     private async Task ValidateBornRootLabelRecoveryCurrentAsync(MirrorPulseNamespaceBornMemberRecoveryAction action,

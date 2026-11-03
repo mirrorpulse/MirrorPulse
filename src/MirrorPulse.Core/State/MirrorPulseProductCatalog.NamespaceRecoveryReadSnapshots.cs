@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using Microsoft.Data.Sqlite;
+using MirrorPulse.Core.Contracts;
 
 namespace MirrorPulse.Core.State;
 
@@ -20,6 +21,13 @@ public sealed partial class MirrorPulseProductCatalog
         internal NamespaceHistoryCache<MirrorPulseNamespaceBirthIntent> ValidatedBirths { get; } = new();
         internal NamespaceHistoryCache<MirrorPulseNamespaceBirthObservation> ValidatedBirthObservations { get; } = new();
         internal NamespaceHistoryCache<(Guid? SelectedActionId, BornMemberRecoveryHistory Summary)> BornRecoverySummaries { get; } = new();
+        internal NamespaceHistoryCache<MirrorPulseNamespaceMemberProtectionSnapshot> ProtectionSnapshots { get; } = new();
+        internal NamespaceHistoryCache<MirrorPulseNamespaceBirthProtection> LatestBirthProtections { get; } = new();
+        internal NamespaceHistoryCache<MirrorPulseNamespaceBirthProtection> LocatedBirthProtections { get; } = new();
+        internal NamespaceHistoryCache<MirrorPulseRootRenameHistory> RootRenameHistories { get; } = new();
+        internal NamespaceHistoryCache<MirrorPulseNamespaceBornMemberRecoveryAction, BornRootLabelRecoveryScope> BornRootLabelScopes { get; } = new();
+        internal NamespaceHistoryCache<(Guid Initialization, RootId Root, bool Pending, Guid? Label), MirrorPulseRootLabelCancellationRecoveryOwner> CancellationInitializers { get; } = new();
+        internal NamespaceHistoryCache<MirrorPulseRootLabelCancellationRecoveryOwner> CancellationOwners { get; } = new();
     }
 
     private SqliteTransaction BeginNamespaceRecoveryReadSnapshot()

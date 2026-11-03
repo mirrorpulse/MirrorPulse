@@ -28,6 +28,9 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task<MirrorPulseNamespaceMemberProtectionSnapshot?> ReadNamespaceMemberProtectionSnapshotCoreAsync(
         Guid memberId, SqliteTransaction transaction, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        _namespaceRecoveryReadSnapshots.TryGetValue(transaction, out var snapshot);
+        if (snapshot?.ProtectionSnapshots.TryGetValue(memberId, out var retained) == true) return retained;
         var member = await ReadNamespaceMemberRowAsync(memberId, transaction, cancellationToken).ConfigureAwait(false);
         if (member is null) return null;
         var lineage = await ReadNamespaceMemberProtectionLineageCoreAsync(memberId, transaction, cancellationToken,
@@ -54,6 +57,7 @@ public sealed partial class MirrorPulseProductCatalog
             result = new(context, identity, protection.Verification.Dacl, Guid.Empty,
                 new(member.OriginId, protection.ProtectionId), observation);
         }
+        if (snapshot is not null) snapshot.ProtectionSnapshots[memberId] = result;
         return result;
     }
 }

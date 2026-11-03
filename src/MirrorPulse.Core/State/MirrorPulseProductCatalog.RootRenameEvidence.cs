@@ -55,13 +55,19 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task<MirrorPulseRootRenameHistory?> FindManagedRootRenameHistoryCoreAsync(Guid operationId,
         CancellationToken token, SqliteTransaction? transaction = null)
     {
+        token.ThrowIfCancellationRequested();
+        NamespaceRecoveryReadSnapshot? snapshot = null;
+        if (transaction is not null) _namespaceRecoveryReadSnapshots.TryGetValue(transaction, out snapshot);
+        if (snapshot?.RootRenameHistories.TryGetValue(operationId, out var retained) == true) return retained;
         await using SqliteCommand query = _connection.CreateCommand();
         query.Transaction = transaction;
         query.CommandText = "SELECT payload, proof, observation, root_id, operation_id FROM managed_root_rename_history WHERE operation_id=$operation;";
         query.Parameters.AddWithValue("$operation", operationId.ToString());
         await using SqliteDataReader reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
         if (!await reader.ReadAsync(token).ConfigureAwait(false)) return null;
-        return ReadRenameHistory(reader);
+        var result = ReadRenameHistory(reader);
+        if (snapshot is not null) snapshot.RootRenameHistories[operationId] = result;
+        return result;
     }
 
     private static MirrorPulseRootRenameHistory ReadRenameHistory(SqliteDataReader reader)

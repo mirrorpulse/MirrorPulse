@@ -114,7 +114,14 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             Assert.IsTrue(MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(
                 MirrorPulseWindowsNamespaceInheritance.CreateInheritedDacl(before.Anchor.Context.Verification.Dacl, true), actual));
 
+            long cancellationStarted = System.Diagnostics.Stopwatch.GetTimestamp();
             var cancelled = await runtime.CancelManagedRootRenameAsync(original.Intent.OperationId, deadline.Token);
+            TestContext.WriteLine("LocalCancellationTiming: " + System.Text.Json.JsonSerializer.Serialize(new
+            {
+                disabled,
+                elapsedMs = System.Diagnostics.Stopwatch.GetElapsedTime(cancellationStarted).TotalMilliseconds,
+                originalFixtureDeadlineSeconds = 60
+            }));
             Assert.AreEqual(MirrorPulseRootRenamePhase.Cancelled, cancelled.Intent.Phase);
             Assert.AreEqual("Docs", cancelled.CurrentDirectoryName); Assert.AreEqual(4, cancelled.MemberCount);
             Assert.IsTrue(cancelled.CurrentTreeAudited); Assert.AreEqual(!disabled, cancelled.NamespaceReady);

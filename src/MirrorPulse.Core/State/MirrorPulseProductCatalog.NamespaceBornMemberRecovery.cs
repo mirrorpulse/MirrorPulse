@@ -89,7 +89,7 @@ public sealed partial class MirrorPulseProductCatalog
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            ThrowIfDisposed(); using var transaction = _connection.BeginTransaction(deferred: true);
+            ThrowIfDisposed(); using var transaction = BeginNamespaceRecoveryReadSnapshot();
             var result = await ReadBornMemberRecoveryHistoryCoreAsync(memberId, transaction, cancellationToken).ConfigureAwait(false);
             transaction.Commit(); return result;
         }
