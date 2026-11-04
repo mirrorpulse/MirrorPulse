@@ -17,7 +17,16 @@ public sealed partial class CliTransferFixtureLayoutTests
     [DataRow(true, false)]
     [DataRow(false, true)]
     [DataRow(true, true)]
-    public async Task StoppedFailureObserverRetainsActualIntentDespiteMissingConflictRevisions(bool create, bool actualErrorRevisions)
+    public Task StoppedFailureObserverRetainsActualIntentDespiteMissingConflictRevisions(bool create, bool actualErrorRevisions) =>
+        ProbeStoppedFailureRevisionFactsAsync(create, actualErrorRevisions, separateObservation: false);
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public Task StoppedFailureObserverSeparatesOriginalMissingErrorFromALaterSelectedVersion(bool create) =>
+        ProbeStoppedFailureRevisionFactsAsync(create, actualErrorRevisions: false, separateObservation: true);
+
+    private static async Task ProbeStoppedFailureRevisionFactsAsync(bool create, bool actualErrorRevisions, bool separateObservation)
     {
         var fixture = Create(); var paths = new MirrorPulseStoragePaths(Path.Combine(fixture.Root, "sync"), Path.Combine(fixture.Root, "data"));
         Directory.CreateDirectory(paths.SyncRootPath);
@@ -47,6 +56,14 @@ public sealed partial class CliTransferFixtureLayoutTests
                     await catalog.SaveUploadConflictAsync(new(Guid.NewGuid(), route.InstanceId, command.OperationId.ToString("D"),
                         "Left/cross-instance.bin", MirrorPulseConflictReason.StaleRemoteRevision, MirrorPulseVersionComparison.Diverged,
                         actualErrorRevisions ? baseline : null, actualErrorRevisions ? "PRIVATE_ACTUAL_REVISION" : null, observed));
+                if (separateObservation)
+                {
+                    var rejected = (await catalog.ReadMutationAsync(effect))!;
+                    var previous = await catalog.ReadUploadConflictsAsync();
+                    DateTimeOffset now = observed.AddSeconds(5);
+                    _ = await catalog.PrepareCoalescedConflictRemoteObservationAsync(previous[0].ConflictId, item, "Left/cross-instance.bin",
+                        new(1, Guid.NewGuid(), rejected.Intent, baseline ?? "PRIVATE_SELECTED_REVISION", now, now));
+                }
                 before = JsonSerializer.Serialize(await catalog.ReadMutationAsync(effect));
             }
             var result = await RunFailureObserverAsync(fixture.Root);
@@ -54,12 +71,16 @@ public sealed partial class CliTransferFixtureLayoutTests
             var actual = JsonSerializer.Deserialize<CliTransferFailureObservation>(result.Output, JsonOptions)!;
             Assert.IsTrue(actual.ExclusiveCatalogOwner); Assert.IsFalse(actual.MoreConflictsAvailable);
             Assert.HasCount(2, actual.Conflicts); Assert.HasCount(1, actual.Plans);
-            Assert.IsTrue(actual.Conflicts.All(conflict => conflict.ExpectedRevisionPresent == (actualErrorRevisions && !create) &&
-                conflict.ActualRevisionPresent == actualErrorRevisions && conflict.PlanId == plan.PlanId));
+            Assert.IsTrue(actual.Conflicts.All(conflict => conflict.ExpectedRevisionPresent == ((actualErrorRevisions || separateObservation) && !create) &&
+                conflict.ActualRevisionPresent == (actualErrorRevisions || separateObservation) && conflict.PlanId == plan.PlanId &&
+                conflict.SeparateRemoteObservationPresent == separateObservation));
             foreach (var conflict in actual.Conflicts)
             {
                 Assert.AreEqual(actualErrorRevisions && !create ? (bool?)true : null, conflict.ErrorExpectedMatchesOriginalExecution);
                 Assert.AreEqual(actualErrorRevisions ? (bool?)false : null, conflict.ErrorActualMatchesOriginalExecution);
+                Assert.AreEqual((actualErrorRevisions || separateObservation) && !create ? (bool?)true : null, conflict.SelectedExpectedMatchesOriginalExecution);
+                Assert.AreEqual(separateObservation && !create ? (bool?)true : actualErrorRevisions || separateObservation ? (bool?)false : null,
+                    conflict.SelectedActualMatchesOriginalExecution);
             }
             Assert.AreEqual(plan.PlanId, actual.Plans[0].PlanId); Assert.AreEqual(item, actual.Plans[0].ItemId);
             Assert.IsTrue(actual.Plans[0].ExecutionPresent);

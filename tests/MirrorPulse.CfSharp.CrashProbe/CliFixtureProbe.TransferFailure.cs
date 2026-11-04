@@ -14,6 +14,9 @@ public sealed record CliTransferPlanFailure(Guid PlanId, Guid ItemId, string Eff
 public sealed record CliTransferConflictFailure(Guid ConflictId, Guid OperationId, string Reason,
     bool ExpectedRevisionPresent, bool ActualRevisionPresent, Guid? PlanId)
 {
+    public bool SeparateRemoteObservationPresent { get; init; }
+    public bool? SelectedExpectedMatchesOriginalExecution { get; init; }
+    public bool? SelectedActualMatchesOriginalExecution { get; init; }
     public bool? ErrorExpectedMatchesOriginalExecution { get; init; }
     public bool? ErrorActualMatchesOriginalExecution { get; init; }
 }
@@ -44,13 +47,34 @@ public static partial class CliFixtureProbe
                     throw new InvalidDataException("Failure observation cannot disclose a foreign conflict or path.");
                 var plan = await fixture.Catalog.ReadJournalCoalescingOwnerAsync(operationId);
                 var execution = plan is null ? null : await fixture.Catalog.ReadJournalCoalescingExecutionAsync(plan.PlanId);
+                MirrorPulseCoalescedConflictRemoteObservation? observed = null;
+                if (execution is not null)
+                {
+                    var current = await fixture.Catalog.ReadJournalCoalescingDispatchAsync(plan!.PlanId);
+                    foreach (var step in current.Steps)
+                    {
+                        var rejected = await fixture.Catalog.ReadMutationAsync(step.OperationId);
+                        if (rejected?.State != MirrorPulseMutationState.Conflict) continue;
+                        observed = await fixture.Catalog.ReadCoalescedConflictRemoteObservationAsync(step.OperationId);
+                        if (observed is not null && (observed.PlanId != plan.PlanId || !observed.SelectedConflictIds.Contains(conflict.ConflictId)))
+                            throw new InvalidDataException("The separate remote observation lost its exact selected conflict and original plan.");
+                        break;
+                    }
+                }
+                string? originalExpected = observed is null ? conflict.LocalRevision : observed.OriginalErrorExpectedRevision;
+                string? originalActual = observed is null ? conflict.RemoteRevision : observed.OriginalErrorActualRevision;
                 conflicts.Add(new(conflict.ConflictId, operationId, conflict.Reason.ToString(),
                     !string.IsNullOrEmpty(conflict.LocalRevision), !string.IsNullOrEmpty(conflict.RemoteRevision), plan?.PlanId)
                 {
-                    ErrorExpectedMatchesOriginalExecution = execution is null || string.IsNullOrEmpty(conflict.LocalRevision) ? null
+                    SeparateRemoteObservationPresent = observed is not null,
+                    SelectedExpectedMatchesOriginalExecution = execution is null || string.IsNullOrEmpty(conflict.LocalRevision) ? null
                         : string.Equals(conflict.LocalRevision, execution.ExpectedRevision, StringComparison.Ordinal),
-                    ErrorActualMatchesOriginalExecution = execution is null || string.IsNullOrEmpty(conflict.RemoteRevision) ? null
-                        : string.Equals(conflict.RemoteRevision, execution.ExpectedRevision, StringComparison.Ordinal)
+                    SelectedActualMatchesOriginalExecution = execution is null || string.IsNullOrEmpty(conflict.RemoteRevision) ? null
+                        : string.Equals(conflict.RemoteRevision, execution.ExpectedRevision, StringComparison.Ordinal),
+                    ErrorExpectedMatchesOriginalExecution = execution is null || string.IsNullOrEmpty(originalExpected) ? null
+                        : string.Equals(originalExpected, execution.ExpectedRevision, StringComparison.Ordinal),
+                    ErrorActualMatchesOriginalExecution = execution is null || string.IsNullOrEmpty(originalActual) ? null
+                        : string.Equals(originalActual, execution.ExpectedRevision, StringComparison.Ordinal)
                 });
                 if (plan is null || plans.ContainsKey(plan.PlanId)) continue;
                 string path = route.DirectoryName + "/" + plan.FinalPath.Replace('\\', '/');
