@@ -210,7 +210,7 @@ public sealed partial class MirrorPulseProductCatalog
         try
         {
             ThrowIfDisposed();
-            using SqliteTransaction transaction = _connection.BeginTransaction(deferred: true);
+            using SqliteTransaction transaction = BeginNamespaceRecoveryReadSnapshot();
             await using SqliteCommand query = _connection.CreateCommand();
             query.Transaction = transaction;
             query.CommandText = "SELECT member_id FROM namespace_member_names WHERE parent_member_id=$parent AND child_name_key=$name;";
@@ -242,7 +242,7 @@ public sealed partial class MirrorPulseProductCatalog
         try
         {
             ThrowIfDisposed();
-            using SqliteTransaction transaction = _connection.BeginTransaction(deferred: true);
+            using SqliteTransaction transaction = BeginNamespaceRecoveryReadSnapshot();
             var entries = await ReadNamespaceMemberTreeCoreAsync(memberId, transaction, cancellationToken).ConfigureAwait(false);
             transaction.Commit();
             return entries;

@@ -63,6 +63,20 @@ and complete-receipt reads from3,928 to336. Each next transaction still rejects
 damaged historical position fingerprints. These query counts establish reduced
 catalog work; they do not prove a signed Host command meets its30-second deadline.
 
+Current child-name lookup, complete member-tree reads and protection-lineage reads
+also use that same bounded successful-fact snapshot within their own read-only
+transaction. All current names, positions, parent relationships and protection
+checks remain required. Writers and later API invocations start without these
+facts; no native observation or authority is retained.
+
+After eight completed Labels in the actual three-member SQLite fixture, child
+lookup SELECTs decreased from3,565 to314, complete-tree reads from3,808 to341 and
+protection-lineage reads from4,551 to389. Every next transaction still rejects
+damaged position fingerprints in those three APIs. Immutable member and binding
+lookups remain unchanged at78 and79 SELECTs: they return original registration
+provenance and do not claim a current position. These counts establish less SQL,
+not completion of historical cancellation replay within its30-second deadline.
+
 Default Host Label execution also records bounded fixed-stage progress before
 awaiting work, so an unfinished request retains its last entered stage. Each
 request emits at most32 progress records containing only the original operation

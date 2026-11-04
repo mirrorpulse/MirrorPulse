@@ -25,7 +25,7 @@ public sealed partial class MirrorPulseProductCatalog
         try
         {
             ThrowIfDisposed();
-            using SqliteTransaction transaction = _connection.BeginTransaction(deferred: true);
+            using SqliteTransaction transaction = BeginNamespaceRecoveryReadSnapshot();
             var lineage = await ReadNamespaceMemberProtectionLineageCoreAsync(memberId, transaction, cancellationToken).ConfigureAwait(false);
             transaction.Commit();
             return lineage;
