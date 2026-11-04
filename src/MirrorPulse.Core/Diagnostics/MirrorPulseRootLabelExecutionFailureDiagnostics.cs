@@ -28,10 +28,36 @@ public static class MirrorPulseRootLabelExecutionFailureDiagnostics
     {
         if (!Enum.IsDefined(stage)) throw new ArgumentOutOfRangeException(nameof(stage));
         ArgumentNullException.ThrowIfNull(action);
-        try { return await action().ConfigureAwait(false); }
+        await MirrorPulseRootLabelExecutionProgressDiagnostics.ReportAsync(stage, "Begin").ConfigureAwait(false);
+        try
+        {
+            T result = await action().ConfigureAwait(false);
+            await MirrorPulseRootLabelExecutionProgressDiagnostics.ReportAsync(stage, "Completed").ConfigureAwait(false);
+            return result;
+        }
         catch (Exception original) when (original is not StackOverflowException and not OutOfMemoryException)
         {
             if (Stage(original) == MirrorPulseRootLabelExecutionStage.Unknown) MarkStage(original, stage);
+            await MirrorPulseRootLabelExecutionProgressDiagnostics.ReportAsync(stage, "Failed").ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    public static async ValueTask<T> RunWithProgressAsync<T>(Guid operationId, Func<ValueTask<T>> action, Func<LogEntry, ValueTask> observe)
+    {
+        if (operationId == Guid.Empty) throw new ArgumentException("The original Label operation is required.", nameof(operationId));
+        ArgumentNullException.ThrowIfNull(action); ArgumentNullException.ThrowIfNull(observe);
+        using var progress = MirrorPulseRootLabelExecutionProgressDiagnostics.Enter(operationId, observe);
+        await progress.ReportAsync(MirrorPulseRootLabelExecutionStage.Unknown, "Begin").ConfigureAwait(false);
+        try
+        {
+            T result = await RunAsync(operationId, action, observe).ConfigureAwait(false);
+            await progress.ReportAsync(MirrorPulseRootLabelExecutionStage.Unknown, "Completed").ConfigureAwait(false);
+            return result;
+        }
+        catch (Exception original) when (original is not StackOverflowException and not OutOfMemoryException)
+        {
+            await progress.ReportAsync(MirrorPulseRootLabelExecutionStage.Unknown, "Failed").ConfigureAwait(false);
             throw;
         }
     }

@@ -33,6 +33,7 @@ public static class SafeDiagnosticPolicy
         ["RootLabelJournalReadmissionFailed"] = "A root remains closed until its current Host namespace audit succeeds.",
         ["RootLabelJournalAdmissionFailed"] = "A root notification remains pending until its current Host admission succeeds.",
         ["RootLabelExecutionFailed"] = "The original root Label execution stopped at a protected namespace boundary.",
+        ["RootLabelExecutionProgress"] = "The original root Label execution reached a protected namespace boundary.",
         ["RootLabelCancellationFailed"] = "The original root Label cancellation stopped at a protected namespace boundary.",
         ["RootLabelCancellationProgress"] = "The original root Label cancellation reached a protected namespace boundary.",
         ["RootLabelCancellationBornProgress"] = "The original born permission recovery reached an observed boundary.",
@@ -155,10 +156,10 @@ public static class SafeDiagnosticPolicy
                 "workerElapsedMs" or "workerStageElapsedMs" =>
                     int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out int elapsed) && elapsed >= 0
                         ? elapsed.ToString(CultureInfo.InvariantCulture) : null,
-                "cancellationProgressPhase" => value is "Begin" or "Completed" or "Failed" ? value : null,
+                "cancellationProgressPhase" or "executionProgressPhase" => value is "Begin" or "Completed" or "Failed" ? value : null,
                 "cancellationBornStep" => Enum.TryParse(value, out MirrorPulseCancellationBornStep bornStep) && Enum.IsDefined(bornStep) && value == bornStep.ToString() ? value : null,
                 "cancellationBornTruncated" => value == "true" ? value : null,
-                "cancellationElapsedMs" or "cancellationSequence" or "startupElapsedMs" or "startupSequence" or "cancellationBornElapsedMs" or "cancellationBornSequence" =>
+                "cancellationElapsedMs" or "cancellationSequence" or "startupElapsedMs" or "startupSequence" or "cancellationBornElapsedMs" or "cancellationBornSequence" or "executionElapsedMs" or "executionSequence" =>
                     long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out long startupCount) && startupCount >= 0
                         ? startupCount.ToString(CultureInfo.InvariantCulture) : null,
                 "startupStage" => value is "LibraryStartBegin" or "LibraryStartCompleted" or "LibraryServicesBegin" or "LibraryServicesCompleted" or
