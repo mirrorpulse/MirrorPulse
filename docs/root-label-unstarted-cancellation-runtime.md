@@ -102,6 +102,16 @@ has no pending recovery operation; its audit operation ID must not be projected
 as an unresolved recovery. Original root-list and member-inspection responses are
 retained for each root startup phase, including failed state checks.
 
+Preparing a controlled local import in a disabled root drains that root's work
+and requires a fresh native audit of its complete unfenced current tree under
+the current Host anchor. It retains closed ordinary admission while input bytes
+are staged as the normal user and the original import plan is prepared under
+the namespace role. Replay may retain only that operation's existing import
+ownership; the creation coordinator still checks its root, parent, name and
+content. Executing the retained import also leaves ordinary admission closed.
+The signed offline fixture separately verifies journal growth, source isolation
+while disabled, and delivery of the exact bytes after an independent reenable.
+
 The preparation diagnostic also records a closed stage: root work drain,
 instance/library serialization, original ownership, current-tree audit or public
 proof/preparation. Nested stages retain the deepest failure and the same original

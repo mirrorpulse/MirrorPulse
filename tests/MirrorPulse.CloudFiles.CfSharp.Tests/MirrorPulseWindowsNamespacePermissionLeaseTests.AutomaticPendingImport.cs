@@ -14,6 +14,15 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     [DoNotParallelize]
     [TestCategory("NativeCloudFiles")]
     public async Task NativeAutomaticStartupPreservesPendingImportWithoutAddingAnInitializerFence()
+        => await ProbeAutomaticPendingImportAsync(disabled: false);
+
+    [TestMethod]
+    [DoNotParallelize]
+    [TestCategory("NativeCloudFiles")]
+    public async Task NativeAutomaticStartupKeepsDisabledImportLocalAcrossOwnersWithoutOpeningOrdinaryWork()
+        => await ProbeAutomaticPendingImportAsync(disabled: true);
+
+    private async Task ProbeAutomaticPendingImportAsync(bool disabled)
     {
         if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
             Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
@@ -21,7 +30,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         string directory = Path.Combine(Path.GetTempPath(), "MirrorPulse-native-tests", Guid.NewGuid().ToString("N"));
         var paths = new MirrorPulseStoragePaths(Path.Combine(directory, "sync"), Path.Combine(directory, "data"));
         var root = AdapterRootRegistrationMapper.Map(AdapterId.Parse("example.pending-import-startup"), InstanceId.New(),
-            new("existing", "Existing", "Existing", false), RootRegistrationState.Active, identityScope: RootIdentityScope.InstanceRoot);
+            new("existing", "Existing", "Existing", false), disabled ? RootRegistrationState.Disabled : RootRegistrationState.Active,
+            identityScope: RootIdentityScope.InstanceRoot);
         var router = new MirrorPulseRootRouter(paths.SyncRootPath, [root]);
         var registry = new CfSharpMirrorPulseCloudRootRegistry(); using WindowsIdentity user = WindowsIdentity.GetCurrent();
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(65));
@@ -54,9 +64,18 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 var parent = await runtime.InspectNamespaceMemberAsync("Existing", true, timeout.Token);
                 if (owner == 0)
                 {
-                    Assert.IsTrue(work.IsAdmitted(root.RootId)); parentId = parent.MemberId;
+                    Assert.AreEqual(!disabled, work.IsAdmitted(root.RootId)); parentId = parent.MemberId;
+                    if (disabled)
+                    {
+                        Assert.IsFalse(work.TryEnter([root.RootId], out var ordinaryWork)); Assert.IsNull(ordinaryWork);
+                    }
                     var plan = await runtime.PrepareNamespaceImportAsync(operation, parentId, "note.txt", input, timeout.Token);
                     itemId = plan.ItemId; Assert.IsFalse(File.Exists(Path.Combine(paths.SyncRootPath, "Existing", "note.txt")));
+                    if (disabled)
+                    {
+                        Assert.IsFalse(work.IsAdmitted(root.RootId));
+                        Assert.AreEqual(plan, await runtime.PrepareNamespaceImportAsync(operation, parentId, "note.txt", input, timeout.Token));
+                    }
                 }
                 else
                 {
@@ -67,14 +86,17 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     var imported = await runtime.ExecuteNamespaceImportAsync(operation, timeout.Token);
                     Assert.AreEqual(operation, imported.MemberId); Assert.IsFalse(work.IsAdmitted(root.RootId));
                     Assert.IsEmpty(await catalog.ReadNamespacePendingOperationsAsync(root.RootId, timeout.Token));
-                    var completed = await runtime.RecoverNamespaceRootAsync(Guid.NewGuid(), root.RootId, timeout.Token);
-                    Assert.AreEqual(root.RootId, completed.ScopeRoot); Assert.IsTrue(work.IsAdmitted(root.RootId));
+                    if (!disabled)
+                    {
+                        var completed = await runtime.RecoverNamespaceRootAsync(Guid.NewGuid(), root.RootId, timeout.Token);
+                        Assert.AreEqual(root.RootId, completed.ScopeRoot); Assert.IsTrue(work.IsAdmitted(root.RootId));
+                    }
                     var actual = await runtime.InspectNamespaceMemberAsync("Existing/note.txt", false, timeout.Token);
                     Assert.AreEqual(itemId, actual.NativeItemId); Assert.AreEqual(imported.MemberId, actual.MemberId);
                     Assert.AreEqual(expected, await File.ReadAllTextAsync(Path.Combine(paths.SyncRootPath, "Existing", "note.txt"), timeout.Token));
                     Assert.IsEmpty(await catalog.ReadNamespaceDispatchFencedRootsAsync(timeout.Token));
-                    TestContext.WriteLine("PendingImportStartup: twoLibraryOwners=True; sameNamespaceRole=True; originalRetryIdAndItemId=True; " +
-                        "noCompetingInitializer=True; actualClosedRootImport=True; completionDoesNotAdmit=True; separateFreshAudit=True; " +
+                    TestContext.WriteLine($"PendingImportStartup: disabled={disabled}; twoLibraryOwners=True; sameNamespaceRole=True; originalRetryIdAndItemId=True; " +
+                        $"noCompetingInitializer=True; actualClosedRootImport=True; completionDoesNotAdmit=True; separateFreshAudit={!disabled}; disabledOrdinaryAdmissionClosed={disabled}; " +
                         "bytesAndNativeIdentity=True; sourceCalls=0; newHostRoleRecovery=False; remoteAcceptance=False.");
                 }
                 Assert.IsEmpty(worker.Calls);

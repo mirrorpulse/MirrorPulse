@@ -901,7 +901,9 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             var parent = await catalog!.ReadNamespaceMemberAsync(parentMemberId, cancellationToken).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The import parent is not registered.");
             var registration = router!.Registrations.Single(root => root.RootId == parent.RootId);
-            using var admission = namespaceWork?.Enter([registration.RootId]);
+            using var admission = registration.State == RootRegistrationState.Disabled ? null : namespaceWork?.Enter([registration.RootId]);
+            await using var disabledAdmission = registration.State == RootRegistrationState.Disabled
+                ? await EnterDisabledImportPreparationAsync(registration, operationId, cancellationToken).ConfigureAwait(false) : null;
             var inputs = new MirrorPulseLocalImportStagingStore(new(syncRootPath, dataRootPath));
             // A source may hydrate through this SDK owner. Retain it while capturing input,
             // then release that scope before waiting for the instance's execution admission.
@@ -912,6 +914,46 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             return await WithInstanceLibraryAsync(registration.InstanceId, token =>
                 new MirrorPulseNamespaceCreationCoordinator(fileSystem, state, catalog, router, _namespaceExecution, _namespaceActor!)
                     .PrepareImportAsync(operationId, parentMemberId, name, input, token), cancellationToken).ConfigureAwait(false);
+        }
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        private async ValueTask<MirrorPulseNamespaceWorkAdmission.RecoveryLease> EnterDisabledImportPreparationAsync(
+            RootRegistration root, Guid operationId, CancellationToken requestCancellation)
+        {
+            if (namespaceWork is null || catalog is null || router is null || _namespaceExecution is null ||
+                _namespaceActor is null || _permissions is null || _startupProtection is null)
+                throw new NotSupportedException("Disabled import preparation requires the protected Host namespace boundary.");
+            using var stop = CancellationTokenSource.CreateLinkedTokenSource(requestCancellation, _admissionShutdown.Token);
+            var drained = await namespaceWork.WaitForRecoveryAsync([root.RootId], stop.Token).ConfigureAwait(false);
+            try
+            {
+                // Original replay retains only its durable import ownership. The
+                // creation coordinator still validates its parent, name and bytes.
+                var original = await catalog.ReadNamespaceBirthAsync(operationId, stop.Token).ConfigureAwait(false);
+                if (original is not null)
+                {
+                    if (original.RootId != root.RootId || original.Origin != MirrorPulseNamespaceBirthOrigin.Import)
+                        throw new InvalidOperationException("The operation ID does not own an import in this disabled root.");
+                }
+                else
+                {
+                    await WithInstanceLibraryAsync(root.InstanceId, async token =>
+                    {
+                        var anchor = RequireCurrentStartupAnchor();
+                        var member = await catalog.ReadNamespaceMemberByBindingAsync(anchor.Original.LocalObject, token).ConfigureAwait(false)
+                            ?? throw new InvalidDataException("Disabled import preparation lost its live sync-root anchor.");
+                        var audit = await new MirrorPulseNamespaceCurrentTreeAuditCoordinator(fileSystem, catalog, router,
+                            _namespaceExecution, _namespaceActor, _permissions).AuditRootAsync(member.MemberId, anchor, root.RootId, token).ConfigureAwait(false);
+                        if (audit.Inventory.FencedRoots.Count != 0 || _startupProtection != anchor || router.FindRegistration(root.RootId) != root)
+                            throw new InvalidOperationException("New disabled import preparation requires its current unfenced Host audit.");
+                        return true;
+                    }, stop.Token).ConfigureAwait(false);
+                }
+                // Disposal leaves ordinary work closed. Input capture and actual
+                // creation retain their normal-user and namespace-role boundaries.
+                return drained;
+            }
+            catch { await drained.DisposeAsync().ConfigureAwait(false); throw; }
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
