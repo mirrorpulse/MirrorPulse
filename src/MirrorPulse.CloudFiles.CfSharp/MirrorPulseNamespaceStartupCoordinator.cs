@@ -172,8 +172,11 @@ internal sealed class MirrorPulseNamespaceStartupCoordinator(CloudFileSystem fil
                     var result = await new MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(fileSystem, catalog, router, execution, actor, scheduler, permissions) { Progress = progress }
                         .RecoverRootAsync(operationId.Value, root.RootId, cancellationToken).ConfigureAwait(false);
                     await result.DisposeAsync().ConfigureAwait(false);
-                    recovery.CompleteAfterFreshAudit();
-                    outcomes[root.RootId] = new(root.RootId, operationId, true, null);
+                    // Disabled roots still need their native protection and identity audit,
+                    // but a successful audit must not enable ordinary synchronization.
+                    bool admitted = root.State == RootRegistrationState.Active;
+                    if (admitted) recovery.CompleteAfterFreshAudit();
+                    outcomes[root.RootId] = new(root.RootId, operationId, admitted, null);
                     progress?.Invoke("NamespaceRootCompleted");
                 }
                 catch (Exception error) when (error is IOException or InvalidOperationException or UnauthorizedAccessException or Win32Exception)

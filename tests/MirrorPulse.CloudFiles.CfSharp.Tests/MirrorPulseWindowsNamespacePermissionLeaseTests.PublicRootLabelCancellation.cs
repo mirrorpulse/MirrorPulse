@@ -175,7 +175,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 namespaceExecution: currentRole, namespaceActor: currentActor, scheduler: currentScheduler, namespaceWork: work, initializeNamespaceOnStart: true);
             await using var runtime = factory.Create(paths);
             await runtime.StartAsync(deadline.Token);
-            Assert.AreEqual(!newRole, runtime.NamespaceStartupResults.Single(item => item.RootId == root.RootId).Admitted);
+            Assert.AreEqual(!disabled && !newRole, runtime.NamespaceStartupResults.Single(item => item.RootId == root.RootId).Admitted);
+            Assert.AreEqual(!disabled && !newRole, work.IsAdmitted(root.RootId));
             await Assert.ThrowsExactlyAsync<ArgumentException>(() => runtime.CancelManagedRootRenameAsync(Guid.Empty, deadline.Token).AsTask());
             await Assert.ThrowsExactlyAsync<FileNotFoundException>(() => runtime.CancelManagedRootRenameAsync(Guid.NewGuid(), deadline.Token).AsTask());
             var original = preparedBeforeRoleChange ?? await runtime.PrepareManagedRootRenameAsync(root.RootId, "Renamed", deadline.Token);

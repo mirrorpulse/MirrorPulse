@@ -88,6 +88,13 @@ identities and typed exit receipts, followed by the complete current graph and r
 checks. Saving the enable selection alone does not prove a new startup or grant
 namespace admission. The existing public command and state deadlines still apply.
 
+Startup audits the current native identities and namespace protection of disabled
+roots as well as active roots. A successful disabled-root audit leaves ordinary
+work admission closed and reports no recovery failure. The Host remains healthy
+for this intentional closed state; a disabled-root startup recovery failure still
+degrades Host health. Only an active root can receive admission after its fresh
+startup audit.
+
 The preparation diagnostic also records a closed stage: root work drain,
 instance/library serialization, original ownership, current-tree audit or public
 proof/preparation. Nested stages retain the deepest failure and the same original

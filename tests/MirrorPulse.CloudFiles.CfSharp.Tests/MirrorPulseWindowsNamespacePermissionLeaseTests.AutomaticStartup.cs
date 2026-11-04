@@ -67,7 +67,15 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 Assert.HasCount(3, runtime.NamespaceStartupResults);
                 foreach (var root in roots.Where(root => owner == 0 || root.RootId != existingRoot.RootId))
                 {
-                    Assert.IsTrue(work.IsAdmitted(root.RootId), runtime.NamespaceStartupResults.Single(result => result.RootId == root.RootId).RecoveryCode);
+                    var startup = runtime.NamespaceStartupResults.Single(result => result.RootId == root.RootId);
+                    bool enabled = root.State == RootRegistrationState.Active;
+                    Assert.AreEqual(enabled, work.IsAdmitted(root.RootId), startup.RecoveryCode);
+                    Assert.AreEqual(enabled, startup.Admitted);
+                    Assert.IsNotNull(startup.OperationId);
+                    Assert.IsNull(startup.RecoveryCode, "A successfully audited disabled root stays closed without a recovery failure.");
+                    bool entered = work.TryEnter([root.RootId], out var ordinaryWork);
+                    ordinaryWork?.Dispose();
+                    Assert.AreEqual(enabled, entered, "Only an active root may accept ordinary work after startup.");
                     var actual = await runtime.InspectNamespaceMemberAsync(root.DirectoryName, true, timeout.Token);
                     Assert.AreEqual(root.RootId, actual.RootId);
                 }
@@ -99,7 +107,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 Assert.IsEmpty(worker.Calls);
                 Assert.IsEmpty(await catalog.ReadNamespaceDispatchFencedRootsAsync(timeout.Token));
                 TestContext.WriteLine($"AutomaticStartup: owner={owner}; existingOriginalCapture=True; newRootUserOwnerAtCreation=True; newProtectedBirths=True; offlineSourceCalls=0; " +
-                    "freshPerRootNativeAudit=True; busyRootIsolation=True; sameOperationRecovery=True; originalMembersAndBytesPreserved=True; remoteAcceptance=False.");
+                    "freshPerRootNativeAudit=True; disabledRootAdmissionClosed=True; busyRootIsolation=True; sameOperationRecovery=True; originalMembersAndBytesPreserved=True; remoteAcceptance=False.");
             }
         }
         finally

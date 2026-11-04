@@ -96,7 +96,9 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
 
     public MirrorPulseHostStatus GetHostStatus() => new(
         (_state == MirrorPulseLifecycleState.Running && (_session.JournalHealth is { Healthy: false } ||
-            _topology.Roots.Any(root => root.State is RootRegistrationState.Active or RootRegistrationState.Disabled && !_namespaceWork.IsAdmitted(root.RootId)))
+            _topology.Roots.Any(root => !_namespaceWork.IsAdmitted(root.RootId) &&
+                (root.State == RootRegistrationState.Active || root.State == RootRegistrationState.Disabled &&
+                    _session.NamespaceStartupResults.Any(result => result.RootId == root.RootId && result.RecoveryCode is not null))))
             ? MirrorPulseLifecycleState.Degraded : _state).ToString(),
         Environment.ProcessId,
         MirrorPulseControlPipeNames.CurrentUserV1(),

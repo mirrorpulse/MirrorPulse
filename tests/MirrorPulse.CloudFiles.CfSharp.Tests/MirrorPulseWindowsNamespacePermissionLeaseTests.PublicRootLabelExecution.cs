@@ -94,20 +94,30 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 namespaceExecution: currentRole, namespaceActor: currentActor, scheduler: currentScheduler, namespaceWork: work, initializeNamespaceOnStart: true);
             await using var runtime = factory.Create(paths);
             await runtime.StartAsync(deadline.Token);
-            Assert.IsTrue(runtime.NamespaceStartupResults.Single(item => item.RootId == root.RootId).Admitted);
+            Assert.AreEqual(!disabled, runtime.NamespaceStartupResults.Single(item => item.RootId == root.RootId).Admitted);
+            Assert.AreEqual(!disabled, work.IsAdmitted(root.RootId));
             await Assert.ThrowsExactlyAsync<ArgumentException>(() => runtime.ExecuteManagedRootRenameAsync(Guid.Empty, deadline.Token).AsTask());
             await Assert.ThrowsExactlyAsync<FileNotFoundException>(() => runtime.ExecuteManagedRootRenameAsync(Guid.NewGuid(), deadline.Token).AsTask());
             string target = caseOnly ? "docs" : "Renamed";
             MirrorPulseRootRenameHistory original;
-            // Exercise actual public preparation draining accepted work before
-            // it can capture proof or obtain instance/library serialization.
-            using (var held = work.Enter([root.RootId]))
+            if (disabled)
             {
-                Task<MirrorPulseRootRenameHistory> preparing = runtime.PrepareManagedRootRenameAsync(root.RootId, target, deadline.Token).AsTask();
-                while (work.IsAdmitted(root.RootId)) await Task.Delay(10, deadline.Token);
-                Assert.IsFalse(preparing.IsCompleted);
-                held.Dispose();
-                original = await preparing;
+                Assert.IsFalse(work.TryEnter([root.RootId], out var ordinaryWork));
+                Assert.IsNull(ordinaryWork);
+                original = await runtime.PrepareManagedRootRenameAsync(root.RootId, target, deadline.Token);
+            }
+            else
+            {
+                // Active-root preparation drains accepted ordinary work before
+                // it can capture proof or obtain instance/library serialization.
+                using (var held = work.Enter([root.RootId]))
+                {
+                    Task<MirrorPulseRootRenameHistory> preparing = runtime.PrepareManagedRootRenameAsync(root.RootId, target, deadline.Token).AsTask();
+                    while (work.IsAdmitted(root.RootId)) await Task.Delay(10, deadline.Token);
+                    Assert.IsFalse(preparing.IsCompleted);
+                    held.Dispose();
+                    original = await preparing;
+                }
             }
             Assert.IsFalse(work.IsAdmitted(root.RootId));
             Assert.IsNull(await currentCatalog.ReadNamespaceMemberMoveStartAsync(original.Intent.OperationId, deadline.Token));
