@@ -88,6 +88,11 @@ identities and typed exit receipts, followed by the complete current graph and r
 checks. Saving the enable selection alone does not prove a new startup or grant
 namespace admission. The existing public command and state deadlines still apply.
 
+The preceding root Label lifecycle uses the same contract: the disable selection
+has its own completed stop/wait/start before the first disabled state check and
+case-only Label. Its original process chain is distinct from the later restart
+that verifies the disabled Label, and retains all four typed CLI responses.
+
 Startup audits the current native identities and namespace protection of disabled
 roots as well as active roots. A successful disabled-root audit leaves ordinary
 work admission closed and reports no recovery failure. The Host remains healthy

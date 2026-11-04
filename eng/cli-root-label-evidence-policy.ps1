@@ -54,12 +54,19 @@ function Assert-CliRootLabelLifecycleEvidence {
     if ($case.targetName -ceq $case.sourceName -or -not $case.targetName.Equals($case.sourceName, [StringComparison]::OrdinalIgnoreCase) -or
         $previous -cne $Evidence.restoredDirectoryName) { throw 'Require an actual case-only Label and restoration of the fixture name.' }
     foreach ($pair in @(@{phase='active-restart';record=$Evidence.activeRestart},
+        @{phase='disabled-selection-restart';record=$Evidence.disabledSelectionRestart},
         @{phase='disabled-restart';record=$Evidence.disabledRestart},@{phase='restored-restart';record=$Evidence.restoredRestart})) {
         $before = Read-RootLabelOriginal ($pair.phase + '-before')
         $after = Read-RootLabelOriginal ($pair.phase + '-after')
+        Read-RootLabelOriginal ($pair.phase + '-stop') | Out-Null
+        Read-RootLabelOriginal ($pair.phase + '-start') | Out-Null
         if ($pair.record.previousProcessExited -isnot [bool] -or $pair.record.previousProcessExited -ne $true -or $before.processId -le 0 -or $after.processId -le 0 -or
             $before.processId -eq $after.processId -or $pair.record.previousProcessId -ne $before.processId -or
             $pair.record.currentProcessId -ne $after.processId) { throw 'Require the actual original and independently restarted Host process identities.' }
+    }
+    if ($Evidence.disabledSelectionRestart.previousProcessId -ne $Evidence.activeRestart.currentProcessId -or
+        $Evidence.disabledSelectionRestart.currentProcessId -ne $Evidence.disabledRestart.previousProcessId) {
+        throw 'Disabled selection and the later Label must retain their actual independently restarted Host process chain.'
     }
     foreach ($phase in @('active','active-restarted','disabled-case','disabled-restarted','restore','restored')) {
         $disabled = $phase -cin @('disabled-case','disabled-restarted','restore')

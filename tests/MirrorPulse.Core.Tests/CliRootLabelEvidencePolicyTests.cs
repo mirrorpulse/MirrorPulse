@@ -18,6 +18,12 @@ public sealed class CliRootLabelEvidencePolicyTests
     [DataRow("disabled-connected")]
     [DataRow("disabled-admitted")]
     [DataRow("disabled-admission-string")]
+    [DataRow("missing-disabled-selection")]
+    [DataRow("disabled-selection-same-host")]
+    [DataRow("disabled-selection-not-exited")]
+    [DataRow("disabled-selection-exit-string")]
+    [DataRow("disabled-selection-foreign-receipt")]
+    [DataRow("disabled-selection-missing-start")]
     [DataRow("old-label-reverted")]
     [DataRow("changed-bytes")]
     [DataRow("invented-ack")]
@@ -40,6 +46,12 @@ public sealed class CliRootLabelEvidencePolicyTests
                 case "disabled-connected": ChangeOriginal(directory, "disabled-case-status", node => node["instances"]![0]!["workerConnected"] = true); break;
                 case "disabled-admitted": ChangeOriginal(directory, "disabled-case-roots", node => node[0]!["namespaceReady"] = true); break;
                 case "disabled-admission-string": ChangeOriginal(directory, "disabled-case-roots", node => node[0]!["namespaceReady"] = "false"); break;
+                case "missing-disabled-selection": evidence.Remove("disabledSelectionRestart"); break;
+                case "disabled-selection-same-host": ChangeOriginal(directory, "disabled-selection-restart-after", node => node["processId"] = 102); break;
+                case "disabled-selection-not-exited": evidence["disabledSelectionRestart"]!["previousProcessExited"] = false; break;
+                case "disabled-selection-exit-string": evidence["disabledSelectionRestart"]!["previousProcessExited"] = "true"; break;
+                case "disabled-selection-foreign-receipt": evidence["disabledSelectionRestart"]!["currentProcessId"] = 999; break;
+                case "disabled-selection-missing-start": File.Delete(Path.Combine(directory, "disabled-selection-restart-start.json")); break;
                 case "old-label-reverted": ChangeOriginal(directory, "historical-replay", node => node["currentDirectoryName"] = "Docs Label"); break;
                 case "changed-bytes":
                     string path = Path.Combine(directory, "active-restarted-bytes.json");
@@ -160,11 +172,14 @@ public sealed class CliRootLabelEvidencePolicyTests
             ["journalAckReceiptInspected"] = false
         };
         int process = 101;
-        foreach (var pair in new (string Phase, string Field)[] { ("active-restart", "activeRestart"), ("disabled-restart", "disabledRestart"), ("restored-restart", "restoredRestart") })
+        foreach (var pair in new (string Phase, string Field)[] { ("active-restart", "activeRestart"), ("disabled-selection-restart", "disabledSelectionRestart"),
+            ("disabled-restart", "disabledRestart"), ("restored-restart", "restoredRestart") })
         {
             Original(pair.Phase + "-before", new JsonObject { ["processId"] = process });
+            Original(pair.Phase + "-stop", new JsonObject { ["processId"] = process });
+            Original(pair.Phase + "-start", new JsonObject { ["processId"] = process + 1 });
             Original(pair.Phase + "-after", new JsonObject { ["processId"] = process + 1 });
-            evidence[pair.Field] = new JsonObject { ["previousProcessId"] = process, ["currentProcessId"] = process + 1, ["previousProcessExited"] = true }; process += 2;
+            evidence[pair.Field] = new JsonObject { ["previousProcessId"] = process, ["currentProcessId"] = process + 1, ["previousProcessExited"] = true }; process++;
         }
         return evidence;
     }

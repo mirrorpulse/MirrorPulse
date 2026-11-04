@@ -115,6 +115,7 @@ function Invoke-CliRootLabelLifecycle {
         $replay.operationId -cne $first.operationId -or $replay.currentTreeAudited -ne $true) { throw 'A new Host did not replay the original completed Label.' }
 
     Invoke-RootLabelCli 'disable' @('instance', 'disable', '--instance-id', $InstanceId) | Out-Null
+    $disabledSelectionRestart = Restart-RootLabelHost 'disabled-selection-restart'
     Read-RootLabelState 'disabled' $label $true | Out-Null
     $caseLabel = $label.ToUpperInvariant()
     if ($caseLabel -ceq $label) { throw 'The synthetic case-only Label must have distinct spelling.' }
@@ -135,7 +136,7 @@ function Invoke-CliRootLabelLifecycle {
     Assert-RootLabelTree 'restored' $DirectoryName
     $result = [ordered]@{schemaVersion=1;rootId=$RootId;instanceId=$InstanceId;memberId=$member.memberId;nativeItemId=$member.nativeItemId;
         memberCount=$tree.Count;executions=$records.ToArray();residentAndSourceBytes=$bytes;
-        activeRestart=$activeRestart;disabledRestart=$disabledRestart;restoredRestart=$finalRestart;
+        activeRestart=$activeRestart;disabledSelectionRestart=$disabledSelectionRestart;disabledRestart=$disabledRestart;restoredRestart=$finalRestart;
         historicalReplay=$historical;restoredDirectoryName=$DirectoryName;defaultHostIntegrated=$true;
         actualWorkerRequired=$true;preparedIntentAcrossNewRole=$false;interruptedNativeExecution=$false;journalAckReceiptInspected=$false}
     if ($originals) { $result | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $originals 'completed.json') -Encoding utf8 }
