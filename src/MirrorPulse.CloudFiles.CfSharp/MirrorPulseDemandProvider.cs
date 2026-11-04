@@ -256,33 +256,40 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        InstanceId instanceId;
-        string adapterPath = normalizedPath;
-        string? rootKey = null;
-        if (_rootRouter is null)
-        {
-            CloudPlaceholderIdentity identity = CloudPlaceholderIdentity.Decode(encodedIdentity.Span);
-            instanceId = ResolveInstance(identity);
-        }
-        else
-        {
-            MirrorPulseRoutedItem routed = _rootRouter.Resolve(normalizedPath, encodedIdentity.Span);
-            instanceId = routed.InstanceId;
-            adapterPath = routed.RelativePath;
-            rootKey = routed.RootKey;
-        }
-
-        byte[] retainedIdentity = encodedIdentity.ToArray();
         MirrorPulseNamespaceWorkAdmission.WorkLease? admission = null;
+        var stage = MirrorPulseProviderReadStage.Routing;
         try
         {
+            InstanceId instanceId;
+            string adapterPath = normalizedPath;
+            string? rootKey = null;
+            if (_rootRouter is null)
+            {
+                CloudPlaceholderIdentity identity = CloudPlaceholderIdentity.Decode(encodedIdentity.Span);
+                instanceId = ResolveInstance(identity);
+            }
+            else
+            {
+                MirrorPulseRoutedItem routed = _rootRouter.Resolve(normalizedPath, encodedIdentity.Span);
+                instanceId = routed.InstanceId;
+                adapterPath = routed.RelativePath;
+                rootKey = routed.RootKey;
+            }
+            byte[] retainedIdentity = encodedIdentity.ToArray();
+            stage = MirrorPulseProviderReadStage.WorkAdmission;
             admission = _namespaceWork?.Enter([_rootRouter!.GetRegistration(instanceId, rootKey!).RootId]);
+            stage = MirrorPulseProviderReadStage.IdentityValidation;
             if (_rootRouter is not null)
                 await _rootRouter.RequireCurrentCallbackAsync(new(instanceId, rootKey!, adapterPath), retainedIdentity, cancellationToken).ConfigureAwait(false);
+            stage = MirrorPulseProviderReadStage.StreamCreation;
             Stream stream = new WorkerRangeStream(_transport, instanceId, adapterPath, retainedIdentity, fileSize, rootKey, admission);
             return stream;
         }
-        catch { admission?.Dispose(); throw; }
+        catch (Exception error)
+        {
+            MirrorPulseProviderReadFailure.Record(stage, error);
+            admission?.Dispose(); throw;
+        }
     }
 
     private InstanceId ResolveInstance(CloudPlaceholderIdentity identity)
@@ -374,28 +381,32 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
                 _position,
                 length,
                 rootKey);
-            await using Stream source = await transport.ReadRangeAsync(request, cancellationToken)
-                .ConfigureAwait(false);
-            if (!source.CanRead)
+            var stage = MirrorPulseProviderReadStage.RangeTransport;
+            try
             {
-                throw new InvalidDataException("The Adapter Worker returned an unreadable range stream.");
-            }
-
-            int received = 0;
-            while (received < length)
-            {
-                int count = await source.ReadAsync(buffer.Slice(received, length - received), cancellationToken)
+                await using Stream source = await transport.ReadRangeAsync(request, cancellationToken)
                     .ConfigureAwait(false);
-                if (count == 0)
+                stage = MirrorPulseProviderReadStage.RangeContent;
+                if (!source.CanRead)
+                    throw new InvalidDataException("The Adapter Worker returned an unreadable range stream.");
+
+                int received = 0;
+                while (received < length)
                 {
-                    throw new EndOfStreamException("The Adapter Worker returned a truncated range.");
+                    int count = await source.ReadAsync(buffer.Slice(received, length - received), cancellationToken)
+                        .ConfigureAwait(false);
+                    if (count == 0)
+                        throw new EndOfStreamException("The Adapter Worker returned a truncated range.");
+                    received += count;
                 }
-
-                received += count;
+                _position += received;
+                return received;
             }
-
-            _position += received;
-            return received;
+            catch (Exception error)
+            {
+                MirrorPulseProviderReadFailure.Record(stage, error);
+                throw;
+            }
         }
 
         public override int Read(byte[] buffer, int offset, int count) =>

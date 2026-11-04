@@ -51,9 +51,17 @@ public sealed class MirrorPulseCloudProviderDiagnostics : IAsyncDisposable
             };
             // Never copy arbitrary activity tags, exception messages, paths or identities.
             // TryWrite cannot delay or change a Windows callback when the queue is full.
+            List<LogField> fields = [new("hresult", unchecked((uint)hresult).ToString("X8", CultureInfo.InvariantCulture)),
+                new("cloudRequestKind", requestKind), new("failureCategory", failure)];
+            if (requestKind == "FetchData")
+            {
+                if (activity.GetTagItem(MirrorPulseProviderReadFailure.StageTag) is string stage)
+                    fields.Add(new("providerReadStage", stage));
+                if (activity.GetTagItem(MirrorPulseProviderReadFailure.KindTag) is string errorKind)
+                    fields.Add(new("providerReadFailureKind", errorKind));
+            }
             _entries.Writer.TryWrite(new(LogLevel.Warning, "CloudFiles.Provider", "CloudProviderRequestFailed", DateTimeOffset.UtcNow,
-                [new("hresult", unchecked((uint)hresult).ToString("X8", CultureInfo.InvariantCulture)),
-                    new("cloudRequestKind", requestKind), new("failureCategory", failure)]));
+                fields));
         }
         catch
         {
