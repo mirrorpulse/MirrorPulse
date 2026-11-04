@@ -110,7 +110,7 @@ public sealed partial class MirrorPulseProductCatalog
         try
         {
             ThrowIfDisposed();
-            using SqliteTransaction transaction = _connection.BeginTransaction(deferred: true);
+            using SqliteTransaction transaction = BeginNamespaceRecoveryReadSnapshot();
             var result = await ReadNamespaceMemberMoveCompletionCoreAsync(operationId, transaction, cancellationToken)
                 .ConfigureAwait(false);
             transaction.Commit();

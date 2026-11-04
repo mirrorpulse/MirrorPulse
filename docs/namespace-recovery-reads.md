@@ -47,3 +47,25 @@ corruption in the selected record still fails. The complete history API retains
 all requested original records and continues to report corruption. Startup still
 requests the complete discovery inventory; only each selected recovery uses the
 point lookup. This does not establish bounded pending discovery or complete P083.
+
+Public product move reads now opt into the existing successful-fact snapshot for
+their own SQLite transaction: intent, pending owner, before-native start, status,
+native/projection receipts, member completion and complete directory receipts.
+The execution-admission API preserves its immediate transaction and scopes the
+same reuse to its validation phase. These APIs perform no writes. Every later
+API invocation, native inspection and writer starts without these extra facts;
+missing rows, failed checks and current native authority are never retained.
+
+The managed execution profile uses actual SQLite transactions, a complete born
+graph and one, five and eight completed root Labels. At eight Labels, execution
+admission SELECTs decreased from6,768 to493, sealed-snapshot reads from3,734 to321
+and complete-receipt reads from3,928 to336. Each next transaction still rejects
+damaged historical position fingerprints. These query counts establish reduced
+catalog work; they do not prove a signed Host command meets its30-second deadline.
+
+Default Host Label execution also records bounded fixed-stage progress before
+awaiting work, so an unfinished request retains its last entered stage. Each
+request emits at most32 progress records containing only the original operation
+ID, fixed stage/phase, sequence and elapsed milliseconds. Observation failure
+cannot replace the original result, exception or cancellation token. No path,
+member name, content, credential or exception message enters these records.
