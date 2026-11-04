@@ -11,7 +11,8 @@ function Assert-CliRegressionObservations {
     if ($namespace.Count -ne 5) { throw 'Default Host namespace lifecycle observations are incomplete.' }
     foreach ($phase in @('NoAdapters', 'InitialRoot', 'RestartedRoot', 'DisabledRoot', 'ReenabledRoot')) {
         $match = @($namespace | Where-Object phase -ceq $phase)
-        if ($match.Count -ne 1 -or $match[0].freshAdmission -isnot [bool] -or $match[0].freshAdmission -ne $true -or
+        $expectedAdmission = $phase -cne 'DisabledRoot'
+        if ($match.Count -ne 1 -or $match[0].freshAdmission -isnot [bool] -or $match[0].freshAdmission -ne $expectedAdmission -or
             $match[0].anchorMemberId -cnotmatch '\A[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\z' -or
             $match[0].anchorMemberId -ceq '00000000-0000-0000-0000-000000000000') { throw "A fresh default Host anchor observation is missing: $phase" }
         if ($phase -ceq 'NoAdapters') { continue }

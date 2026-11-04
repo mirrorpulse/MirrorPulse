@@ -27,7 +27,8 @@ function Invoke-CliRootLabelLifecycle {
             if ($selected.Count -eq 1 -and $instance.Count -eq 1 -and
                 $selected[0].root.directoryName -ceq $Name -and $selected[0].root.label -ceq $Name -and
                 $selected[0].syncState -ceq $(if ($Disabled) { 'Disabled' } else { 'Active' }) -and
-                $null -eq $selected[0].pendingRename -and
+                $null -eq $selected[0].pendingRename -and $selected[0].namespaceReady -is [bool] -and
+                $selected[0].namespaceReady -eq (-not $Disabled) -and
                 $(if ($Disabled) { $instance[0].phase -ceq 'Offline' -and -not $instance[0].workerConnected }
                   else { $selected[0].namespaceReady -eq $true -and $instance[0].workerConnected -eq $true })) {
                 return $selected[0]

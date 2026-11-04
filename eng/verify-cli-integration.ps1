@@ -135,21 +135,31 @@ function Write-MirrorPulseUploadDiagnostics {
 }
 
 function Assert-CliNamespaceRoot {
-    param([Parameter(Mandatory)][string]$Phase, [Parameter(Mandatory)][string]$ExpectedState)
+    param([Parameter(Mandatory)][string]$Phase, [Parameter(Mandatory)][ValidateSet('Active', 'Disabled')][string]$ExpectedState)
     $status = Invoke-MirrorPulseCli @('--json', '--no-start', 'root', 'list')
+    if ($Regression -and $EvidencePath) {
+        $originals = Join-Path ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($EvidencePath))) 'cli-regression.originals/namespace-roots'
+        New-Item -ItemType Directory -Path $originals -Force | Out-Null
+        $status | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $originals ($Phase + '-roots.json')) -Encoding utf8
+    }
     $selected = @($status.data | Where-Object { $_.root.rootId -eq $script:registeredRoot.rootId })
-    if ($selected.Count -ne 1 -or $selected[0].namespaceReady -ne $true -or $selected[0].syncState -cne $ExpectedState -or
+    $expectedAdmission = $ExpectedState -ceq 'Active'
+    if ($selected.Count -ne 1 -or $selected[0].namespaceReady -isnot [bool] -or $selected[0].namespaceReady -ne $expectedAdmission -or
+        $selected[0].root.state -cne $ExpectedState -or $selected[0].syncState -cne $ExpectedState -or $null -ne $selected[0].pendingRename -or
         $null -ne $selected[0].namespaceRecoveryOperationId -or $null -ne $selected[0].namespaceRecoveryCode) {
-        throw "The default Host did not freshly admit its original $ExpectedState root ($Phase)."
+        throw "The default Host did not retain the expected namespace admission of its original $ExpectedState root ($Phase)."
     }
     $member = Invoke-MirrorPulseCli @('--json', '--no-start', 'namespace', 'member', 'inspect', $script:rootDirectory, '--directory')
+    if ($Regression -and $EvidencePath) {
+        $member | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $originals ($Phase + '-member.json')) -Encoding utf8
+    }
     if ($member.data.rootId -cne $script:registeredRoot.rootId -or [string]::IsNullOrEmpty($member.data.memberId) -or
         $member.data.actualParentMemberId -cne $script:firstAnchorMember -or
         ($null -ne $script:firstNamespaceMember -and $member.data.memberId -cne $script:firstNamespaceMember)) {
         throw "The default Host lost the original protected root member ($Phase)."
     }
     if ($null -eq $script:firstNamespaceMember) { $script:firstNamespaceMember = $member.data.memberId }
-    $namespaceAudits.Add([ordered]@{phase=$Phase;anchorMemberId=$script:firstAnchorMember;rootId=$script:registeredRoot.rootId;memberId=$member.data.memberId;state=$ExpectedState;freshAdmission=$true})
+    $namespaceAudits.Add([ordered]@{phase=$Phase;anchorMemberId=$script:firstAnchorMember;rootId=$script:registeredRoot.rootId;memberId=$member.data.memberId;state=$ExpectedState;freshAdmission=$selected[0].namespaceReady})
 }
 
 try {

@@ -95,6 +95,13 @@ for this intentional closed state; a disabled-root startup recovery failure stil
 degrades Host health. Only an active root can receive admission after its fresh
 startup audit.
 
+The signed CLI regression and root Label fixtures require typed closed admission
+for a disabled root and typed open admission for an active root. The lifecycle
+summary records the observed admission value. A completed disabled startup audit
+has no pending recovery operation; its audit operation ID must not be projected
+as an unresolved recovery. Original root-list and member-inspection responses are
+retained for each root startup phase, including failed state checks.
+
 The preparation diagnostic also records a closed stage: root work drain,
 instance/library serialization, original ownership, current-tree audit or public
 proof/preparation. Nested stages retain the deepest failure and the same original

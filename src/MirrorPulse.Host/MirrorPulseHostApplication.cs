@@ -467,7 +467,8 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
             var startup = _session.NamespaceStartupResults.SingleOrDefault(result => result.RootId == id);
             return new MirrorPulseControlRootStatus(root, pending is null && (ready || root.State == nameof(RootRegistrationState.Disabled)) ? root.State : "NamespaceRecovery",
                 deferred.Contains(id) || pending is not null, rename, ready,
-                ready ? null : startup?.OperationId, ready ? null : startup?.RecoveryCode);
+                ready || root.State == nameof(RootRegistrationState.Disabled) && startup?.RecoveryCode is null ? null : startup?.OperationId,
+                ready ? null : startup?.RecoveryCode);
         }).ToArray();
     }
 

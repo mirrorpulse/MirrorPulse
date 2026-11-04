@@ -16,6 +16,8 @@ public sealed class CliRootLabelEvidencePolicyTests
     [DataRow("lost-descendant")]
     [DataRow("same-host")]
     [DataRow("disabled-connected")]
+    [DataRow("disabled-admitted")]
+    [DataRow("disabled-admission-string")]
     [DataRow("old-label-reverted")]
     [DataRow("changed-bytes")]
     [DataRow("invented-ack")]
@@ -36,6 +38,8 @@ public sealed class CliRootLabelEvidencePolicyTests
                 case "lost-descendant": ChangeOriginal(directory, "disabled-restarted-tree", node => node.AsArray().RemoveAt(1)); break;
                 case "same-host": ChangeOriginal(directory, "active-restart-after", node => node["processId"] = 101); break;
                 case "disabled-connected": ChangeOriginal(directory, "disabled-case-status", node => node["instances"]![0]!["workerConnected"] = true); break;
+                case "disabled-admitted": ChangeOriginal(directory, "disabled-case-roots", node => node[0]!["namespaceReady"] = true); break;
+                case "disabled-admission-string": ChangeOriginal(directory, "disabled-case-roots", node => node[0]!["namespaceReady"] = "false"); break;
                 case "old-label-reverted": ChangeOriginal(directory, "historical-replay", node => node["currentDirectoryName"] = "Docs Label"); break;
                 case "changed-bytes":
                     string path = Path.Combine(directory, "active-restarted-bytes.json");

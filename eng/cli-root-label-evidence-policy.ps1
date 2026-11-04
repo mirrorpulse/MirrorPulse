@@ -72,6 +72,7 @@ function Assert-CliRootLabelLifecycleEvidence {
         if ($root.Count -ne 1 -or $instance.Count -ne 1 -or $root[0].root.directoryName -cne $name -or $root[0].root.label -cne $name -or
             $instance[0].workerConnected -isnot [bool] -or $root[0].namespaceReady -isnot [bool] -or
             $root[0].syncState -cne $(if ($disabled) { 'Disabled' } else { 'Active' }) -or $null -ne $root[0].pendingRename -or
+            $root[0].namespaceReady -ne (-not $disabled) -or
             $(if ($disabled) { $instance[0].phase -cne 'Offline' -or $instance[0].workerConnected -ne $false }
               else { $root[0].namespaceReady -ne $true -or $instance[0].workerConnected -ne $true })) { throw 'The original lifecycle state does not prove active readiness or disabled source isolation.' }
     }
