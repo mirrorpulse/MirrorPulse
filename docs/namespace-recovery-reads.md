@@ -101,3 +101,18 @@ observed historical cancellation SELECTs decrease from16,911 to14,570 while
 retaining the original tree, bytes and cancellation receipt. Stack instrumentation
 adds overhead, and local hardware differs from CI. This query count establishes
 less work; the original public30-second CI deadline remains an independent gate.
+
+Iterative birth lineage checks may reuse a complete successful local-reference
+proof for the exact original observation, birth and parent owner within the same
+read scope. The first check still validates the identity plan, start, conversion,
+owned content receipt and absence of another operation's prepared object. This
+stores a positive proof with the existing16-entry bound; missing rows and failed
+checks are not cached. Every later API and write phase performs fresh validation.
+
+Initialization preparation uses the same bounded validation scope before its
+first insert and explicitly ends it before persisting the intent or root fences.
+In an owned ARM64 diagnostic containing only born members, five preceding Labels
+and a later Label, replay SELECTs decreased from41,065 to16,314. The complete
+tree, bytes, original birth facts and cancellation receipt remained checked.
+Instrumentation and local hardware prevent treating this count as a CI deadline
+or complete-suite wall-time result.

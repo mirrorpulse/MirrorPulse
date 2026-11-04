@@ -64,6 +64,7 @@ public sealed partial class MirrorPulseProductCatalog
         try
         {
             ThrowIfDisposed(); using SqliteTransaction transaction = _connection.BeginTransaction();
+            using var validation = BeginNamespaceRecoveryValidationReadPhase(transaction);
             var replay = await ReadNamespaceInitializationCoreAsync(intent.OperationId, transaction, cancellationToken).ConfigureAwait(false);
             if (replay is not null)
             {
@@ -76,6 +77,7 @@ public sealed partial class MirrorPulseProductCatalog
             }
             foreach (var root in intent.Roots.Where(root => root.BornRootMemberId is not null))
                 await RequireNamespaceInitializationBornRootAsync(root, intent.PreparedAt, transaction, cancellationToken).ConfigureAwait(false);
+            validation.Dispose();
             await InsertNamespaceInitializationCoreAsync(intent, transaction, cancellationToken).ConfigureAwait(false);
             transaction.Commit(); return intent;
         }

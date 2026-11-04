@@ -160,6 +160,11 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task ValidateNamespaceBirthObservationLocalReferencesAsync(MirrorPulseNamespaceBirthObservation observation,
         MirrorPulseNamespaceBirthIntent birth, string parentOwnerSid, SqliteTransaction? transaction, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
+        NamespaceRecoveryReadSnapshot? snapshot = null;
+        if (transaction is not null) _namespaceRecoveryReadSnapshots.TryGetValue(transaction, out snapshot);
+        var key = (observation, birth, parentOwnerSid);
+        if (snapshot?.ValidatedBirthLocalReferences.TryGetValue(key, out _) == true) return;
         var plan = await ReadNamespaceBirthPlanRowAsync(observation.OperationId, transaction, token).ConfigureAwait(false)
             ?? throw new FileNotFoundException("The original birth identity plan is missing.");
         var start = await ReadNamespaceBirthStartRowAsync(observation.OperationId, transaction, token).ConfigureAwait(false)
@@ -202,6 +207,7 @@ public sealed partial class MirrorPulseProductCatalog
         AddNamespaceBirthBindingParameters(another, observation.LocalObject);
         if (await another.ExecuteScalarAsync(token).ConfigureAwait(false) is not null)
             throw new InvalidOperationException("A birth cannot adopt another operation's prepared ordinary object.");
+        if (snapshot is not null) snapshot.ValidatedBirthLocalReferences[key] = true;
     }
 
     private static void ValidateNamespaceBirthObservation(MirrorPulseNamespaceBirthObservation observation)
