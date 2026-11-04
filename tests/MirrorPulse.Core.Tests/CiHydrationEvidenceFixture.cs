@@ -32,7 +32,7 @@ internal static class CiHydrationEvidenceFixture
                 ["rootId"] = root,
                 ["memberId"] = member,
                 ["state"] = phase == "DisabledRoot" ? "Disabled" : "Active",
-                ["freshAdmission"] = true
+                ["freshAdmission"] = phase != "DisabledRoot"
             });
         var value = new Dictionary<string, object?>
         {

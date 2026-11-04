@@ -1,5 +1,5 @@
 function Get-OrdinaryUserNamespaceBudgetMilliseconds {
-    param([Parameter(Mandatory)][ValidateRange(1, 124)][int]$TestCount, [string[]]$TestNames,
+    param([Parameter(Mandatory)][ValidateRange(1, 125)][int]$TestCount, [string[]]$TestNames,
         [ValidateSet('AllRetained', 'S06')][string]$Scope = 'AllRetained')
     if ($Scope -ceq 'S06' -and -not $PSBoundParameters.ContainsKey('TestNames')) {
         throw 'S06 scope requires its explicit selected test names.'
@@ -16,7 +16,8 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
     $unsealedCancellation = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicRuntimeCancelsOriginalUnsealedRootPreparationsAfterIndependentRoleDisposal'
     $legacyInitializer = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicCancellationRetainsAndResumesItsOriginalPartiallyRotatedInitializer'
     $bornCancellation = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicCancellationRecoversAnInheritedBornRootThroughItsOriginalPurposeAfterRoleDisposal'
-    $additionalSelections = @(@($preparation,$approval,$rootPreparation,$rootExecution,$rootRecovery,$rootRuntime,$rootAdmission,$rootPublic,$rootCancellation,$unsealedCancellation,$legacyInitializer,$bornCancellation) | Where-Object {$_ -cin $TestNames}).Count
+    $disabledImport = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeAutomaticStartupKeepsDisabledImportLocalAcrossOwnersWithoutOpeningOrdinaryWork'
+    $additionalSelections = @(@($preparation,$approval,$rootPreparation,$rootExecution,$rootRecovery,$rootRuntime,$rootAdmission,$rootPublic,$rootCancellation,$unsealedCancellation,$legacyInitializer,$bornCancellation,$disabledImport) | Where-Object {$_ -cin $TestNames}).Count
     if ($TestCount -gt 112 -and (-not $PSBoundParameters.ContainsKey('TestNames') -or $additionalSelections -lt $TestCount-112)) {
         throw 'The additional namespace case requires its explicit original preparation selection.'
     }
@@ -59,6 +60,9 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
             if ([string]::IsNullOrWhiteSpace($name) -or $name.Length -gt 512 -or $name -cnotmatch '^[A-Za-z0-9_.]+$' -or -not $selected.Add($name)) {
                 throw 'The namespace budget requires distinct, bounded test names.'
             }
+            # This additional method owns one actual 65-second native deadline.
+            # Its ordinary 15-second estimate already contributes to executions.
+            if ($name -ceq $disabledImport) { $transferDeadlineMilliseconds += 50000 }
             if ($repeated.ContainsKey($name)) {
                 $executions += $repeated[$name] - 1
                 # Each original transfer scope/cutpoint already owns a 45-second
@@ -69,22 +73,23 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
             }
         }
     }
-    # Every selected native fixture keeps its original deadline. The full124-name
-    # catalog includes72 repeated executions and a95m15s child envelope. The step
+    # Every selected native fixture keeps its original deadline. The full125-name
+    # catalog retains72 repeated executions and adds one65-second disabled-import
+    # execution to the original95m15s child envelope. The step
     # adds five minutes for controller diagnostics and disposable-user cleanup.
     # The legacy-initializer fixture retains its two original 60-second
     # executions, four Prepared/Applied executions and ten born-recovery cut executions.
     # Each original deadline remains; the cut matrix adds exactly ten minutes.
     # The inherited born-root cancellation adds two 60-second executions;
     # the original 123-name catalog retains its exact prior bound.
-    # AllRetained keeps that exact historical envelope. S06 selects 63 repeated
-    # executions and an 88m30s envelope, retaining every selected fixture deadline.
+    # AllRetained keeps every historical envelope. S06 retains63 repeated
+    # executions and adds the same65 seconds to its original88m30s envelope.
     # count-only callers still retain their original 112-name/30-minute bound.
     return [Math]::Max(600000, 120000 + $executions * 15000 + $transferDeadlineMilliseconds)
 }
 
 function Get-OrdinaryUserNamespaceStepTimeoutMinutes {
-    param([Parameter(Mandatory)][ValidateRange(1, 124)][int]$TestCount, [string[]]$TestNames,
+    param([Parameter(Mandatory)][ValidateRange(1, 125)][int]$TestCount, [string[]]$TestNames,
         [ValidateSet('AllRetained', 'S06')][string]$Scope = 'AllRetained')
     # The workflow must let the existing child budget expire and allow the
     # controller to preserve diagnostics and remove its disposable user/profile.

@@ -82,8 +82,14 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     Assert.AreEqual(MirrorPulseRootRenamePhase.Completed, recovery.Recovery.Intent.Phase);
                     Assert.IsNull(recovery.Recovery.LibraryResult);
                     var current = runtime.NamespaceStartupResults.Single(result => result.RootId == root.RootId);
-                    Assert.IsTrue(current.Admitted, current.RecoveryCode);
-                    Assert.IsTrue(work.IsAdmitted(root.RootId));
+                    Assert.IsNull(current.RecoveryCode);
+                    Assert.AreEqual(!disabled, current.Admitted);
+                    Assert.AreEqual(!disabled, work.IsAdmitted(root.RootId));
+                    if (disabled)
+                    {
+                        Assert.IsFalse(work.TryEnter([root.RootId], out var ordinaryWork));
+                        Assert.IsNull(ordinaryWork);
+                    }
                     var completed = (await catalog.ReadNamespaceDirectoryMoveCompletionAsync(intent.OperationId, deadline.Token))!;
                     Assert.HasCount(4, completed.Entries);
                     Assert.AreEqual(firstStart, await catalog.ReadNamespaceMemberMoveStartAsync(intent.OperationId, deadline.Token));
@@ -188,7 +194,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 }
                 throw new InvalidOperationException("Unexpected runtime root recovery fixture owner.");
             }
-            TestContext.WriteLine($"RuntimeObservedRootLabelRecovery: state={root.State}; cut={cut}; actualRuntime=True; originalAtomicSettlementBeforeRoleRotation=True; differentRole=True; oldRoleAbsent=True; originalProofAndFacts=True; completeCurrentAudit=True; currentRoleProtectedTree=True; currentRootAdmitted=True; stableIDs=True; wholeBytes=True; ordinaryDeleteDenied=True; sourceReads=0; owners=3; processRestart=False; signedWorker=False; publicRenameEntry=False.");
+            TestContext.WriteLine($"RuntimeObservedRootLabelRecovery: state={root.State}; cut={cut}; actualRuntime=True; originalAtomicSettlementBeforeRoleRotation=True; differentRole=True; oldRoleAbsent=True; originalProofAndFacts=True; completeCurrentAudit=True; currentRoleProtectedTree=True; currentRootAdmitted={!disabled}; stableIDs=True; wholeBytes=True; ordinaryDeleteDenied=True; sourceReads=0; owners=3; processRestart=False; signedWorker=False; publicRenameEntry=False.");
         }
         catch (Exception failure) { TestContext.WriteLine("RuntimeObservedRootLabelRecoveryFailure: " + failure); throw; }
         finally

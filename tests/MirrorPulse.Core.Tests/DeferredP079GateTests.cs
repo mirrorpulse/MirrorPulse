@@ -17,11 +17,11 @@ public sealed class DeferredP079GateTests
             . (Join-Path $Repository 'eng/namespace-nonadmin-controller.ps1')
             $catalog=Get-Content (Join-Path $Repository 'eng/test-suites.json') -Raw|ConvertFrom-Json
             $names=@($catalog.required.namespace)
-            if($names.Count -ne 124 -or @($catalog.required.native).Count -ne 149 -or @($catalog.required.deferredP079).Count -ne 5){throw 'Required scope names changed.'}
-            if((Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 124 -TestNames $names -Scope S06) -ne 5310000 -or
-               (Get-OrdinaryUserNamespaceStepTimeoutMinutes -TestCount 124 -TestNames $names -Scope S06) -ne 94 -or
-               (Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 124 -TestNames $names) -ne 5715000 -or
-               (Get-OrdinaryUserNamespaceStepTimeoutMinutes -TestCount 124 -TestNames $names) -ne 101){throw 'Selected or retained deadlines changed.'}
+            if($names.Count -ne 125 -or @($catalog.required.native).Count -ne 150 -or @($catalog.required.deferredP079).Count -ne 5){throw 'Required scope names changed.'}
+            if((Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 125 -TestNames $names -Scope S06) -ne 5375000 -or
+               (Get-OrdinaryUserNamespaceStepTimeoutMinutes -TestCount 125 -TestNames $names -Scope S06) -ne 95 -or
+               (Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 125 -TestNames $names) -ne 5780000 -or
+               (Get-OrdinaryUserNamespaceStepTimeoutMinutes -TestCount 125 -TestNames $names) -ne 102){throw 'Selected or retained deadlines changed.'}
             $prefix='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.'
             $methods=@{
                 NativeHostTransferRetainsSourceAndBothFencesAfterOriginalCopyAndWholeTargetVerification=1

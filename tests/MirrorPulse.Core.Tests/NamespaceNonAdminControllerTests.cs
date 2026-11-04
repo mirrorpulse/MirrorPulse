@@ -55,10 +55,38 @@ public sealed partial class NamespaceNonAdminControllerTests
                 $ErrorActionPreference='Stop'
                 . $Policy
                 $bornCancellation='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicCancellationRecoversAnInheritedBornRootThroughItsOriginalPurposeAfterRoleDisposal'
+                $disabledImport='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeAutomaticStartupKeepsDisabledImportLocalAcrossOwnersWithoutOpeningOrdinaryWork'
                 $legacyInitializer='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicCancellationRetainsAndResumesItsOriginalPartiallyRotatedInitializer'
-                if ($Scenario -like 'born-root-cancellation-*') {
+                if ($Scenario -like 'disabled-import-*') {
                     $catalog=Get-Content -Raw (Join-Path (Split-Path $Policy -Parent) 'test-suites.json') | ConvertFrom-Json
                     $names=@($catalog.required.namespace)
+                    $prior=@($names|Where-Object {$_ -cne $disabledImport})
+                    if ($Count -ne 125 -or $names.Count -ne $Count -or $prior.Count -ne 124) {throw 'Require precisely the original catalog plus the disabled-import method.'}
+                    if ((Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 124 -TestNames $prior) -ne 5715000 -or
+                        (Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 124 -TestNames $prior -Scope S06) -ne 5310000) {throw 'Retain both complete original deadlines.'}
+                    if ($Scenario -eq 'disabled-import-selected') {
+                        if ((Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $Count -TestNames $names) -ne 5780000 -or
+                            (Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $Count -TestNames $names -Scope S06) -ne 5375000 -or
+                            (Get-OrdinaryUserNamespaceStepTimeoutMinutes -TestCount $Count -TestNames $names) -ne 102 -or
+                            (Get-OrdinaryUserNamespaceStepTimeoutMinutes -TestCount $Count -TestNames $names -Scope S06) -ne 95) {throw 'Add only the actual65-second method and retain cleanup.'}
+                    } else {
+                        $parameters=@{TestCount=$Count;TestNames=$names}
+                        switch ($Scenario) {
+                            'disabled-import-missing' {$parameters.TestNames=@($names|Where-Object {$_ -cne $disabledImport})}
+                            'disabled-import-unrelated' {$parameters.TestNames=@($names|ForEach-Object {if($_ -ceq $disabledImport){'Fixture.Unrelated'}else{$_}})}
+                            'disabled-import-duplicate' {$parameters.TestNames=@($names|ForEach-Object {if($_ -ceq $disabledImport){$names[0]}else{$_}})}
+                            'disabled-import-count-only' {$parameters.Remove('TestNames')}
+                            default {throw 'Unknown disabled-import selection.'}
+                        }
+                        $rejected=$false
+                        try {Get-OrdinaryUserNamespaceBudgetMilliseconds @parameters|Out-Null} catch {$rejected=$true}
+                        if (-not $rejected) {throw 'No substitute, missing, duplicate or count-only expansion may borrow this native deadline.'}
+                    }
+                    exit 0
+                }
+                if ($Scenario -like 'born-root-cancellation-*') {
+                    $catalog=Get-Content -Raw (Join-Path (Split-Path $Policy -Parent) 'test-suites.json') | ConvertFrom-Json
+                    $names=@($catalog.required.namespace | Where-Object {$_ -cne $disabledImport})
                     if ($Count -ne 124 -or $names.Count -ne $Count -or @($names|Where-Object {$_ -ceq $bornCancellation}).Count -ne 1) {throw 'Require the exact additive inherited born-root cancellation catalog.'}
                     if ($Scenario -eq 'born-root-cancellation-selected') {
                         $prior=@($names|Where-Object {$_ -cne $bornCancellation})
@@ -81,7 +109,7 @@ public sealed partial class NamespaceNonAdminControllerTests
                 }
                 if ($Scenario -like 'legacy-initializer-*') {
                     $catalog=Get-Content -Raw (Join-Path (Split-Path $Policy -Parent) 'test-suites.json') | ConvertFrom-Json
-                    $names=@($catalog.required.namespace | Where-Object {$_ -cne $bornCancellation})
+                    $names=@($catalog.required.namespace | Where-Object {$_ -cne $disabledImport} | Where-Object {$_ -cne $bornCancellation})
                     if ($Count -ne 123 -or $names.Count -ne $Count -or @($names|Where-Object {$_ -ceq $legacyInitializer}).Count -ne 1) {throw 'Require the complete explicit original-initializer cancellation catalog.'}
                     if ($Scenario -eq 'legacy-initializer-selected') {
                         $prior=@($names|Where-Object {$_ -cne $legacyInitializer})
@@ -105,7 +133,7 @@ public sealed partial class NamespaceNonAdminControllerTests
                 $unsealed='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicRuntimeCancelsOriginalUnsealedRootPreparationsAfterIndependentRoleDisposal'
                 if ($Scenario -like 'unsealed-cancellation-*') {
                     $catalog=Get-Content -Raw (Join-Path (Split-Path $Policy -Parent) 'test-suites.json') | ConvertFrom-Json
-                    $names=@($catalog.required.namespace | Where-Object {$_ -cne $bornCancellation} | Where-Object {$_ -cne $legacyInitializer})
+                    $names=@($catalog.required.namespace | Where-Object {$_ -cne $disabledImport} | Where-Object {$_ -cne $bornCancellation} | Where-Object {$_ -cne $legacyInitializer})
                     if ($Count -ne 122 -or $names.Count -ne $Count -or @($names|Where-Object {$_ -ceq $unsealed}).Count -ne 1) {throw 'Require the complete explicit unsealed cancellation catalog.'}
                     if ($Scenario -eq 'unsealed-cancellation-selected') {
                         $legacy=@($names|Where-Object {$_ -cne $unsealed})
@@ -123,7 +151,7 @@ public sealed partial class NamespaceNonAdminControllerTests
                 }
                 if ($Scenario -like 'root-cancellation-*') {
                     $catalog=Get-Content -Raw (Join-Path (Split-Path $Policy -Parent) 'test-suites.json') | ConvertFrom-Json
-                    $names=@($catalog.required.namespace | Where-Object {$_ -cne $bornCancellation} | Where-Object {$_ -cne $legacyInitializer} | Where-Object {$_ -cne $unsealed})
+                    $names=@($catalog.required.namespace | Where-Object {$_ -cne $disabledImport} | Where-Object {$_ -cne $bornCancellation} | Where-Object {$_ -cne $legacyInitializer} | Where-Object {$_ -cne $unsealed})
                     $cancel='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicRuntimeCancelsOnlyUnstartedOriginalRootLabelsAcrossRolesAndRetainsLaterNames'
                     if ($Count -ne 121 -or $names.Count -ne $Count -or @($names|Where-Object {$_ -ceq $cancel}).Count -ne 1) {throw 'Require the complete explicit cancellation catalog.'}
                     if ($Scenario -eq 'root-cancellation-selected') {
@@ -142,7 +170,7 @@ public sealed partial class NamespaceNonAdminControllerTests
                 }
                 if ($Scenario -like 'root-public-*') {
                     $catalog=Get-Content -Raw (Join-Path (Split-Path $Policy -Parent) 'test-suites.json') | ConvertFrom-Json
-                    $names=@($catalog.required.namespace | Where-Object {$_ -cne $bornCancellation} | Where-Object {$_ -cne $legacyInitializer} | Where-Object {$_ -cne $unsealed} | Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicRuntimeCancelsOnlyUnstartedOriginalRootLabelsAcrossRolesAndRetainsLaterNames'})
+                    $names=@($catalog.required.namespace | Where-Object {$_ -cne $disabledImport} | Where-Object {$_ -cne $bornCancellation} | Where-Object {$_ -cne $legacyInitializer} | Where-Object {$_ -cne $unsealed} | Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicRuntimeCancelsOnlyUnstartedOriginalRootLabelsAcrossRolesAndRetainsLaterNames'})
                     $public='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicRuntimeExecutesOnlyOriginalProtectedRootLabelsAndAuditsCurrentReadmission'
                     if ($Count -ne 120 -or $names.Count -ne $Count -or @($names|Where-Object {$_ -ceq $public}).Count -ne 1) {throw 'Require the exact additive public runtime catalog.'}
                     if ($Scenario -eq 'root-public-selected') {
@@ -159,7 +187,7 @@ public sealed partial class NamespaceNonAdminControllerTests
                 }
                 if ($Scenario -like 'root-admission-*') {
                     $catalog=Get-Content -Raw (Join-Path (Split-Path $Policy -Parent) 'test-suites.json') | ConvertFrom-Json
-                    $names=@($catalog.required.namespace | Where-Object {$_ -cne $bornCancellation} | Where-Object {$_ -cne $legacyInitializer} | Where-Object {$_ -cne $unsealed} | Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicRuntimeCancelsOnlyUnstartedOriginalRootLabelsAcrossRolesAndRetainsLaterNames'} | Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicRuntimeExecutesOnlyOriginalProtectedRootLabelsAndAuditsCurrentReadmission'})
+                    $names=@($catalog.required.namespace | Where-Object {$_ -cne $disabledImport} | Where-Object {$_ -cne $bornCancellation} | Where-Object {$_ -cne $legacyInitializer} | Where-Object {$_ -cne $unsealed} | Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicRuntimeCancelsOnlyUnstartedOriginalRootLabelsAcrossRolesAndRetainsLaterNames'} | Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicRuntimeExecutesOnlyOriginalProtectedRootLabelsAndAuditsCurrentReadmission'})
                     $admission='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeRootLabelJournalAdmissionRequiresCurrentTreeAndActualSdkReturnBeforeReadmission'
                     if ($Count -ne 119 -or $names.Count -ne $Count -or @($names|Where-Object {$_ -ceq $admission}).Count -ne 1) {throw 'Require the exact additive admission catalog.'}
                     if ($Scenario -eq 'root-admission-selected') {
@@ -306,9 +334,9 @@ public sealed partial class NamespaceNonAdminControllerTests
                     if ($Scenario -eq 'budget-rejected') {
                         if (-not $rejected) { throw 'An invalid or unbounded selection was accepted.' }
                     } else {
-                        $maximum=if ($Scenario -eq 'budget-catalog') {4755000+4*60000+10*60000+2*60000} else {1800000}
+                        $maximum=if ($Scenario -eq 'budget-catalog') {4755000+4*60000+10*60000+2*60000+65000} else {1800000}
                         if ($rejected -or $budget -lt 600000 -or $budget -gt $maximum) { throw 'The whole-suite envelope is missing or unbounded.' }
-                        if ($Scenario -eq 'budget-catalog' -and $budget -ne 120000+($Count+51)*15000+18*30000+28*15000+6*45000+6*15000+4*45000+5*15000+6*45000+2*45000+2*45000+4*60000+10*60000+15000+2*45000) {
+                        if ($Scenario -eq 'budget-catalog' -and $budget -ne 120000+($Count+51)*15000+18*30000+28*15000+6*45000+6*15000+4*45000+5*15000+6*45000+2*45000+2*45000+4*60000+10*60000+15000+2*45000+50000) {
                             throw 'The actual catalog lost a same/cross-instance transfer or one of its five retirement cutpoints.'
                         }
                         if ($Count -ge 52 -and $budget -le 600000) { throw 'The growing suite still has the obsolete fixed ten-minute envelope.' }
