@@ -13,9 +13,11 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 public sealed partial class CliTransferFixtureLayoutTests
 {
     [TestMethod]
-    [DataRow(false)]
-    [DataRow(true)]
-    public async Task StoppedFailureObserverRetainsActualIntentDespiteMissingConflictRevisions(bool create)
+    [DataRow(false, false)]
+    [DataRow(true, false)]
+    [DataRow(false, true)]
+    [DataRow(true, true)]
+    public async Task StoppedFailureObserverRetainsActualIntentDespiteMissingConflictRevisions(bool create, bool actualErrorRevisions)
     {
         var fixture = Create(); var paths = new MirrorPulseStoragePaths(Path.Combine(fixture.Root, "sync"), Path.Combine(fixture.Root, "data"));
         Directory.CreateDirectory(paths.SyncRootPath);
@@ -43,7 +45,8 @@ public sealed partial class CliTransferFixtureLayoutTests
                 await catalog.TransitionMutationAsync(effect, MirrorPulseMutationState.Executing, MirrorPulseMutationState.Conflict);
                 foreach (var command in window)
                     await catalog.SaveUploadConflictAsync(new(Guid.NewGuid(), route.InstanceId, command.OperationId.ToString("D"),
-                        "Left/cross-instance.bin", MirrorPulseConflictReason.StaleRemoteRevision, MirrorPulseVersionComparison.Diverged, null, null, observed));
+                        "Left/cross-instance.bin", MirrorPulseConflictReason.StaleRemoteRevision, MirrorPulseVersionComparison.Diverged,
+                        actualErrorRevisions ? baseline : null, actualErrorRevisions ? "PRIVATE_ACTUAL_REVISION" : null, observed));
                 before = JsonSerializer.Serialize(await catalog.ReadMutationAsync(effect));
             }
             var result = await RunFailureObserverAsync(fixture.Root);
@@ -51,7 +54,13 @@ public sealed partial class CliTransferFixtureLayoutTests
             var actual = JsonSerializer.Deserialize<CliTransferFailureObservation>(result.Output, JsonOptions)!;
             Assert.IsTrue(actual.ExclusiveCatalogOwner); Assert.IsFalse(actual.MoreConflictsAvailable);
             Assert.HasCount(2, actual.Conflicts); Assert.HasCount(1, actual.Plans);
-            Assert.IsTrue(actual.Conflicts.All(conflict => !conflict.ExpectedRevisionPresent && !conflict.ActualRevisionPresent && conflict.PlanId == plan.PlanId));
+            Assert.IsTrue(actual.Conflicts.All(conflict => conflict.ExpectedRevisionPresent == (actualErrorRevisions && !create) &&
+                conflict.ActualRevisionPresent == actualErrorRevisions && conflict.PlanId == plan.PlanId));
+            foreach (var conflict in actual.Conflicts)
+            {
+                Assert.AreEqual(actualErrorRevisions && !create ? (bool?)true : null, conflict.ErrorExpectedMatchesOriginalExecution);
+                Assert.AreEqual(actualErrorRevisions ? (bool?)false : null, conflict.ErrorActualMatchesOriginalExecution);
+            }
             Assert.AreEqual(plan.PlanId, actual.Plans[0].PlanId); Assert.AreEqual(item, actual.Plans[0].ItemId);
             Assert.IsTrue(actual.Plans[0].ExecutionPresent);
             Assert.IsTrue(create ? actual.Plans[0].ExpectedRevisionPresent is false : actual.Plans[0].ExpectedRevisionPresent is true);
@@ -60,6 +69,8 @@ public sealed partial class CliTransferFixtureLayoutTests
             Assert.IsTrue(create ? mutation.ExpectedRevisionPresent is false : mutation.ExpectedRevisionPresent is true);
             Assert.IsNotNull(mutation.AcceptedRevisionPresent);
             Assert.IsFalse(mutation.AcceptedRevisionPresent.Value);
+            Assert.IsNotNull(mutation.ExpectedMatchesOriginalExecution);
+            Assert.IsTrue(mutation.ExpectedMatchesOriginalExecution.Value);
             Assert.IsFalse(result.Output.Contains("PRIVATE_", StringComparison.Ordinal)); Assert.IsFalse(result.Output.Contains("cross-instance.bin", StringComparison.Ordinal));
             await using var reopened = await MirrorPulseProductCatalog.OpenAsync(paths);
             Assert.AreEqual(before, JsonSerializer.Serialize(await reopened.ReadMutationAsync(effect)));

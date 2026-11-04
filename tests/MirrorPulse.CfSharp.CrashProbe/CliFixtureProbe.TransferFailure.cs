@@ -5,11 +5,18 @@ using MirrorPulse.Core.State;
 namespace MirrorPulse.CfSharp.CrashProbe;
 
 public sealed record CliTransferEffectFailure(Guid OperationId, string Kind, string? State,
-    string? ExecutionEvidence, bool? ExpectedRevisionPresent, bool? AcceptedRevisionPresent);
+    string? ExecutionEvidence, bool? ExpectedRevisionPresent, bool? AcceptedRevisionPresent)
+{
+    public bool? ExpectedMatchesOriginalExecution { get; init; }
+}
 public sealed record CliTransferPlanFailure(Guid PlanId, Guid ItemId, string Effect, int OriginalJournalCount,
     bool ExecutionPresent, bool? ExpectedRevisionPresent, IReadOnlyList<CliTransferEffectFailure> Effects);
 public sealed record CliTransferConflictFailure(Guid ConflictId, Guid OperationId, string Reason,
-    bool ExpectedRevisionPresent, bool ActualRevisionPresent, Guid? PlanId);
+    bool ExpectedRevisionPresent, bool ActualRevisionPresent, Guid? PlanId)
+{
+    public bool? ErrorExpectedMatchesOriginalExecution { get; init; }
+    public bool? ErrorActualMatchesOriginalExecution { get; init; }
+}
 public sealed record CliTransferFailureObservation(int SchemaVersion, bool ExclusiveCatalogOwner, bool MoreConflictsAvailable,
     IReadOnlyList<CliTransferConflictFailure> Conflicts, IReadOnlyList<CliTransferPlanFailure> Plans);
 
@@ -36,14 +43,20 @@ public static partial class CliFixtureProbe
                 if (route is null || !fixture.Inventory.AllowedEntries.TryGetValue(conflict.RelativePath, out bool directoryEntry) || directoryEntry)
                     throw new InvalidDataException("Failure observation cannot disclose a foreign conflict or path.");
                 var plan = await fixture.Catalog.ReadJournalCoalescingOwnerAsync(operationId);
+                var execution = plan is null ? null : await fixture.Catalog.ReadJournalCoalescingExecutionAsync(plan.PlanId);
                 conflicts.Add(new(conflict.ConflictId, operationId, conflict.Reason.ToString(),
-                    !string.IsNullOrEmpty(conflict.LocalRevision), !string.IsNullOrEmpty(conflict.RemoteRevision), plan?.PlanId));
+                    !string.IsNullOrEmpty(conflict.LocalRevision), !string.IsNullOrEmpty(conflict.RemoteRevision), plan?.PlanId)
+                {
+                    ErrorExpectedMatchesOriginalExecution = execution is null || string.IsNullOrEmpty(conflict.LocalRevision) ? null
+                        : string.Equals(conflict.LocalRevision, execution.ExpectedRevision, StringComparison.Ordinal),
+                    ErrorActualMatchesOriginalExecution = execution is null || string.IsNullOrEmpty(conflict.RemoteRevision) ? null
+                        : string.Equals(conflict.RemoteRevision, execution.ExpectedRevision, StringComparison.Ordinal)
+                });
                 if (plan is null || plans.ContainsKey(plan.PlanId)) continue;
                 string path = route.DirectoryName + "/" + plan.FinalPath.Replace('\\', '/');
                 if (plan.InstanceId != route.InstanceId || plan.RootKey != route.UniquenessKey ||
                     !fixture.Inventory.AllowedEntries.TryGetValue(path, out bool isDirectory) || isDirectory)
                     throw new InvalidDataException("The retained plan escaped its exact authenticated fixture route.");
-                var execution = await fixture.Catalog.ReadJournalCoalescingExecutionAsync(plan.PlanId);
                 var effects = new List<CliTransferEffectFailure>();
                 if (execution is not null)
                 {
@@ -53,7 +66,11 @@ public static partial class CliFixtureProbe
                         var mutation = await fixture.Catalog.ReadMutationAsync(step.OperationId);
                         effects.Add(new(step.OperationId, step.Kind.ToString(), mutation?.State.ToString(),
                             mutation?.ExecutionEvidence.ToString(), mutation is null ? null : !string.IsNullOrEmpty(mutation.Intent.ExpectedRevision),
-                            mutation is null ? null : !string.IsNullOrEmpty(mutation.AcceptedRevision)));
+                            mutation is null ? null : !string.IsNullOrEmpty(mutation.AcceptedRevision))
+                        {
+                            ExpectedMatchesOriginalExecution = mutation is null ? null
+                                : string.Equals(mutation.Intent.ExpectedRevision, execution.ExpectedRevision, StringComparison.Ordinal)
+                        });
                     }
                 }
                 plans.Add(plan.PlanId, new(plan.PlanId, plan.ItemId, plan.Effect.ToString(), plan.Members.Count,
