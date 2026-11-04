@@ -33,6 +33,12 @@ public sealed class CliRootLabelCancellationPolicyTests
     [DataRow("reenabled-exit-string")]
     [DataRow("reenabled-foreign-receipt")]
     [DataRow("missing-reenabled-start")]
+    [DataRow("missing-disabled-startup")]
+    [DataRow("disabled-startup-same-host")]
+    [DataRow("disabled-startup-not-exited")]
+    [DataRow("disabled-startup-exit-string")]
+    [DataRow("disabled-startup-foreign-receipt")]
+    [DataRow("missing-disabled-startup-start")]
     public async Task CancellationRequiresOriginalPreparationIndependentProcessAndSeparateCurrentAdmission(string damage)
     {
         string directory = Path.Combine(Path.GetTempPath(), "MirrorPulse-cancellation-policy-" + Guid.NewGuid().ToString("N"));
@@ -86,6 +92,15 @@ public sealed class CliRootLabelCancellationPolicyTests
                 case "reenabled-exit-string": evidence["reenabledRestart"]!["previousProcessExited"] = "True"; break;
                 case "reenabled-foreign-receipt": evidence["reenabledRestart"]!["previousProcessId"] = 909; break;
                 case "missing-reenabled-start": File.Delete(Path.Combine(directory, "restored-restart-start.json")); break;
+                case "missing-disabled-startup": evidence.Remove("disabledStartupRestart"); break;
+                case "disabled-startup-same-host":
+                    ChangeOriginal(directory, "disabled-selection-restart-after", node => node["processId"] = 202);
+                    evidence["disabledStartupRestart"]!["currentProcessId"] = 202;
+                    break;
+                case "disabled-startup-not-exited": evidence["disabledStartupRestart"]!["previousProcessExited"] = false; break;
+                case "disabled-startup-exit-string": evidence["disabledStartupRestart"]!["previousProcessExited"] = "True"; break;
+                case "disabled-startup-foreign-receipt": evidence["disabledStartupRestart"]!["previousProcessId"] = 909; break;
+                case "missing-disabled-startup-start": File.Delete(Path.Combine(directory, "disabled-selection-restart-start.json")); break;
             }
             string evidencePath = Path.Combine(directory, "completed.json");
             await File.WriteAllTextAsync(evidencePath, evidence.ToJsonString());
@@ -217,6 +232,10 @@ public sealed class CliRootLabelCancellationPolicyTests
                 ["restoredExecution"] = restored
             });
         }
+        WriteOriginal(directory, "disabled-selection-restart-before", Node(new { processId = 202 }));
+        WriteOriginal(directory, "disabled-selection-restart-after", Node(new { processId = 303 }));
+        WriteOriginal(directory, "disabled-selection-restart-stop", Node(new { stopped = true }));
+        WriteOriginal(directory, "disabled-selection-restart-start", Node(new { started = true }));
         WriteOriginal(directory, "restored-restart-before", Node(new { processId = 404 }));
         WriteOriginal(directory, "restored-restart-after", Node(new { processId = 505 }));
         WriteOriginal(directory, "restored-restart-stop", Node(new { stopped = true }));
@@ -233,6 +252,7 @@ public sealed class CliRootLabelCancellationPolicyTests
             ["directoryName"] = "Docs",
             ["residentAndSourceBytes"] = bytes,
             ["cases"] = cases,
+            ["disabledStartupRestart"] = Node(new { previousProcessId = 202, currentProcessId = 303, previousProcessExited = true }),
             ["reenabledRestart"] = Node(new { previousProcessId = 404, currentProcessId = 505, previousProcessExited = true }),
             ["defaultHostIntegrated"] = true,
             ["actualWorkerRequired"] = true,

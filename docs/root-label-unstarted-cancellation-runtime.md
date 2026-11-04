@@ -81,10 +81,10 @@ signed Host process crash recovery. Other producer results, the full fault/race
 matrix and signed final-reenabled startup acceptance remain separate obligations.
 
 The signed cancellation fixture applies the documented startup-selection contract
-after its disabled case: it enables the instance, waits for the old Host to exit,
-and starts an independent Host before requiring the Worker and namespace to be
-ready. Its evidence retains the final before/after process identities and typed
-exit receipt, followed by the complete current graph and resident/source byte
+after both selection changes: it disables or enables the instance, waits for the
+old Host to exit, and starts an independent Host before requiring the selected
+Worker and namespace availability. Its evidence retains both before/after process
+identities and typed exit receipts, followed by the complete current graph and resident/source byte
 checks. Saving the enable selection alone does not prove a new startup or grant
 namespace admission. The existing public command and state deadlines still apply.
 

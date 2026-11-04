@@ -81,6 +81,16 @@ function Assert-CliRootLabelCancellationEvidence {
     }
     Require-CancellationState 'initial' $Evidence.directoryName $false $null
     $cases = @($Evidence.cases)
+    $disabledBefore = Read-CancellationOriginal 'disabled-selection-restart-before'
+    $disabledAfter = Read-CancellationOriginal 'disabled-selection-restart-after'
+    Read-CancellationOriginal 'disabled-selection-restart-stop' | Out-Null
+    Read-CancellationOriginal 'disabled-selection-restart-start' | Out-Null
+    if ($null -eq $Evidence.disabledStartupRestart -or $disabledBefore.processId -le 0 -or $disabledAfter.processId -le 0 -or
+        $disabledBefore.processId -eq $disabledAfter.processId -or
+        $Evidence.disabledStartupRestart.previousProcessId -ne $disabledBefore.processId -or
+        $Evidence.disabledStartupRestart.currentProcessId -ne $disabledAfter.processId -or
+        $Evidence.disabledStartupRestart.previousProcessExited -isnot [bool] -or
+        $Evidence.disabledStartupRestart.previousProcessExited -ne $true) { throw 'Disabled admission requires the previous Host to exit and an original independent startup receipt.' }
     if ($cases.Count -ne 2) { throw 'Require enabled and disabled independent-process cancellation cases.' }
     $operations = [Collections.Generic.List[string]]::new()
     foreach ($phase in @('active', 'disabled')) {

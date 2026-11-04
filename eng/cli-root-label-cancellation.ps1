@@ -105,9 +105,13 @@ function Invoke-CliRootLabelCancellationLifecycle {
         return $completed
     }
 
+    $disabledStartupRestart = $null
     $cases = @(foreach ($phase in @('active', 'disabled')) {
         $disabled = $phase -ceq 'disabled'
-        if ($disabled) { Invoke-CancellationCli 'disable' @('instance', 'disable', '--instance-id', $InstanceId) | Out-Null }
+        if ($disabled) {
+            Invoke-CancellationCli 'disable' @('instance', 'disable', '--instance-id', $InstanceId) | Out-Null
+            $disabledStartupRestart = Restart-CancellationHost 'disabled-selection-restart'
+        }
         Read-CancellationState ($phase + '-before') $DirectoryName $disabled $null
         $prepared = Prepare-CancellationLabel $phase $DirectoryName ($DirectoryName + ' Cancel ' + $phase)
         Read-CancellationState ($phase + '-prepared') $DirectoryName $disabled $prepared.operationId
@@ -143,7 +147,8 @@ function Invoke-CliRootLabelCancellationLifecycle {
     Assert-CancellationTree 'restored' $DirectoryName
     $result = [ordered]@{schemaVersion=1;rootId=$RootId;instanceId=$InstanceId;memberId=$member.memberId;
         nativeItemId=$member.nativeItemId;memberCount=$tree.Count;directoryName=$DirectoryName;
-        residentAndSourceBytes=$bytes;cases=$cases;reenabledRestart=$reenabledRestart;defaultHostIntegrated=$true;actualWorkerRequired=$true;
+        residentAndSourceBytes=$bytes;cases=$cases;disabledStartupRestart=$disabledStartupRestart;reenabledRestart=$reenabledRestart;
+        defaultHostIntegrated=$true;actualWorkerRequired=$true;
         preparedIntentAcrossIndependentHost=$true;interruptedNativeExecution=$false;journalAckReceiptInspected=$false}
     if ($originals) { $result | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $originals 'completed.json') -Encoding utf8 }
     return $result
