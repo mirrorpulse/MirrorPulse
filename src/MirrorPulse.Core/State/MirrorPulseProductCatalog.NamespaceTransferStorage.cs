@@ -10,6 +10,9 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task<MirrorPulseNamespaceTransferCopy?> ReadNamespaceTransferCoreAsync(Guid id,
         SqliteTransaction transaction, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
+        using var validation = _namespaceRecoveryReadSnapshots.TryGetValue(transaction, out _) ? null :
+            BeginNamespaceRecoveryValidationReadPhase(transaction);
         MirrorPulseNamespaceTransferCopy copy;
         await using (var query = _connection.CreateCommand())
         {

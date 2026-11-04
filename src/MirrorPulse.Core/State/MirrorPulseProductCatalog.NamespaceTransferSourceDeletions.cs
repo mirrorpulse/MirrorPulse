@@ -17,7 +17,7 @@ public sealed partial class MirrorPulseProductCatalog
         await _gate.WaitAsync(token).ConfigureAwait(false);
         try
         {
-            ThrowIfDisposed(); using var transaction = _connection.BeginTransaction(deferred: true);
+            ThrowIfDisposed(); using var transaction = BeginNamespaceRecoveryReadSnapshot();
             var copy = await ReadNamespaceTransferCoreAsync(operationId, transaction, token).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The original transfer is missing.");
             if (copy.SourceDeletion?.AcceptedAt is null)

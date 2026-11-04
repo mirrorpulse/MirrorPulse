@@ -20,7 +20,7 @@ public sealed partial class MirrorPulseProductCatalog
         await _gate.WaitAsync(token).ConfigureAwait(false);
         try
         {
-            ThrowIfDisposed(); using var transaction = _connection.BeginTransaction(deferred: true);
+            ThrowIfDisposed(); using var transaction = BeginNamespaceRecoveryReadSnapshot();
             var copy = await ReadNamespaceTransferCoreAsync(operationId, transaction, token).ConfigureAwait(false);
             var result = copy is null ? null : await ReadTransferStatusCoreAsync(copy, transaction, token).ConfigureAwait(false);
             transaction.Commit(); return result;
@@ -37,7 +37,7 @@ public sealed partial class MirrorPulseProductCatalog
         await _gate.WaitAsync(token).ConfigureAwait(false);
         try
         {
-            ThrowIfDisposed(); using var transaction = _connection.BeginTransaction(deferred: true);
+            ThrowIfDisposed(); using var transaction = BeginNamespaceRecoveryReadSnapshot();
             var copy = await ReadPendingNamespaceTransferForRootCoreAsync(rootId, transaction, token).ConfigureAwait(false);
             MirrorPulseNamespaceTransferStatus[] result = copy is null ? [] :
                 [await ReadTransferStatusCoreAsync(copy, transaction, token).ConfigureAwait(false)];

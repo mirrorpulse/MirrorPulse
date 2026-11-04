@@ -28,7 +28,7 @@ public sealed partial class MirrorPulseProductCatalog
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            ThrowIfDisposed(); using var transaction = _connection.BeginTransaction(deferred: true);
+            ThrowIfDisposed(); using var transaction = BeginNamespaceRecoveryReadSnapshot();
             var member = await ReadNamespaceMemberCoreAsync(memberId, transaction, cancellationToken).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The namespace member is not registered.");
             var value = await ReadNamespaceMemberIdentityCoreAsync(member, transaction, cancellationToken).ConfigureAwait(false);
@@ -102,7 +102,7 @@ public sealed partial class MirrorPulseProductCatalog
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            ThrowIfDisposed(); using var transaction = _connection.BeginTransaction(deferred: true);
+            ThrowIfDisposed(); using var transaction = BeginNamespaceRecoveryReadSnapshot();
             var value = await ReadNamespaceIdentityAcceptanceCoreAsync(operationId, transaction, cancellationToken).ConfigureAwait(false);
             transaction.Commit(); return value;
         }

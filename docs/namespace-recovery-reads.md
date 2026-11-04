@@ -116,3 +116,19 @@ and a later Label, replay SELECTs decreased from41,065 to16,314. The complete
 tree, bytes, original birth facts and cancellation receipt remained checked.
 Instrumentation and local hardware prevent treating this count as a CI deadline
 or complete-suite wall-time result.
+
+Transfer status, target/source validation, original journal ownership and identity
+read APIs use the same bounded read scope. The complete private transfer graph
+also creates a validation-only scope when its caller has none; that scope ends
+when the graph returns, before the caller can persist a change. Original payload,
+fences, effect IDs, historical protection and identity references, journal members
+and acknowledgement validation remain required. No transfer result or native
+authority is cached across calls.
+
+In an owned ARM64 diagnostic, the original 45-second cross-instance transfer
+acknowledgement recovery method retained every fault, byte and restart assertion.
+These scopes reduced observed product SELECTs from19,993 to17,446. Instrumentation
+adds overhead; this local count does not establish the ordinary-user CI deadline.
+The original CI failure had an already-cancelled token before reopening the
+catalog, with slow initial schema creation and disposal; it does not establish a
+blocked reopen or a CfSharp defect.
