@@ -16,6 +16,7 @@ public sealed partial class MirrorPulseProductCatalog
     {
         internal NamespaceHistoryCache<MirrorPulseNamespaceMemberRegistration> Members { get; } = new();
         internal NamespaceHistoryCache<MirrorPulseNamespaceMemberRegistration, MirrorPulseNamespaceMemberLocation> Locations { get; } = new();
+        internal NamespaceHistoryCache<(MirrorPulseNamespaceMemberRegistration Member, MirrorPulseNamespaceMemberPosition Head), long> ValidatedPositionHistories { get; } = new();
         internal NamespaceHistoryCache<MirrorPulseNamespaceBirthIntent, bool> BirthReferenceIndexes { get; } = new();
         internal NamespaceHistoryCache<MirrorPulseNamespaceInitializationStatus> Initializations { get; } = new();
         internal NamespaceHistoryCache<MirrorPulseNamespaceBirthIntent> ValidatedBirths { get; } = new();

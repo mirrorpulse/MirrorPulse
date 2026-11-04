@@ -74,24 +74,25 @@ public sealed class MirrorPulseNamespaceBornMemberRecoveryCoordinator(CloudFileS
         await execution.RunNamespaceOperationAsync(async () =>
         {
             Progress?.Invoke("NamespaceBornRecoveryContextBegin");
-            history = await catalog.ReadNamespaceBornMemberRecoveryActionsAsync(memberId, stop).ConfigureAwait(false);
+            var planning = await catalog.ReadNamespaceBornMemberRecoveryExecutionContextAsync(initializationOperationId, memberId, actionId, stop).ConfigureAwait(false);
+            history = planning.History;
             Progress?.Invoke("NamespaceBornRecoveryContextHistoryCompleted");
-            retained = history.SingleOrDefault(value => value.ActionId == actionId);
+            retained = planning.SelectedAction;
             if (retained is not null && retained.RootLabelRecoveryOwner != owner)
                 throw new InvalidOperationException("Born recovery cannot replace its admitted original Label and initializer witness.");
-            if (retained is not null && await catalog.ReadNamespaceBornMemberRecoveryCompletionAsync(actionId, stop).ConfigureAwait(false) is { } replay)
+            if (retained is not null && planning.SelectedCompletion is { } replay)
             {
                 if (retained.InitializationOperationId != initializationOperationId) throw new InvalidOperationException("The action belongs to a different initializer.");
                 result = new(actionId, replay, null, true); return;
             }
             Progress?.Invoke("NamespaceBornRecoveryContextLineageBegin");
-            var child = (await catalog.ReadNamespaceMemberRecoveryLineageAsync(initializationOperationId, memberId, stop).ConfigureAwait(false))[0];
+            var child = planning.Lineage[0];
             Progress?.Invoke("NamespaceBornRecoveryContextLineageCompleted");
             var currentRoot = router.GetRegistration(registration.InstanceId, registration.UniquenessKey);
             if (child.Member != member || currentRoot.RootId != registration.RootId || currentRoot.DirectoryName != registration.DirectoryName)
                 throw new InvalidDataException("The admitted born member or root layout changed before recovery.");
             Progress?.Invoke("NamespaceBornRecoveryContextParentBegin");
-            var parent = await catalog.ReadNamespaceMemberProtectionSnapshotAsync(child.Location.ParentMemberId!.Value, stop).ConfigureAwait(false)
+            var parent = planning.Parent
                 ?? throw new InvalidDataException("The born parent requires coherent recovery first.");
             Progress?.Invoke("NamespaceBornRecoveryContextParentCompleted");
             if (owner is not null && await catalog.ReadRootLabelCancellationRecoveryOwnerAsync(owner.RootLabelOperationId, stop).ConfigureAwait(false) != owner.Initialization)

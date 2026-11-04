@@ -83,3 +83,21 @@ request emits at most32 progress records containing only the original operation
 ID, fixed stage/phase, sequence and elapsed milliseconds. Observation failure
 cannot replace the original result, exception or cancellation token. No path,
 member name, content, credential or exception message enters these records.
+
+Born recovery now reads the complete original action history, selected completion,
+pending lineage and direct parent in one actual read transaction. A completed
+historical action returns no current lineage or parent authority. Execution still
+checks the selected initializer and original Label witness, retains native guards,
+revalidates the action before protected work and independently reads it back.
+
+Current member-location reads use the same bounded transaction scope. A successful
+complete position-history validation may be reused only for the exact original
+member and complete head payload inside that scope. Each kind retains at most16
+entries. Misses, failures, later API calls, native observations and writes do not
+reuse this result. All writer validation scopes still end before mutation.
+
+An owned local ARM64 diagnostic with five preceding Labels and a later Label
+observed historical cancellation SELECTs decrease from16,911 to14,570 while
+retaining the original tree, bytes and cancellation receipt. Stack instrumentation
+adds overhead, and local hardware differs from CI. This query count establishes
+less work; the original public30-second CI deadline remains an independent gate.

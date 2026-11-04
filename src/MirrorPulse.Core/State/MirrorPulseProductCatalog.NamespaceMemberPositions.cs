@@ -82,6 +82,10 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task<long> ValidateNamespaceMemberPositionHistoryAsync(MirrorPulseNamespaceMemberRegistration member,
         MirrorPulseNamespaceMemberPosition head, SqliteTransaction transaction, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
+        _namespaceRecoveryReadSnapshots.TryGetValue(transaction, out var snapshot);
+        var key = (member, head);
+        if (snapshot?.ValidatedPositionHistories.TryGetValue(key, out long retainedLength) == true) return retainedLength;
         var current = head;
         var visited = new HashSet<Guid>();
         long length = 0;
@@ -91,7 +95,7 @@ public sealed partial class MirrorPulseProductCatalog
             if (!visited.Add(current.OperationId)) throw new InvalidDataException("The member position history contains a cycle.");
             await ValidateNamespaceMemberPositionReferencesAsync(member, current, transaction, token).ConfigureAwait(false);
             length++;
-            if (current.PreviousPositionOperationId is not { } previousId) return length;
+            if (current.PreviousPositionOperationId is not { } previousId) break;
             var previous = await ReadNamespaceMemberPositionRowAsync(member.MemberId, previousId, transaction, token).ConfigureAwait(false);
             if (current.LegacyAnchor)
             {
@@ -103,12 +107,14 @@ public sealed partial class MirrorPulseProductCatalog
                 if (legacy.MemberId != member.MemberId || legacy.LocalObject != member.LocalObject ||
                     completed.VerifiedAt >= current.VerifiedAt)
                     throw new InvalidDataException("The legacy position anchor must precede the same object's new settlement.");
-                return length;
+                break;
             }
             if (previous is null || previous.VerifiedAt >= current.VerifiedAt)
                 throw new InvalidDataException("A position successor requires its original earlier settlement fact.");
             current = previous;
         }
+        if (snapshot is not null) snapshot.ValidatedPositionHistories[key] = length;
+        return length;
     }
 
     private async Task ValidateNamespaceMemberPositionReferencesAsync(MirrorPulseNamespaceMemberRegistration member,

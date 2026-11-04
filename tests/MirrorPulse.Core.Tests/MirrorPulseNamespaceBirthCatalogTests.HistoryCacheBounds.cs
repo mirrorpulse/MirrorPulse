@@ -86,6 +86,8 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             Assert.AreEqual(original.OperationId, retained.OperationId);
             CollectionAssert.AreEqual(original.Entries.ToArray(), retained.Entries.ToArray());
         }
+        await ExecuteSqlAsync(fixture.Paths, $"UPDATE namespace_member_positions SET fingerprint=zeroblob(32) WHERE operation_id='{originals[0].OperationId:D}';");
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(() => catalog.ReadNamespaceMemberLocationAsync(setup.Members[^1].MemberId));
     }
 
     private static async Task<IReadOnlyDictionary<string, int>> ObserveHistoryCacheBoundsAsync(
@@ -93,22 +95,27 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
     {
         const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
         var connection = (SqliteConnection)typeof(MirrorPulseProductCatalog).GetField("_connection", flags)!.GetValue(catalog)!;
-        var histories = (IEnumerable)typeof(MirrorPulseProductCatalog).GetField("_namespaceHistoryReads", flags)!.GetValue(catalog)!;
+        IEnumerable[] histories =
+        [
+            (IEnumerable)typeof(MirrorPulseProductCatalog).GetField("_namespaceHistoryReads", flags)!.GetValue(catalog)!,
+            (IEnumerable)typeof(MirrorPulseProductCatalog).GetField("_namespaceRecoveryReadSnapshots", flags)!.GetValue(catalog)!
+        ];
         var maximums = new Dictionary<string, int>(StringComparer.Ordinal);
         SQLitePCL.strdelegate_trace trace = (context, sql) =>
         {
-            foreach (object pair in histories)
-            {
-                var transaction = (SqliteTransaction)pair.GetType().GetProperty("Key")!.GetValue(pair)!;
-                if (!ReferenceEquals(transaction.Connection, connection)) continue;
-                object history = pair.GetType().GetProperty("Value")!.GetValue(pair)!;
-                foreach (var property in history.GetType().GetProperties(flags))
+            foreach (var family in histories)
+                foreach (object pair in family)
                 {
-                    object cache = property.GetValue(history)!;
-                    int count = (int)cache.GetType().GetProperty("Count", flags)!.GetValue(cache)!;
-                    maximums[property.Name] = Math.Max(maximums.GetValueOrDefault(property.Name), count);
+                    var transaction = (SqliteTransaction)pair.GetType().GetProperty("Key")!.GetValue(pair)!;
+                    if (!ReferenceEquals(transaction.Connection, connection)) continue;
+                    object history = pair.GetType().GetProperty("Value")!.GetValue(pair)!;
+                    foreach (var property in history.GetType().GetProperties(flags))
+                    {
+                        object cache = property.GetValue(history)!;
+                        int count = (int)cache.GetType().GetProperty("Count", flags)!.GetValue(cache)!;
+                        maximums[property.Name] = Math.Max(maximums.GetValueOrDefault(property.Name), count);
+                    }
                 }
-            }
         };
         SQLitePCL.raw.sqlite3_trace(connection.Handle!, trace, null);
         try { await read(); }
