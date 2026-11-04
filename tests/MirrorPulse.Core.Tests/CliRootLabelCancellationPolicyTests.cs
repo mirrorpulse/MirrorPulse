@@ -27,6 +27,12 @@ public sealed class CliRootLabelCancellationPolicyTests
     [DataRow("duplicate-operation")]
     [DataRow("invented-fault")]
     [DataRow("boolean-string")]
+    [DataRow("missing-reenabled-restart")]
+    [DataRow("reenabled-same-host")]
+    [DataRow("reenabled-not-exited")]
+    [DataRow("reenabled-exit-string")]
+    [DataRow("reenabled-foreign-receipt")]
+    [DataRow("missing-reenabled-start")]
     public async Task CancellationRequiresOriginalPreparationIndependentProcessAndSeparateCurrentAdmission(string damage)
     {
         string directory = Path.Combine(Path.GetTempPath(), "MirrorPulse-cancellation-policy-" + Guid.NewGuid().ToString("N"));
@@ -71,6 +77,15 @@ public sealed class CliRootLabelCancellationPolicyTests
                     break;
                 case "invented-fault": evidence["interruptedNativeExecution"] = true; break;
                 case "boolean-string": evidence["preparedIntentAcrossIndependentHost"] = "True"; break;
+                case "missing-reenabled-restart": evidence.Remove("reenabledRestart"); break;
+                case "reenabled-same-host":
+                    ChangeOriginal(directory, "restored-restart-after", node => node["processId"] = 404);
+                    evidence["reenabledRestart"]!["currentProcessId"] = 404;
+                    break;
+                case "reenabled-not-exited": evidence["reenabledRestart"]!["previousProcessExited"] = false; break;
+                case "reenabled-exit-string": evidence["reenabledRestart"]!["previousProcessExited"] = "True"; break;
+                case "reenabled-foreign-receipt": evidence["reenabledRestart"]!["previousProcessId"] = 909; break;
+                case "missing-reenabled-start": File.Delete(Path.Combine(directory, "restored-restart-start.json")); break;
             }
             string evidencePath = Path.Combine(directory, "completed.json");
             await File.WriteAllTextAsync(evidencePath, evidence.ToJsonString());
@@ -202,6 +217,10 @@ public sealed class CliRootLabelCancellationPolicyTests
                 ["restoredExecution"] = restored
             });
         }
+        WriteOriginal(directory, "restored-restart-before", Node(new { processId = 404 }));
+        WriteOriginal(directory, "restored-restart-after", Node(new { processId = 505 }));
+        WriteOriginal(directory, "restored-restart-stop", Node(new { stopped = true }));
+        WriteOriginal(directory, "restored-restart-start", Node(new { started = true }));
         State("restored", "Docs", false); Graph("restored", "Docs");
         return new JsonObject
         {
@@ -214,6 +233,7 @@ public sealed class CliRootLabelCancellationPolicyTests
             ["directoryName"] = "Docs",
             ["residentAndSourceBytes"] = bytes,
             ["cases"] = cases,
+            ["reenabledRestart"] = Node(new { previousProcessId = 404, currentProcessId = 505, previousProcessExited = true }),
             ["defaultHostIntegrated"] = true,
             ["actualWorkerRequired"] = true,
             ["preparedIntentAcrossIndependentHost"] = true,

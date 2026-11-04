@@ -136,11 +136,14 @@ function Invoke-CliRootLabelCancellationLifecycle {
             cancellation=$cancelled;laterExecution=$later;historicalReplay=$replay;restoredExecution=$restored}
     })
     Invoke-CancellationCli 'enable' @('instance', 'enable', '--instance-id', $InstanceId) | Out-Null
+    # Instance enable saves the next startup selection. Observe a real new Host
+    # before requiring the enabled Worker and a fresh current namespace audit.
+    $reenabledRestart = Restart-CancellationHost 'restored-restart'
     Read-CancellationState 'restored' $DirectoryName $false $null
     Assert-CancellationTree 'restored' $DirectoryName
     $result = [ordered]@{schemaVersion=1;rootId=$RootId;instanceId=$InstanceId;memberId=$member.memberId;
         nativeItemId=$member.nativeItemId;memberCount=$tree.Count;directoryName=$DirectoryName;
-        residentAndSourceBytes=$bytes;cases=$cases;defaultHostIntegrated=$true;actualWorkerRequired=$true;
+        residentAndSourceBytes=$bytes;cases=$cases;reenabledRestart=$reenabledRestart;defaultHostIntegrated=$true;actualWorkerRequired=$true;
         preparedIntentAcrossIndependentHost=$true;interruptedNativeExecution=$false;journalAckReceiptInspected=$false}
     if ($originals) { $result | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $originals 'completed.json') -Encoding utf8 }
     return $result

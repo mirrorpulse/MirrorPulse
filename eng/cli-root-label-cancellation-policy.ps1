@@ -146,6 +146,16 @@ function Assert-CliRootLabelCancellationEvidence {
         Require-CancellationGraph ($phase + '-replayed') $laterName
     }
     if (@($operations | Select-Object -Unique).Count -ne 6) { throw 'Require six distinct original cancellation and execution operations.' }
+    $before = Read-CancellationOriginal 'restored-restart-before'
+    $after = Read-CancellationOriginal 'restored-restart-after'
+    Read-CancellationOriginal 'restored-restart-stop' | Out-Null
+    Read-CancellationOriginal 'restored-restart-start' | Out-Null
+    if ($null -eq $Evidence.reenabledRestart -or $before.processId -le 0 -or $after.processId -le 0 -or
+        $before.processId -eq $after.processId -or
+        $Evidence.reenabledRestart.previousProcessId -ne $before.processId -or
+        $Evidence.reenabledRestart.currentProcessId -ne $after.processId -or
+        $Evidence.reenabledRestart.previousProcessExited -isnot [bool] -or
+        $Evidence.reenabledRestart.previousProcessExited -ne $true) { throw 'Reenabled admission requires the previous Host to exit and an original independent startup receipt.' }
     Require-CancellationState 'restored' $Evidence.directoryName $false $null
     Require-CancellationGraph 'restored' $Evidence.directoryName
     $completed = Get-Item -LiteralPath (Join-Path $OriginalsDirectory 'completed.json') -ErrorAction Stop

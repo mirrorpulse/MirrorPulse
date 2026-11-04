@@ -80,6 +80,14 @@ This evidence uses separate runtime roles; it does not establish independent
 signed Host process crash recovery. Other producer results, the full fault/race
 matrix and signed final-reenabled startup acceptance remain separate obligations.
 
+The signed cancellation fixture applies the documented startup-selection contract
+after its disabled case: it enables the instance, waits for the old Host to exit,
+and starts an independent Host before requiring the Worker and namespace to be
+ready. Its evidence retains the final before/after process identities and typed
+exit receipt, followed by the complete current graph and resident/source byte
+checks. Saving the enable selection alone does not prove a new startup or grant
+namespace admission. The existing public command and state deadlines still apply.
+
 The preparation diagnostic also records a closed stage: root work drain,
 instance/library serialization, original ownership, current-tree audit or public
 proof/preparation. Nested stages retain the deepest failure and the same original
