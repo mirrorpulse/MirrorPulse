@@ -70,6 +70,36 @@ public sealed partial class PendingOracleBoundaryTests
         finally { if (owner is not null) await owner.DisposeAsync(); }
     }
 
+    [TestMethod]
+    public async Task OracleFixtureCleanupWaitsForAnActuallyHeldDatabaseDeleteShareToDrain()
+    {
+        var fixture = await Fixture.CreateAsync();
+        using var held = new FileStream(fixture.Paths.CfSharpStateDatabasePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        Task cleanup = fixture.DisposeAsync().AsTask();
+        try
+        {
+            Assert.IsFalse(cleanup.IsCompleted);
+            await held.DisposeAsync();
+            await cleanup.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.IsFalse(Directory.Exists(fixture.Root));
+        }
+        finally { await held.DisposeAsync(); await cleanup; }
+    }
+
+    [TestMethod]
+    public async Task OracleFixtureCleanupRetainsPermanentSharingViolationsAfterItsBoundedWait()
+    {
+        var fixture = await Fixture.CreateAsync();
+        using var held = new FileStream(fixture.Paths.CfSharpStateDatabasePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        try
+        {
+            var error = await Assert.ThrowsExactlyAsync<IOException>(() => fixture.DisposeAsync().AsTask());
+            Assert.IsTrue((error.HResult & 0xffff) is 32 or 33);
+            Assert.IsTrue(Directory.Exists(fixture.Root));
+        }
+        finally { await held.DisposeAsync(); await fixture.DisposeAsync(); }
+    }
+
     private static async Task<(int ExitCode, string Output, string Error)> RunAsync(string directory, bool completed)
     {
         var start = new ProcessStartInfo("dotnet") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
@@ -144,14 +174,26 @@ public sealed partial class PendingOracleBoundaryTests
             return new(root, paths, plan.PlanId, effect, window.Select(command => command.OperationId).ToArray());
         }
 
-        public ValueTask DisposeAsync()
+        public async ValueTask DisposeAsync()
         {
             string full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Root));
             string name = Path.GetFileName(full); const string prefix = "MirrorPulse-cli-integration-";
             if (!string.Equals(Path.GetDirectoryName(full), Path.TrimEndingDirectorySeparator(Path.GetTempPath()), StringComparison.OrdinalIgnoreCase) ||
                 !name.StartsWith(prefix, StringComparison.Ordinal) || !Guid.TryParseExact(name[prefix.Length..], "N", out _) ||
                 (File.GetAttributes(full) & FileAttributes.ReparsePoint) != 0) throw new InvalidDataException("Refuse a cleanup outside the exact oracle fixture.");
-            Directory.Delete(full, recursive: true); return ValueTask.CompletedTask;
+            for (int attempt = 0; ; attempt++)
+            {
+                if ((File.GetAttributes(full) & FileAttributes.ReparsePoint) != 0)
+                    throw new InvalidDataException("Refuse redirected oracle fixture cleanup.");
+                try { Directory.Delete(full, recursive: true); return; }
+                catch (IOException error) when (attempt < 5 && ((error.HResult & 0xffff) is 32 or 33))
+                {
+                    // Wait only for transient sharing/locking of this exact owned
+                    // GUID fixture. A persistent lock still throws its original error.
+                    Console.WriteLine($"OracleFixtureCleanupWait: nativeError={error.HResult:X8}; retry={attempt + 1}.");
+                    await Task.Delay(TimeSpan.FromMilliseconds(20 << attempt));
+                }
+            }
         }
     }
 }
