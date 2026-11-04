@@ -31,7 +31,8 @@ public sealed partial class MirrorPulseProductCatalog
         internal NamespaceHistoryCache<MirrorPulseNamespaceMemberRegistration, bool> ValidatedMemberNames { get; } = new();
         internal NamespaceHistoryCache<MirrorPulseNamespaceMemberRegistration, MirrorPulseNamespaceMemberIdentity> MemberIdentities { get; } = new();
         internal NamespaceHistoryCache<MirrorPulseNamespaceMemberRegistration,
-            (NamespaceMemberProof Proof, MirrorPulseNamespacePermissionVerification Verification, Guid? EpochPositionId)> MemberContextProtections { get; } = new();
+            (NamespaceMemberProof Proof, MirrorPulseNamespacePermissionVerification Verification, Guid? EpochPositionId)> MemberContextProtections
+        { get; } = new();
         internal NamespaceHistoryCache<MirrorPulseNamespaceMemberMoveIntent> MoveRows { get; } = new();
         internal NamespaceHistoryCache<(Guid OperationId, bool Chain), MirrorPulseNamespaceMemberMoveStart> MoveStarts { get; } = new();
         internal NamespaceHistoryCache<(MirrorPulseNamespaceMemberMoveCompletion Completion, Guid MemberId)> MoveCompletionRows { get; } = new();
