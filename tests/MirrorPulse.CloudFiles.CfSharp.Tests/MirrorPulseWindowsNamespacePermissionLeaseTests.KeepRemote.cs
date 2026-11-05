@@ -284,7 +284,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     return;
                 }
                 var confirmed = await ConfirmAsync();
-                Assert.IsTrue(confirmed.Receipt.MayAcknowledge);
+                Assert.IsTrue(confirmed.Receipt.MayAcknowledge, System.Text.Json.JsonSerializer.Serialize(confirmed.Receipt));
                 var confirmedAttempts = await catalog.ReadConflictKeepRemoteNativeAttemptsAsync(commandId, token);
                 Assert.HasCount(nativeInterruption is not null && nativeInterruption != MirrorPulseKeepRemoteNativeCheckpoint.AfterNativeRecorded ? 2 : 1, confirmedAttempts);
                 Assert.AreEqual(confirmed, confirmedAttempts[^1].Result);

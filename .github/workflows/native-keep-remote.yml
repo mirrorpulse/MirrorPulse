@@ -1,0 +1,57 @@
+name: KeepRemote native diagnostics
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - develop
+    paths:
+      - .github/workflows/native-keep-remote.yml
+      - eng/verify-keep-remote-native.ps1
+
+permissions:
+  contents: read
+
+jobs:
+  keep-remote-x64:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - name: Check out the selected source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          global-json-file: global.json
+
+      - name: Restore locked native test dependencies
+        shell: pwsh
+        run: |
+          pwsh ./eng/restore-adapter-sdk.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned SDK restore failed.' }
+          dotnet restore tests/MirrorPulse.CloudFiles.CfSharp.Tests/MirrorPulse.CloudFiles.CfSharp.Tests.csproj --locked-mode
+          if ($LASTEXITCODE -ne 0) { throw 'Locked test restore failed.' }
+
+      - name: Build the native test assembly
+        run: dotnet build tests/MirrorPulse.CloudFiles.CfSharp.Tests/MirrorPulse.CloudFiles.CfSharp.Tests.csproj -c Release --no-restore
+
+      - name: Retain every selected fixture deadline
+        id: budget
+        shell: pwsh
+        run: |
+          $minutes = & ./eng/verify-keep-remote-native.ps1 -BudgetOnly
+          if ($LASTEXITCODE -ne 0) { throw 'Bounded diagnostic selection failed.' }
+          "timeout_minutes=$minutes" >> $env:GITHUB_OUTPUT
+
+      - name: Run the declared KeepRemote boundary and retain actual inputs
+        timeout-minutes: ${{ fromJSON(steps.budget.outputs.timeout_minutes) }}
+        run: pwsh ./eng/verify-keep-remote-native.ps1
+
+      - name: Preserve original inputs, reports and SDK receipt failures
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: keep-remote-native-x64-originals
+          path: artifacts/test-results/keep-remote-native
+          if-no-files-found: error
