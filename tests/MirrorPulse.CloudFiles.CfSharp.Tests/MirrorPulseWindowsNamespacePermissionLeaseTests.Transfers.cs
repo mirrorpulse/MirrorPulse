@@ -16,6 +16,7 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
 {
     [TestMethod]
+    [DoNotParallelize]
     [TestCategory("NativeCloudFiles")]
     public Task NativeHostTransferRetainsSourceAndBothFencesAfterOriginalCopyAndWholeTargetVerification() => RunNativeHostTransferAsync(deleteSource: false, selectedSameInstance: false);
 
