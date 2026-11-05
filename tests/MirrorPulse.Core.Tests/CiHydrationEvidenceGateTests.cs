@@ -58,21 +58,9 @@ public sealed class CiHydrationEvidenceGateTests
             if (scenario.StartsWith("namespace-", StringComparison.Ordinal))
             {
                 using JsonDocument catalog = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(repository, "eng", "test-suites.json")));
-                string[] required = catalog.RootElement.GetProperty("required").GetProperty("namespace").EnumerateArray().Select(item => item.GetString()!).ToArray();
-                string[] native = catalog.RootElement.GetProperty("required").GetProperty("native").EnumerateArray().Select(item => item.GetString()!).ToArray();
-                int nativeCount = required.Count(native.Contains) - (scenario == "namespace-partial" ? 1 : 0);
-                int managedCount = required.Count(name => !native.Contains(name));
                 string namespacePath = Path.Combine(root, "namespace.json");
-                await File.WriteAllTextAsync(namespacePath, JsonSerializer.Serialize(new
-                {
-                    schemaVersion = 1,
-                    suite = "namespace",
-                    selected = nativeCount + managedCount,
-                    executed = nativeCount + managedCount,
-                    skipped = 0,
-                    categories = new[] { new { category = "native", selected = nativeCount, executed = nativeCount, skipped = 0 },
-                        new { category = "managed", selected = managedCount, executed = managedCount, skipped = 0 } },
-                }));
+                await File.WriteAllTextAsync(namespacePath, JsonSerializer.Serialize(
+                    CiNamespaceEvidenceFixture.Create(catalog.RootElement, scenario == "namespace-partial")));
                 static string Quote(string value) => "'" + value.Replace("'", "''", StringComparison.Ordinal) + "'";
                 string manifests = scenario == "namespace-missing" ? Quote(tests) : Quote(tests) + "," + Quote(namespacePath);
                 string wrapper = Path.Combine(root, "collect.ps1");

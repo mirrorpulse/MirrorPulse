@@ -98,19 +98,7 @@ public sealed class CiEvidenceCandidateTests
                 if (arm && scenario.StartsWith("namespace-", StringComparison.Ordinal) && scenario != "namespace-missing")
                 {
                     using JsonDocument catalog = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(repository, "eng", "test-suites.json")));
-                    string[] required = catalog.RootElement.GetProperty("required").GetProperty("namespace").EnumerateArray().Select(item => item.GetString()!).ToArray();
-                    string[] native = catalog.RootElement.GetProperty("required").GetProperty("native").EnumerateArray().Select(item => item.GetString()!).ToArray();
-                    int nativeCount = required.Count(native.Contains) - (scenario == "namespace-partial" ? 1 : 0);
-                    int managedCount = required.Count(name => !native.Contains(name));
-                    tests.Add(new
-                    {
-                        suite = "namespace",
-                        selected = nativeCount + managedCount,
-                        executed = nativeCount + managedCount,
-                        skipped = 0,
-                        categories = new[] { new { category = "native", selected = nativeCount, executed = nativeCount, skipped = 0 },
-                            new { category = "managed", selected = managedCount, executed = managedCount, skipped = 0 } },
-                    });
+                    tests.Add(CiNamespaceEvidenceFixture.Create(catalog.RootElement, scenario == "namespace-partial"));
                 }
                 await File.WriteAllTextAsync(Path.Combine(directory, job + ".json"), JsonSerializer.Serialize(new
                 {
@@ -150,10 +138,6 @@ public sealed class CiEvidenceCandidateTests
         string scenario, string source, string hash)
     {
         using JsonDocument catalog = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(repository, "eng", "test-suites.json")));
-        string[] required = catalog.RootElement.GetProperty("required").GetProperty("namespace").EnumerateArray().Select(item => item.GetString()!).ToArray();
-        string[] native = catalog.RootElement.GetProperty("required").GetProperty("native").EnumerateArray().Select(item => item.GetString()!).ToArray();
-        int nativeCount = required.Count(native.Contains) - (scenario == "nonadmin-partial" ? 1 : 0);
-        int managedCount = required.Count(name => !native.Contains(name));
         return new()
         {
             ["schemaVersion"] = 1,
@@ -169,15 +153,7 @@ public sealed class CiEvidenceCandidateTests
             ["testAssemblySha256"] = scenario == "nonadmin-no-payload-digest" ? "missing" : hash,
             ["contextSha256"] = hash,
             ["trxSha256"] = hash,
-            ["tests"] = new
-            {
-                suite = "namespace",
-                selected = nativeCount + managedCount,
-                executed = nativeCount + managedCount,
-                skipped = 0,
-                categories = new[] { new { category = "native", selected = nativeCount, executed = nativeCount, skipped = 0 },
-                    new { category = "managed", selected = managedCount, executed = managedCount, skipped = 0 } },
-            },
+            ["tests"] = CiNamespaceEvidenceFixture.Create(catalog.RootElement, scenario == "nonadmin-partial"),
         };
     }
 }
