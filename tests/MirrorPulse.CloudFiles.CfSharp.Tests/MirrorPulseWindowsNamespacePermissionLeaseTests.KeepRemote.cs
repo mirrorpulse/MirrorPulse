@@ -90,7 +90,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             await File.WriteAllBytesAsync(file.FullPath, [1, 2, 3], token);
             var originals = new List<MirrorPulseNamespacePermissionPreparation>();
             var members = new Dictionary<Guid, MirrorPulseNamespaceMemberRegistration>();
-            await PrepareAcceptedIdentityOriginalsAsync(fileSystem, catalog, router, role, caller.User!, originals, token);
+            await PrepareAcceptedIdentityOriginalsAsync(fileSystem, catalog, router, role, caller.User!, originals, token, waitForFixtureMetadata: true);
             await SaveAcceptedIdentityFixtureTopologyAsync(catalog, root, token);
             await RegisterNativeOriginalMembersAsync(fileSystem, catalog, router, role, originals, members, actor, token);
             await using var feed = fileSystem.CreateLocalChangeFeed(new() { BatchSize = 1 });
@@ -395,11 +395,28 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     CollectionAssert.AreEqual(selected.PlaceholderIdentity.ToArray(), afterHandoff.PlaceholderIdentity.ToArray());
                     await Assert.ThrowsExactlyAsync<UnauthorizedAccessException>(() => File.ReadAllBytesAsync(file.FullPath, token));
                     await thirdRole.RunNamespaceOperationAsync(async () => CollectionAssert.AreEqual(selectedBytes, await File.ReadAllBytesAsync(file.FullPath, token)));
+
+                    var oldRestore = new MirrorPulseConflictKeepRemoteResidentRestoration(fileSystem, catalog, state, feed, router, role, actor);
+                    await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => RestoreUnderAsync(oldRestore).AsTask());
+                    Assert.HasCount(0, await catalog.ReadConflictKeepRemoteRestoreAttemptsAsync(commandId, token));
+                    var currentRestore = new MirrorPulseConflictKeepRemoteResidentRestoration(fileSystem, catalog, state, feed, router, thirdRole, actor);
+                    var restored = await RestoreUnderAsync(currentRestore);
+                    Assert.IsTrue(restored.ProductVerified);
+                    var restoreAttempt = (await catalog.ReadConflictKeepRemoteRestoreAttemptsAsync(commandId, token)).Single();
+                    Assert.AreEqual(result.RecoveryId, restoreAttempt.Start.RoleRecoveryId);
+                    Assert.AreEqual(firstAction.ActionId, restoreAttempt.Start.ActionId);
+                    Assert.AreEqual(restored, await RestoreUnderAsync(currentRestore));
+                    CollectionAssert.AreEqual(selectedBytes, await File.ReadAllBytesAsync(file.FullPath, token));
+                    CollectionAssert.AreEqual(confirmedAttempts.ToArray(), (await catalog.ReadConflictKeepRemoteNativeAttemptsAsync(commandId, token)).ToArray());
                     Assert.HasCount(1, await catalog.ReadNamespaceDispatchFencedRootsAsync(token));
 
                     ValueTask<MirrorPulseConflictKeepRemoteRoleResult> RecoverAsync(MirrorPulseConflictKeepRemoteResidentRoleRecovery worker) =>
                         scheduler.RunAsync(root.InstanceId, stop => actor.RunAsync(inner =>
                             new ValueTask<MirrorPulseConflictKeepRemoteRoleResult>(worker.RecoverAsync(root.RootId, copies, inner)), stop), token);
+
+                    ValueTask<MirrorPulseConflictKeepRemoteRestoreResult> RestoreUnderAsync(MirrorPulseConflictKeepRemoteResidentRestoration worker) =>
+                        scheduler.RunAsync(root.InstanceId, stop => actor.RunAsync(inner =>
+                            new ValueTask<MirrorPulseConflictKeepRemoteRestoreResult>(worker.RestoreAsync(root.RootId, copies, inner)), stop), token);
                 }
 
                 async Task<(MirrorPulseConflictKeepRemoteNativeResult Result, IReadOnlyList<MirrorPulseConflictKeepRemoteNativeAttempt> Attempts)> ConfirmWithRecoveryAsync()

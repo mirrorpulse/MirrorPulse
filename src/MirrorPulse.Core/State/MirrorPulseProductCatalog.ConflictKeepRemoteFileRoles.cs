@@ -74,8 +74,9 @@ public sealed partial class MirrorPulseProductCatalog
             }
 
             var authority = await ReadKeepRemoteRoleAuthorityCoreAsync(commandId, transaction, token).ConfigureAwait(false);
-            if (authority.Restore.Any(attempt => attempt.Result?.ProductVerified == true) ||
-                authority.Restore.Count > 0 && authority.Restore[^1].Result is { Receipt.Drained: false })
+            var restore = await ReadKeepRemoteRestoreAttemptsCoreAsync(commandId, transaction, token).ConfigureAwait(false);
+            if (restore.Any(attempt => attempt.Result?.ProductVerified == true) ||
+                restore.Count > 0 && restore[^1].Result is { Receipt.Drained: false })
                 throw new InvalidOperationException("A restored or undrained file cannot enter a new role handoff.");
             await RequireKeepRemoteFileStartRootAsync(authority.First, transaction, token).ConfigureAwait(false);
             if (!SameKeepRemoteSnapshot(authority.First.Original, await ReadNamespaceMemberProtectionSnapshotCoreAsync(
@@ -211,7 +212,7 @@ public sealed partial class MirrorPulseProductCatalog
         var original = preparation?.Intent.LocalContent?.UploadBinding.PreviousPlaceholderIdentity
             ?? throw new InvalidOperationException("Role recovery requires the original placeholder identity.");
         var native = await ReadKeepRemoteNativeAttemptsCoreAsync(commandId, transaction, token).ConfigureAwait(false);
-        var restore = await ReadKeepRemoteRestoreAttemptsCoreAsync(commandId, transaction, token).ConfigureAwait(false);
+        var restore = await ReadKeepRemoteRestoreFactsCoreAsync(commandId, transaction, token).ConfigureAwait(false);
         return new(first, content, original, native, restore);
     }
 

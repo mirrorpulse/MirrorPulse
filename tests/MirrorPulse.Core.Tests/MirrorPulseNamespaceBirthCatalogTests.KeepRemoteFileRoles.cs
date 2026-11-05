@@ -126,4 +126,42 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         return new(1, start.CommandId, start.FirstActionId, start.NextAction.ActionId, start.PlaceholderIdentity,
             start.Child with { Dacl = start.NextAction.RoleOnlyDacl, ObservedAt = at }, start.Parent with { ObservedAt = at }, 1, at);
     }
+
+    [TestMethod]
+    public async Task KeepRemoteRoleHandoffBindsRestorationAndRejectsTheOldOwnersLostReturn()
+    {
+        using var fixture = new Fixture();
+        MirrorPulseConflictKeepRemoteRestoreStart original, recovered;
+        MirrorPulseConflictKeepRemoteRestoreResult verified;
+        await using (var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths))
+        {
+            var restore = await PrepareKeepRemoteRestoreAsync(catalog);
+            original = await catalog.RecordConflictKeepRemoteRestoreStartAsync(restore.Start);
+            var native = (await catalog.ReadConflictKeepRemoteNativeAttemptsAsync(original.CommandId)).Single();
+            var role = await NewKeepRemoteRoleStartAsync(catalog, new(native.Start, native.Result!), "S-1-5-5-123-461");
+            await catalog.RecordConflictKeepRemoteRoleStartAsync(role);
+            await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => catalog.RecordConflictKeepRemoteRestoreResultAsync(restore.Result));
+            var handed = await catalog.RecordConflictKeepRemoteRoleResultAsync(KeepRemoteRoleResult(role));
+            var at = handed.RecordedAt.AddSeconds(1);
+            recovered = NextRestoreStart(original, at) with
+            {
+                RoleRecoveryId = handed.RecoveryId,
+                Child = handed.Child with { ObservedAt = at },
+                Parent = handed.Parent with { ObservedAt = at },
+                ObservedInSync = false,
+            };
+            await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => catalog.RecordConflictKeepRemoteRestoreStartAsync(recovered with { RoleRecoveryId = Guid.NewGuid() }));
+            await catalog.RecordConflictKeepRemoteRestoreStartAsync(recovered);
+            var result = RestoreResult(recovered, role.NextAction.RestoreDacl);
+            var first = (await catalog.ReadConflictKeepRemoteFileActionAsync(original.CommandId))!;
+            await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => catalog.RecordConflictKeepRemoteRestoreResultAsync(
+                result with { Child = result.Child! with { Dacl = first.RestoreDacl } }));
+            verified = await catalog.RecordConflictKeepRemoteRestoreResultAsync(result);
+        }
+        await using var reopened = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        CollectionAssert.AreEqual(new[] { new MirrorPulseConflictKeepRemoteRestoreAttempt(original, null), new(recovered, verified) },
+            (await reopened.ReadConflictKeepRemoteRestoreAttemptsAsync(original.CommandId)).ToArray());
+        Assert.AreEqual("pending", (await reopened.ReadUserCommandAsync(original.CommandId))!.State);
+        Assert.HasCount(1, await reopened.ReadNamespaceDispatchFencedRootsAsync());
+    }
 }

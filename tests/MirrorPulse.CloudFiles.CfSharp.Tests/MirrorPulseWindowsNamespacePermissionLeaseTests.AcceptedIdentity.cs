@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Security.AccessControl;
 using System.Security.Cryptography;
 using System.Security.Principal;
@@ -183,12 +184,12 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
 
     private static async Task PrepareAcceptedIdentityOriginalsAsync(CloudFileSystem fileSystem, MirrorPulseProductCatalog catalog,
         MirrorPulseRootRouter router, MirrorPulseNamespaceExecutionSession role, SecurityIdentifier owner,
-        List<MirrorPulseNamespacePermissionPreparation> originals, CancellationToken token)
+        List<MirrorPulseNamespacePermissionPreparation> originals, CancellationToken token, bool waitForFixtureMetadata = false)
     {
         foreach (CloudItem item in new CloudItem[] { fileSystem.Root, fileSystem.GetDirectory("Docs"), fileSystem.GetFile("Docs/original.bin") })
         {
             SetProtectedFixtureUserOwner(item, owner);
-            await using var lease = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(item, router, token);
+            await using var lease = await OpenFixtureMetadataAsync(item);
             var observed = await lease.InspectAsync(token);
             var baseline = new MirrorPulseNamespacePermissionBaseline(Guid.NewGuid(), observed.RootId, observed.LocalObject,
                 observed.RelativePath, observed.IsDirectory, observed.OwnerSid, observed.Dacl, observed.ObservedAt);
@@ -209,6 +210,18 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 Assert.AreEqual(MirrorPulseNamespacePermissionOutcome.Verified, applied.Permission!.Outcome);
             }
         });
+
+        async Task<MirrorPulseWindowsNamespacePermissionLease> OpenFixtureMetadataAsync(CloudItem item)
+        {
+            // Initial read-only capture can meet a transient observer after creating a fixture file.
+            // No permission action exists here. Keep each actual conflict and writer check unchanged.
+            for (int attempt = 0; ; attempt++)
+            {
+                try { return await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(item, router, token); }
+                catch (Win32Exception error) when (waitForFixtureMetadata && error.NativeErrorCode == 32 && attempt < 4)
+                { await Task.Delay(TimeSpan.FromMilliseconds(50 << attempt), token); }
+            }
+        }
     }
 
     private static async Task SaveAcceptedIdentityFixtureTopologyAsync(MirrorPulseProductCatalog catalog, RootRegistration root, CancellationToken token)

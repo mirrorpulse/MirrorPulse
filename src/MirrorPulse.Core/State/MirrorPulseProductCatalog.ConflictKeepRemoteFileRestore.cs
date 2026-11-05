@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Data.Sqlite;
 
 namespace MirrorPulse.Core.State;
@@ -7,7 +8,11 @@ namespace MirrorPulse.Core.State;
 /// <summary>Before-scope authority to restore access after the original successful native confirmation.</summary>
 public sealed record MirrorPulseConflictKeepRemoteRestoreStart(int Version, Guid CommandId, Guid ActionId, Guid AttemptId,
     Guid NativeAttemptId, string ObservedPlaceholderIdentity, bool ObservedInSync,
-    MirrorPulseNamespacePermissionVerification Child, MirrorPulseNamespacePermissionVerification Parent, DateTimeOffset StartedAt);
+    MirrorPulseNamespacePermissionVerification Child, MirrorPulseNamespacePermissionVerification Parent, DateTimeOffset StartedAt)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? RoleRecoveryId { get; init; }
+}
 
 /// <summary>Actual public exclusive-file access-operation facts, separate from product permission verification.</summary>
 public sealed record MirrorPulseConflictKeepRemoteRestoreReceipt(string Outcome, string Stage, MirrorPulseLocalFileBinding ExpectedObject,
@@ -76,11 +81,16 @@ public sealed partial class MirrorPulseProductCatalog
                 transaction.Commit(); return (T)retained;
             }
             if (kind == 1)
-                RequireKeepRemoteRestoreStart((MirrorPulseConflictKeepRemoteRestoreStart)(object)value, authority, attempts);
+            {
+                var start = (MirrorPulseConflictKeepRemoteRestoreStart)(object)value;
+                RequireCurrentKeepRemoteRestoreRole(start, authority);
+                RequireKeepRemoteRestoreStart(start, authority, attempts);
+            }
             else
             {
                 if (existing is null || attempts[^1] != existing)
                     throw new InvalidOperationException("An access result requires its latest retained before-scope attempt.");
+                RequireCurrentKeepRemoteRestoreRole(existing.Start, authority);
                 RequireKeepRemoteRestoreResult((MirrorPulseConflictKeepRemoteRestoreResult)(object)value, existing.Start, authority);
             }
             await RequireKeepRemoteFileStartRootAsync(authority.First, transaction, token).ConfigureAwait(false);
@@ -109,6 +119,27 @@ public sealed partial class MirrorPulseProductCatalog
     }
 
     private async Task<IReadOnlyList<MirrorPulseConflictKeepRemoteRestoreAttempt>> ReadKeepRemoteRestoreAttemptsCoreAsync(
+        Guid commandId, SqliteTransaction transaction, CancellationToken token)
+    {
+        var attempts = await ReadKeepRemoteRestoreFactsCoreAsync(commandId, transaction, token).ConfigureAwait(false);
+        if (attempts.Count == 0) return attempts;
+        try
+        {
+            var authority = await ReadKeepRemoteRestoreAuthorityCoreAsync(commandId, transaction, token).ConfigureAwait(false);
+            for (int index = 0; index < attempts.Count; index++)
+            {
+                RequireKeepRemoteRestoreStart(attempts[index].Start, authority, attempts.Take(index).ToArray());
+                if (attempts[index].Result is { } result) RequireKeepRemoteRestoreResult(result, attempts[index].Start, authority);
+            }
+        }
+        catch (Exception error) when (error is ArgumentException or InvalidOperationException)
+        { throw new InvalidDataException("The restoration history lost its original successful native and role authority.", error); }
+        return attempts;
+    }
+
+    // Role admission examines the already ordered and owner-bound restore timeline. The public
+    // restoration reader above verifies authority after reading both ledgers.
+    private async Task<IReadOnlyList<MirrorPulseConflictKeepRemoteRestoreAttempt>> ReadKeepRemoteRestoreFactsCoreAsync(
         Guid commandId, SqliteTransaction transaction, CancellationToken token)
     {
         var attempts = new List<MirrorPulseConflictKeepRemoteRestoreAttempt>();
@@ -172,23 +203,12 @@ public sealed partial class MirrorPulseProductCatalog
                 { throw new InvalidDataException("The retained restoration payload is invalid.", error); }
             }
         }
-        if (attempts.Count == 0) return attempts;
-        try
-        {
-            var authority = await ReadKeepRemoteRestoreAuthorityCoreAsync(commandId, transaction, token).ConfigureAwait(false);
-            for (int index = 0; index < attempts.Count; index++)
-            {
-                RequireKeepRemoteRestoreStart(attempts[index].Start, authority, attempts.Take(index).ToArray());
-                if (attempts[index].Result is { } result) RequireKeepRemoteRestoreResult(result, attempts[index].Start, authority);
-            }
-        }
-        catch (Exception error) when (error is ArgumentException or InvalidOperationException)
-        { throw new InvalidDataException("The restoration history lost its original successful native authority.", error); }
-        return attempts;
+        return attempts.AsReadOnly();
     }
 
     private sealed record KeepRemoteRestoreAuthority(MirrorPulseConflictKeepRemoteFileStart First,
-        MirrorPulseConflictKeepRemoteFileContent Content, MirrorPulseConflictKeepRemoteNativeAttempt Native);
+        MirrorPulseConflictKeepRemoteFileContent Content, MirrorPulseConflictKeepRemoteNativeAttempt Native,
+        IReadOnlyList<MirrorPulseConflictKeepRemoteRoleAttempt> Roles);
 
     private async Task<KeepRemoteRestoreAuthority> ReadKeepRemoteRestoreAuthorityCoreAsync(Guid commandId,
         SqliteTransaction transaction, CancellationToken token)
@@ -200,19 +220,22 @@ public sealed partial class MirrorPulseProductCatalog
         var native = (await ReadKeepRemoteNativeAttemptsCoreAsync(commandId, transaction, token).ConfigureAwait(false))
             .SingleOrDefault(attempt => attempt.Result?.Receipt.MayAcknowledge == true)
             ?? throw new InvalidOperationException("Restoring access requires the original successful native confirmation.");
-        return new(first, content, native);
+        var roles = await ReadKeepRemoteRoleAttemptsCoreAsync(commandId, transaction, token).ConfigureAwait(false);
+        return new(first, content, native, roles);
     }
 
     private static void RequireKeepRemoteRestoreStart(MirrorPulseConflictKeepRemoteRestoreStart value,
         KeepRemoteRestoreAuthority authority, IReadOnlyList<MirrorPulseConflictKeepRemoteRestoreAttempt> previous)
     {
-        var action = authority.Content.Action;
+        var originalAction = authority.Content.Action;
+        var action = RequireKeepRemoteRestoreRole(value, authority);
         var native = authority.Native;
         ArgumentNullException.ThrowIfNull(value.Child);
         ArgumentNullException.ThrowIfNull(value.Parent);
-        if (value.Version != 1 || value.CommandId != authority.First.CommandId || value.ActionId != action.ActionId ||
+        if (value.Version != 1 || value.CommandId != authority.First.CommandId || value.ActionId != originalAction.ActionId ||
             value.NativeAttemptId != native.Start.AttemptId || value.AttemptId == Guid.Empty ||
             new[] { value.CommandId, value.ActionId, value.AttemptId, value.NativeAttemptId }.Distinct().Count() != 4 ||
+            value.AttemptId == value.RoleRecoveryId || value.NativeAttemptId == value.RoleRecoveryId ||
             value.ObservedPlaceholderIdentity != native.Start.SelectedPlaceholderIdentity || value.StartedAt < native.Result!.RecordedAt ||
             previous.Count == 0 && !value.ObservedInSync || previous.Any(attempt => attempt.Result?.ProductVerified == true) ||
             previous.Count > 0 && (previous[^1].Result is { Receipt.Drained: false } ||
@@ -232,10 +255,11 @@ public sealed partial class MirrorPulseProductCatalog
         MirrorPulseConflictKeepRemoteRestoreStart start, KeepRemoteRestoreAuthority authority)
     {
         var receipt = value.Receipt ?? throw new ArgumentException("Retain the actual public access-operation receipt.");
-        var action = authority.Content.Action;
+        var action = RequireKeepRemoteRestoreRole(start, authority);
         if (value.Version != 1 || value.CommandId != start.CommandId || value.ActionId != start.ActionId ||
             value.AttemptId != start.AttemptId || value.NativeAttemptId != start.NativeAttemptId ||
             receipt.ExpectedObject != action.LocalObject || value.RecordedAt < receipt.ObservedAt || receipt.ObservedAt < start.StartedAt ||
+            authority.Roles.Any(role => role.Start.NextAction.PreparedAt > start.StartedAt && role.Start.NextAction.PreparedAt <= value.RecordedAt) ||
             receipt.Outcome is not ("Completed" or "Busy" or "Unsupported" or "LocalObjectMismatch" or "NotApplicable" or "ProtectionLost" or
                 "NativeAppliedProjectionPending" or "CallbackFailed" or "Canceled" or "DeadlineExceeded" or "Failed") ||
             receipt.Stage is not ("Admission" or "Open" or "Inspection" or "NativePreparation" or "Projection" or "Callback" or "AccessDescriptor" or "Draining" or "Released") ||
@@ -262,5 +286,22 @@ public sealed partial class MirrorPulseProductCatalog
         RequireKeepRemoteSealedVerification(value.Child, action.LocalObject, action.OwnerSid, action.RestoreDacl, start.StartedAt, value.RecordedAt);
         RequireKeepRemoteSealedVerification(value.Parent, authority.First.Parent.Context.Member.LocalObject,
             authority.First.Parent.Context.Member.OwnerSid, authority.First.Parent.ExpectedDacl, start.StartedAt, value.RecordedAt);
+    }
+
+    private static MirrorPulseConflictKeepRemoteFileAction RequireKeepRemoteRestoreRole(MirrorPulseConflictKeepRemoteRestoreStart start,
+        KeepRemoteRestoreAuthority authority)
+    {
+        var role = authority.Roles.LastOrDefault(attempt => attempt.Start.NextAction.PreparedAt <= start.StartedAt);
+        if (role is null && start.RoleRecoveryId is null) return authority.Content.Action;
+        if (role is { Result: { } observed } && observed.RecordedAt <= start.StartedAt && observed.RecoveryId == start.RoleRecoveryId &&
+            observed.PlaceholderIdentity == start.ObservedPlaceholderIdentity)
+            return role.Start.NextAction;
+        throw new InvalidOperationException("Restoring access requires the latest verified handoff for the selected original placeholder.");
+    }
+
+    private static void RequireCurrentKeepRemoteRestoreRole(MirrorPulseConflictKeepRemoteRestoreStart start, KeepRemoteRestoreAuthority authority)
+    {
+        if (authority.Roles.Count > 0 && (authority.Roles[^1].Result is not { } current || current.RecoveryId != start.RoleRecoveryId))
+            throw new InvalidOperationException("New restoration facts require the current verified role handoff.");
     }
 }

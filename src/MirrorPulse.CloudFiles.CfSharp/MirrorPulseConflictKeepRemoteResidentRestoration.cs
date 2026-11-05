@@ -15,7 +15,7 @@ internal enum MirrorPulseKeepRemoteRestoreCheckpoint { AfterRestoreStart, AfterA
 /// The caller retains Host lifecycle, scheduler, actor, pending-root admission and both private
 /// copies. Native confirmation must already have succeeded. This never recopies bytes, changes
 /// identity, accepts a later edit, acknowledges originals or releases the command's fence.
-/// Another execution role requires a separate retained recovery handoff.
+/// Another execution role must first verify its retained metadata handoff.
 /// </remarks>
 [SupportedOSPlatform("windows10.0.26100")]
 internal sealed class MirrorPulseConflictKeepRemoteResidentRestoration(CloudFileSystem fileSystem, MirrorPulseProductCatalog catalog,
@@ -39,7 +39,12 @@ internal sealed class MirrorPulseConflictKeepRemoteResidentRestoration(CloudFile
         var native = (await catalog.ReadConflictKeepRemoteNativeAttemptsAsync(intent.CommandId, token).ConfigureAwait(false))
             .SingleOrDefault(attempt => attempt.Result?.Receipt.MayAcknowledge == true)
             ?? throw new InvalidOperationException("Restoring access requires the original successful public native confirmation.");
-        var action = content.Action;
+        var originalAction = content.Action;
+        var roles = await catalog.ReadConflictKeepRemoteRoleAttemptsAsync(intent.CommandId, token).ConfigureAwait(false);
+        var role = roles.Count == 0 ? null : roles[^1];
+        if (role is not null && role.Result is null)
+            throw new InvalidOperationException("Restoring access requires the current role's verified handoff.");
+        var action = role?.Start.NextAction ?? originalAction;
         var selectedIdentity = new CloudPlaceholderIdentity(intent.ItemId, intent.RemoteSource.RemoteId, intent.RemoteSource.RemoteRevision);
         string selected = Convert.ToBase64String(selectedIdentity.Encode());
         if (copies.Local is null || content.Completion?.Copy != copies.Remote.Proof ||
@@ -67,9 +72,10 @@ internal sealed class MirrorPulseConflictKeepRemoteResidentRestoration(CloudFile
             await using var metadata = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(file, router, token).ConfigureAwait(false);
             var before = await InspectAsync(token).ConfigureAwait(false);
             RequireChild(before.Child, restored: false); RequireParent(before.Parent); RequireIdentity(before.Snapshot);
-            var start = await catalog.RecordConflictKeepRemoteRestoreStartAsync(new(1, intent.CommandId, action.ActionId,
+            var start = await catalog.RecordConflictKeepRemoteRestoreStartAsync(new MirrorPulseConflictKeepRemoteRestoreStart(1, intent.CommandId, originalAction.ActionId,
                 Guid.NewGuid(), native.Start.AttemptId, selected, before.Snapshot.SynchronizationState == CloudSynchronizationState.InSync,
-                Verification(before.Child), Verification(before.Parent), DateTimeOffset.UtcNow), token).ConfigureAwait(false);
+                Verification(before.Child), Verification(before.Parent), DateTimeOffset.UtcNow)
+            { RoleRecoveryId = role?.Result?.RecoveryId }, token).ConfigureAwait(false);
             await AtAsync(MirrorPulseKeepRemoteRestoreCheckpoint.AfterRestoreStart, token).ConfigureAwait(false);
             var scope = await MirrorPulseWindowsNamespacePermissionLease.RunOwnedProtectedAsync(file, router, action.LocalObject,
                 async (lease, stop) =>
@@ -116,7 +122,7 @@ internal sealed class MirrorPulseConflictKeepRemoteResidentRestoration(CloudFile
                     verified = false;
                 }
             }
-            result = await catalog.RecordConflictKeepRemoteRestoreResultAsync(new(1, intent.CommandId, action.ActionId, start.AttemptId,
+            result = await catalog.RecordConflictKeepRemoteRestoreResultAsync(new(1, intent.CommandId, originalAction.ActionId, start.AttemptId,
                 native.Start.AttemptId, receipt, child, parentProof, links, identity, inSync, verified, DateTimeOffset.UtcNow),
                 CancellationToken.None).ConfigureAwait(false);
             await AtAsync(MirrorPulseKeepRemoteRestoreCheckpoint.AfterRestoreRecorded, CancellationToken.None).ConfigureAwait(false);
