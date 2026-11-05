@@ -11,5 +11,5 @@ public sealed partial class NamespaceNonAdminControllerTests
     [DataRow("restoration-missing")]
     [DataRow("restoration-unrelated")]
     public Task ControllerRetainsEveryOriginalDeadlineAndAddsOnlyActualKeepRemoteExecutions(string selection) =>
-        RunAsync("keep-remote-" + selection, 131);
+        RunAsync("keep-remote-" + selection, 132);
 }

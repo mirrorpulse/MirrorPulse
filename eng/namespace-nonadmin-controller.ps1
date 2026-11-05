@@ -1,5 +1,5 @@
 function Get-OrdinaryUserNamespaceBudgetMilliseconds {
-    param([Parameter(Mandatory)][ValidateRange(1, 131)][int]$TestCount, [string[]]$TestNames,
+    param([Parameter(Mandatory)][ValidateRange(1, 132)][int]$TestCount, [string[]]$TestNames,
         [ValidateSet('AllRetained', 'S06')][string]$Scope = 'AllRetained')
     if ($Scope -ceq 'S06' -and -not $PSBoundParameters.ContainsKey('TestNames')) {
         throw 'S06 scope requires its explicit selected test names.'
@@ -25,6 +25,7 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
         ($prefix+'NativeKeepRemoteResidentWriterPreservesChangedLocalBytesBeforeItsFirstWrite') = 1
         ($prefix+'NativeKeepRemoteConfirmationRetainsOriginalAttemptsAndRecoversLostSdkReturns') = 4
         ($prefix+'NativeKeepRemoteRestorationRetainsActualAccessResultsAndPreservesOrdinaryLaterEdits') = 5
+        ($prefix+'NativeKeepRemoteRoleHandoffRecoversLostReadbackWithoutReapplyingContent') = 1
     }
     $additionalSelections = @(@($preparation,$approval,$rootPreparation,$rootExecution,$rootRecovery,$rootRuntime,$rootAdmission,$rootPublic,$rootCancellation,$unsealedCancellation,$legacyInitializer,$bornCancellation,$disabledImport)+@($keepRemote.Keys) | Where-Object {$_ -cin $TestNames}).Count
     if ($TestCount -gt 112 -and (-not $PSBoundParameters.ContainsKey('TestNames') -or $additionalSelections -lt $TestCount-112)) {
@@ -97,13 +98,13 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
     # the original 123-name catalog retains its exact prior bound.
     # AllRetained keeps every historical envelope. S06 retains63 repeated
     # executions and adds the same65 seconds to its original88m30s envelope.
-    # The six KeepRemote methods add exactly nineteen65-second executions.
+    # The seven KeepRemote methods add exactly twenty 65-second executions.
     # Count-only callers still retain their original112-name/30-minute bound.
     return [Math]::Max(600000, 120000 + $executions * 15000 + $transferDeadlineMilliseconds)
 }
 
 function Get-OrdinaryUserNamespaceStepTimeoutMinutes {
-    param([Parameter(Mandatory)][ValidateRange(1, 131)][int]$TestCount, [string[]]$TestNames,
+    param([Parameter(Mandatory)][ValidateRange(1, 132)][int]$TestCount, [string[]]$TestNames,
         [ValidateSet('AllRetained', 'S06')][string]$Scope = 'AllRetained')
     # The workflow must let the existing child budget expire and allow the
     # controller to preserve diagnostics and remove its disposable user/profile.

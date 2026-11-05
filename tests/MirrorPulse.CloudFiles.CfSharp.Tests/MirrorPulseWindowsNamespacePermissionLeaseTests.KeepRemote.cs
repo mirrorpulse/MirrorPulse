@@ -54,6 +54,10 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     public Task NativeKeepRemoteRestorationRetainsActualAccessResultsAndPreservesOrdinaryLaterEdits(string checkpoint) =>
         RunKeepRemoteResidentFixtureAsync(checkpoint, 65537);
 
+    [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles")]
+    public Task NativeKeepRemoteRoleHandoffRecoversLostReadbackWithoutReapplyingContent() =>
+        RunKeepRemoteResidentFixtureAsync("role-handoff", 65537);
+
     private async Task RunKeepRemoteResidentFixtureAsync(string scenario, int selectedLength)
     {
         if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
@@ -330,6 +334,10 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 {
                     await VerifyRestorationAsync();
                 }
+                else if (scenario == "role-handoff")
+                {
+                    await VerifyRoleHandoffAsync();
+                }
                 else
                 {
                     byte[] laterBytes = "a later edit after content completion"u8.ToArray();
@@ -344,6 +352,54 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     Assert.AreEqual(confirmed, await ConfirmAsync());
                     Assert.HasCount(confirmedAttempts.Count, await catalog.ReadConflictKeepRemoteNativeAttemptsAsync(commandId, token));
                     await role.RunNamespaceOperationAsync(async () => CollectionAssert.AreEqual(laterBytes, await File.ReadAllBytesAsync(file.FullPath, token)));
+                }
+
+                async Task VerifyRoleHandoffAsync()
+                {
+                    var firstAction = (await catalog.ReadConflictKeepRemoteFileActionAsync(commandId, token))!;
+                    MirrorPulseConflictKeepRemoteRoleStart lost;
+                    await using (var secondRole = new MirrorPulseNamespaceExecutionSession())
+                    {
+                        var handoff = new MirrorPulseConflictKeepRemoteResidentRoleRecovery(fileSystem, catalog, state, feed, router, secondRole, actor)
+                        {
+                            Checkpoint = (point, _) => point == MirrorPulseKeepRemoteRoleCheckpoint.AfterMetadataHandoff
+                                ? ValueTask.FromException(new IOException("Synthetic interruption after the retained file's role metadata write."))
+                                : ValueTask.CompletedTask
+                        };
+                        await Assert.ThrowsExactlyAsync<IOException>(() => RecoverAsync(handoff).AsTask());
+                        var pending = (await catalog.ReadConflictKeepRemoteRoleAttemptsAsync(commandId, token)).Single();
+                        lost = pending.Start;
+                        Assert.IsNull(pending.Result);
+                        Assert.AreEqual(secondRole.RoleSid.Value, lost.NextAction.RoleSid);
+                        await secondRole.RunNamespaceOperationAsync(async () => CollectionAssert.AreEqual(selectedBytes, await File.ReadAllBytesAsync(file.FullPath, token)));
+                    }
+
+                    await using var thirdRole = new MirrorPulseNamespaceExecutionSession();
+                    var recovery = new MirrorPulseConflictKeepRemoteResidentRoleRecovery(fileSystem, catalog, state, feed, router, thirdRole, actor);
+                    var result = await RecoverAsync(recovery);
+                    var history = await catalog.ReadConflictKeepRemoteRoleAttemptsAsync(commandId, token);
+                    Assert.HasCount(2, history);
+                    Assert.AreEqual(lost, history[0].Start);
+                    Assert.IsNull(history[0].Result);
+                    Assert.AreEqual(lost.NextAction.ActionId, history[1].Start.PreviousRecoveryId);
+                    Assert.AreEqual(thirdRole.RoleSid.Value, history[1].Start.NextAction.RoleSid);
+                    Assert.AreEqual(result, history[1].Result);
+                    Assert.AreEqual(result, await RecoverAsync(recovery));
+                    Assert.AreEqual(firstAction, await catalog.ReadConflictKeepRemoteFileActionAsync(commandId, token));
+                    Assert.AreEqual(completion, (await catalog.ReadConflictKeepRemoteFileContentAsync(commandId, token))!.Completion);
+                    CollectionAssert.AreEqual(confirmedAttempts.ToArray(), (await catalog.ReadConflictKeepRemoteNativeAttemptsAsync(commandId, token)).ToArray());
+                    Assert.HasCount(0, await catalog.ReadConflictKeepRemoteRestoreAttemptsAsync(commandId, token));
+                    var afterHandoff = await file.InspectAsync(token);
+                    Assert.AreEqual(snapshot.LocalBinding, afterHandoff.LocalBinding);
+                    Assert.AreEqual(CloudSynchronizationState.InSync, afterHandoff.SynchronizationState);
+                    CollectionAssert.AreEqual(selected.PlaceholderIdentity.ToArray(), afterHandoff.PlaceholderIdentity.ToArray());
+                    await Assert.ThrowsExactlyAsync<UnauthorizedAccessException>(() => File.ReadAllBytesAsync(file.FullPath, token));
+                    await thirdRole.RunNamespaceOperationAsync(async () => CollectionAssert.AreEqual(selectedBytes, await File.ReadAllBytesAsync(file.FullPath, token)));
+                    Assert.HasCount(1, await catalog.ReadNamespaceDispatchFencedRootsAsync(token));
+
+                    ValueTask<MirrorPulseConflictKeepRemoteRoleResult> RecoverAsync(MirrorPulseConflictKeepRemoteResidentRoleRecovery worker) =>
+                        scheduler.RunAsync(root.InstanceId, stop => actor.RunAsync(inner =>
+                            new ValueTask<MirrorPulseConflictKeepRemoteRoleResult>(worker.RecoverAsync(root.RootId, copies, inner)), stop), token);
                 }
 
                 async Task<(MirrorPulseConflictKeepRemoteNativeResult Result, IReadOnlyList<MirrorPulseConflictKeepRemoteNativeAttempt> Attempts)> ConfirmWithRecoveryAsync()
