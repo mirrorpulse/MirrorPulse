@@ -98,7 +98,7 @@ jobs:
 
       - name: Test
         run: |
-          dotnet test MirrorPulse.sln --configuration Release --no-build --logger trx --results-directory artifacts/test-results/managed
+          dotnet test MirrorPulse.sln --configuration Release --no-build --logger trx --results-directory artifacts/test-results/managed --blame-hang-timeout 5m --blame-hang-dump-type none
           if ($LASTEXITCODE -ne 0) { throw 'Managed tests failed.' }
           pwsh ./eng/verify-test-results.ps1 -Suite managed -ResultsDirectory artifacts/test-results/managed
 

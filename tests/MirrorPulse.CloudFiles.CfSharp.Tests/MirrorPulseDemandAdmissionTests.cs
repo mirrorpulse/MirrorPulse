@@ -30,18 +30,36 @@ public sealed class MirrorPulseDemandAdmissionTests
     public async Task RecoveryDrainsTheActualDirectoryPageCallbackBeforeAcceptingItsAudit()
     {
         var (router, root) = Router(); await using var admission = new MirrorPulseNamespaceWorkAdmission([root.RootId]);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await OpenAsync(admission, root.RootId);
         var entered = Signal(); var release = new TaskCompletionSource<CloudRemoteDirectoryPage>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var pages = new Pages(async _ => { entered.SetResult(); return await release.Task; });
+        var pages = new Pages(async token => { entered.TrySetResult(); return await release.Task.WaitAsync(token); });
         var provider = new MirrorPulseDemandProvider(router, new Ranges(_ => throw new AssertFailedException("No range expected.")), pages, admission);
         byte[] identity = router.CreateFileIdentity(root.InstanceId, root.UniquenessKey, "folder", "v1").Encode();
-        var fetching = provider.FetchChildrenAsync("Docs/folder", identity, null).AsTask();
-        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        var recovery = admission.BeginRecoveryAsync([root.RootId]).AsTask(); Assert.IsFalse(recovery.IsCompleted);
-        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => provider.FetchChildrenAsync("Docs/folder", identity, null).AsTask());
-        release.SetResult(new CloudRemoteDirectoryPage([])); await fetching.WaitAsync(TimeSpan.FromSeconds(5));
-        await using var scope = await recovery.WaitAsync(TimeSpan.FromSeconds(5)); Assert.AreEqual(1, pages.Calls);
-        Assert.IsFalse(admission.IsAdmitted(root.RootId)); scope.CompleteAfterFreshAudit();
+        var fetching = provider.FetchChildrenAsync("Docs/folder", identity, null, deadline.Token).AsTask();
+        Task<MirrorPulseNamespaceWorkAdmission.RecoveryLease>? recovery = null;
+        try
+        {
+            await entered.Task.WaitAsync(deadline.Token);
+            recovery = admission.BeginRecoveryAsync([root.RootId], deadline.Token).AsTask(); Assert.IsFalse(recovery.IsCompleted);
+            var waiting = provider.FetchChildrenAsync("Docs/folder", identity, null, deadline.Token).AsTask();
+            Assert.IsFalse(waiting.IsCompleted); Assert.AreEqual(1, pages.Calls);
+            release.TrySetResult(new CloudRemoteDirectoryPage([])); await fetching.WaitAsync(deadline.Token);
+            await using var scope = await recovery.WaitAsync(deadline.Token); Assert.AreEqual(1, pages.Calls);
+            Assert.IsFalse(admission.IsAdmitted(root.RootId)); Assert.IsFalse(waiting.IsCompleted);
+            // This managed fixture models audit completion; it grants no native proof.
+            scope.CompleteAfterFreshAudit(); await scope.DisposeAsync();
+            Assert.IsEmpty((await waiting.WaitAsync(deadline.Token)).Children);
+            Assert.AreEqual(2, pages.Calls); Assert.IsTrue(admission.IsAdmitted(root.RootId));
+        }
+        finally
+        {
+            // Assertion failures must release the original callback and recovery owner too.
+            deadline.Cancel(); release.TrySetResult(new CloudRemoteDirectoryPage([]));
+            if (recovery is not null)
+                try { await using var abandoned = await recovery; }
+                catch (OperationCanceledException) when (deadline.IsCancellationRequested) { }
+        }
     }
 
     [TestMethod]
