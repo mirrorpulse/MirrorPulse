@@ -812,4 +812,16 @@ CREATE TABLE conflict_keep_remote_file_actions(
 CREATE TABLE conflict_keep_remote_file_action_owners(
     command_id TEXT NOT NULL PRIMARY KEY REFERENCES conflict_keep_remote_file_starts(command_id),
     action_id TEXT NOT NULL UNIQUE REFERENCES conflict_keep_remote_file_actions(action_id));
-PRAGMA user_version=97;
+CREATE TABLE conflict_keep_remote_content_facts(
+    command_id TEXT NOT NULL REFERENCES conflict_keep_remote_file_actions(command_id),
+    kind INTEGER NOT NULL CHECK(kind IN (1,2)),
+    action_id TEXT NOT NULL REFERENCES conflict_keep_remote_file_actions(action_id),
+    payload BLOB NOT NULL CHECK(length(payload)<=262144),
+    fingerprint BLOB NOT NULL CHECK(length(fingerprint)=32),
+    PRIMARY KEY(command_id,kind));
+CREATE TABLE conflict_keep_remote_content_owners(
+    command_id TEXT NOT NULL REFERENCES conflict_keep_remote_file_actions(command_id),
+    kind INTEGER NOT NULL CHECK(kind IN (1,2)),
+    action_id TEXT NOT NULL REFERENCES conflict_keep_remote_file_actions(action_id),
+    PRIMARY KEY(command_id,kind));
+PRAGMA user_version=98;

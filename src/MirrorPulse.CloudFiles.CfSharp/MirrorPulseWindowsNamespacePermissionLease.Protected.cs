@@ -62,14 +62,20 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLease
     private string ReadOwnerSid(CloudLocalFileBinding original)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        ValidateRetainedHandle(_target);
-        if (!GetFileInformationByHandleEx(_target, FileIdInformation, out FileIdInfo identity, (uint)System.Runtime.InteropServices.Marshal.SizeOf<FileIdInfo>()))
-            throw new System.ComponentModel.Win32Exception(System.Runtime.InteropServices.Marshal.GetLastPInvokeError());
-        if (identity.VolumeSerialNumber != original.VolumeSerialNumber || identity.FileId != original.LocalFileId)
-            throw new InvalidDataException("The read-only owner reference does not belong to the protected original object.");
+        RequireRetainedObject(_target, new(original.VolumeSerialNumber, original.SyncRootFileId, original.LocalFileId));
         var descriptor = new HandleSecurity(_target, _isDirectory);
         return ((SecurityIdentifier?)descriptor.GetOwner(typeof(SecurityIdentifier)))?.Value
             ?? throw new InvalidDataException("The retained original object has no owner SID.");
+    }
+
+    internal static void RequireRetainedObject(Microsoft.Win32.SafeHandles.SafeFileHandle handle, MirrorPulseLocalFileBinding original)
+    {
+        ArgumentNullException.ThrowIfNull(original);
+        ValidateRetainedHandle(handle);
+        if (!GetFileInformationByHandleEx(handle, FileIdInformation, out FileIdInfo identity, (uint)System.Runtime.InteropServices.Marshal.SizeOf<FileIdInfo>()))
+            throw new System.ComponentModel.Win32Exception(System.Runtime.InteropServices.Marshal.GetLastPInvokeError());
+        if (identity.VolumeSerialNumber != original.VolumeSerialNumber || identity.FileId != original.LocalFileId)
+            throw new InvalidDataException("The retained handle differs from the original local object.");
     }
 
     private sealed class ProtectedPermissionLease(MirrorPulseWindowsNamespacePermissionLease metadata,

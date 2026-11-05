@@ -34,7 +34,7 @@ public sealed class MirrorPulseConflictPageUpgradeTests
             await using (var original = new SqliteConnection(options.ToString()))
             {
                 await original.OpenAsync(); await using var query = original.CreateCommand();
-                query.CommandText = "PRAGMA user_version;"; Assert.AreEqual(97L, await query.ExecuteScalarAsync());
+                query.CommandText = "PRAGMA user_version;"; Assert.AreEqual(98L, await query.ExecuteScalarAsync());
                 // Recreate a genuine version92 catalog without the new observation tables.
                 query.CommandText = "DROP INDEX ix_remote_conflicts_page; DROP INDEX ix_upload_conflicts_page; DROP TABLE coalesced_conflict_remote_members; DROP TABLE coalesced_conflict_remote_heads; DROP TABLE coalesced_conflict_remote_observations; PRAGMA user_version=92;";
                 await query.ExecuteNonQueryAsync();
@@ -52,7 +52,7 @@ public sealed class MirrorPulseConflictPageUpgradeTests
             await using (var inspected = new SqliteConnection(options.ToString()))
             {
                 await inspected.OpenAsync(); await using var query = inspected.CreateCommand();
-                query.CommandText = "PRAGMA user_version;"; Assert.AreEqual(97L, await query.ExecuteScalarAsync());
+                query.CommandText = "PRAGMA user_version;"; Assert.AreEqual(98L, await query.ExecuteScalarAsync());
                 query.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE name IN ('ix_remote_conflicts_page','ix_upload_conflicts_page');";
                 Assert.AreEqual(2L, await query.ExecuteScalarAsync());
                 query.CommandText = "SELECT (SELECT COUNT(*) FROM upload_conflicts)+(SELECT COUNT(*) FROM remote_conflict_projections);";
