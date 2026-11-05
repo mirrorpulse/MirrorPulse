@@ -34,6 +34,19 @@ internal sealed partial class MirrorPulseConflictKeepRemoteJournal
         return retained;
     }
 
+    /// <summary>Checks immutable original rows while leaving all later observations independently pending.</summary>
+    /// <remarks>Use after permission action admission. Current content and successor safety require the native application boundary.</remarks>
+    internal async Task<MirrorPulseConflictKeepRemoteJournalBinding> RevalidateRetainedOriginalsAsync(
+        MirrorPulseConflictKeepRemoteCopies copies, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(copies);
+        var retained = await catalog.ReadConflictKeepRemoteJournalAsync(copies.Preparation.Intent.CommandId, token).ConfigureAwait(false)
+            ?? throw new InvalidDataException("The original KeepRemote journal correlations are missing.");
+        var current = await CaptureCoreAsync(copies, false, token).ConfigureAwait(false);
+        RequireSameBinding(retained, Bind(current, copies.Preparation, retained.ObservedAt));
+        return retained;
+    }
+
     private static MirrorPulseConflictKeepRemoteJournalBinding Bind(MirrorPulseKeepRemoteJournalSnapshot snapshot,
         MirrorPulseConflictKeepRemotePreparation preparation, DateTimeOffset observedAt) =>
         new(1, snapshot.CommandId, snapshot.PlanId, snapshot.ItemId, snapshot.IntentSha256,

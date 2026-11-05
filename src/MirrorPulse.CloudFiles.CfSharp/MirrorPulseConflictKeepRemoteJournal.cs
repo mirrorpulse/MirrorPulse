@@ -28,8 +28,11 @@ internal sealed partial class MirrorPulseConflictKeepRemoteJournal(ICloudStateSt
         MirrorPulseRootRouter router, CloudLocalChangeFeed feed)
         : this(store, catalog, router, (members, token) => ReadPublicOriginalsAsync(feed, members, token)) { }
 
-    internal async Task<MirrorPulseKeepRemoteJournalSnapshot> CaptureAsync(MirrorPulseConflictKeepRemoteCopies copies,
-        CancellationToken token = default)
+    internal Task<MirrorPulseKeepRemoteJournalSnapshot> CaptureAsync(MirrorPulseConflictKeepRemoteCopies copies,
+        CancellationToken token = default) => CaptureCoreAsync(copies, true, token);
+
+    private async Task<MirrorPulseKeepRemoteJournalSnapshot> CaptureCoreAsync(MirrorPulseConflictKeepRemoteCopies copies,
+        bool requireNoSuccessors, CancellationToken token)
     {
         ArgumentNullException.ThrowIfNull(copies);
         var retained = await RequireCopiesAsync(copies, token).ConfigureAwait(false);
@@ -39,7 +42,7 @@ internal sealed partial class MirrorPulseConflictKeepRemoteJournal(ICloudStateSt
         if (plan.PlanId != intent.PlanId || plan.ItemId != intent.ItemId || plan.InstanceId != intent.InstanceId ||
             plan.RootKey != intent.RemoteSource.RootKey || !plan.Members.Select(member => member.OperationId).SequenceEqual(intent.OriginalOperationIds))
             throw new InvalidDataException("The original KeepRemote group changed its complete journal ownership.");
-        var before = await ReadRowsAsync(plan, token).ConfigureAwait(false);
+        var before = await ReadRowsAsync(plan, requireNoSuccessors, token).ConfigureAwait(false);
         var observations = await readOriginals(plan.Members, token).ConfigureAwait(false);
         if (observations.Count != plan.Members.Count || observations.Any(observation => observation.ItemId != plan.ItemId || observation.IsDirectory) ||
             observations.Select(observation => observation.OperationId).Distinct().Count() != observations.Count)
@@ -55,7 +58,7 @@ internal sealed partial class MirrorPulseConflictKeepRemoteJournal(ICloudStateSt
                 Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(command with { ItemId = plan.ItemId }))) != member.Fingerprint)
                 throw new InvalidDataException("An original typed KeepRemote observation changed after its retained planning window.");
         }
-        var after = await ReadRowsAsync(plan, token).ConfigureAwait(false);
+        var after = await ReadRowsAsync(plan, requireNoSuccessors, token).ConfigureAwait(false);
         if (!before.SequenceEqual(after))
             throw new InvalidDataException("The original KeepRemote journal changed during public decoding.");
         var current = await RequireCopiesAsync(copies, token).ConfigureAwait(false);
@@ -86,14 +89,16 @@ internal sealed partial class MirrorPulseConflictKeepRemoteJournal(ICloudStateSt
         return retained;
     }
 
-    private async Task<MirrorPulseKeepRemoteJournalOriginal[]> ReadRowsAsync(MirrorPulseJournalCoalescingPlan plan, CancellationToken token)
+    private async Task<MirrorPulseKeepRemoteJournalOriginal[]> ReadRowsAsync(MirrorPulseJournalCoalescingPlan plan,
+        bool requireNoSuccessors, CancellationToken token)
     {
         await using var transaction = await store.BeginTransactionAsync(token).ConfigureAwait(false);
-        // One extra target row is sufficient to reject any successor. Unrelated backlog is not enumerated.
+        // Read one extra row to detect a successor during first admission. After a retained
+        // permission action, preserve every later observation while checking the original set.
         var rows = await transaction.Operations.ListByItemIdAsync(plan.ItemId, checked(plan.Members.Count + 1), token).ConfigureAwait(false);
-        if (rows.Count != plan.Members.Count)
+        if (rows.Count < plan.Members.Count || requireNoSuccessors && rows.Count != plan.Members.Count)
             throw new InvalidDataException("KeepRemote requires every original pending row and no later target-item operation.");
-        var ordered = rows.OrderBy(row => row.Sequence).ToArray();
+        var ordered = rows.OrderBy(row => row.Sequence).Take(plan.Members.Count).ToArray();
         var result = new MirrorPulseKeepRemoteJournalOriginal[ordered.Length];
         for (int index = 0; index < ordered.Length; index++)
         {

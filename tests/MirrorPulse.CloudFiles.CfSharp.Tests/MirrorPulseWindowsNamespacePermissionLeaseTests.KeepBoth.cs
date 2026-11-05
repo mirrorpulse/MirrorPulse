@@ -179,7 +179,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         }
     }
 
-    private sealed class KeepBothRemote(string path) : IMirrorPulseWorkerStatTransport, IMirrorPulseWorkerRangeTransport,
+    private sealed class KeepBothRemote(string path, string remoteId = "remote-object") : IMirrorPulseWorkerStatTransport, IMirrorPulseWorkerRangeTransport,
         IMirrorPulseWorkerDirectoryPageSource, IMirrorPulseWorkerUploadTransport, IMirrorPulseWorkerMutationTransport
     {
         internal static readonly byte[] SelectedBytes = [6, 6, 6];
@@ -196,7 +196,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         public ValueTask<MirrorPulseWorkerDirectoryPage> ReadDirectoryPageAsync(MirrorPulseWorkerDirectoryPageRequest request, CancellationToken token)
         {
             Read(token); Assert.AreEqual(string.Empty, request.NormalizedPath);
-            return ValueTask.FromResult(new MirrorPulseWorkerDirectoryPage([new("remote-object", _revision, "File", "original.bin", new FileInfo(path).Length, null, null, false)], ReadOnlyMemory<byte>.Empty, true));
+            return ValueTask.FromResult(new MirrorPulseWorkerDirectoryPage([new(remoteId, _revision, "File", "original.bin", new FileInfo(path).Length, null, null, false)], ReadOnlyMemory<byte>.Empty, true));
         }
         public ValueTask<Stream> ReadRangeAsync(MirrorPulseWorkerReadRangeRequest request, CancellationToken token)
         { Read(token); return ValueTask.FromResult<Stream>(new MemoryStream(File.ReadAllBytes(path), checked((int)request.Offset), checked((int)request.Length), writable: false)); }

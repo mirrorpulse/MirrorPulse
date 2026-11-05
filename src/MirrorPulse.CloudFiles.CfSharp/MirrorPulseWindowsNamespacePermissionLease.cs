@@ -148,15 +148,33 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLease : IMirror
             (ReadAttributes(_target).Attributes & ReparseAttribute) != 0 && !snapshot.IsPlaceholder)
             throw new InvalidDataException("The retained namespace object cannot provide an owned permission binding.");
         cancellationToken.ThrowIfCancellationRequested();
+        var result = ReadRetainedPermissions(binding);
+        _rootLabelTargetInspection?.RequireNativeMember(_item, result, snapshot);
+        return result;
+    }
+
+    /// <summary>Rechecks the retained directory handle without calling a path facade inside a protected child callback.</summary>
+    /// <remarks>The caller independently inspects the current SDK path before and after the callback.</remarks>
+    internal MirrorPulseNamespacePermissionObject InspectRetainedDirectoryPermissions(MirrorPulseLocalFileBinding binding,
+        CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(binding);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!_isDirectory || _metadataOnly || _rootLabelTargetInspection is not null)
+            throw new InvalidOperationException("A retained directory lifetime handle is required for this permission check.");
+        return ReadRetainedPermissions(new CloudLocalFileBinding(binding.VolumeSerialNumber, binding.SyncRootFileId, binding.LocalFileId));
+    }
+
+    private MirrorPulseNamespacePermissionObject ReadRetainedPermissions(CloudLocalFileBinding binding)
+    {
         uint linkCount = ValidateRetainedHandle(_target);
         var descriptor = new HandleSecurity(_target, _isDirectory);
         string owner = ReadOwnerSid(binding);
-        var result = new MirrorPulseNamespacePermissionObject(new(binding.VolumeSerialNumber, binding.SyncRootFileId, binding.LocalFileId), _rootId,
+        return new MirrorPulseNamespacePermissionObject(new(binding.VolumeSerialNumber, binding.SyncRootFileId, binding.LocalFileId), _rootId,
             _item.RelativePath.Replace('\\', '/'), _isDirectory, owner,
             descriptor.GetSecurityDescriptorSddlForm(AccessControlSections.Access), DateTimeOffset.UtcNow)
         { LinkCount = linkCount };
-        _rootLabelTargetInspection?.RequireNativeMember(_item, result, snapshot);
-        return result;
     }
 
     public ValueTask ApplyDaclAsync(string dacl, CancellationToken cancellationToken)

@@ -70,6 +70,44 @@ public sealed partial class MirrorPulseConflictKeepRemoteJournalTests
     }
 
     [TestMethod]
+    public async Task OriginalRowRevalidationKeepsSuccessorsPendingAcrossBothStoreOwners()
+    {
+        await using var fixture = await Fixture.OpenAsync();
+        var retained = await fixture.Guard().RetainAsync(fixture.Copies);
+        string original = JsonSerializer.Serialize(retained);
+        await fixture.ChangeRowAsync("successor");
+        string pending = await fixture.RowsAsync();
+        await fixture.ReopenOwnersAsync();
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(() => fixture.Guard().RevalidateRetainedAsync(fixture.Copies));
+        Assert.AreEqual(original, JsonSerializer.Serialize(await fixture.Guard().RevalidateRetainedOriginalsAsync(fixture.Copies)));
+        Assert.AreEqual(pending, await fixture.RowsAsync());
+        Assert.AreEqual("pending", (await fixture.Catalog.ReadUserCommandAsync(retained.CommandId))!.State);
+        Assert.HasCount(fixture.Plan.Members.Count, await fixture.Catalog.ReadUploadConflictsAsync());
+    }
+
+    [TestMethod]
+    [DataRow("payload")]
+    [DataRow("kind")]
+    [DataRow("created")]
+    [DataRow("attempt")]
+    [DataRow("retry")]
+    [DataRow("item")]
+    [DataRow("missing")]
+    [DataRow("sequence")]
+    public async Task OriginalRowRevalidationStillRejectsChangedOrMissingOriginalsWhenASuccessorExists(string change)
+    {
+        await using var fixture = await Fixture.OpenAsync();
+        var retained = await fixture.Guard().RetainAsync(fixture.Copies);
+        string original = JsonSerializer.Serialize(retained);
+        await fixture.ChangeRowAsync("successor");
+        await fixture.ChangeRowAsync(change);
+        string pending = await fixture.RowsAsync();
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(() => fixture.Guard().RevalidateRetainedOriginalsAsync(fixture.Copies));
+        Assert.AreEqual(pending, await fixture.RowsAsync());
+        Assert.AreEqual(original, JsonSerializer.Serialize(await fixture.Catalog.ReadConflictKeepRemoteJournalAsync(retained.CommandId)));
+    }
+
+    [TestMethod]
     public async Task ARealBindingInsertFaultRollsBackWithoutConsumingAnyOriginal()
     {
         await using var fixture = await Fixture.OpenAsync(); string before = await fixture.RowsAsync();

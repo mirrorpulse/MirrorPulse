@@ -173,7 +173,8 @@ public sealed partial class MirrorPulseProductCatalog
         var roots = DeserializeTopology(payload).Roots.Where(root => root.RootId == start.Original.Context.Member.RootId).ToArray();
         var intent = preparation.Intent;
         if (roots.Length != 1 || roots[0].InstanceId != intent.InstanceId || roots[0].UniquenessKey != intent.RemoteSource.RootKey ||
-            start.Original.Context.Location.RelativePath != roots[0].Label + "/" + intent.LocalRelativePath)
+            (start.Original.Context.Location.RelativePath != intent.LocalRelativePath &&
+             start.Original.Context.Location.RelativePath != roots[0].Label + "/" + intent.LocalRelativePath))
             throw new InvalidOperationException("A file start must retain this instance/root and its current full native location.");
     }
 
