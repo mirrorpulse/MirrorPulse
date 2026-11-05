@@ -1,5 +1,5 @@
 function Get-OrdinaryUserNamespaceBudgetMilliseconds {
-    param([Parameter(Mandatory)][ValidateRange(1, 125)][int]$TestCount, [string[]]$TestNames,
+    param([Parameter(Mandatory)][ValidateRange(1, 130)][int]$TestCount, [string[]]$TestNames,
         [ValidateSet('AllRetained', 'S06')][string]$Scope = 'AllRetained')
     if ($Scope -ceq 'S06' -and -not $PSBoundParameters.ContainsKey('TestNames')) {
         throw 'S06 scope requires its explicit selected test names.'
@@ -17,7 +17,15 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
     $legacyInitializer = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicCancellationRetainsAndResumesItsOriginalPartiallyRotatedInitializer'
     $bornCancellation = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicCancellationRecoversAnInheritedBornRootThroughItsOriginalPurposeAfterRoleDisposal'
     $disabledImport = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeAutomaticStartupKeepsDisabledImportLocalAcrossOwnersWithoutOpeningOrdinaryWork'
-    $additionalSelections = @(@($preparation,$approval,$rootPreparation,$rootExecution,$rootRecovery,$rootRuntime,$rootAdmission,$rootPublic,$rootCancellation,$unsealedCancellation,$legacyInitializer,$bornCancellation,$disabledImport) | Where-Object {$_ -cin $TestNames}).Count
+    $prefix = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.'
+    $keepRemote = @{
+        ($prefix+'NativeKeepRemoteFirstSealRequiresTheOriginalFileAndJournalAndReplaysWithoutWriting') = 3
+        ($prefix+'NativeKeepRemoteResidentByteCopyRetainsPlaceholderAndOriginalJournal') = 3
+        ($prefix+'NativeKeepRemoteResidentWriterKeepsItsWriteAndCompletionFactsAcrossRetry') = 3
+        ($prefix+'NativeKeepRemoteResidentWriterPreservesChangedLocalBytesBeforeItsFirstWrite') = 1
+        ($prefix+'NativeKeepRemoteConfirmationRetainsOriginalAttemptsAndRecoversLostSdkReturns') = 4
+    }
+    $additionalSelections = @(@($preparation,$approval,$rootPreparation,$rootExecution,$rootRecovery,$rootRuntime,$rootAdmission,$rootPublic,$rootCancellation,$unsealedCancellation,$legacyInitializer,$bornCancellation,$disabledImport)+@($keepRemote.Keys) | Where-Object {$_ -cin $TestNames}).Count
     if ($TestCount -gt 112 -and (-not $PSBoundParameters.ContainsKey('TestNames') -or $additionalSelections -lt $TestCount-112)) {
         throw 'The additional namespace case requires its explicit original preparation selection.'
     }
@@ -27,7 +35,6 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
         if ($TestNames.Count -ne $TestCount) { throw 'The namespace budget must describe the exact selected catalog.' }
         $selected = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
         $repeated = [Collections.Generic.Dictionary[string, int]]::new([StringComparer]::Ordinal)
-        $prefix = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.'
         $repeated.Add($prefix + 'NativeHostTransferRetainsSourceAndBothFencesAfterOriginalCopyAndWholeTargetVerification', 2)
         $repeated.Add($prefix + 'NativeHostTransferDeletesOnlyOriginalRemoteSourceWhileRetainingGuardedLocalBytes', 2)
         $repeated.Add($prefix + 'NativeHostTransferRetiresOriginalSourceThroughTheSdkAndKeepsPrivateBytesAndBothFences', 2)
@@ -63,6 +70,11 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
             # This additional method owns one actual 65-second native deadline.
             # Its ordinary 15-second estimate already contributes to executions.
             if ($name -ceq $disabledImport) { $transferDeadlineMilliseconds += 50000 }
+            if ($keepRemote.ContainsKey($name)) {
+                # Every selected data row retains its actual65-second fixture deadline.
+                $executions += $keepRemote[$name]-1
+                $transferDeadlineMilliseconds += $keepRemote[$name]*50000
+            }
             if ($repeated.ContainsKey($name)) {
                 $executions += $repeated[$name] - 1
                 # Each original transfer scope/cutpoint already owns a 45-second
@@ -73,7 +85,7 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
             }
         }
     }
-    # Every selected native fixture keeps its original deadline. The full125-name
+    # Every selected native fixture keeps its original deadline. The prior125-name
     # catalog retains72 repeated executions and adds one65-second disabled-import
     # execution to the original95m15s child envelope. The step
     # adds five minutes for controller diagnostics and disposable-user cleanup.
@@ -84,12 +96,13 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
     # the original 123-name catalog retains its exact prior bound.
     # AllRetained keeps every historical envelope. S06 retains63 repeated
     # executions and adds the same65 seconds to its original88m30s envelope.
-    # count-only callers still retain their original 112-name/30-minute bound.
+    # The five KeepRemote methods add exactly fourteen65-second executions.
+    # Count-only callers still retain their original112-name/30-minute bound.
     return [Math]::Max(600000, 120000 + $executions * 15000 + $transferDeadlineMilliseconds)
 }
 
 function Get-OrdinaryUserNamespaceStepTimeoutMinutes {
-    param([Parameter(Mandatory)][ValidateRange(1, 125)][int]$TestCount, [string[]]$TestNames,
+    param([Parameter(Mandatory)][ValidateRange(1, 130)][int]$TestCount, [string[]]$TestNames,
         [ValidateSet('AllRetained', 'S06')][string]$Scope = 'AllRetained')
     # The workflow must let the existing child budget expire and allow the
     # controller to preserve diagnostics and remove its disposable user/profile.

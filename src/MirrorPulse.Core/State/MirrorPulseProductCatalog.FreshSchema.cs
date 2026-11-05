@@ -7,13 +7,13 @@ public sealed partial class MirrorPulseProductCatalog
 {
     // This is a schema-only baseline for an atomically created empty file. Later migrations
     // remain authoritative, including future versions newer than this baseline.
-    private const long FreshCatalogSchemaVersion = 98;
+    private const long FreshCatalogSchemaVersion = 99;
 
     private static async Task CreateFreshCatalogSchemaAsync(SqliteConnection connection, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
         using var resource = typeof(MirrorPulseProductCatalog).Assembly
-            .GetManifestResourceStream("MirrorPulse.Core.State.CatalogSchema98.sql")
+            .GetManifestResourceStream("MirrorPulse.Core.State.CatalogSchema99.sql")
             ?? throw new InvalidDataException("The product's empty catalog schema resource is missing.");
         using var reader = new StreamReader(resource, Encoding.UTF8);
         string sql = await reader.ReadToEndAsync(token).ConfigureAwait(false);

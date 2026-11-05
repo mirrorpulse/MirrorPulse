@@ -48,14 +48,19 @@ public sealed class TestResultGateTests
             if (repeatFirst) selected = selected.Append(names[0]);
             foreach (string name in selected)
             {
-                string id = Guid.NewGuid().ToString();
                 int separator = name.LastIndexOf('.');
-                definitions.Add(new XElement(ns + "UnitTest", new XAttribute("id", id),
-                    new XAttribute("storage", "MirrorPulse.CloudFiles.CfSharp.Tests.dll"),
-                    new XElement(ns + "TestMethod", new XAttribute("className", name[..separator]),
-                        new XAttribute("name", name[(separator + 1)..]))));
-                results.Add(new XElement(ns + "UnitTestResult", new XAttribute("testId", id),
-                    new XAttribute("outcome", outcome)));
+                string[] cases = catalog.RootElement.TryGetProperty("requiredCases", out var mappings) && mappings.TryGetProperty(name, out var explicitCases)
+                    ? explicitCases.EnumerateArray().Select(item => item.GetString()!).ToArray() : [name[(separator + 1)..]];
+                foreach (string testCase in cases)
+                {
+                    string id = Guid.NewGuid().ToString();
+                    definitions.Add(new XElement(ns + "UnitTest", new XAttribute("id", id),
+                        new XAttribute("storage", "MirrorPulse.CloudFiles.CfSharp.Tests.dll"),
+                        new XElement(ns + "TestMethod", new XAttribute("className", name[..separator]),
+                            new XAttribute("name", name[(separator + 1)..]))));
+                    results.Add(new XElement(ns + "UnitTestResult", new XAttribute("testId", id),
+                        new XAttribute("executionId", Guid.NewGuid().ToString()), new XAttribute("testName", testCase), new XAttribute("outcome", outcome)));
+                }
             }
             new XDocument(new XElement(ns + "TestRun", definitions, results))
                 .Save(Path.Combine(root, "fixture.trx"));

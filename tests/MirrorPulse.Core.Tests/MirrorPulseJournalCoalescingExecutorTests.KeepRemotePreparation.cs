@@ -167,7 +167,7 @@ public sealed partial class MirrorPulseJournalCoalescingExecutorTests
         await Assert.ThrowsExactlyAsync<InvalidDataException>(async () => { await using var rejected = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths); });
         command.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=$name;"; command.Parameters.AddWithValue("$name", table);
         Assert.AreEqual(0L, await command.ExecuteScalarAsync());
-        command.Parameters.Clear(); command.CommandText = "PRAGMA user_version;"; Assert.AreEqual(98L, await command.ExecuteScalarAsync());
+        command.Parameters.Clear(); command.CommandText = "PRAGMA user_version;"; Assert.AreEqual(99L, await command.ExecuteScalarAsync());
     }
 
     private static MirrorPulseConflictRemoteSource KeepRemoteSource(Fixture fixture, MirrorPulseCoalescedConflictRemoteObservation selected) =>

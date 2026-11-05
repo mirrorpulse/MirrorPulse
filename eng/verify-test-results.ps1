@@ -7,6 +7,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $catalog = Get-Content -LiteralPath (Join-Path $PSScriptRoot "test-suites.json") -Raw | ConvertFrom-Json
+. (Join-Path $PSScriptRoot 'test-execution-policy.ps1')
 $files = @(Get-ChildItem -LiteralPath $ResultsDirectory -Filter "*.trx" -File -Recurse)
 if ($files.Count -eq 0) { throw "No TRX results were produced for the requested gate." }
 $results = @(
@@ -26,6 +27,9 @@ $results = @(
             }
             [pscustomobject][ordered]@{
                 name = $name
+                case = [string]$result.testName
+                testId = [string]$result.testId
+                executionId = [string]$result.executionId
                 assembly = [IO.Path]::GetFileNameWithoutExtension($definition.storage)
                 category = $category
                 outcome = [string]$result.outcome
@@ -49,14 +53,10 @@ if ($Suite -eq "managed") {
         }
     }
 } else {
-    foreach ($required in $catalog.required.$Suite) {
-        $matched = @($results | Where-Object name -eq $required)
-        if ($matched.Count -ne 1 -or $matched[0].outcome -ne "Passed") {
-            throw "Required $Suite test did not execute successfully exactly once: $required"
-        }
-    }
+    Assert-RequiredTestResults -Catalog $catalog -Suite $Suite -Results $results
     if ($skipped.Count -ne 0) { throw "The $Suite gate contains skipped tests." }
-    if ($Suite -in @('namespace', 'cfsharpDelete', 'cfsharpRecreation', 'deferredP079') -and $results.Count -ne @($catalog.required.$Suite).Count) {
+    if ($Suite -in @('namespace', 'cfsharpDelete', 'cfsharpRecreation', 'deferredP079') -and
+        $results.Count -ne (Get-RequiredTestExecutionCount -Catalog $catalog -Names @($catalog.required.$Suite))) {
         throw "The $Suite gate must select exactly the required tests."
     }
 }
