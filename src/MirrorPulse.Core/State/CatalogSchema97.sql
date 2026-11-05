@@ -804,4 +804,12 @@ CREATE TRIGGER namespace_name_epoch_update AFTER UPDATE ON namespace_member_name
     INSERT INTO namespace_name_epochs(parent_member_id,child_name_key,epoch) VALUES(NEW.parent_member_id,NEW.child_name_key,1)
     ON CONFLICT(parent_member_id,child_name_key) DO UPDATE SET epoch=epoch+1;
 END;
-PRAGMA user_version=96;
+CREATE TABLE conflict_keep_remote_file_actions(
+    command_id TEXT NOT NULL PRIMARY KEY REFERENCES conflict_keep_remote_file_starts(command_id),
+    action_id TEXT NOT NULL UNIQUE,
+    payload BLOB NOT NULL CHECK(length(payload)<=262144),
+    fingerprint BLOB NOT NULL CHECK(length(fingerprint)=32));
+CREATE TABLE conflict_keep_remote_file_action_owners(
+    command_id TEXT NOT NULL PRIMARY KEY REFERENCES conflict_keep_remote_file_starts(command_id),
+    action_id TEXT NOT NULL UNIQUE REFERENCES conflict_keep_remote_file_actions(action_id));
+PRAGMA user_version=97;
