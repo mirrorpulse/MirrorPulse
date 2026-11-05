@@ -117,10 +117,77 @@ public sealed class MirrorPulseKeepRemoteContentTransferTests
         Assert.IsTrue(fixture.Source.CanRead);
     }
 
+    [TestMethod]
+    [DataRow(65537)]
+    [DataRow(3)]
+    [DataRow(0)]
+    public async Task ResidentCopyRetainsTheBeforeWriteBoundaryAndPersistsExactBytes(int length)
+    {
+        await using var fixture = await Fixture.OpenAsync(length);
+        byte[] original = "the earlier resident contents"u8.ToArray();
+        int beforeWrite = 0;
+        await using (var target = await fixture.OpenResidentAsync(original))
+        {
+            Assert.AreEqual(fixture.Proof.Sha256, await MirrorPulseConflictKeepRemoteContentTransfer.CopyResidentAsync(
+                fixture.Source, fixture.Proof, target, async token =>
+                {
+                    beforeWrite++;
+                    byte[] stillOriginal = new byte[original.Length];
+                    Assert.AreEqual(original.LongLength, target.Length);
+                    Assert.AreEqual(original.Length, await RandomAccess.ReadAsync(target.SafeFileHandle, stillOriginal, 0, token));
+                    CollectionAssert.AreEqual(original, stillOriginal);
+                }, CancellationToken.None));
+            Assert.AreEqual((long)length, target.Length);
+        }
+        Assert.AreEqual(1, beforeWrite);
+        CollectionAssert.AreEqual(fixture.Bytes, await File.ReadAllBytesAsync(fixture.ResidentPath));
+        CollectionAssert.AreEqual(fixture.Bytes, await fixture.ReadSourceAsync());
+    }
+
+    [TestMethod]
+    [DataRow("wrong-private-proof")]
+    [DataRow("durable-write-start-fails")]
+    [DataRow("cancel-after-write-start")]
+    public async Task ResidentCopyCannotTruncateBeforePrivateProofAndDurableWriteStart(string failure)
+    {
+        await using var fixture = await Fixture.OpenAsync(0);
+        byte[] original = "preserve this resident file"u8.ToArray();
+        using var cancellation = new CancellationTokenSource();
+        int beforeWrite = 0;
+        await using (var target = await fixture.OpenResidentAsync(original))
+        {
+            var proof = failure == "wrong-private-proof" ? fixture.Proof with { Sha256 = new string('A', 64) } : fixture.Proof;
+            Task<string> CopyAsync() => MirrorPulseConflictKeepRemoteContentTransfer.CopyResidentAsync(fixture.Source, proof, target, _ =>
+            {
+                beforeWrite++;
+                if (failure == "durable-write-start-fails") throw new IOException("The write intent could not be saved.");
+                if (failure == "cancel-after-write-start") cancellation.Cancel();
+                return ValueTask.CompletedTask;
+            }, cancellation.Token);
+            if (failure == "wrong-private-proof") await Assert.ThrowsExactlyAsync<InvalidDataException>(CopyAsync);
+            else if (failure == "durable-write-start-fails") await Assert.ThrowsExactlyAsync<IOException>(CopyAsync);
+            else await Assert.ThrowsAsync<OperationCanceledException>(CopyAsync);
+        }
+        Assert.AreEqual(failure == "wrong-private-proof" ? 0 : 1, beforeWrite);
+        CollectionAssert.AreEqual(original, await File.ReadAllBytesAsync(fixture.ResidentPath));
+    }
+
+    [TestMethod]
+    public async Task ResidentCopyCannotUseTheSameOpenFileAsSourceAndDestination()
+    {
+        await using var fixture = await Fixture.OpenAsync(13);
+        bool beforeWrite = false;
+        await Assert.ThrowsExactlyAsync<ArgumentException>(() => MirrorPulseConflictKeepRemoteContentTransfer.CopyResidentAsync(
+            fixture.Source, fixture.Proof, fixture.Source, _ => { beforeWrite = true; return ValueTask.CompletedTask; }, CancellationToken.None));
+        Assert.IsFalse(beforeWrite);
+        CollectionAssert.AreEqual(fixture.Bytes, await fixture.ReadSourceAsync());
+    }
+
     private sealed class Fixture : IAsyncDisposable
     {
         private readonly string _directory = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "MirrorPulse-keep-remote-transfer", Guid.NewGuid().ToString("N"));
         internal string Path => System.IO.Path.Combine(_directory, "selected-private.bin");
+        internal string ResidentPath => System.IO.Path.Combine(_directory, "resident.bin");
         internal FileStream Source { get; private set; } = null!;
         internal byte[] Bytes { get; private init; } = [];
         internal byte[] Native { get; private init; } = [];
@@ -142,6 +209,12 @@ public sealed class MirrorPulseKeepRemoteContentTransferTests
 
         internal Task<string> CopyAsync(MirrorPulseConflictKeepBothCopy? proof = null, CancellationToken token = default) =>
             MirrorPulseConflictKeepRemoteContentTransfer.TransferRetainedAsync(Source, proof ?? Proof, TransferAsync, RetrieveAsync, token);
+
+        internal async Task<FileStream> OpenResidentAsync(byte[] original)
+        {
+            await File.WriteAllBytesAsync(ResidentPath, original);
+            return new FileStream(ResidentPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None, 4096, FileOptions.Asynchronous);
+        }
 
         internal async Task<byte[]> ReadSourceAsync()
         {
