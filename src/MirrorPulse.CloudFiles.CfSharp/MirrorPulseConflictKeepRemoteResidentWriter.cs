@@ -27,20 +27,29 @@ internal sealed class MirrorPulseConflictKeepRemoteResidentWriter(CloudFileSyste
         Guid commandId = copies.Preparation.Intent.CommandId;
         var history = await catalog.ReadConflictKeepRemoteFileContentAsync(commandId, token).ConfigureAwait(false);
         if (history?.Completion is { } completed) return completed;
-        await new MirrorPulseConflictKeepRemoteResidentSeal(fileSystem, catalog, state, feed, router, execution, actor)
-            .ApplyFirstAsync(admittedRoot, copies, token).ConfigureAwait(false);
+        var handoff = MirrorPulseConflictKeepRemoteResidentRoleRecovery.RequireCompletedHead(
+            await catalog.ReadConflictKeepRemoteRoleAttemptsAsync(commandId, token).ConfigureAwait(false));
+        if (handoff is null)
+            await new MirrorPulseConflictKeepRemoteResidentSeal(fileSystem, catalog, state, feed, router, execution, actor)
+                .ApplyFirstAsync(admittedRoot, copies, token).ConfigureAwait(false);
         var first = await catalog.ReadConflictKeepRemoteFileStartAsync(commandId, token).ConfigureAwait(false)
             ?? throw new InvalidDataException("The original KeepRemote file start disappeared.");
         history = await catalog.ReadConflictKeepRemoteFileContentAsync(commandId, token).ConfigureAwait(false)
             ?? throw new InvalidDataException("The original KeepRemote permission action disappeared.");
-        var action = history.Action;
+        var originalAction = history.Action;
+        var action = handoff?.Start.NextAction ?? originalAction;
+        var intent = copies.Preparation.Intent;
+        var registration = router.GetRegistration(intent.InstanceId, intent.RemoteSource.RootKey);
         if (action.RoleSid != execution.RoleSid.Value || action.OwnerSid != execution.OwnerSid.Value ||
             first.Original.Context.Member.RootId != admittedRoot || first.Parent.Context.Member.RootId != admittedRoot ||
+            registration.RootId != admittedRoot || registration.State != RootRegistrationState.Active ||
             copies.Local is null || action.RoleOnlyDacl != MirrorPulseNamespacePermissionPolicy.CreateOrdinaryFileBirthDacl(execution))
             throw new InvalidOperationException("Resident copying requires the original active permission action and both retained private copies.");
         string identity = copies.Preparation.Intent.LocalContent!.UploadBinding.PreviousPlaceholderIdentity!;
         var file = fileSystem.GetFile(first.Original.Context.Location.RelativePath);
         var parent = fileSystem.GetDirectory(first.Parent.Context.Location.RelativePath);
+        if (file.Parent is null || !string.Equals(file.Parent.FullPath, parent.FullPath, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("Resident copying lost its original direct parent.");
         var journal = new MirrorPulseConflictKeepRemoteJournal(state.OpenStore, catalog, router, feed);
         using var store = await execution.RunNormalUserOperationAsync(() => state.OpenStoreFileLeaseAsync(token).AsTask()).ConfigureAwait(false);
         var storeBinding = new MirrorPulseCfSharpStoreFileBinding(first.StoreVolumeSerialNumber, first.StoreFileId);
@@ -66,17 +75,19 @@ internal sealed class MirrorPulseConflictKeepRemoteResidentWriter(CloudFileSyste
                 {
                     var before = await InspectAsync(stop).ConfigureAwait(false);
                     if (write is null)
-                        write = await catalog.RecordConflictKeepRemoteFileWriteStartAsync(new(1, commandId, action.ActionId,
+                        write = await catalog.RecordConflictKeepRemoteFileWriteStartAsync(new MirrorPulseConflictKeepRemoteFileWriteStart(1, commandId, originalAction.ActionId,
                             Verification(before.Child), Verification(before.Parent), before.Child.LinkCount!.Value,
-                            identity, DateTimeOffset.UtcNow), stop).ConfigureAwait(false);
+                            identity, DateTimeOffset.UtcNow)
+                        { RoleRecoveryId = handoff?.Result?.RecoveryId }, stop).ConfigureAwait(false);
                     await AtCheckpointAsync(MirrorPulseKeepRemoteContentCheckpoint.AfterWriteStart, stop).ConfigureAwait(false);
                 }, token).ConfigureAwait(false);
             await AtCheckpointAsync(MirrorPulseKeepRemoteContentCheckpoint.AfterContentFlush, token).ConfigureAwait(false);
             var after = await InspectAsync(CancellationToken.None).ConfigureAwait(false);
             if (hash != copies.Remote.Proof.Sha256 || target.Length != copies.Remote.Proof.Length)
                 throw new InvalidDataException("The complete resident KeepRemote bytes differ from the selected private version.");
-            result = await catalog.RecordConflictKeepRemoteFileContentCompletionAsync(new(1, commandId, action.ActionId, copies.Remote.Proof,
-                Verification(after.Child), Verification(after.Parent), after.Child.LinkCount!.Value, identity, DateTimeOffset.UtcNow),
+            result = await catalog.RecordConflictKeepRemoteFileContentCompletionAsync(new MirrorPulseConflictKeepRemoteFileContentCompletion(1, commandId, originalAction.ActionId, copies.Remote.Proof,
+                Verification(after.Child), Verification(after.Parent), after.Child.LinkCount!.Value, identity, DateTimeOffset.UtcNow)
+            { RoleRecoveryId = handoff?.Result?.RecoveryId },
                 CancellationToken.None).ConfigureAwait(false);
             await AtCheckpointAsync(MirrorPulseKeepRemoteContentCheckpoint.AfterContentRecorded, token).ConfigureAwait(false);
 

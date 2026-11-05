@@ -5,6 +5,73 @@ namespace MirrorPulse.Core.Tests;
 public sealed partial class MirrorPulseNamespaceBirthCatalogTests
 {
     [TestMethod]
+    public async Task KeepRemoteRoleHandoffRejectsStalePhaseReturnsAndRetainsTheOriginalWrite()
+    {
+        using var fixture = new Fixture();
+        await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        var setup = await PrepareKeepRemoteContentAsync(catalog);
+        var command = setup.Action.CommandId;
+        await catalog.RecordConflictKeepRemoteFileWriteStartAsync(setup.Write);
+        var template = new MirrorPulseConflictKeepRemoteNativeStart(1, command, setup.Action.ActionId, Guid.NewGuid(),
+            "BAUG", setup.Write.OriginalPlaceholderIdentity, setup.Completion.Child, setup.Completion.Parent,
+            setup.Completion.VerifiedAt.AddSeconds(1));
+        var firstHandoff = (await NewKeepRemoteRoleStartAsync(catalog, new(template, NativeResult(template, setup.Completion.Copy.Length)),
+            "S-1-5-5-123-461")) with
+        { PlaceholderIdentity = template.ObservedPlaceholderIdentity };
+        await catalog.RecordConflictKeepRemoteRoleStartAsync(firstHandoff);
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => catalog.RecordConflictKeepRemoteFileContentCompletionAsync(setup.Completion));
+        var firstResult = await catalog.RecordConflictKeepRemoteRoleResultAsync(KeepRemoteRoleResult(firstHandoff));
+        var at = firstResult.RecordedAt.AddSeconds(1);
+        var completion = setup.Completion with
+        {
+            RoleRecoveryId = firstResult.RecoveryId,
+            Child = firstResult.Child with { ObservedAt = at },
+            Parent = firstResult.Parent with { ObservedAt = at },
+            VerifiedAt = at
+        };
+        await catalog.RecordConflictKeepRemoteFileContentCompletionAsync(completion);
+        at = at.AddSeconds(1);
+        var started = template with
+        {
+            RoleRecoveryId = firstResult.RecoveryId,
+            Child = completion.Child with { ObservedAt = at },
+            Parent = completion.Parent with { ObservedAt = at },
+            StartedAt = at
+        };
+        await catalog.RecordConflictKeepRemoteNativeStartAsync(started);
+        var stale = NativeResult(started, completion.Copy.Length);
+        at = stale.RecordedAt.AddSeconds(1);
+        var nextHandoff = (await NewKeepRemoteRoleStartAsync(catalog, new(started, stale), "S-1-5-5-123-462", firstHandoff)) with
+        {
+            PlaceholderIdentity = template.ObservedPlaceholderIdentity,
+            Child = started.Child with { ObservedAt = at },
+            Parent = started.Parent with { ObservedAt = at }
+        };
+        nextHandoff = nextHandoff with { NextAction = nextHandoff.NextAction with { PreparedAt = at } };
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => catalog.RecordConflictKeepRemoteRoleStartAsync(nextHandoff with
+        {
+            NextAction = nextHandoff.NextAction with { PreparedAt = started.StartedAt },
+            Child = started.Child,
+            Parent = started.Parent
+        }));
+        await catalog.RecordConflictKeepRemoteRoleStartAsync(nextHandoff);
+        var current = await catalog.RecordConflictKeepRemoteRoleResultAsync(KeepRemoteRoleResult(nextHandoff));
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => catalog.RecordConflictKeepRemoteNativeResultAsync(stale));
+        at = current.RecordedAt.AddSeconds(1);
+        var resumed = NextNativeStart(started, at) with { RoleRecoveryId = current.RecoveryId, Child = current.Child with { ObservedAt = at } };
+        await catalog.RecordConflictKeepRemoteNativeStartAsync(resumed);
+        var confirmed = await catalog.RecordConflictKeepRemoteNativeResultAsync(NativeResult(resumed, completion.Copy.Length));
+        await catalog.DisposeAsync();
+        await using var reopened = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        Assert.AreEqual(setup.Write, (await reopened.ReadConflictKeepRemoteFileContentAsync(command))!.WriteStart);
+        Assert.AreEqual(completion, await reopened.RecordConflictKeepRemoteFileContentCompletionAsync(completion));
+        CollectionAssert.AreEqual(new[] { new MirrorPulseConflictKeepRemoteNativeAttempt(started, null), new(resumed, confirmed) },
+            (await reopened.ReadConflictKeepRemoteNativeAttemptsAsync(command)).ToArray());
+        Assert.AreEqual("pending", (await reopened.ReadUserCommandAsync(command))!.State);
+        Assert.HasCount(1, await reopened.ReadNamespaceDispatchFencedRootsAsync());
+    }
+
+    [TestMethod]
     public async Task KeepRemoteRoleHandoffRetainsLostReadbackAndOriginalNativeAuthorityAcrossCatalogOwners()
     {
         using var fixture = new Fixture();

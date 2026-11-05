@@ -18,6 +18,13 @@ internal sealed class MirrorPulseConflictKeepRemoteResidentRoleRecovery(CloudFil
 {
     internal Func<MirrorPulseKeepRemoteRoleCheckpoint, CancellationToken, ValueTask>? Checkpoint { get; init; }
 
+    internal static MirrorPulseConflictKeepRemoteRoleAttempt? RequireCompletedHead(IReadOnlyList<MirrorPulseConflictKeepRemoteRoleAttempt> attempts)
+    {
+        if (attempts.Count == 0) return null;
+        var head = attempts[^1];
+        return head.Result is not null ? head : throw new InvalidOperationException("KeepRemote requires the current role's verified handoff.");
+    }
+
     internal async Task<MirrorPulseConflictKeepRemoteRoleResult> RecoverAsync(RootId admittedRoot,
         MirrorPulseConflictKeepRemoteCopies copies, CancellationToken token)
     {

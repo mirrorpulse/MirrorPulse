@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Data.Sqlite;
 
 namespace MirrorPulse.Core.State;
@@ -7,12 +8,20 @@ namespace MirrorPulse.Core.State;
 /// <summary>The original object and parent observations retained before resident bytes can change.</summary>
 public sealed record MirrorPulseConflictKeepRemoteFileWriteStart(int Version, Guid CommandId, Guid ActionId,
     MirrorPulseNamespacePermissionVerification Child, MirrorPulseNamespacePermissionVerification Parent,
-    uint LinkCount, string OriginalPlaceholderIdentity, DateTimeOffset StartedAt);
+    uint LinkCount, string OriginalPlaceholderIdentity, DateTimeOffset StartedAt)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? RoleRecoveryId { get; init; }
+}
 
 /// <summary>Complete flushed private-version bytes independently read back under the original content seal.</summary>
 public sealed record MirrorPulseConflictKeepRemoteFileContentCompletion(int Version, Guid CommandId, Guid ActionId,
     MirrorPulseConflictKeepBothCopy Copy, MirrorPulseNamespacePermissionVerification Child,
-    MirrorPulseNamespacePermissionVerification Parent, uint LinkCount, string OriginalPlaceholderIdentity, DateTimeOffset VerifiedAt);
+    MirrorPulseNamespacePermissionVerification Parent, uint LinkCount, string OriginalPlaceholderIdentity, DateTimeOffset VerifiedAt)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? RoleRecoveryId { get; init; }
+}
 
 /// <summary>Retained content boundaries for one original file application.</summary>
 public sealed record MirrorPulseConflictKeepRemoteFileContent(MirrorPulseConflictKeepRemoteFileAction Action,
@@ -60,20 +69,29 @@ public sealed partial class MirrorPulseProductCatalog
             ThrowIfDisposed(); using var transaction = _connection.BeginTransaction();
             var facts = await ReadKeepRemoteFileContentCoreAsync(commandId, transaction, token).ConfigureAwait(false)
                 ?? throw new InvalidOperationException("The original KeepRemote permission action must precede content work.");
-            var first = await ReadKeepRemoteFileStartCoreAsync(commandId, transaction, token).ConfigureAwait(false)
-                ?? throw new InvalidDataException("The original KeepRemote file start disappeared.");
-            var preparation = await ReadConflictKeepRemoteCoreAsync(commandId, transaction, token).ConfigureAwait(false)
-                ?? throw new InvalidDataException("The original selected KeepRemote copies disappeared.");
-            if (kind == 1)
-                RequireKeepRemoteWriteStart((MirrorPulseConflictKeepRemoteFileWriteStart)(object)value, first, facts.Action, preparation);
-            else
-                RequireKeepRemoteContentCompletion((MirrorPulseConflictKeepRemoteFileContentCompletion)(object)value, first, facts, preparation);
             object? retained = kind == 1 ? facts.WriteStart : facts.Completion;
             if (retained is not null)
             {
                 if (!KeepRemoteContentFactPayload(retained).AsSpan().SequenceEqual(payload))
                     throw new InvalidOperationException("The first KeepRemote content boundary is immutable.");
                 transaction.Commit(); return (T)retained;
+            }
+            var first = await ReadKeepRemoteFileStartCoreAsync(commandId, transaction, token).ConfigureAwait(false)
+                ?? throw new InvalidDataException("The original KeepRemote file start disappeared.");
+            var preparation = await ReadConflictKeepRemoteCoreAsync(commandId, transaction, token).ConfigureAwait(false)
+                ?? throw new InvalidDataException("The original selected KeepRemote copies disappeared.");
+            var roles = await ReadKeepRemoteRoleAttemptsCoreAsync(commandId, transaction, token).ConfigureAwait(false);
+            if (kind == 1)
+            {
+                var start = (MirrorPulseConflictKeepRemoteFileWriteStart)(object)value;
+                RequireCurrentKeepRemoteRole(roles, start.RoleRecoveryId);
+                RequireKeepRemoteWriteStart(start, first, facts.Action, preparation, roles);
+            }
+            else
+            {
+                var completion = (MirrorPulseConflictKeepRemoteFileContentCompletion)(object)value;
+                RequireCurrentKeepRemoteRole(roles, completion.RoleRecoveryId);
+                RequireKeepRemoteContentCompletion(completion, first, facts, preparation, roles);
             }
             await RequireKeepRemoteFileStartRootAsync(first, transaction, token).ConfigureAwait(false);
             var member = await ReadNamespaceMemberProtectionSnapshotCoreAsync(first.Original.Context.Member.MemberId, transaction, token).ConfigureAwait(false);
@@ -97,6 +115,28 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task<MirrorPulseConflictKeepRemoteFileContent?> ReadKeepRemoteFileContentCoreAsync(Guid commandId,
         SqliteTransaction transaction, CancellationToken token)
     {
+        var facts = await ReadKeepRemoteFileContentFactsCoreAsync(commandId, transaction, token).ConfigureAwait(false);
+        if (facts?.WriteStart is not { } start) return facts;
+        var first = await ReadKeepRemoteFileStartCoreAsync(commandId, transaction, token).ConfigureAwait(false)
+            ?? throw new InvalidDataException("KeepRemote content history lost its original file start.");
+        var preparation = await ReadConflictKeepRemoteCoreAsync(commandId, transaction, token).ConfigureAwait(false)
+            ?? throw new InvalidDataException("KeepRemote content history lost its original selected copies.");
+        var roles = await ReadKeepRemoteRoleAttemptsCoreAsync(commandId, transaction, token).ConfigureAwait(false);
+        try
+        {
+            RequireKeepRemoteWriteStart(start, first, facts.Action, preparation, roles);
+            if (facts.Completion is { } completion) RequireKeepRemoteContentCompletion(completion, first, facts, preparation, roles);
+        }
+        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
+        {
+            throw new InvalidDataException("The retained KeepRemote content boundaries disagree.", exception);
+        }
+        return facts;
+    }
+
+    private async Task<MirrorPulseConflictKeepRemoteFileContent?> ReadKeepRemoteFileContentFactsCoreAsync(Guid commandId,
+        SqliteTransaction transaction, CancellationToken token)
+    {
         var action = await ReadKeepRemoteFileActionCoreAsync(commandId, transaction, token).ConfigureAwait(false);
         var start = await ReadKeepRemoteContentFactCoreAsync<MirrorPulseConflictKeepRemoteFileWriteStart>(commandId, 1, transaction, token).ConfigureAwait(false);
         var completion = await ReadKeepRemoteContentFactCoreAsync<MirrorPulseConflictKeepRemoteFileContentCompletion>(commandId, 2, transaction, token).ConfigureAwait(false);
@@ -105,21 +145,10 @@ public sealed partial class MirrorPulseProductCatalog
             if (start is not null || completion is not null) throw new InvalidDataException("KeepRemote content history lost its original permission action.");
             return null;
         }
-        var first = await ReadKeepRemoteFileStartCoreAsync(commandId, transaction, token).ConfigureAwait(false)
-            ?? throw new InvalidDataException("KeepRemote content history lost its original file start.");
-        var preparation = await ReadConflictKeepRemoteCoreAsync(commandId, transaction, token).ConfigureAwait(false)
-            ?? throw new InvalidDataException("KeepRemote content history lost its original selected copies.");
-        var result = new MirrorPulseConflictKeepRemoteFileContent(action, start, completion);
-        try
-        {
-            if (start is not null) RequireKeepRemoteWriteStart(start, first, action, preparation);
-            if (completion is not null) RequireKeepRemoteContentCompletion(completion, first, result, preparation);
-        }
-        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
-        {
-            throw new InvalidDataException("The retained KeepRemote content boundaries disagree.", exception);
-        }
-        return result;
+        if (start is not null && start.ActionId != action.ActionId ||
+            completion is not null && (start is null || completion.ActionId != action.ActionId))
+            throw new InvalidDataException("The retained KeepRemote content boundaries lost their first action or write start.");
+        return new(action, start, completion);
     }
 
     private async Task<T?> ReadKeepRemoteContentFactCoreAsync<T>(Guid commandId, int kind, SqliteTransaction transaction, CancellationToken token)
@@ -164,32 +193,38 @@ public sealed partial class MirrorPulseProductCatalog
     }
 
     private static void RequireKeepRemoteWriteStart(MirrorPulseConflictKeepRemoteFileWriteStart value,
-        MirrorPulseConflictKeepRemoteFileStart first, MirrorPulseConflictKeepRemoteFileAction action,
-        MirrorPulseConflictKeepRemotePreparation preparation)
+        MirrorPulseConflictKeepRemoteFileStart first, MirrorPulseConflictKeepRemoteFileAction firstAction,
+        MirrorPulseConflictKeepRemotePreparation preparation, IReadOnlyList<MirrorPulseConflictKeepRemoteRoleAttempt> roles)
     {
-        if (value.Version != 1 || value.CommandId != first.CommandId || value.ActionId != action.ActionId ||
-            value.LinkCount != 1 || value.StartedAt < action.PreparedAt || preparation.LocalPreservation?.Copy is null ||
+        var (action, handoff) = RequireKeepRemoteRoleAt(firstAction, roles, value.RoleRecoveryId, value.StartedAt);
+        var earliest = handoff?.RecordedAt ?? firstAction.PreparedAt;
+        if (value.Version != 1 || value.CommandId != first.CommandId || value.ActionId != firstAction.ActionId ||
+            value.LinkCount != 1 || value.StartedAt < earliest || preparation.LocalPreservation?.Copy is null ||
             preparation.RemoteCopy is null || value.OriginalPlaceholderIdentity is not { Length: > 0 and <= 5464 } ||
+            handoff is not null && handoff.PlaceholderIdentity != value.OriginalPlaceholderIdentity ||
             value.OriginalPlaceholderIdentity != preparation.Intent.LocalContent?.UploadBinding.PreviousPlaceholderIdentity)
             throw new InvalidOperationException("Resident writing requires the first action, both original copies and unchanged placeholder identity.");
-        RequireKeepRemoteSealedVerification(value.Child, action.LocalObject, action.OwnerSid, action.RoleOnlyDacl, action.PreparedAt, value.StartedAt);
+        RequireKeepRemoteSealedVerification(value.Child, action.LocalObject, action.OwnerSid, action.RoleOnlyDacl, earliest, value.StartedAt);
         RequireKeepRemoteSealedVerification(value.Parent, first.Parent.Context.Member.LocalObject,
-            first.Parent.Context.Member.OwnerSid, first.Parent.ExpectedDacl, action.PreparedAt, value.StartedAt);
+            first.Parent.Context.Member.OwnerSid, first.Parent.ExpectedDacl, earliest, value.StartedAt);
     }
 
     private static void RequireKeepRemoteContentCompletion(MirrorPulseConflictKeepRemoteFileContentCompletion value,
         MirrorPulseConflictKeepRemoteFileStart first, MirrorPulseConflictKeepRemoteFileContent facts,
-        MirrorPulseConflictKeepRemotePreparation preparation)
+        MirrorPulseConflictKeepRemotePreparation preparation, IReadOnlyList<MirrorPulseConflictKeepRemoteRoleAttempt> roles)
     {
         var write = facts.WriteStart ?? throw new InvalidOperationException("Complete resident bytes require the original before-write fact.");
+        var (action, handoff) = RequireKeepRemoteRoleAt(facts.Action, roles, value.RoleRecoveryId, value.VerifiedAt);
+        var earliest = handoff is not null && handoff.RecordedAt > write.StartedAt ? handoff.RecordedAt : write.StartedAt;
         if (value.Version != 1 || value.CommandId != first.CommandId || value.ActionId != facts.Action.ActionId ||
             value.Copy is null || value.Copy != preparation.RemoteCopy || value.LinkCount != 1 ||
-            value.OriginalPlaceholderIdentity != write.OriginalPlaceholderIdentity || value.VerifiedAt < write.StartedAt)
+            value.OriginalPlaceholderIdentity != write.OriginalPlaceholderIdentity || value.VerifiedAt < earliest ||
+            handoff is not null && handoff.PlaceholderIdentity != value.OriginalPlaceholderIdentity)
             throw new InvalidOperationException("Complete resident bytes require the original selected copy, file and permission action.");
-        RequireKeepRemoteSealedVerification(value.Child, facts.Action.LocalObject, facts.Action.OwnerSid,
-            facts.Action.RoleOnlyDacl, write.StartedAt, value.VerifiedAt);
+        RequireKeepRemoteSealedVerification(value.Child, action.LocalObject, action.OwnerSid,
+            action.RoleOnlyDacl, earliest, value.VerifiedAt);
         RequireKeepRemoteSealedVerification(value.Parent, first.Parent.Context.Member.LocalObject,
-            first.Parent.Context.Member.OwnerSid, first.Parent.ExpectedDacl, write.StartedAt, value.VerifiedAt);
+            first.Parent.Context.Member.OwnerSid, first.Parent.ExpectedDacl, earliest, value.VerifiedAt);
     }
 
     private static void RequireKeepRemoteSealedVerification(MirrorPulseNamespacePermissionVerification verification,

@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Data.Sqlite;
 
 namespace MirrorPulse.Core.State;
@@ -7,7 +8,11 @@ namespace MirrorPulse.Core.State;
 /// <summary>A retained SDK request boundary, before any native identity or synchronization change.</summary>
 public sealed record MirrorPulseConflictKeepRemoteNativeStart(int Version, Guid CommandId, Guid ActionId, Guid AttemptId,
     string SelectedPlaceholderIdentity, string ObservedPlaceholderIdentity, MirrorPulseNamespacePermissionVerification Child,
-    MirrorPulseNamespacePermissionVerification Parent, DateTimeOffset StartedAt);
+    MirrorPulseNamespacePermissionVerification Parent, DateTimeOffset StartedAt)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? RoleRecoveryId { get; init; }
+}
 
 /// <summary>The actual public SDK result while the original object remains sealed. It grants no restoration or ACK authority.</summary>
 public sealed record MirrorPulseConflictKeepRemoteNativeResult(int Version, Guid CommandId, Guid ActionId, Guid AttemptId,
@@ -71,9 +76,12 @@ public sealed partial class MirrorPulseProductCatalog
                     throw new InvalidOperationException("An original native confirmation boundary is immutable.");
                 transaction.Commit(); return (T)retained;
             }
+            var roles = await ReadKeepRemoteRoleAttemptsCoreAsync(commandId, transaction, token).ConfigureAwait(false);
             if (kind == 1)
             {
-                RequireKeepRemoteNativeStart((MirrorPulseConflictKeepRemoteNativeStart)(object)value, first, content, attempts);
+                var start = (MirrorPulseConflictKeepRemoteNativeStart)(object)value;
+                RequireCurrentKeepRemoteRole(roles, start.RoleRecoveryId);
+                RequireKeepRemoteNativeStart(start, first, content, attempts, roles);
                 if (attempts.Any(attempt => attempt.Result?.Receipt.MayAcknowledge == true))
                     throw new InvalidOperationException("A completed native confirmation is historical and cannot start another byte confirmation.");
             }
@@ -81,7 +89,8 @@ public sealed partial class MirrorPulseProductCatalog
             {
                 if (existing is null || attempts[^1] != existing)
                     throw new InvalidOperationException("A native result requires the latest original before-native attempt.");
-                RequireKeepRemoteNativeResult((MirrorPulseConflictKeepRemoteNativeResult)(object)value, existing.Start, first, content);
+                RequireCurrentKeepRemoteRole(roles, existing.Start.RoleRecoveryId);
+                RequireKeepRemoteNativeResult((MirrorPulseConflictKeepRemoteNativeResult)(object)value, existing.Start, first, content, roles);
             }
             await RequireKeepRemoteFileStartRootAsync(first, transaction, token).ConfigureAwait(false);
             if (!SameKeepRemoteSnapshot(first.Original, await ReadNamespaceMemberProtectionSnapshotCoreAsync(first.Original.Context.Member.MemberId, transaction, token).ConfigureAwait(false)) ||
@@ -107,6 +116,33 @@ public sealed partial class MirrorPulseProductCatalog
     }
 
     private async Task<IReadOnlyList<MirrorPulseConflictKeepRemoteNativeAttempt>> ReadKeepRemoteNativeAttemptsCoreAsync(
+        Guid commandId, SqliteTransaction transaction, CancellationToken token)
+    {
+        var attempts = await ReadKeepRemoteNativeFactsCoreAsync(commandId, transaction, token).ConfigureAwait(false);
+        if (attempts.Count == 0) return attempts;
+        var first = await ReadKeepRemoteFileStartCoreAsync(commandId, transaction, token).ConfigureAwait(false)
+            ?? throw new InvalidDataException("Native confirmation lost its original file start.");
+        var content = await ReadKeepRemoteFileContentCoreAsync(commandId, transaction, token).ConfigureAwait(false)
+            ?? throw new InvalidDataException("Native confirmation lost its original content action.");
+        var roles = await ReadKeepRemoteRoleAttemptsCoreAsync(commandId, transaction, token).ConfigureAwait(false);
+        try
+        {
+            for (int i = 0; i < attempts.Count; i++)
+            {
+                RequireKeepRemoteNativeStart(attempts[i].Start, first, content, attempts.Take(i).ToArray(), roles);
+                if (attempts.Take(i).Any(attempt => attempt.Result?.Receipt.MayAcknowledge == true))
+                    throw new InvalidOperationException("Native work continued after a completed historical confirmation.");
+                if (attempts[i].Result is { } result) RequireKeepRemoteNativeResult(result, attempts[i].Start, first, content, roles);
+            }
+        }
+        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
+        {
+            throw new InvalidDataException("The retained native boundaries disagree with their original file and selected bytes.", exception);
+        }
+        return attempts;
+    }
+
+    private async Task<IReadOnlyList<MirrorPulseConflictKeepRemoteNativeAttempt>> ReadKeepRemoteNativeFactsCoreAsync(
         Guid commandId, SqliteTransaction transaction, CancellationToken token)
     {
         var attempts = new List<MirrorPulseConflictKeepRemoteNativeAttempt>();
@@ -168,51 +204,39 @@ public sealed partial class MirrorPulseProductCatalog
                 }
             }
         }
-        if (attempts.Count == 0) return attempts;
-        var first = await ReadKeepRemoteFileStartCoreAsync(commandId, transaction, token).ConfigureAwait(false)
-            ?? throw new InvalidDataException("Native confirmation lost its original file start.");
-        var content = await ReadKeepRemoteFileContentCoreAsync(commandId, transaction, token).ConfigureAwait(false)
-            ?? throw new InvalidDataException("Native confirmation lost its original content action.");
-        try
-        {
-            for (int i = 0; i < attempts.Count; i++)
-            {
-                RequireKeepRemoteNativeStart(attempts[i].Start, first, content, attempts.Take(i).ToArray());
-                if (attempts.Take(i).Any(attempt => attempt.Result?.Receipt.MayAcknowledge == true))
-                    throw new InvalidOperationException("Native work continued after a completed historical confirmation.");
-                if (attempts[i].Result is { } result) RequireKeepRemoteNativeResult(result, attempts[i].Start, first, content);
-            }
-        }
-        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
-        {
-            throw new InvalidDataException("The retained native boundaries disagree with their original file and selected bytes.", exception);
-        }
-        return attempts;
+        return attempts.AsReadOnly();
     }
 
     private static void RequireKeepRemoteNativeStart(MirrorPulseConflictKeepRemoteNativeStart value,
         MirrorPulseConflictKeepRemoteFileStart first, MirrorPulseConflictKeepRemoteFileContent content,
-        IReadOnlyList<MirrorPulseConflictKeepRemoteNativeAttempt> previous)
+        IReadOnlyList<MirrorPulseConflictKeepRemoteNativeAttempt> previous, IReadOnlyList<MirrorPulseConflictKeepRemoteRoleAttempt> roles)
     {
         var complete = content.Completion ?? throw new InvalidOperationException("Native work requires complete durable selected bytes.");
+        var (action, handoff) = RequireKeepRemoteRoleAt(content.Action, roles, value.RoleRecoveryId, value.StartedAt);
+        var earliest = handoff is not null && handoff.RecordedAt > complete.VerifiedAt ? handoff.RecordedAt : complete.VerifiedAt;
         if (value.Version != 1 || value.CommandId != first.CommandId || value.ActionId != content.Action.ActionId ||
             value.AttemptId == Guid.Empty || value.AttemptId == value.CommandId || value.AttemptId == value.ActionId ||
-            value.StartedAt < complete.VerifiedAt || previous.Count > 0 && value.StartedAt < (previous[^1].Result?.RecordedAt ?? previous[^1].Start.StartedAt) ||
+            value.AttemptId == value.RoleRecoveryId || value.StartedAt < earliest ||
+            previous.Count > 0 && value.StartedAt < (previous[^1].Result?.RecordedAt ?? previous[^1].Start.StartedAt) ||
             previous.Count > 0 && value.SelectedPlaceholderIdentity != previous[0].Start.SelectedPlaceholderIdentity ||
+            handoff is not null && handoff.PlaceholderIdentity != value.ObservedPlaceholderIdentity &&
+                (handoff.PlaceholderIdentity != complete.OriginalPlaceholderIdentity || !previous.Any(attempt => attempt.Start.RoleRecoveryId == handoff.RecoveryId)) ||
             value.ObservedPlaceholderIdentity != complete.OriginalPlaceholderIdentity &&
                 (previous.Count == 0 || value.ObservedPlaceholderIdentity != value.SelectedPlaceholderIdentity))
             throw new InvalidOperationException("Native confirmation requires the original completed content, action and retained identity history.");
         RequireKeepRemoteNativeIdentity(value.SelectedPlaceholderIdentity);
-        RequireKeepRemoteSealedVerification(value.Child, content.Action.LocalObject, content.Action.OwnerSid,
-            content.Action.RoleOnlyDacl, complete.VerifiedAt, value.StartedAt);
+        RequireKeepRemoteSealedVerification(value.Child, action.LocalObject, action.OwnerSid,
+            action.RoleOnlyDacl, earliest, value.StartedAt);
         RequireKeepRemoteSealedVerification(value.Parent, first.Parent.Context.Member.LocalObject, first.Parent.Context.Member.OwnerSid,
-            first.Parent.ExpectedDacl, complete.VerifiedAt, value.StartedAt);
+            first.Parent.ExpectedDacl, earliest, value.StartedAt);
     }
 
     private static void RequireKeepRemoteNativeResult(MirrorPulseConflictKeepRemoteNativeResult value,
-        MirrorPulseConflictKeepRemoteNativeStart start, MirrorPulseConflictKeepRemoteFileStart first, MirrorPulseConflictKeepRemoteFileContent content)
+        MirrorPulseConflictKeepRemoteNativeStart start, MirrorPulseConflictKeepRemoteFileStart first, MirrorPulseConflictKeepRemoteFileContent content,
+        IReadOnlyList<MirrorPulseConflictKeepRemoteRoleAttempt> roles)
     {
         var receipt = value.Receipt ?? throw new ArgumentException("The actual SDK result is required.");
+        var (action, _) = RequireKeepRemoteRoleAt(content.Action, roles, start.RoleRecoveryId, value.RecordedAt);
         if (value.Version != 1 || value.CommandId != start.CommandId || value.ActionId != start.ActionId || value.AttemptId != start.AttemptId ||
             value.RecordedAt < receipt.ObservedAt || receipt.ObservedAt < start.StartedAt || !Enum.IsDefined(receipt.Outcome) ||
             !Enum.IsDefined(receipt.Stage) || !Enum.IsDefined(receipt.NativeStage) || receipt.BytesVerified < 0 || receipt.SegmentsRead < 0 ||
@@ -222,8 +246,8 @@ public sealed partial class MirrorPulseProductCatalog
                 receipt.Stage != MirrorPulseContentConfirmationStage.Complete || receipt.ObservedPlaceholderIdentity != start.SelectedPlaceholderIdentity))
             throw new InvalidOperationException("The native result must retain the actual request, complete selected bytes and native projection observation.");
         if (receipt.ObservedPlaceholderIdentity is { } identity) RequireKeepRemoteNativeIdentity(identity);
-        RequireKeepRemoteSealedVerification(value.Child, content.Action.LocalObject, content.Action.OwnerSid,
-            content.Action.RoleOnlyDacl, start.StartedAt, value.RecordedAt);
+        RequireKeepRemoteSealedVerification(value.Child, action.LocalObject, action.OwnerSid,
+            action.RoleOnlyDacl, start.StartedAt, value.RecordedAt);
         RequireKeepRemoteSealedVerification(value.Parent, first.Parent.Context.Member.LocalObject, first.Parent.Context.Member.OwnerSid,
             first.Parent.ExpectedDacl, start.StartedAt, value.RecordedAt);
     }

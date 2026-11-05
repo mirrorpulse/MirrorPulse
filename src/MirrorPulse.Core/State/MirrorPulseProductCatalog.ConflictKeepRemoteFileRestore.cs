@@ -83,14 +83,14 @@ public sealed partial class MirrorPulseProductCatalog
             if (kind == 1)
             {
                 var start = (MirrorPulseConflictKeepRemoteRestoreStart)(object)value;
-                RequireCurrentKeepRemoteRestoreRole(start, authority);
+                RequireCurrentKeepRemoteRole(authority.Roles, start.RoleRecoveryId);
                 RequireKeepRemoteRestoreStart(start, authority, attempts);
             }
             else
             {
                 if (existing is null || attempts[^1] != existing)
                     throw new InvalidOperationException("An access result requires its latest retained before-scope attempt.");
-                RequireCurrentKeepRemoteRestoreRole(existing.Start, authority);
+                RequireCurrentKeepRemoteRole(authority.Roles, existing.Start.RoleRecoveryId);
                 RequireKeepRemoteRestoreResult((MirrorPulseConflictKeepRemoteRestoreResult)(object)value, existing.Start, authority);
             }
             await RequireKeepRemoteFileStartRootAsync(authority.First, transaction, token).ConfigureAwait(false);
@@ -291,17 +291,11 @@ public sealed partial class MirrorPulseProductCatalog
     private static MirrorPulseConflictKeepRemoteFileAction RequireKeepRemoteRestoreRole(MirrorPulseConflictKeepRemoteRestoreStart start,
         KeepRemoteRestoreAuthority authority)
     {
-        var role = authority.Roles.LastOrDefault(attempt => attempt.Start.NextAction.PreparedAt <= start.StartedAt);
-        if (role is null && start.RoleRecoveryId is null) return authority.Content.Action;
-        if (role is { Result: { } observed } && observed.RecordedAt <= start.StartedAt && observed.RecoveryId == start.RoleRecoveryId &&
-            observed.PlaceholderIdentity == start.ObservedPlaceholderIdentity)
-            return role.Start.NextAction;
-        throw new InvalidOperationException("Restoring access requires the latest verified handoff for the selected original placeholder.");
-    }
-
-    private static void RequireCurrentKeepRemoteRestoreRole(MirrorPulseConflictKeepRemoteRestoreStart start, KeepRemoteRestoreAuthority authority)
-    {
-        if (authority.Roles.Count > 0 && (authority.Roles[^1].Result is not { } current || current.RecoveryId != start.RoleRecoveryId))
-            throw new InvalidOperationException("New restoration facts require the current verified role handoff.");
+        var (action, handoff) = RequireKeepRemoteRoleAt(authority.Content.Action, authority.Roles, start.RoleRecoveryId, start.StartedAt);
+        if (handoff is not null && handoff.PlaceholderIdentity != start.ObservedPlaceholderIdentity &&
+            (handoff.PlaceholderIdentity != authority.Content.Completion!.OriginalPlaceholderIdentity ||
+             authority.Native.Start.RoleRecoveryId != handoff.RecoveryId))
+            throw new InvalidOperationException("Restoring access requires the role's observed or subsequently confirmed selected identity.");
+        return action;
     }
 }

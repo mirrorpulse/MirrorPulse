@@ -22,6 +22,7 @@ public sealed class DeferredP079GateTests
                 'NativeKeepRemoteResidentWriterKeepsItsWriteAndCompletionFactsAcrossRetry',
                 'NativeKeepRemoteResidentWriterPreservesChangedLocalBytesBeforeItsFirstWrite',
                 'NativeKeepRemoteConfirmationRetainsOriginalAttemptsAndRecoversLostSdkReturns',
+                'NativeKeepRemoteNewRoleResumesOriginalWriteAndConfirmsSelectedBytes',
                 'NativeKeepRemoteRestorationRetainsActualAccessResultsAndPreservesOrdinaryLaterEdits',
                 'NativeKeepRemoteRoleHandoffRecoversLostReadbackWithoutReapplyingContent')|ForEach-Object {$keepRemotePrefix+$_}
             $names=@($catalog.required.namespace | Where-Object {$_ -cnotin $keepRemote})

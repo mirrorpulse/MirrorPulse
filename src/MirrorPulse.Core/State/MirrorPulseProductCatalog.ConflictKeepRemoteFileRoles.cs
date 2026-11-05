@@ -74,6 +74,8 @@ public sealed partial class MirrorPulseProductCatalog
             }
 
             var authority = await ReadKeepRemoteRoleAuthorityCoreAsync(commandId, transaction, token).ConfigureAwait(false);
+            _ = await ReadKeepRemoteFileContentCoreAsync(commandId, transaction, token).ConfigureAwait(false);
+            _ = await ReadKeepRemoteNativeAttemptsCoreAsync(commandId, transaction, token).ConfigureAwait(false);
             var restore = await ReadKeepRemoteRestoreAttemptsCoreAsync(commandId, transaction, token).ConfigureAwait(false);
             if (restore.Any(attempt => attempt.Result?.ProductVerified == true) ||
                 restore.Count > 0 && restore[^1].Result is { Receipt.Drained: false })
@@ -86,7 +88,15 @@ public sealed partial class MirrorPulseProductCatalog
                 throw new InvalidOperationException("The original member or direct parent changed before role recovery.");
 
             if (kind == 1)
-                RequireKeepRemoteRoleStart((MirrorPulseConflictKeepRemoteRoleStart)(object)value, authority, attempts);
+            {
+                var start = (MirrorPulseConflictKeepRemoteRoleStart)(object)value;
+                var at = start.NextAction.PreparedAt;
+                if (authority.Content.WriteStart?.StartedAt >= at || authority.Content.Completion?.VerifiedAt >= at ||
+                    authority.Native.Any(attempt => attempt.Start.StartedAt >= at || attempt.Result?.RecordedAt >= at) ||
+                    restore.Any(attempt => attempt.Start.StartedAt >= at || attempt.Result?.RecordedAt >= at))
+                    throw new InvalidOperationException("A new handoff must follow already recorded KeepRemote work.");
+                RequireKeepRemoteRoleStart(start, authority, attempts);
+            }
             else
             {
                 if (existing is null || attempts[^1] != existing)
@@ -206,12 +216,14 @@ public sealed partial class MirrorPulseProductCatalog
     {
         var first = await ReadKeepRemoteFileStartCoreAsync(commandId, transaction, token).ConfigureAwait(false)
             ?? throw new InvalidOperationException("Role recovery requires the original resident file start.");
-        var content = await ReadKeepRemoteFileContentCoreAsync(commandId, transaction, token).ConfigureAwait(false)
+        // The phase readers validate against the role history. Here use their ordered,
+        // owner-bound facts to select the phase that was present at each handoff.
+        var content = await ReadKeepRemoteFileContentFactsCoreAsync(commandId, transaction, token).ConfigureAwait(false)
             ?? throw new InvalidOperationException("Role recovery requires the original permission action.");
         var preparation = await ReadConflictKeepRemoteCoreAsync(commandId, transaction, token).ConfigureAwait(false);
         var original = preparation?.Intent.LocalContent?.UploadBinding.PreviousPlaceholderIdentity
             ?? throw new InvalidOperationException("Role recovery requires the original placeholder identity.");
-        var native = await ReadKeepRemoteNativeAttemptsCoreAsync(commandId, transaction, token).ConfigureAwait(false);
+        var native = await ReadKeepRemoteNativeFactsCoreAsync(commandId, transaction, token).ConfigureAwait(false);
         var restore = await ReadKeepRemoteRestoreFactsCoreAsync(commandId, transaction, token).ConfigureAwait(false);
         return new(first, content, original, native, restore);
     }
@@ -271,4 +283,21 @@ public sealed partial class MirrorPulseProductCatalog
         DateTimeOffset earliest, DateTimeOffset latest) =>
         RequireKeepRemoteSealedVerification(parent, authority.First.Parent.Context.Member.LocalObject,
             authority.First.Parent.Context.Member.OwnerSid, authority.First.Parent.ExpectedDacl, earliest, latest);
+
+    private static (MirrorPulseConflictKeepRemoteFileAction Action, MirrorPulseConflictKeepRemoteRoleResult? Handoff) RequireKeepRemoteRoleAt(
+        MirrorPulseConflictKeepRemoteFileAction first, IReadOnlyList<MirrorPulseConflictKeepRemoteRoleAttempt> roles,
+        Guid? recoveryId, DateTimeOffset at)
+    {
+        var role = roles.LastOrDefault(attempt => attempt.Start.NextAction.PreparedAt <= at);
+        if (role is null && recoveryId is null) return (first, null);
+        if (role is { Result: { } result } && result.RecordedAt <= at && result.RecoveryId == recoveryId)
+            return (role.Start.NextAction, result);
+        throw new InvalidOperationException("The phase requires the verified KeepRemote role at the time of the observation.");
+    }
+
+    private static void RequireCurrentKeepRemoteRole(IReadOnlyList<MirrorPulseConflictKeepRemoteRoleAttempt> roles, Guid? recoveryId)
+    {
+        if (roles.Count == 0 ? recoveryId is not null : roles[^1].Result is not { } current || current.RecoveryId != recoveryId)
+            throw new InvalidOperationException("New KeepRemote facts require the current verified role handoff.");
+    }
 }

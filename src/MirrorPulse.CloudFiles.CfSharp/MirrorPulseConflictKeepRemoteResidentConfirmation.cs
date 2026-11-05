@@ -31,7 +31,10 @@ internal sealed class MirrorPulseConflictKeepRemoteResidentConfirmation(CloudFil
             ?? throw new InvalidOperationException("Native confirmation requires the original file start.");
         var content = await catalog.ReadConflictKeepRemoteFileContentAsync(intent.CommandId, token).ConfigureAwait(false)
             ?? throw new InvalidOperationException("Native confirmation requires the original content action.");
-        var action = content.Action;
+        var originalAction = content.Action;
+        var handoff = MirrorPulseConflictKeepRemoteResidentRoleRecovery.RequireCompletedHead(
+            await catalog.ReadConflictKeepRemoteRoleAttemptsAsync(intent.CommandId, token).ConfigureAwait(false));
+        var action = handoff?.Start.NextAction ?? originalAction;
         if (content.Completion is null || copies.Local is null || content.Completion.Copy != copies.Remote.Proof ||
             first.Original.Context.Member.RootId != admittedRoot || first.Parent.Context.Member.RootId != admittedRoot ||
             action.RoleSid != execution.RoleSid.Value || action.OwnerSid != execution.OwnerSid.Value ||
@@ -60,8 +63,9 @@ internal sealed class MirrorPulseConflictKeepRemoteResidentConfirmation(CloudFil
             var before = await InspectAsync(token).ConfigureAwait(false);
             if (before.Identity != original && (attempts.Count == 0 || before.Identity != selected))
                 throw new InvalidDataException("The current native identity cannot be adopted without the original before-native history.");
-            var start = await catalog.RecordConflictKeepRemoteNativeStartAsync(new(1, intent.CommandId, action.ActionId, Guid.NewGuid(),
-                selected, before.Identity, Verification(before.Child), Verification(before.Parent), DateTimeOffset.UtcNow), token).ConfigureAwait(false);
+            var start = await catalog.RecordConflictKeepRemoteNativeStartAsync(new MirrorPulseConflictKeepRemoteNativeStart(1, intent.CommandId, originalAction.ActionId, Guid.NewGuid(),
+                selected, before.Identity, Verification(before.Child), Verification(before.Parent), DateTimeOffset.UtcNow)
+            { RoleRecoveryId = handoff?.Result?.RecoveryId }, token).ConfigureAwait(false);
             await AtCheckpointAsync(MirrorPulseKeepRemoteNativeCheckpoint.AfterNativeStart, token).ConfigureAwait(false);
             var sdk = await file.ConfirmUploadedContentAsync(new(new(binding.VolumeSerialNumber, binding.SyncRootFileId, binding.LocalFileId),
                 selectedIdentity, copies.Remote.Proof.Length, Convert.FromHexString(copies.Remote.Proof.Sha256),
@@ -69,7 +73,7 @@ internal sealed class MirrorPulseConflictKeepRemoteResidentConfirmation(CloudFil
             var receipt = MirrorPulseContentConfirmation.MapReceipt(sdk);
             await AtCheckpointAsync(MirrorPulseKeepRemoteNativeCheckpoint.AfterSdkReturned, token).ConfigureAwait(false);
             var after = await InspectAsync(CancellationToken.None).ConfigureAwait(false);
-            result = await catalog.RecordConflictKeepRemoteNativeResultAsync(new(1, intent.CommandId, action.ActionId, start.AttemptId,
+            result = await catalog.RecordConflictKeepRemoteNativeResultAsync(new(1, intent.CommandId, originalAction.ActionId, start.AttemptId,
                 receipt, Verification(after.Child), Verification(after.Parent), DateTimeOffset.UtcNow), CancellationToken.None).ConfigureAwait(false);
             await AtCheckpointAsync(MirrorPulseKeepRemoteNativeCheckpoint.AfterNativeRecorded, token).ConfigureAwait(false);
 
