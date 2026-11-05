@@ -125,12 +125,14 @@ public sealed partial class MirrorPulseProductCatalog
         }
         catch (Exception failure) when (failure is JsonException or ArgumentException)
         { throw new InvalidDataException("The first KeepRemote file start is invalid.", failure); }
+        bool completed = await HasKeepRemoteAcknowledgementResultAsync(commandId, transaction, token).ConfigureAwait(false);
         await using (var pending = _connection.CreateCommand())
         {
             pending.Transaction = transaction; pending.CommandText = "SELECT root_id FROM conflict_keep_remote_file_pending WHERE command_id=$id;";
             pending.Parameters.AddWithValue("$id", commandId.ToString("D"));
-            if (await pending.ExecuteScalarAsync(token).ConfigureAwait(false) is not string pendingRoot || pendingRoot != rootId)
-                throw new InvalidDataException("An unfinished KeepRemote file start lost its original root fence.");
+            var pendingRoot = await pending.ExecuteScalarAsync(token).ConfigureAwait(false);
+            if (completed ? pendingRoot is not null : pendingRoot is not string value || value != rootId)
+                throw new InvalidDataException("The KeepRemote file start does not match its original root fence state.");
         }
         var journal = await ReadKeepRemoteJournalBindingCoreAsync(commandId, transaction, token).ConfigureAwait(false)
             ?? throw new InvalidDataException("The original KeepRemote journal correlations disappeared.");

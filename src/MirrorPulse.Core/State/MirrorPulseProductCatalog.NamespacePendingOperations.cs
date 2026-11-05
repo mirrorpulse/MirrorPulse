@@ -3,7 +3,7 @@ using MirrorPulse.Core.Contracts;
 
 namespace MirrorPulse.Core.State;
 
-public enum MirrorPulseNamespacePendingOperationKind { Birth, Move, Retirement, RetirementBatch, Replacement, BornMemberRecovery, RemoteUpdate, Transfer, RootLabelJournal, RootLabel }
+public enum MirrorPulseNamespacePendingOperationKind { Birth, Move, Retirement, RetirementBatch, Replacement, BornMemberRecovery, RemoteUpdate, Transfer, RootLabelJournal, RootLabel, ConflictKeepRemote }
 
 /// <summary>A safe reference to retained local recovery work; it carries no native authority.</summary>
 public sealed record MirrorPulseNamespacePendingOperation(Guid OperationId, RootId RootId, MirrorPulseNamespacePendingOperationKind Kind);
@@ -27,6 +27,8 @@ public sealed partial class MirrorPulseProductCatalog
             var result = new List<MirrorPulseNamespacePendingOperation>();
             if (await ReadPendingRootLabelJournalForRootCoreAsync(rootId, transaction, cancellationToken).ConfigureAwait(false) is { } rootJournal)
                 result.Add(new(rootJournal.Observation.OperationId, rootId, MirrorPulseNamespacePendingOperationKind.RootLabelJournal));
+            if (await ReadPendingKeepRemoteFileStartForRootCoreAsync(rootId, transaction, cancellationToken).ConfigureAwait(false) is { } keepRemote)
+                result.Add(new(keepRemote.CommandId, rootId, MirrorPulseNamespacePendingOperationKind.ConflictKeepRemote));
             await foreach (var transfer in ReadPendingNamespaceTransfersCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
                 if (transfer.Plan.SourceRoute.RootId == rootId || transfer.Plan.TargetRoute.RootId == rootId)
                     result.Add(new(transfer.Plan.OperationId, rootId, MirrorPulseNamespacePendingOperationKind.Transfer));

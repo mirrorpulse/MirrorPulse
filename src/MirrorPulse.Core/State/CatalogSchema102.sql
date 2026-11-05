@@ -874,4 +874,12 @@ CREATE TABLE conflict_keep_remote_role_owners(
     kind INTEGER NOT NULL CHECK(kind IN (1,2)),
     action_id TEXT NOT NULL REFERENCES conflict_keep_remote_file_actions(action_id),
     PRIMARY KEY(command_id,ordinal), UNIQUE(command_id,recovery_id,kind));
-PRAGMA user_version=101;
+CREATE TABLE conflict_keep_remote_acknowledgements(
+    command_id TEXT NOT NULL PRIMARY KEY REFERENCES conflict_keep_remote_file_starts(command_id),
+    invocation_id TEXT NOT NULL UNIQUE,
+    start_payload BLOB NOT NULL CHECK(length(start_payload)<=4096),
+    start_fingerprint BLOB NOT NULL CHECK(length(start_fingerprint)=32),
+    result_payload BLOB CHECK(length(result_payload)<=3145728),
+    result_fingerprint BLOB CHECK(length(result_fingerprint)=32),
+    CHECK((result_payload IS NULL)=(result_fingerprint IS NULL)));
+PRAGMA user_version=102;

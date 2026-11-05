@@ -62,6 +62,10 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     public Task NativeKeepRemoteNewRoleResumesOriginalWriteAndConfirmsSelectedBytes() =>
         RunKeepRemoteResidentFixtureAsync("role-after-write", 65537);
 
+    [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles")]
+    public Task NativeKeepRemoteAcknowledgementRecoversLostSdkReturnAndPreservesLaterEdit() =>
+        RunKeepRemoteResidentFixtureAsync("acknowledgement", 65537);
+
     private async Task RunKeepRemoteResidentFixtureAsync(string scenario, int selectedLength)
     {
         if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
@@ -364,9 +368,10 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     Assert.AreEqual(writeHandoff.RecoveryId, (await catalog.ReadConflictKeepRemoteRestoreAttemptsAsync(commandId, token)).Single().Start.RoleRecoveryId);
                     CollectionAssert.AreEqual(selectedBytes, await File.ReadAllBytesAsync(file.FullPath, token));
                 }
-                else if (Enum.TryParse<MirrorPulseKeepRemoteRestoreCheckpoint>(scenario, out _) || scenario == "restore-later-edit")
+                else if (Enum.TryParse<MirrorPulseKeepRemoteRestoreCheckpoint>(scenario, out _) || scenario is "restore-later-edit" or "acknowledgement")
                 {
                     await VerifyRestorationAsync();
+                    if (scenario == "acknowledgement") return;
                 }
                 else if (scenario == "role-handoff")
                 {
@@ -578,6 +583,70 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     }
                     await RequirePrivateBytesAsync(copies.Local!.Data, local);
                     await RequirePrivateBytesAsync(copies.Remote.Data, selectedBytes);
+                    if (scenario == "acknowledgement") await VerifyAcknowledgementAsync(successor);
+
+                    async Task VerifyAcknowledgementAsync(CloudOperationJournalEntry laterRow)
+                    {
+                        var cutAt = MirrorPulseKeepRemoteAcknowledgementCheckpoint.AfterStart;
+                        var acknowledger = new MirrorPulseConflictKeepRemoteResidentAcknowledgement(catalog, state, feed, router, role, actor)
+                        {
+                            Checkpoint = (point, _) => point == cutAt
+                                ? ValueTask.FromException(new IOException("Synthetic interruption of KeepRemote acknowledgement."))
+                                : ValueTask.CompletedTask
+                        };
+                        var originals = plan.Members.Select(member => member.OperationId).ToArray();
+                        await Assert.ThrowsExactlyAsync<IOException>(() => AcknowledgeAsync(acknowledger).AsTask());
+                        var pending = await catalog.ReadConflictKeepRemoteAcknowledgementAsync(commandId, token);
+                        Assert.IsNotNull(pending);
+                        Assert.IsNull(pending.Result);
+                        await CheckOfficialRowsAsync(expectOriginals: true);
+                        cutAt = MirrorPulseKeepRemoteAcknowledgementCheckpoint.AfterSdkReturn;
+                        await Assert.ThrowsExactlyAsync<IOException>(() => AcknowledgeAsync(acknowledger).AsTask());
+                        await CheckOfficialRowsAsync(expectOriginals: false);
+                        Assert.AreEqual(pending, await catalog.ReadConflictKeepRemoteAcknowledgementAsync(commandId, token));
+                        Assert.AreEqual("pending", (await catalog.ReadUserCommandAsync(commandId, token))!.State);
+                        Assert.HasCount(1, await catalog.ReadNamespaceDispatchFencedRootsAsync(token));
+
+                        await using var recoveredRole = new MirrorPulseNamespaceExecutionSession();
+                        int sdkReturns = 0;
+                        var recovered = new MirrorPulseConflictKeepRemoteResidentAcknowledgement(catalog, state, feed, router, recoveredRole, actor)
+                        {
+                            Checkpoint = (point, _) =>
+                            {
+                                if (point == MirrorPulseKeepRemoteAcknowledgementCheckpoint.AfterSdkReturn) sdkReturns++;
+                                return ValueTask.CompletedTask;
+                            }
+                        };
+                        var result = await AcknowledgeAsync(recovered);
+                        Assert.AreEqual(pending.Start.InvocationId, result.InvocationId);
+                        CollectionAssert.AreEqual(originals, result.VerifiedMissingOriginals.ToArray());
+                        var replay = await AcknowledgeAsync(recovered);
+                        Assert.AreEqual(result.InvocationId, replay.InvocationId);
+                        Assert.AreEqual(result.ReadBackAt, replay.ReadBackAt);
+                        Assert.AreEqual(1, sdkReturns);
+                        await CheckOfficialRowsAsync(expectOriginals: false);
+                        CollectionAssert.AreEqual(later, await File.ReadAllBytesAsync(file.FullPath, token));
+                        Assert.AreEqual("resolved", (await catalog.ReadUserCommandAsync(commandId, token))!.State);
+                        Assert.HasCount(0, await catalog.ReadNamespaceDispatchFencedRootsAsync(token));
+                        Assert.AreEqual(sourceReads, remote.SourceReads);
+                        Assert.AreEqual(0, provider.Reads);
+
+                        ValueTask<MirrorPulseConflictKeepRemoteAcknowledgementResult> AcknowledgeAsync(MirrorPulseConflictKeepRemoteResidentAcknowledgement owner) =>
+                            scheduler.RunAsync(root.InstanceId, stop => actor.RunAsync(inner =>
+                                new ValueTask<MirrorPulseConflictKeepRemoteAcknowledgementResult>(owner.AcknowledgeAsync(root.RootId, copies, inner)), stop), token);
+
+                        async Task CheckOfficialRowsAsync(bool expectOriginals)
+                        {
+                            await using var readback = await state.OpenStore.BeginTransactionAsync(token);
+                            foreach (Guid originalId in originals)
+                                Assert.AreEqual(expectOriginals, await readback.Operations.GetAsync(originalId, token) is not null);
+                            var stillPending = await readback.Operations.GetAsync(laterRow.OperationId, token);
+                            Assert.IsNotNull(stillPending);
+                            Assert.AreEqual(laterRow.Sequence, stillPending.Sequence);
+                            CollectionAssert.AreEqual(laterRow.Payload.ToArray(), stillPending.Payload.ToArray());
+                            await readback.RollbackAsync(token);
+                        }
+                    }
 
                     async Task<CloudOperationJournalEntry> WriteOrdinaryLaterEditAsync()
                     {

@@ -58,10 +58,14 @@ public sealed partial class MirrorPulseProductCatalog
             query.Transaction = transaction;
             query.CommandText = """
                 SELECT s.command_id,p.command_id,s.root_id,p.root_id FROM conflict_keep_remote_file_starts s
-                LEFT JOIN conflict_keep_remote_file_pending p ON p.command_id=s.command_id WHERE s.root_id=$root
+                LEFT JOIN conflict_keep_remote_file_pending p ON p.command_id=s.command_id
+                LEFT JOIN conflict_keep_remote_acknowledgements a ON a.command_id=s.command_id
+                LEFT JOIN user_commands u ON u.command_id=s.command_id
+                WHERE s.root_id=$root AND (p.command_id IS NOT NULL OR a.result_payload IS NULL OR u.state IS NOT 'resolved')
                 UNION ALL
                 SELECT s.command_id,p.command_id,s.root_id,p.root_id FROM conflict_keep_remote_file_pending p
-                LEFT JOIN conflict_keep_remote_file_starts s ON s.command_id=p.command_id WHERE p.root_id=$root AND s.command_id IS NULL;
+                LEFT JOIN conflict_keep_remote_file_starts s ON s.command_id=p.command_id
+                WHERE p.root_id=$root AND (s.command_id IS NULL OR s.root_id<>p.root_id);
                 """;
             query.Parameters.AddWithValue("$root", root.ToString());
             await using var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
@@ -83,7 +87,13 @@ public sealed partial class MirrorPulseProductCatalog
         await using (var query = _connection.CreateCommand())
         {
             query.Transaction = transaction;
-            query.CommandText = "SELECT root_id FROM conflict_keep_remote_file_starts UNION SELECT root_id FROM conflict_keep_remote_file_pending;";
+            query.CommandText = """
+                SELECT s.root_id FROM conflict_keep_remote_file_starts s
+                LEFT JOIN conflict_keep_remote_acknowledgements a ON a.command_id=s.command_id
+                LEFT JOIN user_commands u ON u.command_id=s.command_id
+                WHERE a.result_payload IS NULL OR u.state IS NOT 'resolved'
+                UNION SELECT root_id FROM conflict_keep_remote_file_pending;
+                """;
             await using var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
             while (await reader.ReadAsync(token).ConfigureAwait(false))
             {

@@ -166,7 +166,8 @@ public sealed partial class MirrorPulseProductCatalog
             throw new InvalidDataException("KeepRemote lost its complete original group or selected source.");
         ValidatePermissionRelativePath(intent.LocalRelativePath);
         if (intent.LocalContent is not null) ValidateCoalescingDecisionContent(intent.LocalContent);
-        await RequireKeepRemoteCommandAsync(commandId, intent.ConflictId, transaction, token).ConfigureAwait(false);
+        bool completed = await HasKeepRemoteAcknowledgementResultAsync(commandId, transaction, token).ConfigureAwait(false);
+        await RequireKeepRemoteCommandAsync(commandId, intent.ConflictId, transaction, token, completed).ConfigureAwait(false);
         var plan = await ReadCoalescingPlanCoreAsync(intent.PlanId, transaction, token).ConfigureAwait(false);
         var execution = await ReadCoalescingExecutionCoreAsync(intent.PlanId, transaction, token).ConfigureAwait(false) ?? throw new InvalidDataException("The original KeepRemote execution is missing.");
         var rejected = await ReadMutationCoreAsync(intent.RejectedEffect.OperationId, token, transaction).ConfigureAwait(false);
@@ -175,12 +176,15 @@ public sealed partial class MirrorPulseProductCatalog
             !SameIntent(rejected.Intent, intent.RejectedEffect) || intent.RemoteSource.InstanceId != intent.InstanceId.ToString() ||
             intent.RemoteSource.RelativePath != (rejected.Intent.Kind == MirrorPulseWorkerChangeKind.Move ? rejected.Intent.PreviousRelativePath : rejected.Intent.RelativePath))
             throw new InvalidDataException("KeepRemote lost its original execution, rejected effect or selected root.");
-        var selected = await ReadConflictDecisionSelectionAsync(intent.ConflictId, intent.RemoteSource.RootKey, intent.ItemId,
-            intent.LocalRelativePath, null, false, transaction, token).ConfigureAwait(false);
-        if (selected.PlanId != intent.PlanId || selected.PlanFingerprint != intent.PlanFingerprint || selected.InstanceId != intent.InstanceId ||
-            selected.RejectedEffect is not { } currentEffect || !SameIntent(currentEffect, intent.RejectedEffect) || selected.RemoteTarget != intent.RemoteSource.RelativePath ||
-            selected.RemoteRevision != intent.RemoteSource.RemoteRevision || !selected.Originals.SequenceEqual(intent.OriginalOperationIds) || !selected.Conflicts.SequenceEqual(intent.ConflictIds))
-            throw new InvalidDataException("KeepRemote cannot substitute another selected version epoch or current rejected program.");
+        if (!completed)
+        {
+            var selected = await ReadConflictDecisionSelectionAsync(intent.ConflictId, intent.RemoteSource.RootKey, intent.ItemId,
+                intent.LocalRelativePath, null, false, transaction, token).ConfigureAwait(false);
+            if (selected.PlanId != intent.PlanId || selected.PlanFingerprint != intent.PlanFingerprint || selected.InstanceId != intent.InstanceId ||
+                selected.RejectedEffect is not { } currentEffect || !SameIntent(currentEffect, intent.RejectedEffect) || selected.RemoteTarget != intent.RemoteSource.RelativePath ||
+                selected.RemoteRevision != intent.RemoteSource.RemoteRevision || !selected.Originals.SequenceEqual(intent.OriginalOperationIds) || !selected.Conflicts.SequenceEqual(intent.ConflictIds))
+                throw new InvalidDataException("KeepRemote cannot substitute another selected version epoch or current rejected program.");
+        }
         intent.RemoteSource.Validate(new(intent.ConflictId, intent.InstanceId, intent.OriginalOperationIds[0].ToString("D"), intent.LocalRelativePath,
             MirrorPulseConflictReason.Content, MirrorPulseVersionComparison.Diverged, null, intent.RemoteSource.RemoteRevision, intent.PreparedAt));
         await using (var members = _connection.CreateCommand())
@@ -192,8 +196,8 @@ public sealed partial class MirrorPulseProductCatalog
             {
                 if (index >= intent.OriginalOperationIds.Count || reader.GetInt32(0) != index || reader.GetString(1) != intent.OriginalOperationIds[index].ToString("D") ||
                     reader.GetString(2) != intent.ConflictIds[index].ToString("D") || reader.GetString(3) != reader.GetString(1) || reader.GetString(4) != intent.InstanceId.ToString() ||
-                    reader.GetString(5) != intent.LocalRelativePath || reader.IsDBNull(6) || reader.GetString(6) != intent.RemoteSource.RemoteRevision || reader.GetInt32(7) != 0)
-                    throw new InvalidDataException("KeepRemote lost its exact pending conflict epochs or original journal ownership.");
+                    reader.GetString(5) != intent.LocalRelativePath || reader.IsDBNull(6) || reader.GetString(6) != intent.RemoteSource.RemoteRevision || reader.GetInt32(7) != (completed ? 1 : 0))
+                    throw new InvalidDataException("KeepRemote lost its exact conflict epochs or original journal ownership.");
                 index++;
             }
             if (index != intent.OriginalOperationIds.Count) throw new InvalidDataException("The complete original KeepRemote membership disappeared.");
@@ -224,13 +228,15 @@ public sealed partial class MirrorPulseProductCatalog
         return new(intent with { OriginalOperationIds = Array.AsReadOnly(intent.OriginalOperationIds.ToArray()), ConflictIds = Array.AsReadOnly(intent.ConflictIds.ToArray()) }, local, remote);
     }
 
-    private async Task RequireKeepRemoteCommandAsync(Guid commandId, Guid conflictId, SqliteTransaction transaction, CancellationToken token)
+    private async Task RequireKeepRemoteCommandAsync(Guid commandId, Guid conflictId, SqliteTransaction transaction, CancellationToken token,
+        bool completed = false)
     {
         await using var query = _connection.CreateCommand(); query.Transaction = transaction;
         query.CommandText = "SELECT action,target_id,state FROM user_commands WHERE command_id=$id;"; query.Parameters.AddWithValue("$id", commandId.ToString("D"));
         await using var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
-        if (!await reader.ReadAsync(token).ConfigureAwait(false) || reader.GetString(0) != "keepremote" || reader.GetString(1) != conflictId.ToString("D") || reader.GetString(2) is not ("pending" or "failed"))
-            throw new InvalidDataException("KeepRemote requires its original pending or failed explicit user command.");
+        if (!await reader.ReadAsync(token).ConfigureAwait(false) || reader.GetString(0) != "keepremote" || reader.GetString(1) != conflictId.ToString("D") ||
+            (completed ? reader.GetString(2) != "resolved" : reader.GetString(2) is not ("pending" or "failed")))
+            throw new InvalidDataException("KeepRemote requires the original explicit user command in its retained state.");
     }
 
     private static void ValidateKeepRemoteLocalCopy(MirrorPulseConflictKeepRemoteIntent intent, MirrorPulseConflictKeepRemoteLocalPreservation proof)
