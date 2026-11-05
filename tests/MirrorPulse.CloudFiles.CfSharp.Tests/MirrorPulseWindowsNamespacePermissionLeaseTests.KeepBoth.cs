@@ -189,7 +189,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         internal int SourceReads { get; private set; }
         internal int AcceptedUploads { get; private set; }
         internal Guid AcceptedOperation { get; private set; }
-        internal void Seed() { Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!); File.WriteAllBytes(path, SelectedBytes); }
+        internal void Seed(byte[]? bytes = null) { Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!); File.WriteAllBytes(path, bytes ?? SelectedBytes); }
         private void Read(CancellationToken token) { token.ThrowIfCancellationRequested(); Assert.IsFalse(DenySourceReads, "Recovery cannot reopen a committed remote source."); SourceReads++; }
         public ValueTask<string?> StatAsync(MirrorPulseWorkerStatRequest request, CancellationToken token)
         { Read(token); Assert.AreEqual("original.bin", request.NormalizedPath); return ValueTask.FromResult<string?>(_revision); }

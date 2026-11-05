@@ -16,7 +16,17 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     [DataRow("seal")]
     [DataRow("writer")]
     [DataRow("unowned-seal")]
-    public async Task NativeKeepRemoteFirstSealRequiresTheOriginalFileAndJournalAndReplaysWithoutWriting(string scenario)
+    public Task NativeKeepRemoteFirstSealRequiresTheOriginalFileAndJournalAndReplaysWithoutWriting(string scenario) =>
+        RunKeepRemoteResidentFixtureAsync(scenario, 3);
+
+    [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles")]
+    [DataRow(65537)]
+    [DataRow(3)]
+    [DataRow(0)]
+    public Task NativeKeepRemoteResidentByteCopyRetainsPlaceholderAndOriginalJournal(int selectedLength) =>
+        RunKeepRemoteResidentFixtureAsync("copy", selectedLength);
+
+    private async Task RunKeepRemoteResidentFixtureAsync(string scenario, int selectedLength)
     {
         if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
             Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
@@ -71,7 +81,9 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             var content = new MirrorPulseCoalescingContent(local.Length, Convert.ToHexString(SHA256.HashData(local)), binding);
             await catalog.PrepareJournalCoalescingAndExecutionAsync(plan, window.CompleteWindow!, "prior-remote", content, token);
             var remote = new KeepBothRemote(Path.Combine(paths.DataRootPath, "keep-remote-selected.bin"), snapshot.RemoteId);
-            remote.Seed();
+            byte[] selectedBytes = new byte[selectedLength];
+            new Random(518).NextBytes(selectedBytes);
+            remote.Seed(selectedBytes);
             await Assert.ThrowsExactlyAsync<MirrorPulseWorkerMutationConflictException>(() =>
                 new MirrorPulseJournalCoalescingExecutor(catalog, remote, remote, remote, new(remote)).ExecuteAsync(plan.PlanId,
                     (_, _) => ValueTask.FromResult<Stream>(new MemoryStream(local, writable: false)), token).AsTask());
@@ -86,7 +98,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             Guid commandId = Guid.NewGuid();
             await catalog.SaveUserCommandAsync(new(commandId, "keepremote", conflictId.ToString("D"), "pending"), token);
             var source = new MirrorPulseConflictRemoteSource(1, root.InstanceId.ToString(), root.UniquenessKey, "original.bin",
-                snapshot.RemoteId, "selected-remote", KeepBothRemote.SelectedBytes.Length);
+                snapshot.RemoteId, "selected-remote", selectedLength);
             await catalog.PrepareConflictKeepRemoteAsync(commandId, conflictId, itemId, "Docs/original.bin", source, content, token);
             var copyStore = new MirrorPulseConflictCopyStore(paths);
             await using var copies = await new MirrorPulseConflictKeepRemotePreserver(catalog, copyStore, new(copyStore, remote, remote, remote))
@@ -157,6 +169,31 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             Assert.IsFalse(replay.AccessDescriptorApplied);
             Assert.AreEqual(action, await catalog.ReadConflictKeepRemoteFileActionAsync(commandId, token));
             await role.RunNamespaceOperationAsync(async () => CollectionAssert.AreEqual(local, await File.ReadAllBytesAsync(file.FullPath, token)));
+            if (scenario == "copy")
+            {
+                int writeStart = 0;
+                await role.RunNamespaceOperationAsync(async () =>
+                {
+                    await using var target = new FileStream(file.FullPath, FileMode.Open, FileAccess.ReadWrite, FileShare.Read,
+                        64 * 1024, FileOptions.Asynchronous);
+                    Assert.AreEqual(1U, MirrorPulseWindowsNamespacePermissionLease.ValidateRetainedHandle(target.SafeFileHandle));
+                    Assert.AreEqual(copies.Remote.Proof.Sha256, await MirrorPulseConflictKeepRemoteContentTransfer.CopyResidentAsync(
+                        copies.Remote.Data, copies.Remote.Proof, target, _ =>
+                        {
+                            Assert.AreEqual(local.LongLength, target.Length);
+                            writeStart++;
+                            return ValueTask.CompletedTask;
+                        }, token));
+                    Assert.AreEqual((long)selectedLength, target.Length);
+                });
+                Assert.AreEqual(1, writeStart);
+                var copied = await file.InspectAsync(token);
+                Assert.IsTrue(copied.IsPlaceholder);
+                Assert.AreEqual(snapshot.LocalBinding, copied.LocalBinding);
+                CollectionAssert.AreEqual(snapshot.PlaceholderIdentity.ToArray(), copied.PlaceholderIdentity.ToArray());
+                await role.RunNamespaceOperationAsync(async () => CollectionAssert.AreEqual(selectedBytes, await File.ReadAllBytesAsync(file.FullPath, token)));
+                Assert.IsTrue(copies.Local!.Data.CanRead);
+            }
             Assert.AreEqual("pending", (await catalog.ReadUserCommandAsync(commandId, token))!.State);
             Assert.AreEqual(sourceReads, remote.SourceReads);
             Assert.AreEqual(0, provider.Reads);
