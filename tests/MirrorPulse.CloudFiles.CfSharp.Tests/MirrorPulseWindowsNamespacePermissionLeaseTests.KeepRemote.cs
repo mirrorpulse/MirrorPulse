@@ -231,6 +231,26 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 CollectionAssert.AreEqual(snapshot.PlaceholderIdentity.ToArray(), copied.PlaceholderIdentity.ToArray());
                 await role.RunNamespaceOperationAsync(async () => CollectionAssert.AreEqual(selectedBytes, await File.ReadAllBytesAsync(file.FullPath, token)));
                 Assert.IsTrue(copies.Local!.Data.CanRead);
+                CloudContentConfirmationResult confirmed = null!;
+                await scheduler.RunAsync(root.InstanceId, stop => actor.RunAsync(async inner =>
+                {
+                    await role.RunNamespaceOperationAsync(async () =>
+                    {
+                        // The selected private version was read from the remote source before
+                        // sealing. Its exact server identity and complete bytes supply this proof.
+                        confirmed = await file.ConfirmUploadedContentAsync(new(snapshot.LocalBinding!,
+                            new CloudPlaceholderIdentity(itemId, source.RemoteId, source.RemoteRevision), copies.Remote.Proof.Length,
+                            Convert.FromHexString(copies.Remote.Proof.Sha256), CloudContentPreparation.ReplacePlaceholderIdentity,
+                            snapshot.PlaceholderIdentity.Span), inner);
+                    });
+                    return true;
+                }, stop), token);
+                Assert.IsTrue(confirmed.Outcome is CloudContentConfirmationOutcome.Confirmed or CloudContentConfirmationOutcome.AlreadyConfirmed);
+                Assert.IsTrue(confirmed.NativeConfirmationVerified && confirmed.DurableProjectionCommitted);
+                var selected = await file.InspectAsync(token);
+                Assert.AreEqual(source.RemoteRevision, selected.RemoteRevision);
+                Assert.AreEqual(snapshot.LocalBinding, selected.LocalBinding);
+                await role.RunNamespaceOperationAsync(async () => CollectionAssert.AreEqual(selectedBytes, await File.ReadAllBytesAsync(file.FullPath, token)));
                 byte[] laterBytes = "a later edit after content completion"u8.ToArray();
                 await role.RunNamespaceOperationAsync(async () =>
                 {
