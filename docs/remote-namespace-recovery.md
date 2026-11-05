@@ -1,6 +1,6 @@
 # Remote namespace recovery
 
-The current dependency is CfSharp preview.8. Its default preservation policy retains
+The current dependency is CfSharp preview.9. Its default preservation policy retains
 even clean remote Delete targets as durable conflicts; MirrorPulse preserves that
 policy. Explicit product KeepRemote settlement uses its separate command lifecycle. Earlier automatic
 Delete scenarios below describe the preview.6 baseline; newer previews require
