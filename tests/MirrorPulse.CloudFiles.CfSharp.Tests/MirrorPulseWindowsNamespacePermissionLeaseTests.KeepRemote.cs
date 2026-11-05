@@ -66,6 +66,10 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     public Task NativeKeepRemoteAcknowledgementRecoversLostSdkReturnAndPreservesLaterEdit() =>
         RunKeepRemoteResidentFixtureAsync("acknowledgement", 65537);
 
+    [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles")]
+    public Task NativeKeepRemoteDefaultCommandResumesFirstPermissionIntentBeforeRootAudit() =>
+        RunKeepRemoteResidentFixtureAsync("host-command", 65537);
+
     private async Task RunKeepRemoteResidentFixtureAsync(string scenario, int selectedLength)
     {
         if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
@@ -98,9 +102,21 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             await File.WriteAllBytesAsync(file.FullPath, [1, 2, 3], token);
             var originals = new List<MirrorPulseNamespacePermissionPreparation>();
             var members = new Dictionary<Guid, MirrorPulseNamespaceMemberRegistration>();
-            await PrepareAcceptedIdentityOriginalsAsync(fileSystem, catalog, router, role, caller.User!, originals, token, waitForFixtureMetadata: true);
-            await SaveAcceptedIdentityFixtureTopologyAsync(catalog, root, token);
-            await RegisterNativeOriginalMembersAsync(fileSystem, catalog, router, role, originals, members, actor, token);
+            if (scenario == "host-command")
+            {
+                foreach (CloudItem item in new CloudItem[] { fileSystem.Root, fileSystem.GetDirectory("Docs"), file })
+                    SetProtectedFixtureUserOwner(item, caller.User!);
+                await SaveAcceptedIdentityFixtureTopologyAsync(catalog, root, token);
+                await using var permissions = new MirrorPulseNamespacePermissionCoordinator(catalog);
+                await using var initialized = await new MirrorPulseNamespaceInitializationCoordinator(fileSystem, catalog, router,
+                    role, actor, scheduler, permissions).InitializeAsync(Guid.NewGuid(), token);
+            }
+            else
+            {
+                await PrepareAcceptedIdentityOriginalsAsync(fileSystem, catalog, router, role, caller.User!, originals, token, waitForFixtureMetadata: true);
+                await SaveAcceptedIdentityFixtureTopologyAsync(catalog, root, token);
+                await RegisterNativeOriginalMembersAsync(fileSystem, catalog, router, role, originals, members, actor, token);
+            }
             await using var feed = fileSystem.CreateLocalChangeFeed(new() { BatchSize = 1 });
             await feed.StartAsync(token);
             var journal = new MirrorPulseJournalUploadSource(feed, router, catalog, _ => true);
@@ -134,6 +150,61 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     MirrorPulseConflictReason.StaleRemoteRevision, MirrorPulseVersionComparison.Diverged, "prior-remote", "selected-remote", DateTimeOffset.UtcNow);
                 await catalog.SaveUploadConflictAsync(conflict, token);
                 conflictId = conflict.ConflictId;
+            }
+            if (scenario == "host-command")
+            {
+                var firstOwner = new MirrorPulseUploadConflictActions(catalog, state, feed, new(TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(5)),
+                    paths, router, remote, scheduler: scheduler, fileSystem: fileSystem, namespaceActor: actor,
+                    namespaceExecution: role, stats: remote, remoteRanges: remote, remoteDirectories: remote)
+                {
+                    KeepRemoteFileStarted = _ => ValueTask.FromException(new IOException("Synthetic interruption after first KeepRemote permission intent."))
+                };
+                await Assert.ThrowsExactlyAsync<IOException>(() => firstOwner.ApplyAsync(conflictId, MirrorPulseConflictAction.KeepRemote, token).AsTask());
+                Guid retainedCommand = (await catalog.ReadConflictKeepRemoteOwnerAsync(plan.Members[0].OperationId, token))!.Value;
+                var firstStart = await catalog.ReadConflictKeepRemoteFileStartAsync(retainedCommand, token);
+                var firstAction = await catalog.ReadConflictKeepRemoteFileActionAsync(retainedCommand, token);
+                Assert.IsNotNull(firstStart);
+                Assert.IsNotNull(firstAction);
+                Assert.AreEqual(firstStart.StartedAt, firstAction.PreparedAt);
+                Assert.IsNull((await catalog.ReadConflictKeepRemoteFileContentAsync(retainedCommand, token))!.WriteStart);
+                Assert.HasCount(1, await catalog.ReadNamespaceDispatchFencedRootsAsync(token));
+                CollectionAssert.AreEqual(local, await File.ReadAllBytesAsync(file.FullPath, token));
+                int readsBeforeRecovery = remote.SourceReads;
+                remote.DenySourceReads = true;
+                await using var nextRole = new MirrorPulseNamespaceExecutionSession();
+                var nextOwner = new MirrorPulseUploadConflictActions(catalog, state, feed, new(TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(5)),
+                    paths, router, remote, scheduler: scheduler, fileSystem: fileSystem, namespaceActor: actor, namespaceExecution: nextRole,
+                    namespaceWork: work, stats: remote, remoteRanges: remote, remoteDirectories: remote);
+                Assert.IsFalse(work.IsAdmitted(root.RootId));
+                Assert.IsTrue(await MirrorPulseUploadConflictActions.RetryKeepRemoteProtectionLossAsync(() =>
+                    scheduler.RunAsync(root.InstanceId, stop => nextOwner.RecoverKeepRemoteBeforeAuditAsync(root, stop), token)));
+                Assert.IsFalse(work.IsAdmitted(root.RootId));
+                Assert.HasCount(0, await catalog.ReadNamespaceDispatchFencedRootsAsync(token));
+                Assert.AreEqual("resolved", (await catalog.ReadUserCommandAsync(retainedCommand, token))!.State);
+                var handoff = (await catalog.ReadConflictKeepRemoteRoleAttemptsAsync(retainedCommand, token)).Single();
+                Assert.IsNotNull(handoff.Result);
+                Assert.AreEqual(firstAction.ActionId, handoff.Start.FirstActionId);
+                Assert.AreEqual(firstAction, await catalog.ReadConflictKeepRemoteFileActionAsync(retainedCommand, token));
+                var applied = await file.InspectAsync(token);
+                Assert.AreEqual(snapshot.LocalBinding, applied.LocalBinding);
+                Assert.AreEqual("selected-remote", applied.RemoteRevision);
+                Assert.AreEqual(CloudSynchronizationState.InSync, applied.SynchronizationState);
+                CollectionAssert.AreEqual(selectedBytes, await File.ReadAllBytesAsync(file.FullPath, token));
+                await using var permissions = new MirrorPulseNamespacePermissionCoordinator(catalog);
+                var startupStages = new List<string>();
+                var startup = await new MirrorPulseNamespaceStartupCoordinator(fileSystem, catalog, router, nextRole, actor, scheduler,
+                    permissions, work, startupStages.Add).StartAsync(token);
+                await using var startupGuard = startup.Guard;
+                var audited = startup.Roots.Single();
+                Assert.IsTrue(audited.Admitted, $"{audited.RecoveryCode} ({audited.NativeErrorCode}): {string.Join(", ", startupStages)}");
+                Assert.IsTrue(work.IsAdmitted(root.RootId));
+                var replayedCommand = await nextOwner.ApplyAsync(conflictId, MirrorPulseConflictAction.KeepRemote, token);
+                Assert.AreEqual(retainedCommand, replayedCommand.ResolutionId);
+                CollectionAssert.AreEqual(local, await File.ReadAllBytesAsync(replayedCommand.PreservedPath!, token));
+                Assert.AreEqual(readsBeforeRecovery, remote.SourceReads);
+                Assert.AreEqual(0, remote.AcceptedUploads);
+                Assert.AreEqual(0, provider.Reads);
+                return;
             }
             Guid commandId = Guid.NewGuid();
             await catalog.SaveUserCommandAsync(new(commandId, "keepremote", conflictId.ToString("D"), "pending"), token);

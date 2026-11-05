@@ -27,6 +27,7 @@ public sealed partial class MirrorPulseUploadConflictActions
     private readonly CloudFileSystem? _fileSystem;
     private readonly MirrorPulseNamespaceContentConfirmation? _contentConfirmation;
     private readonly MirrorPulseNamespaceExecutionSession? _namespaceExecution;
+    private readonly MirrorPulseNamespaceActor? _namespaceActor;
     private readonly MirrorPulseNamespaceWorkAdmission? _namespaceWork;
     private readonly MirrorPulseConflictDeletionLocalCoordinator? _localDeletion;
     private readonly IMirrorPulseWorkerStatTransport? _stats;
@@ -67,6 +68,7 @@ public sealed partial class MirrorPulseUploadConflictActions
         _scheduler = scheduler;
         _fileSystem = fileSystem;
         _namespaceExecution = namespaceExecution;
+        _namespaceActor = namespaceActor;
         _namespaceWork = namespaceWork;
         _stats = stats;
         _mayDispatch = mayDispatch ?? (_ => true);
@@ -85,8 +87,11 @@ public sealed partial class MirrorPulseUploadConflictActions
         CancellationToken cancellationToken = default)
     {
         await using var admission = await RetainRootAsync(conflictId, action, cancellationToken).ConfigureAwait(false);
-        return _scheduler is null ? await ApplyRetainedAsync(admission, action, cancellationToken).ConfigureAwait(false) :
-            await _scheduler.RunAsync(admission.Conflict.InstanceId, token => ApplyRetainedAsync(admission, action, token), cancellationToken).ConfigureAwait(false);
+        return await RetryKeepRemoteProtectionLossAsync(ApplyOnceAsync).ConfigureAwait(false);
+
+        ValueTask<MirrorPulseConflictResolution> ApplyOnceAsync() => _scheduler is null ?
+            ApplyRetainedAsync(admission, action, cancellationToken) :
+            _scheduler.RunAsync(admission.Conflict.InstanceId, token => ApplyRetainedAsync(admission, action, token), cancellationToken);
     }
 
     internal sealed class RootAdmission(MirrorPulseConflictRecord conflict, RootId? rootId,
@@ -109,7 +114,10 @@ public sealed partial class MirrorPulseUploadConflictActions
         if (!Enum.IsDefined(action) || action == MirrorPulseConflictAction.Defer) throw new ArgumentOutOfRangeException(nameof(action));
         var conflict = await _catalog.ReadUploadConflictAsync(conflictId, token).ConfigureAwait(false)
             ?? throw new FileNotFoundException("The upload conflict was not found.");
-        if (!conflict.IsPending) throw new InvalidOperationException("The upload conflict has already been resolved.");
+        Guid? keepRemote = Guid.TryParse(conflict.ChangeId, out var originalId) ?
+            await _catalog.ReadConflictKeepRemoteOwnerAsync(originalId, token).ConfigureAwait(false) : null;
+        if (!conflict.IsPending && (action != MirrorPulseConflictAction.KeepRemote || keepRemote is null))
+            throw new InvalidOperationException("The upload conflict has already been resolved.");
         if (_router is null)
         {
             if (_namespaceWork is not null) throw new InvalidOperationException("Root admission requires the Host router.");
@@ -119,7 +127,7 @@ public sealed partial class MirrorPulseUploadConflictActions
         if (route.InstanceId != conflict.InstanceId) throw new InvalidDataException("The conflict route belongs to another instance.");
         var root = _router.GetRegistration(route.InstanceId, route.RootKey);
         if (_namespaceWork is null) return new(conflict, root.RootId, null, null);
-        bool pending = action == MirrorPulseConflictAction.Retry || Guid.TryParse(conflict.ChangeId, out var original) &&
+        bool pending = keepRemote is not null || action == MirrorPulseConflictAction.Retry || Guid.TryParse(conflict.ChangeId, out var original) &&
             (await _catalog.ReadConflictDeletionOwnerAsync(original, token).ConfigureAwait(false) is not null ||
              await _catalog.ReadConflictLocalRemovalOwnerAsync(original, token).ConfigureAwait(false) is not null ||
              await _catalog.ReadConflictKeepBothOwnerAsync(original, token).ConfigureAwait(false) is not null);
@@ -145,11 +153,18 @@ public sealed partial class MirrorPulseUploadConflictActions
             if (route.InstanceId != originalInstance || _router.GetRegistration(route.InstanceId, route.RootKey).RootId != retained)
                 throw new InvalidDataException("The conflict changed its admitted instance or root.");
         }
+        if (Guid.TryParse(conflict.ChangeId, out Guid originalId) &&
+            await _catalog.ReadConflictKeepRemoteOwnerAsync(originalId, cancellationToken).ConfigureAwait(false) is { } keepRemoteOwner)
+        {
+            if (action != MirrorPulseConflictAction.KeepRemote)
+                throw new InvalidOperationException("This original group already belongs to a retained KeepRemote decision.");
+            return await ExecuteKeepRemoteAdmittedAsync(keepRemoteOwner, admittedRoot, cancellationToken).ConfigureAwait(false);
+        }
         if (!conflict.IsPending)
         {
             throw new InvalidOperationException("The upload conflict has already been resolved.");
         }
-        var group = Guid.TryParse(conflict.ChangeId, out Guid originalId) ?
+        var group = originalId != Guid.Empty ?
             await _catalog.ReadJournalCoalescingOwnerAsync(originalId, cancellationToken).ConfigureAwait(false) : null;
         if (originalId != Guid.Empty && await _catalog.ReadConflictKeepBothOwnerAsync(originalId, cancellationToken).ConfigureAwait(false) is { } bothOwner)
         {
@@ -171,6 +186,8 @@ public sealed partial class MirrorPulseUploadConflictActions
                 throw new InvalidOperationException("This conflict already belongs to a retained deletion decision.");
             return await ApplyExistingDeletionAsync(deletionOwner, conflict, admittedRoot, cancellationToken).ConfigureAwait(false);
         }
+        if (group is not null && action == MirrorPulseConflictAction.KeepRemote)
+            return await PrepareKeepRemoteAdmittedAsync(conflict, group, admittedRoot, cancellationToken).ConfigureAwait(false);
         if (group is not null && action is not (MirrorPulseConflictAction.Retry or MirrorPulseConflictAction.KeepLocal or MirrorPulseConflictAction.KeepBoth or MirrorPulseConflictAction.DeleteRemote or MirrorPulseConflictAction.DeleteLocal))
             throw new NotSupportedException("This coalesced decision requires a complete local group operation; no original journal ID was acknowledged.");
 

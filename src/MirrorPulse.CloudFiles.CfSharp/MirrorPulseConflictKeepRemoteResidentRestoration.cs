@@ -23,6 +23,7 @@ internal sealed class MirrorPulseConflictKeepRemoteResidentRestoration(CloudFile
     MirrorPulseNamespaceExecutionSession execution, MirrorPulseNamespaceActor actor)
 {
     internal Func<MirrorPulseKeepRemoteRestoreCheckpoint, CancellationToken, ValueTask>? Checkpoint { get; init; }
+    internal bool RestoreRegisteredDescriptor { get; init; }
 
     internal async Task<MirrorPulseConflictKeepRemoteRestoreResult> RestoreAsync(RootId admittedRoot,
         MirrorPulseConflictKeepRemoteCopies copies, CancellationToken token)
@@ -45,6 +46,10 @@ internal sealed class MirrorPulseConflictKeepRemoteResidentRestoration(CloudFile
         if (role is not null && role.Result is null)
             throw new InvalidOperationException("Restoring access requires the current role's verified handoff.");
         var action = role?.Start.NextAction ?? originalAction;
+        // Restore the registered graph's descriptor when the Host will audit and
+        // rotate the whole tree after settlement. Only the current role acts here.
+        bool restoreRegistered = attempts.Count == 0 ? RestoreRegisteredDescriptor : attempts[0].Start.RestoreRegisteredDescriptor;
+        string restoreDacl = restoreRegistered ? originalAction.RestoreDacl : action.RestoreDacl;
         var selectedIdentity = new CloudPlaceholderIdentity(intent.ItemId, intent.RemoteSource.RemoteId, intent.RemoteSource.RemoteRevision);
         string selected = Convert.ToBase64String(selectedIdentity.Encode());
         if (copies.Local is null || content.Completion?.Copy != copies.Remote.Proof ||
@@ -75,7 +80,7 @@ internal sealed class MirrorPulseConflictKeepRemoteResidentRestoration(CloudFile
             var start = await catalog.RecordConflictKeepRemoteRestoreStartAsync(new MirrorPulseConflictKeepRemoteRestoreStart(1, intent.CommandId, originalAction.ActionId,
                 Guid.NewGuid(), native.Start.AttemptId, selected, before.Snapshot.SynchronizationState == CloudSynchronizationState.InSync,
                 Verification(before.Child), Verification(before.Parent), DateTimeOffset.UtcNow)
-            { RoleRecoveryId = role?.Result?.RecoveryId }, token).ConfigureAwait(false);
+            { RoleRecoveryId = role?.Result?.RecoveryId, RestoreRegisteredDescriptor = restoreRegistered }, token).ConfigureAwait(false);
             await AtAsync(MirrorPulseKeepRemoteRestoreCheckpoint.AfterRestoreStart, token).ConfigureAwait(false);
             var scope = await MirrorPulseWindowsNamespacePermissionLease.RunOwnedProtectedAsync(file, router, action.LocalObject,
                 async (lease, stop) =>
@@ -86,7 +91,7 @@ internal sealed class MirrorPulseConflictKeepRemoteResidentRestoration(CloudFile
                     RequireParent(parentGuard.InspectRetainedDirectoryPermissions(first.Parent.Context.Member.LocalObject, stop));
                     // Always reapply on an uncertain return so this public operation supplies
                     // its own actual application/readback facts on the original object.
-                    await lease.ApplyDaclAsync(action.RestoreDacl, stop).ConfigureAwait(false);
+                    await lease.ApplyDaclAsync(restoreDacl, stop).ConfigureAwait(false);
                     await AtAsync(MirrorPulseKeepRemoteRestoreCheckpoint.AfterAccessApplied, stop).ConfigureAwait(false);
                     RequireChild(await lease.InspectAsync(stop).ConfigureAwait(false), restored: true);
                     await RequireScopeIdentityAsync(lease, stop).ConfigureAwait(false);
@@ -143,7 +148,7 @@ internal sealed class MirrorPulseConflictKeepRemoteResidentRestoration(CloudFile
         {
             if (observed.LocalObject != action.LocalObject || observed.OwnerSid != action.OwnerSid || observed.IsDirectory || observed.LinkCount != 1 ||
                 observed.RootId != admittedRoot || observed.RelativePath != file.RelativePath.Replace('\\', '/') ||
-                !(MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(action.RestoreDacl, observed.Dacl) && (restored || attempts.Count > 0) ||
+                !(MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(restoreDacl, observed.Dacl) && (restored || attempts.Count > 0) ||
                   !restored && MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(action.RoleOnlyDacl, observed.Dacl)))
                 throw new InvalidDataException("Access restoration requires the original single-link file and its retained permission history.");
         }

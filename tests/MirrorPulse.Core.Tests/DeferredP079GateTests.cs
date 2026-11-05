@@ -23,6 +23,7 @@ public sealed class DeferredP079GateTests
                 'NativeKeepRemoteResidentWriterPreservesChangedLocalBytesBeforeItsFirstWrite',
                 'NativeKeepRemoteConfirmationRetainsOriginalAttemptsAndRecoversLostSdkReturns',
                 'NativeKeepRemoteAcknowledgementRecoversLostSdkReturnAndPreservesLaterEdit',
+                'NativeKeepRemoteDefaultCommandResumesFirstPermissionIntentBeforeRootAudit',
                 'NativeKeepRemoteNewRoleResumesOriginalWriteAndConfirmsSelectedBytes',
                 'NativeKeepRemoteRestorationRetainsActualAccessResultsAndPreservesOrdinaryLaterEdits',
                 'NativeKeepRemoteRoleHandoffRecoversLostReadbackWithoutReapplyingContent')|ForEach-Object {$keepRemotePrefix+$_}

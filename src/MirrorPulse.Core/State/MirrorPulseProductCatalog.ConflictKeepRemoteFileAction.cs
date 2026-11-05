@@ -40,19 +40,27 @@ public sealed partial class MirrorPulseProductCatalog
             if (!SameKeepRemoteSnapshot(start.Original, current) || !SameKeepRemoteSnapshot(start.Parent, parent))
                 throw new InvalidOperationException("The original member or direct parent changed before permission action admission.");
             await RequireKeepRemoteFileStartRootAsync(start, transaction, token).ConfigureAwait(false);
-            byte[] payload = KeepRemoteFileActionPayload(action);
-            await using var insert = _connection.CreateCommand(); insert.Transaction = transaction;
-            insert.CommandText = """
-                INSERT INTO conflict_keep_remote_file_actions(command_id,action_id,payload,fingerprint) VALUES($command,$action,$payload,$hash);
-                INSERT INTO conflict_keep_remote_file_action_owners(command_id,action_id) VALUES($command,$action);
-                """;
-            insert.Parameters.AddWithValue("$command", action.CommandId.ToString("D"));
-            insert.Parameters.AddWithValue("$action", action.ActionId.ToString("D"));
-            insert.Parameters.AddWithValue("$payload", payload); insert.Parameters.AddWithValue("$hash", SHA256.HashData(payload));
-            await insert.ExecuteNonQueryAsync(token).ConfigureAwait(false);
+            await InsertKeepRemoteFileActionAsync(action, transaction, token).ConfigureAwait(false);
             token.ThrowIfCancellationRequested(); transaction.Commit(); return action;
         }
         finally { _gate.Release(); }
+    }
+
+    private async Task InsertKeepRemoteFileActionAsync(MirrorPulseConflictKeepRemoteFileAction action,
+        SqliteTransaction transaction, CancellationToken token)
+    {
+        byte[] payload = KeepRemoteFileActionPayload(action);
+        await using var insert = _connection.CreateCommand();
+        insert.Transaction = transaction;
+        insert.CommandText = """
+            INSERT INTO conflict_keep_remote_file_actions(command_id,action_id,payload,fingerprint) VALUES($command,$action,$payload,$hash);
+            INSERT INTO conflict_keep_remote_file_action_owners(command_id,action_id) VALUES($command,$action);
+            """;
+        insert.Parameters.AddWithValue("$command", action.CommandId.ToString("D"));
+        insert.Parameters.AddWithValue("$action", action.ActionId.ToString("D"));
+        insert.Parameters.AddWithValue("$payload", payload);
+        insert.Parameters.AddWithValue("$hash", SHA256.HashData(payload));
+        await insert.ExecuteNonQueryAsync(token).ConfigureAwait(false);
     }
 
     /// <summary>Reads the original permission intent without granting authority over today's file.</summary>

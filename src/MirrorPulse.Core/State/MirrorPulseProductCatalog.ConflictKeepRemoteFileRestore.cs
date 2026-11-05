@@ -12,6 +12,9 @@ public sealed record MirrorPulseConflictKeepRemoteRestoreStart(int Version, Guid
 {
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Guid? RoleRecoveryId { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool RestoreRegisteredDescriptor { get; init; }
 }
 
 /// <summary>Actual public exclusive-file access-operation facts, separate from product permission verification.</summary>
@@ -237,14 +240,16 @@ public sealed partial class MirrorPulseProductCatalog
             new[] { value.CommandId, value.ActionId, value.AttemptId, value.NativeAttemptId }.Distinct().Count() != 4 ||
             value.AttemptId == value.RoleRecoveryId || value.NativeAttemptId == value.RoleRecoveryId ||
             value.ObservedPlaceholderIdentity != native.Start.SelectedPlaceholderIdentity || value.StartedAt < native.Result!.RecordedAt ||
-            previous.Count == 0 && !value.ObservedInSync || previous.Any(attempt => attempt.Result?.ProductVerified == true) ||
+            previous.Count == 0 && !value.ObservedInSync || previous.Any(attempt => attempt.Result?.ProductVerified == true ||
+                attempt.Start.RestoreRegisteredDescriptor != value.RestoreRegisteredDescriptor) ||
             previous.Count > 0 && (previous[^1].Result is { Receipt.Drained: false } ||
                 value.StartedAt < (previous[^1].Result?.RecordedAt ?? previous[^1].Start.StartedAt)))
             throw new InvalidOperationException("Restoration requires its original successful native result and ordered, drained attempt history.");
         // A previously restored descriptor can be adopted only after this command retained a
         // before-scope attempt. Later ordinary edits are preserved, never reconfirmed here.
-        string descriptor = previous.Count > 0 && MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(action.RestoreDacl, value.Child.Dacl)
-            ? action.RestoreDacl : action.RoleOnlyDacl;
+        string restoreDacl = value.RestoreRegisteredDescriptor ? originalAction.RestoreDacl : action.RestoreDacl;
+        string descriptor = previous.Count > 0 && MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(restoreDacl, value.Child.Dacl)
+            ? restoreDacl : action.RoleOnlyDacl;
         RequireKeepRemoteSealedVerification(value.Child, action.LocalObject, action.OwnerSid, descriptor,
             native.Result.RecordedAt, value.StartedAt);
         RequireKeepRemoteSealedVerification(value.Parent, authority.First.Parent.Context.Member.LocalObject,
@@ -283,7 +288,8 @@ public sealed partial class MirrorPulseProductCatalog
             value.Child is null || value.Parent is null || value.LinkCount != 1 || value.ObservedInSync is null ||
             value.ObservedPlaceholderIdentity != start.ObservedPlaceholderIdentity)
             throw new InvalidOperationException("Verified access restoration requires the drained descriptor operation and separate same-object observations.");
-        RequireKeepRemoteSealedVerification(value.Child, action.LocalObject, action.OwnerSid, action.RestoreDacl, start.StartedAt, value.RecordedAt);
+        string restoreDacl = start.RestoreRegisteredDescriptor ? authority.Content.Action.RestoreDacl : action.RestoreDacl;
+        RequireKeepRemoteSealedVerification(value.Child, action.LocalObject, action.OwnerSid, restoreDacl, start.StartedAt, value.RecordedAt);
         RequireKeepRemoteSealedVerification(value.Parent, authority.First.Parent.Context.Member.LocalObject,
             authority.First.Parent.Context.Member.OwnerSid, authority.First.Parent.ExpectedDacl, start.StartedAt, value.RecordedAt);
     }

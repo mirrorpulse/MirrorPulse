@@ -21,9 +21,25 @@ public sealed partial class MirrorPulseProductCatalog
 {
     /// <summary>Atomically retains the first UpdateFile execution facts before any local byte mutation.</summary>
     /// <remarks>The Host must retain lifecycle/namespace admission and independently guard actual native objects and store rows.</remarks>
-    public async Task<MirrorPulseConflictKeepRemoteFileStart> RetainConflictKeepRemoteFileStartAsync(Guid commandId,
+    public Task<MirrorPulseConflictKeepRemoteFileStart> RetainConflictKeepRemoteFileStartAsync(Guid commandId,
         ulong storeVolumeSerialNumber, Guid storeFileId, MirrorPulseNamespaceMemberProtectionSnapshot original,
-        MirrorPulseNamespaceMemberProtectionSnapshot parent, DateTimeOffset startedAt, CancellationToken token = default)
+        MirrorPulseNamespaceMemberProtectionSnapshot parent, DateTimeOffset startedAt, CancellationToken token = default) =>
+        RetainKeepRemoteFileStartAsync(commandId, storeVolumeSerialNumber, storeFileId, original, parent, startedAt, null, token);
+
+    /// <summary>Retains the first permission action with its file start and fence before native application.</summary>
+    public Task<MirrorPulseConflictKeepRemoteFileStart> RetainConflictKeepRemoteFileStartAndActionAsync(Guid commandId,
+        ulong storeVolumeSerialNumber, Guid storeFileId, MirrorPulseNamespaceMemberProtectionSnapshot original,
+        MirrorPulseNamespaceMemberProtectionSnapshot parent, MirrorPulseConflictKeepRemoteFileAction action, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        ValidateKeepRemoteFileAction(action);
+        return RetainKeepRemoteFileStartAsync(commandId, storeVolumeSerialNumber, storeFileId, original, parent, action.PreparedAt, action, token);
+    }
+
+    private async Task<MirrorPulseConflictKeepRemoteFileStart> RetainKeepRemoteFileStartAsync(Guid commandId,
+        ulong storeVolumeSerialNumber, Guid storeFileId, MirrorPulseNamespaceMemberProtectionSnapshot original,
+        MirrorPulseNamespaceMemberProtectionSnapshot parent, DateTimeOffset startedAt, MirrorPulseConflictKeepRemoteFileAction? action,
+        CancellationToken token)
     {
         ArgumentNullException.ThrowIfNull(original); ArgumentNullException.ThrowIfNull(parent);
         // Snapshot the caller's complete facts before awaiting; no caller-owned object becomes durable authority.
@@ -39,12 +55,15 @@ public sealed partial class MirrorPulseProductCatalog
             var start = new MirrorPulseConflictKeepRemoteFileStart(1, commandId, storeVolumeSerialNumber, storeFileId,
                 Convert.ToHexString(SHA256.HashData(KeepRemoteJournalPayload(journal))), original, parent, startedAt);
             await RequireKeepRemoteFileStartRelationsAsync(start, journal, transaction, token).ConfigureAwait(false);
+            if (action is not null) RequireKeepRemoteFileActionReferences(action, start);
             byte[] payload = KeepRemoteFileStartPayload(start);
             var retained = await ReadKeepRemoteFileStartCoreAsync(commandId, transaction, token).ConfigureAwait(false);
             if (retained is not null)
             {
                 if (!KeepRemoteFileStartPayload(retained).AsSpan().SequenceEqual(payload))
                     throw new InvalidOperationException("The first KeepRemote file start is immutable across owners and roles.");
+                if (action is not null && await ReadKeepRemoteFileActionCoreAsync(commandId, transaction, token).ConfigureAwait(false) != action)
+                    throw new InvalidOperationException("A retained KeepRemote file start cannot adopt a different first permission action.");
                 transaction.Commit(); return retained;
             }
             var rootId = original.Context.Member.RootId!.Value;
@@ -67,6 +86,8 @@ public sealed partial class MirrorPulseProductCatalog
             insert.Parameters.AddWithValue("$root", rootId.ToString());
             insert.Parameters.AddWithValue("$payload", payload); insert.Parameters.AddWithValue("$hash", SHA256.HashData(payload));
             await insert.ExecuteNonQueryAsync(token).ConfigureAwait(false);
+            if (action is not null)
+                await InsertKeepRemoteFileActionAsync(action, transaction, token).ConfigureAwait(false);
             token.ThrowIfCancellationRequested(); transaction.Commit(); return start;
         }
         finally { _gate.Release(); }
@@ -83,6 +104,23 @@ public sealed partial class MirrorPulseProductCatalog
             ThrowIfDisposed(); using var transaction = _connection.BeginTransaction(deferred: true);
             var result = await ReadKeepRemoteFileStartCoreAsync(commandId, transaction, token).ConfigureAwait(false);
             transaction.Commit(); return result;
+        }
+        finally { _gate.Release(); }
+    }
+
+    /// <summary>Reads the one original KeepRemote file start that still owns the selected root.</summary>
+    public async Task<MirrorPulseConflictKeepRemoteFileStart?> ReadPendingConflictKeepRemoteFileStartAsync(RootId rootId,
+        CancellationToken token = default)
+    {
+        if (rootId.Value == Guid.Empty) throw new ArgumentException("A stable root ID is required.", nameof(rootId));
+        await _gate.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            using var transaction = _connection.BeginTransaction(deferred: true);
+            var result = await ReadPendingKeepRemoteFileStartForRootCoreAsync(rootId, transaction, token).ConfigureAwait(false);
+            transaction.Commit();
+            return result;
         }
         finally { _gate.Release(); }
     }

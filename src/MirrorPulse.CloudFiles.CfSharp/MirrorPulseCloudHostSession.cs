@@ -1290,6 +1290,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                 if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
                     throw new PlatformNotSupportedException("Automatic namespace startup requires Windows 11 24H2 or later.");
                 NoteStartup("NamespaceStartupBegin");
+                await RecoverKeepRemoteBeforeStartupAsync(cancellationToken).ConfigureAwait(false);
                 await WithAdmittedInstancesLibraryAsync(router!.Registrations.Select(root => root.InstanceId).Distinct(),
                     BootstrapNamespaceAsync, cancellationToken).ConfigureAwait(false);
                 NoteStartup("NamespaceStartupCompleted");
@@ -1312,6 +1313,26 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             long elapsed = _startupCheckpoint == 0 ? 0 : (long)Stopwatch.GetElapsedTime(_startupCheckpoint, now).TotalMilliseconds;
             _startupCheckpoint = now;
             _providerDiagnostics?.RecordStartup(stage, ++_startupSequence, elapsed);
+        }
+
+        private async ValueTask RecoverKeepRemoteBeforeStartupAsync(CancellationToken token)
+        {
+            if (_conflictActions is null) return;
+            foreach (var root in router!.Registrations.Where(root => root.State == RootRegistrationState.Active))
+            {
+                try
+                {
+                    _ = await MirrorPulseUploadConflictActions.RetryKeepRemoteProtectionLossAsync(() =>
+                        WithInstanceLibraryAsync(root.InstanceId, stop => (_conflictActions ??
+                            throw new InvalidOperationException("The upload conflict action service has not started."))
+                            .RecoverKeepRemoteBeforeAuditAsync(root, stop), token)).ConfigureAwait(false);
+                }
+                catch (Exception error) when (error is IOException or InvalidOperationException or UnauthorizedAccessException or System.ComponentModel.Win32Exception or NotSupportedException)
+                {
+                    // A root that still owns an original file start remains fenced in
+                    // startup's pending-operation discovery. Other roots can be audited.
+                }
+            }
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
@@ -1712,9 +1733,10 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
             var service = _conflictActions ?? throw new InvalidOperationException("The upload conflict action service has not started.");
             await using var admission = await service.RetainRootAsync(conflictId, action, cancellationToken).ConfigureAwait(false);
-            return await WithInstanceLibraryAsync(admission.Conflict.InstanceId, token =>
-                (_conflictActions ?? throw new InvalidOperationException("The upload conflict action service has not started."))
-                    .ApplyRetainedAsync(admission, action, token), cancellationToken).ConfigureAwait(false);
+            return await MirrorPulseUploadConflictActions.RetryKeepRemoteProtectionLossAsync(() =>
+                WithInstanceLibraryAsync(admission.Conflict.InstanceId, token =>
+                    (_conflictActions ?? throw new InvalidOperationException("The upload conflict action service has not started."))
+                        .ApplyRetainedAsync(admission, action, token), cancellationToken)).ConfigureAwait(false);
         }
 
         public async ValueTask<MirrorPulseRemoteDeleteResolution> RecoverRemoteDeleteResolutionAsync(Guid commandId, CancellationToken cancellationToken)
