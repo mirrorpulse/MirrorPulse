@@ -21,7 +21,8 @@ public sealed class DeferredP079GateTests
                 'NativeKeepRemoteResidentByteCopyRetainsPlaceholderAndOriginalJournal',
                 'NativeKeepRemoteResidentWriterKeepsItsWriteAndCompletionFactsAcrossRetry',
                 'NativeKeepRemoteResidentWriterPreservesChangedLocalBytesBeforeItsFirstWrite',
-                'NativeKeepRemoteConfirmationRetainsOriginalAttemptsAndRecoversLostSdkReturns')|ForEach-Object {$keepRemotePrefix+$_}
+                'NativeKeepRemoteConfirmationRetainsOriginalAttemptsAndRecoversLostSdkReturns',
+                'NativeKeepRemoteRestorationRetainsActualAccessResultsAndPreservesOrdinaryLaterEdits')|ForEach-Object {$keepRemotePrefix+$_}
             $names=@($catalog.required.namespace | Where-Object {$_ -cnotin $keepRemote})
             if($names.Count -ne 125 -or @($catalog.required.native|Where-Object {$_ -cnotin $keepRemote}).Count -ne 150 -or @($catalog.required.deferredP079).Count -ne 5){throw 'Required scope names changed.'}
             if((Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 125 -TestNames $names -Scope S06) -ne 5375000 -or

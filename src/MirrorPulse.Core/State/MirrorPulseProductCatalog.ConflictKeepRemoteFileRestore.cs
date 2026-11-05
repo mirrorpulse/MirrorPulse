@@ -251,7 +251,9 @@ public sealed partial class MirrorPulseProductCatalog
                 throw new InvalidOperationException("A retained permission observation must belong to this actual access attempt.");
         }
         if (!value.ProductVerified) return;
-        if (receipt.Outcome != "Completed" || receipt.Stage != "Released" || !receipt.Drained || !receipt.CallbackStarted ||
+        // The public receipt retains the last work phase. This callback ends with
+        // same-object identity inspection; resource release is proven by Drained.
+        if (receipt.Outcome != "Completed" || receipt.Stage != "Inspection" || !receipt.Drained || !receipt.CallbackStarted ||
             !receipt.CallbackCompleted || !receipt.AccessDescriptorApplied || !receipt.AccessDescriptorReadBack || receipt.ErrorHResult is not null ||
             receipt.NativeIdentityPrepared || receipt.NativeConverted || receipt.DurableProjectionCommitted ||
             value.Child is null || value.Parent is null || value.LinkCount != 1 || value.ObservedInSync is null ||

@@ -21,6 +21,13 @@
       "NativeKeepRemoteConfirmationRetainsOriginalAttemptsAndRecoversLostSdkReturns (\"AfterSdkReturned\")",
       "NativeKeepRemoteConfirmationRetainsOriginalAttemptsAndRecoversLostSdkReturns (\"AfterNativeRecorded\")",
       "NativeKeepRemoteConfirmationRetainsOriginalAttemptsAndRecoversLostSdkReturns (\"native-changed\")"
+    ],
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeKeepRemoteRestorationRetainsActualAccessResultsAndPreservesOrdinaryLaterEdits": [
+      "NativeKeepRemoteRestorationRetainsActualAccessResultsAndPreservesOrdinaryLaterEdits (\"AfterRestoreStart\")",
+      "NativeKeepRemoteRestorationRetainsActualAccessResultsAndPreservesOrdinaryLaterEdits (\"AfterAccessApplied\")",
+      "NativeKeepRemoteRestorationRetainsActualAccessResultsAndPreservesOrdinaryLaterEdits (\"AfterScopeReturned\")",
+      "NativeKeepRemoteRestorationRetainsActualAccessResultsAndPreservesOrdinaryLaterEdits (\"AfterRestoreRecorded\")",
+      "NativeKeepRemoteRestorationRetainsActualAccessResultsAndPreservesOrdinaryLaterEdits (\"restore-later-edit\")"
     ]
   },
   "allowSkipped": [
@@ -125,6 +132,7 @@
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeKeepRemoteResidentWriterKeepsItsWriteAndCompletionFactsAcrossRetry",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeKeepRemoteResidentWriterPreservesChangedLocalBytesBeforeItsFirstWrite",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeKeepRemoteConfirmationRetainsOriginalAttemptsAndRecoversLostSdkReturns",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeKeepRemoteRestorationRetainsActualAccessResultsAndPreservesOrdinaryLaterEdits",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeOriginalRemoteFileUpdateInvalidatesHydratedBytesBeforeCursor",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeOriginalRemoteUpdateReconcilesItsSdkOutcomeBeforeNewRoleAudit",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeOriginalRemoteUpdateStartWithoutSdkProgressRemainsFenced",
@@ -281,6 +289,7 @@
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeKeepRemoteResidentWriterKeepsItsWriteAndCompletionFactsAcrossRetry",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeKeepRemoteResidentWriterPreservesChangedLocalBytesBeforeItsFirstWrite",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeKeepRemoteConfirmationRetainsOriginalAttemptsAndRecoversLostSdkReturns",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeKeepRemoteRestorationRetainsActualAccessResultsAndPreservesOrdinaryLaterEdits",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeOriginalRemoteFileUpdateInvalidatesHydratedBytesBeforeCursor",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeOriginalRemoteUpdateReconcilesItsSdkOutcomeBeforeNewRoleAudit",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeOriginalRemoteUpdateStartWithoutSdkProgressRemainsFenced",
@@ -437,6 +446,7 @@
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeKeepRemoteResidentWriterKeepsItsWriteAndCompletionFactsAcrossRetry",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeKeepRemoteResidentWriterPreservesChangedLocalBytesBeforeItsFirstWrite",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeKeepRemoteConfirmationRetainsOriginalAttemptsAndRecoversLostSdkReturns",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeKeepRemoteRestorationRetainsActualAccessResultsAndPreservesOrdinaryLaterEdits",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeOriginalRemoteFileUpdateInvalidatesHydratedBytesBeforeCursor",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeOriginalRemoteUpdateReconcilesItsSdkOutcomeBeforeNewRoleAudit",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeOriginalRemoteUpdateStartWithoutSdkProgressRemainsFenced",

@@ -127,6 +127,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
     [DataRow("unknown-stage")]
     [DataRow("missing-sync")]
     [DataRow("error")]
+    [DataRow("released-phase")]
     public async Task KeepRemoteVerifiedRestoreRequiresActualDrainedScopeAndIndependentObservations(string changed)
     {
         using var fixture = new Fixture(); await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
@@ -155,6 +156,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             "unknown-outcome" => setup.Result with { Receipt = setup.Result.Receipt with { Outcome = "invented" } },
             "unknown-stage" => setup.Result with { Receipt = setup.Result.Receipt with { Stage = "invented" } },
             "missing-sync" => setup.Result with { ObservedInSync = null },
+            "released-phase" => setup.Result with { Receipt = setup.Result.Receipt with { Stage = "Released" } },
             _ => setup.Result with { Receipt = setup.Result.Receipt with { ErrorHResult = unchecked((int)0x80070005) } },
         };
         await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => catalog.RecordConflictKeepRemoteRestoreResultAsync(value));
@@ -296,7 +298,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
     {
         var at = start.StartedAt.AddSeconds(1);
         return new(1, start.CommandId, start.ActionId, start.AttemptId, start.NativeAttemptId,
-            new("Completed", "Released", start.Child.LocalObject, true, true, true, true, true, false, false, false, null, null, null, false, false, at),
+            new("Completed", "Inspection", start.Child.LocalObject, true, true, true, true, true, false, false, false, null, null, null, false, false, at),
             start.Child with { Dacl = descriptor, ObservedAt = at }, start.Parent with { ObservedAt = at }, 1,
             start.ObservedPlaceholderIdentity, true, true, at);
     }
