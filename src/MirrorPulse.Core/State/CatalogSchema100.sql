@@ -1,4 +1,4 @@
--- Empty product catalog schema 96, generated through the real public initializer.
+-- Empty product catalog schema 100; definitions match the public initializer.
 CREATE TABLE adapter_remote_projections(instance_id TEXT NOT NULL,batch_id TEXT NOT NULL,
     source_fingerprint BLOB NOT NULL CHECK(length(source_fingerprint)=32),
     payload BLOB NOT NULL CHECK(length(payload)>0 AND length(payload)<=33554432),
@@ -840,4 +840,22 @@ CREATE TABLE conflict_keep_remote_native_owners(
     kind INTEGER NOT NULL CHECK(kind IN (1,2)),
     action_id TEXT NOT NULL REFERENCES conflict_keep_remote_file_actions(action_id),
     PRIMARY KEY(command_id,ordinal), UNIQUE(command_id,attempt_id,kind));
-PRAGMA user_version=99;
+CREATE TABLE conflict_keep_remote_restore_facts(
+    command_id TEXT NOT NULL REFERENCES conflict_keep_remote_file_actions(command_id),
+    ordinal INTEGER NOT NULL CHECK(ordinal BETWEEN 1 AND 512),
+    attempt_id TEXT NOT NULL,
+    kind INTEGER NOT NULL CHECK(kind IN (1,2)),
+    action_id TEXT NOT NULL REFERENCES conflict_keep_remote_file_actions(action_id),
+    native_attempt_id TEXT NOT NULL,
+    payload BLOB NOT NULL CHECK(length(payload)<=262144),
+    fingerprint BLOB NOT NULL CHECK(length(fingerprint)=32),
+    PRIMARY KEY(command_id,ordinal), UNIQUE(command_id,attempt_id,kind));
+CREATE TABLE conflict_keep_remote_restore_owners(
+    command_id TEXT NOT NULL REFERENCES conflict_keep_remote_file_actions(command_id),
+    ordinal INTEGER NOT NULL CHECK(ordinal BETWEEN 1 AND 512),
+    attempt_id TEXT NOT NULL,
+    kind INTEGER NOT NULL CHECK(kind IN (1,2)),
+    action_id TEXT NOT NULL REFERENCES conflict_keep_remote_file_actions(action_id),
+    native_attempt_id TEXT NOT NULL,
+    PRIMARY KEY(command_id,ordinal), UNIQUE(command_id,attempt_id,kind));
+PRAGMA user_version=100;

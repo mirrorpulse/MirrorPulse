@@ -8,7 +8,7 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.Sqlite" />
-    <EmbeddedResource Include="State/CatalogSchema99.sql" LogicalName="MirrorPulse.Core.State.CatalogSchema99.sql" />
+    <EmbeddedResource Include="State/CatalogSchema100.sql" LogicalName="MirrorPulse.Core.State.CatalogSchema100.sql" />
   </ItemGroup>
 
 </Project>
