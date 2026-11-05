@@ -55,3 +55,20 @@ function Assert-RequiredTestResults {
         }
     }
 }
+
+function Assert-NativeTestExecution {
+    param([Parameter(Mandatory)][object]$Evidence, [Parameter(Mandatory)][object]$Catalog)
+
+    $requiredCount = Get-RequiredTestExecutionCount -Catalog $Catalog -Names @($Catalog.required.native)
+    $native = @($Evidence.categories | Where-Object category -CEQ 'native')
+    $results = @($Evidence.results)
+    if ($Evidence.suite -cne 'native' -or $requiredCount -le 0 -or $Evidence.skipped -ne 0 -or
+        $Evidence.selected -ne $results.Count -or $Evidence.executed -ne $results.Count -or
+        $native.Count -ne 1 -or $native[0].selected -ne $requiredCount -or
+        $native[0].executed -ne $requiredCount -or $native[0].skipped -ne 0 -or
+        @($results | Where-Object category -CEQ 'native').Count -ne $requiredCount -or
+        @($results | Where-Object outcome -CNE 'Passed').Count) {
+        throw 'The dedicated native suite did not execute all required native tests.'
+    }
+    Assert-RequiredTestResults -Catalog $Catalog -Suite native -Results @($results | Where-Object category -CEQ 'native')
+}

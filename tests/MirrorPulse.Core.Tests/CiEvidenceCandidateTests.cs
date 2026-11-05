@@ -31,6 +31,8 @@ public sealed class CiEvidenceCandidateTests
     [DataRow("namespace-valid", true)]
     [DataRow("namespace-missing", false)]
     [DataRow("namespace-partial", false)]
+    [DataRow("native-valid", true)]
+    [DataRow("native-replaced", false)]
     [DataRow("nonadmin-valid", true)]
     [DataRow("nonadmin-missing", false)]
     [DataRow("nonadmin-administrator", false)]
@@ -95,6 +97,11 @@ public sealed class CiEvidenceCandidateTests
                         artifacts.Add(new { path = "namespace-nonadmin/namespace.trx", length = 10, sha256 = shared });
                 }
                 var tests = new List<object> { new { suite, selected = 1, executed = 1, skipped = 0 } };
+                if (job == "build-and-test" && scenario.StartsWith("native-", StringComparison.Ordinal))
+                {
+                    using JsonDocument catalog = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(repository, "eng", "test-suites.json")));
+                    tests.Add(CiNamespaceEvidenceFixture.CreateNative(catalog.RootElement, replaceDataRow: scenario == "native-replaced"));
+                }
                 if (arm && scenario.StartsWith("namespace-", StringComparison.Ordinal) && scenario != "namespace-missing")
                 {
                     using JsonDocument catalog = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(repository, "eng", "test-suites.json")));
@@ -124,6 +131,7 @@ public sealed class CiEvidenceCandidateTests
                 start.ArgumentList.Add(argument);
             if (scenario != "legacy") start.ArgumentList.Add("-RequireOfficialCandidate");
             if (scenario.StartsWith("namespace-", StringComparison.Ordinal)) start.ArgumentList.Add("-RequireNamespace");
+            if (scenario.StartsWith("native-", StringComparison.Ordinal)) start.ArgumentList.Add("-RequireNative");
             if (scenario.StartsWith("nonadmin-", StringComparison.Ordinal)) start.ArgumentList.Add("-RequireNonAdminNamespace");
             using Process process = Process.Start(start)!;
             Task<string> output = process.StandardOutput.ReadToEndAsync();

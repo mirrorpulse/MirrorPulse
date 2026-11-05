@@ -46,7 +46,9 @@ foreach ($path in $TestManifests) {
     })
     if (($categories | Measure-Object selected -Sum).Sum -ne $test.selected -or
         ($categories | Measure-Object executed -Sum).Sum -ne $test.executed) { throw "Test category totals do not match." }
-    $suites += [pscustomobject][ordered]@{suite=$test.suite;selected=[int]$test.selected;executed=[int]$test.executed;skipped=[int]$test.skipped;categories=$categories}
+    $suite = [ordered]@{suite=$test.suite;selected=[int]$test.selected;executed=[int]$test.executed;skipped=[int]$test.skipped;categories=$categories}
+    if ($test.suite -cin @('native', 'namespace')) { $suite.results = @($test.results) }
+    $suites += [pscustomobject]$suite
 }
 if (@($suites.suite | Select-Object -Unique).Count -ne $suites.Count) { throw "Duplicate test suites cannot be counted twice." }
 $requiredSuite = switch ($Job) { "build-and-test" { "managed" }; "official-package-arm64" { "signed" }; "official-adapters" { "official" } }
@@ -55,13 +57,11 @@ if ($RequireNamespace -and ($Job -cne 'official-package-arm64' -or $suites.suite
     throw 'Dedicated ARM64 namespace verification is missing.'
 }
 if ($RequireNative) {
+    . (Join-Path $PSScriptRoot 'test-execution-policy.ps1')
     $suiteCatalog = Get-Content -LiteralPath (Join-Path $PSScriptRoot "test-suites.json") -Raw | ConvertFrom-Json
-    $requiredNativeCount = @($suiteCatalog.required.native).Count
     $native = @($suites | Where-Object suite -eq "native")
-    if ($requiredNativeCount -le 0 -or $native.Count -ne 1 -or $native[0].skipped -ne 0 -or
-        @($native[0].categories | Where-Object { $_.category -eq "native" -and $_.executed -eq $requiredNativeCount }).Count -ne 1) {
-        throw "The dedicated native suite did not execute all required native tests."
-    }
+    if ($native.Count -ne 1) { throw 'The dedicated native suite is missing or repeated.' }
+    Assert-NativeTestExecution -Evidence $native[0] -Catalog $suiteCatalog
 }
 $artifacts = @()
 function Add-Artifact([string]$Root, [string]$RelativePath, [string]$Prefix, [string]$ExpectedHash, [long]$ExpectedLength) {
