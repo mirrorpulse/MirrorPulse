@@ -22,6 +22,9 @@ public sealed class ManagedTestOriginalsTests
     [DataRow("doctype", false)]
     [DataRow("staleResults", false)]
     [DataRow("staleTrx", false)]
+    [DataRow("normalizedAssembly", true)]
+    [DataRow("foreignStorage", false)]
+    [DataRow("differentPreparedStorage", false)]
     public async Task CollectorBindsActualAssembliesAndPreservesOriginalNegativeOutcomes(string boundary, bool succeeds)
     {
         string repository = SftpProtocolFixture.FindRepositoryRoot();
@@ -64,7 +67,10 @@ public sealed class ManagedTestOriginalsTests
             XNamespace ns = "http://microsoft.com/schemas/VisualStudio/TeamTest/2010";
             string id = Guid.NewGuid().ToString();
             string codeBase = boundary == "foreignAssembly" ? typeof(object).Assembly.Location : assembly;
-            var definition = new XElement(ns + "UnitTest", new XAttribute("id", id), new XAttribute("storage", codeBase),
+            string storage = boundary == "foreignStorage" ? typeof(object).Assembly.Location :
+                boundary == "differentPreparedStorage" ? Path.Combine(root, "tests", "MirrorPulse.Cli.Tests", "bin", "Release", framework, "MirrorPulse.Cli.Tests.dll") : codeBase;
+            if (boundary == "normalizedAssembly") codeBase = Path.Combine(Path.GetDirectoryName(assembly)!, ".", Path.GetFileName(assembly));
+            var definition = new XElement(ns + "UnitTest", new XAttribute("id", id), new XAttribute("storage", storage),
                 new XElement(ns + "TestMethod", new XAttribute("codeBase", codeBase),
                     new XAttribute("className", "Fixture.RepeatedCase"), new XAttribute("name", "SameMethod")));
             var definitions = new XElement(ns + "TestDefinitions", definition);

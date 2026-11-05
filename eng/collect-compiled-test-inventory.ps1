@@ -44,6 +44,8 @@ function Assert-InventoryAssemblies {
         ($env:GITHUB_ACTIONS -ceq 'true' -and $changes.Count)) { throw 'The prepared tracked source changed.' }
 }
 Assert-InventoryAssemblies
+$preparedAssemblyPaths = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+foreach ($assembly in $prepared.assemblies) { $null = $preparedAssemblyPaths.Add([IO.Path]::GetFullPath($assembly.path, $workspace)) }
 $directory = Get-InventoryPath (Join-Path $originals 'discovery')
 $inventoryPath = Join-Path $directory 'prepared.json'; $resultPath = Join-Path $directory 'reconciled.json'
 if ($Phase -ceq 'Discover') {
@@ -103,8 +105,11 @@ foreach ($file in $collected.originals) {
         if ($null -eq $definition) { throw 'An original result lost its unique definition.' }
         $method = $definition.SelectSingleNode('*[local-name()="TestMethod"]')
         if ($null -eq $method) { throw 'An original result lost its method.' }
-        $assemblyPath = Get-InventoryPath $method.GetAttribute('codeBase')
-        if ($assemblyPath -ine (Get-InventoryPath $definition.GetAttribute('storage'))) { throw 'An original result changed its executing assembly.' }
+        # Result strings select only the three inputs checked before and after this phase.
+        # No path from XML is opened, and an unprepared path is rejected immediately.
+        $assemblyPath = [IO.Path]::GetFullPath($method.GetAttribute('codeBase'), $workspace)
+        $storagePath = [IO.Path]::GetFullPath($definition.GetAttribute('storage'), $workspace)
+        if ($assemblyPath -ine $storagePath -or -not $preparedAssemblyPaths.Contains($assemblyPath)) { throw 'An original result changed its executing assembly.' }
         $rawResults.Add(@{ testId = $row.GetAttribute('testId'); fullyQualifiedName = $method.GetAttribute('className') + '.' + $method.GetAttribute('name')
             displayName = $row.GetAttribute('testName'); source = $assemblyPath })
     }

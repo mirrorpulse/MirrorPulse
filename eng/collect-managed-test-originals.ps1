@@ -124,8 +124,7 @@ $prepared = Get-Content -LiteralPath $preparePath -Raw | ConvertFrom-Json
 if ($prepared.schemaVersion -ne 1 -or $prepared.sourceSha -cne $source -or $prepared.trackedSourceClean -ne $clean -or $prepared.assemblies.Count -ne 3) {
     throw 'The test preparation belongs to another source state.'
 }
-$bindings = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::OrdinalIgnoreCase)
-foreach ($assembly in $prepared.assemblies) {
+function Confirm-PreparedAssembly($assembly) {
     $path = Get-ContainedPath $assembly.path $workspace
     $retained = Get-ContainedPath (Join-Path $output $assembly.archivePath) $output
     if ((Get-FileHash -LiteralPath $path).Hash -cne $assembly.sha256 -or
@@ -134,6 +133,11 @@ foreach ($assembly in $prepared.assemblies) {
         [Reflection.AssemblyName]::GetAssemblyName($retained).FullName -cne $assembly.identity) {
         throw 'A prepared test assembly changed before evidence collection.'
     }
+    return $path
+}
+$bindings = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::OrdinalIgnoreCase)
+foreach ($assembly in $prepared.assemblies) {
+    $path = Confirm-PreparedAssembly $assembly
     $bindings.Add($path, $assembly)
 }
 $policyPath = Get-ContainedPath $prepared.policy.path $workspace
@@ -181,8 +185,11 @@ $originals = @(
             if ($null -eq $definition) { throw 'An original result has no unique test definition.' }
             $method = $definition.SelectSingleNode('*[local-name()="TestMethod"]')
             if ($null -eq $method) { throw 'An original result has no test method.' }
-            $codeBase = Get-ContainedPath $method.GetAttribute('codeBase') $workspace
-            $storage = Get-ContainedPath $definition.GetAttribute('storage') $workspace
+            # These XML values select an already validated input; they never open a file.
+            # Normalize each value and require the same prepared binding, rather than
+            # walking that input's complete ancestry again for every result row.
+            $codeBase = [IO.Path]::GetFullPath($method.GetAttribute('codeBase'), $workspace)
+            $storage = [IO.Path]::GetFullPath($definition.GetAttribute('storage'), $workspace)
             if ($codeBase -ine $storage -or -not $bindings.ContainsKey($codeBase)) {
                 throw 'An original test source does not match a prepared executing assembly.'
             }
@@ -198,6 +205,10 @@ $originals = @(
     }
 )
 if ($inventory.Count -eq 0) { throw 'No original managed cases were retained.' }
+# Recheck every actual and retained input, including its full path ancestry and
+# original hash/identity, after processing all rows. Per-row identity checks above
+# cannot introduce another file path or substitute an unprepared assembly.
+foreach ($assembly in $prepared.assemblies) { $null = Confirm-PreparedAssembly $assembly }
 $summaryPath = Join-Path $results 'test-evidence.json'
 $summary = if (Test-Path -LiteralPath $summaryPath) {
     Copy-Original $summaryPath (Join-Path $output 'results/test-evidence.json')
