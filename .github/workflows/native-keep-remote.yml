@@ -8,6 +8,7 @@ on:
     paths:
       - .github/workflows/native-keep-remote.yml
       - eng/verify-keep-remote-native.ps1
+      - tests/MirrorPulse.CloudFiles.CfSharp.Tests/MirrorPulseWindowsNamespacePermissionLeaseTests.KeepRemote.cs
 
 permissions:
   contents: read

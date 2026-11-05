@@ -283,10 +283,47 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     await role.RunNamespaceOperationAsync(async () => CollectionAssert.AreEqual(latest, await File.ReadAllBytesAsync(file.FullPath, token)));
                     return;
                 }
+                var beforeConfirmation = await catalog.ReadConflictKeepRemoteNativeAttemptsAsync(commandId, token);
+                int expectedAttempts = beforeConfirmation.Count +
+                    (beforeConfirmation.Any(attempt => attempt.Result?.Receipt.MayAcknowledge == true) ? 0 : 1);
                 var confirmed = await ConfirmAsync();
+                if (confirmed.Receipt.Outcome == MirrorPulseContentConfirmationOutcome.ProtectionLost)
+                {
+                    // A returned refusal is not completion. A new scheduler admission must
+                    // retain it and recheck the original authority before a fresh SDK hash pass.
+                    // In particular, never continue a digest on the invalidated opaque owner.
+                    var refused = await catalog.ReadConflictKeepRemoteNativeAttemptsAsync(commandId, token);
+                    Assert.HasCount(expectedAttempts, refused);
+                    Assert.AreEqual(confirmed, refused[^1].Result);
+                    Assert.IsFalse(confirmed.Receipt.MayAcknowledge);
+                    Assert.IsTrue(confirmed.Receipt.NativeIdentityPrepared);
+                    Assert.IsFalse(confirmed.Receipt.NativeApplied);
+                    Assert.IsFalse(confirmed.Receipt.NativeConfirmationVerified);
+                    Assert.IsTrue(confirmed.Receipt.DurableProjectionCommitted);
+                    Assert.AreEqual(MirrorPulseContentConfirmationStage.Reference, confirmed.Receipt.NativeStage);
+                    Assert.IsFalse(confirmed.Receipt.ObservedInSync);
+                    Assert.HasCount(1, await catalog.ReadNamespaceDispatchFencedRootsAsync(token));
+                    Assert.AreEqual("pending", (await catalog.ReadUserCommandAsync(commandId, token))!.State);
+                    await store.RequireCurrentAsync(store.Binding, token);
+                    await retainedJournal.RevalidateRetainedOriginalsAsync(copies, token);
+                    var prepared = await file.InspectAsync(token);
+                    Assert.AreEqual(snapshot.LocalBinding, prepared.LocalBinding);
+                    Assert.AreEqual(CloudContentAvailability.FullyAvailable, prepared.ContentAvailability);
+                    Assert.AreEqual(CloudSynchronizationState.NotInSync, prepared.SynchronizationState);
+                    Assert.AreEqual(source.RemoteRevision, prepared.RemoteRevision);
+                    Assert.AreEqual(Convert.ToBase64String(prepared.PlaceholderIdentity.Span), confirmed.Receipt.ObservedPlaceholderIdentity);
+                    await role.RunNamespaceOperationAsync(async () => CollectionAssert.AreEqual(selectedBytes, await File.ReadAllBytesAsync(file.FullPath, token)));
+                    TestContext.WriteLine("KeepRemote retained an actual ProtectionLost receipt; the next admission revalidates the original store, journal, object, seals and complete selected bytes.");
+                    confirmed = await ConfirmAsync();
+                    expectedAttempts++;
+                    var recovered = await catalog.ReadConflictKeepRemoteNativeAttemptsAsync(commandId, token);
+                    CollectionAssert.AreEqual(refused.ToArray(), recovered.Take(refused.Count).ToArray());
+                }
                 Assert.IsTrue(confirmed.Receipt.MayAcknowledge, System.Text.Json.JsonSerializer.Serialize(confirmed.Receipt));
                 var confirmedAttempts = await catalog.ReadConflictKeepRemoteNativeAttemptsAsync(commandId, token);
-                Assert.HasCount(nativeInterruption is not null && nativeInterruption != MirrorPulseKeepRemoteNativeCheckpoint.AfterNativeRecorded ? 2 : 1, confirmedAttempts);
+                Assert.HasCount(expectedAttempts, confirmedAttempts);
+                CollectionAssert.AreEqual(beforeConfirmation.ToArray(), confirmedAttempts.Take(beforeConfirmation.Count).ToArray());
+                Assert.IsFalse(confirmedAttempts.Take(confirmedAttempts.Count - 1).Any(attempt => attempt.Result?.Receipt.MayAcknowledge == true));
                 Assert.AreEqual(confirmed, confirmedAttempts[^1].Result);
                 var selected = await file.InspectAsync(token);
                 Assert.AreEqual(source.RemoteRevision, selected.RemoteRevision);

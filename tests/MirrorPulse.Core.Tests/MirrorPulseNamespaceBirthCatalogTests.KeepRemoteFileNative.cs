@@ -7,7 +7,14 @@ namespace MirrorPulse.Core.Tests;
 public sealed partial class MirrorPulseNamespaceBirthCatalogTests
 {
     [TestMethod]
-    public async Task KeepRemoteNativeAttemptsRetainFailuresLostReturnsAndSuccessAcrossOwners()
+    public Task KeepRemoteNativeAttemptsRetainFailuresLostReturnsAndSuccessAcrossOwners() =>
+        VerifyKeepRemoteNativeAttemptRecoveryAsync(false);
+
+    [TestMethod]
+    public Task KeepRemoteProtectionLostReceiptRetainsPreparedProjectionAcrossFreshNativeAttempts() =>
+        VerifyKeepRemoteNativeAttemptRecoveryAsync(true);
+
+    private static async Task VerifyKeepRemoteNativeAttemptRecoveryAsync(bool protectionLost)
     {
         using var fixture = new Fixture(); NativeSetup setup; MirrorPulseConflictKeepRemoteNativeResult success;
         await using (var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths))
@@ -17,7 +24,17 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             var failed = setup.Result with
             {
                 Receipt = setup.Result.Receipt with
-                { Outcome = MirrorPulseContentConfirmationOutcome.ContentMismatch, NativeConfirmationVerified = false, DurableProjectionCommitted = false }
+                {
+                    Outcome = protectionLost ? MirrorPulseContentConfirmationOutcome.ProtectionLost : MirrorPulseContentConfirmationOutcome.ContentMismatch,
+                    Stage = protectionLost ? MirrorPulseContentConfirmationStage.Reference : MirrorPulseContentConfirmationStage.Verify,
+                    NativeStage = protectionLost ? MirrorPulseContentConfirmationStage.Reference : MirrorPulseContentConfirmationStage.Verify,
+                    NativeApplied = false,
+                    NativeConfirmationVerified = false,
+                    DurableProjectionCommitted = protectionLost,
+                    ObservedInSync = false,
+                    NativeMarkHResult = null,
+                    NativeErrorHResult = protectionLost ? unchecked((int)0x80131509) : null
+                }
             };
             await catalog.RecordConflictKeepRemoteNativeResultAsync(failed);
             var lost = NextNativeStart(setup.Start, setup.Result.RecordedAt.AddSeconds(1));
