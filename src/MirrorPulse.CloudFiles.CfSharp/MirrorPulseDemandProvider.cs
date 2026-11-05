@@ -156,7 +156,8 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
         }
 
         ReadOnlyMemory<byte> cursor = DecodeContinuation(continuationToken);
-        using var admission = _namespaceWork?.Enter([_rootRouter!.GetRegistration(instanceId, rootKey!).RootId]);
+        using var admission = _namespaceWork is null ? null : await _namespaceWork.EnterAfterRecoveryAsync(
+            [_rootRouter!.GetRegistration(instanceId, rootKey!).RootId], cancellationToken).ConfigureAwait(false);
         if (_rootRouter is not null)
             await _rootRouter.RequireCurrentCallbackAsync(new(instanceId, rootKey!, adapterPath), directoryIdentity, cancellationToken).ConfigureAwait(false);
         CloudRemoteDirectoryPage page = rootKey is null
@@ -277,7 +278,8 @@ public sealed class MirrorPulseDemandProvider : ICloudDemandProvider
             }
             byte[] retainedIdentity = encodedIdentity.ToArray();
             stage = MirrorPulseProviderReadStage.WorkAdmission;
-            admission = _namespaceWork?.Enter([_rootRouter!.GetRegistration(instanceId, rootKey!).RootId]);
+            admission = _namespaceWork is null ? null : await _namespaceWork.EnterAfterRecoveryAsync(
+                [_rootRouter!.GetRegistration(instanceId, rootKey!).RootId], cancellationToken).ConfigureAwait(false);
             stage = MirrorPulseProviderReadStage.IdentityValidation;
             if (_rootRouter is not null)
                 await _rootRouter.RequireCurrentCallbackAsync(new(instanceId, rootKey!, adapterPath), retainedIdentity, cancellationToken).ConfigureAwait(false);

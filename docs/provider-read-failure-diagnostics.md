@@ -25,3 +25,12 @@ Focused tests exercise actual provider routing, closed-root admission, rejected
 range transport and truncated content, retain the original exceptions and verify
 that only the closed boundary fields reach the log. Clean signed Host and native
 acceptance remain separate.
+
+FetchData and FetchChildren wait when an existing recovery temporarily owns their
+root. Waiting holds no ordinary lease or Worker request, preserves recovery queue
+priority and uses the callback cancellation token. Only a successful fresh audit
+can release a callback into ordinary work; an unknown root, an idle closed root,
+a failed audit or owner disposal still refuses it. At most 256 callbacks wait in
+one admission owner. The lazy content stream retains its admitted lease until
+disposal, and its current identity is checked after waiting. The pinned SDK
+cancels its callbacks before draining the dispatcher during session disposal.

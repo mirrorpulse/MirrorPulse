@@ -117,8 +117,32 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
                 Task.Run(() => File.Delete(Path.Combine(docs.FullPath, "cold.bin")), timeout.Token));
             // The same independent consumer drives FETCH_DATA, including the lazy source body.
+            await using var readRecovery = await sourceAdmission.BeginRecoveryAsync([registration.RootId], timeout.Token);
+            var pendingRead = RunSourceConsumerAsync(directory, "read", role, timeout.Token);
+            while (sourceAdmission.PendingReadCount == 0)
+            {
+                if (pendingRead.IsCompleted)
+                {
+                    _ = await pendingRead;
+                    Assert.Fail("The cold native read must reach pending admission while recovery owns its root.");
+                }
+                await Task.Delay(10, timeout.Token);
+            }
+            Assert.IsFalse(pendingRead.IsCompleted);
+            Assert.AreEqual(0, worker.Calls.Count(call => call == "range-open"));
+            foreach (var preparation in preparations)
+            {
+                CloudDirectory item = preparation.Baseline.RootId is null ? fileSystem.Root : docs;
+                await using var lease = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(item, router, timeout.Token);
+                var observed = await lease.InspectAsync(timeout.Token);
+                Assert.AreEqual(preparation.Baseline.LocalObject, observed.LocalObject);
+                Assert.AreEqual(preparation.Baseline.OwnerSid, observed.OwnerSid);
+                Assert.IsTrue(MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(preparation.Intent.TargetDacl, observed.Dacl));
+            }
+            readRecovery.CompleteAfterFreshAudit(); await readRecovery.DisposeAsync();
             CollectionAssert.AreEqual(new byte[] { 1, 2, 3, 4 },
-                (await RunSourceConsumerAsync(directory, "read", role, timeout.Token)).Content);
+                (await pendingRead).Content);
+            Assert.AreEqual(0, sourceAdmission.PendingReadCount);
             Assert.IsGreaterThan(0, worker.Calls.Count(call => call == "range-open"));
             Assert.IsGreaterThan(0, worker.Calls.Count(call => call == "range-read"));
             Assert.AreEqual(worker.Calls.Count(call => call == "range-open"), worker.Calls.Count(call => call == "range-dispose"));
@@ -133,7 +157,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             }
             await using var sourceDrained = await sourceAdmission.BeginRecoveryAsync([registration.RootId], timeout.Token);
             Assert.IsFalse(sourceAdmission.IsAdmitted(registration.RootId));
-            TestContext.WriteLine($"NativeSourceContext: productionStartupBoundary=True; externalOrdinaryConsumer=True; ordinaryEnumeration=True; inheritedDeleteProtection=True; coldHydration=True; lazyRangeDisposedAsNormalUser=True; rootAdmissionDrainedAfterLazySource=True; closedParentDacls=True; rootGuardRetained=True; elevatedCaller={new WindowsPrincipal(caller).IsInRole(WindowsBuiltInRole.Administrator)}; hostStrictIntegrated=False.");
+            TestContext.WriteLine($"NativeSourceContext: productionStartupBoundary=True; externalOrdinaryConsumer=True; ordinaryEnumeration=True; inheritedDeleteProtection=True; coldHydration=True; coldNativeReadWaitedForExistingRecovery=True; noSourceBeforeFreshReadmission=True; lazyRangeDisposedAsNormalUser=True; rootAdmissionDrainedAfterLazySource=True; closedParentDacls=True; rootGuardRetained=True; elevatedCaller={new WindowsPrincipal(caller).IsInRole(WindowsBuiltInRole.Administrator)}; hostStrictIntegrated=False.");
         }
         finally
         {
