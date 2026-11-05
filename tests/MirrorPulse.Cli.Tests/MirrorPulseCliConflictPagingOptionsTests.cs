@@ -76,7 +76,11 @@ public sealed class MirrorPulseCliConflictPagingOptionsTests
         {
             using var output = new StringWriter(); using var error = new StringWriter();
             string[] arguments = ["--no-start", "conflict", "show", "--conflict-id", Guid.NewGuid().ToString("D")];
-            await Assert.ThrowsExactlyAsync<InvalidDataException>(() => MirrorPulseCliApplication.RunAsync(arguments, output, error, operations, () => true));
+            await Assert.ThrowsExactlyAsync<InvalidDataException>(async () =>
+            {
+                int exit = await MirrorPulseCliApplication.RunAsync(arguments, output, error, operations, () => true);
+                Assert.Fail($"Expected cursor rejection; exit={exit}, requests={calls}, error={error}.");
+            });
         });
         Assert.AreEqual(cycle ? 3 : 2, calls);
     }
@@ -84,8 +88,21 @@ public sealed class MirrorPulseCliConflictPagingOptionsTests
     private static async Task WithPipeAsync(MirrorPulseControlDispatcher dispatcher, Func<MirrorPulseCliHostOperations, Task> action)
     {
         string pipe = "MirrorPulse-conflict-options-" + Guid.NewGuid().ToString("N"); using var shutdown = new CancellationTokenSource();
-        Task serve = new MirrorPulseControlPipeServer(dispatcher.DispatchAsync, pipe).ServeAsync(shutdown.Token);
-        var client = new MirrorPulseControlClient(new MirrorPulseControlClientOptions { PipeName = pipe });
+        shutdown.CancelAfter(TimeSpan.FromSeconds(45));
+        // Paging semantics need real pipe exchanges, not the production five-second
+        // frame deadline while other CI processes contend for the same runner.
+        Task serve = new MirrorPulseControlPipeServer(dispatcher.DispatchAsync, pipe, new()
+        {
+            FrameReadTimeout = TimeSpan.FromSeconds(15),
+            FrameWriteTimeout = TimeSpan.FromSeconds(15),
+            ConnectionTimeout = TimeSpan.FromSeconds(30),
+        }).ServeAsync(shutdown.Token);
+        var client = new MirrorPulseControlClient(new MirrorPulseControlClientOptions
+        {
+            PipeName = pipe,
+            ConnectTimeout = TimeSpan.FromSeconds(10),
+            RequestTimeout = TimeSpan.FromSeconds(15),
+        });
         await using var operations = new MirrorPulseCliHostOperations(new MirrorPulseHostStartupOptions(), client);
         try { await action(operations); } finally { shutdown.Cancel(); await serve; }
     }
