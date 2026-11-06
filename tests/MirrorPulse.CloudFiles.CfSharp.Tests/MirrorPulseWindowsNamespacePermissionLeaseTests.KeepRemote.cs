@@ -70,6 +70,10 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     public Task NativeKeepRemoteDefaultCommandResumesFirstPermissionIntentBeforeRootAudit() =>
         RunKeepRemoteResidentFixtureAsync("host-command", 65537);
 
+    [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles")]
+    public Task NativeKeepRemoteIndependentRuntimeSettlesOriginalCommandBeforeReadmission() =>
+        RunKeepRemoteResidentFixtureAsync("host-process", 65537);
+
     private async Task RunKeepRemoteResidentFixtureAsync(string scenario, int selectedLength)
     {
         if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
@@ -102,7 +106,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             await File.WriteAllBytesAsync(file.FullPath, [1, 2, 3], token);
             var originals = new List<MirrorPulseNamespacePermissionPreparation>();
             var members = new Dictionary<Guid, MirrorPulseNamespaceMemberRegistration>();
-            if (scenario == "host-command")
+            if (scenario is "host-command" or "host-process")
             {
                 foreach (CloudItem item in new CloudItem[] { fileSystem.Root, fileSystem.GetDirectory("Docs"), file })
                     SetProtectedFixtureUserOwner(item, caller.User!);
@@ -151,7 +155,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 await catalog.SaveUploadConflictAsync(conflict, token);
                 conflictId = conflict.ConflictId;
             }
-            if (scenario == "host-command")
+            if (scenario is "host-command" or "host-process")
             {
                 var firstOwner = new MirrorPulseUploadConflictActions(catalog, state, feed, new(TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(5)),
                     paths, router, remote, scheduler: scheduler, fileSystem: fileSystem, namespaceActor: actor,
@@ -169,6 +173,16 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 Assert.IsNull((await catalog.ReadConflictKeepRemoteFileContentAsync(retainedCommand, token))!.WriteStart);
                 Assert.HasCount(1, await catalog.ReadNamespaceDispatchFencedRootsAsync(token));
                 CollectionAssert.AreEqual(local, await File.ReadAllBytesAsync(file.FullPath, token));
+                if (scenario == "host-process")
+                {
+                    await feed.DisposeAsync();
+                    await fileSystem.DisposeAsync();
+                    await catalog.DisposeAsync();
+                    await role.DisposeAsync();
+                    await VerifyIndependentKeepRemoteRuntimeAsync(directory, paths, firstStart, firstAction,
+                        plan.Members.Count, selectedBytes, local, token);
+                    return;
+                }
                 int readsBeforeRecovery = remote.SourceReads;
                 remote.DenySourceReads = true;
                 await using var nextRole = new MirrorPulseNamespaceExecutionSession();

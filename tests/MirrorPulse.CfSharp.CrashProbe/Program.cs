@@ -3,6 +3,22 @@ using MirrorPulse.CfSharp.CrashProbe;
 using MirrorPulse.CloudFiles.CfSharp;
 using MirrorPulse.Core.Configuration;
 
+if (args.Length == 3 && args[0] == "--resume-keep-remote")
+{
+    if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100) ||
+        !Guid.TryParseExact(args[2], "D", out Guid commandId))
+        return 2;
+    try
+    {
+        return await KeepRemoteRestartProbe.RunAsync(args[1], commandId);
+    }
+    catch (Exception error)
+    {
+        Console.Error.WriteLine($"KeepRemote restart failed: {error.GetType().Name}, HRESULT {error.HResult:X8}.");
+        return 1;
+    }
+}
+
 if (args.Length == 2 && args[0] == "--serve-cli-transfer-webdav")
 {
     return await CliTransferWebDavFixture.RunAsync(args[1]);
