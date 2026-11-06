@@ -44,6 +44,26 @@ function Invoke-CliCoalescingContentConflict {
         }while([DateTimeOffset]::UtcNow -lt $deadline)
         throw 'The real signed coalescing fixture did not observe the expected complete bytes within30s.'
     }
+    function Write-CoalescingEdit([byte[]]$Bytes) {
+        if($Action -ceq 'KeepBoth'){
+            [IO.File]::WriteAllBytes($local,$Bytes)
+            return
+        }
+        $stream=[IO.File]::Open($local,[IO.FileMode]::Open,[IO.FileAccess]::Write,[IO.FileShare]::Read)
+        try{
+            $stream.Write($Bytes,0,$Bytes.Length)
+            $stream.SetLength($Bytes.Length)
+            $stream.Flush($true)
+        }finally{$stream.Dispose()}
+    }
+    function Assert-KeepRemoteResident($Observation,[string]$ExpectedIdentity) {
+        if($Action -ceq 'KeepRemote' -and (-not $Observation.nativeInspected -or
+            $Observation.native.isPlaceholder -ne $true -or $Observation.native.contentAvailability -cne 'FullyAvailable' -or
+            $Observation.nativeIdentitySha256 -cnotmatch '^[0-9A-F]{64}$' -or
+            ($ExpectedIdentity -and $Observation.nativeIdentitySha256 -cne $ExpectedIdentity))){
+            throw 'The signed KeepRemote fixture requires the same fully resident native placeholder throughout its original local edits.'
+        }
+    }
     $source=Join-Path $SourceRoot 'cli-roundtrip.txt';$local=Join-Path $MappedRoot 'cli-roundtrip.txt'
     $seed=[Text.Encoding]::UTF8.GetBytes('signed coalescing original accepted bytes')
     $first=[Text.Encoding]::UTF8.GetBytes('signed coalescing first local edit')
@@ -52,8 +72,21 @@ function Invoke-CliCoalescingContentConflict {
     $seedHash=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($seed))
     $latestHash=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($latest))
     $remoteHash=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($remote))
-    [IO.File]::WriteAllBytes($source,$seed)
-    Assert-CoalescingHash $local $seedHash $true
+    if($Action -ceq 'KeepRemote'){
+        # Exercise the public protected creation path and let the signed Worker accept the seed.
+        $inputPath=Join-Path ([IO.Path]::GetDirectoryName($SourceRoot)) 'keep-remote-seed.txt'
+        [IO.File]::WriteAllBytes($inputPath,$seed)
+        $parent=Invoke-CoalescingCli 'keep-remote-root-member' @('--json','--no-start','namespace','member','inspect',
+            [IO.Path]::GetFileName($MappedRoot),'--directory')
+        $prepared=Invoke-CoalescingCli 'keep-remote-seed-prepared' @('--json','--no-start','namespace','member','prepare-import',
+            $parent.memberId,'cli-roundtrip.txt',$inputPath)
+        Invoke-CoalescingCli 'keep-remote-seed-imported' @('--json','--no-start','namespace','member','import',$prepared.operationId)|Out-Null
+        Assert-CoalescingHash $source $seedHash $false
+        Assert-CoalescingHash $local $seedHash $false
+    }else{
+        [IO.File]::WriteAllBytes($source,$seed)
+        Assert-CoalescingHash $local $seedHash $true
+    }
     Invoke-CoalescingCli 'disable' @('--json','--developer-mode','instance','disable','--instance-id',$InstanceId)|Out-Null
     Invoke-CoalescingCli 'disabled-restart' @('--json','--developer-mode','host','restart')|Out-Null
     & $WaitHostStopped
@@ -64,10 +97,11 @@ function Invoke-CliCoalescingContentConflict {
     Invoke-CoalescingCli 'stop-before-edit-baseline' @('--json','--developer-mode','host','stop')|Out-Null
     & $WaitHostStopped
     $editBaseline=Read-CoalescingEdit 'edit-baseline'
+    Assert-KeepRemoteResident $editBaseline ''
     Invoke-CoalescingCli 'start-before-first-edit' @('--json','--developer-mode','host','start')|Out-Null
     $baseline=[long](Confirm-CoalescingDisabled 'before-first-edit-status').pendingUploads
     $firstWrittenAt=[DateTimeOffset]::UtcNow
-    [IO.File]::WriteAllBytes($local,$first)
+    Write-CoalescingEdit $first
     $deadline=[DateTimeOffset]::UtcNow.AddSeconds(30)
     do {
         $status=& $InvokeCli @('--json','--developer-mode','status')
@@ -83,13 +117,14 @@ function Invoke-CliCoalescingContentConflict {
     Invoke-CoalescingCli 'stop-after-first-edit' @('--json','--developer-mode','host','stop')|Out-Null
     & $WaitHostStopped
     $firstOriginals=Read-CoalescingEdit 'first-edit-originals'
+    Assert-KeepRemoteResident $firstOriginals $editBaseline.nativeIdentitySha256
     $firstWitness=Get-CliCoalescingEditWitness -Before $editBaseline -After $firstOriginals -WrittenAt $firstWrittenAt -LocalPath $local -ExpectedContent $first
     $firstWitness|ConvertTo-Json -Depth 8|Set-Content -LiteralPath (Join-Path $originals 'first-edit-witness.json') -Encoding utf8
     $firstCount=[long]$status.data.pendingUploads
     Invoke-CoalescingCli 'start-before-second-edit' @('--json','--developer-mode','host','start')|Out-Null
     $firstCount=[long](Confirm-CoalescingDisabled 'before-second-edit-status').pendingUploads
     $secondWrittenAt=[DateTimeOffset]::UtcNow
-    [IO.File]::WriteAllBytes($local,$latest)
+    Write-CoalescingEdit $latest
     $deadline=[DateTimeOffset]::UtcNow.AddSeconds(30)
     do {
         $status=& $InvokeCli @('--json','--developer-mode','status')
@@ -103,6 +138,7 @@ function Invoke-CliCoalescingContentConflict {
     Invoke-CoalescingCli 'stop-after-second-edit' @('--json','--developer-mode','host','stop')|Out-Null
     & $WaitHostStopped
     $secondOriginals=Read-CoalescingEdit 'second-edit-originals'
+    Assert-KeepRemoteResident $secondOriginals $editBaseline.nativeIdentitySha256
     $secondWitness=Get-CliCoalescingEditWitness -Before $firstOriginals -After $secondOriginals -WrittenAt $secondWrittenAt -LocalPath $local -ExpectedContent $latest -RequiredOriginalIds $firstWitness.originalOperationIds
     $secondWitness|ConvertTo-Json -Depth 8|Set-Content -LiteralPath (Join-Path $originals 'second-edit-witness.json') -Encoding utf8
     Invoke-CoalescingCli 'queued-status' @('--json','--developer-mode','status')|Out-Null

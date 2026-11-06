@@ -23,7 +23,17 @@ function Invoke-CliCoalescingChoice {
     }
     $raw=(& $CliPath --json --developer-mode --no-start conflict resolve --conflict-id $ConflictId.ToString('D') --action $Action 2>&1|Out-String).Trim()
     $code=$LASTEXITCODE
-    if($code -notin @(0,11) -or [string]::IsNullOrEmpty($raw) -or $raw.Length -gt 1048576){throw "The real isolated $Action command did not return an accepted result."}
+    if([string]::IsNullOrEmpty($raw) -or $raw.Length -gt 1048576){throw "The real isolated $Action command returned no bounded result (exit $code)."}
+    if($code -notin @(0,11)){
+        $errorCode='unavailable'
+        try{
+            $failure=$raw|ConvertFrom-Json -ErrorAction Stop
+            if($failure.kind -ceq 'error' -and $failure.error.code -cmatch '^[A-Za-z][A-Za-z0-9_-]{0,63}$'){
+                $errorCode=$failure.error.code
+            }
+        }catch{}
+        throw "The real isolated $Action command was refused (exit $code, code $errorCode)."
+    }
     $result=$raw|ConvertFrom-Json;$id=[guid]::Empty
     $command=$result.data.conflictCommand
     if($result.kind -cne 'result' -or $null -eq $command -or $command.conflictId -cne $ConflictId.ToString('D') -or
