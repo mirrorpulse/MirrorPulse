@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using CfSharp;
 using Microsoft.Data.Sqlite;
 using MirrorPulse.CloudFiles.CfSharp;
@@ -19,6 +20,12 @@ public sealed record CliCoalescingFixtureAudit(int SchemaVersion, bool Exclusive
     string? PreservedRemoteSha256, bool ActualNativeConfirmation)
 {
     public CliCoalescingObservedVersionAudit? SelectedRemoteObservation { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? PreservedLocalSha256 { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? AcknowledgementId { get; init; }
 }
 
 public sealed record CliCoalescingObservedVersionAudit(int Version, Guid ObservationId, Guid RejectedEffectId,
@@ -35,7 +42,7 @@ public static partial class CliCoalescingFixtureProbe
     private sealed record Marker(int SchemaVersion, string InstanceId, string RootId, string RootKey, string DirectoryName);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
-    public static async Task<int> RunAsync(string directory, bool completed)
+    public static async Task<int> RunAsync(string directory, bool completed, bool keepRemote = false)
     {
         string root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory));
         const string prefix = "MirrorPulse-cli-integration-";
@@ -91,7 +98,8 @@ public static partial class CliCoalescingFixtureProbe
             await transaction.RollbackAsync();
         }
         Guid? commandId = null, acceptedId = null;
-        string? localHash = null, preservedHash = null;
+        string? localHash = null, preservedHash = null, preservedLocalHash = null;
+        Guid? acknowledgementId = null;
         if (!completed)
         {
             if (pending != originalIds.Length || (await catalog.ReadCurrentCoalescingKeepBothCommandsAsync(plan.PlanId)).Count != 0)
@@ -101,6 +109,15 @@ public static partial class CliCoalescingFixtureProbe
                 if (!conflicts.Any(conflict => conflict.InstanceId == route.InstanceId && conflict.ChangeId == id.ToString("D") &&
                     conflict.RelativePath == route.DirectoryName + "/cli-roundtrip.txt" && conflict.Reason == MirrorPulseConflictReason.StaleRemoteRevision))
                     throw new InvalidDataException("Each pending original must retain its real conditional conflict.");
+        }
+        else if (keepRemote)
+        {
+            if (pending != 0) throw new InvalidDataException("An original KeepRemote journal row remains pending.");
+            var settled = await ReadKeepRemoteSettlementAsync(paths, catalog, store, plan, rejected, originalIds, selectedObservation);
+            commandId = settled.CommandId;
+            acknowledgementId = settled.AcknowledgementId;
+            localHash = preservedHash = settled.SelectedSha256;
+            preservedLocalHash = settled.PreservedLocalSha256;
         }
         else
         {
@@ -155,6 +172,8 @@ public static partial class CliCoalescingFixtureProbe
             pending, originalIds.Length - pending, true, rejected.State.ToString(), rejectedId, commandId, acceptedId,
             localHash, preservedHash, completed)
         {
+            PreservedLocalSha256 = preservedLocalHash,
+            AcknowledgementId = acknowledgementId,
             SelectedRemoteObservation = selectedObservation is null ? null : new(selectedObservation.Version, selectedObservation.ObservationId,
                 selectedObservation.RejectedEffect.OperationId, selectedObservation.PreviousObservationId, selectedObservation.RefreshCommandId,
                 selectedObservation.OriginalOperationIds, selectedObservation.PreviousConflictIds, selectedObservation.SelectedConflictIds,

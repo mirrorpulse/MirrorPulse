@@ -6,12 +6,17 @@ param(
     [string]$PackagePath,
     [switch]$Regression,
     [switch]$Coalescing,
+    [ValidateSet('KeepBoth', 'KeepRemote', IgnoreCase = $false)]
+    [string]$CoalescingAction = 'KeepBoth',
     [ValidateSet("Debug", "Release")]
     [string]$Configuration = "Release",
     [string]$EvidencePath
 )
 
 $ErrorActionPreference = "Stop"
+if ($PSBoundParameters.ContainsKey('CoalescingAction') -and -not $Coalescing) {
+    throw 'A coalescing choice requires the independent coalescing fixture.'
+}
 if ($Coalescing -and ($Regression -or [string]::IsNullOrWhiteSpace($EvidencePath) -or $env:MIRRORPULSE_NATIVE_TEST -cne '1')) {
     throw 'The independent coalescing fixture requires its own evidence path and explicitly enabled disposable native environment.'
 }
@@ -324,12 +329,18 @@ try {
     if ($Coalescing) {
         $coalescingEvidence = Invoke-CliCoalescingContentConflict -InvokeCli { param($arguments) Invoke-MirrorPulseCli $arguments } `
             -WaitHostStopped { Wait-MirrorPulseHostStopped } `
-            -ReadStoppedAudit { param($completed) Invoke-CliStoppedCoalescingOracle -ProbeAssembly $script:probeAssembly -FixtureRoot $runRoot -Completed $completed } `
+            -ReadStoppedAudit { param($completed) Invoke-CliStoppedCoalescingOracle -ProbeAssembly $script:probeAssembly -FixtureRoot $runRoot -Completed $completed -Action $CoalescingAction } `
             -ReadStoppedEdit { Read-CliStoppedCoalescingEdit -ProbeAssembly $script:probeAssembly -FixtureRoot $runRoot } `
-            -ResolveKeepBoth { param($conflict) Invoke-CliCoalescingKeepBoth -CliPath $script:cliExecutable -FixtureRoot $runRoot -ConflictId $conflict } `
+            -ResolveChoice { param($conflict) Invoke-CliCoalescingChoice -CliPath $script:cliExecutable -FixtureRoot $runRoot -ConflictId $conflict -Action $CoalescingAction } `
+            -Action $CoalescingAction `
             -InstanceId $instanceId -MappedRoot $mappedRoot -SourceRoot $sourceRoot -EvidencePath $EvidencePath
         $coalescingEvidence.packageSha256 = (Get-FileHash -LiteralPath $PackagePath).Hash
         $coalescingEvidence.signatureSha256 = (Get-FileHash -LiteralPath ($PackagePath + '.signature.json')).Hash
+        if ($CoalescingAction -ceq 'KeepRemote') {
+            $coalescingEvidence.cliExecutableSha256 = (Get-FileHash -LiteralPath $script:cliExecutable).Hash
+            $coalescingEvidence.hostExecutableSha256 = (Get-FileHash -LiteralPath $hostExecutable).Hash
+            $coalescingEvidence.probeAssemblySha256 = (Get-FileHash -LiteralPath $script:probeAssembly).Hash
+        }
     }
     if ($Regression) {
         $onlineRead = Invoke-CliFixtureProbe -Mode read -Phase Online

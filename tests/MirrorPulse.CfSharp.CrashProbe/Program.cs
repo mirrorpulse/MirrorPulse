@@ -37,7 +37,7 @@ if (args.Length == 4 && args[0] == "--namespace-source-consumer")
     }
 }
 
-if (args.Length == 2 && args[0] is "--read-cli-fixture" or "--audit-cli-fixture" or "--inspect-cli-fixture" or "--cleanup-cli-fixture" or "--cleanup-cli-transfer-fixture" or "--audit-cli-transfer-fixture" or "--observe-cli-transfer-failure" or "--audit-cli-coalescing-pending" or "--audit-cli-coalescing-completed" or "--audit-cli-coalescing-edit" or "--observe-cli-coalescing-edit")
+if (args.Length == 2 && args[0] is "--read-cli-fixture" or "--audit-cli-fixture" or "--inspect-cli-fixture" or "--cleanup-cli-fixture" or "--cleanup-cli-transfer-fixture" or "--audit-cli-transfer-fixture" or "--observe-cli-transfer-failure" or "--audit-cli-coalescing-pending" or "--audit-cli-coalescing-completed" or "--audit-cli-coalescing-keep-remote" or "--audit-cli-coalescing-edit" or "--observe-cli-coalescing-edit")
 {
     try
     {
@@ -48,6 +48,8 @@ if (args.Length == 2 && args[0] is "--read-cli-fixture" or "--audit-cli-fixture"
         if (args[0] == "--observe-cli-transfer-failure") return await CliFixtureProbe.RunTransferFailureObservationAsync(args[1]);
         if (args[0] is "--audit-cli-coalescing-pending" or "--audit-cli-coalescing-completed")
             return await CliCoalescingFixtureProbe.RunAsync(args[1], args[0] == "--audit-cli-coalescing-completed");
+        if (args[0] == "--audit-cli-coalescing-keep-remote")
+            return await CliCoalescingFixtureProbe.RunAsync(args[1], completed: true, keepRemote: true);
         return await CliFixtureProbe.RunAsync(args[1], audit: args[0] == "--audit-cli-fixture",
             inspect: args[0] == "--inspect-cli-fixture", cleanup: args[0] == "--cleanup-cli-fixture");
     }

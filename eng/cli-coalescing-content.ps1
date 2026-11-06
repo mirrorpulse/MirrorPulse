@@ -5,7 +5,8 @@ function Invoke-CliCoalescingContentConflict {
         [Parameter(Mandatory)][scriptblock]$WaitHostStopped,
         [Parameter(Mandatory)][scriptblock]$ReadStoppedAudit,
         [Parameter(Mandatory)][scriptblock]$ReadStoppedEdit,
-        [Parameter(Mandatory)][scriptblock]$ResolveKeepBoth,
+        [Parameter(Mandatory)][scriptblock]$ResolveChoice,
+        [ValidateSet('KeepBoth','KeepRemote', IgnoreCase = $false)][string]$Action = 'KeepBoth',
         [Parameter(Mandatory)][string]$InstanceId,
         [Parameter(Mandatory)][string]$MappedRoot,
         [Parameter(Mandatory)][string]$SourceRoot,
@@ -136,7 +137,7 @@ function Invoke-CliCoalescingContentConflict {
     }
     $pending|ConvertTo-Json -Depth 8|Set-Content -LiteralPath (Join-Path $originals 'pending-before-choice.json') -Encoding utf8
     if([string]::IsNullOrEmpty($conflict.localRevision) -or [string]::IsNullOrEmpty($conflict.remoteRevision)){
-        throw 'The actual conflict did not expose the selected revisions required for KeepBoth; original intent evidence was retained without fabricating response revisions.'
+        throw "The actual conflict did not expose the selected revisions required for $Action."
     }
     $observation=$pending.selectedRemoteObservation
     if($null -ne $observation){
@@ -165,10 +166,9 @@ function Invoke-CliCoalescingContentConflict {
     if($connected.Count -ne 1){throw 'The actual Worker did not reconnect for the retained conflict choice.'}
     $retained=Invoke-CoalescingCli 'conflicts-after-restart' @('--json','--developer-mode','conflict','list')
     if(@($retained.items|Where-Object conflictId -CEQ $conflict.conflictId).Count -ne 1){throw 'The original selected conflict did not survive the real Host restart.'}
-    # The injected boundary accepts only result/exit0 or result/exit11 for this
-    # exact KeepBoth request. Other CLI commands retain strict original handling.
-    $choice=& $ResolveKeepBoth $conflict.conflictId
-    $choice|ConvertTo-Json -Depth 12|Set-Content -LiteralPath (Join-Path $originals 'keep-both.json') -Encoding utf8
+    $choice=& $ResolveChoice $conflict.conflictId
+    $choiceFile=if($Action -ceq 'KeepRemote'){'keep-remote.json'}else{'keep-both.json'}
+    $choice|ConvertTo-Json -Depth 12|Set-Content -LiteralPath (Join-Path $originals $choiceFile) -Encoding utf8
     $command=[guid]::Empty
     if($choice.kind -cne 'result' -or $choice.data.conflictCommand.conflictId -cne $conflict.conflictId -or
         -not [guid]::TryParse([string]$choice.data.conflictCommand.commandId,[ref]$command) -or $command -eq [guid]::Empty -or
@@ -182,21 +182,23 @@ function Invoke-CliCoalescingContentConflict {
         Start-Sleep -Milliseconds 100
     }while([DateTimeOffset]::UtcNow -lt $deadline)
     $operation|ConvertTo-Json -Depth 8|Set-Content -LiteralPath (Join-Path $originals 'completed-command.json') -Encoding utf8
-    if($operation.data.operationId -cne $command.ToString('D') -or $operation.data.action -cne 'keepboth' -or
+    if($operation.data.operationId -cne $command.ToString('D') -or $operation.data.action -cne $Action.ToLowerInvariant() -or
         $operation.data.targetId -cne $conflict.conflictId -or $operation.data.state -cne 'resolved'){
-        throw 'The exact KeepBoth command did not actually resolve within the original30s observation window.'
+        throw "The exact $Action command did not resolve within the original 30-second observation window."
     }
-    Assert-CoalescingHash $source $latestHash $false
-    Assert-CoalescingHash $local $latestHash $false
+    $resolvedHash=if($Action -ceq 'KeepRemote'){$remoteHash}else{$latestHash}
+    Assert-CoalescingHash $source $resolvedHash $false
+    Assert-CoalescingHash $local $resolvedHash $false
     Invoke-CoalescingCli 'stop-before-audit' @('--json','--developer-mode','host','stop')|Out-Null
     & $WaitHostStopped
     $before=& $ReadStoppedAudit $true
     if($before.rawEffect -cne 'UpdateFile' -or $before.originalCount -lt 2 -or
-        $before.acknowledgedOriginalCount -ne $before.originalCount -or $before.localSha256 -cne $latestHash -or
+        $before.acknowledgedOriginalCount -ne $before.originalCount -or $before.localSha256 -cne $resolvedHash -or
         $before.preservedRemoteSha256 -cne $remoteHash -or $before.actualNativeConfirmation -ne $true -or
         $before.planId -cne $pending.planId -or $before.commandId -cne $command.ToString('D') -or
-        (@($before.originalOperationIds) -join ',') -cne (@($pending.originalOperationIds) -join ',')){
-        throw 'The stopped original oracle did not prove the complete signed UpdateFile/KeepBoth boundary.'
+        (@($before.originalOperationIds) -join ',') -cne (@($pending.originalOperationIds) -join ',') -or
+        ($Action -ceq 'KeepRemote' -and ($before.preservedLocalSha256 -cne $latestHash -or -not $before.acknowledgementId))){
+        throw "The stopped original oracle did not prove the complete signed UpdateFile/$Action boundary."
     }
     $before|ConvertTo-Json -Depth 8|Set-Content -LiteralPath (Join-Path $originals 'stopped-before-restart.json') -Encoding utf8
     Invoke-CoalescingCli 'start-after-choice' @('--json','--developer-mode','host','start')|Out-Null
@@ -208,8 +210,8 @@ function Invoke-CliCoalescingContentConflict {
         Start-Sleep -Milliseconds 100
     }while([DateTimeOffset]::UtcNow -lt $deadline)
     if($connected.Count -ne 1){throw 'The actual signed Worker did not reconnect after the choice.'}
-    Assert-CoalescingHash $source $latestHash $false
-    Assert-CoalescingHash $local $latestHash $false
+    Assert-CoalescingHash $source $resolvedHash $false
+    Assert-CoalescingHash $local $resolvedHash $false
     Invoke-CoalescingCli 'stop-after-restart' @('--json','--developer-mode','host','stop')|Out-Null
     & $WaitHostStopped
     $after=& $ReadStoppedAudit $true
@@ -217,10 +219,15 @@ function Invoke-CliCoalescingContentConflict {
     if(($before|ConvertTo-Json -Depth 8 -Compress) -cne ($after|ConvertTo-Json -Depth 8 -Compress)){
         throw 'The restarted Host changed the completed original execution, private copy or acknowledgement facts.'
     }
-    [ordered]@{schemaVersion=1;sourceSha=$env:GITHUB_SHA;runId=$env:GITHUB_RUN_ID;defaultHostIntegrated=$true;signedWorker=$true;
-        rawEffect='UpdateFile';action='KeepBoth';originalCount=$before.originalCount;actualNativeConfirmation=$true;
+    $report=[ordered]@{schemaVersion=1;sourceSha=$env:GITHUB_SHA;runId=$env:GITHUB_RUN_ID;defaultHostIntegrated=$true;signedWorker=$true;
+        rawEffect='UpdateFile';action=$Action;originalCount=$before.originalCount;actualNativeConfirmation=$true;
         firstEditOriginalOperationIds=@($firstWitness.originalOperationIds);secondEditOriginalOperationIds=@($secondWitness.originalOperationIds);
         actualEditOriginalJournalWitness=$true;globalPendingCountUsedAsEditProof=$false;
-        localSha256=$latestHash;preservedRemoteSha256=$remoteHash;unchangedRetainedFactsAfterActualRestart=$true;
+        localSha256=$resolvedHash;preservedRemoteSha256=$remoteHash;unchangedRetainedFactsAfterActualRestart=$true;
         fullSevenEffectMatrixAccepted=$false;fullP076Accepted=$false;teardownCompleted=$false}
+    if($Action -ceq 'KeepRemote'){
+        $report.preservedLocalSha256=$before.preservedLocalSha256
+        $report.acknowledgementId=$before.acknowledgementId
+    }
+    $report
 }
