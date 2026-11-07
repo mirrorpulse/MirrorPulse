@@ -23,9 +23,20 @@ public sealed record MirrorPulseConflictKeepRemotePreparation(MirrorPulseConflic
 
 public sealed partial class MirrorPulseProductCatalog
 {
-    public async Task<MirrorPulseConflictKeepRemotePreparation> PrepareConflictKeepRemoteAsync(Guid commandId, Guid conflictId,
+    public Task<MirrorPulseConflictKeepRemotePreparation> PrepareConflictKeepRemoteAsync(Guid commandId, Guid conflictId,
         Guid itemId, string localPath, MirrorPulseConflictRemoteSource source, MirrorPulseCoalescingContent? localContent,
-        CancellationToken token = default)
+        CancellationToken token = default) =>
+        PrepareConflictKeepRemoteCoreAsync(commandId, conflictId, itemId, localPath, source, localContent, false, token);
+
+    /// <summary>Accepts the original command and its complete selected group in one transaction.</summary>
+    public Task<MirrorPulseConflictKeepRemotePreparation> AcceptConflictKeepRemoteAsync(Guid commandId, Guid conflictId,
+        Guid itemId, string localPath, MirrorPulseConflictRemoteSource source, MirrorPulseCoalescingContent? localContent,
+        CancellationToken token = default) =>
+        PrepareConflictKeepRemoteCoreAsync(commandId, conflictId, itemId, localPath, source, localContent, true, token);
+
+    private async Task<MirrorPulseConflictKeepRemotePreparation> PrepareConflictKeepRemoteCoreAsync(Guid commandId, Guid conflictId,
+        Guid itemId, string localPath, MirrorPulseConflictRemoteSource source, MirrorPulseCoalescingContent? localContent,
+        bool acceptCommand, CancellationToken token)
     {
         if (commandId == Guid.Empty || conflictId == Guid.Empty || itemId == Guid.Empty) throw new ArgumentException("KeepRemote requires its exact command, conflict and item identities.");
         ArgumentNullException.ThrowIfNull(source); ValidatePermissionRelativePath(localPath);
@@ -42,7 +53,8 @@ public sealed partial class MirrorPulseProductCatalog
                     throw new InvalidDataException("KeepRemote cannot replace its original group, selected remote version or local bytes.");
                 transaction.Commit(); return replay;
             }
-            await RequireKeepRemoteCommandAsync(commandId, conflictId, transaction, token).ConfigureAwait(false);
+            if (!acceptCommand)
+                await RequireKeepRemoteCommandAsync(commandId, conflictId, transaction, token).ConfigureAwait(false);
             var selection = await ReadConflictDecisionSelectionAsync(conflictId, source.RootKey, itemId, localPath, null, false, transaction, token).ConfigureAwait(false);
             if (selection.PlanId is not { } plan || selection.PlanFingerprint is not { } fingerprint || selection.RejectedEffect is not { } rejected ||
                 source.InstanceId != selection.InstanceId.ToString() || source.RelativePath != selection.RemoteTarget || source.RemoteRevision != selection.RemoteRevision)
@@ -54,6 +66,15 @@ public sealed partial class MirrorPulseProductCatalog
                 itemId, localPath, rejected, source, localContent, selection.Originals, selection.Conflicts, DateTimeOffset.UtcNow);
             byte[] payload = JsonSerializer.SerializeToUtf8Bytes(intent, TopologyJsonOptions);
             if (payload.Length > 16_777_216) throw new InvalidDataException("The complete KeepRemote preparation exceeds its retained payload bound.");
+            if (acceptCommand)
+            {
+                await using var command = _connection.CreateCommand();
+                command.Transaction = transaction;
+                command.CommandText = "INSERT INTO user_commands(command_id,action,target_id,state) VALUES($id,'keepremote',$target,'pending');";
+                command.Parameters.AddWithValue("$id", commandId.ToString("D"));
+                command.Parameters.AddWithValue("$target", conflictId.ToString("D"));
+                await command.ExecuteNonQueryAsync(token).ConfigureAwait(false);
+            }
             await using (var insert = _connection.CreateCommand())
             {
                 insert.Transaction = transaction;
@@ -70,6 +91,30 @@ public sealed partial class MirrorPulseProductCatalog
                 await member.ExecuteNonQueryAsync(token).ConfigureAwait(false);
             }
             token.ThrowIfCancellationRequested(); transaction.Commit(); return new(intent, null, null);
+        }
+        finally { _gate.Release(); }
+    }
+
+    /// <summary>Lists decisions that still require ordinary root admission for their first file operation.</summary>
+    public async Task<IReadOnlyList<Guid>> ReadPendingConflictKeepRemotePreparationsAsync(Guid? after = null, CancellationToken token = default)
+    {
+        await _gate.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            await using var query = _connection.CreateCommand();
+            query.CommandText = """
+                SELECT p.command_id FROM conflict_keep_remote_preparations p
+                JOIN user_commands u ON u.command_id=p.command_id
+                WHERE p.command_id>$after AND u.action='keepremote' AND u.state IN ('pending','failed')
+                    AND NOT EXISTS(SELECT 1 FROM conflict_keep_remote_file_starts s WHERE s.command_id=p.command_id)
+                ORDER BY p.command_id LIMIT 64;
+                """;
+            query.Parameters.AddWithValue("$after", after?.ToString("D") ?? string.Empty);
+            var ids = new List<Guid>();
+            await using var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
+            while (await reader.ReadAsync(token).ConfigureAwait(false)) ids.Add(Guid.ParseExact(reader.GetString(0), "D"));
+            return ids.AsReadOnly();
         }
         finally { _gate.Release(); }
     }

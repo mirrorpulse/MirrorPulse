@@ -135,23 +135,72 @@ public sealed partial class MirrorPulseJournalCoalescingExecutorTests
     }
 
     [TestMethod]
-    public async Task KeepRemoteMembershipInsertFailureRollsBackTheWholeOriginalGroup()
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task KeepRemoteMembershipInsertFailureRollsBackTheWholeOriginalGroup(bool acceptCommand)
     {
         using var fixture = new Fixture(MirrorPulseCoalescedEffect.UpdateFile); var remote = new FileRemote(fixture);
         await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
         var (previous, request) = await RejectWithoutVersionMetadataAsync(catalog, fixture, remote);
         var selected = await catalog.PrepareCoalescedConflictRemoteObservationAsync(previous[0], fixture.Plan.ItemId, fixture.Plan.FinalPath, request);
-        Guid command = Guid.NewGuid(); await catalog.SaveUserCommandAsync(new(command, "keepremote", selected.SelectedConflictIds[0].ToString("D"), "pending"));
+        Guid command = Guid.NewGuid();
+        if (!acceptCommand)
+            await catalog.SaveUserCommandAsync(new(command, "keepremote", selected.SelectedConflictIds[0].ToString("D"), "pending"));
         var source = KeepRemoteSource(fixture, selected);
         await using var connection = ObservationFaultConnection(fixture); await connection.OpenAsync(); await using var fault = connection.CreateCommand();
         fault.CommandText = "CREATE TRIGGER reject_keep_remote_member BEFORE INSERT ON conflict_keep_remote_members WHEN NEW.ordinal=1 BEGIN SELECT RAISE(ABORT,'actual member insert fault'); END;";
         await fault.ExecuteNonQueryAsync();
-        await Assert.ThrowsExactlyAsync<SqliteException>(() => catalog.PrepareConflictKeepRemoteAsync(command, selected.SelectedConflictIds[0], fixture.Plan.ItemId, fixture.Plan.FinalPath, source, fixture.Content));
+        await Assert.ThrowsExactlyAsync<SqliteException>(PrepareAsync);
         Assert.IsNull(await catalog.ReadConflictKeepRemoteAsync(command));
+        Assert.AreEqual(acceptCommand ? null : "pending", (await catalog.ReadUserCommandAsync(command))?.State);
+        Assert.IsEmpty(await catalog.ReadPendingConflictKeepRemotePreparationsAsync());
         foreach (var original in fixture.Plan.Members) Assert.IsNull(await catalog.ReadConflictKeepRemoteOwnerAsync(original.OperationId));
         Assert.HasCount(fixture.Plan.Members.Count, await catalog.ReadUploadConflictsAsync());
         fault.CommandText = "DROP TRIGGER reject_keep_remote_member;"; await fault.ExecuteNonQueryAsync();
-        Assert.IsNotNull(await catalog.PrepareConflictKeepRemoteAsync(command, selected.SelectedConflictIds[0], fixture.Plan.ItemId, fixture.Plan.FinalPath, source, fixture.Content));
+        var prepared = await PrepareAsync();
+        Assert.AreEqual(command, prepared.Intent.CommandId);
+        Assert.AreEqual("pending", (await catalog.ReadUserCommandAsync(command))?.State);
+        CollectionAssert.AreEqual(new[] { command }, (await catalog.ReadPendingConflictKeepRemotePreparationsAsync()).ToArray());
+        Assert.IsEmpty(await catalog.ReadPendingConflictKeepRemotePreparationsAsync(command));
+        Assert.AreEqual(JsonSerializer.Serialize(prepared), JsonSerializer.Serialize(await PrepareAsync()));
+
+        Task<MirrorPulseConflictKeepRemotePreparation> PrepareAsync() => acceptCommand
+            ? catalog.AcceptConflictKeepRemoteAsync(command, selected.SelectedConflictIds[0], fixture.Plan.ItemId, fixture.Plan.FinalPath, source, fixture.Content)
+            : catalog.PrepareConflictKeepRemoteAsync(command, selected.SelectedConflictIds[0], fixture.Plan.ItemId, fixture.Plan.FinalPath, source, fixture.Content);
+    }
+
+    [TestMethod]
+    [DataRow("changed-source")]
+    [DataRow("command-id-reuse")]
+    public async Task KeepRemoteAcceptanceFailureRetainsOriginalCommandAndLeavesTheGroupUnowned(string failure)
+    {
+        using var fixture = new Fixture(MirrorPulseCoalescedEffect.UpdateFile);
+        var remote = new FileRemote(fixture);
+        await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        var (previous, request) = await RejectWithoutVersionMetadataAsync(catalog, fixture, remote);
+        var selected = await catalog.PrepareCoalescedConflictRemoteObservationAsync(previous[0], fixture.Plan.ItemId, fixture.Plan.FinalPath, request);
+        Guid command = Guid.NewGuid();
+        var source = KeepRemoteSource(fixture, selected);
+        MirrorPulseUserCommandRecord? original = null;
+        if (failure == "command-id-reuse")
+        {
+            original = new(command, "retry", selected.SelectedConflictIds[0].ToString("D"), "failed");
+            await catalog.SaveUserCommandAsync(original);
+        }
+        else source = source with { RemoteRevision = "a-different-selected-revision" };
+
+        Task<MirrorPulseConflictKeepRemotePreparation> AcceptAsync() => catalog.AcceptConflictKeepRemoteAsync(command,
+            selected.SelectedConflictIds[0], fixture.Plan.ItemId, fixture.Plan.FinalPath, source, fixture.Content);
+        if (failure == "command-id-reuse") await Assert.ThrowsExactlyAsync<SqliteException>(AcceptAsync);
+        else await Assert.ThrowsExactlyAsync<InvalidDataException>(AcceptAsync);
+
+        Assert.AreEqual(original, await catalog.ReadUserCommandAsync(command));
+        Assert.IsNull(await catalog.ReadConflictKeepRemoteAsync(command));
+        Assert.IsEmpty(await catalog.ReadPendingConflictKeepRemotePreparationsAsync());
+        foreach (var member in fixture.Plan.Members)
+            Assert.IsNull(await catalog.ReadConflictKeepRemoteOwnerAsync(member.OperationId));
+        Assert.HasCount(fixture.Plan.Members.Count, await catalog.ReadUploadConflictsAsync());
+        Assert.IsEmpty(remote.Writes);
     }
 
     [TestMethod]

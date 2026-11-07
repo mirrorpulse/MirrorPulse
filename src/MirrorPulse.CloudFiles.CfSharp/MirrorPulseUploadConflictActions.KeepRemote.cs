@@ -40,8 +40,7 @@ public sealed partial class MirrorPulseUploadConflictActions
         if (content.UploadBinding.PreviousPlaceholderIdentity is null)
             throw new InvalidOperationException("KeepRemote requires the original resident placeholder.");
         Guid command = Guid.NewGuid();
-        await _catalog.SaveUserCommandAsync(new(command, "keepremote", conflict.ConflictId.ToString("D"), "pending"), token).ConfigureAwait(false);
-        await _catalog.PrepareConflictKeepRemoteAsync(command, conflict.ConflictId, group.ItemId, conflict.RelativePath,
+        await _catalog.AcceptConflictKeepRemoteAsync(command, conflict.ConflictId, group.ItemId, conflict.RelativePath,
             source, content, token).ConfigureAwait(false);
         return await ExecuteKeepRemoteAdmittedAsync(command, admittedRoot, token).ConfigureAwait(false);
     }
