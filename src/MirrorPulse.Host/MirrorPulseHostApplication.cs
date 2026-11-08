@@ -1232,7 +1232,7 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
         return await ReadStatusAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task<MirrorPulseAppStatusResponse> ResolveConflictAsync(
+    private async Task<MirrorPulseAppStatusResponse> ResolveConflictCoreAsync(
         Guid conflictId,
         MirrorPulseConflictAction action,
         CancellationToken cancellationToken)

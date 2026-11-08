@@ -1733,13 +1733,16 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             MirrorPulseConflictAction action,
             CancellationToken cancellationToken)
         {
-            ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
-            var service = _conflictActions ?? throw new InvalidOperationException("The upload conflict action service has not started.");
-            await using var admission = await service.RetainRootAsync(conflictId, action, cancellationToken).ConfigureAwait(false);
-            return await MirrorPulseUploadConflictActions.RetryKeepRemoteProtectionLossAsync(() =>
-                WithInstanceLibraryAsync(admission.Conflict.InstanceId, token =>
-                    (_conflictActions ?? throw new InvalidOperationException("The upload conflict action service has not started."))
-                        .ApplyRetainedAsync(admission, action, token), cancellationToken)).ConfigureAwait(false);
+            return await MirrorPulseConflictCommandDiagnostics.AtStageAsync(MirrorPulseConflictCommandStage.Admission, async () =>
+            {
+                ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
+                var service = _conflictActions ?? throw new InvalidOperationException("The upload conflict action service has not started.");
+                await using var admission = await service.RetainRootAsync(conflictId, action, cancellationToken).ConfigureAwait(false);
+                return await MirrorPulseUploadConflictActions.RetryKeepRemoteProtectionLossAsync(() =>
+                    WithInstanceLibraryAsync(admission.Conflict.InstanceId, token =>
+                        (_conflictActions ?? throw new InvalidOperationException("The upload conflict action service has not started."))
+                            .ApplyRetainedAsync(admission, action, token), cancellationToken)).ConfigureAwait(false);
+            }).ConfigureAwait(false);
         }
 
         public async ValueTask<MirrorPulseRemoteDeleteResolution> RecoverRemoteDeleteResolutionAsync(Guid commandId, CancellationToken cancellationToken)

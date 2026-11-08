@@ -28,8 +28,8 @@ function Invoke-CliCoalescingChoice {
         $errorCode='unavailable'
         try{
             $failure=$raw|ConvertFrom-Json -ErrorAction Stop
-            if($failure.kind -ceq 'error' -and $failure.error.code -cmatch '^[A-Za-z][A-Za-z0-9_-]{0,63}$'){
-                $errorCode=$failure.error.code
+            if($failure.kind -ceq 'error' -and $failure.code -cmatch '^[A-Za-z][A-Za-z0-9._-]{0,127}$'){
+                $errorCode=$failure.code
             }
         }catch{}
         throw "The real isolated $Action command was refused (exit $code, code $errorCode)."

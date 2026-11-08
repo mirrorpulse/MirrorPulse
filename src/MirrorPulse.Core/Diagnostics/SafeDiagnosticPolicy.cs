@@ -54,6 +54,7 @@ public static class SafeDiagnosticPolicy
         ["RemotePollFailed"] = "Remote polling failed.",
         ["TransferComplete"] = "The transfer completed.",
         ["TransferCommandFailed"] = "A transfer command stopped at a retained execution boundary.",
+        ["ConflictCommandFailed"] = "A conflict command stopped at a retained execution boundary.",
         ["sync.failed"] = "Synchronization failed.",
     };
 
@@ -129,6 +130,7 @@ public static class SafeDiagnosticPolicy
                 "hresult" => value.Length == 8 && uint.TryParse(value, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out uint number)
                     ? number.ToString("X8", CultureInfo.InvariantCulture) : null,
                 "transferCommandPhase" => Enum.TryParse(value, out MirrorPulseTransferCommandPhase transferPhase) && Enum.IsDefined(transferPhase) && value == transferPhase.ToString() ? value : null,
+                "conflictCommandStage" => Enum.TryParse(value, out MirrorPulseConflictCommandStage conflictStage) && Enum.IsDefined(conflictStage) && value == conflictStage.ToString() ? value : null,
                 "transferFailureBoundary" => Enum.TryParse(value, out MirrorPulseTransferFailureBoundary transferBoundary) && Enum.IsDefined(transferBoundary) && value == transferBoundary.ToString() ? value : null,
                 "transferFailureKind" => value is "Native" or "Disposed" or "InvalidData" or "InvalidOperation" or "Authorization" or "Cancelled" or "IO" or "Argument" or "Other" ? value : null,
                 "journalReadStage" => Enum.TryParse(value, out MirrorPulseJournalReadStage journalStage) && Enum.IsDefined(journalStage) && value == journalStage.ToString() ? value : null,

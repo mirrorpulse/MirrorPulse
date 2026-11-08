@@ -2,6 +2,7 @@ using System.Runtime.Versioning;
 using CfSharp;
 using MirrorPulse.Core.Conflicts;
 using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.Diagnostics;
 using MirrorPulse.Core.State;
 using MirrorPulse.Core.Sync;
 
@@ -48,14 +49,23 @@ public sealed partial class MirrorPulseUploadConflictActions
         if (target.InstanceId != group.InstanceId || target.RootKey != group.RootKey || target.ItemId != group.ItemId ||
             target.RejectedEffect is not { Kind: MirrorPulseWorkerChangeKind.ContentUpdate, IsDirectory: false })
             throw new InvalidDataException("KeepRemote lost the original rejected file update.");
-        var source = await _namespaceExecution!.RunNormalUserOperationAsync(() => _remoteCopies!.CaptureSourceAsync(conflict,
-            target.RootKey, target.RemoteRelativePath, token)).ConfigureAwait(false);
-        var content = await CaptureGroupKeepLocalContentAsync(group, admittedRoot, token).ConfigureAwait(false);
+        var source = await MirrorPulseConflictCommandDiagnostics.AtStageAsync(MirrorPulseConflictCommandStage.RemoteSource,
+            () =>
+            {
+                if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100)) throw new PlatformNotSupportedException();
+                return _namespaceExecution!.RunNormalUserOperationAsync(() => _remoteCopies!.CaptureSourceAsync(conflict,
+                    target.RootKey, target.RemoteRelativePath, token));
+            }).ConfigureAwait(false);
+        var content = await MirrorPulseConflictCommandDiagnostics.AtStageAsync(MirrorPulseConflictCommandStage.LocalContent,
+            () => CaptureGroupKeepLocalContentAsync(group, admittedRoot, token)).ConfigureAwait(false);
         if (content.UploadBinding.PreviousPlaceholderIdentity is null)
             throw new InvalidOperationException("KeepRemote requires the original resident placeholder.");
         Guid command = Guid.NewGuid();
-        await _catalog.AcceptConflictKeepRemoteAsync(command, conflict.ConflictId, group.ItemId, conflict.RelativePath,
-            source, content, token).ConfigureAwait(false);
+        await MirrorPulseConflictCommandDiagnostics.AtStageAsync(MirrorPulseConflictCommandStage.Acceptance, async () =>
+        {
+            _ = await _catalog.AcceptConflictKeepRemoteAsync(command, conflict.ConflictId, group.ItemId, conflict.RelativePath,
+                source, content, token).ConfigureAwait(false);
+        }).ConfigureAwait(false);
         if (KeepRemotePrepared is not null) await KeepRemotePrepared(token).ConfigureAwait(false);
         return await ExecuteKeepRemoteOrReportPendingAsync(command, conflict.ConflictId, admittedRoot, token).ConfigureAwait(false);
     }
@@ -103,16 +113,19 @@ public sealed partial class MirrorPulseUploadConflictActions
         var actor = _namespaceActor!;
         var fileSystem = _fileSystem!;
         var preserver = new MirrorPulseConflictKeepRemotePreserver(_catalog, _copies, _remoteCopies!);
-        await using var copies = await execution.RunNormalUserOperationAsync(() => preserver.RetainAsync(commandId,
-            (original, stop) => new(OpenKeepRemoteSourceAsync(original, stop)), token)).ConfigureAwait(false);
+        await using var copies = await MirrorPulseConflictCommandDiagnostics.AtStageAsync(MirrorPulseConflictCommandStage.CopyRetention,
+            () => execution.RunNormalUserOperationAsync(() => preserver.RetainAsync(commandId,
+                (original, stop) => new(OpenKeepRemoteSourceAsync(original, stop)), token))).ConfigureAwait(false);
         var settled = await actor.RunAsync(async stop =>
         {
             var journal = new MirrorPulseConflictKeepRemoteJournal(_state.OpenStore, _catalog, _router, _feed);
             var first = await _catalog.ReadConflictKeepRemoteFileStartAsync(commandId, stop).ConfigureAwait(false);
             if (first is null)
             {
-                await execution.RunNormalUserOperationAsync(() => journal.RetainAsync(copies, stop)).ConfigureAwait(false);
-                await RetainKeepRemoteStartAsync(root.RootId, intent, stop).ConfigureAwait(false);
+                await MirrorPulseConflictCommandDiagnostics.AtStageAsync(MirrorPulseConflictCommandStage.OriginalJournal,
+                    () => execution.RunNormalUserOperationAsync(() => journal.RetainAsync(copies, stop))).ConfigureAwait(false);
+                await MirrorPulseConflictCommandDiagnostics.AtStageAsync(MirrorPulseConflictCommandStage.FileStart,
+                    () => RetainKeepRemoteStartAsync(root.RootId, intent, stop)).ConfigureAwait(false);
                 if (KeepRemoteFileStarted is not null) await KeepRemoteFileStarted(stop).ConfigureAwait(false);
             }
 
@@ -124,12 +137,19 @@ public sealed partial class MirrorPulseUploadConflictActions
                 var roles = await _catalog.ReadConflictKeepRemoteRoleAttemptsAsync(commandId, stop).ConfigureAwait(false);
                 if (roles.Count == 0 ? action.RoleSid != execution.RoleSid.Value :
                     roles[^1].Result is null || roles[^1].Start.NextAction.RoleSid != execution.RoleSid.Value)
-                    await new MirrorPulseConflictKeepRemoteResidentRoleRecovery(fileSystem, _catalog, _state, _feed, _router, execution, actor)
-                        .RecoverAsync(root.RootId, copies, stop).ConfigureAwait(false);
-                await new MirrorPulseConflictKeepRemoteResidentWriter(fileSystem, _catalog, _state, _feed, _router, execution, actor)
-                    .CopyAsync(root.RootId, copies, stop).ConfigureAwait(false);
-                var native = await new MirrorPulseConflictKeepRemoteResidentConfirmation(fileSystem, _catalog, _state, _feed, _router, execution, actor)
-                    .ConfirmAsync(root.RootId, copies, stop).ConfigureAwait(false);
+                    await MirrorPulseConflictCommandDiagnostics.AtStageAsync(MirrorPulseConflictCommandStage.RoleRecovery, async () =>
+                    {
+                        _ = await new MirrorPulseConflictKeepRemoteResidentRoleRecovery(fileSystem, _catalog, _state, _feed, _router, execution, actor)
+                            .RecoverAsync(root.RootId, copies, stop).ConfigureAwait(false);
+                    }).ConfigureAwait(false);
+                await MirrorPulseConflictCommandDiagnostics.AtStageAsync(MirrorPulseConflictCommandStage.ContentWrite, async () =>
+                {
+                    _ = await new MirrorPulseConflictKeepRemoteResidentWriter(fileSystem, _catalog, _state, _feed, _router, execution, actor)
+                        .CopyAsync(root.RootId, copies, stop).ConfigureAwait(false);
+                }).ConfigureAwait(false);
+                var native = await MirrorPulseConflictCommandDiagnostics.AtStageAsync(MirrorPulseConflictCommandStage.NativeConfirmation,
+                    async () => await new MirrorPulseConflictKeepRemoteResidentConfirmation(fileSystem, _catalog, _state, _feed, _router, execution, actor)
+                        .ConfirmAsync(root.RootId, copies, stop).ConfigureAwait(false)).ConfigureAwait(false);
                 if (native.Receipt.Outcome == MirrorPulseContentConfirmationOutcome.ProtectionLost)
                     throw new KeepRemoteProtectionLostException();
                 if (!native.Receipt.MayAcknowledge)
@@ -138,12 +158,14 @@ public sealed partial class MirrorPulseUploadConflictActions
                 {
                     RestoreRegisteredDescriptor = true
                 };
-                var restored = await restorer.RestoreAsync(root.RootId, copies, stop).ConfigureAwait(false);
+                var restored = await MirrorPulseConflictCommandDiagnostics.AtStageAsync(MirrorPulseConflictCommandStage.AccessRestoration,
+                    async () => await restorer.RestoreAsync(root.RootId, copies, stop).ConfigureAwait(false)).ConfigureAwait(false);
                 if (!restored.ProductVerified)
                     throw new IOException("KeepRemote could not verify restored access to the original file.");
             }
-            return await new MirrorPulseConflictKeepRemoteResidentAcknowledgement(_catalog, _state, _feed, _router, execution, actor)
-                .AcknowledgeAsync(root.RootId, copies, stop).ConfigureAwait(false);
+            return await MirrorPulseConflictCommandDiagnostics.AtStageAsync(MirrorPulseConflictCommandStage.Acknowledgement,
+                async () => await new MirrorPulseConflictKeepRemoteResidentAcknowledgement(_catalog, _state, _feed, _router, execution, actor)
+                    .AcknowledgeAsync(root.RootId, copies, stop).ConfigureAwait(false)).ConfigureAwait(false);
         }, token).ConfigureAwait(false);
 
         foreach (Guid conflict in intent.ConflictIds) _conflictCenter?.Remove(conflict);
