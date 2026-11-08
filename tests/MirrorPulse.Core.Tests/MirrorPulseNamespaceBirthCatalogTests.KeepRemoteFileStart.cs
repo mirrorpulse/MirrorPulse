@@ -193,7 +193,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             setup.Preparation.Intent.CommandId, setup.StoreVolume, setup.StoreFileId, setup.Original, setup.Parent, setup.StartedAt, token);
 
     private static async Task<KeepRemoteFileSetup> PrepareKeepRemoteFileAsync(MirrorPulseProductCatalog catalog, bool retainJournal = true,
-        string? backendRemoteId = null)
+        string? backendRemoteId = null, bool moveAcceptedBeforeConflict = false, bool rejectMove = false)
     {
         var member = await PrepareMovableMemberAsync(catalog); var root = await AddIdentityTopologyAsync(catalog, member.Move.RootId);
         var original = (await catalog.ReadNamespaceMemberProtectionSnapshotAsync(member.Member.MemberId))!;
@@ -203,25 +203,38 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         var content = new MirrorPulseCoalescingContent(bytes.Length, hash,
             new(original.Context.Member.LocalObject, MirrorPulseContentPreparation.ReplacePlaceholderIdentity, "AQID"));
         DateTimeOffset now = DateTimeOffset.UtcNow;
+        bool movedProgram = moveAcceptedBeforeConflict || rejectMove;
         MirrorPulseWorkerChangeCommand[] window = Enumerable.Range(1, 2).Select(sequence => new MirrorPulseWorkerChangeCommand(Guid.NewGuid(), sequence,
-            root.InstanceId, root.UniquenessKey, MirrorPulseWorkerChangeKind.ContentUpdate, path, null, null, false,
+            root.InstanceId, root.UniquenessKey, movedProgram && sequence == 1 ? MirrorPulseWorkerChangeKind.Move : MirrorPulseWorkerChangeKind.ContentUpdate,
+            path, movedProgram && sequence == 1 ? root.UniquenessKey : null,
+            movedProgram && sequence == 1 ? path + ".before" : null, false,
             original.Identity.ItemId!.Value, now.AddTicks(sequence))).ToArray();
         var plan = MirrorPulseJournalCoalescingPlanner.TryPlan(window, original.Identity.ItemId!.Value, 100, new HashSet<Guid>())!;
         await catalog.PrepareJournalCoalescingAndExecutionAsync(plan, window, "baseline", content);
-        var rejected = await catalog.PrepareJournalCoalescingMutationAsync(plan.PlanId, 0);
+        string baseline = "baseline";
+        if (moveAcceptedBeforeConflict)
+        {
+            var move = await catalog.PrepareJournalCoalescingMutationAsync(plan.PlanId, 0);
+            await new MirrorPulseMutationExecutor(catalog).ExecutePreparedAsync(move,
+                _ => ValueTask.FromResult<string?>("moved-baseline"), (_, _) => ValueTask.CompletedTask, CancellationToken.None);
+            Assert.AreEqual(MirrorPulseMutationState.Acknowledged, (await catalog.ReadMutationAsync(move.Intent.OperationId))!.State);
+            baseline = "moved-baseline";
+        }
+        var rejected = await catalog.PrepareJournalCoalescingMutationAsync(plan.PlanId, moveAcceptedBeforeConflict ? 1 : 0);
         await Assert.ThrowsExactlyAsync<MirrorPulseWorkerMutationConflictException>(() => new MirrorPulseMutationExecutor(catalog).ExecutePreparedAsync(rejected,
-            _ => ValueTask.FromException<string?>(new MirrorPulseWorkerMutationConflictException("baseline", "selected")),
+            _ => ValueTask.FromException<string?>(new MirrorPulseWorkerMutationConflictException(baseline, "selected")),
             (_, _) => ValueTask.CompletedTask, CancellationToken.None).AsTask());
         Guid conflict = Guid.Empty;
         foreach (var row in plan.Members)
         {
             Guid id = Guid.NewGuid(); if (conflict == Guid.Empty) conflict = id;
             await catalog.SaveUploadConflictAsync(new(id, root.InstanceId, row.OperationId.ToString("D"), path,
-                MirrorPulseConflictReason.StaleRemoteRevision, MirrorPulseVersionComparison.Diverged, "baseline", "selected", DateTimeOffset.UtcNow));
+                MirrorPulseConflictReason.StaleRemoteRevision, MirrorPulseVersionComparison.Diverged, baseline, "selected", DateTimeOffset.UtcNow));
         }
         Guid command = Guid.NewGuid(); await catalog.SaveUserCommandAsync(new(command, "keepremote", conflict.ToString("D"), "pending"));
         var preparation = await catalog.PrepareConflictKeepRemoteAsync(command, conflict, plan.ItemId, path,
-            new(1, root.InstanceId.ToString(), root.UniquenessKey, path, backendRemoteId ?? original.Identity.RemoteId!, "selected", bytes.Length), content);
+            new(1, root.InstanceId.ToString(), root.UniquenessKey, rejected.Intent.Kind == MirrorPulseWorkerChangeKind.Move ? rejected.Intent.PreviousRelativePath! : path,
+                backendRemoteId ?? original.Identity.RemoteId!, "selected", bytes.Length), content);
         var copy = new MirrorPulseConflictKeepBothCopy(bytes.Length, hash);
         await catalog.RecordConflictKeepRemoteLocalPreservationAsync(command, new(copy)); await catalog.RecordConflictKeepRemoteRemoteCopyAsync(command, copy);
         preparation = (await catalog.ReadConflictKeepRemoteAsync(command))!;

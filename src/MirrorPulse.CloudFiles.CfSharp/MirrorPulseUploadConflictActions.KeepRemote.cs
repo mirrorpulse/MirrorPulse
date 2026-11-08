@@ -39,16 +39,15 @@ public sealed partial class MirrorPulseUploadConflictActions
     {
         if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100)) throw new PlatformNotSupportedException();
         RequireKeepRemoteService();
-        if (group.Effect != MirrorPulseCoalescedEffect.UpdateFile)
-            throw new NotSupportedException("This KeepRemote effect requires its own protected execution.");
         var root = _router!.GetRegistration(group.InstanceId, group.RootKey);
         RequireKeepRemoteRoot(root, admittedRoot);
         if (!_mayDispatch(root.InstanceId))
             throw new InvalidOperationException("KeepRemote requires an available original Adapter instance.");
         var target = await _catalog.ReadCoalescedConflictRemoteTargetAsync(conflict.ConflictId, token).ConfigureAwait(false);
-        if (target.InstanceId != group.InstanceId || target.RootKey != group.RootKey || target.ItemId != group.ItemId ||
-            target.RejectedEffect is not { Kind: MirrorPulseWorkerChangeKind.ContentUpdate, IsDirectory: false })
+        if (target.InstanceId != group.InstanceId || target.RootKey != group.RootKey || target.ItemId != group.ItemId)
             throw new InvalidDataException("KeepRemote lost the original rejected file update.");
+        if (target.RejectedEffect is not { Kind: MirrorPulseWorkerChangeKind.ContentUpdate, IsDirectory: false })
+            throw new NotSupportedException("This KeepRemote effect requires its own protected execution.");
         var source = await MirrorPulseConflictCommandDiagnostics.AtStageAsync(MirrorPulseConflictCommandStage.RemoteSource,
             () =>
             {

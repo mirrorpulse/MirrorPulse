@@ -192,7 +192,8 @@ public sealed partial class MirrorPulseProductCatalog
         // CfSharp boundary; those identifiers can differ while the native object stays the same.
         if (start.Version != 1 || start.StoreFileId == Guid.Empty || start.StartedAt < journal.ObservedAt ||
             start.JournalBindingSha256 != Convert.ToHexString(SHA256.HashData(KeepRemoteJournalPayload(journal))) ||
-            plan.Effect != MirrorPulseCoalescedEffect.UpdateFile || intent.LocalContent is null ||
+            plan.InstanceId != intent.InstanceId || plan.RootKey != intent.RemoteSource.RootKey || plan.ItemId != intent.ItemId ||
+            intent.RejectedEffect is not { Kind: MirrorPulseWorkerChangeKind.ContentUpdate, IsDirectory: false } || intent.LocalContent is null ||
             preparation.LocalPreservation?.Copy is null || preparation.RemoteCopy is null ||
             child?.Context?.Member is not { IsDirectory: false, RootId: not null } member || child.Identity is null ||
             child.Context.Location is null || child.Context.Protection is null || child.Context.Verification is null ||
@@ -203,6 +204,9 @@ public sealed partial class MirrorPulseProductCatalog
             child.Context.Location.ParentMemberId != parentMember.MemberId || child.Context.Location.MemberId != member.MemberId ||
             child.Context.Protection.RoleSid != parent.Context.Protection.RoleSid || member.OwnerSid != parentMember.OwnerSid)
             throw new InvalidDataException("A file start requires the complete original UpdateFile decision, copies, journal, object, identity and direct parent.");
+        // The retained preparation already revalidates the exact current rejected program.
+        // A prior Move can be acknowledged while this same group's ContentUpdate is rejected;
+        // preserve that prefix instead of treating its raw plan kind as a new file operation.
     }
 
     private async Task RequireKeepRemoteFileStartRootAsync(MirrorPulseConflictKeepRemoteFileStart start,

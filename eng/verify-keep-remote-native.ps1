@@ -15,7 +15,7 @@ if ($selected.Count -eq 0 -or @($selected | Where-Object { $_ -cnotmatch '^Mirro
     throw 'Require the exact declared KeepRemote native methods.'
 }
 $count = Get-RequiredTestExecutionCount -Catalog $catalog -Names $selected
-if ($count -lt 1 -or $count -gt 27) { throw 'Review an empty or expanded diagnostic boundary before execution.' }
+if ($count -lt 1 -or $count -gt 28) { throw 'Review an empty or expanded diagnostic boundary before execution.' }
 $boundary = 'KeepRemote'
 $filter = 'FullyQualifiedName~NativeKeepRemote'
 if ($Scope -eq 'access-journal') {

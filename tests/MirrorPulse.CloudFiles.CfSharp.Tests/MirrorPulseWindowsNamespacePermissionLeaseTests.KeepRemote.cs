@@ -109,12 +109,12 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             await using var fileSystem = new MirrorPulseCloudFileSystemBuilder(paths).WithStateStore(state).WithContentProvider(provider).Build();
             await role.RunNamespaceOperationAsync(() => fileSystem.StartAsync(token).AsTask());
             await using var catalog = await MirrorPulseProductCatalog.OpenAsync(paths, token);
-            var file = fileSystem.GetFile("Docs/original.bin");
+            var file = fileSystem.GetFile(scenario == "post-move" ? "Docs/before.bin" : "Docs/original.bin");
             Directory.CreateDirectory(fileSystem.GetDirectory("Docs").FullPath);
             await File.WriteAllBytesAsync(file.FullPath, [1, 2, 3], token);
             var originals = new List<MirrorPulseNamespacePermissionPreparation>();
             var members = new Dictionary<Guid, MirrorPulseNamespaceMemberRegistration>();
-            if (scenario is "host-command" or "host-process" or "host-preparation" or "access-journal-qualification")
+            if (scenario is "host-command" or "host-process" or "host-preparation" or "access-journal-qualification" or "post-move")
             {
                 foreach (CloudItem item in new CloudItem[] { fileSystem.Root, fileSystem.GetDirectory("Docs"), file })
                     SetProtectedFixtureUserOwner(item, caller.User!);
@@ -132,17 +132,27 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 await SaveAcceptedIdentityFixtureTopologyAsync(catalog, root, token);
                 await RegisterNativeOriginalMembersAsync(fileSystem, catalog, router, role, originals, members, actor, token);
             }
+            await using var postMovePermissions = scenario == "post-move" ? new MirrorPulseNamespacePermissionCoordinator(catalog) : null;
+            (MirrorPulseNamespaceAnchorProtection Guard, IReadOnlyList<MirrorPulseNamespaceStartupRoot> Roots)? postMoveStartup = postMovePermissions is not null
+                ? await new MirrorPulseNamespaceStartupCoordinator(fileSystem, catalog, router, role, actor, scheduler,
+                    postMovePermissions, work).StartAsync(token) : null;
+            await using var postMoveGuard = postMoveStartup?.Guard;
+            if (postMoveStartup is not null)
+                Assert.IsTrue(postMoveStartup.Value.Roots.Single().Admitted);
             await using var feed = fileSystem.CreateLocalChangeFeed(new() { BatchSize = 1 });
             await feed.StartAsync(token);
             var journal = new MirrorPulseJournalUploadSource(feed, router, catalog, _ => true);
             Guid itemId = (await file.InspectAsync(token)).ItemId!.Value;
-            await File.AppendAllTextAsync(file.FullPath, " first local edit", token);
+            if (scenario == "post-move")
+                file = await MoveKeepRemoteOriginalAsync(fileSystem, state, catalog, router, role, actor, file, token);
+            else
+                await File.AppendAllTextAsync(file.FullPath, " first local edit", token);
             await ReadEditedWindowAsync(1);
             await File.AppendAllTextAsync(file.FullPath, " latest local edit", token);
             var window = await ReadEditedWindowAsync(2);
             var plan = MirrorPulseJournalCoalescingPlanner.TryPlan(window.CompleteWindow!, itemId, window.WindowUpperSequence, new HashSet<Guid>());
             Assert.IsNotNull(plan);
-            Assert.AreEqual(MirrorPulseCoalescedEffect.UpdateFile, plan.Effect);
+            Assert.AreEqual(scenario == "post-move" ? MirrorPulseCoalescedEffect.MoveAndUpdateFile : MirrorPulseCoalescedEffect.UpdateFile, plan.Effect);
             Assert.HasCount(2, plan.Members);
             byte[] local = await File.ReadAllBytesAsync(file.FullPath, token);
             var snapshot = await file.InspectAsync(token);
@@ -162,16 +172,25 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             byte[] selectedBytes = new byte[selectedLength];
             new Random(518).NextBytes(selectedBytes);
             remote.Seed(selectedBytes);
+            IMirrorPulseWorkerMutationTransport mutations = scenario == "post-move" ? new KeepRemoteAcceptedMove(remote) : remote;
             await Assert.ThrowsExactlyAsync<MirrorPulseWorkerMutationConflictException>(() =>
-                new MirrorPulseJournalCoalescingExecutor(catalog, remote, remote, remote, new(remote)).ExecuteAsync(plan.PlanId,
+                new MirrorPulseJournalCoalescingExecutor(catalog, remote, remote, mutations, new(remote)).ExecuteAsync(plan.PlanId,
                     (_, _) => ValueTask.FromResult<Stream>(new MemoryStream(local, writable: false)), token).AsTask());
             Guid conflictId = Guid.Empty;
             foreach (var member in plan.Members)
             {
                 var conflict = new MirrorPulseConflictRecord(Guid.NewGuid(), root.InstanceId, member.OperationId.ToString("D"), "Docs/original.bin",
-                    MirrorPulseConflictReason.StaleRemoteRevision, MirrorPulseVersionComparison.Diverged, "prior-remote", "selected-remote", DateTimeOffset.UtcNow);
+                    MirrorPulseConflictReason.StaleRemoteRevision, MirrorPulseVersionComparison.Diverged,
+                    scenario == "post-move" ? "accepted-move" : "prior-remote", "selected-remote", DateTimeOffset.UtcNow);
                 await catalog.SaveUploadConflictAsync(conflict, token);
                 conflictId = conflict.ConflictId;
+            }
+            if (scenario == "post-move")
+            {
+                await VerifyPostMoveKeepRemoteAsync(paths, state, catalog, router, role, actor, scheduler, work,
+                    fileSystem, feed, remote, file, conflictId, plan, snapshot, local, selectedBytes, token);
+                Assert.AreEqual(0, provider.Reads);
+                return;
             }
             if (scenario is "host-preparation")
             {

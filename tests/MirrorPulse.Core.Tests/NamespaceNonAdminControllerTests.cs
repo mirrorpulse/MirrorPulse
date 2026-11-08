@@ -69,6 +69,7 @@ public sealed partial class NamespaceNonAdminControllerTests
                     'NativeKeepRemoteCfSharpAccessOnlyPreservesOriginalJournalAndRealSameLengthWrite',
                     'NativeKeepRemoteDefaultCommandResumesFirstPermissionIntentBeforeRootAudit',
                     'NativeKeepRemoteCurrentRoleRestoresItsRegisteredInheritedDescriptor',
+                    'NativeKeepRemoteAfterAcknowledgedMoveRetainsItsPrefixAndSettlesTheOriginalJournal',
                     'NativeKeepRemoteNewRoleResumesOriginalWriteAndConfirmsSelectedBytes',
                     'NativeKeepRemoteRestorationRetainsActualAccessResultsAndPreservesOrdinaryLaterEdits',
                     'NativeKeepRemoteRoleHandoffRecoversLostReadbackWithoutReapplyingContent')|ForEach-Object {$keepRemotePrefix+$_}
@@ -76,16 +77,16 @@ public sealed partial class NamespaceNonAdminControllerTests
                     $catalog=Get-Content -Raw (Join-Path (Split-Path $Policy -Parent) 'test-suites.json')|ConvertFrom-Json
                     $names=@($catalog.required.namespace)
                     $prior=@($names|Where-Object {$_ -cnotin $keepRemote})
-                    if ($Count -ne 139 -or $names.Count -ne $Count -or $prior.Count -ne 125 -or
-                        @($keepRemote|Where-Object {$_ -cin $names}).Count -ne 14) {throw 'Require every explicit resident KeepRemote method and every prior method.'}
+                    if ($Count -ne 140 -or $names.Count -ne $Count -or $prior.Count -ne 125 -or
+                        @($keepRemote|Where-Object {$_ -cin $names}).Count -ne 15) {throw 'Require every explicit resident KeepRemote method and every prior method.'}
                     $actualRows=0
                     foreach($method in $keepRemote){$cases=$catalog.requiredCases.PSObject.Properties[$method];$actualRows+=if($null -eq $cases){1}else{@($cases.Value).Count}}
-                    if($actualRows -ne 27){throw 'The explicit native data rows and their controller deadlines must change together.'}
+                    if($actualRows -ne 28){throw 'The explicit native data rows and their controller deadlines must change together.'}
                     if ((Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 125 -TestNames $prior) -ne 5780000 -or
                         (Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 125 -TestNames $prior -Scope S06) -ne 5375000) {throw 'Retain the complete original catalog deadlines.'}
                     if ($Scenario -eq 'keep-remote-selected') {
-                        if ((Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $Count -TestNames $names) -ne 5780000+27*65000 -or
-                            (Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $Count -TestNames $names -Scope S06) -ne 5375000+27*65000) {throw 'Each actual data row owns its 65-second native deadline.'}
+                        if ((Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $Count -TestNames $names) -ne 5780000+28*65000 -or
+                            (Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $Count -TestNames $names -Scope S06) -ne 5375000+28*65000) {throw 'Each actual data row owns its 65-second native deadline.'}
                     } else {
                         $parameters=@{TestCount=$Count;TestNames=$names}
                         switch ($Scenario) {
@@ -380,9 +381,9 @@ public sealed partial class NamespaceNonAdminControllerTests
                     if ($Scenario -eq 'budget-rejected') {
                         if (-not $rejected) { throw 'An invalid or unbounded selection was accepted.' }
                     } else {
-                        $maximum=if ($Scenario -eq 'budget-catalog') {4755000+4*60000+10*60000+2*60000+65000+27*65000} else {1800000}
+                        $maximum=if ($Scenario -eq 'budget-catalog') {4755000+4*60000+10*60000+2*60000+65000+28*65000} else {1800000}
                         if ($rejected -or $budget -lt 600000 -or $budget -gt $maximum) { throw 'The whole-suite envelope is missing or unbounded.' }
-                        if ($Scenario -eq 'budget-catalog' -and $budget -ne 120000+($Count+51)*15000+18*30000+28*15000+6*45000+6*15000+4*45000+5*15000+6*45000+2*45000+2*45000+4*60000+10*60000+15000+2*45000+50000+13*15000+27*50000) {
+                        if ($Scenario -eq 'budget-catalog' -and $budget -ne 120000+($Count+51)*15000+18*30000+28*15000+6*45000+6*15000+4*45000+5*15000+6*45000+2*45000+2*45000+4*60000+10*60000+15000+2*45000+50000+13*15000+28*50000) {
                             throw 'The actual catalog lost a same/cross-instance transfer or one of its five retirement cutpoints.'
                         }
                         if ($Count -ge 52 -and $budget -le 600000) { throw 'The growing suite still has the obsolete fixed ten-minute envelope.' }

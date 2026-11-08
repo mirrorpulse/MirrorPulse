@@ -26,6 +26,7 @@ public sealed class DeferredP079GateTests
                 'NativeKeepRemoteIndependentRuntimeSettlesOriginalCommandBeforeReadmission',
                 'NativeKeepRemoteDefaultCommandResumesFirstPermissionIntentBeforeRootAudit',
                 'NativeKeepRemoteCurrentRoleRestoresItsRegisteredInheritedDescriptor',
+                'NativeKeepRemoteAfterAcknowledgedMoveRetainsItsPrefixAndSettlesTheOriginalJournal',
                 'NativeKeepRemoteNewRoleResumesOriginalWriteAndConfirmsSelectedBytes',
                 'NativeKeepRemoteRestorationRetainsActualAccessResultsAndPreservesOrdinaryLaterEdits',
                 'NativeKeepRemoteRoleHandoffRecoversLostReadbackWithoutReapplyingContent',
