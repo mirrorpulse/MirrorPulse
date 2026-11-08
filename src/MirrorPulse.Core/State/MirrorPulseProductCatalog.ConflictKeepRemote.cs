@@ -95,7 +95,7 @@ public sealed partial class MirrorPulseProductCatalog
         finally { _gate.Release(); }
     }
 
-    /// <summary>Lists decisions that still require ordinary root admission for their first file operation.</summary>
+    /// <summary>Lists unresolved decisions for recovery under ordinary root admission.</summary>
     public async Task<IReadOnlyList<Guid>> ReadPendingConflictKeepRemotePreparationsAsync(Guid? after = null, CancellationToken token = default)
     {
         await _gate.WaitAsync(token).ConfigureAwait(false);
@@ -107,7 +107,6 @@ public sealed partial class MirrorPulseProductCatalog
                 SELECT p.command_id FROM conflict_keep_remote_preparations p
                 JOIN user_commands u ON u.command_id=p.command_id
                 WHERE p.command_id>$after AND u.action='keepremote' AND u.state IN ('pending','failed')
-                    AND NOT EXISTS(SELECT 1 FROM conflict_keep_remote_file_starts s WHERE s.command_id=p.command_id)
                 ORDER BY p.command_id LIMIT 64;
                 """;
             query.Parameters.AddWithValue("$after", after?.ToString("D") ?? string.Empty);

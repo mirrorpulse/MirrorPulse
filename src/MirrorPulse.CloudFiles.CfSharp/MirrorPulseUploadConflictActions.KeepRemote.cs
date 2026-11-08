@@ -11,12 +11,26 @@ public sealed partial class MirrorPulseUploadConflictActions
 {
     private sealed class KeepRemoteProtectionLostException() : IOException("KeepRemote lost its protected SDK reference and requires fresh admission.");
 
+    internal Func<CancellationToken, ValueTask>? KeepRemotePrepared { get; init; }
     internal Func<CancellationToken, ValueTask>? KeepRemoteFileStarted { get; init; }
 
     internal static async ValueTask<T> RetryKeepRemoteProtectionLossAsync<T>(Func<ValueTask<T>> executeOnce)
     {
         try { return await executeOnce().ConfigureAwait(false); }
         catch (KeepRemoteProtectionLostException) { return await executeOnce().ConfigureAwait(false); }
+    }
+
+    internal static async ValueTask<T> RetryKeepRemoteReconciliationAsync<T>(Func<ValueTask<T>> execute,
+        Func<CancellationToken, ValueTask<bool>> reconcile, CancellationToken token)
+    {
+        for (int attempt = 0; ; attempt++)
+        {
+            try { return await execute().ConfigureAwait(false); }
+            catch (MirrorPulseKeepRemoteJournalDeferredException error) when (error.RequiresFullRescan && attempt < 3)
+            {
+                if (!await reconcile(token).ConfigureAwait(false)) throw;
+            }
+        }
     }
 
     private async ValueTask<MirrorPulseConflictResolution> PrepareKeepRemoteAdmittedAsync(MirrorPulseConflictRecord conflict,
@@ -42,7 +56,8 @@ public sealed partial class MirrorPulseUploadConflictActions
         Guid command = Guid.NewGuid();
         await _catalog.AcceptConflictKeepRemoteAsync(command, conflict.ConflictId, group.ItemId, conflict.RelativePath,
             source, content, token).ConfigureAwait(false);
-        return await ExecuteKeepRemoteAdmittedAsync(command, admittedRoot, token).ConfigureAwait(false);
+        if (KeepRemotePrepared is not null) await KeepRemotePrepared(token).ConfigureAwait(false);
+        return await ExecuteKeepRemoteOrReportPendingAsync(command, conflict.ConflictId, admittedRoot, token).ConfigureAwait(false);
     }
 
     internal async ValueTask<bool> RecoverKeepRemoteBeforeAuditAsync(RootRegistration root, CancellationToken token)
@@ -55,11 +70,23 @@ public sealed partial class MirrorPulseUploadConflictActions
         return true;
     }
 
-    private ValueTask<MirrorPulseConflictResolution> ExecuteKeepRemoteAdmittedAsync(Guid commandId, RootId? admittedRoot,
+    internal ValueTask<MirrorPulseConflictResolution> ExecuteKeepRemoteAdmittedAsync(Guid commandId, RootId? admittedRoot,
         CancellationToken token)
     {
         if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100)) throw new PlatformNotSupportedException();
         return ExecuteKeepRemoteOnSupportedWindowsAsync(commandId, admittedRoot, token);
+    }
+
+    private async ValueTask<MirrorPulseConflictResolution> ExecuteKeepRemoteOrReportPendingAsync(Guid commandId,
+        Guid conflictId, RootId? admittedRoot, CancellationToken token)
+    {
+        try { return await ExecuteKeepRemoteAdmittedAsync(commandId, admittedRoot, token).ConfigureAwait(false); }
+        catch (MirrorPulseKeepRemoteJournalDeferredException)
+        {
+            // The public result reads its state from the durable user command. The pump will
+            // settle metadata or reconcile the official feed before resuming this same command.
+            return new(commandId, conflictId, MirrorPulseConflictAction.KeepRemote, null, DateTimeOffset.UtcNow);
+        }
     }
 
     [SupportedOSPlatform("windows10.0.26100")]

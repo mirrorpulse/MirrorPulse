@@ -127,7 +127,9 @@ public sealed partial class MirrorPulseUploadConflictActions
         if (route.InstanceId != conflict.InstanceId) throw new InvalidDataException("The conflict route belongs to another instance.");
         var root = _router.GetRegistration(route.InstanceId, route.RootKey);
         if (_namespaceWork is null) return new(conflict, root.RootId, null, null);
-        bool pending = keepRemote is not null || action == MirrorPulseConflictAction.Retry || Guid.TryParse(conflict.ChangeId, out var original) &&
+        bool keepRemoteStarted = keepRemote is { } command &&
+            await _catalog.ReadConflictKeepRemoteFileStartAsync(command, token).ConfigureAwait(false) is not null;
+        bool pending = keepRemoteStarted || action == MirrorPulseConflictAction.Retry || Guid.TryParse(conflict.ChangeId, out var original) &&
             (await _catalog.ReadConflictDeletionOwnerAsync(original, token).ConfigureAwait(false) is not null ||
              await _catalog.ReadConflictLocalRemovalOwnerAsync(original, token).ConfigureAwait(false) is not null ||
              await _catalog.ReadConflictKeepBothOwnerAsync(original, token).ConfigureAwait(false) is not null);
@@ -158,7 +160,7 @@ public sealed partial class MirrorPulseUploadConflictActions
         {
             if (action != MirrorPulseConflictAction.KeepRemote)
                 throw new InvalidOperationException("This original group already belongs to a retained KeepRemote decision.");
-            return await ExecuteKeepRemoteAdmittedAsync(keepRemoteOwner, admittedRoot, cancellationToken).ConfigureAwait(false);
+            return await ExecuteKeepRemoteOrReportPendingAsync(keepRemoteOwner, conflictId, admittedRoot, cancellationToken).ConfigureAwait(false);
         }
         if (!conflict.IsPending)
         {

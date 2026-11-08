@@ -46,6 +46,7 @@ public static class SafeDiagnosticPolicy
         ["JournalContentObservation"] = "A retained journal group was checked against previously accepted content.",
         ["ConflictDeletionRecoveryFailed"] = "A retained conflict deletion requires recovery before its original journal can be acknowledged.",
         ["ConflictKeepBothRecoveryFailed"] = "A retained preservation decision requires recovery before its original journal can be retried.",
+        ["ConflictKeepRemotePreparationRecoveryFailed"] = "An accepted KeepRemote decision stopped before completing its original journal.",
         ["JournalDispatchBoundary"] = "A local content command reached a deferred dispatch boundary.",
         ["JournalAcknowledgementFailed"] = "An accepted Worker result could not be acknowledged.",
         ["MutationOutcomeAmbiguous"] = "A remote outcome requires reconciliation before retry.",

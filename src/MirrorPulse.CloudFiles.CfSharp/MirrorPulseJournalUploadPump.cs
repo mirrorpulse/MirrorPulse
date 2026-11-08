@@ -166,6 +166,9 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
         if (_deletionRecovery is not null) await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.ConflictDeletionRecovery, async () => await _deletionRecovery.RepairAsync(cancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
         if (_localRemovalRecovery is not null) await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.LocalRemovalRecovery, async () => await _localRemovalRecovery.RepairAsync(cancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
         if (_keepBothRecovery is not null) await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.KeepBothRecovery, async () => await _keepBothRecovery.RepairAsync(cancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
+        if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100) && _conflictActions is not null && _namespaceWork is not null)
+            await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.KeepRemotePreparationRecovery,
+                () => RecoverKeepRemotePreparationsAsync(_conflictActions, _namespaceWork, cancellationToken)).ConfigureAwait(false);
         if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100) && _remoteObservationRecovery is not null)
             await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.ConflictRemoteObservationRecovery,
                 async () =>

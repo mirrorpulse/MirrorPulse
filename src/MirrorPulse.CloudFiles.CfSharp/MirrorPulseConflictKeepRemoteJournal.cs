@@ -14,6 +14,14 @@ internal sealed record MirrorPulseKeepRemoteJournalOriginal(Guid OperationId, lo
 internal sealed record MirrorPulseKeepRemoteJournalSnapshot(Guid CommandId, Guid PlanId, Guid ItemId,
     string IntentSha256, IReadOnlyList<MirrorPulseKeepRemoteJournalOriginal> Originals);
 
+internal sealed class MirrorPulseKeepRemoteJournalDeferredException(bool requiresFullRescan) : IOException(
+    requiresFullRescan ? "KeepRemote is waiting for official journal reconciliation."
+        : "KeepRemote is waiting for later metadata to settle.")
+{
+    internal bool RequiresFullRescan { get; } = requiresFullRescan;
+    internal CloudProtectedLocalOperationResult? SealResult { get; set; }
+}
+
 /// <summary>Checks complete original journal ownership before a separately authorized native KeepRemote application.</summary>
 /// <remarks>
 /// Uses only the public SDK store, typed feed and existing product mapper. It never decodes SDK
@@ -96,11 +104,11 @@ internal sealed partial class MirrorPulseConflictKeepRemoteJournal(ICloudStateSt
         // Read one extra row to detect a successor during first admission. After a retained
         // permission action, preserve every later observation while checking the original set.
         var rows = await transaction.Operations.ListByItemIdAsync(plan.ItemId, checked(plan.Members.Count + 1), token).ConfigureAwait(false);
-        if (rows.Count < plan.Members.Count || requireNoSuccessors && rows.Count != plan.Members.Count)
-            throw new InvalidDataException("KeepRemote requires every original pending row and no later target-item operation.");
-        var ordered = rows.OrderBy(row => row.Sequence).Take(plan.Members.Count).ToArray();
-        var result = new MirrorPulseKeepRemoteJournalOriginal[ordered.Length];
-        for (int index = 0; index < ordered.Length; index++)
+        if (rows.Count < plan.Members.Count)
+            throw new InvalidDataException("KeepRemote requires every original pending row.");
+        var ordered = rows.OrderBy(row => row.Sequence).ToArray();
+        var result = new MirrorPulseKeepRemoteJournalOriginal[plan.Members.Count];
+        for (int index = 0; index < result.Length; index++)
         {
             var row = ordered[index]; var member = plan.Members[index];
             if (row.OperationId != member.OperationId || row.Sequence != member.Sequence || row.ItemId != plan.ItemId ||
@@ -108,6 +116,12 @@ internal sealed partial class MirrorPulseConflictKeepRemoteJournal(ICloudStateSt
                 throw new InvalidDataException("A KeepRemote original lost its retained identity, sequence or item association.");
             result[index] = new(row.OperationId, row.Sequence, plan.ItemId, row.Kind,
                 Convert.ToHexString(SHA256.HashData(row.Payload.Span)), row.CreatedAt, row.AttemptCount, row.RetryAfter);
+        }
+        if (requireNoSuccessors && ordered.Length > result.Length)
+        {
+            if (ordered[result.Length].Kind == CloudStateOperationKind.MetadataUpdate)
+                throw new MirrorPulseKeepRemoteJournalDeferredException(requiresFullRescan: false);
+            throw new InvalidDataException("KeepRemote cannot apply after a later target-item operation.");
         }
         await transaction.RollbackAsync(token).ConfigureAwait(false);
         return result;
@@ -120,14 +134,15 @@ internal sealed partial class MirrorPulseConflictKeepRemoteJournal(ICloudStateSt
         IReadOnlyList<MirrorPulseJournalOperationReference> members, CancellationToken token)
     {
         var scan = await feed.BeginScanAsync(token).ConfigureAwait(false);
-        if (scan.RequiresFullRescan) throw new InvalidOperationException("KeepRemote cannot apply while the official feed requires reconciliation.");
+        if (scan.RequiresFullRescan) throw new MirrorPulseKeepRemoteJournalDeferredException(requiresFullRescan: true);
         var result = new List<MirrorPulseLocalChangeObservation>(members.Count);
         foreach (var member in members)
         {
             if (scan.ThroughSequence < member.Sequence)
                 throw new InvalidDataException("The official feed lost an original KeepRemote sequence.");
             var page = await feed.ReadPageAsync(scan, member.Sequence - 1, 1, token).ConfigureAwait(false);
-            if (page.RequiresFullRescan || page.Changes.Count != 1 || page.Changes[0].OperationId != member.OperationId ||
+            if (page.RequiresFullRescan) throw new MirrorPulseKeepRemoteJournalDeferredException(requiresFullRescan: true);
+            if (page.Changes.Count != 1 || page.Changes[0].OperationId != member.OperationId ||
                 page.Changes[0].Sequence != member.Sequence)
                 throw new InvalidDataException("The original public KeepRemote observation disappeared or requires reconciliation.");
             var change = page.Changes[0];

@@ -74,6 +74,14 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     public Task NativeKeepRemoteIndependentRuntimeSettlesOriginalCommandBeforeReadmission() =>
         RunKeepRemoteResidentFixtureAsync("host-process", 65537);
 
+    [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles")]
+    public Task NativeKeepRemoteUploadPumpResumesAcceptedCommandAfterRootAudit() =>
+        RunKeepRemoteResidentFixtureAsync("host-preparation", 65537);
+
+    [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles")]
+    public Task NativeKeepRemoteCfSharpAccessOnlyPreservesOriginalJournalAndRealSameLengthWrite() =>
+        RunKeepRemoteResidentFixtureAsync("access-journal-qualification", 65537);
+
     private async Task RunKeepRemoteResidentFixtureAsync(string scenario, int selectedLength)
     {
         if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
@@ -106,7 +114,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             await File.WriteAllBytesAsync(file.FullPath, [1, 2, 3], token);
             var originals = new List<MirrorPulseNamespacePermissionPreparation>();
             var members = new Dictionary<Guid, MirrorPulseNamespaceMemberRegistration>();
-            if (scenario is "host-command" or "host-process")
+            if (scenario is "host-command" or "host-process" or "host-preparation" or "access-journal-qualification")
             {
                 foreach (CloudItem item in new CloudItem[] { fileSystem.Root, fileSystem.GetDirectory("Docs"), file })
                     SetProtectedFixtureUserOwner(item, caller.User!);
@@ -135,6 +143,12 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             Assert.HasCount(2, plan.Members);
             byte[] local = await File.ReadAllBytesAsync(file.FullPath, token);
             var snapshot = await file.InspectAsync(token);
+            if (scenario is "access-journal-qualification")
+            {
+                await VerifyAccessOnlyJournalQualificationAsync(state, feed, router, file, role, plan, snapshot, local, token);
+                Assert.AreEqual(0, provider.Reads);
+                return;
+            }
             Assert.IsNotNull(snapshot.RemoteId);
             var binding = await new MirrorPulseNamespaceContentConfirmation(catalog, router, actor, role)
                 .CaptureUploadBindingAsync(file, snapshot, token);
@@ -154,6 +168,13 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     MirrorPulseConflictReason.StaleRemoteRevision, MirrorPulseVersionComparison.Diverged, "prior-remote", "selected-remote", DateTimeOffset.UtcNow);
                 await catalog.SaveUploadConflictAsync(conflict, token);
                 conflictId = conflict.ConflictId;
+            }
+            if (scenario is "host-preparation")
+            {
+                await VerifyKeepRemotePreparationRecoveryAsync(paths, catalog, router, root, state, feed, remote, fileSystem,
+                    actor, scheduler, work, role, conflictId, plan, snapshot, local, selectedBytes, token);
+                Assert.AreEqual(0, provider.Reads);
+                return;
             }
             if (scenario is "host-command" or "host-process")
             {
@@ -190,8 +211,9 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     paths, router, remote, scheduler: scheduler, fileSystem: fileSystem, namespaceActor: actor, namespaceExecution: nextRole,
                     namespaceWork: work, stats: remote, remoteRanges: remote, remoteDirectories: remote);
                 Assert.IsFalse(work.IsAdmitted(root.RootId));
-                Assert.IsTrue(await MirrorPulseUploadConflictActions.RetryKeepRemoteProtectionLossAsync(() =>
-                    scheduler.RunAsync(root.InstanceId, stop => nextOwner.RecoverKeepRemoteBeforeAuditAsync(root, stop), token)));
+                Assert.IsTrue(await RetryWithRescanAsync(() =>
+                    MirrorPulseUploadConflictActions.RetryKeepRemoteProtectionLossAsync(() =>
+                        scheduler.RunAsync(root.InstanceId, stop => nextOwner.RecoverKeepRemoteBeforeAuditAsync(root, stop), token))));
                 Assert.IsFalse(work.IsAdmitted(root.RootId));
                 Assert.HasCount(0, await catalog.ReadNamespaceDispatchFencedRootsAsync(token));
                 Assert.AreEqual("resolved", (await catalog.ReadUserCommandAsync(retainedCommand, token))!.State);
@@ -313,9 +335,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         return ValueTask.CompletedTask;
                     }
                 };
-                ValueTask<MirrorPulseConflictKeepRemoteFileContentCompletion> CopyAsync() => scheduler.RunAsync(root.InstanceId,
-                    stop => actor.RunAsync(inner => new ValueTask<MirrorPulseConflictKeepRemoteFileContentCompletion>(
-                        writer.CopyAsync(root.RootId, copies, inner)), stop), token);
+                ValueTask<MirrorPulseConflictKeepRemoteFileContentCompletion> CopyAsync() =>
+                    RunPhaseAsync(stop => writer.CopyAsync(root.RootId, copies, stop));
                 if (scenario == "changed-local")
                 {
                     byte[] latest = "a later local edit that must survive"u8.ToArray();
@@ -347,8 +368,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     interruptedWrite = (await catalog.ReadConflictKeepRemoteFileContentAsync(commandId, token))!.WriteStart;
                     Assert.IsNotNull(interruptedWrite);
                     var recovery = new MirrorPulseConflictKeepRemoteResidentRoleRecovery(fileSystem, catalog, state, feed, router, resumedRole, actor);
-                    writeHandoff = await scheduler.RunAsync(root.InstanceId, stop => actor.RunAsync(inner =>
-                        new ValueTask<MirrorPulseConflictKeepRemoteRoleResult>(recovery.RecoverAsync(root.RootId, copies, inner)), stop), token);
+                    writeHandoff = await RunPhaseAsync(stop => recovery.RecoverAsync(root.RootId, copies, stop));
                     await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => CopyAsync().AsTask());
                     writer = new(fileSystem, catalog, state, feed, router, resumedRole, actor);
                 }
@@ -396,9 +416,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         throw new IOException("Synthetic KeepRemote native interruption.");
                     }
                 };
-                ValueTask<MirrorPulseConflictKeepRemoteNativeResult> ConfirmAsync() => scheduler.RunAsync(root.InstanceId,
-                    stop => actor.RunAsync(inner => new ValueTask<MirrorPulseConflictKeepRemoteNativeResult>(
-                        confirmation.ConfirmAsync(root.RootId, copies, inner)), stop), token);
+                ValueTask<MirrorPulseConflictKeepRemoteNativeResult> ConfirmAsync() =>
+                    RunPhaseAsync(stop => confirmation.ConfirmAsync(root.RootId, copies, stop));
                 if (nativeInterruption is not null)
                 {
                     await Assert.ThrowsExactlyAsync<IOException>(() => ConfirmWithRecoveryAsync());
@@ -447,8 +466,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     Assert.AreEqual(action.ActionId, confirmed.ActionId);
                     Assert.AreEqual(CloudSynchronizationState.InSync, selected.SynchronizationState);
                     var restorer = new MirrorPulseConflictKeepRemoteResidentRestoration(fileSystem, catalog, state, feed, router, currentRole, actor);
-                    var restored = await scheduler.RunAsync(root.InstanceId, stop => actor.RunAsync(inner =>
-                        new ValueTask<MirrorPulseConflictKeepRemoteRestoreResult>(restorer.RestoreAsync(root.RootId, copies, inner)), stop), token);
+                    var restored = await RunPhaseAsync(stop => restorer.RestoreAsync(root.RootId, copies, stop));
                     Assert.IsTrue(restored.ProductVerified);
                     Assert.AreEqual(writeHandoff.RecoveryId, (await catalog.ReadConflictKeepRemoteRestoreAttemptsAsync(commandId, token)).Single().Start.RoleRecoveryId);
                     CollectionAssert.AreEqual(selectedBytes, await File.ReadAllBytesAsync(file.FullPath, token));
@@ -535,12 +553,10 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     Assert.HasCount(1, await catalog.ReadNamespaceDispatchFencedRootsAsync(token));
 
                     ValueTask<MirrorPulseConflictKeepRemoteRoleResult> RecoverAsync(MirrorPulseConflictKeepRemoteResidentRoleRecovery worker) =>
-                        scheduler.RunAsync(root.InstanceId, stop => actor.RunAsync(inner =>
-                            new ValueTask<MirrorPulseConflictKeepRemoteRoleResult>(worker.RecoverAsync(root.RootId, copies, inner)), stop), token);
+                        RunPhaseAsync(stop => worker.RecoverAsync(root.RootId, copies, stop));
 
                     ValueTask<MirrorPulseConflictKeepRemoteRestoreResult> RestoreUnderAsync(MirrorPulseConflictKeepRemoteResidentRestoration worker) =>
-                        scheduler.RunAsync(root.InstanceId, stop => actor.RunAsync(inner =>
-                            new ValueTask<MirrorPulseConflictKeepRemoteRestoreResult>(worker.RestoreAsync(root.RootId, copies, inner)), stop), token);
+                        RunPhaseAsync(stop => worker.RestoreAsync(root.RootId, copies, stop));
                 }
 
                 async Task<(MirrorPulseConflictKeepRemoteNativeResult Result, IReadOnlyList<MirrorPulseConflictKeepRemoteNativeAttempt> Attempts)> ConfirmWithRecoveryAsync()
@@ -567,7 +583,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         Assert.HasCount(1, await catalog.ReadNamespaceDispatchFencedRootsAsync(token));
                         Assert.AreEqual("pending", (await catalog.ReadUserCommandAsync(commandId, token))!.State);
                         await store.RequireCurrentAsync(store.Binding, token);
-                        await retainedJournal.RevalidateRetainedOriginalsAsync(copies, token);
+                        await RetryWithRescanAsync(() => new ValueTask<MirrorPulseConflictKeepRemoteJournalBinding>(
+                            retainedJournal.RevalidateRetainedOriginalsAsync(copies, token)));
                         var prepared = await file.InspectAsync(token);
                         Assert.AreEqual(snapshot.LocalBinding, prepared.LocalBinding);
                         Assert.AreEqual(CloudContentAvailability.FullyAvailable, prepared.ContentAvailability);
@@ -606,9 +623,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                             return ValueTask.CompletedTask;
                         }
                     };
-                    ValueTask<MirrorPulseConflictKeepRemoteRestoreResult> RestoreAsync() => scheduler.RunAsync(root.InstanceId,
-                        stop => actor.RunAsync(inner => new ValueTask<MirrorPulseConflictKeepRemoteRestoreResult>(
-                            restoration.RestoreAsync(root.RootId, copies, inner)), stop), token);
+                    ValueTask<MirrorPulseConflictKeepRemoteRestoreResult> RestoreAsync() =>
+                        RunPhaseAsync(stop => restoration.RestoreAsync(root.RootId, copies, stop));
                     if (cut == MirrorPulseKeepRemoteRestoreCheckpoint.AfterAccessApplied)
                     {
                         var failed = await RestoreAsync();
@@ -717,8 +733,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         Assert.AreEqual(0, provider.Reads);
 
                         ValueTask<MirrorPulseConflictKeepRemoteAcknowledgementResult> AcknowledgeAsync(MirrorPulseConflictKeepRemoteResidentAcknowledgement owner) =>
-                            scheduler.RunAsync(root.InstanceId, stop => actor.RunAsync(inner =>
-                                new ValueTask<MirrorPulseConflictKeepRemoteAcknowledgementResult>(owner.AcknowledgeAsync(root.RootId, copies, inner)), stop), token);
+                            RunPhaseAsync(stop => owner.AcknowledgeAsync(root.RootId, copies, stop));
 
                         async Task CheckOfficialRowsAsync(bool expectOriginals)
                         {
@@ -735,8 +750,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
 
                     async Task<CloudOperationJournalEntry> WriteOrdinaryLaterEditAsync()
                     {
-                        var beforeEdit = await feed.BeginScanAsync(token);
-                        Assert.IsFalse(beforeEdit.RequiresFullRescan);
+                        var beforeEdit = await RetryWithRescanAsync(ReadScanAsync);
                         // This runs under the ordinary caller after the SDK scope drained.
                         await using (var target = new FileStream(file.FullPath, FileMode.Open, FileAccess.Write, FileShare.Read))
                         {
@@ -744,9 +758,13 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         }
                         while (true)
                         {
-                            var scan = await feed.BeginScanAsync(token);
-                            Assert.IsFalse(scan.RequiresFullRescan);
-                            var page = await feed.ReadPageAsync(scan, beforeEdit.ThroughSequence, 64, token);
+                            var page = await RetryWithRescanAsync(async () =>
+                            {
+                                var scan = await ReadScanAsync();
+                                var page = await feed.ReadPageAsync(scan, beforeEdit.ThroughSequence, 64, token);
+                                if (page.RequiresFullRescan) throw new MirrorPulseKeepRemoteJournalDeferredException(requiresFullRescan: true);
+                                return page;
+                            });
                             var observation = page.Changes.FirstOrDefault(change => change.ItemId == itemId && change.Kind == CloudLocalChangeKind.ContentUpdate);
                             if (observation is not null)
                             {
@@ -773,7 +791,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             CollectionAssert.Contains(fencedRoots.ToArray(), root.RootId);
             Assert.AreEqual(sourceReads, remote.SourceReads);
             Assert.AreEqual(0, provider.Reads);
-            await retainedJournal.RevalidateRetainedOriginalsAsync(copies, token);
+            await RetryWithRescanAsync(() => new ValueTask<MirrorPulseConflictKeepRemoteJournalBinding>(
+                retainedJournal.RevalidateRetainedOriginalsAsync(copies, token)));
             await using (var pending = await state.OpenStore.BeginTransactionAsync(token))
             {
                 foreach (var member in plan.Members)
@@ -781,8 +800,48 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 await pending.RollbackAsync(token);
             }
 
-            ValueTask<CloudProtectedLocalOperationResult> ApplySealAsync() => scheduler.RunAsync(root.InstanceId,
-                stop => actor.RunAsync(inner => new ValueTask<CloudProtectedLocalOperationResult>(seal.ApplyFirstAsync(root.RootId, copies, inner)), stop), token);
+            async ValueTask<CloudProtectedLocalOperationResult> ApplySealAsync()
+            {
+                CloudProtectedLocalOperationResult? initial = null;
+                var replay = await RetryWithRescanAsync(async () =>
+                {
+                    try
+                    {
+                        return await scheduler.RunAsync(root.InstanceId, stop => actor.RunAsync(inner =>
+                            new ValueTask<CloudProtectedLocalOperationResult>(seal.ApplyFirstAsync(root.RootId, copies, inner)), stop), token);
+                    }
+                    catch (MirrorPulseKeepRemoteJournalDeferredException error)
+                    {
+                        initial ??= error.SealResult;
+                        throw;
+                    }
+                });
+                return initial ?? replay;
+            }
+
+            ValueTask<T> RetryWithRescanAsync<T>(Func<ValueTask<T>> action) =>
+                MirrorPulseUploadConflictActions.RetryKeepRemoteReconciliationAsync(action, ReconcileAsync, token);
+
+            ValueTask<T> RunPhaseAsync<T>(Func<CancellationToken, Task<T>> action) => RetryWithRescanAsync(() =>
+                scheduler.RunAsync(root.InstanceId, stop => actor.RunAsync(inner => new ValueTask<T>(action(inner)), stop), token));
+
+            async ValueTask<CloudLocalChangeScan> ReadScanAsync()
+            {
+                var scan = await feed.BeginScanAsync(token);
+                if (scan.RequiresFullRescan) throw new MirrorPulseKeepRemoteJournalDeferredException(requiresFullRescan: true);
+                return scan;
+            }
+
+            async ValueTask<bool> ReconcileAsync(CancellationToken stop)
+            {
+                var policy = new MirrorPulseFullRescanPolicy(fileSystem, feed, state, router, catalog,
+                    remote, remote, _ => true, remote, remote, remote, scheduler: scheduler, namespaceWork: work);
+                var recovery = new MirrorPulseFullRescanRecovery(catalog, policy.ReconcileAsync,
+                    feed.AcknowledgeFullRescanAsync, (_, _) => ValueTask.CompletedTask);
+                await recovery.RunAsync(new(true), stop);
+                Assert.Contains(root.RootId, await catalog.ReadDeferredRescanRootsAsync(stop));
+                return true;
+            }
 
             async Task<MirrorPulseJournalUploadBatch> ReadEditedWindowAsync(int expected)
             {

@@ -1322,10 +1322,13 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             {
                 try
                 {
-                    _ = await MirrorPulseUploadConflictActions.RetryKeepRemoteProtectionLossAsync(() =>
-                        WithInstanceLibraryAsync(root.InstanceId, stop => (_conflictActions ??
-                            throw new InvalidOperationException("The upload conflict action service has not started."))
-                            .RecoverKeepRemoteBeforeAuditAsync(root, stop), token)).ConfigureAwait(false);
+                    _ = await MirrorPulseUploadConflictActions.RetryKeepRemoteReconciliationAsync(() =>
+                        MirrorPulseUploadConflictActions.RetryKeepRemoteProtectionLossAsync(() =>
+                            WithInstanceLibraryAsync(root.InstanceId, stop => (_conflictActions ??
+                                throw new InvalidOperationException("The upload conflict action service has not started."))
+                                .RecoverKeepRemoteBeforeAuditAsync(root, stop), token)),
+                        stop => _uploadPump?.WaitForKeepRemoteReconciliationAsync(stop) ?? ValueTask.FromResult(false),
+                        token).ConfigureAwait(false);
                 }
                 catch (Exception error) when (error is IOException or InvalidOperationException or UnauthorizedAccessException or System.ComponentModel.Win32Exception or NotSupportedException)
                 {

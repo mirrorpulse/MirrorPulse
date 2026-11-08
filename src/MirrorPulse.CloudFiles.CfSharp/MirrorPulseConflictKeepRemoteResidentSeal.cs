@@ -107,7 +107,12 @@ internal sealed class MirrorPulseConflictKeepRemoteResidentSeal(CloudFileSystem 
             void RequireParentHandle(CancellationToken stop) => MirrorPulseNamespaceBirthProtectionVerifier.RequireUnchangedParent(parentBefore,
                 parentGuard.InspectRetainedDirectoryPermissions(parent.Member.LocalObject, stop));
         }).ConfigureAwait(false);
-        await RequireOriginalsAsync(token, true).ConfigureAwait(false);
+        try { await RequireOriginalsAsync(token, true).ConfigureAwait(false); }
+        catch (MirrorPulseKeepRemoteJournalDeferredException error)
+        {
+            error.SealResult = result;
+            throw;
+        }
         return result;
 
         async ValueTask RequireOriginalsAsync(CancellationToken stop, bool allowSuccessors)
