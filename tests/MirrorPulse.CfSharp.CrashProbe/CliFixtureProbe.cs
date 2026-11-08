@@ -18,7 +18,7 @@ public sealed record CliFixtureItemObservation(string Role, bool Exists, bool Is
     string ContentAvailability, string SynchronizationState, long? Length, long? OnDiskDataSize,
     long? ValidatedDataSize, long? ModifiedDataSize);
 public sealed record CliFixtureInspectionResult(int SchemaVersion, IReadOnlyList<CliFixtureItemObservation> Items,
-    string? RoundTripIdentitySha256);
+    string? RoundTripIdentitySha256, int PreviousPlaceholderCompatibilityMode, int PlaceholderCompatibilityMode);
 
 /// <summary>Independent consumers and a stopped-Host catalog oracle for synthetic CLI fixtures only.</summary>
 public static partial class CliFixtureProbe
@@ -59,6 +59,8 @@ public static partial class CliFixtureProbe
 
     private static async Task<CliFixtureInspectionResult> InspectAsync(string root, CliFixtureMarker marker)
     {
+        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17134)) throw new PlatformNotSupportedException();
+        using var visibility = new CliFixturePlaceholderVisibility();
         // Open the existing registered root without registration or a content
         // provider. The independent official store never opens the Host database.
         string inspectionRoot = Path.Combine(root, "inspection");
@@ -90,7 +92,7 @@ public static partial class CliFixtureProbe
             if (role == "RoundTripFile" && !snapshot.PlaceholderIdentity.IsEmpty)
                 roundTripIdentity = Convert.ToHexString(SHA256.HashData(snapshot.PlaceholderIdentity.Span));
         }
-        return new(1, items.AsReadOnly(), roundTripIdentity);
+        return new(1, items.AsReadOnly(), roundTripIdentity, visibility.PreviousMode, CliFixturePlaceholderVisibility.CurrentMode);
     }
 
     private static async Task<CliFixtureReadResult> ReadAsync(string root, CliFixtureMarker marker)

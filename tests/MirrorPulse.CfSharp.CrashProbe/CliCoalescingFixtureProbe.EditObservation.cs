@@ -81,6 +81,8 @@ public static partial class CliCoalescingFixtureProbe
         CliFixtureItemObservation? native = null; string? nativeIdentity = null;
         if (inspectNative)
         {
+            if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17134)) throw new PlatformNotSupportedException();
+            using var visibility = new CliFixturePlaceholderVisibility();
             string inspection = Path.Combine(root, "inspection");
             if (Path.Exists(inspection)) RequireExistingUnredirected(inspection);
             Directory.CreateDirectory(inspection); string database = Path.Combine(inspection, "cfsharp.db");

@@ -145,7 +145,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             var snapshot = await file.InspectAsync(token);
             if (scenario is "access-journal-qualification")
             {
-                await VerifyAccessOnlyJournalQualificationAsync(state, feed, router, file, role, plan, snapshot, local, token);
+                await VerifyAccessOnlyJournalQualificationAsync(paths, state, feed, router, file, role, plan, snapshot, local, token);
                 Assert.AreEqual(0, provider.Reads);
                 return;
             }

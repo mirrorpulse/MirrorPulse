@@ -3,6 +3,16 @@ using MirrorPulse.CfSharp.CrashProbe;
 using MirrorPulse.CloudFiles.CfSharp;
 using MirrorPulse.Core.Configuration;
 
+if (args.Length == 2 && args[0] == "--inspect-placeholder-visibility")
+{
+    try { return await PlaceholderVisibilityProbe.RunAsync(args[1]); }
+    catch (Exception error)
+    {
+        Console.Error.WriteLine($"Placeholder inspection failed: {error.GetType().Name}, HRESULT {error.HResult:X8}.");
+        return 1;
+    }
+}
+
 if (args.Length == 3 && args[0] == "--resume-keep-remote")
 {
     if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100) ||

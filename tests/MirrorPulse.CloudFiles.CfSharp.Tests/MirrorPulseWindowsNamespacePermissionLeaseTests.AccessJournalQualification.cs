@@ -1,8 +1,10 @@
 using System.Diagnostics;
 using System.Reflection;
 using System.Security.Cryptography;
+using System.Text.Json;
 using CfSharp;
 using CfSharp.Storage.Sqlite;
+using MirrorPulse.Core.Configuration;
 using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.CloudFiles.CfSharp.Tests;
@@ -11,13 +13,59 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
 {
     private sealed record AccessJournalRow(Guid Id, long Sequence, CloudStateOperationKind Kind, string PayloadSha256);
 
-    private static async Task VerifyAccessOnlyJournalQualificationAsync(MirrorPulseCfSharpStateSession state, CloudLocalChangeFeed feed,
+    private static async Task VerifyAccessOnlyJournalQualificationAsync(MirrorPulseStoragePaths paths, MirrorPulseCfSharpStateSession state, CloudLocalChangeFeed feed,
         MirrorPulseRootRouter router, CloudFile file, MirrorPulseNamespaceExecutionSession role, MirrorPulseJournalCoalescingPlan plan,
         CloudItemSnapshot original, byte[] originalBytes, CancellationToken token)
     {
         Assert.IsTrue(original.IsPlaceholder);
         Assert.AreEqual(CloudContentAvailability.FullyAvailable, original.ContentAvailability);
         Assert.IsNotNull(original.LocalBinding);
+        await using (var observer = CloudFileSystem.CreateBuilder(paths.SyncRootPath)
+            .WithStateStore(new SqliteCloudStateStoreFactory(Path.Combine(paths.DataRootPath, "inspection", "cfsharp.db"))).Build())
+        {
+            await observer.StartAsync(token);
+            var observed = await observer.GetFile(file.RelativePath).InspectAsync(token);
+            Assert.IsTrue(observed.IsPlaceholder, "The independent public inspection must observe the actual placeholder.");
+            Assert.AreEqual(original.LocalBinding, observed.LocalBinding);
+            Assert.AreEqual(original.ContentAvailability, observed.ContentAvailability);
+            CollectionAssert.AreEqual(original.PlaceholderIdentity.ToArray(), observed.PlaceholderIdentity.ToArray());
+        }
+        var start = new ProcessStartInfo("dotnet")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+        start.ArgumentList.Add(typeof(MirrorPulse.CfSharp.CrashProbe.ProbeMarker).Assembly.Location);
+        start.ArgumentList.Add("--inspect-placeholder-visibility");
+        start.ArgumentList.Add(Path.GetDirectoryName(paths.SyncRootPath)!);
+        using (var process = Process.Start(start)!)
+        {
+            try
+            {
+                var output = process.StandardOutput.ReadToEndAsync(token);
+                var error = process.StandardError.ReadToEndAsync(token);
+                await process.WaitForExitAsync(token);
+                Assert.AreEqual(0, process.ExitCode, await error);
+                using var result = JsonDocument.Parse(await output);
+                var inspected = result.RootElement;
+                Assert.IsTrue(inspected.GetProperty("IsPlaceholder").GetBoolean());
+                Assert.AreEqual("FullyAvailable", inspected.GetProperty("ContentAvailability").GetString());
+                Assert.AreEqual(2, inspected.GetProperty("SelectedMode").GetInt32());
+                Assert.AreEqual(inspected.GetProperty("PreviousMode").GetInt32(), inspected.GetProperty("RestoredMode").GetInt32());
+                Assert.AreEqual(Convert.ToHexString(SHA256.HashData(original.PlaceholderIdentity.Span)),
+                    inspected.GetProperty("PlaceholderIdentitySha256").GetString());
+                Assert.AreEqual(Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(original.LocalBinding))),
+                    inspected.GetProperty("LocalBindingSha256").GetString());
+                Console.WriteLine($"IndependentPlaceholderVisibility Initial={inspected.GetProperty("InitialIsPlaceholder").GetBoolean()} " +
+                    $"PreviousMode={inspected.GetProperty("PreviousMode").GetInt32()} Exposed=True Restored=True");
+            }
+            finally
+            {
+                if (!process.HasExited) { process.Kill(entireProcessTree: true); await process.WaitForExitAsync(CancellationToken.None); }
+            }
+        }
         var originals = await ReadRowsAsync();
         CollectionAssert.AreEqual(plan.Members.Select(member => member.OperationId).ToArray(), originals.Select(row => row.Id).ToArray());
         await RequirePublicContentRowsAsync(originals);
