@@ -125,7 +125,10 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             }
             else
             {
-                await PrepareAcceptedIdentityOriginalsAsync(fileSystem, catalog, router, role, caller.User!, originals, token, waitForFixtureMetadata: true);
+                if (scenario == "registered-restore")
+                    await PrepareInheritedKeepRemoteOriginalsAsync(fileSystem, catalog, router, role, caller.User!, originals, token);
+                else
+                    await PrepareAcceptedIdentityOriginalsAsync(fileSystem, catalog, router, role, caller.User!, originals, token, waitForFixtureMetadata: true);
                 await SaveAcceptedIdentityFixtureTopologyAsync(catalog, root, token);
                 await RegisterNativeOriginalMembersAsync(fileSystem, catalog, router, role, originals, members, actor, token);
             }
@@ -472,7 +475,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     Assert.AreEqual(writeHandoff.RecoveryId, (await catalog.ReadConflictKeepRemoteRestoreAttemptsAsync(commandId, token)).Single().Start.RoleRecoveryId);
                     CollectionAssert.AreEqual(selectedBytes, await File.ReadAllBytesAsync(file.FullPath, token));
                 }
-                else if (Enum.TryParse<MirrorPulseKeepRemoteRestoreCheckpoint>(scenario, out _) || scenario is "restore-later-edit" or "acknowledgement")
+                else if (Enum.TryParse<MirrorPulseKeepRemoteRestoreCheckpoint>(scenario, out _) || scenario is "restore-later-edit" or "acknowledgement" or "registered-restore")
                 {
                     await VerifyRestorationAsync();
                     if (scenario == "acknowledgement") return;
@@ -614,6 +617,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     bool restoreInterrupted = false;
                     var restoration = new MirrorPulseConflictKeepRemoteResidentRestoration(fileSystem, catalog, state, feed, router, role, actor)
                     {
+                        RestoreRegisteredDescriptor = scenario == "registered-restore",
                         Checkpoint = (restorePoint, _) =>
                         {
                             if (!restoreInterrupted && restorePoint == cut)
@@ -664,6 +668,12 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     Assert.IsTrue(MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(action.RestoreDacl, restored.Child.Dacl));
                     var attempts = await catalog.ReadConflictKeepRemoteRestoreAttemptsAsync(commandId, token);
                     Assert.HasCount(cut is not null && cut != MirrorPulseKeepRemoteRestoreCheckpoint.AfterRestoreRecorded ? 2 : 1, attempts);
+                    if (scenario == "registered-restore")
+                    {
+                        Assert.IsTrue(attempts[0].Start.RestoreRegisteredDescriptor);
+                        Assert.AreEqual(original.ExpectedDacl, action.RestoreDacl);
+                        Assert.AreNotEqual(MirrorPulseNamespacePermissionPolicy.CreateProtectedDacl(role, false), action.RestoreDacl);
+                    }
                     if (successor is null)
                     {
                         CollectionAssert.AreEqual(selectedBytes, await File.ReadAllBytesAsync(file.FullPath, token));

@@ -58,9 +58,13 @@ internal sealed class MirrorPulseConflictKeepRemoteResidentRestoration(CloudFile
             first.Original.Context.Member.RootId != admittedRoot || first.Parent.Context.Member.RootId != admittedRoot ||
             action.RoleSid != execution.RoleSid.Value || action.OwnerSid != execution.OwnerSid.Value ||
             action.RoleOnlyDacl != MirrorPulseNamespacePermissionPolicy.CreateOrdinaryFileBirthDacl(execution) ||
-            action.RestoreDacl != MirrorPulseNamespacePermissionPolicy.CreateProtectedDacl(execution, isDirectory: false) ||
+            (restoreRegistered ? originalAction.RestoreDacl != first.Original.ExpectedDacl :
+                action.RestoreDacl != MirrorPulseNamespacePermissionPolicy.CreateProtectedDacl(execution, isDirectory: false)) ||
             native.Start.SelectedPlaceholderIdentity != selected)
             throw new InvalidOperationException("Restoring access requires the original complete copies, selected identity and current role.");
+        // A controlled birth retains its inherited graph descriptor. Registered restoration
+        // must restore that exact immutable baseline, including its inheritance flags;
+        // the current role's explicit recovery descriptor is a separate policy.
         if (root.RootId != admittedRoot || root.State != RootRegistrationState.Active)
             throw new InvalidOperationException("Restoring access requires the original admitted active root.");
         var file = fileSystem.GetFile(first.Original.Context.Location.RelativePath);

@@ -68,6 +68,8 @@ public sealed partial class MirrorPulseJournalUploadPump
                 try
                 {
                     var fields = new List<LogField> { new("commandId", commandId.ToString("D")),
+                        new("conflictCommandStage", MirrorPulseConflictCommandDiagnostics.Stage(error).ToString()),
+                        new("conflictCommandBoundary", MirrorPulseConflictCommandDiagnostics.Boundary(error).ToString()),
                         new("failureCategory", SafeDiagnosticPolicy.ClassifyFailure(error)),
                         new("journalReadFailureKind", MirrorPulseJournalReadDiagnostics.Kind(error)),
                         new("hresult", error.HResult.ToString("X8", CultureInfo.InvariantCulture)) };
