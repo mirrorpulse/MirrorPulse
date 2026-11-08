@@ -17,11 +17,14 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         CancellationToken token)
     {
         await using var coordinator = new MirrorPulseNamespacePermissionCoordinator(catalog);
+        CloudItem[] items = [fileSystem.Root, fileSystem.GetDirectory("Docs"), fileSystem.GetFile("Docs/original.bin")];
+        // Elevated runners can initially own these objects as Administrators. Establish
+        // every fixture owner before a parent descriptor propagates to its children.
+        foreach (var item in items) SetProtectedFixtureUserOwner(item, owner);
         // Protect each parent before capturing its child. The retained file descriptor then
         // models the inherited registered graph produced by controlled product births.
-        foreach (CloudItem item in new CloudItem[] { fileSystem.Root, fileSystem.GetDirectory("Docs"), fileSystem.GetFile("Docs/original.bin") })
+        foreach (var item in items)
         {
-            SetProtectedFixtureUserOwner(item, owner);
             if (item.Kind == CloudItemKind.File)
             {
                 // Establish a distinct synthetic original before retaining any baseline.
