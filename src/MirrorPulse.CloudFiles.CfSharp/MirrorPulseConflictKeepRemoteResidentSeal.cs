@@ -30,12 +30,13 @@ internal sealed class MirrorPulseConflictKeepRemoteResidentSeal(CloudFileSystem 
         var original = start.Original.Context;
         var parent = start.Parent.Context;
         var root = router.GetRegistration(intent.InstanceId, intent.RemoteSource.RootKey);
+        _ = await MirrorPulseKeepRemotePublicIdentity.ReadOriginalAsync(catalog, root, intent, token).ConfigureAwait(false);
         if (original.Member.RootId != admittedRoot || parent.Member.RootId != admittedRoot ||
             original.Protection.RoleSid != execution.RoleSid.Value || parent.Protection.RoleSid != execution.RoleSid.Value ||
             original.Member.OwnerSid != execution.OwnerSid.Value || parent.Member.OwnerSid != execution.OwnerSid.Value ||
             copies.Local is null || intent.LocalContent?.UploadBinding.PreviousPlaceholderIdentity is not { } encodedIdentity ||
             !CloudPlaceholderIdentity.TryDecode(Convert.FromBase64String(encodedIdentity), out var identity) || identity is null ||
-            identity.ItemId != intent.ItemId || !MirrorPulsePlaceholderIdentity.IdentifiesBackendObject(root, intent.RemoteSource.RemoteId, identity))
+            identity.ItemId != intent.ItemId)
             throw new InvalidDataException("The first resident seal requires the original file, parent, selected identity and execution role.");
         CloudFile file = fileSystem.GetFile(original.Location.RelativePath);
         CloudDirectory directParent = fileSystem.GetDirectory(parent.Location.RelativePath);

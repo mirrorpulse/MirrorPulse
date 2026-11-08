@@ -13,6 +13,7 @@ on:
           - access-journal
           - journal-reconciliation
           - signed-keep-remote
+          - signed-post-move
         default: prototype
 
 permissions:
@@ -20,7 +21,7 @@ permissions:
 
 jobs:
   probe:
-    if: inputs.contract != 'signed-keep-remote'
+    if: inputs.contract != 'signed-keep-remote' && inputs.contract != 'signed-post-move'
     strategy:
       fail-fast: false
       matrix:
@@ -134,7 +135,7 @@ jobs:
           if-no-files-found: error
 
   signed-keep-remote:
-    if: inputs.contract == 'signed-keep-remote'
+    if: inputs.contract == 'signed-keep-remote' || inputs.contract == 'signed-post-move'
     runs-on: windows-11-arm
     timeout-minutes: 20
     steps:
@@ -169,6 +170,7 @@ jobs:
           pwsh ./eng/aggregate-official-adapters.ps1 -ReleaseLockPath artifacts/official-adapter-releases.json -AdapterIds com.mirrorpulse.adapter.local -OutputDirectory artifacts/official-local
 
       - name: Verify signed ARM64 coalesced KeepRemote through the default Host
+        if: inputs.contract == 'signed-keep-remote'
         shell: pwsh
         timeout-minutes: 10
         env:
@@ -180,10 +182,28 @@ jobs:
           pwsh ./eng/verify-cli-integration.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName -Coalescing -CoalescingAction KeepRemote -EvidencePath artifacts/evidence/cli-keep-remote/report.json
           if ($LASTEXITCODE -ne 0) { throw 'The real signed KeepRemote conflict choice failed.' }
 
+      - name: Verify signed ARM64 acknowledged Move and rejected content through the original executor
+        if: inputs.contract == 'signed-post-move'
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          $packages = @(Get-ChildItem -LiteralPath artifacts/official-local -Recurse -Filter '*.mpadapter' -File)
+          if ($packages.Count -ne 1) { throw 'Require the one frozen official Local package.' }
+          pwsh ./eng/verify-signed-post-move.ps1 -PackagePath $packages[0].FullName
+          if ($LASTEXITCODE -ne 0) { throw 'The real signed post-move fixture failed.' }
+
       - name: Preserve signed ARM64 KeepRemote results and failures
-        if: always()
+        if: always() && inputs.contract == 'signed-keep-remote'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: cli-keep-remote-arm64-originals
           path: artifacts/evidence/cli-keep-remote/**
+          if-no-files-found: ignore
+
+      - name: Preserve signed ARM64 post-move originals
+        if: always() && inputs.contract == 'signed-post-move'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: signed-post-move-arm64-originals
+          path: artifacts/test-results/signed-post-move/**
           if-no-files-found: ignore

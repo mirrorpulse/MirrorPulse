@@ -112,12 +112,13 @@ internal sealed class MirrorPulseConflictKeepRemoteResidentRoleRecovery(CloudFil
         }
         async ValueTask<CloudPlaceholderIdentity> ReadIdentityAsync(CancellationToken stop)
         {
+            var originalIdentity = await MirrorPulseKeepRemotePublicIdentity.ReadOriginalAsync(catalog, root, intent, stop).ConfigureAwait(false);
             var native = await file.InspectAsync(stop).ConfigureAwait(false);
             if (!native.Exists || !native.IsPlaceholder || native.IsTombstone || native.Kind != CloudItemKind.File ||
                 native.ContentAvailability != CloudContentAvailability.FullyAvailable || native.LocalBinding is not { } binding ||
                 new MirrorPulseLocalFileBinding(binding.VolumeSerialNumber, binding.SyncRootFileId, binding.LocalFileId) != action.LocalObject ||
                 !CloudPlaceholderIdentity.TryDecode(native.PlaceholderIdentity.Span, out var identity) || identity is null ||
-                identity.ItemId != intent.ItemId || !MirrorPulsePlaceholderIdentity.IdentifiesBackendObject(root, intent.RemoteSource.RemoteId, identity))
+                identity.ItemId != originalIdentity.ItemId || identity.RemoteId != originalIdentity.RemoteId)
                 throw new InvalidDataException("Role recovery requires the original fully resident placeholder and public identity.");
             return identity;
         }

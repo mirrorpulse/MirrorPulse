@@ -51,8 +51,7 @@ internal sealed class MirrorPulseConflictKeepRemoteResidentRestoration(CloudFile
         bool restoreRegistered = attempts.Count == 0 ? RestoreRegisteredDescriptor : attempts[0].Start.RestoreRegisteredDescriptor;
         string restoreDacl = restoreRegistered ? originalAction.RestoreDacl : action.RestoreDacl;
         var root = router.GetRegistration(intent.InstanceId, intent.RemoteSource.RootKey);
-        var selectedIdentity = MirrorPulseKeepRemotePublicIdentity.SelectRevision(root, intent.ItemId, intent.RemoteSource.RemoteId,
-            intent.LocalContent?.UploadBinding.PreviousPlaceholderIdentity, intent.RemoteSource.RemoteRevision);
+        var selectedIdentity = await MirrorPulseKeepRemotePublicIdentity.SelectRevisionAsync(catalog, root, intent, token).ConfigureAwait(false);
         string selected = Convert.ToBase64String(selectedIdentity.Encode());
         if (copies.Local is null || content.Completion?.Copy != copies.Remote.Proof ||
             first.Original.Context.Member.RootId != admittedRoot || first.Parent.Context.Member.RootId != admittedRoot ||

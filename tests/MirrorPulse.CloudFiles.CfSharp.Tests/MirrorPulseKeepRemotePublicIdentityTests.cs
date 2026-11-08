@@ -5,7 +5,7 @@ using MirrorPulse.Core.Contracts;
 namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 
 [TestClass]
-public sealed class MirrorPulseKeepRemotePublicIdentityTests
+public sealed partial class MirrorPulseKeepRemotePublicIdentityTests
 {
     [TestMethod]
     [DataRow("legacy")]

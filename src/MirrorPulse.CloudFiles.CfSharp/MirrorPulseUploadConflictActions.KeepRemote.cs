@@ -237,8 +237,8 @@ public sealed partial class MirrorPulseUploadConflictActions
     private async Task RequireKeepRemoteOriginalAsync(CloudFile file, MirrorPulseConflictKeepRemoteIntent intent,
         CancellationToken token)
     {
-        _ = MirrorPulseKeepRemotePublicIdentity.ReadOriginal(_router!.GetRegistration(intent.InstanceId, intent.RemoteSource.RootKey),
-            intent.ItemId, intent.RemoteSource.RemoteId, intent.LocalContent?.UploadBinding.PreviousPlaceholderIdentity);
+        _ = await MirrorPulseKeepRemotePublicIdentity.ReadOriginalAsync(_catalog,
+            _router!.GetRegistration(intent.InstanceId, intent.RemoteSource.RootKey), intent, token).ConfigureAwait(false);
         var current = await file.InspectAsync(token).ConfigureAwait(false);
         if (!current.Exists || !current.IsPlaceholder || current.IsTombstone || current.ItemId != intent.ItemId ||
             current.ContentAvailability != CloudContentAvailability.FullyAvailable || current.LocalBinding is not { } native ||
