@@ -73,6 +73,8 @@ public sealed partial class MirrorPulseProductCatalog
             if (births.Contains(rootId)) throw new InvalidOperationException("Unresolved births must finish before a file start.");
             var current = await ReadNamespaceMemberProtectionSnapshotCoreAsync(original.Context.Member.MemberId, transaction, token).ConfigureAwait(false);
             var currentParent = await ReadNamespaceMemberProtectionSnapshotCoreAsync(parent.Context.Member.MemberId, transaction, token).ConfigureAwait(false);
+            if (current is not null && original.Identity != current.Identity)
+                throw new InvalidDataException("KeepRemote requires the unchanged original public identity before its first file start.");
             if (!SameKeepRemoteSnapshot(original, current) || !SameKeepRemoteSnapshot(parent, currentParent))
                 throw new InvalidOperationException("KeepRemote requires unchanged current member and direct-parent protection, location and identity.");
             await RequireKeepRemoteFileStartRootAsync(start, transaction, token).ConfigureAwait(false);
@@ -186,6 +188,8 @@ public sealed partial class MirrorPulseProductCatalog
         var intent = preparation.Intent;
         var plan = await ReadCoalescingPlanCoreAsync(intent.PlanId, transaction, token).ConfigureAwait(false);
         var child = start.Original; var parent = start.Parent;
+        // The snapshot retains the public address. Backend correspondence is verified by the
+        // CfSharp boundary; those identifiers can differ while the native object stays the same.
         if (start.Version != 1 || start.StoreFileId == Guid.Empty || start.StartedAt < journal.ObservedAt ||
             start.JournalBindingSha256 != Convert.ToHexString(SHA256.HashData(KeepRemoteJournalPayload(journal))) ||
             plan.Effect != MirrorPulseCoalescedEffect.UpdateFile || intent.LocalContent is null ||
@@ -194,7 +198,7 @@ public sealed partial class MirrorPulseProductCatalog
             child.Context.Location is null || child.Context.Protection is null || child.Context.Verification is null ||
             parent?.Context?.Member is not { IsDirectory: true } parentMember || parent.Identity is null ||
             parent.Context.Location is null || parent.Context.Protection is null || parent.Context.Verification is null ||
-            member.MemberId == Guid.Empty || child.Identity.ItemId != intent.ItemId || child.Identity.RemoteId != intent.RemoteSource.RemoteId ||
+            member.MemberId == Guid.Empty || child.Identity.ItemId != intent.ItemId || string.IsNullOrWhiteSpace(child.Identity.RemoteId) ||
             member.LocalObject != intent.LocalContent.UploadBinding.LocalObject || parentMember.RootId != member.RootId ||
             child.Context.Location.ParentMemberId != parentMember.MemberId || child.Context.Location.MemberId != member.MemberId ||
             child.Context.Protection.RoleSid != parent.Context.Protection.RoleSid || member.OwnerSid != parentMember.OwnerSid)

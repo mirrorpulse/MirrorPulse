@@ -117,7 +117,7 @@ internal sealed class MirrorPulseConflictKeepRemoteResidentRoleRecovery(CloudFil
                 native.ContentAvailability != CloudContentAvailability.FullyAvailable || native.LocalBinding is not { } binding ||
                 new MirrorPulseLocalFileBinding(binding.VolumeSerialNumber, binding.SyncRootFileId, binding.LocalFileId) != action.LocalObject ||
                 !CloudPlaceholderIdentity.TryDecode(native.PlaceholderIdentity.Span, out var identity) || identity is null ||
-                identity.ItemId != intent.ItemId || identity.RemoteId != intent.RemoteSource.RemoteId)
+                identity.ItemId != intent.ItemId || !MirrorPulsePlaceholderIdentity.IdentifiesBackendObject(root, intent.RemoteSource.RemoteId, identity))
                 throw new InvalidDataException("Role recovery requires the original fully resident placeholder and public identity.");
             return identity;
         }

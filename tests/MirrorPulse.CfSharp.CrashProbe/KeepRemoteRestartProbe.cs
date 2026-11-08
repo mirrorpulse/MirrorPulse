@@ -96,10 +96,10 @@ internal static class KeepRemoteRestartProbe
         bool sameLocation = projected is not null && string.Equals(
             Path.GetFullPath(projected.RelativePath, paths.SyncRootPath), localPath, StringComparison.OrdinalIgnoreCase);
         if (projected is not { IsTombstone: false } || projected.RemoteRevision != pending.Intent.RemoteSource.RemoteRevision ||
-            projected.RemoteId != pending.Intent.RemoteSource.RemoteId || atPath?.ItemId != projected.ItemId || !sameLocation)
+            projected.RemoteId != first.Original.Identity.RemoteId || atPath?.ItemId != projected.ItemId || !sameLocation)
         {
             Console.Error.WriteLine($"SDK projection: live={projected is { IsTombstone: false }}; revision={projected?.RemoteRevision == pending.Intent.RemoteSource.RemoteRevision}; " +
-                $"remote={projected?.RemoteId == pending.Intent.RemoteSource.RemoteId}; path={sameLocation && atPath?.ItemId == pending.Intent.ItemId}.");
+                $"remote={projected?.RemoteId == first.Original.Identity.RemoteId}; path={sameLocation && atPath?.ItemId == pending.Intent.ItemId}.");
             throw new InvalidDataException("The independently reopened SDK store lost the original selected projection.");
         }
         foreach (Guid id in pending.Intent.OriginalOperationIds)

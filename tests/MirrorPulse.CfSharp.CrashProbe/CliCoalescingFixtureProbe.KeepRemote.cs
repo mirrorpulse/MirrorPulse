@@ -56,7 +56,7 @@ public static partial class CliCoalescingFixtureProbe
             throw new InvalidDataException("The resident selected file and both actual private copies differ from their original proofs.");
         await using var transaction = await store.BeginTransactionAsync();
         var projected = await transaction.Items.GetByItemIdAsync(plan.ItemId);
-        if (projected is not { IsTombstone: false } || projected.RemoteId != decision.Intent.RemoteSource.RemoteId ||
+        if (projected is not { IsTombstone: false } || projected.RemoteId != first.Original.Identity.RemoteId ||
             projected.RemoteRevision != decision.Intent.RemoteSource.RemoteRevision ||
             !string.Equals(Path.GetFullPath(projected.RelativePath, paths.SyncRootPath), localPath, StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException("The official store lost the selected current projection.");

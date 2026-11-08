@@ -50,7 +50,9 @@ internal sealed class MirrorPulseConflictKeepRemoteResidentRestoration(CloudFile
         // rotate the whole tree after settlement. Only the current role acts here.
         bool restoreRegistered = attempts.Count == 0 ? RestoreRegisteredDescriptor : attempts[0].Start.RestoreRegisteredDescriptor;
         string restoreDacl = restoreRegistered ? originalAction.RestoreDacl : action.RestoreDacl;
-        var selectedIdentity = new CloudPlaceholderIdentity(intent.ItemId, intent.RemoteSource.RemoteId, intent.RemoteSource.RemoteRevision);
+        var root = router.GetRegistration(intent.InstanceId, intent.RemoteSource.RootKey);
+        var selectedIdentity = MirrorPulseKeepRemotePublicIdentity.SelectRevision(root, intent.ItemId, intent.RemoteSource.RemoteId,
+            intent.LocalContent?.UploadBinding.PreviousPlaceholderIdentity, intent.RemoteSource.RemoteRevision);
         string selected = Convert.ToBase64String(selectedIdentity.Encode());
         if (copies.Local is null || content.Completion?.Copy != copies.Remote.Proof ||
             first.Original.Context.Member.RootId != admittedRoot || first.Parent.Context.Member.RootId != admittedRoot ||
@@ -59,7 +61,6 @@ internal sealed class MirrorPulseConflictKeepRemoteResidentRestoration(CloudFile
             action.RestoreDacl != MirrorPulseNamespacePermissionPolicy.CreateProtectedDacl(execution, isDirectory: false) ||
             native.Start.SelectedPlaceholderIdentity != selected)
             throw new InvalidOperationException("Restoring access requires the original complete copies, selected identity and current role.");
-        var root = router.GetRegistration(intent.InstanceId, intent.RemoteSource.RootKey);
         if (root.RootId != admittedRoot || root.State != RootRegistrationState.Active)
             throw new InvalidOperationException("Restoring access requires the original admitted active root.");
         var file = fileSystem.GetFile(first.Original.Context.Location.RelativePath);
@@ -171,7 +172,7 @@ internal sealed class MirrorPulseConflictKeepRemoteResidentRestoration(CloudFile
         async ValueTask RequireScopeIdentityAsync(IMirrorPulseProtectedNamespacePermissionLease lease, CancellationToken stop)
         {
             var observed = await lease.InspectLocalIdentityAsync(stop).ConfigureAwait(false);
-            if (!observed.IsPlaceholder || observed.ItemId != intent.ItemId || observed.RemoteId != intent.RemoteSource.RemoteId ||
+            if (!observed.IsPlaceholder || observed.ItemId != intent.ItemId || observed.RemoteId != selectedIdentity.RemoteId ||
                 !selectedIdentity.Equals(observed.PlaceholderIdentity))
                 throw new InvalidDataException("The protected access callback lost its selected original identity.");
         }

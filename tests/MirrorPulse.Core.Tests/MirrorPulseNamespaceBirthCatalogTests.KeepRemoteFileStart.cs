@@ -192,7 +192,8 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         KeepRemoteFileSetup setup, CancellationToken token = default) => catalog.RetainConflictKeepRemoteFileStartAsync(
             setup.Preparation.Intent.CommandId, setup.StoreVolume, setup.StoreFileId, setup.Original, setup.Parent, setup.StartedAt, token);
 
-    private static async Task<KeepRemoteFileSetup> PrepareKeepRemoteFileAsync(MirrorPulseProductCatalog catalog, bool retainJournal = true)
+    private static async Task<KeepRemoteFileSetup> PrepareKeepRemoteFileAsync(MirrorPulseProductCatalog catalog, bool retainJournal = true,
+        string? backendRemoteId = null)
     {
         var member = await PrepareMovableMemberAsync(catalog); var root = await AddIdentityTopologyAsync(catalog, member.Move.RootId);
         var original = (await catalog.ReadNamespaceMemberProtectionSnapshotAsync(member.Member.MemberId))!;
@@ -220,7 +221,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         }
         Guid command = Guid.NewGuid(); await catalog.SaveUserCommandAsync(new(command, "keepremote", conflict.ToString("D"), "pending"));
         var preparation = await catalog.PrepareConflictKeepRemoteAsync(command, conflict, plan.ItemId, path,
-            new(1, root.InstanceId.ToString(), root.UniquenessKey, path, original.Identity.RemoteId!, "selected", bytes.Length), content);
+            new(1, root.InstanceId.ToString(), root.UniquenessKey, path, backendRemoteId ?? original.Identity.RemoteId!, "selected", bytes.Length), content);
         var copy = new MirrorPulseConflictKeepBothCopy(bytes.Length, hash);
         await catalog.RecordConflictKeepRemoteLocalPreservationAsync(command, new(copy)); await catalog.RecordConflictKeepRemoteRemoteCopyAsync(command, copy);
         preparation = (await catalog.ReadConflictKeepRemoteAsync(command))!;

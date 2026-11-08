@@ -43,7 +43,8 @@ internal sealed class MirrorPulseConflictKeepRemoteResidentConfirmation(CloudFil
         var registration = router.GetRegistration(intent.InstanceId, intent.RemoteSource.RootKey);
         if (registration.RootId != admittedRoot || registration.State != RootRegistrationState.Active)
             throw new InvalidOperationException("Native confirmation requires the original active root.");
-        var selectedIdentity = new CloudPlaceholderIdentity(intent.ItemId, intent.RemoteSource.RemoteId, intent.RemoteSource.RemoteRevision);
+        var selectedIdentity = MirrorPulseKeepRemotePublicIdentity.SelectRevision(registration, intent.ItemId, intent.RemoteSource.RemoteId,
+            intent.LocalContent?.UploadBinding.PreviousPlaceholderIdentity, intent.RemoteSource.RemoteRevision);
         string selected = Convert.ToBase64String(selectedIdentity.Encode());
         string original = content.Completion.OriginalPlaceholderIdentity;
         var binding = action.LocalObject;

@@ -154,7 +154,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 .CaptureUploadBindingAsync(file, snapshot, token);
             var content = new MirrorPulseCoalescingContent(local.Length, Convert.ToHexString(SHA256.HashData(local)), binding);
             await catalog.PrepareJournalCoalescingAndExecutionAsync(plan, window.CompleteWindow!, "prior-remote", content, token);
-            var remote = new KeepBothRemote(Path.Combine(paths.DataRootPath, "keep-remote-selected.bin"), snapshot.RemoteId);
+            string backendRemoteId = MirrorPulsePlaceholderIdentity.Decode(root.InstanceId, snapshot.PlaceholderIdentity.Span).RemoteId;
+            var remote = new KeepBothRemote(Path.Combine(paths.DataRootPath, "keep-remote-selected.bin"), backendRemoteId);
             byte[] selectedBytes = new byte[selectedLength];
             new Random(518).NextBytes(selectedBytes);
             remote.Seed(selectedBytes);
@@ -245,7 +246,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             Guid commandId = Guid.NewGuid();
             await catalog.SaveUserCommandAsync(new(commandId, "keepremote", conflictId.ToString("D"), "pending"), token);
             var source = new MirrorPulseConflictRemoteSource(1, root.InstanceId.ToString(), root.UniquenessKey, "original.bin",
-                snapshot.RemoteId, "selected-remote", selectedLength);
+                backendRemoteId, "selected-remote", selectedLength);
             await catalog.PrepareConflictKeepRemoteAsync(commandId, conflictId, itemId, "Docs/original.bin", source, content, token);
             var copyStore = new MirrorPulseConflictCopyStore(paths);
             await using var copies = await new MirrorPulseConflictKeepRemotePreserver(catalog, copyStore, new(copyStore, remote, remote, remote))
@@ -396,12 +397,12 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                             Assert.AreEqual(snapshot.LocalBinding, atReturn.LocalBinding);
                             // Allow a returned refusal to be recorded and recovered before interrupting a successful return.
                             if (atReturn.SynchronizationState != CloudSynchronizationState.InSync) return;
-                            CollectionAssert.AreEqual(new CloudPlaceholderIdentity(itemId, source.RemoteId, source.RemoteRevision).Encode(),
+                            CollectionAssert.AreEqual(new CloudPlaceholderIdentity(itemId, snapshot.RemoteId, source.RemoteRevision).Encode(),
                                 atReturn.PlaceholderIdentity.ToArray());
                             await using var projection = await state.OpenStore.BeginTransactionAsync(stop);
                             var projected = await projection.Items.GetByItemIdAsync(itemId, stop);
                             Assert.IsNotNull(projected);
-                            Assert.AreEqual(source.RemoteId, projected.RemoteId);
+                            Assert.AreEqual(snapshot.RemoteId, projected.RemoteId);
                             Assert.AreEqual(source.RemoteRevision, projected.RemoteRevision);
                             foreach (var member in plan.Members) Assert.IsNotNull(await projection.Operations.GetAsync(member.OperationId, stop));
                             await projection.RollbackAsync(stop);
