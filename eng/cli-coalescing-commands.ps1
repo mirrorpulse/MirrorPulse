@@ -89,7 +89,14 @@ function Read-CliStoppedCoalescingEdit {
         $stdout=$process.StandardOutput.ReadToEndAsync();$stderr=$process.StandardError.ReadToEndAsync()
         if(-not $process.WaitForExit(30000)){throw 'The stopped edit observation exceeded its30s observation window.'}
         $text=$stdout.GetAwaiter().GetResult();$errorText=$stderr.GetAwaiter().GetResult()
-        if($process.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($text) -or $text.Length -gt 1048576){throw 'The stopped edit observer refused the original fixture.'}
+        if($process.ExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($text) -or $text.Length -gt 1048576){
+            $detail='unavailable'
+            # Preserve only the child probe's bounded public failure fields. Never relay raw stderr.
+            if($errorText -cmatch '\AFixture consumer failure: hresult=([0-9A-F]{8}); type=([A-Za-z][A-Za-z0-9]{0,63}); stage=([A-Za-z][A-Za-z0-9]{0,63}); argument=([A-Za-z][A-Za-z0-9_]{0,63})\.\s*\z'){
+                $detail="hresult=$($Matches[1]); type=$($Matches[2]); stage=$($Matches[3]); argument=$($Matches[4])"
+            }
+            throw "The stopped edit observer refused the original fixture (exit $($process.ExitCode); $detail)."
+        }
         $result=$text|ConvertFrom-Json
         if($result.schemaVersion -ne 1 -or $result.exclusiveCatalogOwner -ne $true -or $result.nativeInspected -ne $true -or
             $result.originalSdkAcknowledgementExecuted -ne $false -or $result.mutationExecuted -ne $false -or @($result.journal).Count -gt 2048){
