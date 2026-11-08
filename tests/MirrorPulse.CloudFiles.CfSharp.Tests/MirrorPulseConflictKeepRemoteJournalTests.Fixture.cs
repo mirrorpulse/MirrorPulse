@@ -128,8 +128,10 @@ public sealed partial class MirrorPulseConflictKeepRemoteJournalTests
             if (change is "missing" or "sequence") await transaction.Operations.RemoveAsync(entry.OperationId);
             if (change == "sequence")
                 await transaction.Operations.EnqueueAsync(new(entry.OperationId, entry.Kind, entry.ItemId, entry.Payload.Span, entry.CreatedAt, entry.AttemptCount, entry.RetryAfter));
-            else if (change == "successor")
-                await transaction.Operations.EnqueueAsync(new(Guid.NewGuid(), entry.Kind, Plan.ItemId, new byte[] { 8 }, entry.CreatedAt.AddSeconds(1)));
+            else if (change is "successor" or "content-successor")
+                await transaction.Operations.EnqueueAsync(new(Guid.NewGuid(),
+                    change == "content-successor" ? CloudStateOperationKind.ContentUpdate : entry.Kind,
+                    Plan.ItemId, new byte[] { 8 }, entry.CreatedAt.AddSeconds(1)));
             else if (change != "missing")
                 await transaction.Operations.UpdateAsync(new(entry.OperationId, change == "kind" ? CloudStateOperationKind.ContentUpdate : entry.Kind,
                     itemId, change == "payload" ? new byte[] { 4, 5, 6 } : entry.Payload.Span,

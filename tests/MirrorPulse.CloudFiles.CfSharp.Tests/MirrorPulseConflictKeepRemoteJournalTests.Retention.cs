@@ -46,8 +46,8 @@ public sealed partial class MirrorPulseConflictKeepRemoteJournalTests
         await using var fixture = await Fixture.OpenAsync();
         var retained = await fixture.Guard().RetainAsync(fixture.Copies); string original = JsonSerializer.Serialize(retained);
         await fixture.ChangeRowAsync(change); string changed = await fixture.RowsAsync(); await fixture.ReopenOwnersAsync();
-        await Assert.ThrowsExactlyAsync<InvalidDataException>(() => fixture.Guard().RevalidateRetainedAsync(fixture.Copies));
-        await Assert.ThrowsExactlyAsync<InvalidDataException>(() => fixture.Guard().RetainAsync(fixture.Copies));
+        await AssertOriginalsRefusedAsync(change, () => fixture.Guard().RevalidateRetainedAsync(fixture.Copies));
+        await AssertOriginalsRefusedAsync(change, () => fixture.Guard().RetainAsync(fixture.Copies));
         Assert.AreEqual(original, JsonSerializer.Serialize(await fixture.Catalog.ReadConflictKeepRemoteJournalAsync(retained.CommandId)));
         Assert.AreEqual(changed, await fixture.RowsAsync());
         Assert.AreEqual("pending", (await fixture.Catalog.ReadUserCommandAsync(retained.CommandId))!.State);
@@ -78,7 +78,7 @@ public sealed partial class MirrorPulseConflictKeepRemoteJournalTests
         await fixture.ChangeRowAsync("successor");
         string pending = await fixture.RowsAsync();
         await fixture.ReopenOwnersAsync();
-        await Assert.ThrowsExactlyAsync<InvalidDataException>(() => fixture.Guard().RevalidateRetainedAsync(fixture.Copies));
+        await AssertOriginalsRefusedAsync("successor", () => fixture.Guard().RevalidateRetainedAsync(fixture.Copies));
         Assert.AreEqual(original, JsonSerializer.Serialize(await fixture.Guard().RevalidateRetainedOriginalsAsync(fixture.Copies)));
         Assert.AreEqual(pending, await fixture.RowsAsync());
         Assert.AreEqual("pending", (await fixture.Catalog.ReadUserCommandAsync(retained.CommandId))!.State);

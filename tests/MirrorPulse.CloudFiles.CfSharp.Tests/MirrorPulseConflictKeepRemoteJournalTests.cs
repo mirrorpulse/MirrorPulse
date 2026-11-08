@@ -39,12 +39,13 @@ public sealed partial class MirrorPulseConflictKeepRemoteJournalTests
     [DataRow("missing")]
     [DataRow("sequence")]
     [DataRow("successor")]
+    [DataRow("content-successor")]
     public async Task AnEarlierKeepRemoteSnapshotCannotAuthorizeChangedOriginalsOrANewerTargetOperation(string change)
     {
         await using var fixture = await Fixture.OpenAsync(); var guard = fixture.Guard();
         var snapshot = await guard.CaptureAsync(fixture.Copies);
         await fixture.ChangeRowAsync(change); string changed = await fixture.RowsAsync();
-        await Assert.ThrowsExactlyAsync<InvalidDataException>(() => guard.RevalidateAsync(snapshot, fixture.Copies));
+        await AssertOriginalsRefusedAsync(change, () => guard.RevalidateAsync(snapshot, fixture.Copies));
         Assert.AreEqual(changed, await fixture.RowsAsync());
         Assert.AreEqual("pending", (await fixture.Catalog.ReadUserCommandAsync(snapshot.CommandId))!.State);
     }
@@ -57,7 +58,7 @@ public sealed partial class MirrorPulseConflictKeepRemoteJournalTests
     {
         await using var fixture = await Fixture.OpenAsync();
         fixture.DuringRead = () => fixture.ChangeRowAsync(change);
-        await Assert.ThrowsExactlyAsync<InvalidDataException>(() => fixture.Guard().CaptureAsync(fixture.Copies));
+        await AssertOriginalsRefusedAsync(change, () => fixture.Guard().CaptureAsync(fixture.Copies));
         Assert.AreEqual(1, fixture.PublicReads);
     }
 
@@ -120,5 +121,15 @@ public sealed partial class MirrorPulseConflictKeepRemoteJournalTests
         await fixture.Copies.DisposeAsync();
         await Assert.ThrowsExactlyAsync<InvalidDataException>(() => guard.CaptureAsync(fixture.Copies));
         Assert.AreEqual(before, await fixture.RowsAsync());
+    }
+
+    private static async Task AssertOriginalsRefusedAsync(string change, Func<Task> apply)
+    {
+        if (change == "successor")
+        {
+            var deferred = await Assert.ThrowsExactlyAsync<MirrorPulseKeepRemoteJournalDeferredException>(apply);
+            Assert.IsFalse(deferred.RequiresFullRescan);
+        }
+        else await Assert.ThrowsExactlyAsync<InvalidDataException>(apply);
     }
 }
