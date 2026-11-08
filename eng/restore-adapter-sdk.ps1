@@ -18,6 +18,28 @@ function Assert-PinnedPackage([string]$Path) {
         throw 'The fixed SDK package does not match its pinned length and SHA256.'
     }
 }
+function Receive-PinnedPackage([string]$Path) {
+    $url = "https://github.com/MirrorPulse/adapter-template/releases/download/$($pin.tag)/$asset"
+    try {
+        Invoke-WebRequest -Uri $url -OutFile $Path -MaximumRetryCount 3 -RetryIntervalSec 2
+        return
+    } catch {
+        $status = [int]$_.Exception.Response.StatusCode
+        if ($status -notin @(408,429,500,502,503,504)) { throw }
+        Write-Host "The fixed SDK download returned HTTP $status; trying its exact release asset API."
+    }
+    # The second route selects the same immutable bytes; no version or hash fallback is allowed.
+    $release = Invoke-RestMethod -Uri "https://api.github.com/repos/mirrorpulse/adapter-template/releases/tags/$($pin.tag)" `
+        -Headers @{ Accept = 'application/vnd.github+json' } -MaximumRetryCount 2 -RetryIntervalSec 2
+    $selected = @($release.assets | Where-Object { $_.name -ceq $asset })
+    if ($release.tag_name -cne $pin.tag -or $release.draft -or $selected.Count -ne 1 -or
+        $selected[0].size -ne $pin.length -or $selected[0].url -cnotmatch '\Ahttps://api\.github\.com/repos/mirrorpulse/adapter-template/releases/assets/[1-9][0-9]*\z' -or
+        $selected[0].digest -cne ('sha256:' + $pin.sha256)) {
+        throw 'The fixed SDK release asset API does not match its original pin.'
+    }
+    Invoke-WebRequest -Uri $selected[0].url -Headers @{ Accept = 'application/octet-stream' } `
+        -OutFile $Path -MaximumRetryCount 2 -RetryIntervalSec 2
+}
 if (Test-Path -LiteralPath $destination) {
     Assert-PinnedPackage $destination
 } else {
@@ -25,8 +47,7 @@ if (Test-Path -LiteralPath $destination) {
     try {
         if ($PackagePath) { Copy-Item -LiteralPath $PackagePath -Destination $temporary }
         else {
-            $url = "https://github.com/MirrorPulse/adapter-template/releases/download/$($pin.tag)/$asset"
-            Invoke-WebRequest -Uri $url -OutFile $temporary -MaximumRetryCount 3 -RetryIntervalSec 2
+            Receive-PinnedPackage $temporary
         }
         Assert-PinnedPackage $temporary
         Move-Item -LiteralPath $temporary -Destination $destination

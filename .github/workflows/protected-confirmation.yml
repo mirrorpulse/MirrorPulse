@@ -43,6 +43,7 @@ jobs:
       - name: Restore locked test dependencies
         run: |
           pwsh ./eng/restore-adapter-sdk.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned Adapter SDK acquisition failed.' }
           dotnet restore tests/MirrorPulse.CloudFiles.CfSharp.Tests --locked-mode
 
       - name: Build native test boundary

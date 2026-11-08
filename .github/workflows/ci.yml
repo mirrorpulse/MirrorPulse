@@ -59,6 +59,7 @@ jobs:
       - name: Restore
         run: |
           pwsh ./eng/restore-adapter-sdk.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned Adapter SDK acquisition failed.' }
           dotnet restore MirrorPulse.sln --locked-mode
 
       - name: Verify formatting
@@ -210,6 +211,7 @@ jobs:
       - name: Restore
         run: |
           pwsh ./eng/restore-adapter-sdk.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned Adapter SDK acquisition failed.' }
           dotnet restore MirrorPulse.sln --locked-mode
 
       - name: Install SFTP fixture dependencies
@@ -566,6 +568,7 @@ jobs:
       - name: Restore package verifier
         run: |
           pwsh ./eng/restore-adapter-sdk.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned Adapter SDK acquisition failed.' }
           dotnet restore tests/MirrorPulse.Core.Tests/MirrorPulse.Core.Tests.csproj --locked-mode
 
       - name: Aggregate the frozen official Adapter releases
