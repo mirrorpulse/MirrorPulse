@@ -43,7 +43,8 @@ public sealed class MirrorPulseConflictCommandDiagnosticsTests
             var fields = json.RootElement.GetProperty("Fields");
             Assert.AreEqual(conflict.ToString("D"), fields.GetProperty("operationId").GetString());
             Assert.AreEqual("LocalContent", fields.GetProperty("conflictCommandStage").GetString());
-            Assert.AreEqual(5, fields.EnumerateObject().Count());
+            Assert.AreEqual("Unknown", fields.GetProperty("conflictCommandBoundary").GetString());
+            Assert.AreEqual(6, fields.EnumerateObject().Count());
         }
         finally { if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true); }
     }
@@ -67,5 +68,27 @@ public sealed class MirrorPulseConflictCommandDiagnosticsTests
         var safe = SafeDiagnosticPolicy.Sanitize(entry);
         Assert.IsFalse(safe.Fields.ContainsKey("conflictCommandStage"));
         Assert.IsFalse(JsonSerializer.Serialize(safe).Contains(value, StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    [DataRow("KeepRemote requires the original registered file.", MirrorPulseConflictCommandBoundary.MissingMember)]
+    [DataRow("KeepRemote requires the original file protection.", MirrorPulseConflictCommandBoundary.MissingProtection)]
+    [DataRow("KeepRemote requires the original protected file and direct parent in its active role.", MirrorPulseConflictCommandBoundary.CurrentRole)]
+    [DataRow("KeepRemote lost the original direct parent.", MirrorPulseConflictCommandBoundary.DirectParent)]
+    [DataRow("KeepRemote requires the original protected file and direct parent before any write.", MirrorPulseConflictCommandBoundary.NativeObject)]
+    [DataRow("KeepRemote requires the exact original resident placeholder without source recall.", MirrorPulseConflictCommandBoundary.ResidentIdentity)]
+    [DataRow("A file start requires the complete original UpdateFile decision, copies, journal, object, identity and direct parent.", MirrorPulseConflictCommandBoundary.StartRelations)]
+    [DataRow("synthetic-private KeepRemote requires the original registered file.", MirrorPulseConflictCommandBoundary.Unknown)]
+    [DataRow("KeepRemote requires the original registered file. synthetic-private", MirrorPulseConflictCommandBoundary.Unknown)]
+    public async Task OnlyAnExactProductGuardProducesAClosedBoundaryWithoutRecordingItsText(string message,
+        MirrorPulseConflictCommandBoundary expected)
+    {
+        var original = new InvalidDataException(message); LogEntry observed = null!;
+        var thrown = await Assert.ThrowsExactlyAsync<InvalidDataException>(() => MirrorPulseConflictCommandDiagnostics.RunAsync<int>(Guid.NewGuid(),
+            () => Task.FromException<int>(original), entry => { observed = entry; return ValueTask.CompletedTask; }));
+        Assert.AreSame(original, thrown);
+        var safe = SafeDiagnosticPolicy.Sanitize(observed);
+        Assert.AreEqual(expected.ToString(), safe.Fields["conflictCommandBoundary"]);
+        Assert.IsFalse(JsonSerializer.Serialize(safe).Contains(message, StringComparison.Ordinal));
     }
 }
