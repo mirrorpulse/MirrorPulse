@@ -28,6 +28,8 @@ jobs:
 
       - name: Restore locked native test dependencies
         shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           pwsh ./eng/restore-adapter-sdk.ps1
           if ($LASTEXITCODE -ne 0) { throw 'Pinned SDK restore failed.' }
