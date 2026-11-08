@@ -62,6 +62,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
     [DataRow("birth", "0.1.0-preview.6", "ee593578dba3c666cf59f4a922f0e220f115bf7f")]
     [DataRow("birth", "0.1.0-preview.9", "ee593578dba3c666cf59f4a922f0e220f115bf7f")]
     [DataRow("birth", "0.1.0-preview.10", "a252ea88439475986242691797bc3c1453d30118")]
+    [DataRow("birth", "0.1.0-preview.11", "cfd98515dcc03ac5767a6820aed046a178410a53")]
     [DataRow("retirement", "0.1.0-preview.7", "3caa382e341d260543d3afc05e25fa034fb32e16")]
     [DataRow("retirement", "0.1.0-preview.6", "137d6e2a9c1b15f337e8e7ca3566d5e3f29fcdb9")]
     [DataRow("retirement", "0.1.0-preview.8", "137d6e2a9c1b15f337e8e7ca3566d5e3f29fcdb9")]
@@ -70,6 +71,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
     [DataRow("retirement", "0.1.0-preview.6", "ee593578dba3c666cf59f4a922f0e220f115bf7f")]
     [DataRow("retirement", "0.1.0-preview.9", "ee593578dba3c666cf59f4a922f0e220f115bf7f")]
     [DataRow("retirement", "0.1.0-preview.10", "a252ea88439475986242691797bc3c1453d30118")]
+    [DataRow("retirement", "0.1.0-preview.11", "cfd98515dcc03ac5767a6820aed046a178410a53")]
     public async Task MixedOrUnknownPublicationsCannotAcquireProductProtocolEvidence(string boundary, string version, string source)
     {
         using var fixture = new Fixture(); await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
