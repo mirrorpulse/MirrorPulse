@@ -60,7 +60,6 @@ public static partial class CliFixtureProbe
     private static async Task<CliFixtureInspectionResult> InspectAsync(string root, CliFixtureMarker marker)
     {
         if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17134)) throw new PlatformNotSupportedException();
-        using var visibility = new CliFixturePlaceholderVisibility();
         // Open the existing registered root without registration or a content
         // provider. The independent official store never opens the Host database.
         string inspectionRoot = Path.Combine(root, "inspection");
@@ -74,6 +73,7 @@ public static partial class CliFixtureProbe
             .WithStateStore(new SqliteCloudStateStoreFactory(database)).Build();
         await fileSystem.StartAsync();
         var items = new List<CliFixtureItemObservation>();
+        var references = new List<(string Role, CloudItem Item)>();
         string? roundTripIdentity = null;
         foreach ((string role, string relative, bool isDirectory) in new[]
         {
@@ -85,6 +85,13 @@ public static partial class CliFixtureProbe
         })
         {
             CloudItem item = isDirectory ? fileSystem.GetDirectory(relative) : fileSystem.GetFile(relative);
+            references.Add((role, item));
+        }
+        // Preview.10's reference resolver can recall a cloud reparse point after provider stop.
+        // Construct references first; every actual native inspection still uses the exposed view.
+        using var visibility = new CliFixturePlaceholderVisibility();
+        foreach ((string role, CloudItem item) in references)
+        {
             CloudItemSnapshot snapshot = await item.InspectAsync();
             items.Add(new(role, snapshot.Exists, snapshot.IsPlaceholder, snapshot.PlaceholderState.ToString(),
                 snapshot.ContentAvailability.ToString(), snapshot.SynchronizationState.ToString(), snapshot.Length,

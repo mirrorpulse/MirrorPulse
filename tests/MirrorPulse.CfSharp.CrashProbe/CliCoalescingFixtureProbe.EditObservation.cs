@@ -82,7 +82,6 @@ public static partial class CliCoalescingFixtureProbe
         if (inspectNative)
         {
             if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17134)) throw new PlatformNotSupportedException();
-            using var visibility = new CliFixturePlaceholderVisibility();
             string inspection = Path.Combine(root, "inspection");
             if (Path.Exists(inspection)) RequireExistingUnredirected(inspection);
             Directory.CreateDirectory(inspection); string database = Path.Combine(inspection, "cfsharp.db");
@@ -91,7 +90,10 @@ public static partial class CliCoalescingFixtureProbe
             // provider, remote application, journal feed, ACL operation or Host execution.
             await using var fileSystem = CloudFileSystem.CreateBuilder(paths.SyncRootPath).WithStateStore(new SqliteCloudStateStoreFactory(database)).Build();
             await fileSystem.StartAsync();
-            var snapshot = await fileSystem.GetFile(relative).InspectAsync();
+            // Keep preview.10's recall-prone reference resolution outside exposed metadata inspection.
+            var file = fileSystem.GetFile(relative);
+            using var visibility = new CliFixturePlaceholderVisibility();
+            var snapshot = await file.InspectAsync();
             native = new("RoundTripFile", snapshot.Exists, snapshot.IsPlaceholder, snapshot.PlaceholderState.ToString(),
                 snapshot.ContentAvailability.ToString(), snapshot.SynchronizationState.ToString(), snapshot.Length,
                 snapshot.OnDiskDataSize, snapshot.ValidatedDataSize, snapshot.ModifiedDataSize);
