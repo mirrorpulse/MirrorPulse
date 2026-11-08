@@ -1,10 +1,15 @@
 # Actual signed-Worker conflict choices use only public CLI commands and a stopped-Host test oracle.
+function Get-CliCoalescingSeedBytes {
+    return ,([Text.Encoding]::UTF8.GetBytes('signed coalescing original accepted bytes'))
+}
+
 function Invoke-CliCoalescingContentConflict {
     param(
         [Parameter(Mandatory)][scriptblock]$InvokeCli,
         [Parameter(Mandatory)][scriptblock]$WaitHostStopped,
         [Parameter(Mandatory)][scriptblock]$ReadStoppedAudit,
         [Parameter(Mandatory)][scriptblock]$ReadStoppedEdit,
+        [Parameter(Mandatory)][scriptblock]$InspectOnlineSeed,
         [Parameter(Mandatory)][scriptblock]$ResolveChoice,
         [ValidateSet('KeepBoth','KeepRemote', IgnoreCase = $false)][string]$Action = 'KeepBoth',
         [Parameter(Mandatory)][string]$InstanceId,
@@ -65,24 +70,22 @@ function Invoke-CliCoalescingContentConflict {
         }
     }
     $source=Join-Path $SourceRoot 'cli-roundtrip.txt';$local=Join-Path $MappedRoot 'cli-roundtrip.txt'
-    $seed=[Text.Encoding]::UTF8.GetBytes('signed coalescing original accepted bytes')
+    $seed=Get-CliCoalescingSeedBytes
     $first=[Text.Encoding]::UTF8.GetBytes('signed coalescing first local edit')
     $latest=[Text.Encoding]::UTF8.GetBytes('signed coalescing final local bytes retained by KeepBoth')
     $remote=[Text.Encoding]::UTF8.GetBytes('signed coalescing independently selected remote version')
     $seedHash=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($seed))
     $latestHash=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($latest))
     $remoteHash=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($remote))
+    $onlineSeedIdentity=''
     if($Action -ceq 'KeepRemote'){
-        # Exercise the public protected creation path and let the signed Worker accept the seed.
-        $inputPath=Join-Path ([IO.Path]::GetDirectoryName($SourceRoot)) 'keep-remote-seed.txt'
-        [IO.File]::WriteAllBytes($inputPath,$seed)
-        $parent=Invoke-CoalescingCli 'keep-remote-root-member' @('--json','--no-start','namespace','member','inspect',
-            [IO.Path]::GetFileName($MappedRoot),'--directory')
-        $prepared=Invoke-CoalescingCli 'keep-remote-seed-prepared' @('--json','--no-start','namespace','member','prepare-import',
-            $parent.memberId,'cli-roundtrip.txt',$inputPath)
-        Invoke-CoalescingCli 'keep-remote-seed-imported' @('--json','--no-start','namespace','member','import',$prepared.operationId)|Out-Null
+        # The signed Worker exposes this existing remote item through the normal initial discovery.
         Assert-CoalescingHash $source $seedHash $false
-        Assert-CoalescingHash $local $seedHash $false
+        Assert-CoalescingHash $local $seedHash $true
+        $onlineSeed=& $InspectOnlineSeed
+        $onlineSeed|ConvertTo-Json -Depth 8|Set-Content -LiteralPath (Join-Path $originals 'keep-remote-seed-online.json') -Encoding utf8
+        Assert-KeepRemoteResident $onlineSeed ''
+        $onlineSeedIdentity=$onlineSeed.nativeIdentitySha256
     }else{
         [IO.File]::WriteAllBytes($source,$seed)
         Assert-CoalescingHash $local $seedHash $true
@@ -97,7 +100,7 @@ function Invoke-CliCoalescingContentConflict {
     Invoke-CoalescingCli 'stop-before-edit-baseline' @('--json','--developer-mode','host','stop')|Out-Null
     & $WaitHostStopped
     $editBaseline=Read-CoalescingEdit 'edit-baseline'
-    Assert-KeepRemoteResident $editBaseline ''
+    Assert-KeepRemoteResident $editBaseline $onlineSeedIdentity
     Invoke-CoalescingCli 'start-before-first-edit' @('--json','--developer-mode','host','start')|Out-Null
     $baseline=[long](Confirm-CoalescingDisabled 'before-first-edit-status').pendingUploads
     $firstWrittenAt=[DateTimeOffset]::UtcNow

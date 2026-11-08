@@ -4,12 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       contract:
-        description: Select protected confirmation or the CfSharp Access journal qualification
+        description: Select protected confirmation, Access journal qualification or signed KeepRemote
         type: choice
         options:
           - prototype
           - managed
           - access-journal
+          - signed-keep-remote
         default: prototype
 
 permissions:
@@ -17,6 +18,7 @@ permissions:
 
 jobs:
   probe:
+    if: inputs.contract != 'signed-keep-remote'
     strategy:
       fail-fast: false
       matrix:
@@ -122,3 +124,56 @@ jobs:
           name: evidence-access-journal-${{ matrix.runtime }}
           path: artifacts/test-results/keep-remote-native
           if-no-files-found: error
+
+  signed-keep-remote:
+    if: inputs.contract == 'signed-keep-remote'
+    runs-on: windows-11-arm
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          global-json-file: global.json
+
+      - name: Restore locked test dependencies
+        shell: pwsh
+        run: |
+          pwsh ./eng/restore-adapter-sdk.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Adapter SDK restore failed.' }
+          dotnet restore MirrorPulse.sln --locked-mode
+
+      - name: Freeze and verify the signed Local Adapter
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          pwsh ./eng/prepare-native-ci-volume.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Disposable native volume preparation failed.' }
+          pwsh ./eng/verify-official-adapter-release-policy.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Official candidate selection failed.' }
+          pwsh ./eng/resolve-official-adapter-releases.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'The official release candidate could not be frozen.' }
+          pwsh ./eng/aggregate-official-adapters.ps1 -ReleaseLockPath artifacts/official-adapter-releases.json -AdapterIds com.mirrorpulse.adapter.local -OutputDirectory artifacts/official-local
+
+      - name: Verify signed ARM64 coalesced KeepRemote through the default Host
+        shell: pwsh
+        timeout-minutes: 10
+        env:
+          MIRRORPULSE_NATIVE_TEST: '1'
+        run: |
+          $packages = @(Get-ChildItem -LiteralPath artifacts/official-local -Recurse -Filter '*.mpadapter' -File)
+          if ($packages.Count -ne 1 -or -not (Test-Path -LiteralPath ($packages[0].FullName + '.signature.json'))) { throw 'The exact frozen signed Local package is required.' }
+          New-Item -ItemType Directory -Path artifacts/evidence/cli-keep-remote -Force | Out-Null
+          pwsh ./eng/verify-cli-integration.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName -Coalescing -CoalescingAction KeepRemote -EvidencePath artifacts/evidence/cli-keep-remote/report.json
+          if ($LASTEXITCODE -ne 0) { throw 'The real signed KeepRemote conflict choice failed.' }
+
+      - name: Preserve signed ARM64 KeepRemote results and failures
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: cli-keep-remote-arm64-originals
+          path: artifacts/evidence/cli-keep-remote/**
+          if-no-files-found: ignore

@@ -190,6 +190,9 @@ try {
     } finally { $fixtureUser.Dispose() }
     New-Item -ItemType Directory -Path (Join-Path $sourceRoot "nested") -Force | Out-Null
     [IO.File]::WriteAllBytes((Join-Path $sourceRoot "nested\fixture.txt"), $fixtureBytes)
+    if ($Coalescing -and $CoalescingAction -ceq 'KeepRemote') {
+        [IO.File]::WriteAllBytes((Join-Path $sourceRoot 'cli-roundtrip.txt'), (Get-CliCoalescingSeedBytes))
+    }
     if ($Regression) {
         $binaryFixture = [byte[]]::new(2 * 1024 * 1024 + 257)
         [Random]::new(4096).NextBytes($binaryFixture)
@@ -331,6 +334,12 @@ try {
             -WaitHostStopped { Wait-MirrorPulseHostStopped } `
             -ReadStoppedAudit { param($completed) Invoke-CliStoppedCoalescingOracle -ProbeAssembly $script:probeAssembly -FixtureRoot $runRoot -Completed $completed -Action $CoalescingAction } `
             -ReadStoppedEdit { Read-CliStoppedCoalescingEdit -ProbeAssembly $script:probeAssembly -FixtureRoot $runRoot } `
+            -InspectOnlineSeed {
+                $inspection = Invoke-CliFixtureProbe -Mode inspect -Phase BeforeCoalescingDisable
+                $target = @($inspection.items | Where-Object role -CEQ 'RoundTripFile')
+                if ($target.Count -ne 1) { throw 'The independent probe did not inspect the exact KeepRemote seed.' }
+                @{ nativeInspected = $true; native = $target[0]; nativeIdentitySha256 = $inspection.roundTripIdentitySha256 }
+            } `
             -ResolveChoice { param($conflict) Invoke-CliCoalescingChoice -CliPath $script:cliExecutable -FixtureRoot $runRoot -ConflictId $conflict -Action $CoalescingAction } `
             -Action $CoalescingAction `
             -InstanceId $instanceId -MappedRoot $mappedRoot -SourceRoot $sourceRoot -EvidencePath $EvidencePath

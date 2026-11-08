@@ -17,7 +17,8 @@ public sealed record CliFixtureAuditResult(int SchemaVersion, bool RouteVerified
 public sealed record CliFixtureItemObservation(string Role, bool Exists, bool IsPlaceholder, string PlaceholderState,
     string ContentAvailability, string SynchronizationState, long? Length, long? OnDiskDataSize,
     long? ValidatedDataSize, long? ModifiedDataSize);
-public sealed record CliFixtureInspectionResult(int SchemaVersion, IReadOnlyList<CliFixtureItemObservation> Items);
+public sealed record CliFixtureInspectionResult(int SchemaVersion, IReadOnlyList<CliFixtureItemObservation> Items,
+    string? RoundTripIdentitySha256);
 
 /// <summary>Independent consumers and a stopped-Host catalog oracle for synthetic CLI fixtures only.</summary>
 public static partial class CliFixtureProbe
@@ -71,12 +72,14 @@ public static partial class CliFixtureProbe
             .WithStateStore(new SqliteCloudStateStoreFactory(database)).Build();
         await fileSystem.StartAsync();
         var items = new List<CliFixtureItemObservation>();
+        string? roundTripIdentity = null;
         foreach ((string role, string relative, bool isDirectory) in new[]
         {
             ("ManagedRoot", marker.DirectoryName, true),
             ("NestedDirectory", Path.Combine(marker.DirectoryName, "nested"), true),
             ("TextFile", Path.Combine(marker.DirectoryName, ReadOnlyPaths[0]), false),
             ("BinaryFile", Path.Combine(marker.DirectoryName, ReadOnlyPaths[1]), false),
+            ("RoundTripFile", Path.Combine(marker.DirectoryName, "cli-roundtrip.txt"), false),
         })
         {
             CloudItem item = isDirectory ? fileSystem.GetDirectory(relative) : fileSystem.GetFile(relative);
@@ -84,8 +87,10 @@ public static partial class CliFixtureProbe
             items.Add(new(role, snapshot.Exists, snapshot.IsPlaceholder, snapshot.PlaceholderState.ToString(),
                 snapshot.ContentAvailability.ToString(), snapshot.SynchronizationState.ToString(), snapshot.Length,
                 snapshot.OnDiskDataSize, snapshot.ValidatedDataSize, snapshot.ModifiedDataSize));
+            if (role == "RoundTripFile" && !snapshot.PlaceholderIdentity.IsEmpty)
+                roundTripIdentity = Convert.ToHexString(SHA256.HashData(snapshot.PlaceholderIdentity.Span));
         }
-        return new(1, items.AsReadOnly());
+        return new(1, items.AsReadOnly(), roundTripIdentity);
     }
 
     private static async Task<CliFixtureReadResult> ReadAsync(string root, CliFixtureMarker marker)
