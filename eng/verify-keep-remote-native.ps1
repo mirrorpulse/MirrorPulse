@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [switch]$BudgetOnly,
-    [ValidateSet('keep-remote', 'access-journal')][string]$Scope = 'keep-remote',
+    [ValidateSet('keep-remote', 'access-journal', 'journal-reconciliation')][string]$Scope = 'keep-remote',
     [ValidateSet('X64', 'Arm64')][string]$ExpectedArchitecture
 )
 
@@ -32,9 +32,26 @@ if ($Scope -eq 'access-journal') {
     $boundary = 'KeepRemoteAccessJournal'
     $filter = ($selected | ForEach-Object { 'FullyQualifiedName=' + $_ }) -join '|'
 }
+$fixtureBudgetMilliseconds = $count * 65000
+if ($Scope -eq 'journal-reconciliation') {
+    $fixture = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.'
+    $selected = @(
+        ($fixture + 'NativeControlledBirthRetainsIdentityBytesAndOfficialJournalAcrossRestart')
+        ($fixture + 'NativeRootLabelJournalAdmissionRequiresCurrentTreeAndActualSdkReturnBeforeReadmission')
+    )
+    if (@($selected | Where-Object { $_ -cnotin $catalog.required.native }).Count) {
+        throw 'Journal reconciliation requires both exact declared methods.'
+    }
+    $count = Get-RequiredTestExecutionCount -Catalog $catalog -Names $selected
+    if ($count -ne 2) { throw 'Journal reconciliation requires exactly two native cases.' }
+    $boundary = 'NamespaceJournalReconciliation'
+    $filter = ($selected | ForEach-Object { 'FullyQualifiedName=' + $_ }) -join '|'
+    # One 45-second birth fixture and all six original 30-second root-label cuts.
+    $fixtureBudgetMilliseconds = 45000 + 6 * 30000
+}
 if ($BudgetOnly) {
-    # Preserve every fixture's original65-second budget plus collection/cleanup.
-    [int][Math]::Ceiling(($count * 65000 + 120000) / 60000.0)
+    # Preserve the selected fixtures' original budgets plus collection/cleanup.
+    [int][Math]::Ceiling(($fixtureBudgetMilliseconds + 120000) / 60000.0)
     exit 0
 }
 if (-not $IsWindows) { throw 'Native diagnostics require Windows.' }

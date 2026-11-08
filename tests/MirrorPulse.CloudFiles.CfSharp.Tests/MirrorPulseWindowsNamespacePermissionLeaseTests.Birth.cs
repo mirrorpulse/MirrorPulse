@@ -83,6 +83,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 }
                 await using var catalog = await MirrorPulseProductCatalog.OpenAsync(paths, timeout.Token);
                 await using var coordinator = new MirrorPulseNamespacePermissionCoordinator(catalog);
+                ValueTask ReconcileAsync(CancellationToken stop) =>
+                    ReconcileClosedFixtureJournalAsync(fileSystem, state, feed, catalog, router, null, stop);
                 await using var guard = await MirrorPulseWindowsNamespacePermissionLease.OpenAsync(fileSystem.Root, router, timeout.Token);
                 if (owner == 0)
                 {
@@ -200,13 +202,13 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     }
                     AssertBirthAliasDenied(Path.Combine(directory, "after-write.link"), filePath);
                     CollectionAssert.AreEqual(payload, await File.ReadAllBytesAsync(filePath, timeout.Token));
-                    var pending = await WaitForBirthJournalAsync(feed, births[0].Plan.ItemId, births[1].Plan.ItemId, timeout.Token);
+                    var pending = await WaitForBirthJournalAsync(feed, births[0].Plan.ItemId, births[1].Plan.ItemId, timeout.Token, ReconcileAsync);
                     journalIds = pending.Select(change => change.OperationId).ToArray();
                     Assert.IsGreaterThan(0, journalIds.Length);
                     stagedBirth = await StageNativeAbandonedBirthAsync(fileSystem, state, catalog, router, role,
                         registration.InstanceId, originals[1], payload, timeout.Token);
                     stagedJournalIds = (await WaitForBirthJournalAsync(feed, stagedBirth.Plan.ItemId,
-                        births[1].Plan.ItemId, timeout.Token)).Select(change => change.OperationId).ToArray();
+                        births[1].Plan.ItemId, timeout.Token, ReconcileAsync)).Select(change => change.OperationId).ToArray();
                 }
                 else if (owner == 1)
                 {
@@ -289,7 +291,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     Assert.IsTrue(snapshot.IsPlaceholder);
                     Assert.AreEqual(observations[0].LocalObject.LocalFileId, snapshot.LocalBinding!.LocalFileId);
                     Assert.AreEqual(births[0].Plan.ItemId, snapshot.ItemId);
-                    var pending = await WaitForBirthJournalAsync(feed, births[0].Plan.ItemId, births[1].Plan.ItemId, timeout.Token);
+                    var pending = await WaitForBirthJournalAsync(feed, births[0].Plan.ItemId, births[1].Plan.ItemId, timeout.Token, ReconcileAsync);
                     CollectionAssert.IsSubsetOf(journalIds, pending.Select(change => change.OperationId).ToArray());
                     await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() => File.Delete(filePath), timeout.Token));
                     string directoryPath = Path.Combine(docs.FullPath, "empty");
@@ -338,16 +340,16 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     Assert.IsNotNull(parentProtection);
                     nestedBirths.AddRange(await CreateNativeNestedBirthsAsync(fileSystem, state, catalog, router, nextRole,
                         registration.InstanceId, births[1].Birth, observations[1], parentProtection, payload, timeout.Token));
-                    nestedJournalIds = await ReadNativeNestedBirthJournalAsync(feed, nestedBirths, timeout.Token);
+                    nestedJournalIds = await ReadNativeNestedBirthJournalAsync(feed, nestedBirths, ReconcileAsync, timeout.Token);
                     foreach (var nested in nestedBirths)
                         await RegisterNativeBornMemberAsync(fileSystem, catalog, router, nextRole, nested.Birth.OperationId, members, namespaceActor, timeout.Token);
                 }
                 else
                 {
                     await VerifyNativeNestedBirthsAsync(fileSystem, state, catalog, router, nextRole, nestedBirths, payload, timeout.Token);
-                    var pending = await WaitForBirthJournalAsync(feed, births[0].Plan.ItemId, births[1].Plan.ItemId, timeout.Token);
+                    var pending = await WaitForBirthJournalAsync(feed, births[0].Plan.ItemId, births[1].Plan.ItemId, timeout.Token, ReconcileAsync);
                     CollectionAssert.IsSubsetOf(journalIds, pending.Select(change => change.OperationId).ToArray());
-                    CollectionAssert.IsSubsetOf(nestedJournalIds, await ReadNativeNestedBirthJournalAsync(feed, nestedBirths, timeout.Token));
+                    CollectionAssert.IsSubsetOf(nestedJournalIds, await ReadNativeNestedBirthJournalAsync(feed, nestedBirths, ReconcileAsync, timeout.Token));
                     Assert.IsNotNull(stagedBirth);
                     if (owner == 2)
                     {
@@ -361,7 +363,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         await RegisterNativeBornMemberAsync(fileSystem, catalog, router, nextRole, stagedBirth.Birth.OperationId, members, namespaceActor, timeout.Token);
                     }
                     CollectionAssert.IsSubsetOf(stagedJournalIds, (await WaitForBirthJournalAsync(feed,
-                        stagedBirth.Plan.ItemId, births[1].Plan.ItemId, timeout.Token)).Select(change => change.OperationId).ToArray());
+                        stagedBirth.Plan.ItemId, births[1].Plan.ItemId, timeout.Token, ReconcileAsync)).Select(change => change.OperationId).ToArray());
                     Assert.AreEqual(Encoding.UTF8.GetString(payload) + " latest", await File.ReadAllTextAsync(filePath, timeout.Token));
                     Assert.HasCount(6, await catalog.ReadNamespacePermissionChangesAsync(timeout.Token));
                     TestContext.WriteLine($"ControlledNestedBirth: cfSharpOwner={owner}; bornDirectParents=True; depth=3; publicParentIdentity=True; firstBindingsAndBytesRetained=True; originalJournalIdsRetained=True; roleOnlyNamespace=True; sourceReads=0; hostIntegrated=False.");
@@ -377,7 +379,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 if (owner == 3)
                 {
                     positionHistory = await VerifyNativeMemberLocationAfterPublicMoveAsync(fileSystem, state, catalog, router, nextRole, namespaceActor,
-                        members[births[0].Birth.OperationId], members[births[1].Birth.OperationId], feed, journalIds, births[1].Plan.ItemId, timeout.Token);
+                        members[births[0].Birth.OperationId], members[births[1].Birth.OperationId], feed, journalIds, births[1].Plan.ItemId, ReconcileAsync, timeout.Token);
                     var retirementMember = members[nestedBirths[^1].Birth.OperationId];
                     var retirement = new MirrorPulseNamespaceRetirementCoordinator(fileSystem, catalog, router, nextRole, namespaceActor);
                     var retirementPrepared = await retirement.PrepareAsync(Guid.NewGuid(), retirementMember.MemberId, timeout.Token);
@@ -417,18 +419,30 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         }
     }
 
-    private async Task<CloudLocalChange[]> WaitForBirthJournalAsync(CloudLocalChangeFeed feed, Guid file, Guid directory, CancellationToken token)
+    private async Task<CloudLocalChange[]> WaitForBirthJournalAsync(CloudLocalChangeFeed feed, Guid file, Guid directory,
+        CancellationToken token, Func<CancellationToken, ValueTask>? reconcile = null)
     {
         string? previousDiagnostic = null;
         while (true)
         {
             var scan = await feed.BeginScanAsync(token);
+            if (scan.RequiresFullRescan && reconcile is not null)
+            {
+                await reconcile(token);
+                continue;
+            }
             Assert.IsFalse(scan.RequiresFullRescan);
             var changes = new List<CloudLocalChange>();
             long after = 0;
             while (true)
             {
                 var page = await feed.ReadPageAsync(scan, after, 64, token);
+                if (page.RequiresFullRescan && reconcile is not null)
+                {
+                    await reconcile(token);
+                    changes.Clear();
+                    break;
+                }
                 Assert.IsFalse(page.RequiresFullRescan);
                 changes.AddRange(page.Changes.Where(change => change.ItemId == file || change.ItemId == directory));
                 if (!page.HasMore) break;

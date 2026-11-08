@@ -84,15 +84,30 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             await moves.PrepareRootLabelAsync(history.Intent.OperationId, deadline.Token);
             await moves.ExecuteRootLabelAsync(history.Intent.OperationId, deadline.Token);
 
+            async ValueTask ReconcileAsync(CancellationToken stop)
+            {
+                await using var closed = await work.BeginRecoveryAsync([root.RootId], stop);
+                await ReconcileClosedFixtureJournalAsync(fileSystem, state, feed, catalog, router, work, stop);
+                await audits.AuditRootAsync(initialized.Completion.AnchorMemberId, anchor, root.RootId, stop);
+                if (!disabled) closed.CompleteAfterFreshAudit();
+            }
+
             MirrorPulseLocalChangeObservation? original = null;
             while (original is null)
             {
                 var scan = await feed.BeginScanAsync(deadline.Token);
+                if (scan.RequiresFullRescan) { await ReconcileAsync(deadline.Token); continue; }
                 Assert.IsFalse(scan.RequiresFullRescan, "Lost journal history cannot supply an original root notification.");
                 long after = 0; bool more;
                 do
                 {
                     var page = await feed.ReadPageAsync(scan, after, 128, deadline.Token);
+                    if (page.RequiresFullRescan)
+                    {
+                        await ReconcileAsync(deadline.Token);
+                        original = null;
+                        break;
+                    }
                     Assert.IsFalse(page.RequiresFullRescan);
                     var change = page.Changes.SingleOrDefault(change => change.Kind == CloudLocalChangeKind.Move &&
                         change.IsDirectory && change.ItemId == history.Proof!.ItemId && change.RelativePath == "Renamed" && change.PreviousRelativePath == "Docs");

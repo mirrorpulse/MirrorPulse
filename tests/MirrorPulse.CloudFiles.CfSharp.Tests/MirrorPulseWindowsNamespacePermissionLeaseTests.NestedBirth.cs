@@ -132,13 +132,14 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         }
     }
 
-    private async Task<Guid[]> ReadNativeNestedBirthJournalAsync(CloudLocalChangeFeed feed, IReadOnlyList<NativeNestedBirth> births, CancellationToken token)
+    private async Task<Guid[]> ReadNativeNestedBirthJournalAsync(CloudLocalChangeFeed feed, IReadOnlyList<NativeNestedBirth> births,
+        Func<CancellationToken, ValueTask> reconcile, CancellationToken token)
     {
         Guid leafId = births[^1].Plan.ItemId;
         var operations = new HashSet<Guid>();
         foreach (var directory in births.Where(birth => birth.Birth.IsDirectory))
         {
-            var page = await WaitForBirthJournalAsync(feed, leafId, directory.Plan.ItemId, token);
+            var page = await WaitForBirthJournalAsync(feed, leafId, directory.Plan.ItemId, token, reconcile);
             foreach (var change in page) operations.Add(change.OperationId);
         }
         return operations.ToArray();
