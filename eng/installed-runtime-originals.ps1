@@ -88,7 +88,7 @@ function Get-InstalledInputMetadata([string]$Path, [string]$Runtime, [string]$So
             if ($assemblyName -ceq 'MirrorPulse.Adapter.Sdk') {
                 $valid = $version -ceq '0.2.0+1008894b495bb57fe8661a6106dcf8954fbe037d'
             } elseif ($assemblyName -clike 'CfSharp*') {
-                $valid = $version -ceq '0.1.0-preview.9+a252ea88439475986242691797bc3c1453d30118'
+                $valid = $version -ceq '0.1.0-preview.10+cfd98515dcc03ac5767a6820aed046a178410a53'
             } else {
                 $valid = $version -cmatch ('\+' + $SourceSha + '$')
             }
