@@ -947,6 +947,18 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             }, requestCancellation);
 
         [SupportedOSPlatform("windows10.0.26100")]
+        private ValueTask<MirrorPulseNamespaceWorkAdmission.RecoveryLease> EnterDisabledLocalRetirementAsync(
+            RootRegistration root, Guid operationId, CancellationToken requestCancellation) =>
+            EnterDisabledLocalOperationAsync(root, async token =>
+            {
+                var original = await catalog!.ReadNamespaceRetirementAsync(operationId, token).ConfigureAwait(false);
+                if (original is not null && (original.Intent.RootId != root.RootId || original.Intent.Version != 1 ||
+                    original.Intent.BatchOperationId is not null || original.Intent.RemoteEntry is not null || original.Intent.TransferEntry is not null))
+                    throw new InvalidOperationException("The operation ID does not own a controlled member retirement in this disabled root.");
+                return original is not null;
+            }, requestCancellation);
+
+        [SupportedOSPlatform("windows10.0.26100")]
         private async ValueTask<MirrorPulseNamespaceWorkAdmission.RecoveryLease> EnterDisabledLocalOperationAsync(
             RootRegistration root, Func<CancellationToken, ValueTask<bool>> hasOriginalLocalOperation,
             CancellationToken requestCancellation)
@@ -1187,7 +1199,9 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             var member = await catalog.ReadNamespaceMemberAsync(memberId, cancellationToken).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The retirement member is not registered.");
             var registration = router.Registrations.Single(root => root.RootId == member.RootId);
-            using var admission = namespaceWork?.Enter([registration.RootId]);
+            using var admission = registration.State == RootRegistrationState.Disabled ? null : namespaceWork?.Enter([registration.RootId]);
+            await using var disabledAdmission = registration.State == RootRegistrationState.Disabled
+                ? await EnterDisabledLocalRetirementAsync(registration, operationId, cancellationToken).ConfigureAwait(false) : null;
             return await WithInstanceLibraryAsync(registration.InstanceId, token =>
                 new MirrorPulseNamespaceRetirementCoordinator(fileSystem, catalog, router, _namespaceExecution, _namespaceActor)
                     .PrepareAsync(operationId, memberId, token), cancellationToken).ConfigureAwait(false);

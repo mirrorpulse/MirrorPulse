@@ -60,3 +60,23 @@ that fixture's65 seconds to the prior143-name budget. The isolated
 with the same two-minute collection/cleanup allowance. Recursive disabled
 directory mutation, replacement/deletion and final default-Host coverage remain
 separate acceptance requirements.
+
+Explicit leaf retirement has its own disabled-root admission. An original replay
+must be the same local single-member operation in that root; batch, remote and
+transfer owners retain their separate execution contracts. New admission uses
+the current protected-tree audit and drained recovery lease. The existing
+retirement coordinator still rejects protected roots and nonempty directories,
+performs native/SDK deletion and retains separate completion receipts.
+
+Its native case deletes one file and one empty directory through the public
+runtime, retains their original birth/member and complete pending journal facts,
+and replays the same receipts after disposing the first namespace role. Replaying
+completed creation does not resurrect the retired objects. No original journal
+entry is acknowledged and no Worker is contacted. This is explicit local
+deletion; it does not claim that the deleted file remains locally present or
+that a remote deletion has been accepted.
+
+The145-name namespace catalog adds only this fixture's65 seconds, retaining every
+prior selection and deadline. The isolated native qualification contains six
+65-second executions with its existing120-second collection/cleanup allowance.
+Recursive disabled retirement and default-Host/installed acceptance remain open.
