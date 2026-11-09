@@ -12,6 +12,7 @@ on:
           - managed
           - access-journal
           - journal-reconciliation
+          - disabled-local-birth
           - signed-keep-remote
           - signed-post-move
           - signed-create-conflict
@@ -58,7 +59,7 @@ jobs:
         run: pwsh ./eng/prepare-native-ci-volume.ps1
 
       - name: Verify protected confirmation
-        if: inputs.contract != 'access-journal' && inputs.contract != 'journal-reconciliation'
+        if: inputs.contract != 'access-journal' && inputs.contract != 'journal-reconciliation' && inputs.contract != 'disabled-local-birth'
         shell: pwsh
         env:
           MIRRORPULSE_NATIVE_TEST: '1'
@@ -71,7 +72,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Protected content confirmation failed.' }
 
       - name: Collect safe probe evidence
-        if: always() && inputs.contract != 'access-journal' && inputs.contract != 'journal-reconciliation'
+        if: always() && inputs.contract != 'access-journal' && inputs.contract != 'journal-reconciliation' && inputs.contract != 'disabled-local-birth'
         shell: pwsh
         env:
           CONFIRMATION_CONTRACT: ${{ inputs.contract || 'prototype' }}
@@ -100,7 +101,7 @@ jobs:
           if ($report.selected -ne $expected -or $report.executed -ne $expected -or $report.passed -ne $expected) { throw 'Every protected confirmation case must execute and pass.' }
 
       - name: Upload safe probe report
-        if: always() && inputs.contract != 'access-journal' && inputs.contract != 'journal-reconciliation'
+        if: always() && inputs.contract != 'access-journal' && inputs.contract != 'journal-reconciliation' && inputs.contract != 'disabled-local-birth'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: evidence-protected-${{ matrix.runtime }}
@@ -109,7 +110,7 @@ jobs:
 
       - name: Retain the original journal fixture deadlines
         id: journal-budget
-        if: inputs.contract == 'access-journal' || inputs.contract == 'journal-reconciliation'
+        if: inputs.contract == 'access-journal' || inputs.contract == 'journal-reconciliation' || inputs.contract == 'disabled-local-birth'
         shell: pwsh
         env:
           JOURNAL_SCOPE: ${{ inputs.contract }}
@@ -119,7 +120,7 @@ jobs:
           "timeout_minutes=$minutes" >> $env:GITHUB_OUTPUT
 
       - name: Verify the selected journal boundary
-        if: inputs.contract == 'access-journal' || inputs.contract == 'journal-reconciliation'
+        if: inputs.contract == 'access-journal' || inputs.contract == 'journal-reconciliation' || inputs.contract == 'disabled-local-birth'
         timeout-minutes: ${{ fromJSON(steps.journal-budget.outputs.timeout_minutes) }}
         shell: pwsh
         env:
@@ -129,7 +130,7 @@ jobs:
           pwsh ./eng/verify-keep-remote-native.ps1 -Scope $env:JOURNAL_SCOPE -ExpectedArchitecture $env:JOURNAL_ARCHITECTURE
 
       - name: Upload original journal qualification evidence
-        if: always() && (inputs.contract == 'access-journal' || inputs.contract == 'journal-reconciliation')
+        if: always() && (inputs.contract == 'access-journal' || inputs.contract == 'journal-reconciliation' || inputs.contract == 'disabled-local-birth')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: evidence-${{ inputs.contract }}-${{ matrix.runtime }}

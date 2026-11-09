@@ -879,7 +879,10 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                 ?? throw new FileNotFoundException("The creation parent is not registered.");
             if (parent.RootId is null) throw new InvalidOperationException("Creation requires an Adapter's managed root.");
             var registration = router.Registrations.Single(root => root.RootId == parent.RootId);
-            using var admission = namespaceWork?.Enter([registration.RootId]);
+            using var admission = registration.State == RootRegistrationState.Disabled ? null : namespaceWork?.Enter([registration.RootId]);
+            await using var disabledAdmission = registration.State == RootRegistrationState.Disabled
+                ? await EnterDisabledLocalBirthAsync(registration, operationId, MirrorPulseNamespaceBirthOrigin.ControlledCreation,
+                    cancellationToken).ConfigureAwait(false) : null;
             return await WithInstanceLibraryAsync(registration.InstanceId, token =>
                 new MirrorPulseNamespaceCreationCoordinator(fileSystem, state, catalog, router, _namespaceExecution, _namespaceActor)
                     .CreateAsync(operationId, parentMemberId, name, isDirectory, token), cancellationToken).ConfigureAwait(false);
@@ -903,7 +906,8 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             var registration = router!.Registrations.Single(root => root.RootId == parent.RootId);
             using var admission = registration.State == RootRegistrationState.Disabled ? null : namespaceWork?.Enter([registration.RootId]);
             await using var disabledAdmission = registration.State == RootRegistrationState.Disabled
-                ? await EnterDisabledImportPreparationAsync(registration, operationId, cancellationToken).ConfigureAwait(false) : null;
+                ? await EnterDisabledLocalBirthAsync(registration, operationId, MirrorPulseNamespaceBirthOrigin.Import,
+                    cancellationToken).ConfigureAwait(false) : null;
             var inputs = new MirrorPulseLocalImportStagingStore(new(syncRootPath, dataRootPath));
             // A source may hydrate through this SDK owner. Retain it while capturing input,
             // then release that scope before waiting for the instance's execution admission.
@@ -917,23 +921,26 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
-        private async ValueTask<MirrorPulseNamespaceWorkAdmission.RecoveryLease> EnterDisabledImportPreparationAsync(
-            RootRegistration root, Guid operationId, CancellationToken requestCancellation)
+        private async ValueTask<MirrorPulseNamespaceWorkAdmission.RecoveryLease> EnterDisabledLocalBirthAsync(
+            RootRegistration root, Guid operationId, MirrorPulseNamespaceBirthOrigin origin, CancellationToken requestCancellation)
         {
+            if (root.State != RootRegistrationState.Disabled ||
+                origin is not (MirrorPulseNamespaceBirthOrigin.ControlledCreation or MirrorPulseNamespaceBirthOrigin.Import))
+                throw new ArgumentException("Closed local birth admission requires its disabled root and explicit local origin.");
             if (namespaceWork is null || catalog is null || router is null || _namespaceExecution is null ||
                 _namespaceActor is null || _permissions is null || _startupProtection is null)
-                throw new NotSupportedException("Disabled import preparation requires the protected Host namespace boundary.");
+                throw new NotSupportedException("Disabled local birth requires the protected Host namespace boundary.");
             using var stop = CancellationTokenSource.CreateLinkedTokenSource(requestCancellation, _admissionShutdown.Token);
             var drained = await namespaceWork.WaitForRecoveryAsync([root.RootId], stop.Token).ConfigureAwait(false);
             try
             {
-                // Original replay retains only its durable import ownership. The
-                // creation coordinator still validates its parent, name and bytes.
+                // Original replay retains only its durable local birth ownership.
+                // The creation coordinator still validates parent, name, kind and bytes.
                 var original = await catalog.ReadNamespaceBirthAsync(operationId, stop.Token).ConfigureAwait(false);
                 if (original is not null)
                 {
-                    if (original.RootId != root.RootId || original.Origin != MirrorPulseNamespaceBirthOrigin.Import)
-                        throw new InvalidOperationException("The operation ID does not own an import in this disabled root.");
+                    if (original.RootId != root.RootId || original.Origin != origin)
+                        throw new InvalidOperationException("The operation ID does not own this local birth in the disabled root.");
                 }
                 else
                 {
@@ -941,11 +948,11 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                     {
                         var anchor = RequireCurrentStartupAnchor();
                         var member = await catalog.ReadNamespaceMemberByBindingAsync(anchor.Original.LocalObject, token).ConfigureAwait(false)
-                            ?? throw new InvalidDataException("Disabled import preparation lost its live sync-root anchor.");
+                            ?? throw new InvalidDataException("Disabled local birth lost its live sync-root anchor.");
                         var audit = await new MirrorPulseNamespaceCurrentTreeAuditCoordinator(fileSystem, catalog, router,
                             _namespaceExecution, _namespaceActor, _permissions).AuditRootAsync(member.MemberId, anchor, root.RootId, token).ConfigureAwait(false);
                         if (audit.Inventory.FencedRoots.Count != 0 || _startupProtection != anchor || router.FindRegistration(root.RootId) != root)
-                            throw new InvalidOperationException("New disabled import preparation requires its current unfenced Host audit.");
+                            throw new InvalidOperationException("New disabled local birth requires its current unfenced Host audit.");
                         return true;
                     }, stop.Token).ConfigureAwait(false);
                 }

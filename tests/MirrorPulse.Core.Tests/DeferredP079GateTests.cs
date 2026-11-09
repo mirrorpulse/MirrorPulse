@@ -33,8 +33,9 @@ public sealed class DeferredP079GateTests
                 'NativeKeepRemoteRoleHandoffRecoversLostReadbackWithoutReapplyingContent',
                 'NativeKeepRemoteUploadPumpResumesAcceptedCommandAfterRootAudit',
                 'NativeKeepRemoteCfSharpAccessOnlyPreservesOriginalJournalAndRealSameLengthWrite')|ForEach-Object {$keepRemotePrefix+$_}
-            $names=@($catalog.required.namespace | Where-Object {$_ -cnotin $keepRemote})
-            if($names.Count -ne 125 -or @($catalog.required.native|Where-Object {$_ -cnotin $keepRemote}).Count -ne 150 -or @($catalog.required.deferredP079).Count -ne 5){throw 'Required scope names changed.'}
+            $disabledCreation=$keepRemotePrefix+'NativeDisabledRootControlledCreationRetainsFilesDirectoriesAndOriginalsAcrossOwnersWithoutDispatch'
+            $names=@($catalog.required.namespace | Where-Object {$_ -cnotin $keepRemote -and $_ -cne $disabledCreation})
+            if($names.Count -ne 125 -or @($catalog.required.native|Where-Object {$_ -cnotin $keepRemote -and $_ -cne $disabledCreation}).Count -ne 150 -or @($catalog.required.deferredP079).Count -ne 5){throw 'Required scope names changed.'}
             if((Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 125 -TestNames $names -Scope S06) -ne 5375000 -or
                (Get-OrdinaryUserNamespaceStepTimeoutMinutes -TestCount 125 -TestNames $names -Scope S06) -ne 95 -or
                (Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 125 -TestNames $names) -ne 5780000 -or
@@ -44,6 +45,10 @@ public sealed class DeferredP079GateTests
                @($catalog.required.native|Where-Object {$_ -ceq $create}).Count -ne 1 -or
                (Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 126 -TestNames @($names+$create) -Scope S06) -ne 5440000 -or
                (Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 126 -TestNames @($names+$create)) -ne 5845000){throw 'The new Create must add only its one65-second execution in both retained scopes.'}
+            if(@($catalog.required.namespace|Where-Object {$_ -ceq $disabledCreation}).Count -ne 1 -or
+               @($catalog.required.native|Where-Object {$_ -ceq $disabledCreation}).Count -ne 1 -or
+               (Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 126 -TestNames @($names+$disabledCreation) -Scope S06) -ne 5440000 -or
+               (Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 126 -TestNames @($names+$disabledCreation)) -ne 5845000){throw 'The independent disabled creation must retain every original deferred scope and add only65seconds.'}
             $prefix='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.'
             $methods=@{
                 NativeHostTransferRetainsSourceAndBothFencesAfterOriginalCopyAndWholeTargetVerification=1

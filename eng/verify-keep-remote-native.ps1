@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [switch]$BudgetOnly,
-    [ValidateSet('keep-remote', 'access-journal', 'journal-reconciliation')][string]$Scope = 'keep-remote',
+    [ValidateSet('keep-remote', 'access-journal', 'journal-reconciliation', 'disabled-local-birth')][string]$Scope = 'keep-remote',
     [ValidateSet('X64', 'Arm64')][string]$ExpectedArchitecture
 )
 
@@ -48,6 +48,20 @@ if ($Scope -eq 'journal-reconciliation') {
     $filter = ($selected | ForEach-Object { 'FullyQualifiedName=' + $_ }) -join '|'
     # One 45-second birth fixture and all six original 30-second root-label cuts.
     $fixtureBudgetMilliseconds = 45000 + 6 * 30000
+}
+if ($Scope -eq 'disabled-local-birth') {
+    $fixture = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.'
+    $selected = @(
+        ($fixture + 'NativeAutomaticStartupPreservesPendingImportWithoutAddingAnInitializerFence')
+        ($fixture + 'NativeAutomaticStartupKeepsDisabledImportLocalAcrossOwnersWithoutOpeningOrdinaryWork')
+        ($fixture + 'NativeDisabledRootControlledCreationRetainsFilesDirectoriesAndOriginalsAcrossOwnersWithoutDispatch')
+    )
+    if (@($selected | Where-Object { $_ -cnotin $catalog.required.native }).Count) { throw 'Local birth requires all three exact original runtime boundaries.' }
+    $count = Get-RequiredTestExecutionCount -Catalog $catalog -Names $selected
+    if ($count -ne 3) { throw 'Local birth qualification requires exactly three actual native cases.' }
+    $boundary = 'DisabledLocalBirth'
+    $filter = ($selected | ForEach-Object { 'FullyQualifiedName=' + $_ }) -join '|'
+    $fixtureBudgetMilliseconds = 3 * 65000
 }
 if ($BudgetOnly) {
     # Preserve the selected fixtures' original budgets plus collection/cleanup.

@@ -251,6 +251,15 @@ occupied destination is never overwritten. This boundary supports empty local
 creation. Import reuses the same birth, conversion, observation, protection and
 member registration state machine with a separate immutable content plan.
 
+Disabled roots permit these explicit local creations without admitting ordinary
+synchronization. New creation and import preparation drain the selected root and
+audit its current protected tree before using the normal instance scheduler and
+namespace actor. Their closed recovery lease never reopens the root. Replaying
+an operation requires its exact root and local birth origin; creation still
+checks the original parent, name and kind. Neither local completion nor replay
+permits a Worker call or acknowledges an original journal operation. Reenable
+requires the separate current baseline and namespace admission boundaries.
+
 `mp namespace member prepare-import` captures the source as the normal user,
 outside both the instance scheduler and namespace actor. This permits a source
 placeholder to hydrate through the same instance without acquiring a recursive
