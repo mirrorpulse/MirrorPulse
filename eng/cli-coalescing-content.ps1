@@ -263,6 +263,7 @@ function Invoke-CliCoalescingContentConflict {
     }
     if($ControlledCreate -and ($before.originalBirthOperationId -cne $importOperation -or
         $before.originalBirthSha256 -cnotmatch '^[A-F0-9]{64}$' -or $before.backendAddressDiffersFromOriginalBirth -ne $true -or
+        $before.currentNativeIdentitySha256 -cnotmatch '^[A-F0-9]{64}$' -or $before.currentNativeOriginalBindingVerified -ne $true -or
         $before.originalExpectedRevisionPresent -ne $false)){
         throw 'The default Host choice lost the original unaccepted local birth or adopted the backend address.'
     }
@@ -299,6 +300,8 @@ function Invoke-CliCoalescingContentConflict {
         $report.originalBirthOperationId=$before.originalBirthOperationId
         $report.originalBirthSha256=$before.originalBirthSha256
         $report.backendAddressDiffersFromOriginalBirth=$true
+        $report.currentNativeIdentitySha256=$before.currentNativeIdentitySha256
+        $report.currentNativeOriginalBindingVerified=$true
         $report.originalExpectedRevisionPresent=$false
     }
     $report

@@ -35,6 +35,12 @@ public sealed record CliCoalescingFixtureAudit(int SchemaVersion, bool Exclusive
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? BackendAddressDiffersFromOriginalBirth { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? CurrentNativeIdentitySha256 { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? CurrentNativeOriginalBindingVerified { get; init; }
 }
 
 public sealed record CliCoalescingObservedVersionAudit(int Version, Guid ObservationId, Guid RejectedEffectId,
@@ -113,6 +119,7 @@ public static partial class CliCoalescingFixtureProbe
         Guid? acknowledgementId = null;
         MirrorPulseNamespaceBirthPlan? originalBirth = null;
         bool? backendAddressDiffers = null;
+        string? currentNativeIdentity = null;
         if (!completed)
         {
             if (pending != originalIds.Length || (await catalog.ReadCurrentCoalescingKeepBothCommandsAsync(plan.PlanId)).Count != 0)
@@ -142,6 +149,8 @@ public static partial class CliCoalescingFixtureProbe
                     originalBirth.RemoteId == decision.Intent.RemoteSource.RemoteId)
                     throw new InvalidDataException("The original public birth and separately selected backend source differ.");
                 backendAddressDiffers = true;
+                currentNativeIdentity = await ReadCurrentCreateNativeIdentityAsync(root, paths, first,
+                    originalBirth, decision.Intent.RemoteSource.RemoteRevision);
             }
         }
         else
@@ -202,6 +211,8 @@ public static partial class CliCoalescingFixtureProbe
             OriginalBirthOperationId = originalBirth?.OperationId,
             OriginalBirthSha256 = originalBirth is null ? null : Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(originalBirth, JsonOptions))),
             BackendAddressDiffersFromOriginalBirth = backendAddressDiffers,
+            CurrentNativeIdentitySha256 = currentNativeIdentity,
+            CurrentNativeOriginalBindingVerified = currentNativeIdentity is null ? null : true,
             SelectedRemoteObservation = selectedObservation is null ? null : new(selectedObservation.Version, selectedObservation.ObservationId,
                 selectedObservation.RejectedEffect.OperationId, selectedObservation.PreviousObservationId, selectedObservation.RefreshCommandId,
                 selectedObservation.OriginalOperationIds, selectedObservation.PreviousConflictIds, selectedObservation.SelectedConflictIds,

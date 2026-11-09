@@ -85,7 +85,9 @@ The independent default-Host verification uses a public CLI import while the
 instance is disabled, two actual subsequent edits and an independently created
 remote file. Its stopped oracle owns the catalog exclusively and reads the real
 coalesced Create, nullable baseline, original SDK rows, local birth and native
-settlement. `signed-create-host` runs this scenario separately from the
+settlement. It also independently inspects the current resident placeholder,
+native binding and selected public identity before and after the real restart.
+`signed-create-host` runs this scenario separately from the
 executor-timed `signed-create-conflict` qualification. Both retain complete
 versions and exact original acknowledgements; neither stands for the full
 effect/choice matrix.
