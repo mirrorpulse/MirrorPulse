@@ -31,6 +31,9 @@ public sealed record CliCoalescingFixtureAudit(int SchemaVersion, bool Exclusive
     public Guid? OriginalBirthOperationId { get; init; }
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? OriginalBirthOrigin { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? OriginalBirthSha256 { get; init; }
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -118,6 +121,7 @@ public static partial class CliCoalescingFixtureProbe
         string? localHash = null, preservedHash = null, preservedLocalHash = null;
         Guid? acknowledgementId = null;
         MirrorPulseNamespaceBirthPlan? originalBirth = null;
+        string? originalBirthOrigin = null;
         bool? backendAddressDiffers = null;
         string? currentNativeIdentity = null;
         if (!completed)
@@ -142,6 +146,9 @@ public static partial class CliCoalescingFixtureProbe
             {
                 originalBirth = await catalog.ReadConflictKeepRemoteOriginalBirthAsync(settled.CommandId)
                     ?? throw new InvalidDataException("The actual Create choice lost its original local birth.");
+                var birthIntent = await catalog.ReadNamespaceBirthAsync(originalBirth.OperationId)
+                    ?? throw new InvalidDataException("The actual Create choice lost its original birth origin.");
+                originalBirthOrigin = birthIntent.Origin.ToString();
                 var decision = (await catalog.ReadConflictKeepRemoteAsync(settled.CommandId))!;
                 var first = (await catalog.ReadConflictKeepRemoteFileStartAsync(settled.CommandId))!;
                 if (originalBirth.ItemId != plan.ItemId || originalBirth.ItemId != first.Original.Identity.ItemId ||
@@ -209,6 +216,7 @@ public static partial class CliCoalescingFixtureProbe
             PreservedLocalSha256 = preservedLocalHash,
             AcknowledgementId = acknowledgementId,
             OriginalBirthOperationId = originalBirth?.OperationId,
+            OriginalBirthOrigin = originalBirthOrigin,
             OriginalBirthSha256 = originalBirth is null ? null : Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(originalBirth, JsonOptions))),
             BackendAddressDiffersFromOriginalBirth = backendAddressDiffers,
             CurrentNativeIdentitySha256 = currentNativeIdentity,

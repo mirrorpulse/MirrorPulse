@@ -13,12 +13,14 @@ function Invoke-CliCoalescingContentConflict {
         [Parameter(Mandatory)][scriptblock]$ResolveChoice,
         [ValidateSet('KeepBoth','KeepRemote', IgnoreCase = $false)][string]$Action = 'KeepBoth',
         [switch]$ControlledCreate,
+        [switch]$EmptyCreate,
         [Parameter(Mandatory)][string]$InstanceId,
         [Parameter(Mandatory)][string]$MappedRoot,
         [Parameter(Mandatory)][string]$SourceRoot,
         [Parameter(Mandatory)][string]$EvidencePath
     )
     if($ControlledCreate -and $Action -cne 'KeepRemote'){throw 'The controlled-Create fixture requires KeepRemote.'}
+    if($EmptyCreate -and -not $ControlledCreate){throw 'Empty creation requires its controlled-Create fixture.'}
     $expectedEffect=if($ControlledCreate){'CreateFile'}else{'UpdateFile'}
     $originals=Join-Path ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($EvidencePath))) 'coalescing.originals'
     New-Item -ItemType Directory -Path $originals -Force|Out-Null
@@ -74,6 +76,7 @@ function Invoke-CliCoalescingContentConflict {
     }
     $source=Join-Path $SourceRoot 'cli-roundtrip.txt';$local=Join-Path $MappedRoot 'cli-roundtrip.txt'
     $seed=Get-CliCoalescingSeedBytes
+    if($EmptyCreate){$seed=[byte[]]::new(0)}
     $first=[Text.Encoding]::UTF8.GetBytes('signed coalescing first local edit')
     $latest=[Text.Encoding]::UTF8.GetBytes('signed coalescing final local bytes retained by KeepBoth')
     $remote=[Text.Encoding]::UTF8.GetBytes('signed coalescing independently selected remote version')
@@ -106,14 +109,18 @@ function Invoke-CliCoalescingContentConflict {
     $baseline=[long]$disabled.pendingUploads
     $importOperation=$null
     if($ControlledCreate){
-        # The default Host stages and executes the real public import while its
-        # instance stays disabled. No test code manufactures a journal original.
+        # Public creation/import runs through the default Host while its instance
+        # stays disabled. No test code manufactures a journal original.
         $parent=Invoke-CoalescingCli 'create-parent' @('--json','--developer-mode','namespace','member','inspect',([IO.Path]::GetFileName($MappedRoot)),'--directory')
-        $input=Join-Path ([IO.Path]::GetDirectoryName($SourceRoot)) 'create-input.bin'
-        [IO.File]::WriteAllBytes($input,$seed)
         $importOperation=[guid]::NewGuid().ToString('D')
-        Invoke-CoalescingCli 'prepare-create' @('--json','--developer-mode','namespace','member','prepare-import',([string]$parent.memberId),'cli-roundtrip.txt',$input,'--operation-id',$importOperation)|Out-Null
-        $created=Invoke-CoalescingCli 'execute-create' @('--json','--developer-mode','namespace','member','import',$importOperation)
+        if($EmptyCreate){
+            $created=Invoke-CoalescingCli 'execute-create' @('--json','--developer-mode','namespace','member','create',([string]$parent.memberId),'cli-roundtrip.txt','--operation-id',$importOperation)
+        }else{
+            $input=Join-Path ([IO.Path]::GetDirectoryName($SourceRoot)) 'create-input.bin'
+            [IO.File]::WriteAllBytes($input,$seed)
+            Invoke-CoalescingCli 'prepare-create' @('--json','--developer-mode','namespace','member','prepare-import',([string]$parent.memberId),'cli-roundtrip.txt',$input,'--operation-id',$importOperation)|Out-Null
+            $created=Invoke-CoalescingCli 'execute-create' @('--json','--developer-mode','namespace','member','import',$importOperation)
+        }
         if($created.operationId -cne $importOperation){throw 'The actual public import lost its original operation.'}
         Assert-CoalescingHash $local $seedHash $false
         if(Test-Path -LiteralPath $source){throw 'The disabled controlled Create touched the backend.'}
@@ -267,6 +274,10 @@ function Invoke-CliCoalescingContentConflict {
         $before.originalExpectedRevisionPresent -ne $false)){
         throw 'The default Host choice lost the original unaccepted local birth or adopted the backend address.'
     }
+    if($ControlledCreate){
+        $expectedBirthOrigin=if($EmptyCreate){'ControlledCreation'}else{'Import'}
+        if($before.originalBirthOrigin -cne $expectedBirthOrigin){throw 'The public Host operation lost its exact original local birth origin.'}
+    }
     $before|ConvertTo-Json -Depth 8|Set-Content -LiteralPath (Join-Path $originals 'stopped-before-restart.json') -Encoding utf8
     Invoke-CoalescingCli 'start-after-choice' @('--json','--developer-mode','host','start')|Out-Null
     $deadline=[DateTimeOffset]::UtcNow.AddSeconds(30)
@@ -298,6 +309,7 @@ function Invoke-CliCoalescingContentConflict {
     }
     if($ControlledCreate){
         $report.originalBirthOperationId=$before.originalBirthOperationId
+        $report.originalBirthOrigin=$before.originalBirthOrigin
         $report.originalBirthSha256=$before.originalBirthSha256
         $report.backendAddressDiffersFromOriginalBirth=$true
         $report.currentNativeIdentitySha256=$before.currentNativeIdentitySha256

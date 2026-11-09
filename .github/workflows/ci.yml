@@ -397,6 +397,27 @@ jobs:
           path: artifacts/evidence/cli-create-keep-remote/**
           if-no-files-found: ignore
 
+      - name: Verify signed ARM64 empty controlled creation through the disabled default Host
+        if: (success() || failure()) && github.event_name == 'workflow_dispatch' && inputs.verify_shell
+        shell: pwsh
+        timeout-minutes: 10
+        env:
+          MIRRORPULSE_NATIVE_TEST: '1'
+        run: |
+          $packages = @(Get-ChildItem -LiteralPath artifacts/official-local -Recurse -Filter '*.mpadapter' -File)
+          if ($packages.Count -ne 1 -or -not (Test-Path -LiteralPath ($packages[0].FullName + '.signature.json'))) { throw 'Require one frozen official signed Local package.' }
+          New-Item -ItemType Directory -Path artifacts/evidence/cli-empty-create-keep-remote -Force | Out-Null
+          pwsh ./eng/verify-cli-integration.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName -Coalescing -CoalescingAction KeepRemote -CreateConflict -EmptyCreate -EvidencePath artifacts/evidence/cli-empty-create-keep-remote/report.json
+          if ($LASTEXITCODE -ne 0) { throw 'The disabled default Host empty-creation fixture failed.' }
+
+      - name: Preserve signed ARM64 empty creation originals
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.verify_shell
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: cli-empty-create-keep-remote-arm64-originals
+          path: artifacts/evidence/cli-empty-create-keep-remote/**
+          if-no-files-found: ignore
+
       - name: Verify signed official packages and native ARM64 Workers
         if: (success() || failure()) && github.event_name == 'workflow_dispatch'
         run: |

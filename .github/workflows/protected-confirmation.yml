@@ -17,6 +17,7 @@ on:
           - signed-post-move
           - signed-create-conflict
           - signed-create-host
+          - signed-empty-create-host
         default: prototype
 
 permissions:
@@ -24,7 +25,7 @@ permissions:
 
 jobs:
   probe:
-    if: inputs.contract != 'signed-keep-remote' && inputs.contract != 'signed-post-move' && inputs.contract != 'signed-create-conflict' && inputs.contract != 'signed-create-host'
+    if: inputs.contract != 'signed-keep-remote' && inputs.contract != 'signed-post-move' && inputs.contract != 'signed-create-conflict' && inputs.contract != 'signed-create-host' && inputs.contract != 'signed-empty-create-host'
     strategy:
       fail-fast: false
       matrix:
@@ -138,7 +139,7 @@ jobs:
           if-no-files-found: error
 
   signed-keep-remote:
-    if: inputs.contract == 'signed-keep-remote' || inputs.contract == 'signed-post-move' || inputs.contract == 'signed-create-conflict' || inputs.contract == 'signed-create-host'
+    if: inputs.contract == 'signed-keep-remote' || inputs.contract == 'signed-post-move' || inputs.contract == 'signed-create-conflict' || inputs.contract == 'signed-create-host' || inputs.contract == 'signed-empty-create-host'
     runs-on: windows-11-arm
     timeout-minutes: 20
     steps:
@@ -214,6 +215,27 @@ jobs:
         with:
           name: cli-create-keep-remote-arm64-originals
           path: artifacts/evidence/cli-create-keep-remote/**
+          if-no-files-found: ignore
+
+      - name: Verify signed ARM64 empty controlled creation through the disabled default Host
+        if: inputs.contract == 'signed-empty-create-host'
+        shell: pwsh
+        timeout-minutes: 10
+        env:
+          MIRRORPULSE_NATIVE_TEST: '1'
+        run: |
+          $packages = @(Get-ChildItem -LiteralPath artifacts/official-local -Recurse -Filter '*.mpadapter' -File)
+          if ($packages.Count -ne 1 -or -not (Test-Path -LiteralPath ($packages[0].FullName + '.signature.json'))) { throw 'Require one frozen official signed Local package.' }
+          New-Item -ItemType Directory -Path artifacts/evidence/cli-empty-create-keep-remote -Force | Out-Null
+          pwsh ./eng/verify-cli-integration.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName -Coalescing -CoalescingAction KeepRemote -CreateConflict -EmptyCreate -EvidencePath artifacts/evidence/cli-empty-create-keep-remote/report.json
+          if ($LASTEXITCODE -ne 0) { throw 'The disabled default Host empty-creation fixture failed.' }
+
+      - name: Preserve signed ARM64 empty creation originals
+        if: always() && inputs.contract == 'signed-empty-create-host'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: cli-empty-create-keep-remote-arm64-originals
+          path: artifacts/evidence/cli-empty-create-keep-remote/**
           if-no-files-found: ignore
 
       - name: Verify signed ARM64 rejected Create and original local-birth identity

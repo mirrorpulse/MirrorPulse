@@ -92,6 +92,13 @@ executor-timed `signed-create-conflict` qualification. Both retain complete
 versions and exact original acknowledgements; neither stands for the full
 effect/choice matrix.
 
+`signed-empty-create-host` separately uses the public empty-file creation
+command in a disabled instance. It retains the `ControlledCreation` origin,
+then verifies two actual edits, the exact original nullable Create, both complete
+versions, original journal acknowledgements and independently inspected native
+identity across default Host restart. The import scenario retains its separate
+`Import` origin and original execution window.
+
 The requirements for a resident protected placeholder and exact original
 provenance still apply. Ordinary files without that identity,
 directory choices, different occupants and the broader effect/choice matrix

@@ -9,12 +9,16 @@ param(
     [ValidateSet('KeepBoth', 'KeepRemote', IgnoreCase = $false)]
     [string]$CoalescingAction = 'KeepBoth',
     [switch]$CreateConflict,
+    [switch]$EmptyCreate,
     [ValidateSet("Debug", "Release")]
     [string]$Configuration = "Release",
     [string]$EvidencePath
 )
 
 $ErrorActionPreference = "Stop"
+if ($EmptyCreate -and -not $CreateConflict) {
+    throw 'The empty creation fixture requires its independent controlled-Create conflict scenario.'
+}
 if ($CreateConflict -and (-not $Coalescing -or $CoalescingAction -cne 'KeepRemote')) {
     throw 'The controlled-Create fixture requires its independent KeepRemote coalescing choice.'
 }
@@ -347,6 +351,7 @@ try {
             -ResolveChoice { param($conflict) Invoke-CliCoalescingChoice -CliPath $script:cliExecutable -FixtureRoot $runRoot -ConflictId $conflict -Action $CoalescingAction } `
             -Action $CoalescingAction `
             -ControlledCreate:$CreateConflict `
+            -EmptyCreate:$EmptyCreate `
             -InstanceId $instanceId -MappedRoot $mappedRoot -SourceRoot $sourceRoot -EvidencePath $EvidencePath
         $coalescingEvidence.packageSha256 = (Get-FileHash -LiteralPath $PackagePath).Hash
         $coalescingEvidence.signatureSha256 = (Get-FileHash -LiteralPath ($PackagePath + '.signature.json')).Hash
