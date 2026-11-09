@@ -309,7 +309,8 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
                 // with no pending content change. Do not mark or suppress a window:
                 // a later real write clears InSync and has its own journal operation.
                 dispatchPhase = "AcknowledgeObservedContent";
-                await _completion.AcknowledgeSuccessfulUploadAsync(command.OperationId, revision, cancellationToken).ConfigureAwait(false);
+                await new MirrorPulseJournalAcceptedObservationAcknowledgement(_state, _completion, _log).AcknowledgeAsync(
+                    command, _router.GetRegistration(command.InstanceId, command.RootKey), observed, revision, cancellationToken).ConfigureAwait(false);
                 return true;
             }
             dispatchPhase = "OpenContent";

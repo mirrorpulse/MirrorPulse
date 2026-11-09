@@ -44,6 +44,8 @@ public static class SafeDiagnosticPolicy
         ["JournalCommandFailed"] = "A local journal command failed.",
         ["JournalGroupRecoveryFailed"] = "A retained journal group requires recovery before its user command can complete.",
         ["JournalContentObservation"] = "A retained journal group was checked against previously accepted content.",
+        ["JournalAcceptedContentObservation"] = "An original journal notification observed owned, previously accepted current content before its public acknowledgement.",
+        ["JournalAcceptedContentAcknowledged"] = "The public journal acknowledgement returned successfully for that original accepted-content observation.",
         ["ConflictDeletionRecoveryFailed"] = "A retained conflict deletion requires recovery before its original journal can be acknowledged.",
         ["ConflictKeepBothRecoveryFailed"] = "A retained preservation decision requires recovery before its original journal can be retried.",
         ["ConflictKeepRemotePreparationRecoveryFailed"] = "An accepted KeepRemote decision stopped before completing its original journal.",
@@ -129,6 +131,10 @@ public static class SafeDiagnosticPolicy
                     Guid.TryParse(value, out Guid id) ? id.ToString("D") : null,
                 "hresult" => value.Length == 8 && uint.TryParse(value, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out uint number)
                     ? number.ToString("X8", CultureInfo.InvariantCulture) : null,
+                "journalSequence" => long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out long sequence) && sequence >= 0
+                    ? sequence.ToString(CultureInfo.InvariantCulture) : null,
+                "journalPayloadSha256" or "nativeIdentitySha256" or "nativeBindingSha256" or "acknowledgedRevisionSha256" =>
+                    value.Length == 64 && value.All(char.IsAsciiHexDigit) ? value.ToUpperInvariant() : null,
                 "transferCommandPhase" => Enum.TryParse(value, out MirrorPulseTransferCommandPhase transferPhase) && Enum.IsDefined(transferPhase) && value == transferPhase.ToString() ? value : null,
                 "conflictCommandStage" => Enum.TryParse(value, out MirrorPulseConflictCommandStage conflictStage) && Enum.IsDefined(conflictStage) && value == conflictStage.ToString() ? value : null,
                 "conflictCommandBoundary" => Enum.TryParse(value, out MirrorPulseConflictCommandBoundary conflictBoundary) && Enum.IsDefined(conflictBoundary) && value == conflictBoundary.ToString() ? value : null,
