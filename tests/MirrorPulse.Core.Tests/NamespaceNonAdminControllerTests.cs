@@ -54,6 +54,22 @@ public sealed partial class NamespaceNonAdminControllerTests
                 param([string]$Policy,[string]$Directory,[string]$Scenario,[int]$Count)
                 $ErrorActionPreference='Stop'
                 . $Policy
+                if ($Scenario -ceq 'disabled-host-job-deadline') {
+                    $eng=Split-Path $Policy -Parent
+                    $workflow=[IO.File]::ReadAllText((Join-Path $eng '../.github/workflows/protected-confirmation.yml'))
+                    $job=$workflow.Substring($workflow.IndexOf('  signed-keep-remote:',[StringComparison]::Ordinal))
+                    $match=[regex]::Match($job,"timeout-minutes: \$\{\{ inputs\.contract == 'signed-disabled-host' && (?<expanded>[0-9]+) \|\| (?<legacy>[0-9]+) \}\}")
+                    $step=[regex]::Match($job,"(?s)if: inputs\.contract == 'signed-disabled-host'\s+shell: pwsh\s+timeout-minutes: (?<minutes>[0-9]+)")
+                    $current=& (Join-Path $eng 'verify-cli-disabled-operations.ps1') -BudgetOnly
+                    if($LASTEXITCODE -ne 0 -or -not $match.Success -or -not $step.Success -or
+                       [int]$match.Groups['legacy'].Value -ne 20 -or [int]$step.Groups['minutes'].Value -ne [int]$current){throw 'Retain the actual signed fixture budget and every legacy job deadline.'}
+                    # The previous signed Host contract allowed ten fixture minutes and ten setup/export minutes.
+                    if([int]$match.Groups['expanded'].Value -ne [int]$current+10){throw 'Retain the complete original signed setup/export margin.'}
+                    $full=[IO.File]::ReadAllText((Join-Path $eng '../.github/workflows/ci.yml'))
+                    $fullStep=[regex]::Match($full,"(?s)name: Verify signed ARM64 disabled operations.*?timeout-minutes: (?<minutes>[0-9]+)")
+                    if(-not $fullStep.Success -or [int]$fullStep.Groups['minutes'].Value -ne [int]$current){throw 'The final full workflow must retain the same actual fixture deadline.'}
+                    exit 0
+                }
                 if ($Scenario -ceq 'disabled-job-deadline') {
                     $eng=Split-Path $Policy -Parent
                     $workflow=[IO.File]::ReadAllText((Join-Path $eng '../.github/workflows/protected-confirmation.yml'))
