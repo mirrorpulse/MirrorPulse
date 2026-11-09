@@ -260,6 +260,57 @@ public static partial class CliFixtureProbe
                     dispatchFenced = fenced.Contains(root.RootId),
                     pending = await catalog.ReadNamespacePendingOperationsAsync(root.RootId)
                 });
+            stage = "OriginalPollingIntent";
+            var polling = new List<object>();
+            var pendingPolls = new MirrorPulseCatalogRemotePollPendingStore(catalog);
+            foreach (var root in inventory.Roots)
+            {
+                var pending = await pendingPolls.LoadAsync(root, default);
+                if (pending is null) continue;
+                if (pending.RootId != root.RootId || pending.RootKey != root.UniquenessKey ||
+                    pending.RootDirectoryName != root.DirectoryName || pending.Previous.Count > 32 || pending.Candidate.Count > 32)
+                    throw new InvalidDataException("The retained polling intent exceeds the authenticated fixed fixture scope.");
+                object[] Snapshot(IReadOnlyDictionary<string, MirrorPulseRemoteSnapshotEntry> entries) => entries
+                    .OrderBy(entry => entry.Key, StringComparer.Ordinal).Select(entry =>
+                    {
+                        string path = CliDisabledFixtureLayout.RequireAllowedRelativePath(inventory,
+                            root.DirectoryName + "/" + entry.Value.RelativePath);
+                        if (inventory.AllowedEntries[path] != (entry.Value.ItemKind == CloudItemKind.Directory))
+                            throw new InvalidDataException("The retained polling entry changed its fixed file/directory kind.");
+                        return (object)new
+                        {
+                            relativePath = path,
+                            entry.Value.ItemKind,
+                            remoteIdSha256 = Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(entry.Key))),
+                            remoteRevisionSha256 = Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(entry.Value.RemoteRevision))),
+                            metadataSha256 = Fingerprint(entry.Value.Metadata),
+                            publicItemId = entry.Value.PublicIdentity?.ItemId,
+                            entry.Value.Length
+                        };
+                    }).ToArray();
+                await using var readProgress = await store.BeginTransactionAsync();
+                var progress = await readProgress.RemoteBatches.GetAsync(pending.BatchId);
+                if (progress is not null && !progress.Fingerprint.Span.SequenceEqual(pending.Fingerprint))
+                    throw new InvalidDataException("The official SDK progress differs from the original polling intent.");
+                polling.Add(new
+                {
+                    rootId = root.RootId.ToString(),
+                    instanceId = root.InstanceId.ToString(),
+                    pending.BatchId,
+                    fingerprint = Convert.ToHexString(pending.Fingerprint),
+                    pending.ProjectionVersion,
+                    previous = Snapshot(pending.Previous),
+                    candidate = Snapshot(pending.Candidate),
+                    progress = progress is null ? null : new
+                    {
+                        status = progress.Status.ToString(),
+                        progress.AppliedEntryCount,
+                        progress.TotalEntryCount,
+                        progress.LastAppliedChangeId
+                    }
+                });
+                await readProgress.RollbackAsync();
+            }
             var incomplete = await catalog.ReadIncompleteMutationsAsync();
             if (incomplete.Count > 128) throw new InvalidDataException("The fixture exceeded its bounded retained effect observation.");
             var unsettled = new List<CliDisabledEffectFact>();
@@ -272,6 +323,7 @@ public static partial class CliFixtureProbe
                 exclusiveCatalogOwner = true,
                 members,
                 roots = rootFacts,
+                polling,
                 journal = selected,
                 originals,
                 births,
