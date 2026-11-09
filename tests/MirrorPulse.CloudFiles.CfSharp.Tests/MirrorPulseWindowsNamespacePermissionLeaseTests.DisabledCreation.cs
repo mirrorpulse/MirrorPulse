@@ -13,7 +13,14 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
 {
     [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles")]
-    public async Task NativeDisabledRootControlledCreationRetainsFilesDirectoriesAndOriginalsAcrossOwnersWithoutDispatch()
+    public Task NativeDisabledRootControlledCreationRetainsFilesDirectoriesAndOriginalsAcrossOwnersWithoutDispatch() =>
+        RunDisabledControlledCreationAcrossOwnersAsync(freshRole: false);
+
+    [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles")]
+    public Task NativeDisabledRootControlledCreationRetainsFilesDirectoriesAndOriginalsAcrossFreshRolesWithoutDispatch() =>
+        RunDisabledControlledCreationAcrossOwnersAsync(freshRole: true);
+
+    private async Task RunDisabledControlledCreationAcrossOwnersAsync(bool freshRole)
     {
         if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
             Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
@@ -26,7 +33,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         var router = new MirrorPulseRootRouter(paths.SyncRootPath, [root]);
         var registry = new CfSharpMirrorPulseCloudRootRegistry(); using WindowsIdentity user = WindowsIdentity.GetCurrent();
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(65));
-        await using var execution = new MirrorPulseNamespaceExecutionSession();
+        await using var sharedExecution = freshRole ? null : new MirrorPulseNamespaceExecutionSession();
+        string? originalRole = null;
         Guid fileOperation = Guid.NewGuid(), directoryOperation = Guid.NewGuid(), parentId = Guid.Empty;
         MirrorPulseNamespaceMemberRegistration? originalFile = null, originalDirectory = null;
         string? birthHistory = null; Dictionary<Guid, string>? originals = null;
@@ -43,6 +51,11 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             }
             for (int owner = 0; owner < 2; owner++)
             {
+                await using var freshExecution = freshRole ? new MirrorPulseNamespaceExecutionSession() : null;
+                var execution = freshExecution ?? sharedExecution!;
+                if (owner == 0) originalRole = execution.RoleSid.Value;
+                else if (freshRole) Assert.AreNotEqual(originalRole, execution.RoleSid.Value);
+                else Assert.AreEqual(originalRole, execution.RoleSid.Value);
                 await using var actor = new MirrorPulseNamespaceActor(); await using var scheduler = new MirrorPulseInstanceScheduler();
                 await using var work = new MirrorPulseNamespaceWorkAdmission([root.RootId]);
                 await using var catalog = await MirrorPulseProductCatalog.OpenAsync(paths, timeout.Token);
@@ -92,6 +105,12 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 var actualDirectory = await runtime.InspectNamespaceMemberAsync("Existing/folder", true, timeout.Token);
                 Assert.AreEqual(created.MemberId, actual.MemberId); Assert.AreEqual(childDirectory.MemberId, actualDirectory.MemberId);
                 Assert.IsNotNull(actual.NativeItemId); Assert.IsNotNull(actualDirectory.NativeItemId);
+                foreach (Guid memberId in new[] { parentId, created.MemberId, childDirectory.MemberId })
+                {
+                    var protection = await catalog.ReadNamespaceMemberProtectionSnapshotAsync(memberId, timeout.Token);
+                    Assert.IsNotNull(protection);
+                    Assert.AreEqual(execution.RoleSid.Value, protection.Context.Protection.RoleSid);
+                }
                 CollectionAssert.AreEqual(latest, await File.ReadAllBytesAsync(file, timeout.Token));
                 Assert.IsTrue(Directory.Exists(Path.Combine(paths.SyncRootPath, "Existing", "folder")));
                 Assert.IsFalse(work.IsAdmitted(root.RootId));
@@ -114,9 +133,9 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 }
                 Assert.IsEmpty(worker.Calls);
             }
-            TestContext.WriteLine("DisabledCreation: twoLibraryOwners=True; sameNamespaceRole=True; actualFilesAndDirectories=True; " +
+            TestContext.WriteLine($"DisabledCreation: twoLibraryOwners=True; sameNamespaceRole={!freshRole}; actualFilesAndDirectories=True; " +
                 "completeLatestBytes=True; originalBirthAndMembership=True; originalJournalPending=True; ordinaryAdmissionClosed=True; " +
-                "configuredUploadPump=True; sourceCalls=0; remoteAcceptance=False; freshRoleRecovery=False.");
+                $"configuredUploadPump=True; sourceCalls=0; remoteAcceptance=False; freshRoleRecovery={freshRole}.");
         }
         finally
         {
