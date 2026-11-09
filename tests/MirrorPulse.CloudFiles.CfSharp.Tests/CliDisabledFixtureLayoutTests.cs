@@ -25,6 +25,29 @@ public sealed class CliDisabledFixtureLayoutTests
     }
 
     [TestMethod]
+    [DataRow("Offline Operations/kept.txt")]
+    [DataRow("Offline Operations\\kept.txt")]
+    public void OfficialNativeSeparatorSpellingsResolveToTheSameExactFixedEntry(string path)
+    {
+        var fixture = Create(false, true);
+        var inventory = CliDisabledFixtureLayout.Authenticate(fixture.Path, fixture.Marker, fixture.Topology);
+        Assert.AreEqual("Offline Operations/kept.txt", CliDisabledFixtureLayout.RequireAllowedRelativePath(inventory, path));
+    }
+
+    [TestMethod]
+    [DataRow("Offline Operations/../kept.txt")]
+    [DataRow("Offline Operations//kept.txt")]
+    [DataRow("Other/kept.txt")]
+    [DataRow("offline operations/kept.txt")]
+    [DataRow("C:\\Offline Operations\\kept.txt")]
+    public void SeparatorNormalizationCannotAdoptTraversalOtherRootsCaseAliasesOrAbsolutePaths(string path)
+    {
+        var fixture = Create(false, true);
+        var inventory = CliDisabledFixtureLayout.Authenticate(fixture.Path, fixture.Marker, fixture.Topology);
+        Assert.ThrowsExactly<InvalidDataException>(() => CliDisabledFixtureLayout.RequireAllowedRelativePath(inventory, path));
+    }
+
+    [TestMethod]
     [DataRow("schema")]
     [DataRow("source")]
     [DataRow("phase")]

@@ -114,9 +114,12 @@ public static partial class CliFixtureProbe
             var blocked = await catalog.ReadBlockedLocalOperationsAsync();
             if (blocked.Count > 128) throw new InvalidDataException("The fixture exceeded its bounded blocked-operation observation.");
             foreach (var value in blocked)
-                if (!inventory.AllowedEntries.ContainsKey(value.RelativePath) || !inventory.Roots.Any(root => root.InstanceId == value.InstanceId &&
-                    (value.RelativePath == root.DirectoryName || value.RelativePath.StartsWith(root.DirectoryName + "/", StringComparison.Ordinal))))
+            {
+                string relativePath = CliDisabledFixtureLayout.RequireAllowedRelativePath(inventory, value.RelativePath);
+                if (!inventory.Roots.Any(root => root.InstanceId == value.InstanceId &&
+                    (relativePath == root.DirectoryName || relativePath.StartsWith(root.DirectoryName + "/", StringComparison.Ordinal))))
                     throw new InvalidDataException("A foreign blocked operation entered the stopped fixture oracle.");
+            }
             stage = "OriginalOperationOutcomes";
             var originals = new List<CliDisabledOriginalFact>();
             foreach (Guid id in marker.Originals)

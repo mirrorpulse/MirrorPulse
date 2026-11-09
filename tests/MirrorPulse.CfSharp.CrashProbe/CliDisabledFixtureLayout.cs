@@ -53,6 +53,16 @@ public static class CliDisabledFixtureLayout
         return root;
     }
 
+    /// <summary>Normalizes only native separator spelling before the exact fixed-name lookup.</summary>
+    public static string RequireAllowedRelativePath(CliDisabledFixtureInventory inventory, string path)
+    {
+        ArgumentNullException.ThrowIfNull(inventory); ArgumentNullException.ThrowIfNull(path);
+        string normalized = path.Replace('\\', '/');
+        if (!inventory.AllowedEntries.ContainsKey(normalized))
+            throw new InvalidDataException("The disabled oracle path is outside its exact fixed inventory.");
+        return normalized;
+    }
+
     public static CliDisabledFixtureInventory Authenticate(string directory, CliDisabledFixtureMarker marker, MirrorPulseAdapterTopology topology)
     {
         ArgumentNullException.ThrowIfNull(marker); ArgumentNullException.ThrowIfNull(topology);
