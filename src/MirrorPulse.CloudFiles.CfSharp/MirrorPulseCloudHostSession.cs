@@ -921,43 +921,63 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
-        private async ValueTask<MirrorPulseNamespaceWorkAdmission.RecoveryLease> EnterDisabledLocalBirthAsync(
+        private ValueTask<MirrorPulseNamespaceWorkAdmission.RecoveryLease> EnterDisabledLocalBirthAsync(
             RootRegistration root, Guid operationId, MirrorPulseNamespaceBirthOrigin origin, CancellationToken requestCancellation)
         {
-            if (root.State != RootRegistrationState.Disabled ||
-                origin is not (MirrorPulseNamespaceBirthOrigin.ControlledCreation or MirrorPulseNamespaceBirthOrigin.Import))
+            if (origin is not (MirrorPulseNamespaceBirthOrigin.ControlledCreation or MirrorPulseNamespaceBirthOrigin.Import))
                 throw new ArgumentException("Closed local birth admission requires its disabled root and explicit local origin.");
+            return EnterDisabledLocalOperationAsync(root, async token =>
+            {
+                var original = await catalog!.ReadNamespaceBirthAsync(operationId, token).ConfigureAwait(false);
+                if (original is not null && (original.RootId != root.RootId || original.Origin != origin))
+                    throw new InvalidOperationException("The operation ID does not own this local birth in the disabled root.");
+                return original is not null;
+            }, requestCancellation);
+        }
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        private ValueTask<MirrorPulseNamespaceWorkAdmission.RecoveryLease> EnterDisabledLocalMoveAsync(
+            RootRegistration root, Guid operationId, CancellationToken requestCancellation) =>
+            EnterDisabledLocalOperationAsync(root, async token =>
+            {
+                var original = await catalog!.ReadNamespaceMemberMoveAsync(operationId, token).ConfigureAwait(false);
+                if (original is not null && (original.RootId != root.RootId || original.Version != 1 || original.RemoteEntry is not null))
+                    throw new InvalidOperationException("The operation ID does not own a controlled member move in this disabled root.");
+                return original is not null;
+            }, requestCancellation);
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        private async ValueTask<MirrorPulseNamespaceWorkAdmission.RecoveryLease> EnterDisabledLocalOperationAsync(
+            RootRegistration root, Func<CancellationToken, ValueTask<bool>> hasOriginalLocalOperation,
+            CancellationToken requestCancellation)
+        {
+            if (root.State != RootRegistrationState.Disabled)
+                throw new ArgumentException("Closed local operation admission requires its disabled root.");
             if (namespaceWork is null || catalog is null || router is null || _namespaceExecution is null ||
                 _namespaceActor is null || _permissions is null || _startupProtection is null)
-                throw new NotSupportedException("Disabled local birth requires the protected Host namespace boundary.");
+                throw new NotSupportedException("Disabled local operations require the protected Host namespace boundary.");
             using var stop = CancellationTokenSource.CreateLinkedTokenSource(requestCancellation, _admissionShutdown.Token);
             var drained = await namespaceWork.WaitForRecoveryAsync([root.RootId], stop.Token).ConfigureAwait(false);
             try
             {
-                // Original replay retains only its durable local birth ownership.
-                // The creation coordinator still validates parent, name, kind and bytes.
-                var original = await catalog.ReadNamespaceBirthAsync(operationId, stop.Token).ConfigureAwait(false);
-                if (original is not null)
-                {
-                    if (original.RootId != root.RootId || original.Origin != origin)
-                        throw new InvalidOperationException("The operation ID does not own this local birth in the disabled root.");
-                }
-                else
+                // Original replay retains only the requested local operation's ownership.
+                // Its coordinator still validates the exact immutable request and execution.
+                if (!await hasOriginalLocalOperation(stop.Token).ConfigureAwait(false))
                 {
                     await WithInstanceLibraryAsync(root.InstanceId, async token =>
                     {
                         var anchor = RequireCurrentStartupAnchor();
                         var member = await catalog.ReadNamespaceMemberByBindingAsync(anchor.Original.LocalObject, token).ConfigureAwait(false)
-                            ?? throw new InvalidDataException("Disabled local birth lost its live sync-root anchor.");
+                            ?? throw new InvalidDataException("Disabled local work lost its live sync-root anchor.");
                         var audit = await new MirrorPulseNamespaceCurrentTreeAuditCoordinator(fileSystem, catalog, router,
                             _namespaceExecution, _namespaceActor, _permissions).AuditRootAsync(member.MemberId, anchor, root.RootId, token).ConfigureAwait(false);
                         if (audit.Inventory.FencedRoots.Count != 0 || _startupProtection != anchor || router.FindRegistration(root.RootId) != root)
-                            throw new InvalidOperationException("New disabled local birth requires its current unfenced Host audit.");
+                            throw new InvalidOperationException("New disabled local work requires its current unfenced Host audit.");
                         return true;
                     }, stop.Token).ConfigureAwait(false);
                 }
-                // Disposal leaves ordinary work closed. Input capture and actual
-                // creation retain their normal-user and namespace-role boundaries.
+                // Disposal leaves ordinary work closed. Each coordinator retains
+                // its normal-user, actor, namespace-role and original-operation checks.
                 return drained;
             }
             catch { await drained.DisposeAsync().ConfigureAwait(false); throw; }
@@ -1112,7 +1132,9 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             var member = await catalog.ReadNamespaceMemberAsync(memberId, cancellationToken).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The source member is not registered.");
             var registration = router.Registrations.Single(root => root.RootId == member.RootId);
-            using var admission = namespaceWork?.Enter([registration.RootId]);
+            using var admission = registration.State == RootRegistrationState.Disabled ? null : namespaceWork?.Enter([registration.RootId]);
+            await using var disabledAdmission = registration.State == RootRegistrationState.Disabled
+                ? await EnterDisabledLocalMoveAsync(registration, operationId, cancellationToken).ConfigureAwait(false) : null;
             return await WithInstanceLibraryAsync(registration.InstanceId, token =>
                 new MirrorPulseNamespaceMemberMoveCoordinator(fileSystem, state, catalog, router, _namespaceExecution, _namespaceActor)
                     .PrepareAsync(operationId, memberId, targetParentMemberId, targetName, token), cancellationToken).ConfigureAwait(false);

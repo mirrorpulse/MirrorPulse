@@ -1,5 +1,5 @@
 function Get-OrdinaryUserNamespaceBudgetMilliseconds {
-    param([Parameter(Mandatory)][ValidateRange(1, 143)][int]$TestCount, [string[]]$TestNames,
+    param([Parameter(Mandatory)][ValidateRange(1, 144)][int]$TestCount, [string[]]$TestNames,
         [ValidateSet('AllRetained', 'S06')][string]$Scope = 'AllRetained')
     if ($Scope -ceq 'S06' -and -not $PSBoundParameters.ContainsKey('TestNames')) {
         throw 'S06 scope requires its explicit selected test names.'
@@ -19,6 +19,7 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
     $disabledImport = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeAutomaticStartupKeepsDisabledImportLocalAcrossOwnersWithoutOpeningOrdinaryWork'
     $disabledCreation = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeDisabledRootControlledCreationRetainsFilesDirectoriesAndOriginalsAcrossOwnersWithoutDispatch'
     $disabledCreationRole = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeDisabledRootControlledCreationRetainsFilesDirectoriesAndOriginalsAcrossFreshRolesWithoutDispatch'
+    $disabledMove = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeDisabledRootControlledMoveRetainsFilesDirectoriesAndOriginalsAcrossFreshRolesWithoutDispatch'
     $prefix = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.'
     $keepRemote = @{
         ($prefix+'NativeKeepRemoteFirstSealRequiresTheOriginalFileAndJournalAndReplaysWithoutWriting') = 3
@@ -38,7 +39,7 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
         ($prefix+'NativeKeepRemoteAcknowledgementRecoversLostSdkReturnAndPreservesLaterEdit') = 1
         ($prefix+'NativeKeepRemoteRoleHandoffRecoversLostReadbackWithoutReapplyingContent') = 1
     }
-    $additionalSelections = @(@($preparation,$approval,$rootPreparation,$rootExecution,$rootRecovery,$rootRuntime,$rootAdmission,$rootPublic,$rootCancellation,$unsealedCancellation,$legacyInitializer,$bornCancellation,$disabledImport,$disabledCreation,$disabledCreationRole)+@($keepRemote.Keys) | Where-Object {$_ -cin $TestNames}).Count
+    $additionalSelections = @(@($preparation,$approval,$rootPreparation,$rootExecution,$rootRecovery,$rootRuntime,$rootAdmission,$rootPublic,$rootCancellation,$unsealedCancellation,$legacyInitializer,$bornCancellation,$disabledImport,$disabledCreation,$disabledCreationRole,$disabledMove)+@($keepRemote.Keys) | Where-Object {$_ -cin $TestNames}).Count
     if ($TestCount -gt 112 -and (-not $PSBoundParameters.ContainsKey('TestNames') -or $additionalSelections -lt $TestCount-112)) {
         throw 'The additional namespace case requires its explicit original preparation selection.'
     }
@@ -85,6 +86,7 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
             if ($name -ceq $disabledImport) { $transferDeadlineMilliseconds += 50000 }
             if ($name -ceq $disabledCreation) { $transferDeadlineMilliseconds += 50000 }
             if ($name -ceq $disabledCreationRole) { $transferDeadlineMilliseconds += 50000 }
+            if ($name -ceq $disabledMove) { $transferDeadlineMilliseconds += 50000 }
             if ($keepRemote.ContainsKey($name)) {
                 # Every selected data row retains its actual65-second fixture deadline.
                 $executions += $keepRemote[$name]-1
@@ -114,12 +116,13 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
     # The sixteen KeepRemote methods add exactly twenty-nine 65-second executions.
     # Disabled controlled creation adds one further65-second file/directory/replay case.
     # Its separate disposed-role recovery case adds its own65-second deadline.
+    # Disabled controlled file/directory move adds one further65-second execution.
     # Count-only callers still retain their original112-name/30-minute bound.
     return [Math]::Max(600000, 120000 + $executions * 15000 + $transferDeadlineMilliseconds)
 }
 
 function Get-OrdinaryUserNamespaceStepTimeoutMinutes {
-    param([Parameter(Mandatory)][ValidateRange(1, 143)][int]$TestCount, [string[]]$TestNames,
+    param([Parameter(Mandatory)][ValidateRange(1, 144)][int]$TestCount, [string[]]$TestNames,
         [ValidateSet('AllRetained', 'S06')][string]$Scope = 'AllRetained')
     # The workflow must let the existing child budget expire and allow the
     # controller to preserve diagnostics and remove its disposable user/profile.

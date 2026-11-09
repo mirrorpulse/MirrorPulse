@@ -20,7 +20,11 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     public Task NativeDisabledRootControlledCreationRetainsFilesDirectoriesAndOriginalsAcrossFreshRolesWithoutDispatch() =>
         RunDisabledControlledCreationAcrossOwnersAsync(freshRole: true);
 
-    private async Task RunDisabledControlledCreationAcrossOwnersAsync(bool freshRole)
+    [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles")]
+    public Task NativeDisabledRootControlledMoveRetainsFilesDirectoriesAndOriginalsAcrossFreshRolesWithoutDispatch() =>
+        RunDisabledControlledCreationAcrossOwnersAsync(freshRole: true, controlledMove: true);
+
+    private async Task RunDisabledControlledCreationAcrossOwnersAsync(bool freshRole, bool controlledMove = false)
     {
         if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
             Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
@@ -36,8 +40,10 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         await using var sharedExecution = freshRole ? null : new MirrorPulseNamespaceExecutionSession();
         string? originalRole = null;
         Guid fileOperation = Guid.NewGuid(), directoryOperation = Guid.NewGuid(), parentId = Guid.Empty;
+        Guid fileMoveOperation = Guid.NewGuid(), directoryMoveOperation = Guid.NewGuid();
         MirrorPulseNamespaceMemberRegistration? originalFile = null, originalDirectory = null;
         string? birthHistory = null; Dictionary<Guid, string>? originals = null;
+        string? originalMoves = null;
         byte[] latest = "disabled controlled creation retains complete latest local bytes"u8.ToArray();
         try
         {
@@ -101,8 +107,43 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => runtime.PrepareNamespaceImportAsync(
                         fileOperation, parentId, "note.txt", file, timeout.Token).AsTask());
                 }
-                var actual = await runtime.InspectNamespaceMemberAsync("Existing/note.txt", false, timeout.Token);
-                var actualDirectory = await runtime.InspectNamespaceMemberAsync("Existing/folder", true, timeout.Token);
+                if (controlledMove)
+                {
+                    Assert.IsNotNull(state);
+                    Dictionary<Guid, string>? beforeMove = null;
+                    if (owner == 0)
+                    {
+                        await using var read = await state.Store.BeginTransactionAsync(timeout.Token);
+                        beforeMove = (await read.Operations.ListAsync(64, timeout.Token)).ToDictionary(row => row.OperationId, DisabledCreationJournalFact);
+                        await read.RollbackAsync(timeout.Token);
+                    }
+                    var fileIntent = await runtime.PrepareNamespaceMemberMoveAsync(fileMoveOperation, created.MemberId,
+                        parentId, "renamed.txt", timeout.Token);
+                    var fileCompletion = await runtime.ExecuteNamespaceMemberMoveAsync(fileMoveOperation, timeout.Token);
+                    var directoryIntent = await runtime.PrepareNamespaceMemberMoveAsync(directoryMoveOperation, childDirectory.MemberId,
+                        parentId, "renamed-folder", timeout.Token);
+                    var directoryCompletion = await runtime.ExecuteNamespaceMemberMoveAsync(directoryMoveOperation, timeout.Token);
+                    string moves = JsonSerializer.Serialize(new { fileIntent, fileCompletion, directoryIntent, directoryCompletion });
+                    if (owner == 0) originalMoves = moves;
+                    else Assert.AreEqual(originalMoves, moves);
+                    await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => runtime.PrepareNamespaceMemberMoveAsync(
+                        fileMoveOperation, created.MemberId, parentId, "changed-request.txt", timeout.Token).AsTask());
+                    Assert.IsFalse(File.Exists(file));
+                    Assert.IsFalse(Directory.Exists(Path.Combine(paths.SyncRootPath, "Existing", "folder")));
+                    file = Path.Combine(paths.SyncRootPath, "Existing", "renamed.txt");
+                    if (beforeMove is not null)
+                    {
+                        await using var read = await state.Store.BeginTransactionAsync(timeout.Token);
+                        foreach (var original in beforeMove)
+                        {
+                            var retained = await read.Operations.GetAsync(original.Key, timeout.Token);
+                            Assert.IsNotNull(retained); Assert.AreEqual(original.Value, DisabledCreationJournalFact(retained));
+                        }
+                        await read.RollbackAsync(timeout.Token);
+                    }
+                }
+                var actual = await runtime.InspectNamespaceMemberAsync(controlledMove ? "Existing/renamed.txt" : "Existing/note.txt", false, timeout.Token);
+                var actualDirectory = await runtime.InspectNamespaceMemberAsync(controlledMove ? "Existing/renamed-folder" : "Existing/folder", true, timeout.Token);
                 Assert.AreEqual(created.MemberId, actual.MemberId); Assert.AreEqual(childDirectory.MemberId, actualDirectory.MemberId);
                 Assert.IsNotNull(actual.NativeItemId); Assert.IsNotNull(actualDirectory.NativeItemId);
                 foreach (Guid memberId in new[] { parentId, created.MemberId, childDirectory.MemberId })
@@ -112,7 +153,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     Assert.AreEqual(execution.RoleSid.Value, protection.Context.Protection.RoleSid);
                 }
                 CollectionAssert.AreEqual(latest, await File.ReadAllBytesAsync(file, timeout.Token));
-                Assert.IsTrue(Directory.Exists(Path.Combine(paths.SyncRootPath, "Existing", "folder")));
+                Assert.IsTrue(Directory.Exists(Path.Combine(paths.SyncRootPath, "Existing", controlledMove ? "renamed-folder" : "folder")));
                 Assert.IsFalse(work.IsAdmitted(root.RootId));
                 Assert.IsFalse(work.TryEnter([root.RootId], out ordinary)); Assert.IsNull(ordinary);
                 Assert.IsEmpty(await catalog.ReadNamespaceDispatchFencedRootsAsync(timeout.Token));
@@ -135,7 +176,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             }
             TestContext.WriteLine($"DisabledCreation: twoLibraryOwners=True; sameNamespaceRole={!freshRole}; actualFilesAndDirectories=True; " +
                 "completeLatestBytes=True; originalBirthAndMembership=True; originalJournalPending=True; ordinaryAdmissionClosed=True; " +
-                $"configuredUploadPump=True; sourceCalls=0; remoteAcceptance=False; freshRoleRecovery={freshRole}.");
+                $"configuredUploadPump=True; sourceCalls=0; remoteAcceptance=False; freshRoleRecovery={freshRole}; controlledFileAndDirectoryMove={controlledMove}.");
         }
         finally
         {

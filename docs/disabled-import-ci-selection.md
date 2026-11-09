@@ -43,3 +43,20 @@ The isolated `disabled-local-birth` x64/ARM64 qualification selects both origina
 import cases and both creation cases, with four65-second fixture tokens plus
 two minutes for collection and cleanup. This component does not establish the
 complete disabled-operation matrix or installed/default-Host directory behavior.
+
+Disabled roots also accept explicit controlled file and directory moves through
+the same drained local-operation boundary and current protected-tree audit. A
+replay must belong to an original local member move in that root; remote-batch
+and root-Label move origins cannot borrow this admission. The move coordinator
+still validates the exact member, parent and name and retains its ordinary
+native/SDK checks and durable source/target fences. This does not dispatch a
+remote mutation or admit ordinary synchronization.
+
+The separate move fixture retains complete local bytes, both original births,
+the original SDK journal facts and immutable move receipts across disposed
+namespace roles. Changed-request replay fails. The144-name catalog adds only
+that fixture's65 seconds to the prior143-name budget. The isolated
+`disabled-local-birth` qualification now contains five65-second executions,
+with the same two-minute collection/cleanup allowance. Recursive disabled
+directory mutation, replacement/deletion and final default-Host coverage remain
+separate acceptance requirements.

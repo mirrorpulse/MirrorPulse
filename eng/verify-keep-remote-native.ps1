@@ -56,13 +56,14 @@ if ($Scope -eq 'disabled-local-birth') {
         ($fixture + 'NativeAutomaticStartupKeepsDisabledImportLocalAcrossOwnersWithoutOpeningOrdinaryWork')
         ($fixture + 'NativeDisabledRootControlledCreationRetainsFilesDirectoriesAndOriginalsAcrossOwnersWithoutDispatch')
         ($fixture + 'NativeDisabledRootControlledCreationRetainsFilesDirectoriesAndOriginalsAcrossFreshRolesWithoutDispatch')
+        ($fixture + 'NativeDisabledRootControlledMoveRetainsFilesDirectoriesAndOriginalsAcrossFreshRolesWithoutDispatch')
     )
-    if (@($selected | Where-Object { $_ -cnotin $catalog.required.native }).Count) { throw 'Local birth requires all four exact original runtime boundaries.' }
+    if (@($selected | Where-Object { $_ -cnotin $catalog.required.native }).Count) { throw 'Local birth requires all five exact original runtime boundaries.' }
     $count = Get-RequiredTestExecutionCount -Catalog $catalog -Names $selected
-    if ($count -ne 4) { throw 'Local birth qualification requires exactly four actual native cases.' }
+    if ($count -ne 5) { throw 'Disabled local work qualification requires exactly five actual native cases.' }
     $boundary = 'DisabledLocalBirth'
     $filter = ($selected | ForEach-Object { 'FullyQualifiedName=' + $_ }) -join '|'
-    $fixtureBudgetMilliseconds = 4 * 65000
+    $fixtureBudgetMilliseconds = 5 * 65000
 }
 if ($BudgetOnly) {
     # Preserve the selected fixtures' original budgets plus collection/cleanup.
