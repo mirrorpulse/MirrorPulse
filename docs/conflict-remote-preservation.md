@@ -81,6 +81,15 @@ SDK journal ID retain their separate durable boundaries. A pending public result
 is resumed as the same command by the normal upload pump. Completed replay reads
 the retained private copies without contacting the remote source again.
 
+The independent default-Host verification uses a public CLI import while the
+instance is disabled, two actual subsequent edits and an independently created
+remote file. Its stopped oracle owns the catalog exclusively and reads the real
+coalesced Create, nullable baseline, original SDK rows, local birth and native
+settlement. `signed-create-host` runs this scenario separately from the
+executor-timed `signed-create-conflict` qualification. Both retain complete
+versions and exact original acknowledgements; neither stands for the full
+effect/choice matrix.
+
 The requirements for a resident protected placeholder and exact original
 provenance still apply. Ordinary files without that identity,
 directory choices, different occupants and the broader effect/choice matrix

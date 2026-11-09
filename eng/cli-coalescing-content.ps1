@@ -12,11 +12,14 @@ function Invoke-CliCoalescingContentConflict {
         [Parameter(Mandatory)][scriptblock]$InspectOnlineSeed,
         [Parameter(Mandatory)][scriptblock]$ResolveChoice,
         [ValidateSet('KeepBoth','KeepRemote', IgnoreCase = $false)][string]$Action = 'KeepBoth',
+        [switch]$ControlledCreate,
         [Parameter(Mandatory)][string]$InstanceId,
         [Parameter(Mandatory)][string]$MappedRoot,
         [Parameter(Mandatory)][string]$SourceRoot,
         [Parameter(Mandatory)][string]$EvidencePath
     )
+    if($ControlledCreate -and $Action -cne 'KeepRemote'){throw 'The controlled-Create fixture requires KeepRemote.'}
+    $expectedEffect=if($ControlledCreate){'CreateFile'}else{'UpdateFile'}
     $originals=Join-Path ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($EvidencePath))) 'coalescing.originals'
     New-Item -ItemType Directory -Path $originals -Force|Out-Null
     function Invoke-CoalescingCli([string]$Name,[string[]]$Arguments) {
@@ -78,7 +81,11 @@ function Invoke-CliCoalescingContentConflict {
     $latestHash=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($latest))
     $remoteHash=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($remote))
     $onlineSeedIdentity=''
-    if($Action -ceq 'KeepRemote'){
+    if($ControlledCreate){
+        if((Test-Path -LiteralPath $local) -or (Test-Path -LiteralPath $source)){
+            throw 'The controlled-Create fixture requires the original absence of both destinations.'
+        }
+    }elseif($Action -ceq 'KeepRemote'){
         # The signed Worker exposes this existing remote item through the normal initial discovery.
         Assert-CoalescingHash $source $seedHash $false
         Assert-CoalescingHash $local $seedHash $true
@@ -97,6 +104,21 @@ function Invoke-CliCoalescingContentConflict {
     $entry=@($disabled.instances|Where-Object instanceId -CEQ $InstanceId)
     if($entry.Count -ne 1 -or $entry[0].enabled -ne $false){throw 'The real instance must be disabled before edits.'}
     $baseline=[long]$disabled.pendingUploads
+    $importOperation=$null
+    if($ControlledCreate){
+        # The default Host stages and executes the real public import while its
+        # instance stays disabled. No test code manufactures a journal original.
+        $parent=Invoke-CoalescingCli 'create-parent' @('--json','--developer-mode','namespace','member','inspect',([IO.Path]::GetFileName($MappedRoot)),'--directory')
+        $input=Join-Path ([IO.Path]::GetDirectoryName($SourceRoot)) 'create-input.bin'
+        [IO.File]::WriteAllBytes($input,$seed)
+        $importOperation=[guid]::NewGuid().ToString('D')
+        Invoke-CoalescingCli 'prepare-create' @('--json','--developer-mode','namespace','member','prepare-import',([string]$parent.memberId),'cli-roundtrip.txt',$input,'--operation-id',$importOperation)|Out-Null
+        $created=Invoke-CoalescingCli 'execute-create' @('--json','--developer-mode','namespace','member','import',$importOperation)
+        if($created.operationId -cne $importOperation){throw 'The actual public import lost its original operation.'}
+        Assert-CoalescingHash $local $seedHash $false
+        if(Test-Path -LiteralPath $source){throw 'The disabled controlled Create touched the backend.'}
+        Confirm-CoalescingDisabled 'after-create-status'|Out-Null
+    }
     Invoke-CoalescingCli 'stop-before-edit-baseline' @('--json','--developer-mode','host','stop')|Out-Null
     & $WaitHostStopped
     $editBaseline=Read-CoalescingEdit 'edit-baseline'
@@ -155,7 +177,7 @@ function Invoke-CliCoalescingContentConflict {
         $selected=@($listed.data.items|Where-Object {$_.instanceId -ceq $InstanceId -and $_.relativePath.Replace('\','/').EndsWith('/cli-roundtrip.txt',[StringComparison]::Ordinal)})
         if($selected.Count -gt 0){
             $conflict=$selected[0]
-            if(-not [string]::IsNullOrEmpty($conflict.localRevision) -and -not [string]::IsNullOrEmpty($conflict.remoteRevision)){break}
+            if(($ControlledCreate -or -not [string]::IsNullOrEmpty($conflict.localRevision)) -and -not [string]::IsNullOrEmpty($conflict.remoteRevision)){break}
         }
         Start-Sleep -Milliseconds 100
     }while([DateTimeOffset]::UtcNow -lt $deadline)
@@ -169,19 +191,19 @@ function Invoke-CliCoalescingContentConflict {
     foreach($id in @($firstWitness.originalOperationIds)+@($secondWitness.originalOperationIds)){
         if($id -cnotin @($pending.originalOperationIds)){throw 'The retained conflict group lost an actual first or second edit original.'}
     }
-    if($pending.rawEffect -cne 'UpdateFile' -or $pending.originalCount -lt 2 -or
-        $pending.pendingOriginalCount -ne $pending.originalCount -or $pending.originalExpectedRevisionPresent -ne $true -or
+    if($pending.rawEffect -cne $expectedEffect -or $pending.originalCount -lt 2 -or
+        $pending.pendingOriginalCount -ne $pending.originalCount -or $pending.originalExpectedRevisionPresent -ne (-not $ControlledCreate) -or
         $pending.originalEffectState -cne 'Conflict'){
-        throw 'The stopped pre-choice oracle did not retain every actual original under the rejected UpdateFile effect.'
+        throw 'The stopped pre-choice oracle did not retain every actual original under its exact rejected effect.'
     }
     $pending|ConvertTo-Json -Depth 8|Set-Content -LiteralPath (Join-Path $originals 'pending-before-choice.json') -Encoding utf8
-    if([string]::IsNullOrEmpty($conflict.localRevision) -or [string]::IsNullOrEmpty($conflict.remoteRevision)){
+    if(((-not $ControlledCreate) -and [string]::IsNullOrEmpty($conflict.localRevision)) -or [string]::IsNullOrEmpty($conflict.remoteRevision)){
         throw "The actual conflict did not expose the selected revisions required for $Action."
     }
     $observation=$pending.selectedRemoteObservation
     if($null -ne $observation){
         $selectedRevisionHash=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($conflict.remoteRevision)))
-        $requestRevisionHash=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($conflict.localRevision)))
+        $requestRevisionHash=if($ControlledCreate){$null}else{[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($conflict.localRevision)))}
         if($observation.version -ne 1 -or $observation.rejectedEffectId -cne $pending.rejectedEffectId -or
             $null -ne $observation.previousObservationId -or $null -ne $observation.refreshCommandId -or
             $observation.originalErrorActualRevisionPresent -ne $false -or $null -ne $observation.originalErrorActualRevisionSha256 -or
@@ -231,13 +253,18 @@ function Invoke-CliCoalescingContentConflict {
     Invoke-CoalescingCli 'stop-before-audit' @('--json','--developer-mode','host','stop')|Out-Null
     & $WaitHostStopped
     $before=& $ReadStoppedAudit $true
-    if($before.rawEffect -cne 'UpdateFile' -or $before.originalCount -lt 2 -or
+    if($before.rawEffect -cne $expectedEffect -or $before.originalCount -lt 2 -or
         $before.acknowledgedOriginalCount -ne $before.originalCount -or $before.localSha256 -cne $resolvedHash -or
         $before.preservedRemoteSha256 -cne $remoteHash -or $before.actualNativeConfirmation -ne $true -or
         $before.planId -cne $pending.planId -or $before.commandId -cne $command.ToString('D') -or
         (@($before.originalOperationIds) -join ',') -cne (@($pending.originalOperationIds) -join ',') -or
         ($Action -ceq 'KeepRemote' -and ($before.preservedLocalSha256 -cne $latestHash -or -not $before.acknowledgementId))){
         throw "The stopped original oracle did not prove the complete signed UpdateFile/$Action boundary."
+    }
+    if($ControlledCreate -and ($before.originalBirthOperationId -cne $importOperation -or
+        $before.originalBirthSha256 -cnotmatch '^[A-F0-9]{64}$' -or $before.backendAddressDiffersFromOriginalBirth -ne $true -or
+        $before.originalExpectedRevisionPresent -ne $false)){
+        throw 'The default Host choice lost the original unaccepted local birth or adopted the backend address.'
     }
     $before|ConvertTo-Json -Depth 8|Set-Content -LiteralPath (Join-Path $originals 'stopped-before-restart.json') -Encoding utf8
     Invoke-CoalescingCli 'start-after-choice' @('--json','--developer-mode','host','start')|Out-Null
@@ -259,7 +286,7 @@ function Invoke-CliCoalescingContentConflict {
         throw 'The restarted Host changed the completed original execution, private copy or acknowledgement facts.'
     }
     $report=[ordered]@{schemaVersion=1;sourceSha=$env:GITHUB_SHA;runId=$env:GITHUB_RUN_ID;defaultHostIntegrated=$true;signedWorker=$true;
-        rawEffect='UpdateFile';action=$Action;originalCount=$before.originalCount;actualNativeConfirmation=$true;
+        rawEffect=$expectedEffect;action=$Action;originalCount=$before.originalCount;actualNativeConfirmation=$true;
         firstEditOriginalOperationIds=@($firstWitness.originalOperationIds);secondEditOriginalOperationIds=@($secondWitness.originalOperationIds);
         actualEditOriginalJournalWitness=$true;globalPendingCountUsedAsEditProof=$false;
         localSha256=$resolvedHash;preservedRemoteSha256=$remoteHash;unchangedRetainedFactsAfterActualRestart=$true;
@@ -267,6 +294,12 @@ function Invoke-CliCoalescingContentConflict {
     if($Action -ceq 'KeepRemote'){
         $report.preservedLocalSha256=$before.preservedLocalSha256
         $report.acknowledgementId=$before.acknowledgementId
+    }
+    if($ControlledCreate){
+        $report.originalBirthOperationId=$before.originalBirthOperationId
+        $report.originalBirthSha256=$before.originalBirthSha256
+        $report.backendAddressDiffersFromOriginalBirth=$true
+        $report.originalExpectedRevisionPresent=$false
     }
     $report
 }

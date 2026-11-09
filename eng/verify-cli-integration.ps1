@@ -8,12 +8,16 @@ param(
     [switch]$Coalescing,
     [ValidateSet('KeepBoth', 'KeepRemote', IgnoreCase = $false)]
     [string]$CoalescingAction = 'KeepBoth',
+    [switch]$CreateConflict,
     [ValidateSet("Debug", "Release")]
     [string]$Configuration = "Release",
     [string]$EvidencePath
 )
 
 $ErrorActionPreference = "Stop"
+if ($CreateConflict -and (-not $Coalescing -or $CoalescingAction -cne 'KeepRemote')) {
+    throw 'The controlled-Create fixture requires its independent KeepRemote coalescing choice.'
+}
 if ($PSBoundParameters.ContainsKey('CoalescingAction') -and -not $Coalescing) {
     throw 'A coalescing choice requires the independent coalescing fixture.'
 }
@@ -190,7 +194,7 @@ try {
     } finally { $fixtureUser.Dispose() }
     New-Item -ItemType Directory -Path (Join-Path $sourceRoot "nested") -Force | Out-Null
     [IO.File]::WriteAllBytes((Join-Path $sourceRoot "nested\fixture.txt"), $fixtureBytes)
-    if ($Coalescing -and $CoalescingAction -ceq 'KeepRemote') {
+    if ($Coalescing -and $CoalescingAction -ceq 'KeepRemote' -and -not $CreateConflict) {
         [IO.File]::WriteAllBytes((Join-Path $sourceRoot 'cli-roundtrip.txt'), (Get-CliCoalescingSeedBytes))
     }
     if ($Regression) {
@@ -332,7 +336,7 @@ try {
     if ($Coalescing) {
         $coalescingEvidence = Invoke-CliCoalescingContentConflict -InvokeCli { param($arguments) Invoke-MirrorPulseCli $arguments } `
             -WaitHostStopped { Wait-MirrorPulseHostStopped } `
-            -ReadStoppedAudit { param($completed) Invoke-CliStoppedCoalescingOracle -ProbeAssembly $script:probeAssembly -FixtureRoot $runRoot -Completed $completed -Action $CoalescingAction } `
+            -ReadStoppedAudit { param($completed) Invoke-CliStoppedCoalescingOracle -ProbeAssembly $script:probeAssembly -FixtureRoot $runRoot -Completed $completed -Action $CoalescingAction -ControlledCreate:$CreateConflict } `
             -ReadStoppedEdit { Read-CliStoppedCoalescingEdit -ProbeAssembly $script:probeAssembly -FixtureRoot $runRoot } `
             -InspectOnlineSeed {
                 $inspection = Invoke-CliFixtureProbe -Mode inspect -Phase BeforeCoalescingDisable
@@ -342,6 +346,7 @@ try {
             } `
             -ResolveChoice { param($conflict) Invoke-CliCoalescingChoice -CliPath $script:cliExecutable -FixtureRoot $runRoot -ConflictId $conflict -Action $CoalescingAction } `
             -Action $CoalescingAction `
+            -ControlledCreate:$CreateConflict `
             -InstanceId $instanceId -MappedRoot $mappedRoot -SourceRoot $sourceRoot -EvidencePath $EvidencePath
         $coalescingEvidence.packageSha256 = (Get-FileHash -LiteralPath $PackagePath).Hash
         $coalescingEvidence.signatureSha256 = (Get-FileHash -LiteralPath ($PackagePath + '.signature.json')).Hash

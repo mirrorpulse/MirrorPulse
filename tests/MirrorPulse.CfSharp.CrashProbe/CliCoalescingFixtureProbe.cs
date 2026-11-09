@@ -26,6 +26,15 @@ public sealed record CliCoalescingFixtureAudit(int SchemaVersion, bool Exclusive
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Guid? AcknowledgementId { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? OriginalBirthOperationId { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? OriginalBirthSha256 { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? BackendAddressDiffersFromOriginalBirth { get; init; }
 }
 
 public sealed record CliCoalescingObservedVersionAudit(int Version, Guid ObservationId, Guid RejectedEffectId,
@@ -42,7 +51,7 @@ public static partial class CliCoalescingFixtureProbe
     private sealed record Marker(int SchemaVersion, string InstanceId, string RootId, string RootKey, string DirectoryName);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
-    public static async Task<int> RunAsync(string directory, bool completed, bool keepRemote = false)
+    public static async Task<int> RunAsync(string directory, bool completed, bool keepRemote = false, bool controlledCreate = false)
     {
         string root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory));
         const string prefix = "MirrorPulse-cli-integration-";
@@ -72,18 +81,20 @@ public static partial class CliCoalescingFixtureProbe
         if (plans.Count > 64) throw new InvalidDataException("The isolated fixture exceeds its plan bound.");
         var selected = plans.Where(plan => plan.InstanceId == route.InstanceId && plan.RootKey == route.UniquenessKey &&
             plan.OriginalPath == "cli-roundtrip.txt" && plan.FinalPath == "cli-roundtrip.txt").ToArray();
-        if (selected.Length != 1 || selected[0].Effect != MirrorPulseCoalescedEffect.UpdateFile || selected[0].Members.Count is < 2 or > 64)
+        var expectedEffect = controlledCreate ? MirrorPulseCoalescedEffect.CreateFile : MirrorPulseCoalescedEffect.UpdateFile;
+        if (selected.Length != 1 || selected[0].Effect != expectedEffect || selected[0].Members.Count is < 2 or > 64 || controlledCreate && !keepRemote)
             throw new InvalidDataException("The fixture requires one actual repeated-content UpdateFile group.");
         var plan = selected[0];
         var execution = await catalog.ReadJournalCoalescingExecutionAsync(plan.PlanId)
             ?? throw new InvalidDataException("The original execution is missing.");
-        if (string.IsNullOrEmpty(execution.ExpectedRevision) || execution.Content is null || execution.Steps.Count != 1 ||
+        if ((controlledCreate ? execution.ExpectedRevision is not null : string.IsNullOrEmpty(execution.ExpectedRevision)) || execution.Content is null || execution.Steps.Count != 1 ||
             execution.Steps[0].Kind != MirrorPulseCoalescingStepKind.Upload) throw new InvalidDataException("The original upload baseline or content proof is missing.");
         Guid[] originalIds = plan.Members.Select(member => member.OperationId).ToArray();
         Guid rejectedId = execution.Steps[0].OperationId;
         var rejected = await catalog.ReadMutationAsync(rejectedId);
         if (originalIds.Contains(rejectedId) || rejected is not { State: MirrorPulseMutationState.Conflict } ||
-            rejected.Intent.Origin != MirrorPulseMutationOrigin.CoalescedJournal || rejected.Intent.ExpectedRevision != execution.ExpectedRevision)
+            rejected.Intent.Origin != MirrorPulseMutationOrigin.CoalescedJournal || rejected.Intent.ExpectedRevision != execution.ExpectedRevision ||
+            rejected.Intent.Kind != (controlledCreate ? MirrorPulseWorkerChangeKind.Create : MirrorPulseWorkerChangeKind.ContentUpdate))
             throw new InvalidDataException("The original rejected effect must remain distinct and unchanged.");
         var selectedObservation = await catalog.ReadCoalescedConflictRemoteObservationAsync(rejectedId);
         if (selectedObservation is not null && (selectedObservation.PlanId != plan.PlanId ||
@@ -100,6 +111,8 @@ public static partial class CliCoalescingFixtureProbe
         Guid? commandId = null, acceptedId = null;
         string? localHash = null, preservedHash = null, preservedLocalHash = null;
         Guid? acknowledgementId = null;
+        MirrorPulseNamespaceBirthPlan? originalBirth = null;
+        bool? backendAddressDiffers = null;
         if (!completed)
         {
             if (pending != originalIds.Length || (await catalog.ReadCurrentCoalescingKeepBothCommandsAsync(plan.PlanId)).Count != 0)
@@ -118,6 +131,18 @@ public static partial class CliCoalescingFixtureProbe
             acknowledgementId = settled.AcknowledgementId;
             localHash = preservedHash = settled.SelectedSha256;
             preservedLocalHash = settled.PreservedLocalSha256;
+            if (controlledCreate)
+            {
+                originalBirth = await catalog.ReadConflictKeepRemoteOriginalBirthAsync(settled.CommandId)
+                    ?? throw new InvalidDataException("The actual Create choice lost its original local birth.");
+                var decision = (await catalog.ReadConflictKeepRemoteAsync(settled.CommandId))!;
+                var first = (await catalog.ReadConflictKeepRemoteFileStartAsync(settled.CommandId))!;
+                if (originalBirth.ItemId != plan.ItemId || originalBirth.ItemId != first.Original.Identity.ItemId ||
+                    originalBirth.RemoteRevision is not null || originalBirth.RemoteId != first.Original.Identity.RemoteId ||
+                    originalBirth.RemoteId == decision.Intent.RemoteSource.RemoteId)
+                    throw new InvalidDataException("The original public birth and separately selected backend source differ.");
+                backendAddressDiffers = true;
+            }
         }
         else
         {
@@ -169,11 +194,14 @@ public static partial class CliCoalescingFixtureProbe
             localHash = proof.Sha256;
         }
         var result = new CliCoalescingFixtureAudit(1, true, plan.Effect.ToString(), plan.PlanId, originalIds, originalIds.Length,
-            pending, originalIds.Length - pending, true, rejected.State.ToString(), rejectedId, commandId, acceptedId,
+            pending, originalIds.Length - pending, execution.ExpectedRevision is not null, rejected.State.ToString(), rejectedId, commandId, acceptedId,
             localHash, preservedHash, completed)
         {
             PreservedLocalSha256 = preservedLocalHash,
             AcknowledgementId = acknowledgementId,
+            OriginalBirthOperationId = originalBirth?.OperationId,
+            OriginalBirthSha256 = originalBirth is null ? null : Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(originalBirth, JsonOptions))),
+            BackendAddressDiffersFromOriginalBirth = backendAddressDiffers,
             SelectedRemoteObservation = selectedObservation is null ? null : new(selectedObservation.Version, selectedObservation.ObservationId,
                 selectedObservation.RejectedEffect.OperationId, selectedObservation.PreviousObservationId, selectedObservation.RefreshCommandId,
                 selectedObservation.OriginalOperationIds, selectedObservation.PreviousConflictIds, selectedObservation.SelectedConflictIds,
