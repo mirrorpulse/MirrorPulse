@@ -260,6 +260,19 @@ checks the original parent, name and kind. Neither local completion nor replay
 permits a Worker call or acknowledges an original journal operation. Reenable
 requires the separate current baseline and namespace admission boundaries.
 
+Explicit replacement of a resident file in a disabled root uses the same drained
+local-operation admission and current protected-tree audit. Its original root,
+member and replacement version remain mandatory. A concurrent replay that waited
+for this drain returns the original preparation without staging today's input.
+The normal-user materialization boundary still refuses a cold disabled target
+or a cold input inside a disabled MirrorPulse root; local admission grants no
+source recall. The replacement retains the complete original private backup and
+same-object journal history, queues its rescan and leaves ordinary work closed.
+Completed replay preserves later local edits without accepting or acknowledging
+them. Restoring access in the original role uses the exact registered descriptor,
+including controlled-birth inheritance flags. A separately proven role handoff
+continues to use its explicit recovery descriptor and existing native checks.
+
 `mp namespace member prepare-import` captures the source as the normal user,
 outside both the instance scheduler and namespace actor. This permits a source
 placeholder to hydrate through the same instance without acquiring a recursive

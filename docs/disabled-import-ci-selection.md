@@ -80,3 +80,21 @@ The145-name namespace catalog adds only this fixture's65 seconds, retaining ever
 prior selection and deadline. The isolated native qualification contains six
 65-second executions with its existing120-second collection/cleanup allowance.
 Recursive disabled retirement and default-Host/installed acceptance remain open.
+
+Disabled resident replacement adds a distinct65-second public-runtime fixture.
+It retains original private backup bytes, native identity, birth and every pending
+journal fact across disposed namespace roles. Four concurrent requests share one
+original preparation; the external synthetic input is removed after its first
+reply. Completed replay preserves a subsequent ordinary edit. Actual online-only
+target and input placeholders refuse preparation without source access or a
+durable replacement admission. The same-role access-restoration check restores
+the exact registered descriptor, including inherited controlled-birth flags;
+separately verified role handoffs retain their canonical recovery policy.
+
+The146-name namespace catalog retains every prior selection and adds only that
+65-second execution:7,990,000ms retained or7,585,000ms for S06. The isolated native
+qualification additionally selects both existing replacement restoration tests.
+Its budget preserves seven65-second disabled/import fixtures, all four original
+45-second content-writer cuts, the original45-second validation fixture and the
+existing120-second collection/cleanup allowance. It does not shorten any earlier
+test deadline or establish the final default-Host/installed operation matrix.

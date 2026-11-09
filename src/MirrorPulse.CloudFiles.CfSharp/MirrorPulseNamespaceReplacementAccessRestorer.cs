@@ -38,14 +38,18 @@ public sealed class MirrorPulseNamespaceReplacementAccessRestorer(MirrorPulsePro
         var facts = await catalog.ReadNamespaceReplacementExecutionAsync(operationId, cancellationToken).ConfigureAwait(false)
             ?? throw new FileNotFoundException("The original replacement admission is missing.");
         var action = MirrorPulseNamespaceReplacementContentWriter.RequireCurrentAction(facts);
+        // A controlled birth can retain its inherited registered descriptor.
+        // Only a separately verified role handoff selects the canonical recovery policy.
+        string expectedRestoreDacl = facts.RoleActions.Count == 0 ? facts.Intent.Original.ExpectedDacl :
+            MirrorPulseNamespacePermissionPolicy.CreateProtectedDacl(execution, isDirectory: false);
         if (facts.RestorationResult is { ProductVerified: true } historical && facts.Restoration?.ActionId == action.ActionId &&
             action.RoleSid == execution.RoleSid.Value && !revalidateForCompletion) return historical;
         if (facts.Cancellation is not null || facts.ContentCompletion is null || execution.RoleSid.Value != action.RoleSid || execution.OwnerSid.Value != action.OwnerSid ||
             !MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(MirrorPulseNamespacePermissionPolicy.CreateOrdinaryFileBirthDacl(execution), action.RoleOnlyDacl) ||
             file.RelativePath.Replace('\\', '/') != facts.Intent.Original.Context.Location.RelativePath ||
             file.Parent is null || !string.Equals(file.Parent.FullPath, parent.FullPath, StringComparison.OrdinalIgnoreCase) ||
-            !MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(
-                MirrorPulseNamespacePermissionPolicy.CreateProtectedDacl(execution, isDirectory: false), action.RestoreDacl) ||
+            facts.RoleActions.Count == 0 && facts.Intent.Original.Context.Protection.RoleSid != execution.RoleSid.Value ||
+            !MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(expectedRestoreDacl, action.RestoreDacl) ||
             !CloudPlaceholderIdentity.TryDecode(Convert.FromBase64String(facts.Intent.OriginalPlaceholderIdentity), out var identity) ||
             identity is null || identity.ItemId != facts.Intent.Original.Identity.ItemId || identity.RemoteId != facts.Intent.Original.Identity.RemoteId)
             throw new InvalidOperationException("Restoration requires copied content, the original identity and a proven current-role action.");

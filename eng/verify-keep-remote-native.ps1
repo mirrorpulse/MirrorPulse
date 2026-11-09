@@ -58,13 +58,18 @@ if ($Scope -eq 'disabled-local-birth') {
         ($fixture + 'NativeDisabledRootControlledCreationRetainsFilesDirectoriesAndOriginalsAcrossFreshRolesWithoutDispatch')
         ($fixture + 'NativeDisabledRootControlledMoveRetainsFilesDirectoriesAndOriginalsAcrossFreshRolesWithoutDispatch')
         ($fixture + 'NativeDisabledRootControlledRetirementRetainsOriginalJournalAcrossFreshRolesWithoutDispatch')
+        ($fixture + 'NativeDisabledRootControlledReplacementRetainsBytesBackupAndJournalAcrossFreshRolesWithoutDispatch')
+        ($fixture + 'NativeReplacementContentWriterRetainsFirstBackupAndDirtyCopyAcrossBothObjectStarts')
+        ($fixture + 'NativeReplacementValidationRetainsBackupBindingAndIdentityAcrossPlaceholderAndOrdinaryStarts')
     )
-    if (@($selected | Where-Object { $_ -cnotin $catalog.required.native }).Count) { throw 'Local birth requires all six exact original runtime boundaries.' }
+    if (@($selected | Where-Object { $_ -cnotin $catalog.required.native }).Count) { throw 'Local birth requires all nine exact original runtime boundaries.' }
     $count = Get-RequiredTestExecutionCount -Catalog $catalog -Names $selected
-    if ($count -ne 6) { throw 'Disabled local work qualification requires exactly six actual native cases.' }
+    if ($count -ne 9) { throw 'Disabled local work qualification requires exactly nine actual native cases.' }
     $boundary = 'DisabledLocalBirth'
     $filter = ($selected | ForEach-Object { 'FullyQualifiedName=' + $_ }) -join '|'
-    $fixtureBudgetMilliseconds = 6 * 65000
+    # Seven65-second disabled/import fixtures and the original four45-second
+    # content-writer cuts plus the original45-second validation fixture.
+    $fixtureBudgetMilliseconds = 7 * 65000 + 4 * 45000 + 45000
 }
 if ($BudgetOnly) {
     # Preserve the selected fixtures' original budgets plus collection/cleanup.

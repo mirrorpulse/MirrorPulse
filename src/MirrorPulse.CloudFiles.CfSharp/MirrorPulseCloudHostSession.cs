@@ -959,6 +959,17 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             }, requestCancellation);
 
         [SupportedOSPlatform("windows10.0.26100")]
+        private ValueTask<MirrorPulseNamespaceWorkAdmission.RecoveryLease> EnterDisabledLocalReplacementAsync(
+            RootRegistration root, Guid operationId, Guid memberId, CancellationToken requestCancellation) =>
+            EnterDisabledLocalOperationAsync(root, async token =>
+            {
+                var original = await catalog!.ReadNamespaceReplacementExecutionAsync(operationId, token).ConfigureAwait(false);
+                if (original is not null && (original.Intent.RootId != root.RootId || original.Intent.MemberId != memberId || original.Intent.Version != 1))
+                    throw new InvalidOperationException("The operation ID does not own a controlled file replacement in this disabled root.");
+                return original is not null;
+            }, requestCancellation);
+
+        [SupportedOSPlatform("windows10.0.26100")]
         private async ValueTask<MirrorPulseNamespaceWorkAdmission.RecoveryLease> EnterDisabledLocalOperationAsync(
             RootRegistration root, Func<CancellationToken, ValueTask<bool>> hasOriginalLocalOperation,
             CancellationToken requestCancellation)
@@ -1068,7 +1079,18 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             if (original.Context.Member.IsDirectory || original.Context.Member.RootId is not { } rootId)
                 throw new InvalidOperationException("Replacement requires a managed root file.");
             var root = router!.Registrations.Single(candidate => candidate.RootId == rootId);
-            using var admission = namespaceWork?.Enter([rootId]);
+            using var admission = root.State == RootRegistrationState.Disabled ? null : namespaceWork?.Enter([rootId]);
+            await using var disabledAdmission = root.State == RootRegistrationState.Disabled
+                ? await EnterDisabledLocalReplacementAsync(root, operationId, memberId, cancellationToken).ConfigureAwait(false) : null;
+            // The original request may have been admitted while waiting for the closed-root drain.
+            // Historical replay must not restage an input or inspect today's replacement bytes.
+            if (disabledAdmission is not null &&
+                await catalog.ReadNamespaceReplacementExecutionAsync(operationId, cancellationToken).ConfigureAwait(false) is { } replay)
+            {
+                if (replay.Intent.MemberId != memberId || replay.Action is null)
+                    throw new InvalidOperationException("The existing replacement admission cannot replay this preparation.");
+                return replay;
+            }
             var inputs = new MirrorPulseLocalImportStagingStore(new(syncRootPath, dataRootPath));
             var materialized = await WithCurrentLibraryAsync(token => new MirrorPulseNamespaceReplacementPreparationCoordinator(fileSystem,
                 state, catalog, router, _namespaceExecution!, _namespaceActor!, _scheduler, inputs, mayDispatch ?? (_ => false))

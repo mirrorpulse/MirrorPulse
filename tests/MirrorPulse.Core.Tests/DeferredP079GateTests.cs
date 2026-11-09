@@ -37,8 +37,9 @@ public sealed class DeferredP079GateTests
             $disabledCreationRole='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeDisabledRootControlledCreationRetainsFilesDirectoriesAndOriginalsAcrossFreshRolesWithoutDispatch'
             $disabledMove='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeDisabledRootControlledMoveRetainsFilesDirectoriesAndOriginalsAcrossFreshRolesWithoutDispatch'
             $disabledRetirement='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeDisabledRootControlledRetirementRetainsOriginalJournalAcrossFreshRolesWithoutDispatch'
-            $names=@($catalog.required.namespace | Where-Object {$_ -cnotin $keepRemote -and $_ -cne $disabledCreation -and $_ -cne $disabledCreationRole -and $_ -cne $disabledMove -and $_ -cne $disabledRetirement})
-            if($names.Count -ne 125 -or @($catalog.required.native|Where-Object {$_ -cnotin $keepRemote -and $_ -cne $disabledCreation -and $_ -cne $disabledCreationRole -and $_ -cne $disabledMove -and $_ -cne $disabledRetirement}).Count -ne 150 -or @($catalog.required.deferredP079).Count -ne 5){throw 'Required scope names changed.'}
+            $disabledReplacement='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeDisabledRootControlledReplacementRetainsBytesBackupAndJournalAcrossFreshRolesWithoutDispatch'
+            $names=@($catalog.required.namespace | Where-Object {$_ -cnotin $keepRemote -and $_ -cne $disabledCreation -and $_ -cne $disabledCreationRole -and $_ -cne $disabledMove -and $_ -cne $disabledRetirement -and $_ -cne $disabledReplacement})
+            if($names.Count -ne 125 -or @($catalog.required.native|Where-Object {$_ -cnotin $keepRemote -and $_ -cne $disabledCreation -and $_ -cne $disabledCreationRole -and $_ -cne $disabledMove -and $_ -cne $disabledRetirement -and $_ -cne $disabledReplacement}).Count -ne 150 -or @($catalog.required.deferredP079).Count -ne 5){throw 'Required scope names changed.'}
             if((Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 125 -TestNames $names -Scope S06) -ne 5375000 -or
                (Get-OrdinaryUserNamespaceStepTimeoutMinutes -TestCount 125 -TestNames $names -Scope S06) -ne 95 -or
                (Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 125 -TestNames $names) -ne 5780000 -or
@@ -64,6 +65,10 @@ public sealed class DeferredP079GateTests
                @($catalog.required.native|Where-Object {$_ -ceq $disabledRetirement}).Count -ne 1 -or
                (Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 126 -TestNames @($names+$disabledRetirement) -Scope S06) -ne 5440000 -or
                (Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 126 -TestNames @($names+$disabledRetirement)) -ne 5845000){throw 'The explicit disabled retirement must retain all original deferred deadlines and add only65seconds.'}
+            if(@($catalog.required.namespace|Where-Object {$_ -ceq $disabledReplacement}).Count -ne 1 -or
+               @($catalog.required.native|Where-Object {$_ -ceq $disabledReplacement}).Count -ne 1 -or
+               (Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 126 -TestNames @($names+$disabledReplacement) -Scope S06) -ne 5440000 -or
+               (Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 126 -TestNames @($names+$disabledReplacement)) -ne 5845000){throw 'The disabled replacement must retain all original deferred deadlines and add only65seconds.'}
             $prefix='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.'
             $methods=@{
                 NativeHostTransferRetainsSourceAndBothFencesAfterOriginalCopyAndWholeTargetVerification=1
