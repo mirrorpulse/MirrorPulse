@@ -179,7 +179,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         }
     }
 
-    private sealed class KeepBothRemote(string path, string remoteId = "remote-object") : IMirrorPulseWorkerStatTransport, IMirrorPulseWorkerRangeTransport,
+    private sealed class KeepBothRemote(string path, string remoteId = "remote-object", string name = "original.bin") : IMirrorPulseWorkerStatTransport, IMirrorPulseWorkerRangeTransport,
         IMirrorPulseWorkerDirectoryPageSource, IMirrorPulseWorkerUploadTransport, IMirrorPulseWorkerMutationTransport
     {
         internal static readonly byte[] SelectedBytes = [6, 6, 6];
@@ -192,11 +192,11 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         internal void Seed(byte[]? bytes = null) { Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!); File.WriteAllBytes(path, bytes ?? SelectedBytes); }
         private void Read(CancellationToken token) { token.ThrowIfCancellationRequested(); Assert.IsFalse(DenySourceReads, "Recovery cannot reopen a committed remote source."); SourceReads++; }
         public ValueTask<string?> StatAsync(MirrorPulseWorkerStatRequest request, CancellationToken token)
-        { Read(token); Assert.AreEqual("original.bin", request.NormalizedPath); return ValueTask.FromResult<string?>(_revision); }
+        { Read(token); Assert.AreEqual(name, request.NormalizedPath); return ValueTask.FromResult<string?>(_revision); }
         public ValueTask<MirrorPulseWorkerDirectoryPage> ReadDirectoryPageAsync(MirrorPulseWorkerDirectoryPageRequest request, CancellationToken token)
         {
             Read(token); Assert.AreEqual(string.Empty, request.NormalizedPath);
-            return ValueTask.FromResult(new MirrorPulseWorkerDirectoryPage([new(remoteId, _revision, "File", "original.bin", new FileInfo(path).Length, null, null, false)], ReadOnlyMemory<byte>.Empty, true));
+            return ValueTask.FromResult(new MirrorPulseWorkerDirectoryPage([new(remoteId, _revision, "File", name, new FileInfo(path).Length, null, null, false)], ReadOnlyMemory<byte>.Empty, true));
         }
         public ValueTask<Stream> ReadRangeAsync(MirrorPulseWorkerReadRangeRequest request, CancellationToken token)
         { Read(token); return ValueTask.FromResult<Stream>(new MemoryStream(File.ReadAllBytes(path), checked((int)request.Offset), checked((int)request.Length), writable: false)); }

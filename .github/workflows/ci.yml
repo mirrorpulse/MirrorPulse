@@ -358,6 +358,24 @@ jobs:
           path: artifacts/test-results/signed-post-move/**
           if-no-files-found: ignore
 
+      - name: Verify signed ARM64 rejected Create and original local-birth identity
+        if: (success() || failure()) && github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          $packages = @(Get-ChildItem -LiteralPath artifacts/official-local -Recurse -Filter '*.mpadapter' -File)
+          if ($packages.Count -ne 1) { throw 'Require the one frozen official Local package.' }
+          pwsh ./eng/verify-signed-create-conflict.ps1 -PackagePath $packages[0].FullName
+          if ($LASTEXITCODE -ne 0) { throw 'The real signed create-conflict fixture failed.' }
+
+      - name: Preserve signed ARM64 create-conflict originals
+        if: always() && github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: signed-create-conflict-arm64-originals
+          path: artifacts/test-results/signed-create-conflict/**
+          if-no-files-found: ignore
+
       - name: Verify signed official packages and native ARM64 Workers
         if: (success() || failure()) && github.event_name == 'workflow_dispatch'
         run: |

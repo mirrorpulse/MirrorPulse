@@ -4,7 +4,7 @@ using MirrorPulse.Core.State;
 
 namespace MirrorPulse.CloudFiles.CfSharp;
 
-/// <summary>Binds the retained public identity to its original backend object without selecting a new generation.</summary>
+/// <summary>Retains the public generation and validates its original backend relation or explicit local-birth choice.</summary>
 internal static class MirrorPulseKeepRemotePublicIdentity
 {
     internal static async ValueTask<CloudPlaceholderIdentity> ReadOriginalAsync(MirrorPulseProductCatalog catalog,
@@ -21,6 +21,17 @@ internal static class MirrorPulseKeepRemotePublicIdentity
         if (CloudPlaceholderIdentity.TryDecode(bytes, out var identity) && identity is not null &&
             MirrorPulsePlaceholderIdentity.IdentifiesBackendObject(root, intent.RemoteSource.RemoteId, identity))
             return ReadOriginal(root, intent.ItemId, intent.RemoteSource.RemoteId, encoded);
+        if (intent.RejectedEffect.Kind == MirrorPulse.Core.Sync.MirrorPulseWorkerChangeKind.Create)
+        {
+            var birth = await catalog.ReadConflictKeepRemoteOriginalBirthAsync(intent.CommandId, token).ConfigureAwait(false);
+            if (birth is null || identity is null || identity.ItemId != birth.ItemId || identity.RemoteId != birth.RemoteId ||
+                identity.RemoteRevision != birth.RemoteRevision)
+                throw new InvalidDataException("KeepRemote requires the exact original protected local birth identity.");
+            // A local birth has no previously accepted backend object. The explicit
+            // choice binds the separately retained remote source to this exact birth;
+            // preserve its public address rather than inventing an earlier acceptance.
+            return ReadOriginal(root, intent.ItemId, "local:" + birth.OperationId.ToString("N"), encoded);
+        }
         var moved = await catalog.ReadConflictKeepRemoteAcknowledgedMoveAsync(intent.CommandId, token).ConfigureAwait(false);
         // Some backends use the path itself as their object address. Only the same
         // group's acknowledged original Move proves the old-to-new correspondence.

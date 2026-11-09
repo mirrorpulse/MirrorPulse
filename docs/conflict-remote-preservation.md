@@ -57,6 +57,35 @@ single-observation `KeepBoth`, absent-remote variants, directory choices and
 multiple remote occupants retain their separate implementation and acceptance
 requirements; the coalesced file path does not certify those cases.
 
+## KeepRemote after a rejected file creation
+
+An original coalesced `CreateFile` can use the protected resident KeepRemote
+path when the controlled local birth already has its original placeholder,
+registered native object, direct parent and complete retained birth provenance.
+The rejected Create retains its null expected revision: it still records the
+original requirement that the remote name be absent. Choosing the observed
+remote file does not rewrite that rejection or retry an upload against a fresh
+baseline.
+
+Controlled creation and import use a scoped `local:<birth ID>` public address.
+The catalog verifies the original birth intent, identity plan, ordinary-object
+conversion, native observation and registered member against the complete native
+binding, root and never-accepted revision. The explicit choice binds its
+separately retained remote source to that exact local birth. Its backend address
+may differ; the public item/address and native object remain unchanged.
+
+The command retains the complete original group, local bytes and selected remote
+version before sealing or writing the existing native object. Content copying,
+native confirmation, restored permissions and acknowledgement of every original
+SDK journal ID retain their separate durable boundaries. A pending public result
+is resumed as the same command by the normal upload pump. Completed replay reads
+the retained private copies without contacting the remote source again.
+
+The requirements for a resident protected placeholder and exact original
+provenance still apply. Ordinary files without that identity,
+directory choices, different occupants and the broader effect/choice matrix
+require their own execution and acceptance evidence.
+
 ## Separate post-rejection version observations
 
 An Adapter's conflict response can omit either revision field. The rejected

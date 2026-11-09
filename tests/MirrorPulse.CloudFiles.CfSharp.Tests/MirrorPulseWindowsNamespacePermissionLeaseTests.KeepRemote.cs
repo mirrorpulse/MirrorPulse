@@ -114,7 +114,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             await File.WriteAllBytesAsync(file.FullPath, [1, 2, 3], token);
             var originals = new List<MirrorPulseNamespacePermissionPreparation>();
             var members = new Dictionary<Guid, MirrorPulseNamespaceMemberRegistration>();
-            if (scenario is "host-command" or "host-process" or "host-preparation" or "access-journal-qualification" or "post-move")
+            if (scenario is "host-command" or "host-process" or "host-preparation" or "access-journal-qualification" or "post-move" or "create-conflict")
             {
                 foreach (CloudItem item in new CloudItem[] { fileSystem.Root, fileSystem.GetDirectory("Docs"), file })
                     SetProtectedFixtureUserOwner(item, caller.User!);
@@ -132,7 +132,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 await SaveAcceptedIdentityFixtureTopologyAsync(catalog, root, token);
                 await RegisterNativeOriginalMembersAsync(fileSystem, catalog, router, role, originals, members, actor, token);
             }
-            await using var postMovePermissions = scenario == "post-move" ? new MirrorPulseNamespacePermissionCoordinator(catalog) : null;
+            await using var postMovePermissions = scenario is "post-move" or "create-conflict" ? new MirrorPulseNamespacePermissionCoordinator(catalog) : null;
             (MirrorPulseNamespaceAnchorProtection Guard, IReadOnlyList<MirrorPulseNamespaceStartupRoot> Roots)? postMoveStartup = postMovePermissions is not null
                 ? await new MirrorPulseNamespaceStartupCoordinator(fileSystem, catalog, router, role, actor, scheduler,
                     postMovePermissions, work).StartAsync(token) : null;
@@ -142,18 +142,22 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             await using var feed = fileSystem.CreateLocalChangeFeed(new() { BatchSize = 1 });
             await feed.StartAsync(token);
             var journal = new MirrorPulseJournalUploadSource(feed, router, catalog, _ => true);
+            if (scenario == "create-conflict")
+                file = await CreateKeepRemoteOriginalAsync(fileSystem, state, catalog, router, role, actor, token);
             Guid itemId = (await file.InspectAsync(token)).ItemId!.Value;
             if (scenario == "post-move")
                 file = await MoveKeepRemoteOriginalAsync(fileSystem, state, catalog, router, role, actor, file, token);
-            else
+            else if (scenario != "create-conflict")
                 await File.AppendAllTextAsync(file.FullPath, " first local edit", token);
             await ReadEditedWindowAsync(1);
             await File.AppendAllTextAsync(file.FullPath, " latest local edit", token);
             var window = await ReadEditedWindowAsync(2);
             var plan = MirrorPulseJournalCoalescingPlanner.TryPlan(window.CompleteWindow!, itemId, window.WindowUpperSequence, new HashSet<Guid>());
             Assert.IsNotNull(plan);
-            Assert.AreEqual(scenario == "post-move" ? MirrorPulseCoalescedEffect.MoveAndUpdateFile : MirrorPulseCoalescedEffect.UpdateFile, plan.Effect);
-            Assert.HasCount(2, plan.Members);
+            Assert.AreEqual(scenario == "post-move" ? MirrorPulseCoalescedEffect.MoveAndUpdateFile :
+                scenario == "create-conflict" ? MirrorPulseCoalescedEffect.CreateFile : MirrorPulseCoalescedEffect.UpdateFile, plan.Effect);
+            if (scenario == "create-conflict") Assert.IsGreaterThanOrEqualTo(2, plan.Members.Count);
+            else Assert.HasCount(2, plan.Members);
             byte[] local = await File.ReadAllBytesAsync(file.FullPath, token);
             var snapshot = await file.InspectAsync(token);
             if (scenario is "access-journal-qualification")
@@ -166,9 +170,11 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             var binding = await new MirrorPulseNamespaceContentConfirmation(catalog, router, actor, role)
                 .CaptureUploadBindingAsync(file, snapshot, token);
             var content = new MirrorPulseCoalescingContent(local.Length, Convert.ToHexString(SHA256.HashData(local)), binding);
-            await catalog.PrepareJournalCoalescingAndExecutionAsync(plan, window.CompleteWindow!, "prior-remote", content, token);
-            string backendRemoteId = MirrorPulsePlaceholderIdentity.Decode(root.InstanceId, snapshot.PlaceholderIdentity.Span).RemoteId;
-            var remote = new KeepBothRemote(Path.Combine(paths.DataRootPath, "keep-remote-selected.bin"), backendRemoteId);
+            await catalog.PrepareJournalCoalescingAndExecutionAsync(plan, window.CompleteWindow!, scenario == "create-conflict" ? null : "prior-remote", content, token);
+            string backendRemoteId = scenario == "create-conflict" ? "created.bin" :
+                MirrorPulsePlaceholderIdentity.Decode(root.InstanceId, snapshot.PlaceholderIdentity.Span).RemoteId;
+            var remote = new KeepBothRemote(Path.Combine(paths.DataRootPath, "keep-remote-selected.bin"), backendRemoteId,
+                scenario == "create-conflict" ? "created.bin" : "original.bin");
             byte[] selectedBytes = new byte[selectedLength];
             new Random(518).NextBytes(selectedBytes);
             remote.Seed(selectedBytes);
@@ -179,11 +185,18 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             Guid conflictId = Guid.Empty;
             foreach (var member in plan.Members)
             {
-                var conflict = new MirrorPulseConflictRecord(Guid.NewGuid(), root.InstanceId, member.OperationId.ToString("D"), "Docs/original.bin",
+                var conflict = new MirrorPulseConflictRecord(Guid.NewGuid(), root.InstanceId, member.OperationId.ToString("D"), file.RelativePath.Replace('\\', '/'),
                     MirrorPulseConflictReason.StaleRemoteRevision, MirrorPulseVersionComparison.Diverged,
-                    scenario == "post-move" ? "accepted-move" : "prior-remote", "selected-remote", DateTimeOffset.UtcNow);
+                    scenario == "post-move" ? "accepted-move" : scenario == "create-conflict" ? null : "prior-remote", "selected-remote", DateTimeOffset.UtcNow);
                 await catalog.SaveUploadConflictAsync(conflict, token);
                 conflictId = conflict.ConflictId;
+            }
+            if (scenario == "create-conflict")
+            {
+                await VerifyCreateKeepRemoteAsync(paths, state, catalog, router, role, actor, scheduler, work,
+                    fileSystem, feed, remote, file, conflictId, plan, snapshot, local, selectedBytes, token);
+                Assert.AreEqual(0, provider.Reads);
+                return;
             }
             if (scenario == "post-move")
             {

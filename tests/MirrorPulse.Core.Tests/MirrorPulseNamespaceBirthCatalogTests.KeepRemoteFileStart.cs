@@ -193,7 +193,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             setup.Preparation.Intent.CommandId, setup.StoreVolume, setup.StoreFileId, setup.Original, setup.Parent, setup.StartedAt, token);
 
     private static async Task<KeepRemoteFileSetup> PrepareKeepRemoteFileAsync(MirrorPulseProductCatalog catalog, bool retainJournal = true,
-        string? backendRemoteId = null, bool moveAcceptedBeforeConflict = false, bool rejectMove = false)
+        string? backendRemoteId = null, bool moveAcceptedBeforeConflict = false, bool rejectMove = false, bool createFile = false)
     {
         var member = await PrepareMovableMemberAsync(catalog); var root = await AddIdentityTopologyAsync(catalog, member.Move.RootId);
         var original = (await catalog.ReadNamespaceMemberProtectionSnapshotAsync(member.Member.MemberId))!;
@@ -205,13 +205,14 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         DateTimeOffset now = DateTimeOffset.UtcNow;
         bool movedProgram = moveAcceptedBeforeConflict || rejectMove;
         MirrorPulseWorkerChangeCommand[] window = Enumerable.Range(1, 2).Select(sequence => new MirrorPulseWorkerChangeCommand(Guid.NewGuid(), sequence,
-            root.InstanceId, root.UniquenessKey, movedProgram && sequence == 1 ? MirrorPulseWorkerChangeKind.Move : MirrorPulseWorkerChangeKind.ContentUpdate,
+            root.InstanceId, root.UniquenessKey, movedProgram && sequence == 1 ? MirrorPulseWorkerChangeKind.Move :
+                createFile && sequence == 1 ? MirrorPulseWorkerChangeKind.Create : MirrorPulseWorkerChangeKind.ContentUpdate,
             path, movedProgram && sequence == 1 ? root.UniquenessKey : null,
             movedProgram && sequence == 1 ? path + ".before" : null, false,
             original.Identity.ItemId!.Value, now.AddTicks(sequence))).ToArray();
         var plan = MirrorPulseJournalCoalescingPlanner.TryPlan(window, original.Identity.ItemId!.Value, 100, new HashSet<Guid>())!;
-        await catalog.PrepareJournalCoalescingAndExecutionAsync(plan, window, "baseline", content);
-        string baseline = "baseline";
+        await catalog.PrepareJournalCoalescingAndExecutionAsync(plan, window, createFile ? null : "baseline", content);
+        string? baseline = createFile ? null : "baseline";
         if (moveAcceptedBeforeConflict)
         {
             var move = await catalog.PrepareJournalCoalescingMutationAsync(plan.PlanId, 0);

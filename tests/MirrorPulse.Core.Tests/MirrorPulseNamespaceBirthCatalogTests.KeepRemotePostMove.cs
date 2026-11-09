@@ -12,6 +12,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         using var fixture = new Fixture(); await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
         var setup = await PrepareKeepRemoteFileAsync(catalog);
         Assert.IsNull(await catalog.ReadConflictKeepRemoteAcknowledgedMoveAsync(setup.Preparation.Intent.CommandId));
+        Assert.IsNull(await catalog.ReadConflictKeepRemoteOriginalBirthAsync(setup.Preparation.Intent.CommandId));
         await Assert.ThrowsExactlyAsync<FileNotFoundException>(() => catalog.ReadConflictKeepRemoteAcknowledgedMoveAsync(Guid.NewGuid()));
         await Assert.ThrowsExactlyAsync<ArgumentException>(() => catalog.ReadConflictKeepRemoteAcknowledgedMoveAsync(Guid.Empty));
     }
