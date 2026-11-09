@@ -27,6 +27,7 @@ public sealed class DeferredP079GateTests
                 'NativeKeepRemoteDefaultCommandResumesFirstPermissionIntentBeforeRootAudit',
                 'NativeKeepRemoteCurrentRoleRestoresItsRegisteredInheritedDescriptor',
                 'NativeKeepRemoteAfterAcknowledgedMoveRetainsItsPrefixAndSettlesTheOriginalJournal',
+                'NativeKeepRemoteControlledCreatePreservesItsAbsentBaselineAndAllOriginalJournalEffects',
                 'NativeKeepRemoteNewRoleResumesOriginalWriteAndConfirmsSelectedBytes',
                 'NativeKeepRemoteRestorationRetainsActualAccessResultsAndPreservesOrdinaryLaterEdits',
                 'NativeKeepRemoteRoleHandoffRecoversLostReadbackWithoutReapplyingContent',
@@ -38,6 +39,11 @@ public sealed class DeferredP079GateTests
                (Get-OrdinaryUserNamespaceStepTimeoutMinutes -TestCount 125 -TestNames $names -Scope S06) -ne 95 -or
                (Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 125 -TestNames $names) -ne 5780000 -or
                (Get-OrdinaryUserNamespaceStepTimeoutMinutes -TestCount 125 -TestNames $names) -ne 102){throw 'Selected or retained deadlines changed.'}
+            $create=$keepRemotePrefix+'NativeKeepRemoteControlledCreatePreservesItsAbsentBaselineAndAllOriginalJournalEffects'
+            if(@($catalog.required.namespace|Where-Object {$_ -ceq $create}).Count -ne 1 -or
+               @($catalog.required.native|Where-Object {$_ -ceq $create}).Count -ne 1 -or
+               (Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 126 -TestNames @($names+$create) -Scope S06) -ne 5440000 -or
+               (Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 126 -TestNames @($names+$create)) -ne 5845000){throw 'The new Create must add only its one65-second execution in both retained scopes.'}
             $prefix='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.'
             $methods=@{
                 NativeHostTransferRetainsSourceAndBothFencesAfterOriginalCopyAndWholeTargetVerification=1
