@@ -1,5 +1,5 @@
 function Get-OrdinaryUserNamespaceBudgetMilliseconds {
-    param([Parameter(Mandatory)][ValidateRange(1, 146)][int]$TestCount, [string[]]$TestNames,
+    param([Parameter(Mandatory)][ValidateRange(1, 147)][int]$TestCount, [string[]]$TestNames,
         [ValidateSet('AllRetained', 'S06')][string]$Scope = 'AllRetained')
     if ($Scope -ceq 'S06' -and -not $PSBoundParameters.ContainsKey('TestNames')) {
         throw 'S06 scope requires its explicit selected test names.'
@@ -22,6 +22,7 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
     $disabledMove = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeDisabledRootControlledMoveRetainsFilesDirectoriesAndOriginalsAcrossFreshRolesWithoutDispatch'
     $disabledRetirement = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeDisabledRootControlledRetirementRetainsOriginalJournalAcrossFreshRolesWithoutDispatch'
     $disabledReplacement = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeDisabledRootControlledReplacementRetainsBytesBackupAndJournalAcrossFreshRolesWithoutDispatch'
+    $residentReplacement = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeResidentInSyncReplacementRetainsOriginalBytesJournalAndDirtyContentWithoutSourceCalls'
     $prefix = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.'
     $keepRemote = @{
         ($prefix+'NativeKeepRemoteFirstSealRequiresTheOriginalFileAndJournalAndReplaysWithoutWriting') = 3
@@ -41,7 +42,7 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
         ($prefix+'NativeKeepRemoteAcknowledgementRecoversLostSdkReturnAndPreservesLaterEdit') = 1
         ($prefix+'NativeKeepRemoteRoleHandoffRecoversLostReadbackWithoutReapplyingContent') = 1
     }
-    $additionalSelections = @(@($preparation,$approval,$rootPreparation,$rootExecution,$rootRecovery,$rootRuntime,$rootAdmission,$rootPublic,$rootCancellation,$unsealedCancellation,$legacyInitializer,$bornCancellation,$disabledImport,$disabledCreation,$disabledCreationRole,$disabledMove,$disabledRetirement,$disabledReplacement)+@($keepRemote.Keys) | Where-Object {$_ -cin $TestNames}).Count
+    $additionalSelections = @(@($preparation,$approval,$rootPreparation,$rootExecution,$rootRecovery,$rootRuntime,$rootAdmission,$rootPublic,$rootCancellation,$unsealedCancellation,$legacyInitializer,$bornCancellation,$disabledImport,$disabledCreation,$disabledCreationRole,$disabledMove,$disabledRetirement,$disabledReplacement,$residentReplacement)+@($keepRemote.Keys) | Where-Object {$_ -cin $TestNames}).Count
     if ($TestCount -gt 112 -and (-not $PSBoundParameters.ContainsKey('TestNames') -or $additionalSelections -lt $TestCount-112)) {
         throw 'The additional namespace case requires its explicit original preparation selection.'
     }
@@ -91,6 +92,8 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
             if ($name -ceq $disabledMove) { $transferDeadlineMilliseconds += 50000 }
             if ($name -ceq $disabledRetirement) { $transferDeadlineMilliseconds += 50000 }
             if ($name -ceq $disabledReplacement) { $transferDeadlineMilliseconds += 50000 }
+            # Two independent 45-second original identity starts retain their full deadlines.
+            if ($name -ceq $residentReplacement) { $executions++; $transferDeadlineMilliseconds += 60000 }
             if ($keepRemote.ContainsKey($name)) {
                 # Every selected data row retains its actual65-second fixture deadline.
                 $executions += $keepRemote[$name]-1
@@ -128,7 +131,7 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
 }
 
 function Get-OrdinaryUserNamespaceStepTimeoutMinutes {
-    param([Parameter(Mandatory)][ValidateRange(1, 146)][int]$TestCount, [string[]]$TestNames,
+    param([Parameter(Mandatory)][ValidateRange(1, 147)][int]$TestCount, [string[]]$TestNames,
         [ValidateSet('AllRetained', 'S06')][string]$Scope = 'AllRetained')
     # The workflow must let the existing child budget expire and allow the
     # controller to preserve diagnostics and remove its disposable user/profile.

@@ -75,7 +75,7 @@ public sealed class MirrorPulseNamespaceReplacementExecutor(CloudFileSystem file
         var writer = new MirrorPulseNamespaceReplacementContentWriter(catalog, backups, router, execution, actor);
         if (facts.ContentCompletion is null)
         {
-            var tightened = await MirrorPulseWindowsNamespacePermissionLease.RunProtectedAsync(file, router, current.LocalObject, identity,
+            var tightened = await MirrorPulseNamespaceReplacementPermissionScope.RunAsync(file, router, current.LocalObject, identity,
                 async (lease, stop) =>
                 {
                     var observed = await lease.InspectAsync(stop).ConfigureAwait(false);
@@ -85,8 +85,7 @@ public sealed class MirrorPulseNamespaceReplacementExecutor(CloudFileSystem file
                         throw new InvalidDataException("Tightening requires the original single-link object and its owned descriptor.");
                     await lease.ApplyDaclAsync(current.RoleOnlyDacl, stop).ConfigureAwait(false);
                 }, token).ConfigureAwait(false);
-            if (tightened.Outcome != CloudProtectedLocalOperationOutcome.Completed || !tightened.CallbackCompleted || !tightened.Drained ||
-                !tightened.AccessDescriptorApplied || !tightened.AccessDescriptorReadBack || !tightened.DurableProjectionCommitted)
+            if (!MirrorPulseNamespaceReplacementPermissionScope.HasCompletedPermissionProof(tightened))
                 throw new IOException("The public replacement protection scope requires recovery.");
         }
         await writer.CopyAsync(operationId, file, parent, input, token).ConfigureAwait(false);

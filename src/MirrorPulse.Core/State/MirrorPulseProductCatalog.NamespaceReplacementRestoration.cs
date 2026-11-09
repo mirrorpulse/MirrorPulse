@@ -12,7 +12,14 @@ public sealed record MirrorPulseNamespaceReplacementRestoration(int Version, Gui
     /// <summary>Explicit before-scope revalidation for completion; historical status replay remains read-only.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool RevalidateForCompletion { get; init; }
+
+    /// <summary>The exact existing placeholder observed before an Access-only permission scope.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public MirrorPulseNamespaceReplacementExistingPlaceholder? ExistingPlaceholder { get; init; }
 }
+
+public sealed record MirrorPulseNamespaceReplacementExistingPlaceholder(int Version, MirrorPulseLocalFileBinding LocalObject,
+    string PlaceholderIdentity, DateTimeOffset ObservedAt);
 
 /// <summary>The actual public scope result and a separate product protection observation.</summary>
 /// <remarks>Native success and product verification are distinct. Neither releases a root, accepts content or acknowledges journal IDs.</remarks>
@@ -206,6 +213,10 @@ public sealed partial class MirrorPulseProductCatalog
             restoration.Parent.Context.Member.RootId != execution.Intent.RootId || action.LocalObject != execution.Action!.LocalObject ||
             restoration.PreparedAt < copied.Verification.ObservedAt)
             throw new InvalidOperationException("Restoration requires copied content, its original action and the admitted current managed parent.");
+        if (restoration.ExistingPlaceholder is { } existing &&
+            (existing.LocalObject != action.LocalObject || existing.PlaceholderIdentity != execution.Intent.OriginalPlaceholderIdentity ||
+             existing.ObservedAt < copied.Verification.ObservedAt))
+            throw new InvalidOperationException("Access-only restoration requires its independently observed original placeholder after the retained content copy.");
     }
 
     private static void RequireReplacementRestorationResultReferences(MirrorPulseNamespaceReplacementRestorationResult result,
@@ -213,12 +224,14 @@ public sealed partial class MirrorPulseProductCatalog
     {
         var action = RequireReplacementRestorationAuthority(restoration, execution, result.RecordedAt, requireCurrent: false);
         if (result.OperationId != restoration.OperationId || result.RestorationId != restoration.RestorationId ||
-            result.ExpectedObject != action.LocalObject || result.RecordedAt < restoration.PreparedAt)
+            result.ExpectedObject != action.LocalObject || result.RecordedAt < restoration.PreparedAt || result.Version != restoration.Version)
             throw new InvalidOperationException("The actual native result requires its before-scope intent and original requested binding.");
         if (!result.ProductVerified) return;
         var parent = restoration.Parent;
-        if (result.NativeOutcome != "Completed" || !result.CallbackStarted || !result.CallbackCompleted || !result.NativeIdentityPrepared ||
-            !result.DurableProjectionCommitted || !result.AccessDescriptorApplied || !result.AccessDescriptorReadBack || !result.Drained ||
+        bool modeVerified = restoration.Version == 1 ? result.NativeIdentityPrepared && result.DurableProjectionCommitted :
+            restoration.ExistingPlaceholder is not null && !result.NativeIdentityPrepared && !result.NativeConverted && !result.DurableProjectionCommitted;
+        if (result.NativeOutcome != "Completed" || !result.CallbackStarted || !result.CallbackCompleted || !modeVerified ||
+            !result.AccessDescriptorApplied || !result.AccessDescriptorReadBack || !result.Drained ||
             result.ErrorHResult is not (null or 0) || result.Verification is not { } verification || result.ParentVerification is not { } parentVerification ||
             verification.LocalObject != action.LocalObject || verification.OwnerSid != action.OwnerSid ||
             !MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(action.RestoreDacl, verification.Dacl) ||
@@ -245,18 +258,26 @@ public sealed partial class MirrorPulseProductCatalog
         ArgumentNullException.ThrowIfNull(restoration.Parent.Context); ArgumentNullException.ThrowIfNull(restoration.Parent.Context.Member);
         ArgumentNullException.ThrowIfNull(restoration.Parent.Context.Verification);
         ArgumentNullException.ThrowIfNull(restoration.Parent.Context.Protection); ArgumentNullException.ThrowIfNull(restoration.Parent.Context.Location);
-        if (restoration.Version != 1 || restoration.OperationId == Guid.Empty || restoration.RestorationId == Guid.Empty || restoration.ActionId == Guid.Empty ||
+        if (restoration.Version is not (1 or 2) || (restoration.Version == 2) != (restoration.ExistingPlaceholder is not null) ||
+            restoration.OperationId == Guid.Empty || restoration.RestorationId == Guid.Empty || restoration.ActionId == Guid.Empty ||
             restoration.RestorationId == restoration.OperationId || restoration.RestorationId == restoration.ActionId || restoration.PreviousRestorationId == Guid.Empty ||
             restoration.RevalidateForCompletion && restoration.PreviousRestorationId is null ||
             restoration.PreviousRestorationId == restoration.RestorationId || restoration.PreparedAt == default || !restoration.Parent.Context.Member.IsDirectory ||
             NamespaceReplacementPayload(restoration).Length > 262_144)
             throw new ArgumentException("Restoration requires its distinct IDs, coherent managed parent and before-scope time.", nameof(restoration));
+        if (restoration.ExistingPlaceholder is { } existing)
+        {
+            ValidatePermissionBinding(existing.LocalObject);
+            if (existing.Version != 1 || string.IsNullOrEmpty(existing.PlaceholderIdentity) || existing.PlaceholderIdentity.Length > 5464 ||
+                existing.ObservedAt == default || existing.ObservedAt > restoration.PreparedAt)
+                throw new ArgumentException("Access-only restoration requires a bounded original placeholder observation before its scope.", nameof(restoration));
+        }
     }
 
     private static void ValidateReplacementRestorationResult(MirrorPulseNamespaceReplacementRestorationResult result)
     {
         ArgumentNullException.ThrowIfNull(result); ValidatePermissionBinding(result.ExpectedObject);
-        if (result.Version != 1 || result.OperationId == Guid.Empty || result.RestorationId == Guid.Empty || result.RecordedAt == default ||
+        if (result.Version is not (1 or 2) || result.OperationId == Guid.Empty || result.RestorationId == Guid.Empty || result.RecordedAt == default ||
             result.NativeOutcome is not ("Completed" or "Busy" or "Unsupported" or "LocalObjectMismatch" or "NotApplicable" or "ProtectionLost" or
                 "NativeAppliedProjectionPending" or "CallbackFailed" or "Canceled" or "DeadlineExceeded" or "Failed") ||
             result.NativeStage is not ("Admission" or "Open" or "Inspection" or "NativePreparation" or "Projection" or "Callback" or "AccessDescriptor" or "Draining" or "Released") ||

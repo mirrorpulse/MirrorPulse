@@ -62,14 +62,17 @@ public sealed class MirrorPulseNamespaceReplacementAccessRestorer(MirrorPulsePro
         var attempt = facts.Restoration;
         if (attempt is null || facts.RestorationResult is not null || attempt.ActionId != action.ActionId)
         {
-            attempt = await catalog.PrepareNamespaceReplacementRestorationAsync(new(1, operationId, Guid.NewGuid(),
+            bool existing = identity.RemoteRevision is not null;
+            attempt = await catalog.PrepareNamespaceReplacementRestorationAsync(new(existing ? 2 : 1, operationId, Guid.NewGuid(),
                 facts.Restoration?.RestorationId, action.ActionId, parentProof, DateTimeOffset.UtcNow)
             {
-                RevalidateForCompletion = revalidateForCompletion && facts.RestorationResult is { ProductVerified: true } && facts.Restoration?.ActionId == action.ActionId
+                RevalidateForCompletion = revalidateForCompletion && facts.RestorationResult is { ProductVerified: true } && facts.Restoration?.ActionId == action.ActionId,
+                ExistingPlaceholder = existing ? new(1, before.Object.LocalObject,
+                    Convert.ToBase64String(before.Snapshot.PlaceholderIdentity.Span), before.Object.ObservedAt) : null
             }, cancellationToken).ConfigureAwait(false);
         }
         await AtAsync(MirrorPulseNamespaceReplacementRestorationCheckpoint.BeforeScope, cancellationToken).ConfigureAwait(false);
-        var receipt = await MirrorPulseWindowsNamespacePermissionLease.RunProtectedAsync(file, router, action.LocalObject, identity,
+        var scoped = await MirrorPulseNamespaceReplacementPermissionScope.RunAsync(file, router, action.LocalObject, identity,
             async (lease, stop) =>
             {
                 var current = await lease.InspectAsync(stop).ConfigureAwait(false);
@@ -78,6 +81,7 @@ public sealed class MirrorPulseNamespaceReplacementAccessRestorer(MirrorPulsePro
                 // produces its own access-operation and readback proof after an interrupted owner.
                 await lease.ApplyDaclAsync(action.RestoreDacl, stop).ConfigureAwait(false);
             }, cancellationToken).ConfigureAwait(false);
+        var receipt = scoped.Receipt;
         // A drained native result must survive client cancellation. The catalog transaction is
         // short and local; no caller token can erase successful native conversion or pending projection.
         await AtAsync(MirrorPulseNamespaceReplacementRestorationCheckpoint.AfterScope, CancellationToken.None).ConfigureAwait(false);
@@ -94,8 +98,8 @@ public sealed class MirrorPulseNamespaceReplacementAccessRestorer(MirrorPulsePro
                 var parentNow = await parentGuard.InspectAsync(CancellationToken.None).ConfigureAwait(false);
                 parentVerification = Verification(parentNow); RequireParent(parentNow);
                 RequireOriginal(final.Object, final.Snapshot, restored: true);
-                productVerified = receipt.CallbackStarted && receipt.CallbackCompleted && receipt.NativeIdentityPrepared &&
-                    receipt.DurableProjectionCommitted && receipt.AccessDescriptorApplied && receipt.AccessDescriptorReadBack;
+                productVerified = MirrorPulseNamespaceReplacementPermissionScope.HasCompletedPermissionProof(scoped) &&
+                    (attempt.Version == 2) == scoped.ExistingPlaceholderIdentityVerified;
             }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException or Win32Exception)
             {
@@ -105,7 +109,7 @@ public sealed class MirrorPulseNamespaceReplacementAccessRestorer(MirrorPulsePro
             }
         }
         var binding = receipt.ExpectedBinding;
-        var result = new MirrorPulseNamespaceReplacementRestorationResult(1, operationId, attempt.RestorationId,
+        var result = new MirrorPulseNamespaceReplacementRestorationResult(attempt.Version, operationId, attempt.RestorationId,
             receipt.Outcome.ToString(), receipt.Stage.ToString(), new(binding.VolumeSerialNumber, binding.SyncRootFileId, binding.LocalFileId),
             receipt.CallbackStarted, receipt.CallbackCompleted, receipt.NativeIdentityPrepared, receipt.NativeConverted,
             receipt.DurableProjectionCommitted, receipt.AccessDescriptorApplied, receipt.AccessDescriptorReadBack, receipt.Drained,
