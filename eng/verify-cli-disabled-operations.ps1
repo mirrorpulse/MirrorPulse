@@ -385,6 +385,14 @@ try{
     Write-DisabledOriginal 'completed-execution' $report
 }catch{
     $primaryFailure=$_
+    try{
+        foreach($relative in @('logs/remote-poll/mirrorpulse.log','logs/cloud-files/mirrorpulse.log','logs/mirrorpulse.log')){
+            $log=Join-Path $data $relative
+            if((Test-Path -LiteralPath $log -PathType Leaf) -and (Get-Item -LiteralPath $log).Length -le 4MB){
+                Get-Content -LiteralPath $log -Tail 96|Set-Content -LiteralPath (Join-Path $originals ('failure-'+$relative.Replace('/','-'))) -Encoding utf8
+            }
+        }
+    }catch{Write-DisabledOriginal 'failure-log-observation-unavailable' ([ordered]@{type=$_.Exception.GetType().Name;hresult=$_.Exception.HResult.ToString('X8')})}
     Write-DisabledOriginal 'execution-failure' ([ordered]@{sourceSha=$sourceSha;phase=$phase;type=$_.Exception.GetType().Name;hresult=$_.Exception.HResult.ToString('X8');message=$_.Exception.Message.Replace($fixture,'<fixture>')})
     throw
 }finally{
