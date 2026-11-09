@@ -8,13 +8,14 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 
 public sealed partial class MirrorPulseActiveRemotePoller
 {
-    private async ValueTask<IReadOnlyDictionary<string, SnapshotEntry>> CaptureIdentitiesAsync(RootRegistration root,
+    private async ValueTask<IReadOnlyDictionary<string, SnapshotEntry>?> CaptureIdentitiesAsync(RootRegistration root,
         IReadOnlyDictionary<string, SnapshotEntry> entries, CancellationToken token)
     {
         var captured = new Dictionary<string, SnapshotEntry>(entries.Count, StringComparer.Ordinal);
         foreach (var (key, entry) in entries)
         {
-            var identity = await _identityResolver!.ResolveAsync(root, entry.RemoteId, entry.RemoteRevision, token).ConfigureAwait(false);
+            var identity = await _identityResolver!.ResolveForPollAsync(root, entry.RemoteId, entry.RemoteRevision, token).ConfigureAwait(false);
+            if (identity is null) return null;
             captured.Add(key, entry with { PublicIdentity = new(identity.ItemId, identity.RemoteId) });
         }
         return new ReadOnlyDictionary<string, SnapshotEntry>(captured);

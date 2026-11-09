@@ -202,7 +202,11 @@ public sealed partial class MirrorPulseActiveRemotePoller : IAsyncDisposable
             instanceId, root.UniquenessKey, cancellationToken).ConfigureAwait(false);
         reportStage(MirrorPulseRemotePollStage.IdentitySelection);
         if (_identityResolver is not null)
-            current = await CaptureIdentitiesAsync(root, current, cancellationToken).ConfigureAwait(false);
+        {
+            var selected = await CaptureIdentitiesAsync(root, current, cancellationToken).ConfigureAwait(false);
+            if (selected is null) return false;
+            current = selected;
+        }
         else if (previous?.Values.Any(entry => entry.PublicIdentity is not null) == true)
             throw new InvalidOperationException("A captured generation snapshot requires its original identity resolver.");
         reportStage(MirrorPulseRemotePollStage.Projection);

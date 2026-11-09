@@ -41,6 +41,14 @@ public sealed class MirrorPulseRemoteIdentityResolver(MirrorPulseProductCatalog 
 
     public async ValueTask<CloudPlaceholderIdentity> ResolveAsync(RootRegistration root, string remoteId,
         string? revision = null, CancellationToken token = default)
+        => (await ResolveCoreAsync(root, remoteId, revision, deferCompletedLocalRetirement: false, token).ConfigureAwait(false))!;
+
+    internal ValueTask<CloudPlaceholderIdentity?> ResolveForPollAsync(RootRegistration root, string remoteId,
+        string? revision, CancellationToken token)
+        => ResolveCoreAsync(root, remoteId, revision, deferCompletedLocalRetirement: true, token);
+
+    private async ValueTask<CloudPlaceholderIdentity?> ResolveCoreAsync(RootRegistration root, string remoteId,
+        string? revision, bool deferCompletedLocalRetirement, CancellationToken token)
     {
         ArgumentNullException.ThrowIfNull(root); ArgumentException.ThrowIfNullOrWhiteSpace(remoteId);
         var original = MirrorPulsePlaceholderIdentity.CreateForRoot(root, remoteId, revision).ToCfSharp();
@@ -77,6 +85,15 @@ public sealed class MirrorPulseRemoteIdentityResolver(MirrorPulseProductCatalog 
             }
             else
             {
+                // A local command can finish native deletion while its original SDK journal
+                // still has to deliver the backend delete. Seeing that backend object during
+                // reenable cannot authorize a successor or reuse the retired public address.
+                // Defer this poll without changing its snapshot or immutable pending batch;
+                // ordinary identity resolution and historical/foreign retirement refusals stay strict.
+                if (deferCompletedLocalRetirement && retirement.Intent.BatchOperationId is null &&
+                    retirement.Intent.RootId == root.RootId && retirement.Phase == MirrorPulseNamespaceRetirementPhase.Completed &&
+                    retirement.StartedItemId == predecessor.ItemId && retirement.NativeDeletedAt is not null && retirement.CompletedAt is not null)
+                    return null;
                 var decision = retirement.Intent.BatchOperationId is { } commandId
                     ? await _catalog.ReadRemoteDeleteResolutionAsync(commandId, token).ConfigureAwait(false) : null;
                 var entry = decision?.Plan.Entries.SingleOrDefault(entry => entry.Original.Context.Member.MemberId == retirement.Intent.MemberId);
