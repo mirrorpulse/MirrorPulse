@@ -54,6 +54,21 @@ public sealed partial class NamespaceNonAdminControllerTests
                 param([string]$Policy,[string]$Directory,[string]$Scenario,[int]$Count)
                 $ErrorActionPreference='Stop'
                 . $Policy
+                if ($Scenario -ceq 'disabled-job-deadline') {
+                    $eng=Split-Path $Policy -Parent
+                    $workflow=[IO.File]::ReadAllText((Join-Path $eng '../.github/workflows/protected-confirmation.yml'))
+                    $job=$workflow.Substring($workflow.IndexOf('  probe:',[StringComparison]::Ordinal))
+                    $job=$job.Substring(0,$job.IndexOf('  signed-keep-remote:',[StringComparison]::Ordinal))
+                    $match=[regex]::Match($job,"timeout-minutes: \$\{\{ inputs\.contract == 'disabled-local-birth' && (?<expanded>[0-9]+) \|\| (?<legacy>[0-9]+) \}\}")
+                    if(-not $match.Success -or [int]$match.Groups['legacy'].Value -ne 15){throw 'Retain the original job deadline for every other qualification.'}
+                    $current=& (Join-Path $eng 'verify-keep-remote-native.ps1') -Scope disabled-local-birth -BudgetOnly
+                    if($LASTEXITCODE -ne 0){throw 'The actual native selection must supply its own step deadline.'}
+                    # Preserve the original five-case qualification's seven-minute setup/export margin.
+                    $originalStep=[int][Math]::Ceiling((5*65000+120000)/60000.0)
+                    $margin=[int]$match.Groups['legacy'].Value-$originalStep
+                    if([int]$match.Groups['expanded'].Value -ne [int]$current+$margin){throw 'The outer job must retain every original setup/export minute beyond its complete native step.'}
+                    exit 0
+                }
                 $bornCancellation='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicCancellationRecoversAnInheritedBornRootThroughItsOriginalPurposeAfterRoleDisposal'
                 $disabledImport='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeAutomaticStartupKeepsDisabledImportLocalAcrossOwnersWithoutOpeningOrdinaryWork'
                 $disabledCreation='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeDisabledRootControlledCreationRetainsFilesDirectoriesAndOriginalsAcrossOwnersWithoutDispatch'

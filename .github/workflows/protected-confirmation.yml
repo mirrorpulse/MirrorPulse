@@ -35,7 +35,7 @@ jobs:
           - runner: windows-11-arm
             runtime: win-arm64
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 15
+    timeout-minutes: ${{ inputs.contract == 'disabled-local-birth' && 21 || 15 }}
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
