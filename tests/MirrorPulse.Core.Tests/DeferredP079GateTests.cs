@@ -16,6 +16,10 @@ public sealed class DeferredP079GateTests
             $ErrorActionPreference='Stop'
             . (Join-Path $Repository 'eng/namespace-nonadmin-controller.ps1')
             $catalog=Get-Content (Join-Path $Repository 'eng/test-suites.json') -Raw|ConvertFrom-Json
+            # Preserve the historical selection below; the new explicit-rescan boundary has its own exact gate.
+            $catalog.required.namespace=@($catalog.required.namespace|Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeProductionPumpSettlesOriginalJournalBeforeAnExplicitRescanAcrossOwners'})
+            $catalog.required.native=@($catalog.required.native|Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeProductionPumpSettlesOriginalJournalBeforeAnExplicitRescanAcrossOwners'})
+            $catalog.allowSkipped=@($catalog.allowSkipped|Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeProductionPumpSettlesOriginalJournalBeforeAnExplicitRescanAcrossOwners'})
             $keepRemotePrefix='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.'
             $keepRemote=@('NativeKeepRemoteFirstSealRequiresTheOriginalFileAndJournalAndReplaysWithoutWriting',
                 'NativeKeepRemoteResidentByteCopyRetainsPlaceholderAndOriginalJournal',

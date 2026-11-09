@@ -11,6 +11,62 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 public sealed class MirrorPulseJournalAdmissionPlannerTests
 {
     [TestMethod]
+    [DataRow(false, false)]
+    [DataRow(false, true)]
+    [DataRow(true, false)]
+    public void RequestedRescanRetainsAdmittedOriginalsWithoutLettingAPausedRootBlockItsIndependentPeer(bool disabled, bool fenced)
+    {
+        var instance = InstanceId.New();
+        var adapter = AdapterId.Parse("example.requested-rescan-admission");
+        var original = AdapterRootRegistrationMapper.Map(adapter, instance, new("original", "Original", "Original", false),
+            disabled ? RootRegistrationState.Disabled : RootRegistrationState.Active);
+        var peer = AdapterRootRegistrationMapper.Map(adapter, InstanceId.New(), new("peer", "Peer", "Peer", false), RootRegistrationState.Active);
+        var router = new MirrorPulseRootRouter(Path.Combine(Path.GetTempPath(), "MirrorPulse-requested-rescan", Guid.NewGuid().ToString("N")), [original, peer]);
+        var batch = new MirrorPulseJournalUploadBatch([], 1, false)
+        { PendingRoutes = new HashSet<(InstanceId InstanceId, string RootKey)> { (instance, original.UniquenessKey) } };
+        var pausedRoots = new HashSet<RootId>();
+        if (fenced) pausedRoots.Add(original.RootId);
+        Assert.AreEqual(!disabled && !fenced,
+            MirrorPulseJournalUploadPump.MustDrainOriginalsBeforeRequestedRescan(batch, router, _ => true, pausedRoots));
+        Assert.IsNotNull(batch.PendingRoutes);
+        Assert.Contains((instance, original.UniquenessKey), batch.PendingRoutes, "A peer's scan admission must not settle or discard the paused original route.");
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task PendingRouteWitnessExcludesOnlyOriginalsActuallySettledDuringBoundedAdmission(bool settledMetadata)
+    {
+        var row = Rows()[0];
+        var plan = Plan([row]);
+        var admission = new MirrorPulseJournalAdmissionPlanner(plan, row.Sequence, 1);
+        while (!await admission.AdvanceAsync((_, _) => ValueTask.FromResult(settledMetadata), (_, _) => ValueTask.FromResult(false), default)) { }
+        Assert.IsNotNull(admission.Result.PendingRoutes);
+        var route = plan.RoutedBlockedCommands.Single();
+        Assert.AreEqual(!settledMetadata, admission.Result.PendingRoutes.Contains((route.InstanceId, route.RootKey)));
+        Assert.HasCount(settledMetadata ? 0 : 1, admission.Result.PendingRoutes);
+        Assert.IsNotNull(admission.Result.CompleteWindow);
+        Assert.HasCount(settledMetadata ? 0 : 1, admission.Result.CompleteWindow);
+        Assert.IsEmpty(admission.Result.ReadyCommands);
+    }
+
+    [TestMethod]
+    public async Task PendingRouteWitnessRetainsAnIndependentDisabledRouteAlongsideAdmittedOriginals()
+    {
+        var rows = Rows().Skip(2).ToArray();
+        var plan = Plan(rows);
+        var admission = new MirrorPulseJournalAdmissionPlanner(plan, 6, 1);
+        while (!await admission.AdvanceAsync((_, _) => ValueTask.FromResult(false),
+            (command, _) => ValueTask.FromResult(command.RootKey == "docs"), default)) { }
+        Assert.IsNotNull(admission.Result.PendingRoutes);
+        Assert.HasCount(2, admission.Result.PendingRoutes);
+        foreach (var route in plan.Commands.Select(command => (command.InstanceId, command.RootKey)))
+            Assert.Contains(route, admission.Result.PendingRoutes);
+        Assert.IsTrue(admission.Result.ReadyCommands.All(command => command.RootKey == "docs"));
+        Assert.IsTrue(admission.Result.CompleteWindow!.Any(command => command.RootKey == "other"));
+    }
+
+    [TestMethod]
     [DataRow(1)]
     [DataRow(2)]
     [DataRow(4)]

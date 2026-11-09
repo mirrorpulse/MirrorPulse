@@ -190,9 +190,17 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
         HashSet<RootId> pendingRoots = (await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.RescanDecision, async () => await _catalog.ReadNamespaceDispatchFencedRootsAsync(cancellationToken).ConfigureAwait(false)).ConfigureAwait(false)).ToHashSet();
         bool enabledDeferredRoot = _router.Registrations.Any(root => root.State == RootRegistrationState.Active &&
             _mayDispatch(root.InstanceId) && deferred.Contains(root.RootId) && !pendingRoots.Contains(root.RootId));
-        MirrorPulseJournalUploadBatch batch = _source.RequiresFullRescan || enabledDeferredRoot ||
-            await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.RescanDecision, async () => await _catalog.ReadFullRescanAsync(cancellationToken).ConfigureAwait(false)).ConfigureAwait(false) is not null ? new([], 0, true) :
-            await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.JournalSource, async () => await _source.ReadPendingAsync(cancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
+        bool mandatoryRescan = _source.RequiresFullRescan ||
+            await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.RescanDecision, async () => await _catalog.ReadFullRescanAsync(cancellationToken).ConfigureAwait(false)).ConfigureAwait(false) is not null;
+        MirrorPulseJournalUploadBatch batch = mandatoryRescan ? new([], 0, true) :
+            await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.JournalSource, async () => enabledDeferredRoot
+                ? await _source.ReadBeforeRequestedRescanAsync(cancellationToken).ConfigureAwait(false)
+                : await _source.ReadPendingAsync(cancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
+        // A requested scan must not project a moved original before its authoritative
+        // Create/edit/Move history has retained and settled its own effect identities.
+        // Feed loss and an already-started full scan keep their mandatory recovery path.
+        if (!batch.RequiresFullRescan && enabledDeferredRoot && !MustDrainOriginalsBeforeRequestedRescan(batch, _router, _mayDispatch, pendingRoots))
+            batch = new([], 0, true);
         if (!batch.RequiresFullRescan) { _planningBatch = batch; return batch; }
         foreach (RootRegistration root in _router.Registrations)
             await _catalog.SaveInstanceRuntimeStateAsync(new(root.InstanceId, "Reconciling", true, null), cancellationToken).ConfigureAwait(false);
@@ -200,6 +208,16 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
         await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.FullRescan, async () => await _rescan.RunAsync(new MirrorPulseLocalChangeSignal(true), cancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
         _source.ClearFullRescanRequest();
         return new([], 0, false);
+    }
+
+    internal static bool MustDrainOriginalsBeforeRequestedRescan(MirrorPulseJournalUploadBatch batch,
+        MirrorPulseRootRouter router, Func<InstanceId, bool> mayDispatch, IReadOnlySet<RootId> fencedRoots)
+    {
+        if (batch.ScanInProgress || batch.PlanningInProgress || batch.AdmissionInProgress || batch.ReadyCommands.Count != 0) return true;
+        if (batch.PendingRoutes is null) return batch.DeferredCount != 0;
+        return batch.PendingRoutes.Any(route => mayDispatch(route.InstanceId) &&
+            router.GetRegistration(route.InstanceId, route.RootKey) is { State: RootRegistrationState.Active } root &&
+            !fencedRoots.Contains(root.RootId));
     }
 
     private async ValueTask ProjectRescanAsync(Guid generation, CancellationToken cancellationToken)

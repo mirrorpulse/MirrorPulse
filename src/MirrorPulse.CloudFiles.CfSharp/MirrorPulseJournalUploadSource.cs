@@ -24,6 +24,10 @@ public sealed record MirrorPulseJournalUploadBatch(
     // validating its original sequence. A copied batch with different ready
     // commands must take the ordinary ordering path again.
     internal IReadOnlyList<MirrorPulseWorkerChangeCommand>? ValidatedSequenceCommands { get; init; }
+
+    // Supplied during bounded admission, after removing metadata originals actually
+    // settled as unsupported. Disabled routes do not prevent an active peer's rescan.
+    internal IReadOnlySet<(InstanceId InstanceId, string RootKey)>? PendingRoutes { get; init; }
 }
 
 /// <summary>
@@ -100,16 +104,22 @@ public sealed class MirrorPulseJournalUploadSource
         _rootLabelAdmission = rootLabelAdmission;
     }
 
-    public async ValueTask<MirrorPulseJournalUploadBatch> ReadPendingAsync(
+    public ValueTask<MirrorPulseJournalUploadBatch> ReadPendingAsync(
         CancellationToken cancellationToken = default)
+        => ReadPendingAsync(waitForNotification: true, cancellationToken);
+
+    internal ValueTask<MirrorPulseJournalUploadBatch> ReadBeforeRequestedRescanAsync(CancellationToken cancellationToken)
+        => ReadPendingAsync(waitForNotification: false, cancellationToken);
+
+    private async ValueTask<MirrorPulseJournalUploadBatch> ReadPendingAsync(bool waitForNotification, CancellationToken cancellationToken)
     {
         if (Interlocked.Exchange(ref _reading, 1) != 0) throw new InvalidOperationException("The journal source has one planning owner.");
-        try { return await ReadPendingCoreAsync(cancellationToken).ConfigureAwait(false); }
+        try { return await ReadPendingCoreAsync(waitForNotification, cancellationToken).ConfigureAwait(false); }
         catch { ResetPlanning(); throw; }
         finally { Volatile.Write(ref _reading, 0); }
     }
 
-    private async ValueTask<MirrorPulseJournalUploadBatch> ReadPendingCoreAsync(CancellationToken cancellationToken)
+    private async ValueTask<MirrorPulseJournalUploadBatch> ReadPendingCoreAsync(bool waitForNotification, CancellationToken cancellationToken)
     {
         if (_retiredSources is not null) await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.RetiredSourceRecovery, async () => await _retiredSources.RecoverPendingAsync(cancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
         // Preserve the feed's wait-for-notification behavior when the journal is
@@ -118,7 +128,7 @@ public sealed class MirrorPulseJournalUploadSource
         // wake-up observation, never the planning window.
         if (_planner is null && _admission is null)
         {
-            if (!_windowReader.HasPendingScan && _retiredSources?.RecoveryScanInProgress != true &&
+            if (waitForNotification && !_windowReader.HasPendingScan && _retiredSources?.RecoveryScanInProgress != true &&
                 _rootLabelJournal?.RecoveryScanInProgress != true &&
                 !(OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100) && _rootLabelAdmission?.HasPendingReadmission == true))
             {

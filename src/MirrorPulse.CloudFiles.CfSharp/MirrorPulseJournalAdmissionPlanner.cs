@@ -14,6 +14,7 @@ internal sealed class MirrorPulseJournalAdmissionPlanner
     private readonly List<MirrorPulseWorkerChangeCommand> _ready = [];
     private readonly List<MirrorPulseWorkerChangeCommand> _complete = [];
     private readonly HashSet<Guid> _acceptedMetadata = [];
+    private readonly HashSet<(MirrorPulse.Core.Contracts.InstanceId InstanceId, string RootKey)> _pendingRoutes = [];
     private readonly MirrorPulseJournalOrderIndex _held = new();
     private int _stage;
     private int _next;
@@ -70,7 +71,11 @@ internal sealed class MirrorPulseJournalAdmissionPlanner
                         if (_next >= _plan.RoutedBlockedCommands.Count) { NextStage(); continue; }
                         if (remaining == 0) return false;
                         var held = _plan.RoutedBlockedCommands[_next];
-                        if (!_acceptedMetadata.Contains(held.OperationId)) _held.Add(held);
+                        if (!_acceptedMetadata.Contains(held.OperationId))
+                        {
+                            _held.Add(held);
+                            _pendingRoutes.Add((held.InstanceId, held.RootKey));
+                        }
                         break;
                     case 2:
                         if (_next >= _plan.Commands.Count) { NextStage(); continue; }
@@ -80,6 +85,7 @@ internal sealed class MirrorPulseJournalAdmissionPlanner
                             throw new InvalidDataException("Final admission lost the original finite command order.");
                         if (await admit(command, token).ConfigureAwait(false) && !_held.HasEarlierDependency(command)) _ready.Add(command);
                         else { _held.Add(command); _deferred++; }
+                        _pendingRoutes.Add((command.InstanceId, command.RootKey));
                         _lastSequence = command.Sequence;
                         break;
                     default:
@@ -106,7 +112,7 @@ internal sealed class MirrorPulseJournalAdmissionPlanner
     {
         var ready = _ready.AsReadOnly();
         _result = new(ready, _deferred, false)
-        { ValidatedSequenceCommands = ready, CompleteWindow = complete, WindowUpperSequence = UpperSequence };
+        { ValidatedSequenceCommands = ready, CompleteWindow = complete, WindowUpperSequence = UpperSequence, PendingRoutes = _pendingRoutes };
         return true;
     }
 }
