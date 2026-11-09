@@ -72,6 +72,30 @@ function Start-DisabledHost([string]$Name){
         $script:ownedDisabledHost=[ordered]@{phase=$Name;processId=$pidValue;startedUtc=$process.StartTime.ToUniversalTime().ToString('o');imageSha256=(Get-FileHash -LiteralPath $image).Hash;privateRuntime=$true;exitObserved=$false}
         $lifetimes.Add($script:ownedDisabledHost)
     }finally{$process.Dispose()}
+    if($null -ne $marker){Wait-DisabledComposition $Name}
+}
+function Wait-DisabledComposition([string]$Name){
+    $deadline=[DateTimeOffset]::UtcNow.AddSeconds(30)
+    do{
+        $state=Invoke-DisabledCli ($Name+'-composition-status') @('--no-start','status')
+        $topology=Invoke-DisabledCli ($Name+'-composition-topology') @('--no-start','adapter','list')
+        $ready=@($topology.instances).Count -eq 2 -and @($state.instances).Count -eq 2
+        foreach($instance in $topology.instances){
+            $actual=@($state.instances|Where-Object instanceId -ceq $instance.instanceId)
+            if($actual.Count -ne 1 -or $actual[0].workerConnected -ne $instance.enabled){$ready=$false}
+        }
+        if($ready){
+            $roots=Invoke-DisabledCli ($Name+'-composition-roots') @('--no-start','root','list')
+            foreach($route in $marker.routes){
+                $root=@($roots|Where-Object {$_.root.rootId -ceq $route.rootId})
+                $instance=@($topology.instances|Where-Object instanceId -ceq $route.instanceId)
+                if($root.Count -ne 1 -or $instance.Count -ne 1 -or $root[0].namespaceReady -ne $instance[0].enabled){$ready=$false}
+            }
+        }
+        if($ready){return}
+        Start-Sleep -Milliseconds 100
+    }while([DateTimeOffset]::UtcNow -lt $deadline)
+    throw 'The real Host composition did not connect its enabled Workers and freshly admit its exact roots within30seconds.'
 }
 function Invoke-DisabledProbe([ValidateSet('audit','cleanup')][string]$Mode,[string]$Name){
     $start=[Diagnostics.ProcessStartInfo]::new('dotnet');$start.UseShellExecute=$false;$start.CreateNoWindow=$true
@@ -368,6 +392,7 @@ try{
         Invoke-CliFixtureTeardown -PrimaryFailure $primaryFailure -RecordFailure {param($failure) Write-DisabledOriginal 'cleanup-failure' ([ordered]@{phase=$phase;type=$failure.Exception.GetType().Name;hresult=$failure.Exception.HResult.ToString('X8')})} -Cleanup {
             if($null -ne $cliBinary -and (Test-Path -LiteralPath $cliBinary)){
                 $running=(& $cliBinary --json --developer-mode --no-start host status 2>$null|Out-String).Trim()
+                if($running){Write-DisabledOriginal 'cleanup-lifecycle' ($running|ConvertFrom-Json)}
                 if($LASTEXITCODE -eq 0){Stop-DisabledHost 'cleanup'}
             }
             if($null -ne $marker -and (Test-Path -LiteralPath $fixture)){
@@ -382,7 +407,10 @@ try{
                 if($null -ne $report){$report.cleanup=$cleanup;$report.fixtureRemoved=$true}
             }
         }
-    }finally{foreach($name in $savedEnvironment.Keys){[Environment]::SetEnvironmentVariable($name,$savedEnvironment[$name],'Process')}}
+    }finally{
+        Write-DisabledOriginal 'host-lifetimes' ([ordered]@{sourceSha=$sourceSha;lifetimes=$lifetimes.ToArray();actualManagedModuleLoadClaimed=$false})
+        foreach($name in $savedEnvironment.Keys){[Environment]::SetEnvironmentVariable($name,$savedEnvironment[$name],'Process')}
+    }
 }
 $report|ConvertTo-Json -Depth 30|Set-Content -LiteralPath $evidenceFile -Encoding utf8
 'Verified the actual signed default-Host offline-operation chain, independent active progress, original outcomes and authenticated teardown.'
