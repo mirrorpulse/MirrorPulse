@@ -94,6 +94,7 @@ public sealed partial class MirrorPulseProductCatalog
             ? execution.Original.ObservedContent?.Content : null;
         MirrorPulseWorkerChangeKind kind = step.Kind switch
         {
+            MirrorPulseCoalescingStepKind.CreateDirectory => MirrorPulseWorkerChangeKind.Create,
             MirrorPulseCoalescingStepKind.Upload => plan.Effect == MirrorPulseCoalescedEffect.CreateFile
                 ? MirrorPulseWorkerChangeKind.Create : MirrorPulseWorkerChangeKind.ContentUpdate,
             MirrorPulseCoalescingStepKind.Move => MirrorPulseWorkerChangeKind.Move,
@@ -101,7 +102,7 @@ public sealed partial class MirrorPulseProductCatalog
             _ => MirrorPulseWorkerChangeKind.MetadataUpdate, // Verification only; no metadata mutation is sent.
         };
         return new(step.OperationId, plan.InstanceId, plan.RootKey, kind, step.RelativePath, step.PreviousRelativePath,
-            false, baseline, content?.Length, content?.Sha256,
+            plan.IsDirectory, baseline, content?.Length, content?.Sha256,
             MirrorPulseMutationOrigin.CoalescedJournal, content?.UploadBinding);
     }
 }

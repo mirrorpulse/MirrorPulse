@@ -71,6 +71,7 @@ public sealed partial class MirrorPulseProductCatalog
                     throw new InvalidOperationException("The original journal operation has no coalescing owner.");
             }
             var plan = await ReadCoalescingPlanCoreAsync(planId, transaction, cancellationToken).ConfigureAwait(false);
+            if (plan.IsDirectory) throw new NotSupportedException("Directory conflict decisions require their own original namespace and backend witnesses.");
             if (!plan.Members.Any(member => member.OperationId == originalOperationId))
                 throw new InvalidDataException("The selected conflict lost its original journal group membership.");
             var originalExecution = await ReadCoalescingExecutionCoreAsync(planId, transaction, cancellationToken).ConfigureAwait(false)

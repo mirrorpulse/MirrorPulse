@@ -50,6 +50,7 @@ public sealed class MirrorPulseJournalCoalescingExecutor(MirrorPulseProductCatal
             {
                 MirrorPulseWorkerChangeKind.Delete => MirrorPulseCoalescingStepKind.Delete,
                 MirrorPulseWorkerChangeKind.Move => MirrorPulseCoalescingStepKind.Move,
+                MirrorPulseWorkerChangeKind.Create when record.Intent.IsDirectory => MirrorPulseCoalescingStepKind.CreateDirectory,
                 MirrorPulseWorkerChangeKind.Create or MirrorPulseWorkerChangeKind.ContentUpdate => MirrorPulseCoalescingStepKind.Upload,
                 MirrorPulseWorkerChangeKind.MetadataUpdate when step.Kind is MirrorPulseCoalescingStepKind.VerifyAbsence or MirrorPulseCoalescingStepKind.VerifyUnchanged => step.Kind,
                 _ => throw new InvalidDataException("The current authorized coalesced effect is unsupported."),
@@ -57,7 +58,7 @@ public sealed class MirrorPulseJournalCoalescingExecutor(MirrorPulseProductCatal
             async ValueTask Complete(string? revision, CancellationToken token)
             {
                 token.ThrowIfCancellationRequested();
-                if (currentKind is MirrorPulseCoalescingStepKind.Upload or MirrorPulseCoalescingStepKind.Move && string.IsNullOrEmpty(revision))
+                if (currentKind is MirrorPulseCoalescingStepKind.Upload or MirrorPulseCoalescingStepKind.Move or MirrorPulseCoalescingStepKind.CreateDirectory && string.IsNullOrEmpty(revision))
                     throw new InvalidDataException("A completed remote effect requires an accepted revision.");
                 var accepted = await catalog.ReadMutationAsync(record.Intent.OperationId, token).ConfigureAwait(false)
                     ?? throw new InvalidDataException("The accepted coalesced effect is missing.");
@@ -82,10 +83,12 @@ public sealed class MirrorPulseJournalCoalescingExecutor(MirrorPulseProductCatal
                             return proof.Revision;
                         case MirrorPulseCoalescingStepKind.Delete:
                             return await mutations.DeleteAsync(new(intent.InstanceId, intent.RelativePath, intent.ExpectedRevision,
-                                false, intent.OperationId, intent.RootKey), token).ConfigureAwait(false);
+                                intent.IsDirectory, intent.OperationId, intent.RootKey), token).ConfigureAwait(false);
                         case MirrorPulseCoalescingStepKind.Move:
                             return await mutations.MoveAsync(new(intent.InstanceId, intent.PreviousRelativePath!, intent.RelativePath,
-                                intent.ExpectedRevision, false, intent.OperationId, intent.RootKey, intent.RootKey), token).ConfigureAwait(false);
+                                intent.ExpectedRevision, intent.IsDirectory, intent.OperationId, intent.RootKey, intent.RootKey), token).ConfigureAwait(false);
+                        case MirrorPulseCoalescingStepKind.CreateDirectory:
+                            return await mutations.CreateDirectoryAsync(new(intent.InstanceId, intent.RootKey, intent.RelativePath, intent.OperationId), token).ConfigureAwait(false);
                         case MirrorPulseCoalescingStepKind.Upload:
                             var authorized = new MirrorPulseCoalescingContent(intent.ContentLength!.Value, intent.ContentSha256!, intent.UploadBinding!);
                             await using (Stream content = await openContent(authorized, token).ConfigureAwait(false))

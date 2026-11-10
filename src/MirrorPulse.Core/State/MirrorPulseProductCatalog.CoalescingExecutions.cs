@@ -237,7 +237,7 @@ public sealed partial class MirrorPulseProductCatalog
                 throw new InvalidDataException("The retained original mutation is invalid.", exception);
             }
             if (original.State != MirrorPulseMutationState.Superseded || original.ExecutionEvidence != MirrorPulseMutationExecutionEvidence.NeverStarted ||
-                original.Intent.Origin != MirrorPulseMutationOrigin.Journal || original.Intent.IsDirectory ||
+                original.Intent.Origin != MirrorPulseMutationOrigin.Journal || original.Intent.IsDirectory != plan.IsDirectory ||
                 original.Intent.InstanceId != plan.InstanceId || original.Intent.RootKey != plan.RootKey ||
                 (original.Intent.PreviousRootKey ?? original.Intent.RootKey) != plan.RootKey ||
                 original.Intent.ExpectedRevision != execution.ExpectedRevision ||

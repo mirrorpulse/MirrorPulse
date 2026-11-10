@@ -1,10 +1,15 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using MirrorPulse.Core.Contracts;
 
 namespace MirrorPulse.Core.Sync;
 
-public enum MirrorPulseCoalescedEffect { VerifyRemoteAbsence, CreateFile, UpdateFile, MoveFile, MoveAndUpdateFile, DeleteFile, VerifyRemoteUnchanged }
+public enum MirrorPulseCoalescedEffect
+{
+    VerifyRemoteAbsence, CreateFile, UpdateFile, MoveFile, MoveAndUpdateFile, DeleteFile, VerifyRemoteUnchanged,
+    CreateDirectory, MoveDirectory, DeleteDirectory, VerifyDirectoryAbsence, VerifyDirectoryUnchanged
+}
 
 /// <summary>References an official journal observation without copying its private payload.</summary>
 public sealed record MirrorPulseJournalOperationReference(Guid OperationId, long Sequence, string Fingerprint);
@@ -12,7 +17,12 @@ public sealed record MirrorPulseJournalOperationReference(Guid OperationId, long
 /// <summary>An immutable decision for one unsent file chain within a complete observation window.</summary>
 public sealed record MirrorPulseJournalCoalescingPlan(Guid PlanId, InstanceId InstanceId, string RootKey,
     Guid ItemId, long WindowUpperSequence, string OriginalPath, string FinalPath, MirrorPulseCoalescedEffect Effect,
-    IReadOnlyList<MirrorPulseJournalOperationReference> Members);
+    IReadOnlyList<MirrorPulseJournalOperationReference> Members)
+{
+    [JsonIgnore]
+    public bool IsDirectory => Effect is MirrorPulseCoalescedEffect.CreateDirectory or MirrorPulseCoalescedEffect.MoveDirectory or
+        MirrorPulseCoalescedEffect.DeleteDirectory or MirrorPulseCoalescedEffect.VerifyDirectoryAbsence or MirrorPulseCoalescedEffect.VerifyDirectoryUnchanged;
+}
 
 public static class MirrorPulseJournalCoalescingPlanner
 {

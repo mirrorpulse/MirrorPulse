@@ -91,9 +91,11 @@ public sealed partial class MirrorPulseProductCatalog
             throw new ArgumentException("At least one distinct original mutation intent is required.", nameof(intents));
         if (intents.Select(intent => intent.ExpectedRevision).Distinct(StringComparer.Ordinal).Count() != 1 ||
             intents.Where(intent => intent.UploadBinding is not null).Select(intent => intent.UploadBinding).Distinct().Skip(1).Any() ||
-            intents.Any(intent => intent.Kind is MirrorPulseWorkerChangeKind.Create or MirrorPulseWorkerChangeKind.ContentUpdate && intent.UploadBinding is null))
+            intents.Any(intent => !intent.IsDirectory && (intent.Kind is MirrorPulseWorkerChangeKind.Create or MirrorPulseWorkerChangeKind.ContentUpdate) && intent.UploadBinding is null))
             throw new InvalidDataException("Superseding requires one unchanged remote baseline and historical native object proof for prepared content.");
-        MirrorPulseJournalCoalescingPlan? expected = MirrorPulseJournalCoalescingPlanner.TryPlan(window, plan.ItemId, plan.WindowUpperSequence, new HashSet<Guid>());
+        MirrorPulseJournalCoalescingPlan? expected = plan.IsDirectory
+            ? MirrorPulseJournalDirectoryCoalescingPlanner.TryPlan(window, plan.ItemId, plan.WindowUpperSequence, new HashSet<Guid>())
+            : MirrorPulseJournalCoalescingPlanner.TryPlan(window, plan.ItemId, plan.WindowUpperSequence, new HashSet<Guid>());
         if (expected is null || JsonSerializer.Serialize(expected, TopologyJsonOptions) != JsonSerializer.Serialize(plan, TopologyJsonOptions))
             throw new InvalidDataException("The decision does not match the complete original observation window.");
         foreach (MirrorPulseMutationIntent intent in intents)
@@ -101,7 +103,7 @@ public sealed partial class MirrorPulseProductCatalog
             MirrorPulseWorkerChangeCommand? command = window.SingleOrDefault(candidate => candidate.OperationId == intent.OperationId);
             if (command is null || command.ItemId != plan.ItemId || intent.Origin != MirrorPulseMutationOrigin.Journal ||
                 intent.InstanceId != command.InstanceId || intent.RootKey != command.RootKey || intent.Kind != command.Kind ||
-                intent.RelativePath != command.RelativePath || intent.PreviousRelativePath != command.PreviousRelativePath || intent.IsDirectory ||
+                intent.RelativePath != command.RelativePath || intent.PreviousRelativePath != command.PreviousRelativePath || intent.IsDirectory != plan.IsDirectory ||
                 (intent.PreviousRootKey ?? intent.RootKey) != (command.PreviousRootKey ?? command.RootKey))
                 throw new InvalidDataException("An original mutation intent does not match its journal observation.");
         }

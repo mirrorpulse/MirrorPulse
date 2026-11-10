@@ -23,7 +23,16 @@ public sealed class MirrorPulseMutationReadback(IMirrorPulseWorkerStatTransport 
         {
             string? source = await stats.StatAsync(new(intent.InstanceId, intent.PreviousRelativePath!, intent.PreviousRootKey ?? intent.RootKey), cancellationToken).ConfigureAwait(false);
             if (record.AcceptedRevision is not null && revision == record.AcceptedRevision && source is null)
+            {
+                if (intent.IsDirectory)
+                {
+                    if (directories is null) return new(MirrorPulseMutationProofKind.Unknown, revision);
+                    var moved = await ReadMetadataAsync(intent, cancellationToken).ConfigureAwait(false);
+                    if (moved is null || moved.IsDeleted || !string.Equals(moved.ItemKind, "Directory", StringComparison.OrdinalIgnoreCase) ||
+                        moved.RemoteRevision != revision) return new(MirrorPulseMutationProofKind.Unknown, revision);
+                }
                 return new(MirrorPulseMutationProofKind.Verified, revision);
+            }
             return new(revision is not null && revision != record.AcceptedRevision
                 ? MirrorPulseMutationProofKind.Conflict : MirrorPulseMutationProofKind.Unknown, revision);
         }

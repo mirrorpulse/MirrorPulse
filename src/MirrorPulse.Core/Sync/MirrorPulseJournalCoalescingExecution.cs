@@ -6,7 +6,7 @@ using MirrorPulse.Core.State;
 
 namespace MirrorPulse.Core.Sync;
 
-public enum MirrorPulseCoalescingStepKind { VerifyAbsence, VerifyUnchanged, Upload, Move, Delete }
+public enum MirrorPulseCoalescingStepKind { VerifyAbsence, VerifyUnchanged, Upload, Move, Delete, CreateDirectory }
 
 /// <summary>The final bytes and historical object captured before any coalesced remote effect.</summary>
 public sealed record MirrorPulseCoalescingContent(long Length, string Sha256, MirrorPulseUploadBinding UploadBinding);
@@ -31,7 +31,7 @@ public sealed record MirrorPulseJournalCoalescingExecution(int Version, Guid Pla
     public MirrorPulseCoalescingObservedContent? ObservedContent { get; init; }
 
     [JsonIgnore]
-    public bool IsMoveOnly => Content is null && Steps.Count == 1 && Steps[0].Kind == MirrorPulseCoalescingStepKind.Move;
+    public bool IsMoveOnly => Version is 1 or 3 && Content is null && Steps.Count == 1 && Steps[0].Kind == MirrorPulseCoalescingStepKind.Move;
 }
 
 /// <summary>A validated dispatch view combining immutable preparation with an explicit later user decision.</summary>
@@ -55,8 +55,9 @@ public static class MirrorPulseJournalCoalescingExecutionPlanner
         ArgumentNullException.ThrowIfNull(completeWindow);
         plan = plan with { Members = Array.AsReadOnly(plan.Members.ToArray()) };
         completeWindow = Array.AsReadOnly(completeWindow.ToArray());
-        MirrorPulseJournalCoalescingPlan? expected = MirrorPulseJournalCoalescingPlanner.TryPlan(
-            completeWindow, plan.ItemId, plan.WindowUpperSequence, new HashSet<Guid>());
+        MirrorPulseJournalCoalescingPlan? expected = plan.IsDirectory
+            ? MirrorPulseJournalDirectoryCoalescingPlanner.TryPlan(completeWindow, plan.ItemId, plan.WindowUpperSequence, new HashSet<Guid>())
+            : MirrorPulseJournalCoalescingPlanner.TryPlan(completeWindow, plan.ItemId, plan.WindowUpperSequence, new HashSet<Guid>());
         if (expected is null || !JsonSerializer.SerializeToUtf8Bytes(plan).AsSpan().SequenceEqual(JsonSerializer.SerializeToUtf8Bytes(expected)))
             throw new InvalidDataException("Execution requires the unchanged complete original observation window.");
         MirrorPulseJournalCoalescingExecution execution = FromPlan(plan, expectedRevision, content, observedContent);
@@ -73,7 +74,8 @@ public static class MirrorPulseJournalCoalescingExecutionPlanner
             throw new InvalidDataException("The retained coalescing decision is invalid.");
         ValidatePath(plan.OriginalPath);
         ValidatePath(plan.FinalPath);
-        bool created = plan.Effect is MirrorPulseCoalescedEffect.CreateFile or MirrorPulseCoalescedEffect.VerifyRemoteAbsence;
+        bool created = plan.Effect is MirrorPulseCoalescedEffect.CreateFile or MirrorPulseCoalescedEffect.VerifyRemoteAbsence or
+            MirrorPulseCoalescedEffect.CreateDirectory or MirrorPulseCoalescedEffect.VerifyDirectoryAbsence;
         if (created ? expectedRevision is not null : string.IsNullOrEmpty(expectedRevision))
             throw new ArgumentException("The coalesced effect requires an explicit unchanged remote baseline.", nameof(expectedRevision));
         if (observedContent is not null)
@@ -112,24 +114,31 @@ public static class MirrorPulseJournalCoalescingExecutionPlanner
         else switch (plan.Effect)
             {
                 case MirrorPulseCoalescedEffect.VerifyRemoteAbsence:
+                case MirrorPulseCoalescedEffect.VerifyDirectoryAbsence:
                     Add(MirrorPulseCoalescingStepKind.VerifyAbsence, plan.OriginalPath);
                     if (!string.Equals(plan.OriginalPath, plan.FinalPath, StringComparison.Ordinal))
                         Add(MirrorPulseCoalescingStepKind.VerifyAbsence, plan.FinalPath);
                     break;
                 case MirrorPulseCoalescedEffect.VerifyRemoteUnchanged:
+                case MirrorPulseCoalescedEffect.VerifyDirectoryUnchanged:
                     Add(MirrorPulseCoalescingStepKind.VerifyUnchanged, plan.OriginalPath);
                     break;
                 case MirrorPulseCoalescedEffect.CreateFile:
                 case MirrorPulseCoalescedEffect.UpdateFile:
                     Add(MirrorPulseCoalescingStepKind.Upload, plan.FinalPath);
                     break;
+                case MirrorPulseCoalescedEffect.CreateDirectory:
+                    Add(MirrorPulseCoalescingStepKind.CreateDirectory, plan.FinalPath);
+                    break;
                 case MirrorPulseCoalescedEffect.MoveFile:
+                case MirrorPulseCoalescedEffect.MoveDirectory:
                 case MirrorPulseCoalescedEffect.MoveAndUpdateFile:
                     Add(MirrorPulseCoalescingStepKind.Move, plan.FinalPath, plan.OriginalPath);
                     if (plan.Effect == MirrorPulseCoalescedEffect.MoveAndUpdateFile)
                         Add(MirrorPulseCoalescingStepKind.Upload, plan.FinalPath);
                     break;
                 case MirrorPulseCoalescedEffect.DeleteFile:
+                case MirrorPulseCoalescedEffect.DeleteDirectory:
                     // Intermediate local names were never sent. Delete the original remote name.
                     Add(MirrorPulseCoalescingStepKind.Delete, plan.OriginalPath);
                     break;
@@ -138,7 +147,7 @@ public static class MirrorPulseJournalCoalescingExecutionPlanner
         if (steps.Any(step => step.OperationId == Guid.Empty || step.OperationId == plan.PlanId ||
             plan.Members.Any(member => member.OperationId == step.OperationId)) || steps.Select(step => step.OperationId).Distinct().Count() != steps.Count)
             throw new InvalidDataException("The coalesced remote-effect identities collide with retained ownership.");
-        return new(observedContent is null ? 1 : plan.Effect == MirrorPulseCoalescedEffect.MoveAndUpdateFile ? 3 : 2,
+        return new(plan.IsDirectory ? 4 : observedContent is null ? 1 : plan.Effect == MirrorPulseCoalescedEffect.MoveAndUpdateFile ? 3 : 2,
             plan.PlanId, Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(plan))),
             expectedRevision, content, steps.AsReadOnly(), Array.Empty<MirrorPulseCoalescingOriginalMutation>())
         { ObservedContent = observedContent };
