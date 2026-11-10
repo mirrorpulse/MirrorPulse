@@ -2,6 +2,14 @@ name: Received Delete reconciliation
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - develop
+    paths:
+      - .github/workflows/received-delete-reconciliation.yml
+      - eng/verify-keep-remote-native.ps1
+      - tests/MirrorPulse.CloudFiles.CfSharp.Tests/MirrorPulseWindowsNamespacePermissionLeaseTests.CfSharpDeleteReplay.cs
+      - tests/MirrorPulse.CloudFiles.CfSharp.Tests/MirrorPulseWindowsNamespacePermissionLeaseTests.RejectedDeleteStartup.cs
 
 permissions:
   contents: read
