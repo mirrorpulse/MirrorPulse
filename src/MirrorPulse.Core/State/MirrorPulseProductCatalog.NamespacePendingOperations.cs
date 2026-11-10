@@ -3,7 +3,7 @@ using MirrorPulse.Core.Contracts;
 
 namespace MirrorPulse.Core.State;
 
-public enum MirrorPulseNamespacePendingOperationKind { Birth, Move, Retirement, RetirementBatch, Replacement, BornMemberRecovery, RemoteUpdate, Transfer, RootLabelJournal, RootLabel, ConflictKeepRemote }
+public enum MirrorPulseNamespacePendingOperationKind { Birth, Move, Retirement, RetirementBatch, Replacement, BornMemberRecovery, RemoteUpdate, Transfer, RootLabelJournal, RootLabel, ConflictKeepRemote, RemoteDeleteRejection }
 
 /// <summary>A safe reference to retained local recovery work; it carries no native authority.</summary>
 public sealed record MirrorPulseNamespacePendingOperation(Guid OperationId, RootId RootId, MirrorPulseNamespacePendingOperationKind Kind);
@@ -25,6 +25,8 @@ public sealed partial class MirrorPulseProductCatalog
             // not turn a query for another root into a false declaration of readiness.
             _ = await ReadNamespaceRootFencesCoreAsync(true, transaction, cancellationToken).ConfigureAwait(false);
             var result = new List<MirrorPulseNamespacePendingOperation>();
+            await foreach (var rejection in ReadPendingRemoteDeleteRejectionsCoreAsync(transaction, cancellationToken, rootId).ConfigureAwait(false))
+                result.Add(new(rejection.Admission.OperationId, rootId, MirrorPulseNamespacePendingOperationKind.RemoteDeleteRejection));
             if (await ReadPendingRootLabelJournalForRootCoreAsync(rootId, transaction, cancellationToken).ConfigureAwait(false) is { } rootJournal)
                 result.Add(new(rootJournal.Observation.OperationId, rootId, MirrorPulseNamespacePendingOperationKind.RootLabelJournal));
             if (await ReadPendingKeepRemoteFileStartForRootCoreAsync(rootId, transaction, cancellationToken).ConfigureAwait(false) is { } keepRemote)

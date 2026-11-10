@@ -81,11 +81,14 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task<IReadOnlyList<RootId>> ReadNamespaceRootFencesCoreAsync(bool includeUnregisteredBirths,
         SqliteTransaction transaction, CancellationToken cancellationToken, Guid? admittedRemoteMoveId = null, Guid? admittedRemoteBirthId = null,
         Guid? admittedRemoteRetirementId = null, Guid? admittedRemoteRetirementTreeId = null, Guid? admittedRemoteResolutionId = null,
-        Guid? admittedRemoteUpdateId = null, Guid? admittedTransferId = null, Guid? admittedTransferBirthId = null)
+        Guid? admittedRemoteUpdateId = null, Guid? admittedTransferId = null, Guid? admittedTransferBirthId = null,
+        Guid? admittedRemoteDeleteRejectionId = null)
     {
         await RequireRemoteTreeSettlementOwnershipIntegrityAsync(transaction, cancellationToken).ConfigureAwait(false);
         await RequireRemoteDeleteResolutionOwnershipIntegrityAsync(transaction, cancellationToken).ConfigureAwait(false);
         HashSet<RootId> roots = [];
+        await foreach (var rejection in ReadPendingRemoteDeleteRejectionsCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
+            if (rejection.Admission.OperationId != admittedRemoteDeleteRejectionId) roots.Add(rejection.Admission.RootId);
         await AddKeepRemoteFileStartRootFencesAsync(roots, transaction, cancellationToken).ConfigureAwait(false);
         await AddRootLabelJournalFencesAsync(roots, transaction, cancellationToken).ConfigureAwait(false);
         await foreach (var update in ReadPendingRemoteUpdatesCoreAsync(transaction, cancellationToken).ConfigureAwait(false))

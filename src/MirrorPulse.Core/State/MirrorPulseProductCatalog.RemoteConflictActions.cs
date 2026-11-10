@@ -35,6 +35,7 @@ public sealed partial class MirrorPulseProductCatalog
                 if (existing.Value.Receipt is { } receipt) { transaction.Commit(); return receipt; }
             }
             string? state = await ReadRemoteActionCommandStateAsync(intent, transaction, token).ConfigureAwait(false);
+            await RequirePreservingDeleteResultBeforeDecisionAsync(intent.Conflict, transaction, token).ConfigureAwait(false);
             if (state is not null and not ("pending" or "failed"))
                 throw new InvalidDataException("A historical command without an owned observed-result receipt cannot be replayed as a completed decision.");
             await using (var command = _connection.CreateCommand())
