@@ -38,6 +38,14 @@ public sealed partial class InstalledStartupDiagnosticsTests
                     $prepared=[pscustomobject]@{schemaVersion=1;sourceSha=('a'*40);runtime='win-x64';installLocation=[IO.Path]::GetDirectoryName($executable)
                         inputs=@([pscustomobject]@{relativePath=$name;archivePath=('inputs/'+$name);path=$executable;length=$length;sha256=$hash})}
                     $role='Fixture';$relative=$name;$package=''
+                    [uint32]$packageLength=0
+                    $packageCode=[MirrorPulse.InstalledProcessImageNative]::GetPackageFullName($process.SafeHandle,[ref]$packageLength,$null)
+                    $ownPackagePresent=$packageCode -eq 122
+                    if($ownPackagePresent){
+                        $ownPackage=[Text.StringBuilder]::new([int]$packageLength)
+                        if([MirrorPulse.InstalledProcessImageNative]::GetPackageFullName($process.SafeHandle,[ref]$packageLength,$ownPackage) -ne 0){throw 'Own fixture package query failed.'}
+                        $package=$ownPackage.ToString()
+                    }elseif($packageCode -ne 15700){throw 'Own fixture package identity is unavailable.'}
                     switch -Exact ($Scenario) {
                         'same-bytes-other-path' {
                             $prepared.installLocation=Join-Path $Directory 'selected';New-Item -ItemType Directory -Path $prepared.installLocation|Out-Null
@@ -54,7 +62,7 @@ public sealed partial class InstalledStartupDiagnosticsTests
                             $prepared.installLocation=$link;$prepared.inputs[0].path=Join-Path $link $name
                         }
                         'foreign-package' {$package='Not.The.Running.Package_1.0.0.0_x64__fixture'}
-                        'app-without-package' {$role='App';$relative='MirrorPulse.App.exe'}
+                        'app-without-package' {$role='App';$relative='MirrorPulse.App.exe';$package=''}
                         'app-wrong-image' {$role='App';$package='Not.The.Running.Package_1.0.0.0_x64__fixture'}
                         'source' {$prepared.sourceSha='not-an-original-source'}
                         'escape' {$relative='../'+$name}
@@ -72,7 +80,7 @@ public sealed partial class InstalledStartupDiagnosticsTests
                         if($null -ne $failure){throw $failure}
                         if($proof.role -cne 'Fixture' -or $proof.processId -ne $PID -or $proof.imageSha256 -cne $hash -or
                             $proof.relativePath -cne $name -or -not $proof.observedWhileRunning -or -not $proof.nativeImagePathMatched -or
-                            -not $proof.sameSession -or $proof.packageIdentityMatched -or $proof.actualManagedModuleLoadPathsEstablished) {throw 'Actual ordinary-process kernel image correlation was lost or promoted to installed proof.'}
+                            -not $proof.sameSession -or $proof.packageIdentityMatched -ne $ownPackagePresent -or $proof.actualManagedModuleLoadPathsEstablished) {throw 'Actual fixture-process kernel image correlation was lost or promoted to installed proof.'}
                         $json=$proof|ConvertTo-Json -Compress
                         if($json.Contains($prepared.installLocation) -or $json.Contains('commandLine') -or $json.Contains('moduleName')) {throw 'Process paths or unrelated process material escaped the bounded evidence.'}
                     } else {
@@ -80,6 +88,7 @@ public sealed partial class InstalledStartupDiagnosticsTests
                             'missing'='one complete original';'duplicate'='one complete original';'foreign-record'='installed root';'linked-root'='reparse point';
                             'foreign-package'='no matching installed package identity';'app-without-package'='exact App, CLI or Host';'app-wrong-image'='exact App, CLI or Host';
                             'source'='Invalid original installed';'escape'='Invalid original installed';'exited'='exited before image observation'}
+                        if($ownPackagePresent){$expected['foreign-package']='actual process package identity differs'}
                         if($null -eq $failure -or -not $failure.Contains($expected[$Scenario])) {throw ('The actual process boundary did not refuse: '+$Scenario+'; '+$failure)}
                     }
                 } finally {

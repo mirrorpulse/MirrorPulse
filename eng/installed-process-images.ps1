@@ -83,7 +83,8 @@ function Get-InstalledProcessImageBinding {
 function Invoke-InstalledStatusWithImageBinding {
     param([Parameter(Mandatory)][string]$AliasPath,[Parameter(Mandatory)]$Prepared,
         [Parameter(Mandatory)][string]$ExpectedPackageFullName,
-        [Parameter(Mandatory)][ValidatePattern('^[A-F0-9]{64}$')][string]$PreparedSha256)
+        [Parameter(Mandatory)][ValidatePattern('^[A-F0-9]{64}$')][string]$PreparedSha256,
+        [switch]$ObserveManagedModules)
     # Compile the native reader before starting the original cold-Host CLI request.
     Initialize-InstalledProcessImageReader
     $start=[Diagnostics.ProcessStartInfo]::new($AliasPath);$start.UseShellExecute=$false;$start.CreateNoWindow=$true
@@ -94,11 +95,13 @@ function Invoke-InstalledStatusWithImageBinding {
         $stdout=$process.StandardOutput.ReadToEndAsync();$stderr=$process.StandardError.ReadToEndAsync()
         $binding=Get-InstalledProcessImageBinding -Process $process -Prepared $Prepared -Role Cli -RelativePath 'mp.exe' `
             -ExpectedPackageFullName $ExpectedPackageFullName -PreparedSha256 $PreparedSha256
+        $managed=if($ObserveManagedModules){Get-InstalledManagedModuleBinding -Process $process -Prepared $Prepared -Role Cli -RelativePath 'mp.exe' `
+            -ExpectedPackageFullName $ExpectedPackageFullName -PreparedSha256 $PreparedSha256}else{$null}
         # The CLI retains its original internal 30s request limit. This bounds only
         # its external process cleanup, without retrying or changing its result.
         if (-not $process.WaitForExit(35000)) { throw 'The original installed status process did not exit after its request limit.' }
         $output=($stdout.GetAwaiter().GetResult()+$stderr.GetAwaiter().GetResult()).Trim()
-        return [pscustomobject]@{output=$output;exitCode=$process.ExitCode;imageBinding=$binding}
+        return [pscustomobject]@{output=$output;exitCode=$process.ExitCode;imageBinding=$binding;managedModuleBinding=$managed}
     } finally {
         if (-not $process.HasExited) { $process.Kill($true);[void]$process.WaitForExit(10000) }
         $process.Dispose()

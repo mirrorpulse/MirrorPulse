@@ -43,6 +43,8 @@ $installedInputPreparation = $null
 $installedInputCompletion = $null
 $installedProcessImageBindings = @()
 $installedProcessImageCompletion = $null
+$installedManagedModuleBindings = @()
+$installedManagedModuleCompletion = $null
 $workspaceRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $installedSourceSha = $env:GITHUB_SHA
 if ([string]::IsNullOrEmpty($installedSourceSha)) { $installedSourceSha = git -C $workspaceRoot rev-parse HEAD }
@@ -110,6 +112,7 @@ try {
         -InstallLocation $installed.InstallLocation -Runtime $Runtime -SourceSha $installedSourceSha `
         -OutputDirectory (Join-Path $workspaceRoot 'artifacts/test-results/installed-msix-originals')
     . (Join-Path $PSScriptRoot 'installed-process-images.ps1')
+    . (Join-Path $PSScriptRoot 'installed-managed-modules.ps1')
     Initialize-InstalledProcessImageReader
     $installedInputManifest = Get-Content -LiteralPath (Join-Path $installedInputPreparation.outputDirectory 'prepared.json') -Raw | ConvertFrom-Json -DateKind String
 
@@ -156,10 +159,11 @@ try {
     $verificationPhase = 'HostAutoStart'
     $hostAttemptedAt = [DateTimeOffset]::UtcNow
     $statusProcess = Invoke-InstalledStatusWithImageBinding -AliasPath $mpCommand.Source -Prepared $installedInputManifest `
-        -ExpectedPackageFullName $installed.PackageFullName -PreparedSha256 $installedInputPreparation.preparedSha256
+        -ExpectedPackageFullName $installed.PackageFullName -PreparedSha256 $installedInputPreparation.preparedSha256 -ObserveManagedModules
     $statusOutput = $statusProcess.output
     $statusExitCode = $statusProcess.exitCode
     $installedProcessImageBindings += $statusProcess.imageBinding
+    $installedManagedModuleBindings += $statusProcess.managedModuleBinding
     if ($statusExitCode -ne 0) {
         throw "The installed CLI did not auto-start its packaged Host: $statusOutput"
     }
@@ -174,6 +178,9 @@ try {
     $installedHostProcess = [Diagnostics.Process]::GetProcessById([int]$hostStatus.data.processId)
     try {
         $installedProcessImageBindings += Get-InstalledProcessImageBinding -Process $installedHostProcess -Prepared $installedInputManifest `
+            -Role Host -RelativePath 'host/MirrorPulse.Host.exe' -ExpectedPackageFullName $installed.PackageFullName `
+            -PreparedSha256 $installedInputPreparation.preparedSha256
+        $installedManagedModuleBindings += Get-InstalledManagedModuleBinding -Process $installedHostProcess -Prepared $installedInputManifest `
             -Role Host -RelativePath 'host/MirrorPulse.Host.exe' -ExpectedPackageFullName $installed.PackageFullName `
             -PreparedSha256 $installedInputPreparation.preparedSha256
     } finally { $installedHostProcess.Dispose() }
@@ -206,6 +213,9 @@ try {
             $installedProcessImageBindings += Get-InstalledProcessImageBinding -Process $probeProcess -Prepared $installedInputManifest `
                 -Role App -RelativePath 'MirrorPulse.App.exe' -ExpectedPackageFullName $installed.PackageFullName `
                 -PreparedSha256 $installedInputPreparation.preparedSha256
+            $installedManagedModuleBindings += Get-InstalledManagedModuleBinding -Process $probeProcess -Prepared $installedInputManifest `
+                -Role App -RelativePath 'MirrorPulse.App.exe' -ExpectedPackageFullName $installed.PackageFullName `
+                -PreparedSha256 $installedInputPreparation.preparedSha256
             $probeObservation = Wait-InstalledShellProbeResult -Process $probeProcess -ResultPath $resultPath -DeadlineUtc $deadline
         }
         finally {
@@ -229,6 +239,10 @@ try {
         -PreparedSha256 $installedInputPreparation.preparedSha256
     $installedProcessImageCompletion = Complete-InstalledProcessImageBindings -Workspace $workspaceRoot `
         -OutputDirectory $installedInputPreparation.outputDirectory -Prepared $installedInputManifest -Bindings $installedProcessImageBindings `
+        -PreparedSha256 $installedInputPreparation.preparedSha256 -CollectedSha256 $installedInputCompletion.collectedSha256 `
+        -ExpectedPackageFullName $installed.PackageFullName -VerifyShell $VerifyShell.IsPresent
+    $installedManagedModuleCompletion = Complete-InstalledManagedModuleBindings -Workspace $workspaceRoot `
+        -OutputDirectory $installedInputPreparation.outputDirectory -Prepared $installedInputManifest -Bindings $installedManagedModuleBindings `
         -PreparedSha256 $installedInputPreparation.preparedSha256 -CollectedSha256 $installedInputCompletion.collectedSha256 `
         -ExpectedPackageFullName $installed.PackageFullName -VerifyShell $VerifyShell.IsPresent
     Write-Output "Verified installed MSIX $($installed.PackageFullName), mp.exe alias, packaged Host auto-start, Cloud Files, and .mpadapter identities."
@@ -301,5 +315,6 @@ if ($EvidencePath) {
         shellEntryPointVerified=$shellEntryPointVerified
         runtimeInputOriginals=$installedInputCompletion
         processImageOriginals=$installedProcessImageCompletion
+        managedModuleOriginals=$installedManagedModuleCompletion
     } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $EvidencePath -Encoding utf8
 }

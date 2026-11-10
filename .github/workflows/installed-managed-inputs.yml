@@ -1,0 +1,65 @@
+name: Installed managed input origins
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - develop
+    paths:
+      - .github/workflows/installed-managed-inputs.yml
+      - eng/installed-managed-modules.ps1
+      - eng/installed-process-images.ps1
+      - eng/verify-msix-cloudfiles.ps1
+      - tests/MirrorPulse.Core.Tests/InstalledStartupDiagnosticsTests.ManagedModules.cs
+
+permissions:
+  contents: read
+
+jobs:
+  installed-arm64:
+    runs-on: windows-11-arm
+    timeout-minutes: 30
+    steps:
+      - name: Check out the exact selected source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          global-json-file: global.json
+
+      - name: Restore locked package inputs
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          pwsh ./eng/restore-adapter-sdk.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned Adapter SDK restore failed.' }
+          dotnet restore MirrorPulse.sln --locked-mode
+          if ($LASTEXITCODE -ne 0) { throw 'Locked solution restore failed.' }
+
+      - name: Prepare the disposable native volume
+        run: pwsh ./eng/prepare-native-ci-volume.ps1
+
+      - name: Verify the actual installed App CLI Host and managed input mappings
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path artifacts/evidence -Force | Out-Null
+          pwsh ./eng/verify-msix-cloudfiles.ps1 -Runtime win-arm64 -VerifyShell -EvidencePath artifacts/evidence/installed.json
+          if ($LASTEXITCODE -ne 0) { throw 'Actual installed managed input qualification failed; original evidence is retained.' }
+
+      - name: Preserve original installed verification results and failures
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: installed-managed-arm64-results
+          path: artifacts/evidence/**
+          if-no-files-found: error
+
+      - name: Preserve the original installed package executing inputs and observers
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: installed-managed-arm64-originals
+          path: artifacts/test-results/installed-msix-originals/**
+          if-no-files-found: ignore
