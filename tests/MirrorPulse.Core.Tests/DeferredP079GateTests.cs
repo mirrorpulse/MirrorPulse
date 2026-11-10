@@ -21,6 +21,17 @@ public sealed class DeferredP079GateTests
             $catalog.required.native=@($catalog.required.native|Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeProductionPumpSettlesOriginalJournalBeforeAnExplicitRescanAcrossOwners'})
             $catalog.allowSkipped=@($catalog.allowSkipped|Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeProductionPumpSettlesOriginalJournalBeforeAnExplicitRescanAcrossOwners'})
             $keepRemotePrefix='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.'
+            # Keep this original transfer/deferred-scope budget unchanged. The new
+            # received-Delete cohort has its own exact selection/row/deadline gate.
+            $receivedDelete=@(
+                'NativeMissingOriginalRemoteDeleteRetainsActualSdkConflictWithoutInventingMemberRetirementAcrossOwners',
+                'NativeMiddleMissingRemoteDeleteSettlesOriginalRejectionBeforeLaterSdkEntryAndCursorAcrossOwners',
+                'NativeMissingRemoteDeleteRecoversOriginalAdmissionBeforeSdkAcrossFreshRoles',
+                'NativeMissingRemoteDeleteRecoversActualSdkConflictBeforeProductResultAcrossFreshRoles',
+                'NativeDefaultRuntimeRecoversReceivedMissingDeleteBeforeNewRoleAuditWithoutAcknowledgingLocalContentOriginals'
+            )|ForEach-Object {$keepRemotePrefix+$_}
+            $catalog.required.namespace=@($catalog.required.namespace|Where-Object {$_ -cnotin $receivedDelete})
+            $catalog.required.native=@($catalog.required.native|Where-Object {$_ -cnotin $receivedDelete})
             $keepRemote=@('NativeKeepRemoteFirstSealRequiresTheOriginalFileAndJournalAndReplaysWithoutWriting',
                 'NativeKeepRemoteResidentByteCopyRetainsPlaceholderAndOriginalJournal',
                 'NativeKeepRemoteResidentWriterKeepsItsWriteAndCompletionFactsAcrossRetry',
