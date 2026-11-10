@@ -172,6 +172,11 @@ internal sealed class MirrorPulseRetainedRemoteBatchCoordinator(MirrorPulseProdu
 
     internal static CloudRemoteChangeBatch ReadOriginalBatch(MirrorPulseRetainedRemoteBatch retained) => Decode(retained).Batch;
 
+    internal static (CloudRemoteChangeBatch Batch, CloudRemoteApplyOptions Options) ReadOriginalWithPolicy(MirrorPulseRetainedRemoteBatch retained)
+    {
+        var original = Decode(retained); return (original.Batch, original.Options);
+    }
+
     private static CloudPlaceholderMetadata? Metadata(MirrorPulseRemoteSnapshotMetadata? source)
     {
         if (source is null) return null;

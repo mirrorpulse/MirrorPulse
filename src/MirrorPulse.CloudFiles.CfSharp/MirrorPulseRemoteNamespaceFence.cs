@@ -25,6 +25,20 @@ public sealed class MirrorPulseRemoteNamespaceFence(MirrorPulseRootRouter router
         RootRegistration current = router.GetRegistration(root.InstanceId, root.UniquenessKey);
         if (current.RootId != root.RootId || current.DirectoryName != root.DirectoryName || current.State != RootRegistrationState.Active)
             return false;
+        var rejections = await catalog.ReadPendingRemoteDeleteRejectionsAsync(root.RootId, limit: 2, token: cancellationToken).ConfigureAwait(false);
+        if (rejections.Count != 0)
+        {
+            if (rejections.Count != 1) return false;
+            var original = rejections[0].Admission;
+            if (original.InstanceId != root.InstanceId || original.RootKey != root.UniquenessKey || original.BatchId != batch.BatchId ||
+                original.BatchFingerprint != Convert.ToHexString(batch.Fingerprint.Span) || original.BatchEntryCount != batch.Changes.Count ||
+                original.Ordinal >= batch.Changes.Count) return false;
+            var originalChange = batch.Changes[original.Ordinal];
+            if (originalChange.Kind != CloudRemoteChangeKind.Delete || originalChange.ChangeId != original.ChangeId || originalChange.ItemId != original.ItemId ||
+                originalChange.RelativePath.Replace('\\', '/') != original.RelativePath ||
+                (originalChange.ItemKind == CloudItemKind.Directory) != original.IsDirectory) return false;
+            return await catalog.CanResumeRemoteDeleteRejectionAsync(original, cancellationToken).ConfigureAwait(false);
+        }
         var updates = (await catalog.ReadPendingNamespaceRemoteUpdatesAsync(root.InstanceId, batch.BatchId, cancellationToken).ConfigureAwait(false))
             .Where(update => update.Plan.Child.Context.Member.RootId == root.RootId).ToArray();
         if (updates.Length != 0)

@@ -54,9 +54,49 @@ public sealed partial class NamespaceNonAdminControllerTests
                 param([string]$Policy,[string]$Directory,[string]$Scenario,[int]$Count)
                 $ErrorActionPreference='Stop'
                 . $Policy
+                $rejectionPrefix='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.'
+                $rejections=@(
+                    $rejectionPrefix+'NativeMissingOriginalRemoteDeleteRetainsActualSdkConflictWithoutInventingMemberRetirementAcrossOwners'
+                    $rejectionPrefix+'NativeMiddleMissingRemoteDeleteSettlesOriginalRejectionBeforeLaterSdkEntryAndCursorAcrossOwners'
+                    $rejectionPrefix+'NativeMissingRemoteDeleteRecoversOriginalAdmissionBeforeSdkAcrossFreshRoles'
+                    $rejectionPrefix+'NativeMissingRemoteDeleteRecoversActualSdkConflictBeforeProductResultAcrossFreshRoles'
+                    $rejectionPrefix+'NativeDefaultRuntimeRecoversReceivedMissingDeleteBeforeNewRoleAuditWithoutAcknowledgingLocalContentOriginals'
+                )
+                function ReadHistoricalNamespaceCatalog([string]$Path) {
+                    $value=Get-Content -LiteralPath $Path -Raw|ConvertFrom-Json
+                    # These historical budgets retain their exact pre-rejection selection.
+                    $value.required.namespace=@($value.required.namespace|Where-Object {$_ -cnotin $rejections})
+                    return $value
+                }
+                if ($Scenario -ceq 'received-delete-selected') {
+                    $actual=Get-Content -LiteralPath (Join-Path (Split-Path $Policy -Parent) 'test-suites.json') -Raw|ConvertFrom-Json
+                    $names=@($actual.required.namespace);$prior=@($names|Where-Object {$_ -cnotin $rejections})
+                    if($names.Count -ne 153 -or $prior.Count -ne 148){throw 'Require all148 prior methods and all five additional rejection methods.'}
+                    foreach($name in $rejections){
+                        foreach($selection in @(@{names=$actual.required.namespace},@{names=$actual.required.native},@{names=$actual.allowSkipped})){
+                            if(@($selection.names|Where-Object {$_ -ceq $name}).Count -ne 1){throw 'Each rejection boundary must be selected exactly once in every actual native catalog.'}
+                        }
+                    }
+                    $rows=@($actual.requiredCases.($rejections[-1]))
+                    $expected=@('ReceivedMissingDeleteBeforeCommitActive','ReceivedMissingDeleteBeforeCommitDisabled',
+                        'ReceivedMissingDeleteAfterCommitActive','ReceivedMissingDeleteAfterCommitDisabled')
+                    if($rows.Count -ne 4 -or @(Compare-Object $expected $rows).Count){throw 'Keep every actual pre/post-SDK and active/disabled startup execution.'}
+                    foreach($scope in @('AllRetained','S06')){
+                        $old=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 148 -TestNames $prior -Scope $scope
+                        $now=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 153 -TestNames $names -Scope $scope
+                        if($now -ne $old+8*65000){throw 'Retain every prior deadline and all eight additional65-second native executions.'}
+                        $minutes=Get-OrdinaryUserNamespaceStepTimeoutMinutes -TestCount 153 -TestNames $names -Scope $scope
+                        if($minutes -ne [int][Math]::Ceiling($now/60000.0)+5){throw 'Retain cleanup after the complete original child envelope.'}
+                    }
+                    $invalid=@($names|ForEach-Object {if($_ -ceq $rejections[-1]){'Fixture.Unrelated'}else{$_}})
+                    $refused=$false
+                    try{Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 153 -TestNames $invalid|Out-Null}catch{$refused=$true}
+                    if(-not $refused){throw 'An unrelated method cannot borrow the original recovery deadline.'}
+                    exit 0
+                }
                 if ($Scenario -ceq 'journal-before-rescan-selected') {
                     $eng=Split-Path $Policy -Parent
-                    $actual=Get-Content -LiteralPath (Join-Path $eng 'test-suites.json') -Raw|ConvertFrom-Json
+                    $actual=ReadHistoricalNamespaceCatalog (Join-Path (Split-Path $Policy -Parent) 'test-suites.json')
                     $added='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeProductionPumpSettlesOriginalJournalBeforeAnExplicitRescanAcrossOwners'
                     $names=@($actual.required.namespace);$before=@($names|Where-Object {$_ -cne $added})
                     if($names.Count -ne 148 -or $before.Count -ne 147 -or
@@ -114,7 +154,7 @@ public sealed partial class NamespaceNonAdminControllerTests
                 $disabledReplacement='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeDisabledRootControlledReplacementRetainsBytesBackupAndJournalAcrossFreshRolesWithoutDispatch'
                 $residentReplacement='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeResidentInSyncReplacementRetainsOriginalBytesJournalAndDirtyContentWithoutSourceCalls'
                 if ($Scenario -like 'resident-replacement-*') {
-                    $complete=Get-Content -Raw (Join-Path (Split-Path $Policy -Parent) 'test-suites.json')|ConvertFrom-Json
+                    $complete=ReadHistoricalNamespaceCatalog (Join-Path (Split-Path $Policy -Parent) 'test-suites.json')
                     # Preserve the historical selection below; the new explicit-rescan boundary has its own exact gate.
                     $complete.required.namespace=@($complete.required.namespace|Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeProductionPumpSettlesOriginalJournalBeforeAnExplicitRescanAcrossOwners'})
                     $names=@($complete.required.namespace);$prior=@($names|Where-Object {$_ -cne $residentReplacement})
@@ -142,7 +182,7 @@ public sealed partial class NamespaceNonAdminControllerTests
                     exit 0
                 }
                 if ($Scenario -like 'disabled-replacement-*') {
-                    $complete=Get-Content -Raw (Join-Path (Split-Path $Policy -Parent) 'test-suites.json')|ConvertFrom-Json
+                    $complete=ReadHistoricalNamespaceCatalog (Join-Path (Split-Path $Policy -Parent) 'test-suites.json')
                     # Preserve the historical selection below; the new explicit-rescan boundary has its own exact gate.
                     $complete.required.namespace=@($complete.required.namespace|Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeProductionPumpSettlesOriginalJournalBeforeAnExplicitRescanAcrossOwners'})
                     $complete.required.namespace=@($complete.required.namespace|Where-Object {$_ -cne $residentReplacement})
@@ -172,7 +212,7 @@ public sealed partial class NamespaceNonAdminControllerTests
                     exit 0
                 }
                 if ($Scenario -like 'disabled-retirement-*') {
-                    $complete=Get-Content -Raw (Join-Path (Split-Path $Policy -Parent) 'test-suites.json')|ConvertFrom-Json
+                    $complete=ReadHistoricalNamespaceCatalog (Join-Path (Split-Path $Policy -Parent) 'test-suites.json')
                     # Preserve the historical selection below; the new explicit-rescan boundary has its own exact gate.
                     $complete.required.namespace=@($complete.required.namespace|Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeProductionPumpSettlesOriginalJournalBeforeAnExplicitRescanAcrossOwners'})
                     $complete.required.namespace=@($complete.required.namespace|Where-Object {$_ -cne $residentReplacement})
@@ -202,7 +242,7 @@ public sealed partial class NamespaceNonAdminControllerTests
                     exit 0
                 }
                 if ($Scenario -like 'disabled-move-*') {
-                    $complete=Get-Content -Raw (Join-Path (Split-Path $Policy -Parent) 'test-suites.json')|ConvertFrom-Json
+                    $complete=ReadHistoricalNamespaceCatalog (Join-Path (Split-Path $Policy -Parent) 'test-suites.json')
                     # Preserve the historical selection below; the new explicit-rescan boundary has its own exact gate.
                     $complete.required.namespace=@($complete.required.namespace|Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeProductionPumpSettlesOriginalJournalBeforeAnExplicitRescanAcrossOwners'})
                     $complete.required.namespace=@($complete.required.namespace|Where-Object {$_ -cne $residentReplacement})
@@ -232,7 +272,7 @@ public sealed partial class NamespaceNonAdminControllerTests
                     exit 0
                 }
                 if ($Scenario -like 'disabled-create-role-*') {
-                    $complete=Get-Content -Raw (Join-Path (Split-Path $Policy -Parent) 'test-suites.json')|ConvertFrom-Json
+                    $complete=ReadHistoricalNamespaceCatalog (Join-Path (Split-Path $Policy -Parent) 'test-suites.json')
                     # Preserve the historical selection below; the new explicit-rescan boundary has its own exact gate.
                     $complete.required.namespace=@($complete.required.namespace|Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeProductionPumpSettlesOriginalJournalBeforeAnExplicitRescanAcrossOwners'})
                     $complete.required.namespace=@($complete.required.namespace|Where-Object {$_ -cne $residentReplacement})
@@ -262,7 +302,7 @@ public sealed partial class NamespaceNonAdminControllerTests
                     exit 0
                 }
                 if ($Scenario -like 'disabled-creation-*') {
-                    $complete=Get-Content -Raw (Join-Path (Split-Path $Policy -Parent) 'test-suites.json')|ConvertFrom-Json
+                    $complete=ReadHistoricalNamespaceCatalog (Join-Path (Split-Path $Policy -Parent) 'test-suites.json')
                     # Preserve the historical selection below; the new explicit-rescan boundary has its own exact gate.
                     $complete.required.namespace=@($complete.required.namespace|Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeProductionPumpSettlesOriginalJournalBeforeAnExplicitRescanAcrossOwners'})
                     $complete.required.namespace=@($complete.required.namespace|Where-Object {$_ -cne $residentReplacement})
@@ -310,7 +350,7 @@ public sealed partial class NamespaceNonAdminControllerTests
                     'NativeKeepRemoteRestorationRetainsActualAccessResultsAndPreservesOrdinaryLaterEdits',
                     'NativeKeepRemoteRoleHandoffRecoversLostReadbackWithoutReapplyingContent')|ForEach-Object {$keepRemotePrefix+$_}
                 if ($Scenario -like 'keep-remote-*') {
-                    $catalog=Get-Content -Raw (Join-Path (Split-Path $Policy -Parent) 'test-suites.json')|ConvertFrom-Json
+                    $catalog=ReadHistoricalNamespaceCatalog (Join-Path (Split-Path $Policy -Parent) 'test-suites.json')
                     # Preserve the historical selection below; the new explicit-rescan boundary has its own exact gate.
                     $catalog.required.namespace=@($catalog.required.namespace|Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeProductionPumpSettlesOriginalJournalBeforeAnExplicitRescanAcrossOwners'})
                     $catalog.required.namespace=@($catalog.required.namespace|Where-Object {$_ -cne $residentReplacement})
@@ -344,7 +384,7 @@ public sealed partial class NamespaceNonAdminControllerTests
                     exit 0
                 }
                 if ($Scenario -like 'disabled-import-*') {
-                    $catalog=Get-Content -Raw (Join-Path (Split-Path $Policy -Parent) 'test-suites.json') | ConvertFrom-Json
+                    $catalog=ReadHistoricalNamespaceCatalog (Join-Path (Split-Path $Policy -Parent) 'test-suites.json')
                     # Preserve the historical selection below; the new explicit-rescan boundary has its own exact gate.
                     $catalog.required.namespace=@($catalog.required.namespace|Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeProductionPumpSettlesOriginalJournalBeforeAnExplicitRescanAcrossOwners'})
                     $catalog.required.namespace=@($catalog.required.namespace|Where-Object {$_ -cne $residentReplacement})
@@ -374,7 +414,7 @@ public sealed partial class NamespaceNonAdminControllerTests
                     exit 0
                 }
                 if ($Scenario -like 'born-root-cancellation-*') {
-                    $catalog=Get-Content -Raw (Join-Path (Split-Path $Policy -Parent) 'test-suites.json') | ConvertFrom-Json
+                    $catalog=ReadHistoricalNamespaceCatalog (Join-Path (Split-Path $Policy -Parent) 'test-suites.json')
                     # Preserve the historical selection below; the new explicit-rescan boundary has its own exact gate.
                     $catalog.required.namespace=@($catalog.required.namespace|Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeProductionPumpSettlesOriginalJournalBeforeAnExplicitRescanAcrossOwners'})
                     $catalog.required.namespace=@($catalog.required.namespace|Where-Object {$_ -cne $residentReplacement})
@@ -400,7 +440,7 @@ public sealed partial class NamespaceNonAdminControllerTests
                     exit 0
                 }
                 if ($Scenario -like 'legacy-initializer-*') {
-                    $catalog=Get-Content -Raw (Join-Path (Split-Path $Policy -Parent) 'test-suites.json') | ConvertFrom-Json
+                    $catalog=ReadHistoricalNamespaceCatalog (Join-Path (Split-Path $Policy -Parent) 'test-suites.json')
                     # Preserve the historical selection below; the new explicit-rescan boundary has its own exact gate.
                     $catalog.required.namespace=@($catalog.required.namespace|Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeProductionPumpSettlesOriginalJournalBeforeAnExplicitRescanAcrossOwners'})
                     $catalog.required.namespace=@($catalog.required.namespace|Where-Object {$_ -cne $residentReplacement})
@@ -427,7 +467,7 @@ public sealed partial class NamespaceNonAdminControllerTests
                 }
                 $unsealed='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicRuntimeCancelsOriginalUnsealedRootPreparationsAfterIndependentRoleDisposal'
                 if ($Scenario -like 'unsealed-cancellation-*') {
-                    $catalog=Get-Content -Raw (Join-Path (Split-Path $Policy -Parent) 'test-suites.json') | ConvertFrom-Json
+                    $catalog=ReadHistoricalNamespaceCatalog (Join-Path (Split-Path $Policy -Parent) 'test-suites.json')
                     # Preserve the historical selection below; the new explicit-rescan boundary has its own exact gate.
                     $catalog.required.namespace=@($catalog.required.namespace|Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeProductionPumpSettlesOriginalJournalBeforeAnExplicitRescanAcrossOwners'})
                     $catalog.required.namespace=@($catalog.required.namespace|Where-Object {$_ -cne $residentReplacement})
@@ -448,7 +488,7 @@ public sealed partial class NamespaceNonAdminControllerTests
                     exit 0
                 }
                 if ($Scenario -like 'root-cancellation-*') {
-                    $catalog=Get-Content -Raw (Join-Path (Split-Path $Policy -Parent) 'test-suites.json') | ConvertFrom-Json
+                    $catalog=ReadHistoricalNamespaceCatalog (Join-Path (Split-Path $Policy -Parent) 'test-suites.json')
                     # Preserve the historical selection below; the new explicit-rescan boundary has its own exact gate.
                     $catalog.required.namespace=@($catalog.required.namespace|Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeProductionPumpSettlesOriginalJournalBeforeAnExplicitRescanAcrossOwners'})
                     $catalog.required.namespace=@($catalog.required.namespace|Where-Object {$_ -cne $residentReplacement})
@@ -470,7 +510,7 @@ public sealed partial class NamespaceNonAdminControllerTests
                     exit 0
                 }
                 if ($Scenario -like 'root-public-*') {
-                    $catalog=Get-Content -Raw (Join-Path (Split-Path $Policy -Parent) 'test-suites.json') | ConvertFrom-Json
+                    $catalog=ReadHistoricalNamespaceCatalog (Join-Path (Split-Path $Policy -Parent) 'test-suites.json')
                     # Preserve the historical selection below; the new explicit-rescan boundary has its own exact gate.
                     $catalog.required.namespace=@($catalog.required.namespace|Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeProductionPumpSettlesOriginalJournalBeforeAnExplicitRescanAcrossOwners'})
                     $catalog.required.namespace=@($catalog.required.namespace|Where-Object {$_ -cne $residentReplacement})
@@ -490,7 +530,7 @@ public sealed partial class NamespaceNonAdminControllerTests
                     exit 0
                 }
                 if ($Scenario -like 'root-admission-*') {
-                    $catalog=Get-Content -Raw (Join-Path (Split-Path $Policy -Parent) 'test-suites.json') | ConvertFrom-Json
+                    $catalog=ReadHistoricalNamespaceCatalog (Join-Path (Split-Path $Policy -Parent) 'test-suites.json')
                     # Preserve the historical selection below; the new explicit-rescan boundary has its own exact gate.
                     $catalog.required.namespace=@($catalog.required.namespace|Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeProductionPumpSettlesOriginalJournalBeforeAnExplicitRescanAcrossOwners'})
                     $catalog.required.namespace=@($catalog.required.namespace|Where-Object {$_ -cne $residentReplacement})
@@ -641,9 +681,9 @@ public sealed partial class NamespaceNonAdminControllerTests
                     if ($Scenario -eq 'budget-rejected') {
                         if (-not $rejected) { throw 'An invalid or unbounded selection was accepted.' }
                     } else {
-                        $maximum=if ($Scenario -eq 'budget-catalog') {4755000+4*60000+10*60000+2*60000+65000+29*65000+65000+65000+65000+65000+65000+90000+65000} else {1800000}
+                        $maximum=if ($Scenario -eq 'budget-catalog') {4755000+4*60000+10*60000+2*60000+65000+29*65000+65000+65000+65000+65000+65000+90000+65000+8*65000} else {1800000}
                         if ($rejected -or $budget -lt 600000 -or $budget -gt $maximum) { throw 'The whole-suite envelope is missing or unbounded.' }
-                        if ($Scenario -eq 'budget-catalog' -and $budget -ne 120000+($Count+51)*15000+18*30000+28*15000+6*45000+6*15000+4*45000+5*15000+6*45000+2*45000+2*45000+4*60000+10*60000+15000+2*45000+50000+13*15000+29*50000+50000+50000+50000+50000+50000+75000+50000) {
+                        if ($Scenario -eq 'budget-catalog' -and $budget -ne 120000+($Count-5+51)*15000+18*30000+28*15000+6*45000+6*15000+4*45000+5*15000+6*45000+2*45000+2*45000+4*60000+10*60000+15000+2*45000+50000+13*15000+29*50000+50000+50000+50000+50000+50000+75000+50000+8*65000) {
                             throw 'The actual catalog lost a same/cross-instance transfer or one of its five retirement cutpoints.'
                         }
                         if ($Count -ge 52 -and $budget -le 600000) { throw 'The growing suite still has the obsolete fixed ten-minute envelope.' }

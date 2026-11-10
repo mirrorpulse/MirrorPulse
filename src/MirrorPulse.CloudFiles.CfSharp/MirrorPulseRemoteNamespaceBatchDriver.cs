@@ -19,7 +19,8 @@ internal sealed class MirrorPulseRemoteNamespaceBatchDriver(
     Func<MirrorPulseRemoteNamespaceBatchCheckpoint, CancellationToken, ValueTask>? checkpoint = null,
     Func<MirrorPulseRemoteBirthCheckpoint, CancellationToken, ValueTask>? birthCheckpoint = null,
     Func<MirrorPulseRemoteRetirementCheckpoint, CancellationToken, ValueTask>? retirementCheckpoint = null,
-    Func<MirrorPulseRemoteUpdateCheckpoint, CancellationToken, ValueTask>? updateCheckpoint = null)
+    Func<MirrorPulseRemoteUpdateCheckpoint, CancellationToken, ValueTask>? updateCheckpoint = null,
+    Func<MirrorPulseRemoteDeleteRejectionCheckpoint, CancellationToken, ValueTask>? rejectionCheckpoint = null)
 {
     private readonly MirrorPulseNamespaceMemberMoveCoordinator _moves = new(fileSystem, state, catalog, router, execution, actor);
     private readonly MirrorPulseNamespaceMemberInspector _members = new(fileSystem, catalog, router, execution, actor);
@@ -27,6 +28,7 @@ internal sealed class MirrorPulseRemoteNamespaceBatchDriver(
     private readonly MirrorPulseRemoteRetirementBatchCoordinator _retirements = new(fileSystem, state, catalog, router, execution, actor, retirementCheckpoint);
     private readonly MirrorPulseRemoteTreeRetirementCoordinator _treeRetirements = new(fileSystem, state, catalog, router, execution, actor, retirementCheckpoint);
     private readonly MirrorPulseRemoteUpdateCoordinator _updates = new(fileSystem, state, catalog, router, execution, actor, updateCheckpoint);
+    private readonly MirrorPulseRemoteDeleteRejectionCoordinator _rejections = new(fileSystem, state, catalog, router, execution, actor, rejectionCheckpoint);
 
     internal async ValueTask<CloudRemoteApplyResult> ApplyAsync(InstanceId instance, CloudRemoteChangeBatch batch,
         CloudRemoteApplyOptions options, MirrorPulseRemoteConflictProjector? conflicts, CancellationToken token)
@@ -52,6 +54,15 @@ internal sealed class MirrorPulseRemoteNamespaceBatchDriver(
         {
             if (batch.Changes[ordinal].Kind == CloudRemoteChangeKind.Delete)
             {
+                var rejection = await catalog.ReadRemoteDeleteRejectionAsync(instance, batch.BatchId, ordinal, token).ConfigureAwait(false);
+                if (rejection is not null)
+                {
+                    MirrorPulseRemoteDeleteRejectionCoordinator.RequireOriginal(rejection.Admission, instance, batch, ordinal, options);
+                    if (rejection.Outcome is not null) continue;
+                    if (ordinal != count - 1) throw new InvalidDataException("A later SDK entry overtook an unsettled preserving Delete result.");
+                    await _rejections.SettleRecordedAsync(rejection, instance, batch, ordinal, options, conflicts, token).ConfigureAwait(false);
+                    continue;
+                }
                 var tree = await catalog.ReadNamespaceRemoteRetirementTreeAsync(instance, batch.BatchId, ordinal, token).ConfigureAwait(false);
                 if (tree is not null)
                 {
@@ -101,8 +112,17 @@ internal sealed class MirrorPulseRemoteNamespaceBatchDriver(
             if (change.Kind == CloudRemoteChangeKind.Delete)
             {
                 bool tree = await catalog.ReadNamespaceRemoteRetirementTreeAsync(instance, batch.BatchId, count, token).ConfigureAwait(false) is not null;
-                if (!tree && change.ItemKind == CloudItemKind.Directory &&
-                    await catalog.ReadNamespaceRemoteRetirementAsync(instance, batch.BatchId, count, token).ConfigureAwait(false) is null)
+                var retained = await catalog.ReadNamespaceRemoteRetirementAsync(instance, batch.BatchId, count, token).ConfigureAwait(false);
+                if (!tree && retained is null)
+                {
+                    var rejection = await _rejections.TryApplyAsync(instance, batch, count, options, conflicts, token).ConfigureAwait(false);
+                    if (rejection is not null)
+                    {
+                        if (checkpoint is not null) await checkpoint(MirrorPulseRemoteNamespaceBatchCheckpoint.AfterSdkApply, token).ConfigureAwait(false);
+                        return rejection;
+                    }
+                }
+                if (!tree && change.ItemKind == CloudItemKind.Directory && retained is null)
                 {
                     var member = await _members.InspectAsync(change.RelativePath, true, token).ConfigureAwait(false);
                     tree = (await catalog.ReadNamespaceMemberTreeAsync(member.MemberId, token).ConfigureAwait(false)).Count > 1;

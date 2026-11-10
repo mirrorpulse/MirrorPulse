@@ -1433,10 +1433,39 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                     }
                 }
             var started = await new MirrorPulseNamespaceStartupCoordinator(fileSystem, catalog!, router!, _namespaceExecution!,
-                _namespaceActor!, instances, _permissions!, namespaceWork!, NoteStartup, RecoverRemoteDeleteBeforeAuditAsync).StartAsync(token).ConfigureAwait(false);
+                _namespaceActor!, instances, _permissions!, namespaceWork!, NoteStartup, RecoverRemoteDeleteBeforeAuditAsync,
+                RecoverRemoteDeleteRejectionBeforeAuditAsync).StartAsync(token).ConfigureAwait(false);
             _startupProtection = started.Guard; NamespaceStartupResults = started.Roots;
             _startupProtectionOwner = fileSystem;
             return true;
+        }
+
+        private async ValueTask RecoverRemoteDeleteRejectionBeforeAuditAsync(RootRegistration root, CancellationToken token)
+        {
+            var pending = await catalog!.ReadPendingRemoteDeleteRejectionsAsync(root.RootId, limit: 1, token: token).ConfigureAwait(false);
+            if (pending.Count == 0) return;
+            if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
+                throw new PlatformNotSupportedException("Original preserving Delete recovery requires Windows 11 24H2 or later.");
+            var original = pending[0]; CloudRemoteChangeBatch batch; CloudRemoteApplyOptions options;
+            var streamed = await catalog.ReadRetainedRemoteBatchAsync(root.InstanceId, token).ConfigureAwait(false);
+            if (streamed?.BatchId == original.Admission.BatchId)
+                (batch, options) = MirrorPulseRetainedRemoteBatchCoordinator.ReadOriginalWithPolicy(streamed);
+            else
+            {
+                var store = new MirrorPulseCatalogRemotePollPendingStore(catalog);
+                var poll = await store.LoadAsync(root, token).ConfigureAwait(false);
+                if (poll is null && router!.Registrations.Count(value => value.InstanceId == root.InstanceId) == 1)
+                    poll = await store.LoadAsync(root.InstanceId, token).ConfigureAwait(false);
+                if (poll is null || poll.BatchId != original.Admission.BatchId)
+                    throw new InvalidDataException("The received preserving Delete lost its actual original incoming or polling header.");
+                batch = MirrorPulseActiveRemotePoller.RestoreOriginalBatch(root.InstanceId, root, poll);
+                options = MirrorPulseRemoteDeleteRejectionCoordinator.OriginalOptions(original.Admission);
+            }
+            var projector = conflicts is null || notifications is null ? null : new MirrorPulseRemoteConflictProjector(fileSystem, catalog, conflicts, notifications);
+            await new MirrorPulseRemoteDeleteRejectionCoordinator(fileSystem, state, catalog, router!, _namespaceExecution!, _namespaceActor!)
+                .RecoverBeforeAuditAsync(root, original, batch, options, projector, token).ConfigureAwait(false);
+            if ((await catalog.ReadPendingRemoteDeleteRejectionsAsync(root.RootId, limit: 1, token: token).ConfigureAwait(false)).Count != 0)
+                throw new IOException("Another bounded received Delete rejection remains before the current namespace audit.");
         }
 
         private async ValueTask RecoverRemoteDeleteBeforeAuditAsync(RootRegistration root, CancellationToken token)

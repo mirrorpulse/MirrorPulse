@@ -159,13 +159,7 @@ public sealed partial class MirrorPulseActiveRemotePoller : IAsyncDisposable
             ? await rootPending.LoadAsync(root, cancellationToken).ConfigureAwait(false) : null);
         if (pending is not null)
         {
-            if (!string.Equals(root.DirectoryName, pending.RootDirectoryName, StringComparison.Ordinal))
-                throw new InvalidDataException("A pending batch belongs to a different root mapping.");
-            IReadOnlyDictionary<string, SnapshotEntry> prior = FromDurableSnapshot(pending.Previous);
-            IReadOnlyDictionary<string, SnapshotEntry> candidate = FromDurableSnapshot(pending.Candidate);
-            CloudRemoteChangeBatch replay = CreateBatch(instanceId, root, prior, candidate, pending.ProjectionVersion);
-            if (replay.BatchId != pending.BatchId || !replay.Fingerprint.Span.SequenceEqual(pending.Fingerprint))
-                throw new InvalidDataException("The pending poll intent does not recreate its immutable batch.");
+            var (replay, candidate) = RestoreOriginalCore(instanceId, root, pending);
             bool allowed = _mayReplay is not null
                 ? await _mayReplay(root, replay, cancellationToken).ConfigureAwait(false)
                 : _mayPoll is null || await _mayPoll(root, cancellationToken).ConfigureAwait(false);
@@ -376,6 +370,22 @@ public sealed partial class MirrorPulseActiveRemotePoller : IAsyncDisposable
         }
 
         return new ReadOnlyDictionary<string, SnapshotEntry>(entries);
+    }
+
+    internal static CloudRemoteChangeBatch RestoreOriginalBatch(InstanceId instance, RootRegistration root, MirrorPulsePendingRemotePoll pending)
+        => RestoreOriginalCore(instance, root, pending).Batch;
+
+    private static (CloudRemoteChangeBatch Batch, IReadOnlyDictionary<string, SnapshotEntry> Candidate) RestoreOriginalCore(
+        InstanceId instance, RootRegistration root, MirrorPulsePendingRemotePoll pending)
+    {
+        if (root.InstanceId != instance || root.DirectoryName != pending.RootDirectoryName ||
+            pending.RootId is { } originalRoot && originalRoot != root.RootId || pending.RootKey is { } originalKey && originalKey != root.UniquenessKey)
+            throw new InvalidDataException("A pending batch belongs to a different original root mapping.");
+        var candidate = FromDurableSnapshot(pending.Candidate);
+        var batch = CreateBatch(instance, root, FromDurableSnapshot(pending.Previous), candidate, pending.ProjectionVersion);
+        if (batch.BatchId != pending.BatchId || !batch.Fingerprint.Span.SequenceEqual(pending.Fingerprint))
+            throw new InvalidDataException("The pending poll intent does not recreate its immutable batch.");
+        return (batch, candidate);
     }
 
     private static CloudRemoteChangeBatch CreateBatch(
