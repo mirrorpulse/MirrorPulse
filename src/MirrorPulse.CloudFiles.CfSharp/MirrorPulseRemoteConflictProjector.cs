@@ -238,6 +238,7 @@ public sealed class MirrorPulseRemoteConflictProjector
         CloudRemoteConflictReason.PathCollision => MirrorPulseConflictReason.PathCollision,
         CloudRemoteConflictReason.StaleRemoteRevision => MirrorPulseConflictReason.StaleRemoteRevision,
         CloudRemoteConflictReason.MissingItem => MirrorPulseConflictReason.MissingItem,
+        CloudRemoteConflictReason.LocalDeleteReconciliationRequired => MirrorPulseConflictReason.LocalDeleteReconciliationRequired,
         _ => MirrorPulseConflictReason.Unknown,
     };
 }

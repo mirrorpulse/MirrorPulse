@@ -13,6 +13,7 @@ public enum MirrorPulseConflictReason
     StaleRemoteRevision,
     MissingItem,
     Unknown,
+    LocalDeleteReconciliationRequired,
 }
 
 public enum MirrorPulseConflictStatus

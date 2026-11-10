@@ -125,7 +125,7 @@ public sealed partial class MirrorPulseProductCatalog
     {
         ValidateRemoteBirthLookup(value.InstanceId, value.BatchId, value.Ordinal);
         static bool Digest(string value) => value is { Length: 64 } && value.All(character => character is >= '0' and <= '9' or >= 'A' and <= 'F');
-        if (value.Version != 1 || value.OperationId == Guid.Empty || value.RootId.Value == Guid.Empty || value.RootMemberId == Guid.Empty ||
+        if (value.Version is not (1 or 2) || value.OperationId == Guid.Empty || value.RootId.Value == Guid.Empty || value.RootMemberId == Guid.Empty ||
             string.IsNullOrWhiteSpace(value.RootKey) || value.RootKey.Length > 128 || string.IsNullOrWhiteSpace(value.RootDirectoryName) ||
             value.RootDirectoryName.Length > 255 || value.RootDirectoryName.IndexOfAny(['/', '\\', ':', '\0']) >= 0 ||
             value.RootDirectoryName is "." or ".." || value.BatchEntryCount is < 1 or > 65_536 || value.Ordinal >= value.BatchEntryCount ||
@@ -134,6 +134,7 @@ public sealed partial class MirrorPulseProductCatalog
             !value.RelativePath.StartsWith(value.RootDirectoryName + "/", StringComparison.Ordinal) ||
             value.RelativePath.IndexOfAny(['\\', ':', '\0']) >= 0 || value.RelativePath.Split('/').Any(part => part is "" or "." or "..") ||
             !MirrorPulseRemoteLibraryProvenance.SupportsPreservingDeleteRejection(value.PackageVersion, value.PackageSource) ||
+            value.Version == 2 && !MirrorPulseRemoteLibraryProvenance.SupportsDeleteReconciliation(value.PackageVersion, value.PackageSource) ||
             value.Policy is null || !value.Policy.PreserveUnsynchronizedLocalContent || value.Policy.EchoSuppressionObservationCount is < 1 or > 64 ||
             value.Policy.EchoSuppressionLifetimeTicks <= 0 || value.Policy.EchoSuppressionLifetimeTicks > TimeSpan.TicksPerHour)
             throw new ArgumentException("A non-mutating Delete attempt requires its complete original entry, stable root and qualified preserving policy.");

@@ -217,7 +217,7 @@ public interface IMirrorPulseCloudRuntime : IAsyncDisposable
         ValueTask.FromException<MirrorPulseCloudStatusSnapshot>(
             new NotSupportedException("This Cloud Files runtime does not expose status."));
 
-    ValueTask<CloudRemoteApplyResult> ApplyRemoteBatchAsync(
+    ValueTask<MirrorPulseRemoteBatchResult> ApplyRemoteBatchAsync(
         InstanceId instanceId,
         CloudRemoteChangeBatch batch,
         MirrorPulseProductCatalog catalog,
@@ -225,12 +225,12 @@ public interface IMirrorPulseCloudRuntime : IAsyncDisposable
         MirrorPulseConflictNotificationBridge notifications,
         CloudRemoteApplyOptions? options,
         CancellationToken cancellationToken) =>
-        ValueTask.FromException<CloudRemoteApplyResult>(
+        ValueTask.FromException<MirrorPulseRemoteBatchResult>(
             new NotSupportedException("This Cloud Files runtime does not apply remote batches."));
 
-    ValueTask<CloudRemoteApplyResult> ApplyAdapterRemoteBatchAsync(InstanceId instanceId, AdapterRemoteChangeBatch batch,
+    ValueTask<MirrorPulseRemoteBatchResult> ApplyAdapterRemoteBatchAsync(InstanceId instanceId, AdapterRemoteChangeBatch batch,
         MirrorPulseProductCatalog catalog, MirrorPulseConflictCenter center, MirrorPulseConflictNotificationBridge notifications,
-        CloudRemoteApplyOptions? options, CancellationToken cancellationToken) => ValueTask.FromException<CloudRemoteApplyResult>(
+        CloudRemoteApplyOptions? options, CancellationToken cancellationToken) => ValueTask.FromException<MirrorPulseRemoteBatchResult>(
             new NotSupportedException("This Cloud Files runtime does not project incoming Adapter batches."));
 
     [SupportedOSPlatform("windows10.0.26100")]
@@ -1934,7 +1934,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             => WithCurrentLibraryAsync(async token => await MirrorPulseCloudStatusReader.ReadAsync(
                 state.OpenStore, instanceIds, router?.Registrations ?? [], token).ConfigureAwait(false), cancellationToken);
 
-        public ValueTask<CloudRemoteApplyResult> ApplyRemoteBatchAsync(
+        public ValueTask<MirrorPulseRemoteBatchResult> ApplyRemoteBatchAsync(
             InstanceId instanceId,
             CloudRemoteChangeBatch batch,
             MirrorPulseProductCatalog catalog,
@@ -1945,7 +1945,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             => WithCurrentLibraryAsync(async token => await ApplyRetainedRemoteBatchAsync(instanceId, batch, catalog, center,
                 notifications, options, token).ConfigureAwait(false), cancellationToken);
 
-        public ValueTask<CloudRemoteApplyResult> ApplyAdapterRemoteBatchAsync(InstanceId instanceId, AdapterRemoteChangeBatch batch,
+        public ValueTask<MirrorPulseRemoteBatchResult> ApplyAdapterRemoteBatchAsync(InstanceId instanceId, AdapterRemoteChangeBatch batch,
             MirrorPulseProductCatalog catalog, MirrorPulseConflictCenter center, MirrorPulseConflictNotificationBridge notifications,
             CloudRemoteApplyOptions? options, CancellationToken cancellationToken) => WithCurrentLibraryAsync(async token =>
         {
@@ -1959,12 +1959,12 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             return await ApplyRetainedRemoteBatchAsync(instanceId, projected, catalog, center, notifications, options, token).ConfigureAwait(false);
         }, cancellationToken);
 
-        private async ValueTask<CloudRemoteApplyResult> ApplyRetainedRemoteBatchAsync(InstanceId instanceId, CloudRemoteChangeBatch batch,
+        private async ValueTask<MirrorPulseRemoteBatchResult> ApplyRetainedRemoteBatchAsync(InstanceId instanceId, CloudRemoteChangeBatch batch,
             MirrorPulseProductCatalog catalog, MirrorPulseConflictCenter center, MirrorPulseConflictNotificationBridge notifications,
             CloudRemoteApplyOptions? options, CancellationToken token)
         {
             if (router is null) return await ApplyRemoteBatchCoreAsync(instanceId, batch, catalog, center, notifications, options, token).ConfigureAwait(false);
-            CloudRemoteApplyResult? result = null;
+            MirrorPulseRemoteBatchResult? result = null;
             var retained = new MirrorPulseRetainedRemoteBatchCoordinator(catalog, state.OpenStore, router,
                 async (instance, original, policy, stop) =>
                 {
@@ -1980,7 +1980,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             new(owner, state.OpenStore, router!, async (instance, batch, policy, token) =>
                 MirrorPulseRemotePollApplyOutcome.FromResult(await ApplyRemoteBatchCoreAsync(instance, batch, owner, center, notifications, policy, token).ConfigureAwait(false)));
 
-        private async ValueTask<CloudRemoteApplyResult> ApplyRemoteBatchCoreAsync(InstanceId instanceId,
+        private async ValueTask<MirrorPulseRemoteBatchResult> ApplyRemoteBatchCoreAsync(InstanceId instanceId,
             CloudRemoteChangeBatch batch, MirrorPulseProductCatalog catalog, MirrorPulseConflictCenter center,
             MirrorPulseConflictNotificationBridge notifications, CloudRemoteApplyOptions? options, CancellationToken cancellationToken)
         {
@@ -2022,7 +2022,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                     if (_namespaceExecution is null) return await coordinator.ApplyAsync(instanceId, batch, options, token).ConfigureAwait(false);
                     if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
                         throw new PlatformNotSupportedException("Remote namespace execution requires Windows 11 24H2 or later.");
-                    CloudRemoteApplyResult result = null!;
+                    MirrorPulseRemoteBatchResult result = null!;
                     await _namespaceExecution.RunNamespaceOperationAsync(async () =>
                         result = await coordinator.ApplyAsync(instanceId, batch, options, token).ConfigureAwait(false)).ConfigureAwait(false);
                     return result;
@@ -2610,7 +2610,7 @@ public sealed class MirrorPulseCloudHostSession : IAsyncDisposable
         return _runtime.CancelManagedRootRenameAsync(operationId, cancellationToken);
     }
 
-    public ValueTask<CloudRemoteApplyResult> ApplyRemoteBatchAsync(
+    public ValueTask<MirrorPulseRemoteBatchResult> ApplyRemoteBatchAsync(
         InstanceId instanceId,
         CloudRemoteChangeBatch batch,
         MirrorPulseProductCatalog catalog,
@@ -2628,7 +2628,7 @@ public sealed class MirrorPulseCloudHostSession : IAsyncDisposable
             options, cancellationToken);
     }
 
-    public ValueTask<CloudRemoteApplyResult> ApplyAdapterRemoteBatchAsync(InstanceId instanceId, AdapterRemoteChangeBatch batch,
+    public ValueTask<MirrorPulseRemoteBatchResult> ApplyAdapterRemoteBatchAsync(InstanceId instanceId, AdapterRemoteChangeBatch batch,
         MirrorPulseProductCatalog catalog, MirrorPulseConflictCenter center, MirrorPulseConflictNotificationBridge notifications,
         CloudRemoteApplyOptions? options = null, CancellationToken cancellationToken = default)
     {

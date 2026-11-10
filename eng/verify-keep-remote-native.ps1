@@ -83,12 +83,15 @@ if ($Scope -eq 'received-delete-reconciliation') {
         ($fixture + 'NativeDefaultRuntimeRecoversReceivedMissingDeleteBeforeNewRoleAuditWithoutAcknowledgingLocalContentOriginals')
         ($fixture + 'NativeDefaultRuntimePublishesActualMissingDeleteConflictAndCursorAcrossFreshRolesWithoutChangingLocalOriginals')
         ($fixture + 'NativeCfSharpPreservingDeleteCharacterizesItsActualLocalTombstoneBeforeAndAfterConsumerAcknowledgement')
+        ($fixture + 'NativeLocalTombstoneDeleteReconciliationPublishesOnlyItsOriginalConflictAcrossOwners')
+        ($fixture + 'NativeLocalTombstoneDeleteRecoversOriginalAdmissionAcrossFreshRoles')
+        ($fixture + 'NativeLocalTombstoneDeleteRecoversActualSdkReceiptAcrossFreshRoles')
     )
     if (@($selected | Where-Object { $_ -cnotin $catalog.required.native -or $_ -cnotin $catalog.required.namespace }).Count) {
-        throw 'Received Delete reconciliation requires all seven exact declared native and namespace methods.'
+        throw 'Received Delete reconciliation requires all ten exact declared native and namespace methods.'
     }
     $count = Get-RequiredTestExecutionCount -Catalog $catalog -Names $selected
-    if ($count -ne 13) { throw 'Require all thirteen actual original SDK/component/startup executions.' }
+    if ($count -ne 19) { throw 'Require all thirteen prior executions and six original tombstone reconciliation executions.' }
     $boundary = 'ReceivedDeleteReconciliation'
     $filter = ($selected | ForEach-Object { 'FullyQualifiedName=' + $_ }) -join '|'
     $fixtureBudgetMilliseconds = $count * 65000

@@ -6,6 +6,10 @@ public static class MirrorPulseRemoteLibraryProvenance
     public const string CurrentPackageVersion = "0.1.0-preview.12";
     public const string CurrentSourceCommit = "cfbc7f83b26b5b6515710a8c490428d2989d8c06";
 
+    /// <summary>Publications with the durable public original-entry tombstone rejection API.</summary>
+    public static bool SupportsDeleteReconciliation(string packageVersion, string sourceCommit) =>
+        (packageVersion, sourceCommit) is ("0.1.0-preview.12", "cfbc7f83b26b5b6515710a8c490428d2989d8c06");
+
     /// <summary>Publications qualified to return a non-mutating conflict for a preserving missing-item Delete.</summary>
     public static bool SupportsPreservingDeleteRejection(string packageVersion, string sourceCommit) =>
         (packageVersion, sourceCommit) is (CurrentPackageVersion, CurrentSourceCommit) or

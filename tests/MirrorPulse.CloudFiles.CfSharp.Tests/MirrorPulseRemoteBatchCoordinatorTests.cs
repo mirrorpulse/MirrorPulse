@@ -87,7 +87,7 @@ public sealed class MirrorPulseRemoteBatchCoordinatorTests
             {
                 await fileSystem.StartAsync();
                 var coordinator = new MirrorPulseRemoteBatchCoordinator(fileSystem, firstState);
-                CloudRemoteApplyResult firstResult = await coordinator.ApplyAsync(instance, first);
+                MirrorPulseRemoteBatchResult firstResult = await coordinator.ApplyAsync(instance, first);
                 Assert.AreEqual(CloudRemoteBatchStatus.Applied, firstResult.Status);
                 CollectionAssert.AreEqual(new byte[] { 1 }, (await coordinator.ReadCursorAsync(instance))?.ToArray());
                 await coordinator.ApplyAsync(instance, first);
@@ -119,16 +119,16 @@ public sealed class MirrorPulseRemoteBatchCoordinatorTests
                      new CloudRemoteChange("b", CloudRemoteChangeKind.DirectoryUpsert, "b", "v1",
                         CloudItemKind.Directory, "B", metadata: metadata, cursorAfter: new byte[] { 4 })],
                     new byte[] { 4 });
-                CloudRemoteApplyResult partialResult = await coordinator.ApplyAsync(
+                MirrorPulseRemoteBatchResult partialResult = await coordinator.ApplyAsync(
                     instance, partial, new CloudRemoteApplyOptions { MaximumEntries = 1 });
                 Assert.IsTrue(partialResult.RequiresRetry);
                 Assert.IsLessThanOrEqualTo(1, partialResult.AppliedEntryCount);
                 CollectionAssert.AreEqual(new byte[] { 3 }, (await coordinator.ReadCursorAsync(instance))?.ToArray());
-                CloudRemoteApplyResult completed = await coordinator.ApplyAsync(instance, partial);
+                MirrorPulseRemoteBatchResult completed = await coordinator.ApplyAsync(instance, partial);
                 Assert.AreEqual(CloudRemoteBatchStatus.Applied, completed.Status);
                 Assert.IsFalse(completed.RequiresRetry);
                 CollectionAssert.AreEqual(new byte[] { 4 }, (await coordinator.ReadCursorAsync(instance))?.ToArray());
-                CloudRemoteApplyResult replayed = await coordinator.ApplyAsync(instance, partial);
+                MirrorPulseRemoteBatchResult replayed = await coordinator.ApplyAsync(instance, partial);
                 Assert.AreEqual(CloudRemoteBatchStatus.Applied, replayed.Status);
                 CollectionAssert.AreEqual(new byte[] { 4 }, replayed.SafeCursor.ToArray());
                 var rootA = AdapterRootRegistrationMapper.Map(AdapterId.Parse("example.cursor-roots"), instance,

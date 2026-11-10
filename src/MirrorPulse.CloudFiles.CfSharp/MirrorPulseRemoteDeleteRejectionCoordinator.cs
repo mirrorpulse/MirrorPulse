@@ -8,20 +8,21 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 
 internal enum MirrorPulseRemoteDeleteRejectionCheckpoint { AfterAdmission, AfterSdkApply, AfterSettlement }
 
-/// <summary>Retains the real SDK rejection of an absent identity without inventing a native member retirement.</summary>
+/// <summary>Retains a real SDK rejection without inventing a native member retirement.</summary>
 [SupportedOSPlatform("windows10.0.26100")]
 internal sealed class MirrorPulseRemoteDeleteRejectionCoordinator(CloudFileSystem fileSystem, MirrorPulseCfSharpStateSession state,
     MirrorPulseProductCatalog catalog, MirrorPulseRootRouter router, MirrorPulseNamespaceExecutionSession execution,
     MirrorPulseNamespaceActor actor, Func<MirrorPulseRemoteDeleteRejectionCheckpoint, CancellationToken, ValueTask>? checkpoint = null)
 {
-    internal async ValueTask<CloudRemoteApplyResult?> TryApplyAsync(InstanceId instance, CloudRemoteChangeBatch batch,
+    internal async ValueTask<MirrorPulseRemoteBatchResult?> TryApplyAsync(InstanceId instance, CloudRemoteChangeBatch batch,
         int ordinal, CloudRemoteApplyOptions options, MirrorPulseRemoteConflictProjector? conflicts, CancellationToken token,
         bool metadataRecovery = false)
     {
         var change = MirrorPulseRemoteRetirementBatchCoordinator.RequireChange(instance, batch, ordinal, options);
         var original = await catalog.ReadRemoteDeleteRejectionAsync(instance, batch.BatchId, ordinal, token).ConfigureAwait(false);
         if (metadataRecovery && original is null) throw new InvalidDataException("Metadata recovery requires its retained original preserving Delete attempt.");
-        if (original is null && await ReadItemAsync(change.ItemId!.Value, token).ConfigureAwait(false) is not null) return null;
+        var projection = await ReadItemAsync(change.ItemId!.Value, token).ConfigureAwait(false);
+        if (original is null && projection is not null && !MatchesTombstone(change, projection)) return null;
         RootRegistration root;
         Guid rootMember;
         if (original is null)
@@ -37,11 +38,11 @@ internal sealed class MirrorPulseRemoteDeleteRejectionCoordinator(CloudFileSyste
             root = router.FindRegistration(original.Admission.RootId) ?? throw new InvalidDataException("The original preserving Delete lost its configured root.");
             RequireCurrentRoot(root, instance, change, metadataRecovery); rootMember = original.Admission.RootMemberId;
         }
-        return await actor.RunAsync<CloudRemoteApplyResult?>(async admitted =>
+        return await actor.RunAsync<MirrorPulseRemoteBatchResult?>(async admitted =>
         {
-            // Recheck the actual official absence under the single namespace owner.
-            // A surviving row with a missing native path retains the old strict gap refusal.
-            if (await ReadItemAsync(change.ItemId!.Value, admitted).ConfigureAwait(false) is not null)
+            projection = await ReadItemAsync(change.ItemId!.Value, admitted).ConfigureAwait(false);
+            bool reconcile = original?.Admission.Version == 2 || original is null && MatchesTombstone(change, projection);
+            if (reconcile ? !MatchesTombstone(change, projection) : projection is not null)
             {
                 if (original is not null) throw new InvalidDataException("The original missing-identity attempt regained an unproved SDK projection.");
                 return null;
@@ -49,7 +50,7 @@ internal sealed class MirrorPulseRemoteDeleteRejectionCoordinator(CloudFileSyste
             await RequirePrefixAsync(batch, ordinal, applied: false, admitted).ConfigureAwait(false);
             if (original is null)
             {
-                var admission = new MirrorPulseRemoteDeleteRejectionAdmission(1, Guid.NewGuid(), instance, root.RootId,
+                var admission = new MirrorPulseRemoteDeleteRejectionAdmission(reconcile ? 2 : 1, Guid.NewGuid(), instance, root.RootId,
                     root.UniquenessKey, root.DirectoryName, rootMember, batch.BatchId, Convert.ToHexString(batch.Fingerprint.Span),
                     batch.Changes.Count, ordinal, EntryFingerprint(batch, ordinal), change.ChangeId, change.ItemId!.Value,
                     change.RelativePath.Replace('\\', '/'), change.ItemKind == CloudItemKind.Directory,
@@ -60,13 +61,22 @@ internal sealed class MirrorPulseRemoteDeleteRejectionCoordinator(CloudFileSyste
             }
             if (original.Outcome is not null || !await catalog.CanResumeRemoteDeleteRejectionAsync(original.Admission, admitted).ConfigureAwait(false))
                 throw new InvalidOperationException("The original preserving Delete cannot overtake another namespace owner or its observed result.");
-            var applied = await execution.RunNormalUserOperationAsync(async () =>
-                await fileSystem.ApplyRemoteChangesAsync(batch, options with { MaximumEntries = 1 }, admitted).ConfigureAwait(false)).ConfigureAwait(false);
+            MirrorPulseRemoteBatchResult applied;
+            if (reconcile)
+            {
+                var result = await execution.RunNormalUserOperationAsync(async () =>
+                    await fileSystem.ReconcileRemoteDeleteAsync(batch, ordinal, options with { MaximumEntries = 1 }, admitted).ConfigureAwait(false)).ConfigureAwait(false);
+                if (result.Status is not (CloudRemoteDeleteReconciliationStatus.RecordedConflict or CloudRemoteDeleteReconciliationStatus.AlreadyRecorded))
+                    throw new IOException("The original SDK Delete reconciliation remains refused: " + result.Status + ".");
+                applied = MirrorPulseRemoteBatchResult.FromReconciliation(batch, ordinal, result);
+            }
+            else applied = MirrorPulseRemoteBatchResult.FromSdk(await execution.RunNormalUserOperationAsync(async () =>
+                await fileSystem.ApplyRemoteChangesAsync(batch, options with { MaximumEntries = 1 }, admitted).ConfigureAwait(false)).ConfigureAwait(false));
             if (checkpoint is not null) await checkpoint(MirrorPulseRemoteDeleteRejectionCheckpoint.AfterSdkApply, CancellationToken.None).ConfigureAwait(false);
             if (applied.AppliedEntryCount <= ordinal) return applied;
             var entry = applied.Entries.SingleOrDefault(value => value.ChangeId == change.ChangeId);
             if (applied.AppliedEntryCount != ordinal + 1 || entry?.Status != CloudRemoteApplyEntryStatus.Conflict ||
-                entry.Conflict?.Reason != CloudRemoteConflictReason.MissingItem || applied.ConflictIds.Count != 1 ||
+                entry.Conflict?.Reason != (reconcile ? CloudRemoteConflictReason.LocalDeleteReconciliationRequired : CloudRemoteConflictReason.MissingItem) || applied.ConflictIds.Count != 1 ||
                 !MirrorPulseRemoteRetirementBatchCoordinator.Matches(batch, ordinal, entry.Conflict.Change))
                 throw new InvalidDataException("The preserving missing-identity attempt did not return its actual original SDK rejection.");
             await SettleUnderActorAsync(original, instance, batch, ordinal, options, applied.ConflictIds[0], conflicts, CancellationToken.None).ConfigureAwait(false);
@@ -136,6 +146,16 @@ internal sealed class MirrorPulseRemoteDeleteRejectionCoordinator(CloudFileSyste
     {
         actor.AssertAccess(); RequireOriginal(original.Admission, instance, batch, ordinal, options);
         await RequirePrefixAsync(batch, ordinal, applied: true, token).ConfigureAwait(false);
+        if (original.Admission.Version == 2)
+        {
+            var receipt = await execution.RunNormalUserOperationAsync(async () =>
+                await fileSystem.GetRemoteDeleteReconciliationAsync(batch, ordinal, token).ConfigureAwait(false)).ConfigureAwait(false);
+            _ = MirrorPulseRemoteBatchResult.FromReconciliation(batch, ordinal, receipt);
+            if (observedConflict is { } expected && receipt.ConflictId != expected)
+                throw new InvalidDataException("The original SDK reconciliation changed its actual conflict.");
+            await CompleteReconciliationAsync(original, instance, receipt, conflicts, token).ConfigureAwait(false);
+            return;
+        }
         CloudRemoteConflictRecord record;
         if (observedConflict is { } id)
             record = await execution.RunNormalUserOperationAsync(async () =>
@@ -174,7 +194,31 @@ internal sealed class MirrorPulseRemoteDeleteRejectionCoordinator(CloudFileSyste
             original.IsDirectory != (change.ItemKind == CloudItemKind.Directory) || original.Policy != Policy(options) ||
             !MirrorPulseRemoteLibraryProvenance.SupportsPreservingDeleteRejection(original.PackageVersion, original.PackageSource))
             throw new InvalidDataException("The preserving Delete changed its immutable original batch, entry, publication or policy.");
+        if (original.Version == 2 && !MirrorPulseRemoteLibraryProvenance.SupportsDeleteReconciliation(original.PackageVersion, original.PackageSource))
+            throw new InvalidDataException("The original tombstone rejection requires its qualified public reconciliation API.");
     }
+
+    private async Task CompleteReconciliationAsync(MirrorPulseRemoteDeleteRejection original, InstanceId instance,
+        CloudRemoteDeleteReconciliationResult receipt, MirrorPulseRemoteConflictProjector? conflicts, CancellationToken token)
+    {
+        var conflict = receipt.Entry!.Conflict!;
+        if (conflict.DetectedAt < original.Admission.StartedAt)
+            throw new InvalidDataException("An older SDK receipt cannot settle the original product admission.");
+        _ = await catalog.CompleteRemoteDeleteRejectionAsync(original.Admission,
+            new(original.Admission.OperationId, receipt.ConflictId!.Value, conflict.DetectedAt, DateTimeOffset.UtcNow), token).ConfigureAwait(false);
+        if (checkpoint is not null) await checkpoint(MirrorPulseRemoteDeleteRejectionCheckpoint.AfterSettlement, token).ConfigureAwait(false);
+        if (conflicts is not null)
+        {
+            var current = await execution.RunNormalUserOperationAsync(async () =>
+                await fileSystem.GetRemoteConflictAsync(receipt.ConflictId.Value, token).ConfigureAwait(false)).ConfigureAwait(false);
+            if (current is not null) await conflicts.CaptureAsync(instance, current.ConflictId, current.Conflict, token).ConfigureAwait(false);
+        }
+    }
+
+    private static bool MatchesTombstone(CloudRemoteChange change, CloudItemState? item) =>
+        item is { IsTombstone: true } && item.ItemId == change.ItemId && item.RemoteId == change.RemoteId && item.Kind == change.ItemKind &&
+        string.Equals(item.RelativePath.Replace('\\', '/'), change.RelativePath.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase) &&
+        (change.PreviousRemoteRevision is null || item.RemoteRevision == change.PreviousRemoteRevision);
 
     private static void RequireCurrentRoot(RootRegistration root, InstanceId instance, CloudRemoteChange change, bool metadataRecovery = false)
     {

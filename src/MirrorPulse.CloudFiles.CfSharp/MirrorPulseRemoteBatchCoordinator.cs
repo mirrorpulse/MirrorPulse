@@ -33,7 +33,7 @@ public sealed class MirrorPulseRemoteBatchCoordinator
         MirrorPulseRemoteConflictProjector? conflicts, MirrorPulseRemoteNamespaceBatchDriver namespaceDriver)
         : this(fileSystem, state, conflicts) => _namespaceDriver = namespaceDriver;
 
-    public async ValueTask<CloudRemoteApplyResult> ApplyAsync(
+    public async ValueTask<MirrorPulseRemoteBatchResult> ApplyAsync(
         InstanceId instanceId,
         CloudRemoteChangeBatch batch,
         CloudRemoteApplyOptions? options = null,
@@ -72,13 +72,14 @@ public sealed class MirrorPulseRemoteBatchCoordinator
 
         if (_namespaceDriver is not null && !OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
             throw new PlatformNotSupportedException("Managed remote entries require Windows 11 24H2 or later.");
-        CloudRemoteApplyResult result = _namespaceDriver is null
-            ? await _fileSystem.ApplyRemoteChangesAsync(batch, options ?? CloudRemoteApplyOptions.Default, cancellationToken).ConfigureAwait(false)
-            : await _namespaceDriver.ApplyAsync(instanceId, batch, options ?? CloudRemoteApplyOptions.Default, _conflicts, cancellationToken).ConfigureAwait(false);
-        if (_namespaceDriver is null && _conflicts is not null)
+        MirrorPulseRemoteBatchResult result;
+        if (_namespaceDriver is null)
         {
-            await _conflicts.CaptureResultAsync(instanceId, result, cancellationToken).ConfigureAwait(false);
+            var applied = await _fileSystem.ApplyRemoteChangesAsync(batch, options ?? CloudRemoteApplyOptions.Default, cancellationToken).ConfigureAwait(false);
+            if (_conflicts is not null) await _conflicts.CaptureResultAsync(instanceId, applied, cancellationToken).ConfigureAwait(false);
+            result = MirrorPulseRemoteBatchResult.FromSdk(applied);
         }
+        else result = await _namespaceDriver.ApplyAsync(instanceId, batch, options ?? CloudRemoteApplyOptions.Default, _conflicts, cancellationToken).ConfigureAwait(false);
 
         if (result.RequiresRetry || result.Status != CloudRemoteBatchStatus.Applied)
         {

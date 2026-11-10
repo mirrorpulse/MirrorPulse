@@ -11,7 +11,7 @@ public sealed record MirrorPulseRemoteDeleteRejectionAdmission(int Version, Guid
     string ChangeId, Guid ItemId, string RelativePath, bool IsDirectory,
     string PackageVersion, string PackageSource, MirrorPulseRemoteBirthPolicy Policy, DateTimeOffset StartedAt);
 
-/// <summary>The actual durable SDK MissingItem conflict, not a successful Delete or source acknowledgement.</summary>
+/// <summary>The actual durable SDK rejection conflict, not a successful Delete or source acknowledgement.</summary>
 public sealed record MirrorPulseRemoteDeleteRejectionOutcome(Guid OperationId, Guid ConflictId,
     DateTimeOffset ConflictDetectedAt, DateTimeOffset ObservedAt);
 

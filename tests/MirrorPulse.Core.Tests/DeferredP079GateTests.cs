@@ -30,7 +30,10 @@ public sealed class DeferredP079GateTests
                 'NativeMissingRemoteDeleteRecoversActualSdkConflictBeforeProductResultAcrossFreshRoles',
                 'NativeDefaultRuntimeRecoversReceivedMissingDeleteBeforeNewRoleAuditWithoutAcknowledgingLocalContentOriginals',
                 'NativeDefaultRuntimePublishesActualMissingDeleteConflictAndCursorAcrossFreshRolesWithoutChangingLocalOriginals',
-                'NativeCfSharpPreservingDeleteCharacterizesItsActualLocalTombstoneBeforeAndAfterConsumerAcknowledgement'
+                'NativeCfSharpPreservingDeleteCharacterizesItsActualLocalTombstoneBeforeAndAfterConsumerAcknowledgement',
+                'NativeLocalTombstoneDeleteReconciliationPublishesOnlyItsOriginalConflictAcrossOwners',
+                'NativeLocalTombstoneDeleteRecoversOriginalAdmissionAcrossFreshRoles',
+                'NativeLocalTombstoneDeleteRecoversActualSdkReceiptAcrossFreshRoles'
             )|ForEach-Object {$keepRemotePrefix+$_}
             $catalog.required.namespace=@($catalog.required.namespace|Where-Object {$_ -cnotin $receivedDelete})
             $catalog.required.native=@($catalog.required.native|Where-Object {$_ -cnotin $receivedDelete})

@@ -30,7 +30,7 @@ internal sealed class MirrorPulseRemoteNamespaceBatchDriver(
     private readonly MirrorPulseRemoteUpdateCoordinator _updates = new(fileSystem, state, catalog, router, execution, actor, updateCheckpoint);
     private readonly MirrorPulseRemoteDeleteRejectionCoordinator _rejections = new(fileSystem, state, catalog, router, execution, actor, rejectionCheckpoint);
 
-    internal async ValueTask<CloudRemoteApplyResult> ApplyAsync(InstanceId instance, CloudRemoteChangeBatch batch,
+    internal async ValueTask<MirrorPulseRemoteBatchResult> ApplyAsync(InstanceId instance, CloudRemoteChangeBatch batch,
         CloudRemoteApplyOptions options, MirrorPulseRemoteConflictProjector? conflicts, CancellationToken token)
     {
         // Validate before retaining a product operation, including options the SDK would reject.
@@ -132,7 +132,7 @@ internal sealed class MirrorPulseRemoteNamespaceBatchDriver(
                     : await _retirements.ApplyAsync(instance, batch, count, options, conflicts, token).ConfigureAwait(false);
                 if (conflicts is not null) await conflicts.CaptureResultAsync(instance, appliedRetirement, token).ConfigureAwait(false);
                 if (checkpoint is not null) await checkpoint(MirrorPulseRemoteNamespaceBatchCheckpoint.AfterSdkApply, token).ConfigureAwait(false);
-                return appliedRetirement;
+                return MirrorPulseRemoteBatchResult.FromSdk(appliedRetirement);
             }
             if (change.Kind != CloudRemoteChangeKind.Move)
             {
@@ -141,12 +141,12 @@ internal sealed class MirrorPulseRemoteNamespaceBatchDriver(
                     var appliedUpdate = await _updates.ApplyAsync(instance, batch, count, options, conflicts, token).ConfigureAwait(false);
                     if (conflicts is not null) await conflicts.CaptureResultAsync(instance, appliedUpdate, token).ConfigureAwait(false);
                     if (checkpoint is not null) await checkpoint(MirrorPulseRemoteNamespaceBatchCheckpoint.AfterSdkApply, token).ConfigureAwait(false);
-                    return appliedUpdate;
+                    return MirrorPulseRemoteBatchResult.FromSdk(appliedUpdate);
                 }
                 var appliedBirth = await _births.ApplyAsync(instance, batch, count, options, token).ConfigureAwait(false);
                 if (conflicts is not null) await conflicts.CaptureResultAsync(instance, appliedBirth, token).ConfigureAwait(false);
                 if (checkpoint is not null) await checkpoint(MirrorPulseRemoteNamespaceBatchCheckpoint.AfterSdkApply, token).ConfigureAwait(false);
-                return appliedBirth;
+                return MirrorPulseRemoteBatchResult.FromSdk(appliedBirth);
             }
             var intent = await ReadOriginalAsync(instance, batch, count, token).ConfigureAwait(false);
             if (intent is null)
@@ -190,7 +190,7 @@ internal sealed class MirrorPulseRemoteNamespaceBatchDriver(
                 ?? throw new InvalidDataException("The SDK entry lost its original product admission.");
             await SettleAsync(intent, instance, batch, count, result, conflicts, token).ConfigureAwait(false);
         }
-        return result; // Preserve the actual public SDK result, including partial progress and failures.
+        return MirrorPulseRemoteBatchResult.FromSdk(result);
     }
 
     private async ValueTask<int> ReadProgressAsync(CloudRemoteChangeBatch batch, CancellationToken token)

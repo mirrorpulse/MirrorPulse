@@ -161,7 +161,7 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
                 CancellationToken batchCancellationToken)
             {
                 await namespaceFence.EnsureApplyAllowedAsync(instanceId, batch, batchCancellationToken).ConfigureAwait(false);
-                CloudRemoteApplyResult result = await (currentSession ??
+                MirrorPulseRemoteBatchResult result = await (currentSession ??
                     throw new InvalidOperationException("The Cloud Files session has not started."))
                     .ApplyRemoteBatchAsync(
                         instanceId, batch, catalog, conflictCenter, conflictNotifications,
@@ -187,7 +187,7 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
                     // A streamed batch must not overtake the immutable polling intent.
                     if (await catalog.ReadPendingRemoteBatchAsync(instanceId, token).ConfigureAwait(false) is not null)
                         throw new InvalidOperationException("A remote polling batch must converge before streamed changes apply.");
-                    CloudRemoteApplyResult result = await (currentSession ??
+                    MirrorPulseRemoteBatchResult result = await (currentSession ??
                         throw new InvalidOperationException("The Cloud Files session has not started."))
                         .ApplyAdapterRemoteBatchAsync(instanceId, adapterBatch, catalog, conflictCenter, conflictNotifications,
                             cancellationToken: token).ConfigureAwait(false);

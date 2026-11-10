@@ -1,7 +1,9 @@
 using System.Security.Principal;
+using System.Text.Json;
 using CfSharp;
 using MirrorPulse.Core.CloudFiles;
 using MirrorPulse.Core.Configuration;
+using MirrorPulse.Core.Conflicts;
 using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.State;
 using MirrorPulse.Core.Sync;
@@ -34,8 +36,24 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     public Task NativeMissingRemoteDeleteRecoversActualSdkConflictBeforeProductResultAcrossFreshRoles() =>
         RunMissingOriginalRemoteDeleteAsync(false, MirrorPulseRemoteDeleteRejectionCheckpoint.AfterSdkApply, true);
 
+    [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles")]
+    [DataRow(false, DisplayName = "TombstoneMixedPrefixFile"), DataRow(true, DisplayName = "TombstoneMixedPrefixDirectory")]
+    public Task NativeLocalTombstoneDeleteReconciliationPublishesOnlyItsOriginalConflictAcrossOwners(bool directory) =>
+        RunMissingOriginalRemoteDeleteAsync(true, localTombstone: true, directoryItem: directory);
+
+    [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles")]
+    [DataRow(false, DisplayName = "TombstoneAdmissionFile"), DataRow(true, DisplayName = "TombstoneAdmissionDirectory")]
+    public Task NativeLocalTombstoneDeleteRecoversOriginalAdmissionAcrossFreshRoles(bool directory) =>
+        RunMissingOriginalRemoteDeleteAsync(false, MirrorPulseRemoteDeleteRejectionCheckpoint.AfterAdmission, true, true, directory);
+
+    [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles")]
+    [DataRow(false, DisplayName = "TombstoneReceiptFile"), DataRow(true, DisplayName = "TombstoneReceiptDirectory")]
+    public Task NativeLocalTombstoneDeleteRecoversActualSdkReceiptAcrossFreshRoles(bool directory) =>
+        RunMissingOriginalRemoteDeleteAsync(false, MirrorPulseRemoteDeleteRejectionCheckpoint.AfterSdkApply, true, true, directory);
+
     private async Task RunMissingOriginalRemoteDeleteAsync(bool ordered,
-        MirrorPulseRemoteDeleteRejectionCheckpoint? interruption = null, bool freshRole = false)
+        MirrorPulseRemoteDeleteRejectionCheckpoint? interruption = null, bool freshRole = false,
+        bool localTombstone = false, bool directoryItem = false)
     {
         if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
             Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
@@ -48,10 +66,12 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         using WindowsIdentity caller = WindowsIdentity.GetCurrent();
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(65));
         var identity = router.CreateFileIdentity(root.InstanceId, "docs", "old-address", "v1");
+        var kind = directoryItem ? CloudItemKind.Directory : CloudItemKind.File;
+        var controlIdentity = localTombstone ? router.CreateFileIdentity(root.InstanceId, "docs", "independent-control", "v1") : identity;
         var control = new CloudRemoteChangeBatch(root.InstanceId + "/unrelated-control", ReadOnlyMemory<byte>.Empty,
-            [new("different-original-change", CloudRemoteChangeKind.Delete, identity.RemoteId, "v2", CloudItemKind.File,
-                "Docs/old.bin", identity.ItemId, cursorAfter: new byte[] { 1 })], new byte[] { 1 });
-        var deletion = new CloudRemoteChange("original-delete", CloudRemoteChangeKind.Delete, identity.RemoteId, "v2", CloudItemKind.File,
+            [new("different-original-change", CloudRemoteChangeKind.Delete, controlIdentity.RemoteId, "v2", CloudItemKind.File,
+                "Docs/old.bin", controlIdentity.ItemId, cursorAfter: new byte[] { 1 })], new byte[] { 1 });
+        var deletion = new CloudRemoteChange("original-delete", CloudRemoteChangeKind.Delete, identity.RemoteId, "v2", kind,
             "Docs/old.bin", identity.ItemId, cursorAfter: new byte[] { 2 });
         var prefix = router.CreateFileIdentity(root.InstanceId, "docs", "prefix", "v1");
         var tail = router.CreateFileIdentity(root.InstanceId, "docs", "tail", "v1");
@@ -66,6 +86,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         int completeOwners = 0;
         string? originalRole = null;
         MirrorPulseNamespaceMemberProtectionSnapshot originalParent = null!;
+        Dictionary<Guid, string> localOriginals = [];
         try
         {
             registry.Register(new(paths.SyncRootPath, "0.1.0", Guid.NewGuid(), [1, 2, 3]));
@@ -77,6 +98,26 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 await setup.StartAsync(deadline.Token);
                 (await setup.Root.CreatePlaceholdersAsync(router.CreateRootPage().Children, cancellationToken: deadline.Token)).ThrowIfAnyFailed();
                 SetProtectedFixtureUserOwner(setup.Root, caller.User!); SetProtectedFixtureUserOwner(setup.GetDirectory("Docs"), caller.User!);
+                if (localTombstone)
+                {
+                    await using var feed = setup.CreateLocalChangeFeed(); await feed.StartAsync(deadline.Token);
+                    var birth = new CloudRemoteChangeBatch(root.InstanceId + "/actual-local-delete-birth", ReadOnlyMemory<byte>.Empty,
+                        [new("birth", directoryItem ? CloudRemoteChangeKind.DirectoryUpsert : CloudRemoteChangeKind.FileUpsert,
+                            identity.RemoteId, "v1", kind, "Docs/old.bin", identity.ItemId, length: directoryItem ? null : 4,
+                            metadata: directoryItem ? CloudPlaceholderMetadata.CreateDirectoryBuilder().Build() : CloudPlaceholderMetadata.CreateFileBuilder().Build())], ReadOnlyMemory<byte>.Empty);
+                    Assert.AreEqual(CloudRemoteBatchStatus.Applied, (await setup.ApplyRemoteChangesAsync(birth, cancellationToken: deadline.Token)).Status);
+                    CloudItem item = directoryItem ? setup.GetDirectory("Docs/old.bin") : setup.GetFile("Docs/old.bin");
+                    await item.DeleteAsync(deadline.Token);
+                    CloudLocalChange? deletionNotice = null;
+                    while (deletionNotice is null)
+                        deletionNotice = (await feed.ReadBatchAsync(deadline.Token)).Changes.SingleOrDefault(change =>
+                            change.Kind == CloudLocalChangeKind.Delete && change.RelativePath.Replace('\\', '/') == "Docs/old.bin");
+                    await using var capture = await setupState.OpenStore.BeginTransactionAsync(deadline.Token);
+                    Assert.IsTrue((await capture.Items.GetByItemIdAsync(identity.ItemId, deadline.Token))!.IsTombstone);
+                    localOriginals = (await capture.Operations.ListAsync(128, deadline.Token)).ToDictionary(value => value.OperationId, OriginalFact);
+                    Assert.IsTrue(localOriginals.ContainsKey(deletionNotice.OperationId));
+                    await capture.RollbackAsync(deadline.Token);
+                }
             }
             await using var sharedExecution = freshRole ? null : new MirrorPulseNamespaceExecutionSession();
             for (int owner = 0; owner < 2; owner++)
@@ -105,7 +146,10 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 var driver = new MirrorPulseRemoteNamespaceBatchDriver(fileSystem, state, catalog, router, execution, actor,
                     rejectionCheckpoint: owner == 0 && interruption is not null ? (point, _) => point == interruption
                         ? ValueTask.FromException(new IOException("Synthetic interruption at the original preserving Delete boundary.")) : ValueTask.CompletedTask : null);
-                var coordinator = new MirrorPulseRemoteBatchCoordinator(fileSystem, state, null, driver);
+                var center = new MirrorPulseConflictCenter();
+                var projector = new MirrorPulseRemoteConflictProjector(fileSystem, catalog, center,
+                    new MirrorPulseConflictNotificationBridge((_, _) => ValueTask.CompletedTask));
+                var coordinator = new MirrorPulseRemoteBatchCoordinator(fileSystem, state, projector, driver);
                 if (owner == 0)
                 {
                     var publicControl = await fileSystem.ApplyRemoteChangesAsync(control, cancellationToken: deadline.Token);
@@ -150,6 +194,11 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     Assert.IsNull(await coordinator.ReadCursorAsync(root.InstanceId, deadline.Token));
                     applied = await coordinator.ApplyAsync(root.InstanceId, original, cancellationToken: deadline.Token);
                     Assert.AreEqual(2, applied.AppliedEntryCount); Assert.AreEqual(CloudRemoteBatchStatus.Applying, applied.Status);
+                    if (localTombstone)
+                    {
+                        Assert.IsNotNull(applied.DeleteReconciliation); Assert.IsNull(applied.SdkApplyResult);
+                        Assert.IsFalse(applied.DeleteReconciliation.NativeMutationAttempted);
+                    }
                     var settled = (await catalog.ReadRemoteDeleteRejectionAsync(root.InstanceId, original.BatchId, deleteOrdinal, deadline.Token))!;
                     Assert.IsNotNull(settled.Outcome);
                     Assert.IsFalse((await fileSystem.GetFile("Docs/tail.bin").InspectAsync(deadline.Token)).Exists);
@@ -161,7 +210,10 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 var records = await fileSystem.ListRemoteConflictsAsync(deadline.Token);
                 Assert.HasCount(2, records);
                 var own = records.Single(value => value.Conflict.Change.ChangeId == "original-delete");
-                Assert.AreEqual(CloudRemoteConflictReason.MissingItem, own.Conflict.Reason);
+                Assert.AreEqual(localTombstone ? CloudRemoteConflictReason.LocalDeleteReconciliationRequired : CloudRemoteConflictReason.MissingItem, own.Conflict.Reason);
+                CollectionAssert.AreEqual(new[] { controlConflict }, (await projector.RestoreAsync(deadline.Token)).ToArray());
+                Assert.AreEqual(localTombstone ? MirrorPulseConflictReason.LocalDeleteReconciliationRequired : MirrorPulseConflictReason.MissingItem,
+                    center.Query().Single(value => value.ConflictId == own.ConflictId).Reason);
                 Assert.AreNotEqual(controlConflict, own.ConflictId);
                 if (originalConflict == Guid.Empty) originalConflict = own.ConflictId;
                 else Assert.AreEqual(originalConflict, own.ConflictId);
@@ -170,9 +222,26 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 Assert.AreEqual(own.ConflictId, rejection.Outcome.ConflictId);
                 Assert.AreEqual(original.BatchId, rejection.Admission.BatchId);
                 Assert.AreEqual(root.RootId, rejection.Admission.RootId);
+                Assert.AreEqual(localTombstone ? 2 : 1, rejection.Admission.Version);
+                if (localTombstone)
+                {
+                    var receipt = await fileSystem.GetRemoteDeleteReconciliationAsync(original, deleteOrdinal, deadline.Token);
+                    Assert.AreEqual(CloudRemoteDeleteReconciliationStatus.AlreadyRecorded, receipt.Status);
+                    Assert.AreEqual(own.ConflictId, receipt.ConflictId); Assert.IsFalse(receipt.NativeMutationAttempted);
+                    await using var read = await state.OpenStore.BeginTransactionAsync(deadline.Token);
+                    foreach (var retained in localOriginals)
+                    {
+                        var row = await read.Operations.GetAsync(retained.Key, deadline.Token);
+                        Assert.IsNotNull(row);
+                        Assert.AreEqual(retained.Value, OriginalFact(row), "Every original local operation must survive product reconciliation unchanged.");
+                    }
+                    Assert.IsTrue((await read.Items.GetByItemIdAsync(identity.ItemId, deadline.Token))!.IsTombstone);
+                    await read.RollbackAsync(deadline.Token);
+                }
                 Assert.IsNull(await catalog.ReadNamespaceRemoteRetirementAsync(root.InstanceId, original.BatchId, deleteOrdinal, deadline.Token));
                 Assert.AreEqual(before, await catalog.ReadNamespaceMemberProtectionSnapshotAsync(parent, deadline.Token));
-                Assert.IsFalse((await fileSystem.GetFile("Docs/old.bin").InspectAsync(deadline.Token)).Exists);
+                CloudItem absent = directoryItem ? fileSystem.GetDirectory("Docs/old.bin") : fileSystem.GetFile("Docs/old.bin");
+                Assert.IsFalse((await absent.InspectAsync(deadline.Token)).Exists);
                 CollectionAssert.AreEqual(original.FinalCursor.ToArray(), (await coordinator.ReadCursorAsync(root.InstanceId, deadline.Token))!.Value.ToArray());
                 completeOwners++;
             }
@@ -189,4 +258,15 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             DeleteFixture(directory);
         }
     }
+
+    private static string OriginalFact(CloudOperationJournalEntry row) => JsonSerializer.Serialize(new
+    {
+        row.OperationId,
+        row.Sequence,
+        row.ItemId,
+        row.Kind,
+        row.AttemptCount,
+        row.CreatedAt,
+        payload = Convert.ToHexString(row.Payload.Span)
+    });
 }

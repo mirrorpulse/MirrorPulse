@@ -63,6 +63,9 @@ public sealed partial class NamespaceNonAdminControllerTests
                     $rejectionPrefix+'NativeDefaultRuntimeRecoversReceivedMissingDeleteBeforeNewRoleAuditWithoutAcknowledgingLocalContentOriginals'
                     $rejectionPrefix+'NativeDefaultRuntimePublishesActualMissingDeleteConflictAndCursorAcrossFreshRolesWithoutChangingLocalOriginals'
                     $rejectionPrefix+'NativeCfSharpPreservingDeleteCharacterizesItsActualLocalTombstoneBeforeAndAfterConsumerAcknowledgement'
+                    $rejectionPrefix+'NativeLocalTombstoneDeleteReconciliationPublishesOnlyItsOriginalConflictAcrossOwners'
+                    $rejectionPrefix+'NativeLocalTombstoneDeleteRecoversOriginalAdmissionAcrossFreshRoles'
+                    $rejectionPrefix+'NativeLocalTombstoneDeleteRecoversActualSdkReceiptAcrossFreshRoles'
                 )
                 function ReadHistoricalNamespaceCatalog([string]$Path) {
                     $value=Get-Content -LiteralPath $Path -Raw|ConvertFrom-Json
@@ -73,7 +76,7 @@ public sealed partial class NamespaceNonAdminControllerTests
                 if ($Scenario -ceq 'received-delete-selected') {
                     $actual=Get-Content -LiteralPath (Join-Path (Split-Path $Policy -Parent) 'test-suites.json') -Raw|ConvertFrom-Json
                     $names=@($actual.required.namespace);$prior=@($names|Where-Object {$_ -cnotin $rejections})
-                    if($names.Count -ne 155 -or $prior.Count -ne 148){throw 'Require all148 prior methods and all seven additional rejection/projection/characterization methods.'}
+                    if($names.Count -ne 158 -or $prior.Count -ne 148){throw 'Require all148 prior methods, seven existing rejection methods and three new reconciliation methods.'}
                     foreach($name in $rejections){
                         foreach($selection in @(@{names=$actual.required.namespace},@{names=$actual.required.native},@{names=$actual.allowSkipped})){
                             if(@($selection.names|Where-Object {$_ -ceq $name}).Count -ne 1){throw 'Each rejection boundary must be selected exactly once in every actual native catalog.'}
@@ -87,28 +90,36 @@ public sealed partial class NamespaceNonAdminControllerTests
                     $expected=@('LocalTombstoneFileBeforeConsumerAck','LocalTombstoneFileAfterConsumerAck',
                         'LocalTombstoneDirectoryBeforeConsumerAck','LocalTombstoneDirectoryAfterConsumerAck')
                     if($rows.Count -ne 4 -or @(Compare-Object $expected $rows).Count){throw 'Retain all actual file/directory and before/after original SDK acknowledgement controls.'}
-                    $before=@($names|Where-Object {$_ -cnotin @($rejections[5],$rejections[6])})
+                    $legacy=@($names|Where-Object {$_ -cnotin @($rejections[7],$rejections[8],$rejections[9])})
+                    $before=@($legacy|Where-Object {$_ -cnotin @($rejections[5],$rejections[6])})
+                    $expectedRows=@(@('TombstoneMixedPrefixFile','TombstoneMixedPrefixDirectory'),
+                        @('TombstoneAdmissionFile','TombstoneAdmissionDirectory'),@('TombstoneReceiptFile','TombstoneReceiptDirectory'))
+                    for($index=0;$index -lt 3;$index++){
+                        $rows=@($actual.requiredCases.($rejections[7+$index]))
+                        if($rows.Count -ne 2 -or @(Compare-Object $expectedRows[$index] $rows -CaseSensitive).Count){throw 'Keep every new file/directory cut as an explicit original row.'}
+                    }
                     foreach($scope in @('AllRetained','S06')){
                         $old=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 148 -TestNames $prior -Scope $scope
                         $first=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 153 -TestNames $before -Scope $scope
-                        $now=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 155 -TestNames $names -Scope $scope
-                        if($first -ne $old+8*65000 -or $now -ne $first+5*65000){throw 'Retain the original eight65-second executions and add exactly five further65-second executions.'}
-                        $minutes=Get-OrdinaryUserNamespaceStepTimeoutMinutes -TestCount 155 -TestNames $names -Scope $scope
+                        $previous=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 155 -TestNames $legacy -Scope $scope
+                        $now=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 158 -TestNames $names -Scope $scope
+                        if($first -ne $old+8*65000 -or $previous -ne $first+5*65000 -or $now -ne $previous+6*65000){throw 'Retain every old65-second execution and add exactly six new65-second executions.'}
+                        $minutes=Get-OrdinaryUserNamespaceStepTimeoutMinutes -TestCount 158 -TestNames $names -Scope $scope
                         if($minutes -ne [int][Math]::Ceiling($now/60000.0)+5){throw 'Retain cleanup after the complete original child envelope.'}
                     }
                     $invalid=@($names|ForEach-Object {if($_ -ceq $rejections[-1]){'Fixture.Unrelated'}else{$_}})
                     $refused=$false
-                    try{Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 155 -TestNames $invalid|Out-Null}catch{$refused=$true}
+                    try{Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 158 -TestNames $invalid|Out-Null}catch{$refused=$true}
                     if(-not $refused){throw 'An unrelated method cannot borrow the original recovery deadline.'}
                     $eng=Split-Path $Policy -Parent
                     $minutes=& pwsh -NoProfile -File (Join-Path $eng 'verify-keep-remote-native.ps1') -Scope received-delete-reconciliation -BudgetOnly
-                    if($LASTEXITCODE -ne 0 -or [int]$minutes -ne [int][Math]::Ceiling((13*65000+120000)/60000.0)){
-                        throw 'The selected clean dual-architecture gate must preserve all thirteen original65-second deadlines and collection.'
+                    if($LASTEXITCODE -ne 0 -or [int]$minutes -ne [int][Math]::Ceiling((19*65000+120000)/60000.0)){
+                        throw 'The selected clean dual-architecture gate must preserve all nineteen actual65-second deadlines and collection.'
                     }
                     $workflow=Get-Content -LiteralPath (Join-Path (Split-Path $eng -Parent) '.github/workflows/received-delete-reconciliation.yml') -Raw
                     if($workflow -notmatch 'runner: windows-latest' -or $workflow -notmatch 'runner: windows-11-arm' -or
                        $workflow -notmatch 'prepare-native-ci-volume.ps1' -or $workflow -notmatch 'fail-fast: false' -or
-                       $workflow -notmatch 'timeout-minutes: 24' -or 24 - [int]$minutes -ne 7){
+                       $workflow -notmatch 'timeout-minutes: 30' -or 30 - [int]$minutes -ne 7){
                         throw 'Retain both native architectures, real NTFS/USN preparation and the original setup/export margin.'
                     }
                     exit 0
@@ -700,9 +711,9 @@ public sealed partial class NamespaceNonAdminControllerTests
                     if ($Scenario -eq 'budget-rejected') {
                         if (-not $rejected) { throw 'An invalid or unbounded selection was accepted.' }
                     } else {
-                        $maximum=if ($Scenario -eq 'budget-catalog') {4755000+4*60000+10*60000+2*60000+65000+29*65000+65000+65000+65000+65000+65000+90000+65000+13*65000} else {1800000}
+                        $maximum=if ($Scenario -eq 'budget-catalog') {4755000+4*60000+10*60000+2*60000+65000+29*65000+65000+65000+65000+65000+65000+90000+65000+13*65000+6*65000} else {1800000}
                         if ($rejected -or $budget -lt 600000 -or $budget -gt $maximum) { throw 'The whole-suite envelope is missing or unbounded.' }
-                        if ($Scenario -eq 'budget-catalog' -and $budget -ne 120000+($Count-7+51)*15000+18*30000+28*15000+6*45000+6*15000+4*45000+5*15000+6*45000+2*45000+2*45000+4*60000+10*60000+15000+2*45000+50000+13*15000+29*50000+50000+50000+50000+50000+50000+75000+50000+13*65000) {
+                        if ($Scenario -eq 'budget-catalog' -and $budget -ne 120000+($Count-10+51)*15000+18*30000+28*15000+6*45000+6*15000+4*45000+5*15000+6*45000+2*45000+2*45000+4*60000+10*60000+15000+2*45000+50000+13*15000+29*50000+50000+50000+50000+50000+50000+75000+50000+19*65000) {
                             throw 'The actual catalog lost a same/cross-instance transfer or one of its five retirement cutpoints.'
                         }
                         if ($Count -ge 52 -and $budget -le 600000) { throw 'The growing suite still has the obsolete fixed ten-minute envelope.' }
