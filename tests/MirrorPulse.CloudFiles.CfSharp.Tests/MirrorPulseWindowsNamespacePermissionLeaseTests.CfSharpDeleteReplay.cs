@@ -33,7 +33,16 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     public Task NativeCfSharpPreservedEmptyDirectoryDeleteRetainsItsConflictAcrossOwners() =>
         RunCfSharpDeleteReplayAsync(directoryItem: true, preserveOnly: true);
 
-    private async Task RunCfSharpDeleteReplayAsync(bool directoryItem, bool preserveOnly = false)
+    [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles")]
+    [DataRow(false, false, DisplayName = "LocalTombstoneFileBeforeConsumerAck")]
+    [DataRow(false, true, DisplayName = "LocalTombstoneFileAfterConsumerAck")]
+    [DataRow(true, false, DisplayName = "LocalTombstoneDirectoryBeforeConsumerAck")]
+    [DataRow(true, true, DisplayName = "LocalTombstoneDirectoryAfterConsumerAck")]
+    public Task NativeCfSharpPreservingDeleteCharacterizesItsActualLocalTombstoneBeforeAndAfterConsumerAcknowledgement(bool directoryItem, bool acknowledgeLocal) =>
+        RunCfSharpDeleteReplayAsync(directoryItem, locallyDeleted: true, acknowledgeLocal: acknowledgeLocal);
+
+    private async Task RunCfSharpDeleteReplayAsync(bool directoryItem, bool preserveOnly = false,
+        bool locallyDeleted = false, bool acknowledgeLocal = false)
     {
         if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
             Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
@@ -82,8 +91,90 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             {
                 var state = new MirrorPulseCfSharpStateSession(paths);
                 await using var sdk = CloudFileSystem.CreateBuilder(paths.SyncRootPath)
-                    .WithStateStore(owner == 0 && !preserveOnly ? fault.Wrap(state) : state).WithContentProvider(provider).Build();
+                    .WithStateStore(owner == 0 && !preserveOnly && !locallyDeleted ? fault.Wrap(state) : state).WithContentProvider(provider).Build();
                 await sdk.StartAsync(deadline.Token);
+                await using var localConsumer = locallyDeleted ? sdk.CreateLocalChangeFeed() : null;
+                if (localConsumer is not null) await localConsumer.StartAsync(deadline.Token);
+                if (locallyDeleted)
+                {
+                    string backend = Path.Combine(directory, "owned-backend-original");
+                    if (owner == 0)
+                    {
+                        if (directoryItem) Directory.CreateDirectory(backend);
+                        else await File.WriteAllBytesAsync(backend, new byte[] { 1, 2, 3, 4 }, deadline.Token);
+                        var created = await sdk.ApplyRemoteChangesAsync(birth, options, deadline.Token);
+                        Assert.AreEqual(CloudRemoteBatchStatus.Applied, created.Status); Assert.IsEmpty(created.ConflictIds);
+                        CloudItem item = directoryItem ? sdk.GetDirectory("Docs/retire") : sdk.GetFile("Docs/retire");
+                        await item.DeleteAsync(deadline.Token);
+                        if (acknowledgeLocal)
+                        {
+                            CloudLocalChange? originalDelete = null;
+                            while (originalDelete is null)
+                            {
+                                originalDelete = (await localConsumer!.ReadBatchAsync(deadline.Token)).Changes.SingleOrDefault(row =>
+                                    row.Kind == CloudLocalChangeKind.Delete && row.RelativePath.Replace('\\', '/') == "Docs/retire");
+                                if (originalDelete is null) await Task.Delay(25, deadline.Token);
+                            }
+                            // This SDK-only fixture is its own consumer. Perform its real
+                            // disposable backend deletion before acknowledging that original.
+                            if (directoryItem) Directory.Delete(backend); else File.Delete(backend);
+                            Assert.IsFalse(File.Exists(backend) || Directory.Exists(backend));
+                            await localConsumer!.AcknowledgeAsync([new CloudLocalChangeAcknowledgement(originalDelete.OperationId, null)], deadline.Token);
+                            await using var acknowledged = await state.OpenStore.BeginTransactionAsync(deadline.Token);
+                            Assert.IsNull(await acknowledged.Operations.GetAsync(originalDelete.OperationId, deadline.Token));
+                            await acknowledged.RollbackAsync(deadline.Token);
+                        }
+                    }
+                    bool tombstone;
+                    Dictionary<Guid, string> originals;
+                    await using (var read = await state.OpenStore.BeginTransactionAsync(deadline.Token))
+                    {
+                        var retained = await read.Items.GetByItemIdAsync(identity.ItemId, deadline.Token);
+                        tombstone = retained is not null;
+                        if (retained is not null) Assert.IsTrue(retained.IsTombstone);
+                        originals = (await read.Operations.ListAsync(64, deadline.Token)).ToDictionary(row => row.OperationId, DisabledCreationJournalFact);
+                        await read.RollbackAsync(deadline.Token);
+                    }
+                    CloudRemoteApplyResult? observed = null; Exception? refusal = null;
+                    try { observed = await sdk.ApplyRemoteChangesAsync(original, options with { PreserveUnsynchronizedLocalContent = true }, deadline.Token); }
+                    catch (Exception error) when (error is IOException or InvalidOperationException) { refusal = error; }
+                    if (tombstone)
+                    {
+                        Assert.IsTrue(refusal is not null || observed is { RequiresRetry: true });
+                        if (observed is not null) Assert.AreEqual(0, observed.AppliedEntryCount);
+                        Assert.IsEmpty(await sdk.ListRemoteConflictsAsync(deadline.Token));
+                    }
+                    else
+                    {
+                        Assert.IsNull(refusal); Assert.IsNotNull(observed);
+                        Assert.AreEqual(CloudRemoteBatchStatus.Applied, observed.Status); Assert.IsFalse(observed.RequiresRetry);
+                        Assert.AreEqual(CloudRemoteConflictReason.MissingItem,
+                            (await sdk.ListRemoteConflictsAsync(deadline.Token)).Single().Conflict.Reason);
+                    }
+                    await using (var read = await state.OpenStore.BeginTransactionAsync(deadline.Token))
+                    {
+                        var progress = await read.RemoteBatches.GetAsync(original.BatchId, deadline.Token);
+                        Assert.AreEqual(tombstone ? 0 : 1, progress?.AppliedEntryCount ?? 0);
+                        if (progress is not null)
+                            CollectionAssert.AreEqual((tombstone ? original.InitialCursor : original.FinalCursor).ToArray(), progress.Cursor.ToArray());
+                        foreach (var retained in originals)
+                        {
+                            var actual = await read.Operations.GetAsync(retained.Key, deadline.Token);
+                            Assert.IsNotNull(actual); Assert.AreEqual(retained.Value, DisabledCreationJournalFact(actual));
+                        }
+                        await read.RollbackAsync(deadline.Token);
+                    }
+                    Assert.AreEqual(0, fault.Failures); Assert.AreEqual(0, provider.Reads);
+                    Assert.IsFalse(File.Exists(paths.ProductCatalogDatabasePath));
+                    object? entryError = observed is { Entries.Count: > 0 } ? observed.Entries[0].Error : null;
+                    var sdkError = entryError as Exception;
+                    TestContext.WriteLine($"CfSharpLocalDeleteEcho: owner={owner}; directory={directoryItem}; consumerAcknowledged={acknowledgeLocal}; " +
+                        $"actualOfficialTombstone={tombstone}; refusal={refusal?.GetType().Name}; hresult={refusal?.HResult:X8}; " +
+                        $"sdkErrorType={entryError?.GetType().Name}; sdkErrorHresult={sdkError?.HResult:X8}; sdkErrorMessage={sdkError?.Message}; " +
+                        $"status={observed?.Status}; requiresRetry={observed?.RequiresRetry}; appliedEntryCount={observed?.AppliedEntryCount}; " +
+                        $"sourceReads=0; productCatalog=False; sdkPackage={MirrorPulseRemoteLibraryProvenance.CurrentPackageVersion}.");
+                    continue;
+                }
                 if (preserveOnly)
                 {
                     var preservingOptions = options with { PreserveUnsynchronizedLocalContent = true };

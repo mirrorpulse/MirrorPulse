@@ -1,0 +1,66 @@
+name: Received Delete reconciliation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  original-delete:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            architecture: X64
+          - runner: windows-11-arm
+            architecture: Arm64
+    runs-on: ${{ matrix.runner }}
+    # Every fixture retains its65-second deadline, plus collection and the
+    # existing seven-minute native setup/export margin outside the step.
+    timeout-minutes: 24
+    steps:
+      - name: Check out the exact selected source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          global-json-file: global.json
+
+      - name: Restore locked dependencies
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          pwsh ./eng/restore-adapter-sdk.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned Adapter SDK restore failed.' }
+          dotnet restore tests/MirrorPulse.CloudFiles.CfSharp.Tests --locked-mode
+          if ($LASTEXITCODE -ne 0) { throw 'Locked native restore failed.' }
+
+      - name: Build the original native boundary
+        run: dotnet build tests/MirrorPulse.CloudFiles.CfSharp.Tests -c Release --no-restore
+
+      - name: Prepare the disposable native test volume
+        run: pwsh ./eng/prepare-native-ci-volume.ps1
+
+      - name: Retain all actual fixture deadlines
+        id: budget
+        shell: pwsh
+        run: |
+          $minutes = & ./eng/verify-keep-remote-native.ps1 -Scope received-delete-reconciliation -BudgetOnly
+          if ($LASTEXITCODE -ne 0) { throw 'Original Delete selection failed.' }
+          "timeout_minutes=$minutes" >> $env:GITHUB_OUTPUT
+
+      - name: Verify original Delete entries and SDK local-tombstone controls
+        timeout-minutes: ${{ fromJSON(steps.budget.outputs.timeout_minutes) }}
+        run: pwsh ./eng/verify-keep-remote-native.ps1 -Scope received-delete-reconciliation -ExpectedArchitecture ${{ matrix.architecture }}
+
+      - name: Preserve original reports and executing inputs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: received-delete-${{ matrix.architecture }}-originals
+          path: artifacts/test-results/keep-remote-native
+          if-no-files-found: error

@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [switch]$BudgetOnly,
-    [ValidateSet('keep-remote', 'access-journal', 'journal-reconciliation', 'disabled-local-birth')][string]$Scope = 'keep-remote',
+    [ValidateSet('keep-remote', 'access-journal', 'journal-reconciliation', 'disabled-local-birth', 'received-delete-reconciliation')][string]$Scope = 'keep-remote',
     [ValidateSet('X64', 'Arm64')][string]$ExpectedArchitecture
 )
 
@@ -72,6 +72,26 @@ if ($Scope -eq 'disabled-local-birth') {
     # Seven65-second disabled/import fixtures and the original four45-second
     # content-writer cuts plus the original45-second validation fixture.
     $fixtureBudgetMilliseconds = 7 * 65000 + 4 * 45000 + 45000 + 2 * 45000 + 65000
+}
+if ($Scope -eq 'received-delete-reconciliation') {
+    $fixture = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.'
+    $selected = @(
+        ($fixture + 'NativeMissingOriginalRemoteDeleteRetainsActualSdkConflictWithoutInventingMemberRetirementAcrossOwners')
+        ($fixture + 'NativeMiddleMissingRemoteDeleteSettlesOriginalRejectionBeforeLaterSdkEntryAndCursorAcrossOwners')
+        ($fixture + 'NativeMissingRemoteDeleteRecoversOriginalAdmissionBeforeSdkAcrossFreshRoles')
+        ($fixture + 'NativeMissingRemoteDeleteRecoversActualSdkConflictBeforeProductResultAcrossFreshRoles')
+        ($fixture + 'NativeDefaultRuntimeRecoversReceivedMissingDeleteBeforeNewRoleAuditWithoutAcknowledgingLocalContentOriginals')
+        ($fixture + 'NativeDefaultRuntimePublishesActualMissingDeleteConflictAndCursorAcrossFreshRolesWithoutChangingLocalOriginals')
+        ($fixture + 'NativeCfSharpPreservingDeleteCharacterizesItsActualLocalTombstoneBeforeAndAfterConsumerAcknowledgement')
+    )
+    if (@($selected | Where-Object { $_ -cnotin $catalog.required.native -or $_ -cnotin $catalog.required.namespace }).Count) {
+        throw 'Received Delete reconciliation requires all seven exact declared native and namespace methods.'
+    }
+    $count = Get-RequiredTestExecutionCount -Catalog $catalog -Names $selected
+    if ($count -ne 13) { throw 'Require all thirteen actual original SDK/component/startup executions.' }
+    $boundary = 'ReceivedDeleteReconciliation'
+    $filter = ($selected | ForEach-Object { 'FullyQualifiedName=' + $_ }) -join '|'
+    $fixtureBudgetMilliseconds = $count * 65000
 }
 if ($BudgetOnly) {
     # Preserve the selected fixtures' original budgets plus collection/cleanup.

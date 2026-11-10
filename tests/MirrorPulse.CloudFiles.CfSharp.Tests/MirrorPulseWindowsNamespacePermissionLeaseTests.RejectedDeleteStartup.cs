@@ -19,7 +19,14 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     [DataRow(false, true, DisplayName = "ReceivedMissingDeleteBeforeCommitDisabled")]
     [DataRow(true, false, DisplayName = "ReceivedMissingDeleteAfterCommitActive")]
     [DataRow(true, true, DisplayName = "ReceivedMissingDeleteAfterCommitDisabled")]
-    public async Task NativeDefaultRuntimeRecoversReceivedMissingDeleteBeforeNewRoleAuditWithoutAcknowledgingLocalContentOriginals(bool afterSdkCommit, bool disable)
+    public Task NativeDefaultRuntimeRecoversReceivedMissingDeleteBeforeNewRoleAuditWithoutAcknowledgingLocalContentOriginals(bool afterSdkCommit, bool disable) =>
+        RunReceivedMissingDeleteAcrossRolesAsync(afterSdkCommit, disable, interrupt: true);
+
+    [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles")]
+    public Task NativeDefaultRuntimePublishesActualMissingDeleteConflictAndCursorAcrossFreshRolesWithoutChangingLocalOriginals() =>
+        RunReceivedMissingDeleteAcrossRolesAsync(afterSdkCommit: false, disable: false, interrupt: false);
+
+    private async Task RunReceivedMissingDeleteAcrossRolesAsync(bool afterSdkCommit, bool disable, bool interrupt)
     {
         if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
             Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
@@ -64,7 +71,12 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 await using var catalog = await MirrorPulseProductCatalog.OpenAsync(paths, deadline.Token);
                 var worker = new MirrorPulseNormalUserWorkerTransportTests.IdentityProbeWorker(execution);
                 var source = new MirrorPulseNormalUserWorkerTransport(execution, worker, worker, worker, worker, worker);
-                var center = new MirrorPulseConflictCenter(); var notifications = new MirrorPulseConflictNotificationBridge((_, _) => ValueTask.CompletedTask);
+                int publishedNotifications = 0;
+                var center = new MirrorPulseConflictCenter();
+                var notifications = new MirrorPulseConflictNotificationBridge((_, _) =>
+                {
+                    Interlocked.Increment(ref publishedNotifications); return ValueTask.CompletedTask;
+                });
                 DisabledCreationStoreObserver? state = null;
                 var factory = new CfSharpMirrorPulseCloudRuntimeFactory(
                     provider: new MirrorPulseDemandProvider(router, source, new MirrorPulseAdapterDirectoryPageSource(source), work),
@@ -74,7 +86,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 {
                     StateStoreDecorator = inner =>
                     {
-                        state = new(inner); return owner == 0 ? fault.Wrap(state) : state;
+                        state = new(inner); return owner == 0 && interrupt ? fault.Wrap(state) : state;
                     }
                 };
                 await using var runtime = factory.Create(paths); await runtime.StartAsync(deadline.Token);
@@ -121,17 +133,37 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     }
                     try
                     {
-                        var failed = await runtime.ApplyRemoteBatchAsync(root.InstanceId, original, catalog, center, notifications, null, deadline.Token);
-                        Assert.IsTrue(failed.RequiresRetry);
+                        var applied = await runtime.ApplyRemoteBatchAsync(root.InstanceId, original, catalog, center, notifications, null, deadline.Token);
+                        if (interrupt) Assert.IsTrue(applied.RequiresRetry);
+                        else
+                        {
+                            Assert.AreEqual(CloudRemoteBatchStatus.Applied, applied.Status); Assert.IsFalse(applied.RequiresRetry);
+                            CollectionAssert.AreEqual(original.FinalCursor.ToArray(), applied.SafeCursor.ToArray());
+                        }
                     }
-                    catch (IOException) { }
-                    Assert.AreEqual(1, fault.Failures);
+                    catch (IOException) when (interrupt) { }
+                    Assert.AreEqual(interrupt ? 1 : 0, fault.Failures);
                     var pending = (await catalog.ReadRemoteDeleteRejectionAsync(root.InstanceId, original.BatchId, 0, deadline.Token))!;
-                    Assert.IsNotNull(pending); Assert.IsNull(pending.Outcome); admission = pending.Admission;
-                    retainedHeader = (await catalog.ReadRetainedRemoteBatchAsync(root.InstanceId, deadline.Token))!.Payload;
-                    Assert.Contains(root.RootId, await catalog.ReadNamespaceDispatchFencedRootsAsync(deadline.Token));
+                    Assert.IsNotNull(pending); admission = pending.Admission;
+                    if (interrupt)
+                    {
+                        Assert.IsNull(pending.Outcome);
+                        retainedHeader = (await catalog.ReadRetainedRemoteBatchAsync(root.InstanceId, deadline.Token))!.Payload;
+                        Assert.Contains(root.RootId, await catalog.ReadNamespaceDispatchFencedRootsAsync(deadline.Token));
+                    }
+                    else
+                    {
+                        Assert.IsNotNull(pending.Outcome);
+                        Assert.IsNull(await catalog.ReadRetainedRemoteBatchAsync(root.InstanceId, deadline.Token));
+                        var projected = center.Query(root.InstanceId).Single();
+                        Assert.AreEqual(pending.Outcome.ConflictId, projected.ConflictId);
+                        Assert.AreEqual(original.Changes[0].ChangeId, projected.ChangeId);
+                        Assert.AreEqual(original.Changes[0].RelativePath, projected.RelativePath);
+                        Assert.IsGreaterThan(0, publishedNotifications);
+                    }
                     await using var progress = await state.Store.BeginTransactionAsync(deadline.Token);
-                    Assert.AreEqual(afterSdkCommit ? 1 : 0, (await progress.RemoteBatches.GetAsync(original.BatchId, deadline.Token))?.AppliedEntryCount ?? 0);
+                    Assert.AreEqual(afterSdkCommit || !interrupt ? 1 : 0,
+                        (await progress.RemoteBatches.GetAsync(original.BatchId, deadline.Token))?.AppliedEntryCount ?? 0);
                     await progress.RollbackAsync(deadline.Token);
                 }
                 else
@@ -145,7 +177,9 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     Assert.AreEqual(execution.RoleSid.Value, protection.Context.Protection.RoleSid);
                     Assert.AreEqual(localMember, (await runtime.InspectNamespaceMemberAsync("Existing/local.txt", false, deadline.Token)).MemberId);
                     CollectionAssert.AreEqual(latest, await File.ReadAllBytesAsync(Path.Combine(paths.SyncRootPath, "Existing", "local.txt"), deadline.Token));
-                    CollectionAssert.AreEqual(retainedHeader, (await catalog.ReadRetainedRemoteBatchAsync(root.InstanceId, deadline.Token))!.Payload);
+                    var incoming = await catalog.ReadRetainedRemoteBatchAsync(root.InstanceId, deadline.Token);
+                    if (interrupt) { Assert.IsNotNull(incoming); CollectionAssert.AreEqual(retainedHeader, incoming.Payload); }
+                    else Assert.IsNull(incoming);
                     var unsupported = (await catalog.ReadBlockedLocalOperationsAsync(deadline.Token)).ToDictionary(value => value.OperationId);
                     await using var read = await state.Store.BeginTransactionAsync(deadline.Token);
                     foreach (var retained in originals)
@@ -169,7 +203,9 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         }
                     }
                     Assert.IsNotNull(await read.Conflicts.GetAsync(recovered.Outcome.ConflictId, deadline.Token));
-                    Assert.IsNull(await read.Checkpoints.GetAsync(MirrorPulseRemoteBatchCoordinator.GetCheckpointName(root.InstanceId), deadline.Token));
+                    var cursor = await read.Checkpoints.GetAsync(MirrorPulseRemoteBatchCoordinator.GetCheckpointName(root.InstanceId), deadline.Token);
+                    if (interrupt) Assert.IsNull(cursor);
+                    else { Assert.IsNotNull(cursor); CollectionAssert.AreEqual(original.FinalCursor.ToArray(), cursor.Value.ToArray()); }
                     await read.RollbackAsync(deadline.Token);
                     if (disable)
                     {
@@ -180,9 +216,9 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 Assert.IsEmpty(worker.Calls); observedOwners++;
             }
             Assert.AreEqual(2, observedOwners);
-            TestContext.WriteLine($"ReceivedDeleteRecovery: afterActualSdkCommit={afterSdkCommit}; disabled={disable}; freshRole=True; " +
-                "actualRetainedHeader=True; originalLocalCreateAndContentJournalAndLatestBytes=True; metadataRetainedOrDurablyUnsupported=True; " +
-                "sourceCalls=0; productCursorPublished=False; nativeRetirementInvented=False.");
+            TestContext.WriteLine($"ReceivedDeleteRecovery: afterActualSdkCommit={afterSdkCommit}; disabled={disable}; interruption={interrupt}; freshRole=True; " +
+                $"actualRetainedHeader={interrupt}; originalLocalCreateAndContentJournalAndLatestBytes=True; metadataRetainedOrDurablyUnsupported=True; " +
+                $"sourceCalls=0; productCursorPublished={!interrupt}; actualConflictProjected={!interrupt}; nativeRetirementInvented=False.");
         }
         finally
         {
