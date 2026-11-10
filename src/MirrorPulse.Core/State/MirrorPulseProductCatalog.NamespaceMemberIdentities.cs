@@ -116,6 +116,12 @@ public sealed partial class MirrorPulseProductCatalog
         _namespaceRecoveryReadSnapshots.TryGetValue(transaction, out var snapshot);
         if (snapshot?.MemberIdentities.TryGetValue(member, out var retained) == true) return retained;
         var original = await ReadOriginalNamespaceMemberIdentityAsync(member, transaction, token).ConfigureAwait(false);
+        if (member.IsDirectory)
+        {
+            var directory = await ReadDirectoryMemberIdentityCoreAsync(member, original, transaction, token).ConfigureAwait(false);
+            if (snapshot is not null) snapshot.MemberIdentities[member] = directory;
+            return directory;
+        }
         Guid? head = null; long total;
         await using (var query = _connection.CreateCommand())
         {
