@@ -44,6 +44,7 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
     private readonly MirrorPulseInstanceScheduler _scheduler;
     private readonly bool _ownsScheduler;
     private readonly MirrorPulseNamespaceContentConfirmation _contentConfirmation;
+    private readonly MirrorPulseNamespaceDirectoryConfirmation _directoryConfirmation;
     private readonly MirrorPulseNamespaceWorkAdmission? _namespaceWork;
     private readonly MirrorPulseJournalCoalescingRecovery _coalescingRecovery;
     private readonly MirrorPulseConflictDeletionRecovery? _deletionRecovery;
@@ -95,6 +96,7 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
         _ownsScheduler = scheduler is null;
         _scheduler = scheduler ?? new MirrorPulseInstanceScheduler();
         _contentConfirmation = new(catalog, router, namespaceActor, namespaceExecution);
+        _directoryConfirmation = new(catalog, router, state, namespaceActor, namespaceExecution);
         _namespaceWork = namespaceWork;
         if (fileSystem is not null)
             _rescan = new(catalog, new MirrorPulseFullRescanPolicy(fileSystem, feed, state, router, catalog,
@@ -507,7 +509,7 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
     }
 
     private async ValueTask AcknowledgeAsync(Guid operationId, string? revision, CancellationToken cancellationToken,
-        bool acknowledgeJournal = true)
+        bool acknowledgeJournal = true, Guid? originalItemId = null)
     {
         string phase = "ReadIntent";
         try
@@ -515,7 +517,7 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
             MirrorPulseMutationRecord record = await _catalog.ReadMutationAsync(operationId, cancellationToken).ConfigureAwait(false)
                 ?? throw new InvalidDataException("The accepted mutation intent disappeared.");
             if (record.Intent.IsDirectory && record.Intent.Kind == MirrorPulseWorkerChangeKind.Create)
-                await ProjectDirectoryAsync(record, revision, cancellationToken).ConfigureAwait(false);
+                await ProjectDirectoryAsync(record, revision, originalItemId, cancellationToken).ConfigureAwait(false);
             if (!record.Intent.IsDirectory && (record.Intent.Kind is MirrorPulseWorkerChangeKind.Create or MirrorPulseWorkerChangeKind.ContentUpdate ||
                 record.Intent.Kind == MirrorPulseWorkerChangeKind.Move && record.Intent.Origin == MirrorPulseMutationOrigin.CoalescedJournal && record.Intent.UploadBinding is not null))
             {
@@ -569,13 +571,12 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
         }
     }
 
-    private async ValueTask ProjectDirectoryAsync(MirrorPulseMutationRecord record, string? revision, CancellationToken cancellationToken)
+    private async ValueTask ProjectDirectoryAsync(MirrorPulseMutationRecord record, string? revision, Guid? originalItemId, CancellationToken cancellationToken)
     {
         if (_fileSystem is null) throw new NotSupportedException("Directory projection requires the Cloud Files owner.");
         MirrorPulseWorkerDirectoryEntry remote = await _readback.ReadMetadataAsync(record.Intent, cancellationToken).ConfigureAwait(false)
             ?? throw new MirrorPulseMutationAmbiguousException("The accepted directory has no remote metadata.");
-        await MirrorPulseDirectoryConfirmation.ConfirmAsync(_fileSystem, _router, record.Intent, remote, revision,
-            cancellationToken).ConfigureAwait(false);
+        await _directoryConfirmation.ConfirmAsync(_fileSystem, record, remote, revision, originalItemId, cancellationToken).ConfigureAwait(false);
     }
 
     private async ValueTask<bool> CheckPreviousMutationAsync(MirrorPulseWorkerChangeCommand command, CancellationToken cancellationToken)

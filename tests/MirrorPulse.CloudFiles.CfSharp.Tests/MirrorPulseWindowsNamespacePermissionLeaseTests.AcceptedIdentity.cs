@@ -207,7 +207,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 var localIdentity = original.Baseline.IsDirectory ? null : router.CreateFileIdentity(router.Registrations.Single().InstanceId, "docs", "local:original");
                 var applied = await coordinator.ApplyProtectedAsync(original.Intent.OperationId,
                     NativeOriginalMemberItem(fileSystem, original.Baseline), router, localIdentity, token);
-                Assert.AreEqual(MirrorPulseNamespacePermissionOutcome.Verified, applied.Permission!.Outcome);
+                Assert.AreEqual(MirrorPulseNamespacePermissionOutcome.Verified, applied.Permission!.Outcome,
+                    $"Permission phase={applied.Receipt?.Stage}; diagnostic={applied.FailureDiagnostic}.");
             }
         });
 

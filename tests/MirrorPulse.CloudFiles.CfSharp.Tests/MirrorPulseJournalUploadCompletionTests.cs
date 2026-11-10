@@ -96,7 +96,11 @@ public sealed class MirrorPulseJournalUploadCompletionTests
                     var proof = new MirrorPulseContentAcceptanceProof(Guid.NewGuid(), MirrorPulseContentConfirmation.CaptureUploadBinding(before),
                         accepted.ItemId, accepted.RemoteId, accepted.RemoteRevision, bytes.Length, Convert.ToHexString(SHA256.HashData(bytes)));
                     var confirmed = await MirrorPulseContentConfirmation.ConfirmAsync(file, proof, deadline.Token);
-                    Assert.IsTrue(confirmed.MayAcknowledge);
+                    Assert.IsTrue(confirmed.MayAcknowledge,
+                        $"Confirmation outcome={confirmed.Outcome}; stage={confirmed.Stage}; nativeStage={confirmed.NativeStage}; " +
+                        $"nativeApplied={confirmed.NativeApplied}; nativeVerified={confirmed.NativeConfirmationVerified}; " +
+                        $"projectionCommitted={confirmed.DurableProjectionCommitted}; preparationHResult={confirmed.PreparationHResult}; " +
+                        $"nativeHResult={confirmed.NativeMarkHResult}; projectionHResult={confirmed.ProjectionErrorHResult}.");
                     var snapshot = await file.InspectAsync(deadline.Token);
                     string originalPayload;
                     await using (var read = await state.OpenStore.BeginTransactionAsync(deadline.Token))
