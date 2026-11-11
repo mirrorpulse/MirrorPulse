@@ -214,16 +214,17 @@ public sealed class MirrorPulseDirectoryJournalTests
         }
     }
 
-    private sealed class DirectoryTransport(string root) : IMirrorPulseWorkerMutationTransport, IMirrorPulseWorkerStatTransport,
+    internal sealed class DirectoryTransport(string root) : IMirrorPulseWorkerMutationTransport, IMirrorPulseWorkerStatTransport,
         IMirrorPulseWorkerDirectoryPageSource, IMirrorPulseWorkerUploadTransport
     {
         public string Root { get; } = root;
         public int Creates { get; private set; }
+        public int UnexpectedCalls { get; private set; }
         public ValueTask<string> CreateDirectoryAsync(MirrorPulseWorkerCreateDirectoryRequest request, CancellationToken cancellationToken)
         {
             Assert.IsTrue(request.MustBeAbsent);
             string path = Path.Combine(Root, request.NormalizedPath.Replace('/', Path.DirectorySeparatorChar));
-            if (Directory.Exists(path)) throw new MirrorPulseWorkerMutationConflictException(null, "exists");
+            if (Directory.Exists(path) || File.Exists(path)) throw new MirrorPulseWorkerMutationConflictException(null, "exists");
             string? parent = Path.GetDirectoryName(request.NormalizedPath.Replace('/', Path.DirectorySeparatorChar));
             if (!string.IsNullOrEmpty(parent) && !Directory.Exists(Path.Combine(Root, parent)))
                 throw new IOException("The parent directory has not been accepted.");
@@ -233,18 +234,24 @@ public sealed class MirrorPulseDirectoryJournalTests
         }
         public ValueTask<string?> StatAsync(MirrorPulseWorkerStatRequest request, CancellationToken cancellationToken) =>
             ValueTask.FromResult(Directory.Exists(Path.Combine(Root, request.NormalizedPath))
-                ? "directory:" + request.NormalizedPath.Replace('\\', '/') : null);
+                ? "directory:" + request.NormalizedPath.Replace('\\', '/') : File.Exists(Path.Combine(Root, request.NormalizedPath))
+                    ? "file:" + request.NormalizedPath.Replace('\\', '/') : null);
         public ValueTask<MirrorPulseWorkerDirectoryPage> ReadDirectoryPageAsync(MirrorPulseWorkerDirectoryPageRequest request,
             CancellationToken cancellationToken)
         {
             string parent = Path.Combine(Root, request.NormalizedPath);
-            MirrorPulseWorkerDirectoryEntry[] entries = Directory.Exists(parent) ? Directory.EnumerateDirectories(parent)
+            MirrorPulseWorkerDirectoryEntry[] entries = Directory.Exists(parent) ? Directory.EnumerateFileSystemEntries(parent)
                 .Select(path => Path.GetRelativePath(Root, path).Replace('\\', '/'))
-                .Select(path => new MirrorPulseWorkerDirectoryEntry("remote:" + path, "directory:" + path, "Directory", path, null, null, null, false)).ToArray() : [];
+                .Select(path => new MirrorPulseWorkerDirectoryEntry("remote:" + path,
+                    Directory.Exists(Path.Combine(Root, path)) ? "directory:" + path : "file:" + path,
+                    Directory.Exists(Path.Combine(Root, path)) ? "Directory" : "File", path, null, null, null, false)).ToArray() : [];
             return ValueTask.FromResult(new MirrorPulseWorkerDirectoryPage(entries, ReadOnlyMemory<byte>.Empty, true));
         }
-        public ValueTask<string?> DeleteAsync(MirrorPulseWorkerDeleteRequest request, CancellationToken cancellationToken) => throw new AssertFailedException("Unexpected deletion.");
-        public ValueTask<string> MoveAsync(MirrorPulseWorkerMoveRequest request, CancellationToken cancellationToken) => throw new AssertFailedException("Unexpected move.");
-        public ValueTask<string> UploadAsync(MirrorPulseWorkerUploadRequest request, CancellationToken cancellationToken) => throw new AssertFailedException("Empty directories have no file upload.");
+        public ValueTask<string?> DeleteAsync(MirrorPulseWorkerDeleteRequest request, CancellationToken cancellationToken)
+        { UnexpectedCalls++; throw new AssertFailedException("Unexpected deletion."); }
+        public ValueTask<string> MoveAsync(MirrorPulseWorkerMoveRequest request, CancellationToken cancellationToken)
+        { UnexpectedCalls++; throw new AssertFailedException("Unexpected move."); }
+        public ValueTask<string> UploadAsync(MirrorPulseWorkerUploadRequest request, CancellationToken cancellationToken)
+        { UnexpectedCalls++; throw new AssertFailedException("Empty directories have no file upload."); }
     }
 }

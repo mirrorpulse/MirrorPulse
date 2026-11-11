@@ -1,6 +1,24 @@
 {
   "schemaVersion": 1,
   "requiredCases": {
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeProductionDirectoryGroupRecoversAcceptedEffectsBeforeOriginalAckAcrossFreshRoles": [
+      "NativeProductionDirectoryGroupRecoversAcceptedEffectsBeforeOriginalAckAcrossFreshRoles (False)",
+      "NativeProductionDirectoryGroupRecoversAcceptedEffectsBeforeOriginalAckAcrossFreshRoles (True)"
+    ],
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeProductionDirectoryGroupSettlesOriginalCreateMoveOrRetirementAcrossOwners": [
+      "NativeProductionDirectoryGroupSettlesOriginalCreateMoveOrRetirementAcrossOwners (False,False)",
+      "NativeProductionDirectoryGroupSettlesOriginalCreateMoveOrRetirementAcrossOwners (False,True)",
+      "NativeProductionDirectoryGroupSettlesOriginalCreateMoveOrRetirementAcrossOwners (True,False)",
+      "NativeProductionDirectoryGroupSettlesOriginalCreateMoveOrRetirementAcrossOwners (True,True)"
+    ],
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeProductionDirectoryGroupRereadsRealLateChildOriginalsBeforeDispatchAcrossOwners": [
+      "NativeProductionDirectoryGroupRereadsRealLateChildOriginalsBeforeDispatchAcrossOwners (False)",
+      "NativeProductionDirectoryGroupRereadsRealLateChildOriginalsBeforeDispatchAcrossOwners (True)"
+    ],
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeProductionDirectoryAbsencePreservesALaterBackendFileOrDirectoryAcrossOwners": [
+      "NativeProductionDirectoryAbsencePreservesALaterBackendFileOrDirectoryAcrossOwners (False)",
+      "NativeProductionDirectoryAbsencePreservesALaterBackendFileOrDirectoryAcrossOwners (True)"
+    ],
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeDirectoryConfirmationRetainsOriginalBindingAndTypedIdentityAcrossOwners": [
       "NativeDirectoryConfirmationRetainsOriginalBindingAndTypedIdentityAcrossOwners (\"none\")",
       "NativeDirectoryConfirmationRetainsOriginalBindingAndTypedIdentityAcrossOwners (\"AfterAcceptanceSaved\")",
@@ -208,6 +226,10 @@
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeConfirmedUploadIdentityRemainsMovableAcrossRestart",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeControlledCreationRegistersEmptyFilesDirectoriesAndNestedMembersAcrossRestart",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeDirectoryConfirmationRetainsOriginalBindingAndTypedIdentityAcrossOwners",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeProductionDirectoryGroupSettlesOriginalCreateMoveOrRetirementAcrossOwners",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeProductionDirectoryGroupRereadsRealLateChildOriginalsBeforeDispatchAcrossOwners",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeProductionDirectoryAbsencePreservesALaterBackendFileOrDirectoryAcrossOwners",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeProductionDirectoryGroupRecoversAcceptedEffectsBeforeOriginalAckAcrossFreshRoles",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeControlledSubtreeRetirementRecoversNativeAndMembershipBoundariesAcrossRestart",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeGroupRemoteDeletionPreservesLocalBytesAndRecoversWithoutReupload",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeSingleRemoteDeletionPreservesLocalBytesAndRecoversWithoutReupload",
@@ -393,6 +415,10 @@
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeConfirmedUploadIdentityRemainsMovableAcrossRestart",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeControlledCreationRegistersEmptyFilesDirectoriesAndNestedMembersAcrossRestart",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeDirectoryConfirmationRetainsOriginalBindingAndTypedIdentityAcrossOwners",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeProductionDirectoryGroupSettlesOriginalCreateMoveOrRetirementAcrossOwners",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeProductionDirectoryGroupRereadsRealLateChildOriginalsBeforeDispatchAcrossOwners",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeProductionDirectoryAbsencePreservesALaterBackendFileOrDirectoryAcrossOwners",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeProductionDirectoryGroupRecoversAcceptedEffectsBeforeOriginalAckAcrossFreshRoles",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeControlledSubtreeRetirementRecoversNativeAndMembershipBoundariesAcrossRestart",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeGroupRemoteDeletionPreservesLocalBytesAndRecoversWithoutReupload",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeSingleRemoteDeletionPreservesLocalBytesAndRecoversWithoutReupload",
@@ -578,6 +604,10 @@
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeConfirmedUploadIdentityRemainsMovableAcrossRestart",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeControlledCreationRegistersEmptyFilesDirectoriesAndNestedMembersAcrossRestart",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeDirectoryConfirmationRetainsOriginalBindingAndTypedIdentityAcrossOwners",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeProductionDirectoryGroupSettlesOriginalCreateMoveOrRetirementAcrossOwners",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeProductionDirectoryGroupRereadsRealLateChildOriginalsBeforeDispatchAcrossOwners",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeProductionDirectoryAbsencePreservesALaterBackendFileOrDirectoryAcrossOwners",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeProductionDirectoryGroupRecoversAcceptedEffectsBeforeOriginalAckAcrossFreshRoles",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeControlledSubtreeRetirementRecoversNativeAndMembershipBoundariesAcrossRestart",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeGroupRemoteDeletionPreservesLocalBytesAndRecoversWithoutReupload",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeSingleRemoteDeletionPreservesLocalBytesAndRecoversWithoutReupload",

@@ -113,11 +113,11 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         }
     }
 
-    private static void RestoreControlledCreationFixtureForCleanup(string syncRoot, SecurityIdentifier user)
+    private static void RestoreControlledCreationFixtureForCleanup(string syncRoot, SecurityIdentifier user, bool moved = false)
     {
         // The caller has verified the exact GUID fixture, marker and root before this helper.
         // This is the only nested directory that this fixture may have created.
-        var info = new DirectoryInfo(Path.Combine(syncRoot, "Docs", "folder"));
+        var info = new DirectoryInfo(Path.Combine(syncRoot, "Docs", moved ? "moved-folder" : "folder"));
         if (!info.Exists) return;
         if (info.LinkTarget is not null)
             throw new InvalidOperationException("Creation fixture cleanup cannot follow a directory link.");

@@ -11,7 +11,7 @@ internal enum MirrorPulseDirectoryConfirmationCheckpoint { AfterAcceptanceSaved,
 
 /// <summary>Confirms a registered directory through its original native object and the shared Host namespace role.</summary>
 [SupportedOSPlatform("windows10.0.16299")]
-internal sealed class MirrorPulseNamespaceDirectoryConfirmation(MirrorPulseProductCatalog catalog, MirrorPulseRootRouter router,
+internal sealed partial class MirrorPulseNamespaceDirectoryConfirmation(MirrorPulseProductCatalog catalog, MirrorPulseRootRouter router,
     MirrorPulseCfSharpStateSession state, MirrorPulseNamespaceActor? actor, MirrorPulseNamespaceExecutionSession? execution)
 {
     internal Func<MirrorPulseDirectoryConfirmationCheckpoint, CancellationToken, ValueTask>? Checkpoint { get; init; }
