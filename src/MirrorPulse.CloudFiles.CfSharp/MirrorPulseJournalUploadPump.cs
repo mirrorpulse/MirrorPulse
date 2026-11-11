@@ -425,7 +425,15 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
                     _state.OpenStore, _stats, command, syncRootRelativePath,
                     allowTombstone: true, allowMissingRemote: true,
                     cancellationToken: cancellationToken).ConfigureAwait(false);
-                await _mutationExecutor.ExecuteAsync(Intent(command, revision), token =>
+                MirrorPulseMutationIntent deletion = Intent(command, revision) with { JournalItemId = command.ItemId };
+                // Retain an older prepared payload byte for byte. It has no generation
+                // evidence and must not gain it merely because this process was upgraded.
+                if (await _catalog.ReadMutationAsync(command.OperationId, cancellationToken).ConfigureAwait(false) is { } retained)
+                {
+                    RequireDeletionObject(retained, command);
+                    deletion = deletion with { JournalItemId = retained.Intent.JournalItemId };
+                }
+                await _mutationExecutor.ExecuteAsync(deletion, token =>
                     _mutations!.DeleteAsync(new MirrorPulseWorkerDeleteRequest(command.InstanceId,
                         command.RelativePath, revision, command.IsDirectory, command.OperationId, command.RootKey), token),
                     (_, token) => AcknowledgeAsync(command.OperationId, null, token), cancellationToken).ConfigureAwait(false);
@@ -582,11 +590,18 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
     private async ValueTask<bool> CheckPreviousMutationAsync(MirrorPulseWorkerChangeCommand command, CancellationToken cancellationToken)
     {
         MirrorPulseMutationRecord? record = await _catalog.ReadMutationAsync(command.OperationId, cancellationToken).ConfigureAwait(false);
+        if (record is not null) RequireDeletionObject(record, command);
         if (record is null || record.State == MirrorPulseMutationState.Prepared) return false;
         if (record.State == MirrorPulseMutationState.Acknowledged) return true;
         await _mutationExecutor.ReconcileAsync(record, _readback.VerifyAsync,
             (revision, token) => AcknowledgeAsync(command.OperationId, revision, token), cancellationToken).ConfigureAwait(false);
         return true;
+    }
+
+    private static void RequireDeletionObject(MirrorPulseMutationRecord record, MirrorPulseWorkerChangeCommand command)
+    {
+        if (record.Intent.JournalItemId is { } original && original != command.ItemId)
+            throw new InvalidDataException("The journal Delete changed its original public object identity.");
     }
 
     private static MirrorPulseMutationIntent Intent(MirrorPulseWorkerChangeCommand command, string? revision,

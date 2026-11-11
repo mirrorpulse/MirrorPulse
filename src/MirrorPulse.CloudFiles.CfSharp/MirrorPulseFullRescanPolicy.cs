@@ -84,7 +84,13 @@ public sealed class MirrorPulseFullRescanPolicy(CloudFileSystem fileSystem, Clou
             known = await transaction.Items.ListSubtreeAsync(string.Empty, cancellationToken).ConfigureAwait(false);
             await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
         }
-        var previous = known.ToDictionary(item => NormalizePath(item.RelativePath), StringComparer.OrdinalIgnoreCase);
+        // A retired generation cannot be the upload baseline for a later local object.
+        // Tombstones still participate in genuine, not-yet-sent local deletions below.
+        var previous = known.Where(item => !item.IsTombstone)
+            .ToDictionary(item => NormalizePath(item.RelativePath), StringComparer.OrdinalIgnoreCase);
+        var completedDeletions = (await catalog.ReadAcknowledgedSourceDeletionsAsync(
+            known.Where(item => item.IsTombstone).Select(item => item.ItemId).ToHashSet(), cancellationToken).ConfigureAwait(false))
+            .ToLookup(completed => completed.ItemId);
         IReadOnlyList<MirrorPulseMutationRecord> incomplete = await catalog.ReadIncompleteMutationsAsync(cancellationToken).ConfigureAwait(false);
         int count = 0;
         var blockedDirectories = new List<string>();
@@ -217,6 +223,9 @@ public sealed class MirrorPulseFullRescanPolicy(CloudFileSystem fileSystem, Clou
             try { route = router.ResolvePath(path); }
             catch (IOException) { continue; }
             if (route.RelativePath.Length == 0 || !enabled.Any(root => root.InstanceId == route.InstanceId && root.UniquenessKey == route.RootKey)) continue;
+            if (item.IsTombstone && completedDeletions[item.ItemId].Any(completed =>
+                completed.InstanceId == route.InstanceId && completed.RootKey == route.RootKey && completed.RelativePath == route.RelativePath &&
+                completed.IsDirectory == (item.Kind == CloudItemKind.Directory) && completed.ExpectedRevision == item.RemoteRevision)) continue;
             string parent = path[..path.LastIndexOf('/')];
             if (blockedDirectories.Any(prefix => path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) ||
                 (!observations.ContainsKey(parent) && !enabled.Any(root => root.DirectoryName == parent))) continue;

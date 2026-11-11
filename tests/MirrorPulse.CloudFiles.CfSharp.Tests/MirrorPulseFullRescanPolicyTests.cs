@@ -4,6 +4,7 @@ using System.Runtime.Versioning;
 using System.Security.AccessControl;
 using System.Security.Cryptography;
 using System.Security.Principal;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using CfSharp;
 using CfSharp.Native;
@@ -224,12 +225,112 @@ public sealed class MirrorPulseFullRescanPolicyTests
             CollectionAssert.AreEqual(new[] { first.RootId }, (await reopenedCatalog.ReadDeferredRescanRootsAsync(timeout.Token)).ToArray());
             Assert.IsFalse(admission.IsAdmitted(first.RootId));
             TestContext.WriteLine("RescanWorkAdmission: currentNativeBindings=True; closedRootDeferred=True; closedRootBytesPreserved=True; otherRootActuallyUploaded=True; stableRootIds=True; completeOriginalAclAndRestartAssertionsRetained=True; strictHostReady=False.");
+            await VerifyRetiredPathSuccessorAsync(restarted, restartedFeed, restartedState, reopenedCatalog, paths, transport,
+                RetryRetainedConfirmationAsync, timeout.Token);
+            TestContext.WriteLine("RescanRetiredGenerations: actualSourceDelete=True; actualOriginalSdkAck=True; " +
+                "duplicateDeletePrevented=True; laterBackendBytesPreserved=True; originalSdkTombstoneUnchanged=True; " +
+                "newPhysicalObjectAcceptedWithoutHistoricalBaseline=True; originalGenuineDeleteAndDeadlineRetained=True.");
         }
         finally
         {
             registry.Unregister(paths.SyncRootPath);
             Directory.Delete(root, true);
         }
+    }
+
+    private static async Task VerifyRetiredPathSuccessorAsync(CloudFileSystem fileSystem, CloudLocalChangeFeed feed,
+        MirrorPulseCfSharpStateSession state, MirrorPulseProductCatalog catalog, MirrorPulseStoragePaths paths,
+        DiskWorker transport, Func<Func<Task>, MirrorPulseProductCatalog?, Task> retry, CancellationToken token)
+    {
+        InstanceId instance = InstanceId.New();
+        RootRegistration root = AdapterRootRegistrationMapper.Map(AdapterId.Parse("example.rescan"), instance,
+            new AdapterRootDefinition("Generations", "Generations", "Generations", false), RootRegistrationState.Active);
+        Directory.CreateDirectory(Path.Combine(paths.SyncRootPath, "Generations"));
+        var router = new MirrorPulseRootRouter(paths.SyncRootPath, [root]);
+        var completion = new MirrorPulseJournalUploadCompletion(feed, state, new(TimeSpan.FromSeconds(1), TimeSpan.FromMinutes(1)));
+        string oldRemote = transport.PathFor(instance, "retired.txt");
+        Directory.CreateDirectory(Path.GetDirectoryName(oldRemote)!);
+        await File.WriteAllBytesAsync(oldRemote, [], token);
+        string revision = Convert.ToHexString(SHA256.HashData(Array.Empty<byte>()));
+        var acknowledged = new CloudPlaceholderIdentity(Guid.NewGuid(), "acknowledged-generation", revision);
+        await fileSystem.GetDirectory("Generations").CreatePlaceholdersAsync([
+            CloudFilePlaceholderSpec.CreateBuilder("retired.txt", acknowledged, 0).WithInSyncState(true).Build()], cancellationToken: token);
+        File.Delete(Path.Combine(paths.SyncRootPath, "Generations", "retired.txt"));
+        MirrorPulseWorkerChangeCommand? deletion = null;
+        int attempts = 0;
+        while (deletion is null)
+        {
+            var scan = await feed.BeginScanAsync(token);
+            long after = 0;
+            var observed = new List<string>();
+            while (true)
+            {
+                var page = await feed.ReadPageAsync(scan, after, 256, token);
+                foreach (var change in page.Changes.Where(change => change.RelativePath.Replace('\\', '/') == "Generations/retired.txt"))
+                {
+                    observed.Add($"{change.Kind}/{change.ItemId}");
+                    if (change.Kind == CloudLocalChangeKind.Delete)
+                        deletion = new(change.OperationId, change.Sequence, instance, root.UniquenessKey, MirrorPulseWorkerChangeKind.Delete,
+                            "retired.txt", null, null, false, change.ItemId, change.ObservedAt);
+                }
+                if (!page.HasMore) break;
+                after = page.LastScannedSequence;
+            }
+            if (++attempts > 200)
+                Assert.Fail($"The public feed has no real original Delete: fullRescan={scan.RequiresFullRescan}, observed={string.Join(',', observed)}.");
+            if (deletion is null) await Task.Delay(20, token);
+        }
+        Assert.AreEqual(acknowledged.ItemId, deletion.ItemId, "The real original Delete must identify the exact retired object.");
+        var deletionIntent = new MirrorPulseMutationIntent(deletion.OperationId, instance, root.UniquenessKey,
+            deletion.Kind, deletion.RelativePath, null, false, revision, null, null, MirrorPulseMutationOrigin.Journal)
+        { JournalItemId = deletion.ItemId };
+        await new MirrorPulseMutationExecutor(catalog).ExecuteAsync(deletionIntent,
+            stop => transport.DeleteAsync(new(instance, deletion.RelativePath, revision, false, deletion.OperationId, root.UniquenessKey), stop),
+            (_, stop) => completion.AcknowledgeSuccessfulUploadAsync(deletion.OperationId, null, stop), token);
+        CloudItemState tombstone;
+        await using (var transaction = await state.OpenStore.BeginTransactionAsync(token))
+        {
+            tombstone = (await transaction.Items.GetByItemIdAsync(acknowledged.ItemId, token))!;
+            Assert.IsTrue(tombstone.IsTombstone);
+            Assert.IsNull(await transaction.Operations.GetAsync(deletion.OperationId, token), "The original public ACK must really commit.");
+            await transaction.RollbackAsync(token);
+        }
+        int completedDeletes = transport.Deletes;
+        var policy = new MirrorPulseFullRescanPolicy(fileSystem, feed, state, router, catalog,
+            transport, transport, _ => true, transport, transport, transport);
+        await retry(() => policy.ReconcileAsync(token).AsTask(), catalog);
+        Assert.AreEqual(completedDeletes, transport.Deletes, "An exact source-accepted and SDK-acknowledged deletion must not run twice.");
+        await File.WriteAllTextAsync(oldRemote, "later independent bytes", token);
+        await retry(() => policy.ReconcileAsync(token).AsTask(), catalog);
+        Assert.AreEqual("later independent bytes", await File.ReadAllTextAsync(oldRemote, token));
+        Assert.AreEqual(completedDeletes, transport.Deletes);
+        await using (var transaction = await state.OpenStore.BeginTransactionAsync(token))
+        {
+            Assert.AreEqual(JsonSerializer.Serialize(tombstone),
+                JsonSerializer.Serialize(await transaction.Items.GetByItemIdAsync(acknowledged.ItemId, token)));
+            await transaction.RollbackAsync(token);
+        }
+        var retired = new CloudPlaceholderIdentity(Guid.NewGuid(), "old-generation", "old-v1");
+        await fileSystem.GetDirectory("Generations").CreatePlaceholdersAsync([
+            CloudFilePlaceholderSpec.CreateBuilder("same.txt", retired, 0).WithInSyncState(true).Build()], cancellationToken: token);
+        CloudFile file = fileSystem.GetFile("Generations/same.txt");
+        var original = await file.InspectAsync(token);
+        await file.DeleteAsync(token);
+        await File.WriteAllTextAsync(file.FullPath, "new generation bytes", token);
+        file = fileSystem.GetFile("Generations/same.txt");
+        var successor = await file.InspectAsync(token);
+        Assert.IsTrue(successor.Exists); Assert.IsFalse(successor.IsPlaceholder);
+        Assert.AreNotEqual(original.LocalBinding, successor.LocalBinding);
+        int originalDeletes = transport.Deletes;
+        await retry(() => policy.ReconcileAsync(token).AsTask(), catalog);
+        Assert.AreEqual(1, transport.Uploads.GetValueOrDefault(instance), "A new generation cannot borrow a retired source revision.");
+        Assert.AreEqual(originalDeletes, transport.Deletes);
+        Assert.AreEqual("new generation bytes", await File.ReadAllTextAsync(transport.PathFor(instance, "same.txt"), token));
+        var accepted = await file.InspectAsync(token);
+        Assert.AreEqual(successor.LocalBinding, accepted.LocalBinding);
+        Assert.AreNotEqual(retired.ItemId, CloudPlaceholderIdentity.Decode(accepted.PlaceholderIdentity.Span).ItemId);
+        Assert.AreEqual(CloudSynchronizationState.InSync, accepted.SynchronizationState);
+        Assert.IsEmpty((await catalog.ReadIncompleteMutationsAsync(token)).Where(record => record.Intent.InstanceId == instance));
     }
 
     private async Task ReportCoordinationUsnsAsync(CloudFileSystem fileSystem, string syncRoot, CancellationToken token)

@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Data.Sqlite;
 using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.Sync;
@@ -14,7 +15,13 @@ public sealed record MirrorPulseMutationIntent(Guid OperationId, InstanceId Inst
     MirrorPulseWorkerChangeKind Kind, string RelativePath, string? PreviousRelativePath, bool IsDirectory,
     string? ExpectedRevision, long? ContentLength, string? ContentSha256, MirrorPulseMutationOrigin Origin,
     MirrorPulseUploadBinding? UploadBinding = null,
-    string? PreviousRootKey = null);
+    string? PreviousRootKey = null)
+{
+    /// <summary>The public journal object whose ordinary Delete owns this immutable intent.</summary>
+    /// <remarks>Absent on historical intents; paths alone never establish generation ownership.</remarks>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? JournalItemId { get; init; }
+}
 public sealed record MirrorPulseMutationRecord(MirrorPulseMutationIntent Intent, MirrorPulseMutationState State,
     string? AcceptedRevision, DateTimeOffset UpdatedAt,
     MirrorPulseMutationExecutionEvidence ExecutionEvidence = MirrorPulseMutationExecutionEvidence.Unknown,
@@ -32,6 +39,8 @@ public sealed partial class MirrorPulseProductCatalog
             !Enum.IsDefined(intent.Kind) || !Enum.IsDefined(intent.Origin) || intent.ContentLength < 0 ||
             (intent.ContentSha256 is not null && (intent.ContentSha256.Length != 64 || !intent.ContentSha256.All(Uri.IsHexDigit))))
             throw new ArgumentException("The mutation intent is invalid.", nameof(intent));
+        if (!HasValidJournalItemId(intent))
+            throw new ArgumentException("Only an ordinary journal Delete can retain a nonempty journal object ID.", nameof(intent));
         if (intent.UploadBinding is not null)
         {
             intent.UploadBinding.Validate();
@@ -177,7 +186,7 @@ public sealed partial class MirrorPulseProductCatalog
         Guid? supersedingPlan = supersededByPlanId is null ? null :
             Guid.TryParse(supersededByPlanId, out Guid parsed) && parsed != Guid.Empty ? parsed :
                 throw new InvalidDataException("The mutation has an invalid coalescing owner.");
-        if (intent.OperationId != operationId || !Enum.IsDefined(intent.Origin) || !Enum.IsDefined((MirrorPulseMutationState)state) || executionStarted is not (null or 0 or 1) ||
+        if (intent.OperationId != operationId || !HasValidJournalItemId(intent) || !Enum.IsDefined(intent.Origin) || !Enum.IsDefined((MirrorPulseMutationState)state) || executionStarted is not (null or 0 or 1) ||
             (intent.Origin == MirrorPulseMutationOrigin.CoalescedJournal) != (coalescingExecutionOwner is not null) ||
             coalescingExecutionOwner is not null && (!Guid.TryParse(coalescingExecutionOwner, out Guid owner) || owner == Guid.Empty || supersedingPlan is not null) ||
             executionStarted == 0 && state is not ((int)MirrorPulseMutationState.Prepared or (int)MirrorPulseMutationState.Superseded) ||
@@ -192,4 +201,7 @@ public sealed partial class MirrorPulseProductCatalog
                 _ => MirrorPulseMutationExecutionEvidence.Unknown,
             }, supersedingPlan);
     }
+
+    private static bool HasValidJournalItemId(MirrorPulseMutationIntent intent) => intent.JournalItemId is null ||
+        intent.JournalItemId != Guid.Empty && intent.Origin == MirrorPulseMutationOrigin.Journal && intent.Kind == MirrorPulseWorkerChangeKind.Delete;
 }
