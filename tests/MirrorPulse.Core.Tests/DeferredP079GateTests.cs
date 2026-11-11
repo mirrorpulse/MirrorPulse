@@ -16,6 +16,15 @@ public sealed class DeferredP079GateTests
             $ErrorActionPreference='Stop'
             . (Join-Path $Repository 'eng/namespace-nonadmin-controller.ps1')
             $catalog=Get-Content (Join-Path $Repository 'eng/test-suites.json') -Raw|ConvertFrom-Json
+            # The new directory cohort owns a separate exact fourteen-execution budget.
+            $directoryPrefix='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.'
+            $directories=@('NativeDirectoryConfirmationRetainsOriginalBindingAndTypedIdentityAcrossOwners',
+                'NativeProductionDirectoryGroupSettlesOriginalCreateMoveOrRetirementAcrossOwners',
+                'NativeProductionDirectoryGroupRereadsRealLateChildOriginalsBeforeDispatchAcrossOwners',
+                'NativeProductionDirectoryAbsencePreservesALaterBackendFileOrDirectoryAcrossOwners',
+                'NativeProductionDirectoryGroupRecoversAcceptedEffectsBeforeOriginalAckAcrossFreshRoles')|ForEach-Object {$directoryPrefix+$_}
+            $catalog.required.namespace=@($catalog.required.namespace|Where-Object {$_ -cnotin $directories})
+            $catalog.required.native=@($catalog.required.native|Where-Object {$_ -cnotin $directories})
             # Preserve the historical selection below; the new explicit-rescan boundary has its own exact gate.
             $catalog.required.namespace=@($catalog.required.namespace|Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeProductionPumpSettlesOriginalJournalBeforeAnExplicitRescanAcrossOwners'})
             $catalog.required.native=@($catalog.required.native|Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeProductionPumpSettlesOriginalJournalBeforeAnExplicitRescanAcrossOwners'})

@@ -67,14 +67,63 @@ public sealed partial class NamespaceNonAdminControllerTests
                     $rejectionPrefix+'NativeLocalTombstoneDeleteRecoversOriginalAdmissionAcrossFreshRoles'
                     $rejectionPrefix+'NativeLocalTombstoneDeleteRecoversActualSdkReceiptAcrossFreshRoles'
                 )
-                function ReadHistoricalNamespaceCatalog([string]$Path) {
+                $directories=@(
+                    'NativeDirectoryConfirmationRetainsOriginalBindingAndTypedIdentityAcrossOwners',
+                    'NativeProductionDirectoryGroupSettlesOriginalCreateMoveOrRetirementAcrossOwners',
+                    'NativeProductionDirectoryGroupRereadsRealLateChildOriginalsBeforeDispatchAcrossOwners',
+                    'NativeProductionDirectoryAbsencePreservesALaterBackendFileOrDirectoryAcrossOwners',
+                    'NativeProductionDirectoryGroupRecoversAcceptedEffectsBeforeOriginalAckAcrossFreshRoles'
+                )|ForEach-Object {$rejectionPrefix+$_}
+                function ReadPreDirectoryNamespaceCatalog([string]$Path) {
                     $value=Get-Content -LiteralPath $Path -Raw|ConvertFrom-Json
+                    $value.required.namespace=@($value.required.namespace|Where-Object {$_ -cnotin $directories})
+                    return $value
+                }
+                function ReadHistoricalNamespaceCatalog([string]$Path) {
+                    $value=ReadPreDirectoryNamespaceCatalog $Path
                     # These historical budgets retain their exact pre-rejection selection.
                     $value.required.namespace=@($value.required.namespace|Where-Object {$_ -cnotin $rejections})
                     return $value
                 }
-                if ($Scenario -ceq 'received-delete-selected') {
+                if ($Scenario -like 'directory-journal-*') {
                     $actual=Get-Content -LiteralPath (Join-Path (Split-Path $Policy -Parent) 'test-suites.json') -Raw|ConvertFrom-Json
+                    $names=@($actual.required.namespace);$prior=@($names|Where-Object {$_ -cnotin $directories})
+                    if($names.Count -ne 163 -or $prior.Count -ne 158){throw 'Retain all158 original namespace methods and exactly five new directory methods.'}
+                    $expectedRows=@(4,4,2,2,2)
+                    for($index=0;$index -lt $directories.Count;$index++){
+                        $method=$directories[$index]
+                        foreach($selection in @(@{names=$actual.required.namespace},@{names=$actual.required.native},@{names=$actual.allowSkipped})){
+                            if(@($selection.names|Where-Object {$_ -ceq $method}).Count -ne 1){throw 'Retain every directory method exactly once in all native/managed declarations.'}
+                        }
+                        $rows=@($actual.requiredCases.($method))
+                        if($rows.Count -ne $expectedRows[$index] -or @($rows|Sort-Object -Unique).Count -ne $rows.Count){throw 'Retain all14 distinct directory executions.'}
+                    }
+                    foreach($scope in @('AllRetained','S06')){
+                        $old=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 158 -TestNames $prior -Scope $scope
+                        if($Scenario -ceq 'directory-journal-selected'){
+                            $now=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 163 -TestNames $names -Scope $scope
+                            if($now -ne $old+4*60000+10*95000){throw 'Each original directory execution retains its real60/95second deadline.'}
+                            $step=Get-OrdinaryUserNamespaceStepTimeoutMinutes -TestCount 163 -TestNames $names -Scope $scope
+                            if($step -ne [int][Math]::Ceiling($now/60000.0)+5){throw 'Retain diagnostics and disposable-user cleanup after every native deadline.'}
+                        }else{
+                            $parameters=@{TestCount=163;TestNames=$names;Scope=$scope}
+                            switch($Scenario){
+                                'directory-journal-missing' {$parameters.TestNames=@($names|Where-Object {$_ -cne $directories[0]})}
+                                'directory-journal-unrelated' {$parameters.TestNames=@($names|ForEach-Object {if($_ -ceq $directories[0]){'Fixture.Unrelated'}else{$_}})}
+                                'directory-journal-duplicate' {$parameters.TestNames=@($names|ForEach-Object {if($_ -ceq $directories[0]){$names[0]}else{$_}})}
+                                'directory-journal-wrong-case' {$parameters.TestNames=@($names|ForEach-Object {if($_ -ceq $directories[0]){$_.ToLowerInvariant()}else{$_}})}
+                                'directory-journal-count-only' {$parameters.Remove('TestNames')}
+                                'directory-journal-over-limit' {$parameters.TestCount=164}
+                                default {throw 'Unknown directory controller selection.'}
+                            }
+                            $refused=$false;try{Get-OrdinaryUserNamespaceBudgetMilliseconds @parameters|Out-Null}catch{$refused=$true}
+                            if(-not $refused){throw 'An incomplete, foreign, duplicate, count-only or unbounded directory selection cannot borrow a native deadline.'}
+                        }
+                    }
+                    exit 0
+                }
+                if ($Scenario -ceq 'received-delete-selected') {
+                    $actual=ReadPreDirectoryNamespaceCatalog (Join-Path (Split-Path $Policy -Parent) 'test-suites.json')
                     $names=@($actual.required.namespace);$prior=@($names|Where-Object {$_ -cnotin $rejections})
                     if($names.Count -ne 158 -or $prior.Count -ne 148){throw 'Require all148 prior methods, seven existing rejection methods and three new reconciliation methods.'}
                     foreach($name in $rejections){
@@ -711,9 +760,9 @@ public sealed partial class NamespaceNonAdminControllerTests
                     if ($Scenario -eq 'budget-rejected') {
                         if (-not $rejected) { throw 'An invalid or unbounded selection was accepted.' }
                     } else {
-                        $maximum=if ($Scenario -eq 'budget-catalog') {4755000+4*60000+10*60000+2*60000+65000+29*65000+65000+65000+65000+65000+65000+90000+65000+13*65000+6*65000} else {1800000}
+                        $maximum=if ($Scenario -eq 'budget-catalog') {4755000+4*60000+10*60000+2*60000+65000+29*65000+65000+65000+65000+65000+65000+90000+65000+13*65000+6*65000+4*60000+10*95000} else {1800000}
                         if ($rejected -or $budget -lt 600000 -or $budget -gt $maximum) { throw 'The whole-suite envelope is missing or unbounded.' }
-                        if ($Scenario -eq 'budget-catalog' -and $budget -ne 120000+($Count-10+51)*15000+18*30000+28*15000+6*45000+6*15000+4*45000+5*15000+6*45000+2*45000+2*45000+4*60000+10*60000+15000+2*45000+50000+13*15000+29*50000+50000+50000+50000+50000+50000+75000+50000+19*65000) {
+                        if ($Scenario -eq 'budget-catalog' -and $budget -ne 120000+($Count-10+51)*15000+18*30000+28*15000+6*45000+6*15000+4*45000+5*15000+6*45000+2*45000+2*45000+4*60000+10*60000+15000+2*45000+50000+13*15000+29*50000+50000+50000+50000+50000+50000+75000+50000+19*65000+4*60000+10*95000-5*15000) {
                             throw 'The actual catalog lost a same/cross-instance transfer or one of its five retirement cutpoints.'
                         }
                         if ($Count -ge 52 -and $budget -le 600000) { throw 'The growing suite still has the obsolete fixed ten-minute envelope.' }
