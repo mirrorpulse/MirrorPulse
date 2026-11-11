@@ -14,6 +14,7 @@ function Invoke-CliCoalescingContentConflict {
         [ValidateSet('KeepBoth','KeepRemote', IgnoreCase = $false)][string]$Action = 'KeepBoth',
         [switch]$ControlledCreate,
         [switch]$EmptyCreate,
+        [switch]$MovedFile,
         [Parameter(Mandatory)][string]$InstanceId,
         [Parameter(Mandatory)][string]$MappedRoot,
         [Parameter(Mandatory)][string]$SourceRoot,
@@ -21,7 +22,8 @@ function Invoke-CliCoalescingContentConflict {
     )
     if($ControlledCreate -and $Action -cne 'KeepRemote'){throw 'The controlled-Create fixture requires KeepRemote.'}
     if($EmptyCreate -and -not $ControlledCreate){throw 'Empty creation requires its controlled-Create fixture.'}
-    $expectedEffect=if($ControlledCreate){'CreateFile'}else{'UpdateFile'}
+    if($MovedFile -and ($Action -cne 'KeepRemote' -or $ControlledCreate -or $EmptyCreate)){throw 'The moved-file fixture requires its independent KeepRemote choice.'}
+    $expectedEffect=if($MovedFile){'MoveAndUpdateFile'}elseif($ControlledCreate){'CreateFile'}else{'UpdateFile'}
     $originals=Join-Path ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($EvidencePath))) 'coalescing.originals'
     New-Item -ItemType Directory -Path $originals -Force|Out-Null
     function Invoke-CoalescingCli([string]$Name,[string[]]$Arguments) {
@@ -103,6 +105,7 @@ function Invoke-CliCoalescingContentConflict {
         $completed
     }
     $source=Join-Path $SourceRoot 'cli-roundtrip.txt';$local=Join-Path $MappedRoot 'cli-roundtrip.txt'
+    $finalName=if($MovedFile){'cli-roundtrip-moved.txt'}else{'cli-roundtrip.txt'}
     $seed=Get-CliCoalescingSeedBytes
     if($EmptyCreate){$seed=[byte[]]::new(0)}
     $first=[Text.Encoding]::UTF8.GetBytes('signed coalescing first local edit')
@@ -136,6 +139,24 @@ function Invoke-CliCoalescingContentConflict {
     if($entry.Count -ne 1 -or $entry[0].enabled -ne $false){throw 'The real instance must be disabled before edits.'}
     $baseline=[long]$disabled.pendingUploads
     $importOperation=$null
+    $moveOperation=$null
+    if($MovedFile){
+        $parent=Invoke-CoalescingCli 'move-parent' @('--json','--developer-mode','namespace','member','inspect',([IO.Path]::GetFileName($MappedRoot)),'--directory')
+        $original=Invoke-CoalescingCli 'move-original' @('--json','--developer-mode','namespace','member','inspect',([IO.Path]::GetFileName($MappedRoot)+'/cli-roundtrip.txt'))
+        $moveOperation=[guid]::NewGuid().ToString('D')
+        Invoke-CoalescingCli 'prepare-local-move' @('--json','--developer-mode','namespace','member','prepare-move',([string]$original.memberId),([string]$parent.memberId),$finalName,'--operation-id',$moveOperation)|Out-Null
+        $moved=Invoke-CoalescingCli 'execute-local-move' @('--json','--developer-mode','namespace','member','move',$moveOperation)
+        $current=Invoke-CoalescingCli 'inspect-local-move' @('--json','--developer-mode','namespace','member','inspect',([IO.Path]::GetFileName($MappedRoot)+'/'+$finalName))
+        if($moved.operationId -cne $moveOperation -or $moved.currentNameCommitted -ne $true -or $moved.isDirectory -ne $false -or
+            $current.memberId -cne $original.memberId -or
+            [string]::IsNullOrEmpty($original.nativeItemId) -or $current.nativeItemId -cne $original.nativeItemId -or
+            $current.rootId -cne $original.rootId -or (Test-Path -LiteralPath $local) -or (Test-Path -LiteralPath (Join-Path $SourceRoot $finalName))){
+            throw 'The public controlled Move lost its original member/native identity or touched the disabled source.'
+        }
+        $local=Join-Path $MappedRoot $finalName
+        Assert-CoalescingHash $local $seedHash $false
+        Assert-CoalescingHash $source $seedHash $false
+    }
     if($ControlledCreate){
         # Public creation/import runs through the default Host while its instance
         # stays disabled. No test code manufactures a journal original.
@@ -178,7 +199,7 @@ function Invoke-CliCoalescingContentConflict {
     $deadline=[DateTimeOffset]::UtcNow.AddSeconds(30);$conflict=$null
     do {
         $listed=& $InvokeCli @('--json','--developer-mode','conflict','list')
-        $selected=@($listed.data.items|Where-Object {$_.instanceId -ceq $InstanceId -and $_.relativePath.Replace('\','/').EndsWith('/cli-roundtrip.txt',[StringComparison]::Ordinal)})
+        $selected=@($listed.data.items|Where-Object {$_.instanceId -ceq $InstanceId -and $_.relativePath.Replace('\','/').EndsWith('/'+$finalName,[StringComparison]::Ordinal)})
         if($selected.Count -gt 0){
             $conflict=$selected[0]
             if(($ControlledCreate -or -not [string]::IsNullOrEmpty($conflict.localRevision)) -and -not [string]::IsNullOrEmpty($conflict.remoteRevision)){break}
@@ -192,6 +213,10 @@ function Invoke-CliCoalescingContentConflict {
     Invoke-CoalescingCli 'stop-before-choice' @('--json','--developer-mode','host','stop')|Out-Null
     & $WaitHostStopped
     $pending=& $ReadStoppedAudit $false
+    if($MovedFile -and (@($pending.pendingMoveOriginalOperationIds).Count -lt 1 -or
+        @($pending.pendingMoveOriginalOperationIds|Where-Object {$_ -cnotin $pending.originalOperationIds}).Count)){
+        throw 'The actual moved-file conflict must retain its original SDK Move in the complete group.'
+    }
     foreach($id in @($firstWitness.originalOperationIds)+@($secondWitness.originalOperationIds)){
         if($id -cnotin @($pending.originalOperationIds)){throw 'The retained conflict group lost an actual first or second edit original.'}
     }
@@ -312,6 +337,12 @@ function Invoke-CliCoalescingContentConflict {
         $report.currentNativeIdentitySha256=$before.currentNativeIdentitySha256
         $report.currentNativeOriginalBindingVerified=$true
         $report.originalExpectedRevisionPresent=$false
+    }
+    if($MovedFile){
+        $report.originalControlledMoveOperationId=$moveOperation
+        $report.originalMoveJournalOperationIds=@($pending.pendingMoveOriginalOperationIds)
+        $report.originalPath='cli-roundtrip.txt';$report.finalPath=$finalName
+        $report.originalExpectedRevisionPresent=$true
     }
     $report
 }

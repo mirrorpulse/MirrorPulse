@@ -46,7 +46,7 @@ function Invoke-CliCoalescingChoice {
 
 function Invoke-CliStoppedCoalescingOracle {
     param([Parameter(Mandatory)][string]$ProbeAssembly,[Parameter(Mandatory)][string]$FixtureRoot,[Parameter(Mandatory)][bool]$Completed,
-        [ValidateSet('KeepBoth','KeepRemote', IgnoreCase = $false)][string]$Action = 'KeepBoth', [switch]$ControlledCreate)
+        [ValidateSet('KeepBoth','KeepRemote', IgnoreCase = $false)][string]$Action = 'KeepBoth', [switch]$ControlledCreate, [switch]$MovedFile)
     $root=Assert-CliCoalescingEnvironment $FixtureRoot
     if([IO.Path]::GetFullPath($ProbeAssembly) -ine (Join-Path $root 'probe/MirrorPulse.CfSharp.CrashProbe.dll')){
         throw 'The stopped oracle must be the current fixture publication.'
@@ -58,6 +58,10 @@ function Invoke-CliStoppedCoalescingOracle {
         if($Action -cne 'KeepRemote'){throw 'Controlled-Create oracle requires KeepRemote.'}
         $mode=if($Completed){'--audit-cli-create-keep-remote'}else{'--audit-cli-create-pending'}
     }
+    if($MovedFile){
+        if($Action -cne 'KeepRemote' -or $ControlledCreate){throw 'The moved-file oracle requires its independent KeepRemote fixture.'}
+        $mode=if($Completed){'--audit-cli-move-keep-remote'}else{'--audit-cli-move-pending'}
+    }
     foreach($argument in @($ProbeAssembly,$mode,$root)){$start.ArgumentList.Add($argument)}
     $process=[Diagnostics.Process]::Start($start)
     try{
@@ -68,7 +72,7 @@ function Invoke-CliStoppedCoalescingOracle {
             throw 'The independent stopped oracle refused the original fixture evidence.'
         }
         $result=$text|ConvertFrom-Json
-        $expectedEffect=if($ControlledCreate){'CreateFile'}else{'UpdateFile'}
+        $expectedEffect=if($MovedFile){'MoveAndUpdateFile'}elseif($ControlledCreate){'CreateFile'}else{'UpdateFile'}
         if($result.schemaVersion -ne 1 -or $result.exclusiveCatalogOwner -ne $true -or $result.rawEffect -cne $expectedEffect -or
             $result.originalCount -lt 2 -or $result.originalCount -gt 64 -or @($result.originalOperationIds).Count -ne $result.originalCount){
             throw 'The oracle did not return its bounded authenticated original group.'
@@ -81,14 +85,15 @@ function Invoke-CliStoppedCoalescingOracle {
 }
 
 function Read-CliStoppedCoalescingEdit {
-    param([Parameter(Mandatory)][string]$ProbeAssembly,[Parameter(Mandatory)][string]$FixtureRoot)
+    param([Parameter(Mandatory)][string]$ProbeAssembly,[Parameter(Mandatory)][string]$FixtureRoot,[switch]$MovedFile)
     $root=Assert-CliCoalescingEnvironment $FixtureRoot
     if([IO.Path]::GetFullPath($ProbeAssembly) -ine (Join-Path $root 'probe/MirrorPulse.CfSharp.CrashProbe.dll')){
         throw 'The edit observer must be the current isolated fixture publication.'
     }
     $start=[Diagnostics.ProcessStartInfo]::new('dotnet')
     $start.UseShellExecute=$false;$start.CreateNoWindow=$true;$start.RedirectStandardOutput=$true;$start.RedirectStandardError=$true
-    foreach($argument in @($ProbeAssembly,'--observe-cli-coalescing-edit',$root)){$start.ArgumentList.Add($argument)}
+    $mode=if($MovedFile){'--observe-cli-move-coalescing-edit'}else{'--observe-cli-coalescing-edit'}
+    foreach($argument in @($ProbeAssembly,$mode,$root)){$start.ArgumentList.Add($argument)}
     $process=[Diagnostics.Process]::Start($start)
     try{
         $stdout=$process.StandardOutput.ReadToEndAsync();$stderr=$process.StandardError.ReadToEndAsync()
@@ -115,8 +120,8 @@ function Read-CliStoppedCoalescingEdit {
 }
 
 function Invoke-CliCoalescingEditFailureObservation {
-    param([Parameter(Mandatory)][string]$ProbeAssembly,[Parameter(Mandatory)][string]$FixtureRoot,[Parameter(Mandatory)][string]$EvidencePath)
-    $result=Read-CliStoppedCoalescingEdit -ProbeAssembly $ProbeAssembly -FixtureRoot $FixtureRoot
+    param([Parameter(Mandatory)][string]$ProbeAssembly,[Parameter(Mandatory)][string]$FixtureRoot,[Parameter(Mandatory)][string]$EvidencePath,[switch]$MovedFile)
+    $result=Read-CliStoppedCoalescingEdit -ProbeAssembly $ProbeAssembly -FixtureRoot $FixtureRoot -MovedFile:$MovedFile
     $directory=Join-Path ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($EvidencePath))) 'coalescing.originals'
     New-Item -ItemType Directory -Path $directory -Force|Out-Null
     $result|ConvertTo-Json -Depth 8|Set-Content -LiteralPath (Join-Path $directory 'failed-edit-state.json') -Encoding utf8

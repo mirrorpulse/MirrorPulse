@@ -10,12 +10,16 @@ param(
     [string]$CoalescingAction = 'KeepBoth',
     [switch]$CreateConflict,
     [switch]$EmptyCreate,
+    [switch]$MoveConflict,
     [ValidateSet("Debug", "Release")]
     [string]$Configuration = "Release",
     [string]$EvidencePath
 )
 
 $ErrorActionPreference = "Stop"
+if ($MoveConflict -and (-not $Coalescing -or $CoalescingAction -cne 'KeepRemote' -or $CreateConflict -or $EmptyCreate)) {
+    throw 'The moved-file fixture requires its independent KeepRemote coalescing choice.'
+}
 if ($EmptyCreate -and -not $CreateConflict) {
     throw 'The empty creation fixture requires its independent controlled-Create conflict scenario.'
 }
@@ -340,8 +344,8 @@ try {
     if ($Coalescing) {
         $coalescingEvidence = Invoke-CliCoalescingContentConflict -InvokeCli { param($arguments) Invoke-MirrorPulseCli $arguments } `
             -WaitHostStopped { Wait-MirrorPulseHostStopped } `
-            -ReadStoppedAudit { param($completed) Invoke-CliStoppedCoalescingOracle -ProbeAssembly $script:probeAssembly -FixtureRoot $runRoot -Completed $completed -Action $CoalescingAction -ControlledCreate:$CreateConflict } `
-            -ReadStoppedEdit { Read-CliStoppedCoalescingEdit -ProbeAssembly $script:probeAssembly -FixtureRoot $runRoot } `
+            -ReadStoppedAudit { param($completed) Invoke-CliStoppedCoalescingOracle -ProbeAssembly $script:probeAssembly -FixtureRoot $runRoot -Completed $completed -Action $CoalescingAction -ControlledCreate:$CreateConflict -MovedFile:$MoveConflict } `
+            -ReadStoppedEdit { Read-CliStoppedCoalescingEdit -ProbeAssembly $script:probeAssembly -FixtureRoot $runRoot -MovedFile:$MoveConflict } `
             -InspectOnlineSeed {
                 $inspection = Invoke-CliFixtureProbe -Mode inspect -Phase BeforeCoalescingDisable
                 $target = @($inspection.items | Where-Object role -CEQ 'RoundTripFile')
@@ -352,6 +356,7 @@ try {
             -Action $CoalescingAction `
             -ControlledCreate:$CreateConflict `
             -EmptyCreate:$EmptyCreate `
+            -MovedFile:$MoveConflict `
             -InstanceId $instanceId -MappedRoot $mappedRoot -SourceRoot $sourceRoot -EvidencePath $EvidencePath
         $coalescingEvidence.packageSha256 = (Get-FileHash -LiteralPath $PackagePath).Hash
         $coalescingEvidence.signatureSha256 = (Get-FileHash -LiteralPath ($PackagePath + '.signature.json')).Hash
@@ -600,7 +605,7 @@ catch {
         try {
             Invoke-MirrorPulseCli @('--json', '--developer-mode', 'host', 'stop') | Out-Null
             Wait-MirrorPulseHostStopped
-            Invoke-CliCoalescingEditFailureObservation -ProbeAssembly $script:probeAssembly -FixtureRoot $runRoot -EvidencePath $EvidencePath
+            Invoke-CliCoalescingEditFailureObservation -ProbeAssembly $script:probeAssembly -FixtureRoot $runRoot -EvidencePath $EvidencePath -MovedFile:$MoveConflict
         } catch { Write-Host "Stopped coalescing edit observation also failed: $($_.Exception.GetType().Name)." }
     }
     throw $primaryFailure
