@@ -13,7 +13,11 @@ namespace MirrorPulse.CfSharp.CrashProbe;
 public sealed record CliDisabledJournalFact(Guid OperationId, long Sequence, Guid? ItemId, string Kind,
     int AttemptCount, DateTimeOffset CreatedAt, string PayloadSha256);
 public sealed record CliDisabledEffectFact(Guid OperationId, string State, string? Kind, bool? IsDirectory,
-    string? ContentSha256, bool NativeConfirmationVerified, bool NativeMayAcknowledge);
+    string? ContentSha256, bool NativeConfirmationVerified, bool NativeMayAcknowledge)
+{
+    public string? Origin { get; init; }
+    public string? RelativePath { get; init; }
+}
 public sealed record CliDisabledOriginalFact(Guid OperationId, bool Pending, Guid? PlanId, IReadOnlyList<CliDisabledEffectFact> Effects, string? BlockReason);
 
 public static partial class CliFixtureProbe
@@ -72,7 +76,7 @@ public static partial class CliFixtureProbe
             await using var fixture = await OpenDisabledFixtureAsync(directory, value => stage = value);
             var catalog = fixture.Catalog; var marker = fixture.Marker; var inventory = fixture.Inventory;
             stage = "OriginalMemberBindings";
-            var members = new List<object>(); var itemIds = new HashSet<Guid>();
+            var members = new List<object>(); var identities = new List<object>(); var itemIds = new HashSet<Guid>();
             foreach (var entry in marker.Members.OrderBy(item => item.Key, StringComparer.Ordinal))
             {
                 var spec = CliDisabledFixtureLayout.MemberSpecs[entry.Key];
@@ -100,6 +104,26 @@ public static partial class CliFixtureProbe
                     originalRelativePath = member.RelativePath,
                     originalBindingSha256 = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(member.LocalObject, JsonOptions)))
                 });
+                if (entry.Key is not ("retiredFile" or "retiredDirectory" or "ephemeralFile" or "ephemeralDirectory"))
+                {
+                    var identity = await catalog.ReadNamespaceMemberIdentityAsync(member.MemberId);
+                    if (identity.MemberId != member.MemberId || identity.OriginalItemId != entry.Value.ItemId)
+                        throw new InvalidDataException("Confirmed public identity cannot replace the original member or first identity.");
+                    var accepted = !member.IsDirectory && identity.AcceptanceOperationId is { } operation
+                        ? await catalog.ReadContentAcceptanceProofAsync(operation) : null;
+                    identities.Add(new
+                    {
+                        key = entry.Key,
+                        member.MemberId,
+                        identity.ItemId,
+                        identity.OriginalItemId,
+                        identity.AcceptanceOperationId,
+                        acceptedRevisionSha256 = accepted?.AcceptedRevision is { } revision
+                            ? Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(revision))) : null,
+                        nativeBindingSha256 = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(
+                            new CloudLocalFileBinding(member.LocalObject.VolumeSerialNumber, member.LocalObject.SyncRootFileId, member.LocalObject.LocalFileId))))
+                    });
+                }
             }
             stage = "OfficialJournalOwnership";
             if (!File.Exists(fixture.Paths.CfSharpStateDatabasePath) || (File.GetAttributes(fixture.Paths.CfSharpStateDatabasePath) & FileAttributes.ReparsePoint) != 0)
@@ -262,32 +286,22 @@ public static partial class CliFixtureProbe
                 });
             stage = "OriginalPollingIntent";
             var polling = new List<object>();
+            var remoteSnapshots = new List<object>();
+            var snapshots = new MirrorPulseFileRemotePollSnapshotStore(fixture.Paths.DataRootPath);
             var pendingPolls = new MirrorPulseCatalogRemotePollPendingStore(catalog);
             foreach (var root in inventory.Roots)
             {
+                var retainedSnapshot = await snapshots.LoadAsync(root);
+                if (retainedSnapshot is not null)
+                {
+                    if (retainedSnapshot.Count > 32) throw new InvalidDataException("Bound the owned fixture root snapshot.");
+                    remoteSnapshots.Add(new { rootId = root.RootId.ToString(), instanceId = root.InstanceId.ToString(), entries = Snapshot(root, retainedSnapshot) });
+                }
                 var pending = await pendingPolls.LoadAsync(root, default);
                 if (pending is null) continue;
                 if (pending.RootId != root.RootId || pending.RootKey != root.UniquenessKey ||
                     pending.RootDirectoryName != root.DirectoryName || pending.Previous.Count > 32 || pending.Candidate.Count > 32)
                     throw new InvalidDataException("The retained polling intent exceeds the authenticated fixed fixture scope.");
-                object[] Snapshot(IReadOnlyDictionary<string, MirrorPulseRemoteSnapshotEntry> entries) => entries
-                    .OrderBy(entry => entry.Key, StringComparer.Ordinal).Select(entry =>
-                    {
-                        string path = CliDisabledFixtureLayout.RequireAllowedRelativePath(inventory,
-                            root.DirectoryName + "/" + entry.Value.RelativePath);
-                        if (inventory.AllowedEntries[path] != (entry.Value.ItemKind == CloudItemKind.Directory))
-                            throw new InvalidDataException("The retained polling entry changed its fixed file/directory kind.");
-                        return (object)new
-                        {
-                            relativePath = path,
-                            entry.Value.ItemKind,
-                            remoteIdSha256 = Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(entry.Key))),
-                            remoteRevisionSha256 = Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(entry.Value.RemoteRevision))),
-                            metadataSha256 = Fingerprint(entry.Value.Metadata),
-                            publicItemId = entry.Value.PublicIdentity?.ItemId,
-                            entry.Value.Length
-                        };
-                    }).ToArray();
                 await using var readProgress = await store.BeginTransactionAsync();
                 var progress = await readProgress.RemoteBatches.GetAsync(pending.BatchId);
                 if (progress is not null && !progress.Fingerprint.Span.SequenceEqual(pending.Fingerprint))
@@ -299,8 +313,8 @@ public static partial class CliFixtureProbe
                     pending.BatchId,
                     fingerprint = Convert.ToHexString(pending.Fingerprint),
                     pending.ProjectionVersion,
-                    previous = Snapshot(pending.Previous),
-                    candidate = Snapshot(pending.Candidate),
+                    previous = Snapshot(root, pending.Previous),
+                    candidate = Snapshot(root, pending.Candidate),
                     progress = progress is null ? null : new
                     {
                         status = progress.Status.ToString(),
@@ -322,6 +336,8 @@ public static partial class CliFixtureProbe
                 marker.Phase,
                 exclusiveCatalogOwner = true,
                 members,
+                identities,
+                remoteSnapshots,
                 roots = rootFacts,
                 polling,
                 journal = selected,
@@ -336,6 +352,24 @@ public static partial class CliFixtureProbe
                 originalSdkAcknowledgementExecuted = false
             }, JsonOptions));
             return 0;
+
+            object[] Snapshot(RootRegistration root, IReadOnlyDictionary<string, MirrorPulseRemoteSnapshotEntry> entries) => entries
+                .OrderBy(entry => entry.Key, StringComparer.Ordinal).Select(entry =>
+                {
+                    string path = CliDisabledFixtureLayout.RequireAllowedRelativePath(inventory, root.DirectoryName + "/" + entry.Value.RelativePath);
+                    if (inventory.AllowedEntries[path] != (entry.Value.ItemKind == CloudItemKind.Directory))
+                        throw new InvalidDataException("The retained polling entry changed its fixed file/directory kind.");
+                    return (object)new
+                    {
+                        relativePath = path,
+                        entry.Value.ItemKind,
+                        remoteIdSha256 = Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(entry.Key))),
+                        remoteRevisionSha256 = Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(entry.Value.RemoteRevision))),
+                        metadataSha256 = Fingerprint(entry.Value.Metadata),
+                        publicItemId = entry.Value.PublicIdentity?.ItemId,
+                        entry.Value.Length
+                    };
+                }).ToArray();
 
             void RequireRoute(InstanceId instance, string key, string path)
             {
@@ -354,7 +388,8 @@ public static partial class CliFixtureProbe
                 if (proof is not null && (proof.OperationId != id || proof.Sha256 != mutation.Intent.ContentSha256))
                     throw new InvalidDataException("An actual content proof differs from its retained original effect.");
                 return new(id, mutation.State.ToString(), mutation.Intent.Kind.ToString(), mutation.Intent.IsDirectory,
-                    proof?.Sha256 ?? mutation.Intent.ContentSha256, native?.NativeConfirmationVerified == true, native?.MayAcknowledge == true);
+                    proof?.Sha256 ?? mutation.Intent.ContentSha256, native?.NativeConfirmationVerified == true, native?.MayAcknowledge == true)
+                { Origin = mutation.Intent.Origin.ToString(), RelativePath = mutation.Intent.RelativePath };
             }
         }
         catch (Exception error) { error.Data["CliFixtureCleanupStage"] = stage; throw; }

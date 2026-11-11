@@ -17,6 +17,7 @@ if($LASTEXITCODE -ne 0 -or $sourceSha -cnotmatch '^[0-9a-f]{40}$' -or ($env:GITH
     throw 'Bind the actual selected source before running the disabled fixture.'
 }
 . (Join-Path $PSScriptRoot 'cli-integration-failure-policy.ps1')
+. (Join-Path $PSScriptRoot 'cli-disabled-settlement-evidence.ps1')
 $fixture=Join-Path ([IO.Path]::GetTempPath()) ('MirrorPulse-cli-disabled-'+[guid]::NewGuid().ToString('N'))
 $sync=Join-Path $fixture 'sync';$data=Join-Path $fixture 'data'
 $evidenceFile=[IO.Path]::GetFullPath($EvidencePath)
@@ -203,11 +204,15 @@ function Assert-DisabledOriginals($Before,$After){
         }
     }
 }
-function Assert-DisabledSettled($Original,[string]$Kind){
+function Assert-DisabledSettled($Original,[string]$Kind,$Header,$Before,$After,[object[]]$Events){
     if($null -eq $Original){throw 'The actual original operation outcome is missing.'}
     if($Original.pending){throw 'The original SDK operation remains pending after its actual source/unsupported outcome.'}
     if($Original.blockReason -ceq 'UnsupportedMetadataChange'){
         if($Kind -cne 'MetadataUpdate'){throw 'An unsupported metadata result cannot settle another original operation kind.'}
+        return
+    }
+    if(@($Original.effects).Count -eq 1 -and $Original.effects[0].state -ceq 'Missing' -and $Kind -cin @('Create','ContentUpdate')){
+        Assert-CliDisabledAcceptedObservation -Before $Before -After $After -Original $Header -Outcome $Original -Events $Events
         return
     }
     if(@($Original.effects).Count -lt 1 -or @($Original.effects|Where-Object state -cne 'Acknowledged').Count){throw 'Missing SDK work is not a durable original source acknowledgement.'}
@@ -338,11 +343,13 @@ try{
     Read-DisabledWorkers 'active-progress' 1;Assert-DisabledSourceUnchanged 'active-progress'
     Stop-DisabledHost 'active-progress';$marker.phase='ActiveProgress';Save-DisabledMarker
     $progress=Invoke-DisabledProbe audit 'after-active-progress'
+    $activeAcknowledgements=@(Read-CliDisabledAcknowledgementEvents -DataRoot $data)
+    Write-DisabledOriginal 'active-acknowledgement-events' $activeAcknowledgements
     Assert-DisabledLocalReceipts $before $progress
     $offlineIds=@($before.journal|Where-Object itemId -cne $marker.members.activeFile.itemId)
     Assert-DisabledOriginals ([pscustomobject]@{journal=$offlineIds}) $progress
     foreach($row in @($before.journal|Where-Object itemId -ceq $marker.members.activeFile.itemId)){
-        Assert-DisabledSettled (@($progress.originals|Where-Object operationId -ceq $row.operationId)[0]) $row.kind
+        Assert-DisabledSettled (@($progress.originals|Where-Object operationId -ceq $row.operationId)[0]) $row.kind $row $before $progress $activeAcknowledgements
     }
     $phase='OfflineReenable';Start-DisabledHost 'reenable-offline'
     Invoke-DisabledCli 'reenable-offline' @('--no-start','instance','enable','--instance-id',$offlineRoute.instanceId)|Out-Null
@@ -360,15 +367,20 @@ try{
     $state=Read-DisabledState 'both-reenabled';Assert-DisabledInstances $state $true $true
     if($state.status.pendingUploads -ne 0){throw 'The actual public backlog did not drain after reenable.'}
     Read-DisabledWorkers 'both-reenabled' 2
+    $finalInspections=[Collections.Generic.List[object]]::new()
     foreach($entry in @(@('keptFile','kept-renamed.txt',$false),@('bornFile','born-renamed.txt',$false),@('bornDirectory','moved-dir',$true))){
         $arguments=@('--no-start','namespace','member','inspect',($offlineRoute.directoryName+'/'+$entry[1]));if($entry[2]){$arguments+='--directory'}
         $current=Invoke-DisabledCli ('final-inspect-'+$entry[0].ToLowerInvariant()) $arguments
-        if($current.memberId -cne $marker.members[$entry[0]].memberId -or $current.nativeItemId -cne $marker.members[$entry[0]].itemId){throw 'A completed moved member lost its original native or product identity.'}
+        if($current.memberId -cne $marker.members[$entry[0]].memberId -or $current.relativePath -cne ($offlineRoute.directoryName+'/'+$entry[1])){throw 'A completed moved member lost its original native binding/member or current committed address.'}
+        $finalInspections.Add([pscustomobject]@{key=$entry[0];inspection=$current})
     }
     Stop-DisabledHost 'final';$marker.phase='Reenabled';Save-DisabledMarker
     $final=Invoke-DisabledProbe audit 'after-reenable'
+    $finalAcknowledgements=@(Read-CliDisabledAcknowledgementEvents -DataRoot $data)
+    Write-DisabledOriginal 'reenabled-acknowledgement-events' $finalAcknowledgements
     Assert-DisabledLocalReceipts $before $final
-    foreach($row in $before.journal){Assert-DisabledSettled (@($final.originals|Where-Object operationId -ceq $row.operationId)[0]) $row.kind}
+    foreach($inspection in $finalInspections){Assert-CliDisabledCurrentIdentity -Before $before -After $final -Inspection $inspection.inspection -Key $inspection.key}
+    foreach($row in $before.journal){Assert-DisabledSettled (@($final.originals|Where-Object operationId -ceq $row.operationId)[0]) $row.kind $row $before $final $finalAcknowledgements}
     if(@($final.journal).Count -or @($final.unsettled).Count -or @($final.blocked|Where-Object reason -cne 'UnsupportedMetadataChange').Count){throw 'The completed operation chain retained unresolved original work or an unexpected block.'}
     if(@($final.roots|Where-Object {$_.dispatchFenced -or @($_.pending).Count}).Count){throw 'The completed operation chain retained an unresolved namespace owner.'}
     $sourceFinal=Get-DisabledSourceSnapshot (Join-Path $fixture 'source/offline');Write-DisabledOriginal 'offline-source-final' $sourceFinal
