@@ -49,6 +49,14 @@ public sealed class CliCoalescingEditWitnessTests
     [DataRow("dateTimeOffsetOldSameSecond", false)]
     [DataRow("unspecifiedDateTime", false)]
     [DataRow("timestampWithoutOffset", false)]
+    [DataRow("waitImmediateWitness", true)]
+    [DataRow("waitFreshAfterUnrelatedProgress", true)]
+    [DataRow("waitExpiredWithoutWitness", false)]
+    [DataRow("waitExpiredWithWitness", true)]
+    [DataRow("waitPartialSnapshot", false)]
+    [DataRow("waitChangedEarlierOriginal", false)]
+    [DataRow("waitMissingRequiredOriginal", false)]
+    [DataRow("waitWrongBytesNoOriginal", false)]
     public async Task ExactEditWitnessRequiresFreshTargetOriginalsCompleteBytesAndRetainedEarlierEdits(string boundary, bool succeeds)
     {
         string root = Path.Combine(Path.GetTempPath(), "MirrorPulse-edit-witness-" + Guid.NewGuid().ToString("N"));
@@ -59,7 +67,7 @@ public sealed class CliCoalescingEditWitnessTests
             string helper = Path.Combine(root, "witness.ps1"), runner = Path.Combine(root, "run.ps1"), local = Path.Combine(root, "local.bin");
             File.Copy(Path.Combine(repository, "eng", "cli-coalescing-edit-witness.ps1"), helper);
             byte[] expected = boundary == "emptyEdit" ? [] : Encoding.UTF8.GetBytes("PRIVATE_FIXTURE_EXPECTED_CONTENT");
-            byte[] actual = boundary == "bytesChanged" ? Encoding.UTF8.GetBytes("PRIVATE_FIXTURE_UNWANTED_CONTENT") :
+            byte[] actual = boundary is "bytesChanged" or "waitWrongBytesNoOriginal" ? Encoding.UTF8.GetBytes("PRIVATE_FIXTURE_UNWANTED_CONTENT") :
                 boundary == "lengthChanged" ? [1] : expected;
             if (boundary != "fileMissing") await File.WriteAllBytesAsync(local, actual);
             await File.WriteAllTextAsync(runner, FixtureScript);
@@ -89,6 +97,13 @@ public sealed class CliCoalescingEditWitnessTests
                 Assert.AreEqual("22222222-2222-2222-2222-222222222222", witness.GetProperty("originalOperationIds")[0].GetString());
                 Assert.AreEqual(1, witness.GetProperty("originalOperationIds").GetArrayLength());
                 Assert.AreEqual(boundary == "secondEditRetainsFirst" ? 1 : 0, witness.GetProperty("retainedPrecedingOriginalIds").GetArrayLength());
+                if (boundary.StartsWith("wait", StringComparison.Ordinal))
+                {
+                    int attempts = boundary == "waitFreshAfterUnrelatedProgress" ? 2 : 1;
+                    Assert.AreEqual(attempts, witness.GetProperty("checkpointAttempts").GetInt32());
+                    Assert.AreEqual(attempts - 1, witness.GetProperty("hostResumes").GetInt32());
+                    Assert.AreEqual(30, witness.GetProperty("maximumWaitSeconds").GetInt32());
+                }
             }
         }
         finally
@@ -156,13 +171,29 @@ public sealed class CliCoalescingEditWitnessTests
           'dateTimeOffsetOldSameSecond' {$new.createdAt=$written.AddTicks(-1)}
           'unspecifiedDateTime' {$new.createdAt=[DateTime]::SpecifyKind($written.AddSeconds(1).DateTime,[DateTimeKind]::Unspecified)}
           'timestampWithoutOffset' {$new.createdAt=$written.AddSeconds(1).UtcDateTime.ToString('yyyy-MM-ddTHH:mm:ss.fffffff',[Globalization.CultureInfo]::InvariantCulture)}
+          'waitPartialSnapshot' {$after.journalInventoryComplete=$false}
+          'waitChangedEarlierOriginal' {$after.journal[0].payloadSha256='B'*64}
+          'waitMissingRequiredOriginal' {$required=@([guid]$seed.operationId);$after.journal=@($new)}
         }
         if($Boundary.StartsWith('jsonDefault',[StringComparison]::Ordinal)){
           $before=$before|ConvertTo-Json -Depth 8|ConvertFrom-Json
           $after=$after|ConvertTo-Json -Depth 8|ConvertFrom-Json
         }
         $beforeText=$before|ConvertTo-Json -Depth 6 -Compress;$afterText=$after|ConvertTo-Json -Depth 6 -Compress
-        $witness=Get-CliCoalescingEditWitness -Before $before -After $after -WrittenAt $written -LocalPath (Join-Path $PSScriptRoot 'local.bin') -ExpectedContent ([Convert]::FromBase64String($ExpectedBase64)) -RequiredOriginalIds $required
+        if($Boundary.StartsWith('wait',[StringComparison]::Ordinal)){
+          $state=@{resumes=0};$deadline=[DateTimeOffset]::UtcNow.AddSeconds(4)
+          if($Boundary.StartsWith('waitExpired',[StringComparison]::Ordinal)){$deadline=[DateTimeOffset]::UtcNow.AddMilliseconds(-1)}
+          $result=Wait-CliCoalescingEditWitness -Before $before -WrittenAt $written -LocalPath (Join-Path $PSScriptRoot 'local.bin') `
+            -ExpectedContent ([Convert]::FromBase64String($ExpectedBase64)) -RequiredOriginalIds $required -Deadline $deadline -ReadStoppedSnapshot {
+              param($attempt)
+              if($Boundary -eq 'waitFreshAfterUnrelatedProgress' -and $attempt -eq 1){
+                $unrelated=Snapshot @($seed.PSObject.Copy()) 1;$unrelated.globalPendingCount=100;$unrelated
+              }elseif($Boundary -in @('waitExpiredWithoutWitness','waitWrongBytesNoOriginal')){$before}else{$after}
+            } -ResumeHost {param($attempt) $state.resumes++}
+          $witness=$result.witness;$witness.checkpointAttempts=$result.attempts;$witness.hostResumes=$state.resumes;$witness.maximumWaitSeconds=$result.maximumWaitSeconds
+        }else{
+          $witness=Get-CliCoalescingEditWitness -Before $before -After $after -WrittenAt $written -LocalPath (Join-Path $PSScriptRoot 'local.bin') -ExpectedContent ([Convert]::FromBase64String($ExpectedBase64)) -RequiredOriginalIds $required
+        }
         if(($before|ConvertTo-Json -Depth 6 -Compress) -cne $beforeText -or ($after|ConvertTo-Json -Depth 6 -Compress) -cne $afterText){throw 'Input snapshot mutated.'}
         $witness|ConvertTo-Json -Depth 6 -Compress
         """;

@@ -74,6 +74,34 @@ function Invoke-CliCoalescingContentConflict {
             throw 'The signed KeepRemote fixture requires the same fully resident native placeholder throughout its original local edits.'
         }
     }
+    function Wait-CoalescingEdit([string]$Phase,$Before,[DateTimeOffset]$WrittenAt,[byte[]]$Bytes,[long]$Baseline,[guid[]]$Required=@()) {
+        $state=@{lastStatus=$null}
+        $completed=Wait-CliCoalescingEditWitness -Before $Before -WrittenAt $WrittenAt -LocalPath $local -ExpectedContent $Bytes `
+            -Deadline ([DateTimeOffset]::UtcNow.AddSeconds(30)) -RequiredOriginalIds $Required -ReadStoppedSnapshot {
+                param($attempt)
+                $state.lastStatus=Invoke-CoalescingCli ($Phase+'-edit-attempt-'+$attempt+'-status') @('--json','--developer-mode','status')
+                $stop=if($attempt -eq 1){'stop-after-'+$Phase+'-edit'}else{'stop-after-'+$Phase+'-edit-attempt-'+$attempt}
+                Invoke-CoalescingCli $stop @('--json','--developer-mode','host','stop')|Out-Null
+                & $WaitHostStopped
+                $snapshot=Read-CoalescingEdit ($Phase+'-edit-attempt-'+$attempt+'-originals')
+                Assert-KeepRemoteResident $snapshot $editBaseline.nativeIdentitySha256
+                $snapshot
+            } -ResumeHost {
+                param($attempt)
+                Invoke-CoalescingCli ('resume-'+$Phase+'-edit-after-attempt-'+$attempt) @('--json','--developer-mode','host','start')|Out-Null
+            }
+        $state.lastStatus|ConvertTo-Json -Depth 12|Set-Content -LiteralPath (Join-Path $originals ($Phase+'-edit-status.json')) -Encoding utf8
+        @{schemaVersion=1;writtenAt=$WrittenAt.ToString('o');expectedSha256=$completed.witness.localSha256;
+            actualSha256=(Get-FileHash -LiteralPath $local).Hash;length=(Get-Item -LiteralPath $local).Length;
+            baselinePendingUploads=$Baseline;observedPendingUploads=$state.lastStatus.pendingUploads}|
+            ConvertTo-Json|Set-Content -LiteralPath (Join-Path $originals ($Phase+'-edit-bytes.json')) -Encoding utf8
+        $completed.snapshot|ConvertTo-Json -Depth 8|Set-Content -LiteralPath (Join-Path $originals ($Phase+'-edit-originals.json')) -Encoding utf8
+        $completed.witness|ConvertTo-Json -Depth 8|Set-Content -LiteralPath (Join-Path $originals ($Phase+'-edit-witness.json')) -Encoding utf8
+        @{schemaVersion=1;attempts=$completed.attempts;elapsedMilliseconds=$completed.elapsedMilliseconds;
+            maximumWaitSeconds=$completed.maximumWaitSeconds;globalPendingCountUsedAsProof=$false}|
+            ConvertTo-Json|Set-Content -LiteralPath (Join-Path $originals ($Phase+'-edit-observation.json')) -Encoding utf8
+        $completed
+    }
     $source=Join-Path $SourceRoot 'cli-roundtrip.txt';$local=Join-Path $MappedRoot 'cli-roundtrip.txt'
     $seed=Get-CliCoalescingSeedBytes
     if($EmptyCreate){$seed=[byte[]]::new(0)}
@@ -134,45 +162,14 @@ function Invoke-CliCoalescingContentConflict {
     $baseline=[long](Confirm-CoalescingDisabled 'before-first-edit-status').pendingUploads
     $firstWrittenAt=[DateTimeOffset]::UtcNow
     Write-CoalescingEdit $first
-    $deadline=[DateTimeOffset]::UtcNow.AddSeconds(30)
-    do {
-        $status=& $InvokeCli @('--json','--developer-mode','status')
-        # Global totals remain diagnostics. The original30s window allows actual
-        # notifications to settle before the stopped owner supplies exact IDs.
-        Start-Sleep -Milliseconds 100
-    }while([DateTimeOffset]::UtcNow -lt $deadline)
-    try {
-        $status|ConvertTo-Json -Depth 12|Set-Content -LiteralPath (Join-Path $originals 'first-edit-status.json') -Encoding utf8
-        @{schemaVersion=1;writtenAt=$firstWrittenAt.ToString('o');expectedSha256=([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($first)));actualSha256=(Get-FileHash -LiteralPath $local).Hash;length=(Get-Item -LiteralPath $local).Length;baselinePendingUploads=$baseline;observedPendingUploads=$status.data.pendingUploads}|
-            ConvertTo-Json|Set-Content -LiteralPath (Join-Path $originals 'first-edit-bytes.json') -Encoding utf8
-    } catch { Write-Host "First edit observation also failed: $($_.Exception.GetType().Name)." }
-    Invoke-CoalescingCli 'stop-after-first-edit' @('--json','--developer-mode','host','stop')|Out-Null
-    & $WaitHostStopped
-    $firstOriginals=Read-CoalescingEdit 'first-edit-originals'
-    Assert-KeepRemoteResident $firstOriginals $editBaseline.nativeIdentitySha256
-    $firstWitness=Get-CliCoalescingEditWitness -Before $editBaseline -After $firstOriginals -WrittenAt $firstWrittenAt -LocalPath $local -ExpectedContent $first
-    $firstWitness|ConvertTo-Json -Depth 8|Set-Content -LiteralPath (Join-Path $originals 'first-edit-witness.json') -Encoding utf8
-    $firstCount=[long]$status.data.pendingUploads
+    $firstObserved=Wait-CoalescingEdit 'first' $editBaseline $firstWrittenAt $first $baseline
+    $firstOriginals=$firstObserved.snapshot;$firstWitness=$firstObserved.witness
     Invoke-CoalescingCli 'start-before-second-edit' @('--json','--developer-mode','host','start')|Out-Null
     $firstCount=[long](Confirm-CoalescingDisabled 'before-second-edit-status').pendingUploads
     $secondWrittenAt=[DateTimeOffset]::UtcNow
     Write-CoalescingEdit $latest
-    $deadline=[DateTimeOffset]::UtcNow.AddSeconds(30)
-    do {
-        $status=& $InvokeCli @('--json','--developer-mode','status')
-        Start-Sleep -Milliseconds 100
-    }while([DateTimeOffset]::UtcNow -lt $deadline)
-    try {
-        $status|ConvertTo-Json -Depth 12|Set-Content -LiteralPath (Join-Path $originals 'second-edit-status.json') -Encoding utf8
-        @{schemaVersion=1;writtenAt=$secondWrittenAt.ToString('o');expectedSha256=([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($latest)));actualSha256=(Get-FileHash -LiteralPath $local).Hash;length=(Get-Item -LiteralPath $local).Length;baselinePendingUploads=$firstCount;observedPendingUploads=$status.data.pendingUploads}|
-            ConvertTo-Json|Set-Content -LiteralPath (Join-Path $originals 'second-edit-bytes.json') -Encoding utf8
-    } catch { Write-Host "Second edit observation also failed: $($_.Exception.GetType().Name)." }
-    Invoke-CoalescingCli 'stop-after-second-edit' @('--json','--developer-mode','host','stop')|Out-Null
-    & $WaitHostStopped
-    $secondOriginals=Read-CoalescingEdit 'second-edit-originals'
-    Assert-KeepRemoteResident $secondOriginals $editBaseline.nativeIdentitySha256
-    $secondWitness=Get-CliCoalescingEditWitness -Before $firstOriginals -After $secondOriginals -WrittenAt $secondWrittenAt -LocalPath $local -ExpectedContent $latest -RequiredOriginalIds $firstWitness.originalOperationIds
-    $secondWitness|ConvertTo-Json -Depth 8|Set-Content -LiteralPath (Join-Path $originals 'second-edit-witness.json') -Encoding utf8
+    $secondObserved=Wait-CoalescingEdit 'second' $firstOriginals $secondWrittenAt $latest $firstCount $firstWitness.originalOperationIds
+    $secondOriginals=$secondObserved.snapshot;$secondWitness=$secondObserved.witness
     Invoke-CoalescingCli 'queued-status' @('--json','--developer-mode','status')|Out-Null
     [IO.File]::WriteAllBytes($source,$remote)
     Invoke-CoalescingCli 'enable' @('--json','--developer-mode','instance','enable','--instance-id',$InstanceId)|Out-Null

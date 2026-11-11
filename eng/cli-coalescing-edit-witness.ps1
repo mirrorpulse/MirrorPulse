@@ -45,7 +45,8 @@ function Get-CliCoalescingEditWitness {
         [Parameter(Mandatory)][DateTimeOffset]$WrittenAt,
         [Parameter(Mandatory)][string]$LocalPath,
         [Parameter(Mandatory)][AllowEmptyCollection()][byte[]]$ExpectedContent,
-        [guid[]]$RequiredOriginalIds=@()
+        [guid[]]$RequiredOriginalIds=@(),
+        [switch]$AllowPending
     )
     Assert-CliCoalescingEditSnapshot $Before
     Assert-CliCoalescingEditSnapshot $After
@@ -77,12 +78,46 @@ function Get-CliCoalescingEditWitness {
         $_.sequence -gt $Before.throughSequence -and -not $beforeRows.ContainsKey([string]$_.operationId) -and
         (ConvertTo-CliCoalescingEditTimestamp $_.createdAt) -ge $WrittenAt
     })
-    if($added.Count -eq 0){throw 'The actual edit has no fresh target content-update original after its retained baseline.'}
     $expected=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($ExpectedContent))
     if(-not (Test-Path -LiteralPath $LocalPath -PathType Leaf) -or (Get-Item -LiteralPath $LocalPath).Length -ne $ExpectedContent.Length -or
         (Get-FileHash -LiteralPath $LocalPath).Hash -cne $expected){throw 'The edit witness lost the exact complete bytes of its actual local edit.'}
+    if($added.Count -eq 0){
+        if($AllowPending){return $null}
+        throw 'The actual edit has no fresh target content-update original after its retained baseline.'
+    }
     [ordered]@{schemaVersion=1;targetItemId=$After.targetItemId;baselineThroughSequence=$Before.throughSequence;
         observedThroughSequence=$After.throughSequence;writtenAt=$WrittenAt.ToString('o');localLength=$ExpectedContent.Length;localSha256=$expected;
         originalOperationIds=@($added|ForEach-Object {$_.operationId});retainedPrecedingOriginalIds=@($RequiredOriginalIds|ForEach-Object {$_.ToString('D')});
         globalPendingCountUsedAsProof=$false;originalSdkAcknowledgementExecuted=$false;mutationExecuted=$false}
+}
+
+function Wait-CliCoalescingEditWitness {
+    param(
+        [Parameter(Mandatory)][object]$Before,
+        [Parameter(Mandatory)][DateTimeOffset]$WrittenAt,
+        [Parameter(Mandatory)][string]$LocalPath,
+        [Parameter(Mandatory)][AllowEmptyCollection()][byte[]]$ExpectedContent,
+        [Parameter(Mandatory)][DateTimeOffset]$Deadline,
+        [Parameter(Mandatory)][scriptblock]$ReadStoppedSnapshot,
+        [Parameter(Mandatory)][scriptblock]$ResumeHost,
+        [guid[]]$RequiredOriginalIds=@()
+    )
+    $started=[DateTimeOffset]::UtcNow
+    if($Deadline -gt $started.AddSeconds(30)){throw 'The edit witness cannot extend its original30s observation window.'}
+    for($attempt=1;;$attempt++){
+        $remaining=($Deadline-[DateTimeOffset]::UtcNow).TotalMilliseconds
+        if($remaining -gt 0){Start-Sleep -Milliseconds ([int][Math]::Min(1000,$remaining))}
+        # Only the exclusive stopped SDK owner supplies success evidence. Global
+        # status changes never shorten the wait or prove a target edit.
+        $snapshot=& $ReadStoppedSnapshot $attempt
+        $witness=Get-CliCoalescingEditWitness -Before $Before -After $snapshot -WrittenAt $WrittenAt `
+            -LocalPath $LocalPath -ExpectedContent $ExpectedContent -RequiredOriginalIds $RequiredOriginalIds -AllowPending
+        if($null -ne $witness){
+            return [ordered]@{snapshot=$snapshot;witness=$witness;attempts=$attempt;
+                elapsedMilliseconds=([DateTimeOffset]::UtcNow-$started).TotalMilliseconds;maximumWaitSeconds=30;
+                globalPendingCountUsedAsProof=$false}
+        }
+        if([DateTimeOffset]::UtcNow -ge $Deadline){throw 'The actual edit has no fresh target original within its original30s observation window.'}
+        & $ResumeHost $attempt|Out-Null
+    }
 }
