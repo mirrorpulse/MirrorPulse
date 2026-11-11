@@ -1,0 +1,76 @@
+name: Directory journal native verification
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - develop
+    paths:
+      - .github/workflows/directory-journal-native.yml
+      - eng/verify-directory-journal-native.ps1
+      - eng/test-suites.json
+      - src/MirrorPulse.CloudFiles.CfSharp/MirrorPulseJournalUploadPump.Coalescing.cs
+      - src/MirrorPulse.CloudFiles.CfSharp/MirrorPulseNamespaceDirectoryConfirmation*.cs
+      - src/MirrorPulse.Core/State/MirrorPulseProductCatalog.ControlledRetirementContexts.cs
+      - tests/MirrorPulse.CloudFiles.CfSharp.Tests/MirrorPulseWindowsNamespacePermissionLeaseTests.DirectoryGroups.cs
+
+permissions:
+  contents: read
+
+jobs:
+  original-directory:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            architecture: X64
+          - runner: windows-11-arm
+            architecture: Arm64
+    runs-on: ${{ matrix.runner }}
+    #25minutes retain every fixture deadline and collection; seven more cover setup/export.
+    timeout-minutes: 32
+    steps:
+      - name: Check out the exact selected source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          global-json-file: global.json
+
+      - name: Restore locked dependencies
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          pwsh ./eng/restore-adapter-sdk.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned Adapter SDK restore failed.' }
+          dotnet restore tests/MirrorPulse.CloudFiles.CfSharp.Tests --locked-mode
+          if ($LASTEXITCODE -ne 0) { throw 'Locked native restore failed.' }
+
+      - name: Build the original native boundary
+        run: dotnet build tests/MirrorPulse.CloudFiles.CfSharp.Tests -c Release --no-restore
+
+      - name: Prepare the disposable native test volume
+        run: pwsh ./eng/prepare-native-ci-volume.ps1
+
+      - name: Retain all actual fixture deadlines
+        id: budget
+        shell: pwsh
+        run: |
+          $minutes = & ./eng/verify-directory-journal-native.ps1 -BudgetOnly
+          if ($LASTEXITCODE -ne 0) { throw 'Original directory selection failed.' }
+          "timeout_minutes=$minutes" >> $env:GITHUB_OUTPUT
+
+      - name: Verify original directories, later occupants and native regressions
+        timeout-minutes: ${{ fromJSON(steps.budget.outputs.timeout_minutes) }}
+        run: pwsh ./eng/verify-directory-journal-native.ps1 -ExpectedArchitecture ${{ matrix.architecture }}
+
+      - name: Preserve original reports and executing inputs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: directory-journal-${{ matrix.architecture }}-originals
+          path: artifacts/test-results/directory-journal-native
+          if-no-files-found: error
