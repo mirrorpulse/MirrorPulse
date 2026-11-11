@@ -58,8 +58,14 @@ public static class MirrorPulseJournalDirectoryCoalescingPlanner
             Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(command))))).ToArray();
         byte[] identity = SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new
         {
-            first.InstanceId, first.RootKey, ItemId = itemId, WindowUpperSequence = windowUpperSequence,
-            OriginalPath = original, FinalPath = current, Effect = effect, Members = members
+            first.InstanceId,
+            first.RootKey,
+            ItemId = itemId,
+            WindowUpperSequence = windowUpperSequence,
+            OriginalPath = original,
+            FinalPath = current,
+            Effect = effect,
+            Members = members
         }));
         return new(new Guid(identity.AsSpan(0, 16)), first.InstanceId, first.RootKey, itemId, windowUpperSequence,
             original, current, effect, Array.AsReadOnly(members));
