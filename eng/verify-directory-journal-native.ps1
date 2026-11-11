@@ -19,13 +19,14 @@ $selected = @(
     'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseDirectoryJournalTests.NativeFullRescanAcceptsNestedDirectoriesBeforeSettlingTheirOriginalJournal'
     'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseDirectoryJournalTests.NativeOfflineEmptyAndNestedDirectoryJournalResumesAfterRuntimeRestart'
     'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadCompletionTests.NativeFailureRetryAndSuccessUseCfSharpJournalAcrossRestart'
+    'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseFullRescanPolicyTests.NativeOverflowReconcilesFilesAndKeepsDisabledRootsOffline'
 )
 if (@($selected | Where-Object { $_ -cnotin $catalog.required.native }).Count) { throw 'Retain every exact directory and original native regression method.' }
 $count = Get-RequiredTestExecutionCount -Catalog $catalog -Names $selected
-if ($count -ne 17) { throw 'Require four confirmation cases, ten journal/fresh-role cases and all three original regressions.' }
+if ($count -ne 18) { throw 'Require four confirmation cases, ten journal/fresh-role cases and all four original regressions.' }
 # Preserve four60-second confirmation fixtures, ten95-second journal fixtures,
-# both original45-second directory fixtures and the original completion envelope.
-$fixtureBudgetMilliseconds = 4 * 60000 + 10 * 95000 + 2 * 45000 + 65000
+# both original45-second directory fixtures, completion and60-second overflow envelopes.
+$fixtureBudgetMilliseconds = 4 * 60000 + 10 * 95000 + 2 * 45000 + 65000 + 60000
 if ($BudgetOnly) { [int][Math]::Ceiling(($fixtureBudgetMilliseconds + 120000) / 60000.0); exit 0 }
 if (-not $IsWindows) { throw 'Directory native verification requires Windows.' }
 $architecture = [Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString()

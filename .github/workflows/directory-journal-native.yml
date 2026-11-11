@@ -14,6 +14,11 @@ on:
       - src/MirrorPulse.Core/State/MirrorPulseProductCatalog.ControlledRetirementContexts.cs
       - tests/MirrorPulse.CloudFiles.CfSharp.Tests/MirrorPulseWindowsNamespacePermissionLeaseTests.DirectoryGroups.cs
       - tests/MirrorPulse.CloudFiles.CfSharp.Tests/MirrorPulseJournalUploadCompletionTests.cs
+      - src/MirrorPulse.CloudFiles.CfSharp/MirrorPulseFullRescanPolicy.cs
+      - src/MirrorPulse.CloudFiles.CfSharp/MirrorPulseJournalUploadPump.cs
+      - src/MirrorPulse.Core/State/MirrorPulseProductCatalog.AcknowledgedSourceDeletions.cs
+      - src/MirrorPulse.Core/State/MirrorPulseProductCatalog.Mutations.cs
+      - tests/MirrorPulse.CloudFiles.CfSharp.Tests/MirrorPulseFullRescanPolicyTests.cs
 
 permissions:
   contents: read
@@ -29,8 +34,8 @@ jobs:
           - runner: windows-11-arm
             architecture: Arm64
     runs-on: ${{ matrix.runner }}
-    #25minutes retain every fixture deadline and collection; seven more cover setup/export.
-    timeout-minutes: 32
+    # 26 minutes retain every fixture deadline and collection; seven more cover setup/export.
+    timeout-minutes: 33
     steps:
       - name: Check out the exact selected source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
