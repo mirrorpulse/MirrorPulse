@@ -95,19 +95,44 @@ public sealed class MirrorPulseJournalUploadCompletionTests
                     var accepted = router.CreateFileIdentity(instance, "docs", "report", "remote-revision-1");
                     var proof = new MirrorPulseContentAcceptanceProof(Guid.NewGuid(), MirrorPulseContentConfirmation.CaptureUploadBinding(before),
                         accepted.ItemId, accepted.RemoteId, accepted.RemoteRevision, bytes.Length, Convert.ToHexString(SHA256.HashData(bytes)));
-                    var confirmed = await MirrorPulseContentConfirmation.ConfirmAsync(file, proof, deadline.Token);
-                    Assert.IsTrue(confirmed.MayAcknowledge,
-                        $"Confirmation outcome={confirmed.Outcome}; stage={confirmed.Stage}; nativeStage={confirmed.NativeStage}; " +
-                        $"nativeApplied={confirmed.NativeApplied}; nativeVerified={confirmed.NativeConfirmationVerified}; " +
-                        $"projectionCommitted={confirmed.DurableProjectionCommitted}; preparationHResult={confirmed.PreparationHResult}; " +
-                        $"nativeHResult={confirmed.NativeMarkHResult}; projectionHResult={confirmed.ProjectionErrorHResult}.");
-                    var snapshot = await file.InspectAsync(deadline.Token);
                     string originalPayload;
                     await using (var read = await state.OpenStore.BeginTransactionAsync(deadline.Token))
                     {
                         var retained = (await read.Operations.GetAsync(operationId, deadline.Token))!;
                         Assert.IsNotNull(retained);
                         originalPayload = Convert.ToHexString(SHA256.HashData(retained.Payload.Span));
+                        await read.RollbackAsync(deadline.Token);
+                    }
+                    var confirmed = await MirrorPulseContentConfirmation.ConfirmAsync(file, proof, deadline.Token);
+                    for (int attempt = 1; ; attempt++)
+                    {
+                        TestContext.WriteLine($"Confirmation attempt={attempt}; outcome={confirmed.Outcome}; stage={confirmed.Stage}; " +
+                            $"prepared={confirmed.NativeIdentityPrepared}; applied={confirmed.NativeApplied}; verified={confirmed.NativeConfirmationVerified}; " +
+                            $"projected={confirmed.DurableProjectionCommitted}; nativeHResult={confirmed.NativeErrorHResult:X8}.");
+                        if (attempt == 3 || confirmed.Outcome is not (MirrorPulseContentConfirmationOutcome.Busy or MirrorPulseContentConfirmationOutcome.ProtectionLost)) break;
+                        await using (var retained = await state.OpenStore.BeginTransactionAsync(deadline.Token))
+                        {
+                            var original = await retained.Operations.GetAsync(operationId, deadline.Token);
+                            Assert.IsNotNull(original);
+                            Assert.AreEqual(originalPayload, Convert.ToHexString(SHA256.HashData(original.Payload.Span)));
+                            await retained.RollbackAsync(deadline.Token);
+                        }
+                        // Conversion may break the SDK's protected reference. Reuse the exact
+                        // accepted proof: no recaptured binding, changed identity/hash or upload.
+                        await Task.Delay(50, deadline.Token);
+                        confirmed = await MirrorPulseContentConfirmation.ConfirmAsync(file, proof, deadline.Token);
+                    }
+                    Assert.IsTrue(confirmed.MayAcknowledge,
+                        $"Confirmation outcome={confirmed.Outcome}; stage={confirmed.Stage}; nativeStage={confirmed.NativeStage}; " +
+                        $"nativeApplied={confirmed.NativeApplied}; nativeVerified={confirmed.NativeConfirmationVerified}; " +
+                        $"projectionCommitted={confirmed.DurableProjectionCommitted}; preparationHResult={confirmed.PreparationHResult}; " +
+                        $"nativeHResult={confirmed.NativeMarkHResult}; projectionHResult={confirmed.ProjectionErrorHResult}.");
+                    var snapshot = await file.InspectAsync(deadline.Token);
+                    await using (var read = await state.OpenStore.BeginTransactionAsync(deadline.Token))
+                    {
+                        var retained = (await read.Operations.GetAsync(operationId, deadline.Token))!;
+                        Assert.IsNotNull(retained);
+                        Assert.AreEqual(originalPayload, Convert.ToHexString(SHA256.HashData(retained.Payload.Span)));
                         await read.RollbackAsync(deadline.Token);
                     }
                     using var log = new LocalRollingLogWriter(Path.Combine(paths.DataRootPath, "observation-test-logs"));

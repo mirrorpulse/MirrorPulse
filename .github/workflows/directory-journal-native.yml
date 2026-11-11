@@ -13,6 +13,7 @@ on:
       - src/MirrorPulse.CloudFiles.CfSharp/MirrorPulseNamespaceDirectoryConfirmation*.cs
       - src/MirrorPulse.Core/State/MirrorPulseProductCatalog.ControlledRetirementContexts.cs
       - tests/MirrorPulse.CloudFiles.CfSharp.Tests/MirrorPulseWindowsNamespacePermissionLeaseTests.DirectoryGroups.cs
+      - tests/MirrorPulse.CloudFiles.CfSharp.Tests/MirrorPulseJournalUploadCompletionTests.cs
 
 permissions:
   contents: read
