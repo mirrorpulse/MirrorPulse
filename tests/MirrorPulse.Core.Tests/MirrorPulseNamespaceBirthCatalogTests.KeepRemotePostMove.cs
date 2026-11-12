@@ -93,6 +93,41 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
     }
 
     [TestMethod]
+    public async Task KeepRemoteMoveOnlyStartRetainsBothOriginalRenamesWithoutCreatingAnUpload()
+    {
+        using var fixture = new Fixture(); KeepRemoteFileSetup setup;
+        MirrorPulseConflictKeepRemoteFileStart start;
+        await using (var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths))
+        {
+            setup = await PrepareKeepRemoteFileAsync(catalog, moveOnly: true);
+            var intent = setup.Preparation.Intent;
+            var plan = await catalog.ReadJournalCoalescingOwnerAsync(intent.OriginalOperationIds[0]);
+            Assert.IsNotNull(plan); Assert.AreEqual(MirrorPulseCoalescedEffect.MoveFile, plan.Effect);
+            var program = await catalog.ReadJournalCoalescingExecutionAsync(plan.PlanId); Assert.IsNotNull(program);
+            Assert.IsTrue(program.IsMoveOnly);
+            Assert.HasCount(2, plan.Members);
+            Assert.HasCount(1, program.Steps);
+            Assert.AreEqual(program.Steps[0].OperationId, intent.RejectedEffect.OperationId);
+            Assert.AreEqual("baseline", intent.RejectedEffect.ExpectedRevision);
+            Assert.AreEqual(plan.OriginalPath, intent.RemoteSource.RelativePath);
+            Assert.AreEqual(plan.FinalPath, intent.LocalRelativePath);
+            start = await StartKeepRemoteFileAsync(catalog, setup);
+        }
+        await using var reopened = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        var decision = setup.Preparation.Intent;
+        Assert.AreEqual(JsonSerializer.Serialize(start), JsonSerializer.Serialize(await reopened.ReadConflictKeepRemoteFileStartAsync(start.CommandId)));
+        var retainedProgram = await reopened.ReadJournalCoalescingExecutionAsync(decision.PlanId); Assert.IsNotNull(retainedProgram);
+        Assert.IsTrue(retainedProgram.IsMoveOnly);
+        Assert.HasCount(1, retainedProgram.Steps);
+        var rejected = await reopened.ReadMutationAsync(decision.RejectedEffect.OperationId); Assert.IsNotNull(rejected);
+        Assert.AreEqual(MirrorPulseMutationState.Conflict, rejected.State);
+        Assert.IsNull(rejected.AcceptedRevision);
+        var journal = await reopened.ReadConflictKeepRemoteJournalAsync(start.CommandId); Assert.IsNotNull(journal);
+        CollectionAssert.AreEqual(decision.OriginalOperationIds.ToArray(), journal.Originals.Select(original => original.OperationId).ToArray());
+        Assert.IsNull(await reopened.ReadConflictKeepRemoteAcknowledgementAsync(start.CommandId));
+    }
+
+    [TestMethod]
     public async Task KeepRemoteResidentStartAfterAcknowledgedMoveRetainsItsOriginalEffectAndCompleteJournalAcrossOwners()
     {
         using var fixture = new Fixture(); KeepRemoteFileSetup setup;

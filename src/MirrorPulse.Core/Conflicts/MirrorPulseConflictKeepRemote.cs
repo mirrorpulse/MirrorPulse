@@ -15,7 +15,7 @@ public static class MirrorPulseConflictKeepRemote
         {
             MirrorPulseWorkerChangeKind.ContentUpdate => true,
             MirrorPulseWorkerChangeKind.Create => plan.Effect == MirrorPulseCoalescedEffect.CreateFile && rejected.ExpectedRevision is null,
-            MirrorPulseWorkerChangeKind.Move => plan.Effect == MirrorPulseCoalescedEffect.MoveAndUpdateFile &&
+            MirrorPulseWorkerChangeKind.Move => plan.Effect is MirrorPulseCoalescedEffect.MoveFile or MirrorPulseCoalescedEffect.MoveAndUpdateFile &&
                 !string.IsNullOrEmpty(rejected.ExpectedRevision) && rejected.PreviousRelativePath == plan.OriginalPath &&
                 rejected.RelativePath == plan.FinalPath && plan.OriginalPath != plan.FinalPath,
             _ => false,

@@ -193,7 +193,8 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             setup.Preparation.Intent.CommandId, setup.StoreVolume, setup.StoreFileId, setup.Original, setup.Parent, setup.StartedAt, token);
 
     private static async Task<KeepRemoteFileSetup> PrepareKeepRemoteFileAsync(MirrorPulseProductCatalog catalog, bool retainJournal = true,
-        string? backendRemoteId = null, bool moveAcceptedBeforeConflict = false, bool rejectMove = false, bool createFile = false)
+        string? backendRemoteId = null, bool moveAcceptedBeforeConflict = false, bool rejectMove = false, bool createFile = false,
+        bool moveOnly = false)
     {
         var member = await PrepareMovableMemberAsync(catalog); var root = await AddIdentityTopologyAsync(catalog, member.Move.RootId);
         var original = (await catalog.ReadNamespaceMemberProtectionSnapshotAsync(member.Member.MemberId))!;
@@ -204,14 +205,20 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             new(original.Context.Member.LocalObject, MirrorPulseContentPreparation.ReplacePlaceholderIdentity, "AQID"));
         DateTimeOffset now = DateTimeOffset.UtcNow;
         bool movedProgram = moveAcceptedBeforeConflict || rejectMove;
-        MirrorPulseWorkerChangeCommand[] window = Enumerable.Range(1, 2).Select(sequence => new MirrorPulseWorkerChangeCommand(Guid.NewGuid(), sequence,
+        MirrorPulseWorkerChangeCommand[] window = moveOnly ?
+        [
+            new(Guid.NewGuid(), 1, root.InstanceId, root.UniquenessKey, MirrorPulseWorkerChangeKind.Move,
+                path + ".between", root.UniquenessKey, path + ".before", false, original.Identity.ItemId!.Value, now.AddTicks(1)),
+            new(Guid.NewGuid(), 2, root.InstanceId, root.UniquenessKey, MirrorPulseWorkerChangeKind.Move,
+                path, root.UniquenessKey, path + ".between", false, original.Identity.ItemId!.Value, now.AddTicks(2)),
+        ] : Enumerable.Range(1, 2).Select(sequence => new MirrorPulseWorkerChangeCommand(Guid.NewGuid(), sequence,
             root.InstanceId, root.UniquenessKey, movedProgram && sequence == 1 ? MirrorPulseWorkerChangeKind.Move :
                 createFile && sequence == 1 ? MirrorPulseWorkerChangeKind.Create : MirrorPulseWorkerChangeKind.ContentUpdate,
             path, movedProgram && sequence == 1 ? root.UniquenessKey : null,
             movedProgram && sequence == 1 ? path + ".before" : null, false,
             original.Identity.ItemId!.Value, now.AddTicks(sequence))).ToArray();
         var plan = MirrorPulseJournalCoalescingPlanner.TryPlan(window, original.Identity.ItemId!.Value, 100, new HashSet<Guid>())!;
-        await catalog.PrepareJournalCoalescingAndExecutionAsync(plan, window, createFile ? null : "baseline", content);
+        await catalog.PrepareJournalCoalescingAndExecutionAsync(plan, window, createFile ? null : "baseline", moveOnly ? null : content);
         string? baseline = createFile ? null : "baseline";
         if (moveAcceptedBeforeConflict)
         {
