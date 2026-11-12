@@ -75,8 +75,8 @@ function Invoke-CliStoppedCoalescingOracle {
             throw 'The independent stopped oracle refused the original fixture evidence.'
         }
         $result=$text|ConvertFrom-Json
-        $expectedEffect=if($MoveOnly){'MoveFile'}elseif($MovedFile){'MoveAndUpdateFile'}elseif($ControlledCreate){'CreateFile'}else{'UpdateFile'}
-        if($result.schemaVersion -ne 1 -or $result.exclusiveCatalogOwner -ne $true -or $result.rawEffect -cne $expectedEffect -or
+        $expectedEffects=if($MoveOnly){@('MoveFile','MoveAndUpdateFile')}elseif($MovedFile){'MoveAndUpdateFile'}elseif($ControlledCreate){'CreateFile'}else{'UpdateFile'}
+        if($result.schemaVersion -ne 1 -or $result.exclusiveCatalogOwner -ne $true -or $result.rawEffect -cnotin $expectedEffects -or
             $result.originalCount -lt 2 -or $result.originalCount -gt 64 -or @($result.originalOperationIds).Count -ne $result.originalCount){
             throw 'The oracle did not return its bounded authenticated original group.'
         }

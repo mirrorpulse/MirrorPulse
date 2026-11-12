@@ -53,6 +53,12 @@ public sealed record CliCoalescingFixtureAudit(int SchemaVersion, bool Exclusive
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? MoveOnlyExpectedRevisionSha256 { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? UnchangedContentAcceptanceOperationId { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? UnchangedContentSha256 { get; init; }
 }
 
 public sealed record CliCoalescingObservedVersionAudit(int Version, Guid ObservationId, Guid RejectedEffectId,
@@ -103,9 +109,10 @@ public static partial class CliCoalescingFixtureProbe
         string finalPath = moving ? "cli-roundtrip-moved.txt" : "cli-roundtrip.txt";
         var selected = plans.Where(plan => plan.InstanceId == route.InstanceId && plan.RootKey == route.UniquenessKey &&
             plan.OriginalPath == "cli-roundtrip.txt" && plan.FinalPath == finalPath).ToArray();
-        var expectedEffect = moveOnly ? MirrorPulseCoalescedEffect.MoveFile : movedFile ? MirrorPulseCoalescedEffect.MoveAndUpdateFile :
+        var expectedEffect = moving ? MirrorPulseCoalescedEffect.MoveAndUpdateFile :
             controlledCreate ? MirrorPulseCoalescedEffect.CreateFile : MirrorPulseCoalescedEffect.UpdateFile;
-        if (selected.Length != 1 || selected[0].Effect != expectedEffect || selected[0].Members.Count is < 2 or > 64 || controlledCreate && !keepRemote)
+        if (selected.Length != 1 || selected[0].Effect != expectedEffect && !(moveOnly && selected[0].Effect == MirrorPulseCoalescedEffect.MoveFile) ||
+            selected[0].Members.Count is < 2 or > 64 || controlledCreate && !keepRemote)
             throw new InvalidDataException("The fixture requires one actual original coalescing group of its selected kind.");
         var plan = selected[0];
         var execution = await catalog.ReadJournalCoalescingExecutionAsync(plan.PlanId)
@@ -116,8 +123,21 @@ public static partial class CliCoalescingFixtureProbe
               (moveOnly || execution.Steps[1].Kind == MirrorPulseCoalescingStepKind.Upload && execution.Steps[1].RelativePath == plan.FinalPath)
             : execution.Steps.Count == 1 && execution.Steps[0].Kind == MirrorPulseCoalescingStepKind.Upload;
         if ((controlledCreate ? execution.ExpectedRevision is not null : string.IsNullOrEmpty(execution.ExpectedRevision)) ||
-            (execution.Content is null) != moveOnly || !expectedSteps || moveOnly && plan.Members.Count != 2)
+            (execution.Content is null) != moveOnly || !expectedSteps ||
+            moveOnly && (plan.Effect == MirrorPulseCoalescedEffect.MoveFile) != (plan.Members.Count == 2))
             throw new InvalidDataException("The original ordered effects, baseline or content proof do not match the selected fixture.");
+        if (moveOnly && plan.Effect == MirrorPulseCoalescedEffect.MoveAndUpdateFile)
+        {
+            var observed = execution.ObservedContent
+                ?? throw new InvalidDataException("The single Move must retain its unchanged accepted content observation.");
+            var proof = await catalog.ReadContentAcceptanceProofAsync(observed.AcceptanceOperationId);
+            if (proof is null || proof.AcceptedItemId != plan.ItemId || proof.AcceptedRevision != execution.ExpectedRevision ||
+                proof.AcceptedRevision != observed.RemoteRevision || proof.RemoteId != observed.RemoteId ||
+                proof.Length != observed.Content.Length || !string.Equals(proof.Sha256, observed.Content.Sha256, StringComparison.OrdinalIgnoreCase) ||
+                proof.UploadBinding.LocalObject != observed.Content.UploadBinding.LocalObject ||
+                plan.Members.Any(member => member.OperationId == proof.OperationId))
+                throw new InvalidDataException("The single Move lost its separate prior accepted bytes or native binding.");
+        }
         if (movedFile && await catalog.ReadMutationAsync(execution.Steps[1].OperationId) is { } laterUpload &&
             (laterUpload.ExecutionEvidence != MirrorPulseMutationExecutionEvidence.NeverStarted ||
              laterUpload.State is not (MirrorPulseMutationState.Prepared or MirrorPulseMutationState.Superseded)))
@@ -145,7 +165,8 @@ public static partial class CliCoalescingFixtureProbe
                 if (await transaction.Operations.GetAsync(member.OperationId) is { } original)
                 {
                     pending++;
-                    if (moveOnly && (original.Kind != CloudStateOperationKind.Move || original.ItemId != plan.ItemId || original.Sequence != member.Sequence))
+                    if (moveOnly && (original.Kind is not (CloudStateOperationKind.Move or CloudStateOperationKind.ContentUpdate) ||
+                        original.ItemId != plan.ItemId || original.Sequence != member.Sequence))
                         throw new InvalidDataException("The pure rename original is not the expected typed SDK journal row.");
                     if (original.Kind == CloudStateOperationKind.Move) moveOriginals.Add(member.OperationId);
                 }
@@ -161,6 +182,7 @@ public static partial class CliCoalescingFixtureProbe
         if (!completed)
         {
             if (moving && moveOriginals.Count == 0) throw new InvalidDataException("The selected group has no actual original SDK Move.");
+            if (moveOnly && moveOriginals.Count != 2) throw new InvalidDataException("The selected single Move must own both original SDK renames.");
             if (pending != originalIds.Length || (await catalog.ReadCurrentCoalescingKeepBothCommandsAsync(plan.PlanId)).Count != 0)
                 throw new InvalidDataException("Every original must still be pending before the choice.");
             var conflicts = await catalog.ReadUploadConflictsAsync();
@@ -251,6 +273,8 @@ public static partial class CliCoalescingFixtureProbe
             PendingMoveOriginalOperationIds = moving && !completed ? moveOriginals : null,
             OriginalExecutionStepKinds = moveOnly ? execution.Steps.Select(step => step.Kind.ToString()).ToArray() : null,
             MoveOnlyExpectedRevisionSha256 = moveOnly ? HashRevision(execution.ExpectedRevision) : null,
+            UnchangedContentAcceptanceOperationId = moveOnly ? execution.ObservedContent?.AcceptanceOperationId : null,
+            UnchangedContentSha256 = moveOnly ? execution.ObservedContent?.Content.Sha256 : null,
             PreservedLocalSha256 = preservedLocalHash,
             AcknowledgementId = acknowledgementId,
             OriginalBirthOperationId = originalBirth?.OperationId,

@@ -28,7 +28,7 @@ function Invoke-CliCoalescingContentConflict {
     if($moving -and ($Action -cne 'KeepRemote' -or $ControlledCreate -or $EmptyCreate -or ($MovedFile -and $MoveOnly))){
         throw 'The moved-file fixture requires its independent KeepRemote choice.'
     }
-    $expectedEffect=if($MoveOnly){'MoveFile'}elseif($MovedFile){'MoveAndUpdateFile'}elseif($ControlledCreate){'CreateFile'}else{'UpdateFile'}
+    $expectedEffect=if($moving){'MoveAndUpdateFile'}elseif($ControlledCreate){'CreateFile'}else{'UpdateFile'}
     $originals=Join-Path ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($EvidencePath))) 'coalescing.originals'
     New-Item -ItemType Directory -Path $originals -Force|Out-Null
     function Invoke-CoalescingCli([string]$Name,[string[]]$Arguments) {
@@ -100,10 +100,10 @@ function Invoke-CliCoalescingContentConflict {
         Assert-KeepRemoteResident $Snapshot $onlineSeedIdentity
         $target=@($Snapshot.journal|Where-Object associatedWithTarget)
         if(-not $Snapshot.targetItemId -or $Snapshot.targetItemIsTombstone -or
-            @($target|Where-Object {$_.kind -cnotin @('Move','MetadataUpdate')}).Count -ne 0){
-            throw 'The pure rename fixture observed an unexpected target content operation or replacement.'
+            @($target|Where-Object {$_.kind -cnotin @('Move','ContentUpdate','MetadataUpdate')}).Count -ne 0){
+            throw 'The pure rename fixture observed an unexpected replacement or deletion.'
         }
-        $target|Where-Object kind -CEQ 'Move'|Sort-Object sequence
+        $target|Where-Object kind -CNE 'MetadataUpdate'|Sort-Object sequence
     }
     function Assert-BackendMoveTargetsAbsent {
         if($MoveOnly -and ((Test-Path -LiteralPath (Join-Path $SourceRoot $intermediateName)) -or
@@ -148,6 +148,11 @@ function Invoke-CliCoalescingContentConflict {
     $latest=[Text.Encoding]::UTF8.GetBytes('signed coalescing final local bytes retained by KeepBoth')
     $remote=[Text.Encoding]::UTF8.GetBytes('signed coalescing independently selected remote version')
     $seedHash=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($seed))
+    $backendSeedHash=$seedHash
+    if($MoveOnly){
+        $seed=[Text.Encoding]::UTF8.GetBytes('signed pure rename accepted local version')
+        $seedHash=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($seed))
+    }
     $latestHash=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($latest))
     if($MoveOnly){$latestHash=$seedHash}
     $remoteHash=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($remote))
@@ -158,11 +163,28 @@ function Invoke-CliCoalescingContentConflict {
         }
     }elseif($Action -ceq 'KeepRemote'){
         # The signed Worker exposes this existing remote item through the normal initial discovery.
-        Assert-CoalescingHash $source $seedHash $false
-        Assert-CoalescingHash $local $seedHash $true
+        Assert-CoalescingHash $source $backendSeedHash $false
+        Assert-CoalescingHash $local $backendSeedHash $true
+        if($MoveOnly){
+            # A real prior upload supplies the byte and native identity proof used by the Host's unchanged-content classifier.
+            Write-CoalescingEdit $seed
+            Assert-CoalescingHash $source $seedHash $false
+            $deadline=[DateTimeOffset]::UtcNow.AddSeconds(30)
+            do {
+                $seedStatus=& $InvokeCli @('--json','--developer-mode','status')
+                if($seedStatus.kind -ceq 'result' -and $seedStatus.data.pendingUploads -eq 0){break}
+                Start-Sleep -Milliseconds 100
+            }while([DateTimeOffset]::UtcNow -lt $deadline)
+            if($seedStatus.kind -cne 'result' -or $seedStatus.data.pendingUploads -ne 0){
+                throw 'The actual seed upload did not settle before disabling the adapter.'
+            }
+        }
         $onlineSeed=& $InspectOnlineSeed
         $onlineSeed|ConvertTo-Json -Depth 8|Set-Content -LiteralPath (Join-Path $originals 'keep-remote-seed-online.json') -Encoding utf8
         Assert-KeepRemoteResident $onlineSeed ''
+        if($MoveOnly -and $onlineSeed.native.synchronizationState -cne 'InSync'){
+            throw 'The uploaded seed must retain an in-sync native placeholder before the two renames.'
+        }
         $onlineSeedIdentity=$onlineSeed.nativeIdentitySha256
     }else{
         [IO.File]::WriteAllBytes($source,$seed)
@@ -193,7 +215,8 @@ function Invoke-CliCoalescingContentConflict {
             Invoke-CoalescingCli 'stop-after-intermediate-move' @('--json','--developer-mode','host','stop')|Out-Null
             & $WaitHostStopped
             $firstMoveSnapshot=Read-CoalescingEdit 'intermediate-move-originals' $true
-            $firstMoves=@(Get-MoveOnlyJournal $firstMoveSnapshot)
+            $firstOriginals=@(Get-MoveOnlyJournal $firstMoveSnapshot)
+            $firstMoves=@($firstOriginals|Where-Object kind -CEQ 'Move')
             if($firstMoves.Count -ne 1 -or (ConvertTo-CliCoalescingEditTimestamp $firstMoves[0].createdAt) -lt $intermediateStartedAt){
                 throw 'The first controlled rename requires exactly one fresh pending SDK Move.'
             }
@@ -209,7 +232,8 @@ function Invoke-CliCoalescingContentConflict {
             Invoke-CoalescingCli 'stop-after-final-move' @('--json','--developer-mode','host','stop')|Out-Null
             & $WaitHostStopped
             $lastMoveSnapshot=Read-CoalescingEdit 'final-move-originals'
-            $moves=@(Get-MoveOnlyJournal $lastMoveSnapshot)
+            $lastOriginals=@(Get-MoveOnlyJournal $lastMoveSnapshot)
+            $moves=@($lastOriginals|Where-Object kind -CEQ 'Move')
             if($moves.Count -ne 2 -or $lastMoveSnapshot.targetItemId -cne $firstMoveSnapshot.targetItemId -or
                 $moves[0].operationId -cne $firstMoves[0].operationId -or $moves[0].sequence -ne $firstMoves[0].sequence -or
                 $moves[0].payloadSha256 -cne $firstMoves[0].payloadSha256 -or $moves[0].createdAt -cne $firstMoves[0].createdAt -or
@@ -217,7 +241,16 @@ function Invoke-CliCoalescingContentConflict {
                 (ConvertTo-CliCoalescingEditTimestamp $moves[1].createdAt) -lt $finalMoveStartedAt){
                 throw 'Both ordered SDK Move rows must retain the same original item and first operation.'
             }
-            $moveOnlyOriginals=@($moves.operationId)
+            foreach($row in $firstOriginals){
+                $retained=@($lastOriginals|Where-Object operationId -CEQ $row.operationId)
+                if($retained.Count -ne 1 -or $retained[0].kind -cne $row.kind -or $retained[0].sequence -ne $row.sequence -or
+                    $retained[0].payloadSha256 -cne $row.payloadSha256 -or $retained[0].createdAt -cne $row.createdAt){
+                    throw 'The second rename changed a pending original from the first rename.'
+                }
+            }
+            $moveOnlyOriginals=@($lastOriginals.operationId)
+            $moveOnlyMoveIds=@($moves.operationId)
+            if($lastOriginals.Count -eq 2){$expectedEffect='MoveFile'}
         }
     }
     if($ControlledCreate){
@@ -284,8 +317,8 @@ function Invoke-CliCoalescingContentConflict {
         throw 'The actual moved-file conflict must retain its original SDK Move in the complete group.'
     }
     if($MoveOnly -and (($moveOnlyOriginals -join ',') -cne (@($pending.originalOperationIds) -join ',') -or
-        ($moveOnlyOriginals -join ',') -cne (@($pending.pendingMoveOriginalOperationIds) -join ','))){
-        throw 'The rejected MoveFile group must contain exactly the two observed SDK Move originals in order.'
+        ($moveOnlyMoveIds -join ',') -cne (@($pending.pendingMoveOriginalOperationIds) -join ','))){
+        throw 'The rejected move-only program must retain the exact observed originals, including both SDK Move rows.'
     }
     $editOriginals=if(-not $MoveOnly){@($firstWitness.originalOperationIds)+@($secondWitness.originalOperationIds)}
     foreach($id in $editOriginals){
@@ -303,8 +336,10 @@ function Invoke-CliCoalescingContentConflict {
     if($MoveOnly){
         $expectedRevisionHash=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($conflict.localRevision)))
         if($pending.moveOnlyExpectedRevisionSha256 -cne $expectedRevisionHash -or $conflict.localRevision -ceq $conflict.remoteRevision -or
-            (@($pending.originalExecutionStepKinds) -join ',') -cne 'Move'){
-            throw 'The pure rename conflict lost its original conditional revision or Move-only execution.'
+            (@($pending.originalExecutionStepKinds) -join ',') -cne 'Move' -or
+            ($expectedEffect -ceq 'MoveAndUpdateFile' -and
+                (-not $pending.unchangedContentAcceptanceOperationId -or $pending.unchangedContentSha256 -cne $seedHash))){
+            throw 'The pure rename conflict lost its original revision, single Move effect or accepted byte proof.'
         }
     }
     if($null -ne $observation){
@@ -431,6 +466,8 @@ function Invoke-CliCoalescingContentConflict {
         $report.intermediateControlledMoveOperationId=$intermediateOperation.ToString('D')
         $report.intermediatePath=$intermediateName
         $report.backendMoveTargetsAbsentAfterRestart=$true
+        $report.originalContentObservationCount=$moveOnlyOriginals.Count-$moveOnlyMoveIds.Count
+        $report.unchangedContentAcceptanceOperationId=$before.unchangedContentAcceptanceOperationId
     }
     $report
 }
