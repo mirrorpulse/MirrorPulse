@@ -10,8 +10,20 @@ using MirrorPulse.Core.Transport;
 InstanceId instance = InstanceId.Parse(args[1]);
 WorkerSessionId session = WorkerSessionId.Parse(args[3]);
 string? cache = Environment.GetEnvironmentVariable("MP_TRANSFER_CACHE_DIR");
+string? workerState = Environment.GetEnvironmentVariable("MP_WORKER_STATE_DIR");
 string? modePath = cache is null ? null : Path.Combine(cache, ".mp-startup-fixture-mode");
 string mode = modePath is not null && File.Exists(modePath) ? (await File.ReadAllTextAsync(modePath)).Trim() : "Normal";
+if (mode == "DurableStateProbe")
+{
+    string state = workerState ?? throw new InvalidDataException("WorkerStateGrantRequired");
+    if (!Directory.Exists(state)) throw new InvalidDataException("WorkerStateGrantMissing");
+    string receipt = Path.Combine(state, ".mp-worker-state-fixture");
+    if (!File.Exists(receipt))
+        await File.WriteAllBytesAsync(receipt, JsonSerializer.SerializeToUtf8Bytes(new { instanceId = instance.Value, firstSession = session.Value }));
+    using var retained = JsonDocument.Parse(await File.ReadAllBytesAsync(receipt));
+    if (retained.RootElement.GetProperty("instanceId").GetGuid() != instance.Value)
+        throw new InvalidDataException("WorkerStateInstanceMismatch");
+}
 using FileStream? heldResource = mode is "IgnoreStopWithOpenFile" or "IdleBeforePipeWithOpenFile" or "NormalWithOpenFile"
     ? new FileStream(Path.Combine(cache!, ".mp-startup-fixture-open-resource"), FileMode.Create, FileAccess.ReadWrite, FileShare.None)
     : null;
@@ -96,7 +108,7 @@ while (true)
                 "after-retirement", null, "AQID")).ToArray());
         if (mode == "LostOriginalDirectoryReply")
         {
-            string receiptPath = Path.Combine(cache!, ".mp-original-directory-fixture-receipt");
+            string receiptPath = Path.Combine(workerState ?? throw new InvalidDataException("WorkerStateGrantRequired"), ".mp-original-directory-fixture-receipt");
             if (!File.Exists(receiptPath))
             {
                 await File.WriteAllBytesAsync(receiptPath, AdapterProtocolJson.Encode(receipt));

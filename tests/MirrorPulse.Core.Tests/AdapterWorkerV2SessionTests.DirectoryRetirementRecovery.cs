@@ -43,8 +43,13 @@ public sealed partial class AdapterWorkerV2SessionTests
                 Assert.AreEqual(MirrorPulseMutationState.Executing, (await catalog.ReadMutationAsync(operation, token))!.State);
             }
 
-            byte[] workerOriginal = await File.ReadAllBytesAsync(Path.Combine(cache, ".mp-original-directory-fixture-receipt"), token);
+            string workerState = Path.Combine(paths.DataRootPath, "state", "workers", instance.Value.ToString("N"));
+            byte[] workerOriginal = await File.ReadAllBytesAsync(Path.Combine(workerState, ".mp-original-directory-fixture-receipt"), token);
             var workerReceipt = AdapterProtocolJson.Decode<AdapterOwnedChildEffectReceipt>(workerOriginal);
+            // Clear the disposable transfer cache after both processes stop. A
+            // committed backend receipt belongs to the durable instance grant.
+            foreach (string entry in Directory.EnumerateFiles(cache)) File.Delete(entry);
+            await File.WriteAllTextAsync(Path.Combine(cache, ".mp-startup-fixture-mode"), "LostOriginalDirectoryReply", token);
             // A fresh Worker process reconnects to the reopened catalog and supervisor.
             await using (var catalog = await MirrorPulseProductCatalog.OpenAsync(paths, cancellationToken: token))
             {

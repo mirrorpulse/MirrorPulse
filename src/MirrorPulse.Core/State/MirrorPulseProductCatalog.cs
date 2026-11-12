@@ -44,15 +44,17 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
 {
     private readonly FileStream _owner;
     private readonly SqliteConnection _connection;
+    internal string WorkerStateRootPath { get; }
     private readonly SemaphoreSlim _gate = new(1, 1);
     internal SemaphoreSlim CredentialGate { get; } = new(1, 1);
     internal MirrorPulseInstanceScheduler CoalescingScheduler { get; } = new();
     private bool _disposed;
 
-    private MirrorPulseProductCatalog(FileStream owner, SqliteConnection connection)
+    private MirrorPulseProductCatalog(FileStream owner, SqliteConnection connection, MirrorPulseStoragePaths paths)
     {
         _owner = owner;
         _connection = connection;
+        WorkerStateRootPath = Path.Combine(paths.DataRootPath, "state", "workers");
     }
 
     public static async Task<MirrorPulseProductCatalog> OpenAsync(
@@ -505,7 +507,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
             await EnsureUnsealedRootLabelCancellationSchemaAsync(connection, currentVersion, stampVersion: false, cancellationToken).ConfigureAwait(false);
             openObservation.Mark(MirrorPulseCatalogOpenPhase.TransferSchemaPrepared);
             openObservation.Mark(MirrorPulseCatalogOpenPhase.RecoverySchemaPreparing);
-            var catalog = new MirrorPulseProductCatalog(owner, connection);
+            var catalog = new MirrorPulseProductCatalog(owner, connection, paths);
             await EnsureNamespaceRemoteUpdateSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
             await EnsureRemoteDeleteResolutionSchemaAsync(connection, cancellationToken, stampVersion: false).ConfigureAwait(false);
             await catalog.UpgradeRemoteTreeSettlementOwnersAsync(currentVersion, cancellationToken).ConfigureAwait(false);

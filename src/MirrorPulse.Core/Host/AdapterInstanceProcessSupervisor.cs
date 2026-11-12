@@ -55,6 +55,7 @@ public sealed class AdapterInstanceProcessSupervisor :
             throw new InvalidOperationException("The Adapter process supervisor is already running.");
         }
 
+        WorkerPersistentStateDirectory.RequireSeparateCaches(_catalog.WorkerStateRootPath, topology.Instances);
         _started = true;
         foreach (AdapterInstance instance in topology.Instances.Where(item => !item.Enabled))
         {
@@ -306,9 +307,14 @@ public sealed class AdapterInstanceProcessSupervisor :
             AdapterInstanceWorkerPayload payload = AdapterInstanceWorkerLaunchResolver.Resolve(
                 topology, instance.InstanceId, sessionId, runtimeIdentifier, arguments);
             WorkerLaunchRequest request = payload.LaunchRequest;
+            string stateDirectory = WorkerPersistentStateDirectory.Prepare(_catalog.WorkerStateRootPath, instance.InstanceId);
             request = new WorkerLaunchRequest(request.InstanceId, request.WorkerSessionId,
                 request.ExecutablePath, request.WorkingDirectory, request.Arguments,
-                new Dictionary<string, string> { ["MP_TRANSFER_CACHE_DIR"] = instance.TransferCacheDirectory });
+                new Dictionary<string, string>
+                {
+                    ["MP_TRANSFER_CACHE_DIR"] = instance.TransferCacheDirectory,
+                    ["MP_WORKER_STATE_DIR"] = stateDirectory,
+                });
             Directory.CreateDirectory(instance.TransferCacheDirectory);
             int selectedVersion = 1;
             observation.Advance(WorkerSessionStage.CreatePipe);
