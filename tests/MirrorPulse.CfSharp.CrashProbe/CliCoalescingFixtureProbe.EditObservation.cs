@@ -22,7 +22,7 @@ public sealed record CliCoalescingEditObservation(int SchemaVersion, bool Exclus
 public static partial class CliCoalescingFixtureProbe
 {
     /// <summary>Retains a bounded actual journal inventory after the exact synthetic Host has stopped.</summary>
-    public static async Task<int> ObserveEditAsync(string directory, bool inspectNative, bool movedFile = false)
+    public static async Task<int> ObserveEditAsync(string directory, bool inspectNative, bool movedFile = false, bool intermediateMove = false)
     {
         string root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory));
         const string prefix = "MirrorPulse-cli-integration-"; string name = Path.GetFileName(root);
@@ -52,7 +52,8 @@ public static partial class CliCoalescingFixtureProbe
         await using var store = await MirrorPulseCfSharpStateStoreFactory.Create(paths).OpenAsync(new(paths.SyncRootPath));
         var rows = new List<CliCoalescingJournalObservation>(); var echoes = new List<CliCoalescingEchoObservation>();
         CloudItemState? target; CloudStateCheckpoint? checkpoint; long through, after = 0; bool complete = false;
-        string relative = Path.Combine(route.DirectoryName, movedFile ? "cli-roundtrip-moved.txt" : "cli-roundtrip.txt");
+        string relative = Path.Combine(route.DirectoryName, intermediateMove ? "cli-roundtrip-intermediate.txt" :
+            movedFile ? "cli-roundtrip-moved.txt" : "cli-roundtrip.txt");
         await using (var transaction = await store.BeginTransactionAsync())
         {
             target = await transaction.Items.GetByRelativePathAsync(relative);

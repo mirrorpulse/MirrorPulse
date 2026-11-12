@@ -46,7 +46,8 @@ function Invoke-CliCoalescingChoice {
 
 function Invoke-CliStoppedCoalescingOracle {
     param([Parameter(Mandatory)][string]$ProbeAssembly,[Parameter(Mandatory)][string]$FixtureRoot,[Parameter(Mandatory)][bool]$Completed,
-        [ValidateSet('KeepBoth','KeepRemote', IgnoreCase = $false)][string]$Action = 'KeepBoth', [switch]$ControlledCreate, [switch]$MovedFile)
+        [ValidateSet('KeepBoth','KeepRemote', IgnoreCase = $false)][string]$Action = 'KeepBoth',
+        [switch]$ControlledCreate, [switch]$MovedFile, [switch]$MoveOnly)
     $root=Assert-CliCoalescingEnvironment $FixtureRoot
     if([IO.Path]::GetFullPath($ProbeAssembly) -ine (Join-Path $root 'probe/MirrorPulse.CfSharp.CrashProbe.dll')){
         throw 'The stopped oracle must be the current fixture publication.'
@@ -58,9 +59,11 @@ function Invoke-CliStoppedCoalescingOracle {
         if($Action -cne 'KeepRemote'){throw 'Controlled-Create oracle requires KeepRemote.'}
         $mode=if($Completed){'--audit-cli-create-keep-remote'}else{'--audit-cli-create-pending'}
     }
-    if($MovedFile){
-        if($Action -cne 'KeepRemote' -or $ControlledCreate){throw 'The moved-file oracle requires its independent KeepRemote fixture.'}
-        $mode=if($Completed){'--audit-cli-move-keep-remote'}else{'--audit-cli-move-pending'}
+    if($MovedFile -or $MoveOnly){
+        if($Action -cne 'KeepRemote' -or $ControlledCreate -or ($MovedFile -and $MoveOnly)){throw 'The moved-file oracle requires its independent KeepRemote fixture.'}
+        $effect=if($MoveOnly){'move-only'}else{'move'}
+        $phase=if($Completed){'keep-remote'}else{'pending'}
+        $mode="--audit-cli-$effect-$phase"
     }
     foreach($argument in @($ProbeAssembly,$mode,$root)){$start.ArgumentList.Add($argument)}
     $process=[Diagnostics.Process]::Start($start)
@@ -72,7 +75,7 @@ function Invoke-CliStoppedCoalescingOracle {
             throw 'The independent stopped oracle refused the original fixture evidence.'
         }
         $result=$text|ConvertFrom-Json
-        $expectedEffect=if($MovedFile){'MoveAndUpdateFile'}elseif($ControlledCreate){'CreateFile'}else{'UpdateFile'}
+        $expectedEffect=if($MoveOnly){'MoveFile'}elseif($MovedFile){'MoveAndUpdateFile'}elseif($ControlledCreate){'CreateFile'}else{'UpdateFile'}
         if($result.schemaVersion -ne 1 -or $result.exclusiveCatalogOwner -ne $true -or $result.rawEffect -cne $expectedEffect -or
             $result.originalCount -lt 2 -or $result.originalCount -gt 64 -or @($result.originalOperationIds).Count -ne $result.originalCount){
             throw 'The oracle did not return its bounded authenticated original group.'
@@ -85,14 +88,14 @@ function Invoke-CliStoppedCoalescingOracle {
 }
 
 function Read-CliStoppedCoalescingEdit {
-    param([Parameter(Mandatory)][string]$ProbeAssembly,[Parameter(Mandatory)][string]$FixtureRoot,[switch]$MovedFile)
+    param([Parameter(Mandatory)][string]$ProbeAssembly,[Parameter(Mandatory)][string]$FixtureRoot,[switch]$MovedFile,[switch]$IntermediateMove)
     $root=Assert-CliCoalescingEnvironment $FixtureRoot
     if([IO.Path]::GetFullPath($ProbeAssembly) -ine (Join-Path $root 'probe/MirrorPulse.CfSharp.CrashProbe.dll')){
         throw 'The edit observer must be the current isolated fixture publication.'
     }
     $start=[Diagnostics.ProcessStartInfo]::new('dotnet')
     $start.UseShellExecute=$false;$start.CreateNoWindow=$true;$start.RedirectStandardOutput=$true;$start.RedirectStandardError=$true
-    $mode=if($MovedFile){'--observe-cli-move-coalescing-edit'}else{'--observe-cli-coalescing-edit'}
+    $mode=if($IntermediateMove){'--observe-cli-intermediate-move'}elseif($MovedFile){'--observe-cli-move-coalescing-edit'}else{'--observe-cli-coalescing-edit'}
     foreach($argument in @($ProbeAssembly,$mode,$root)){$start.ArgumentList.Add($argument)}
     $process=[Diagnostics.Process]::Start($start)
     try{

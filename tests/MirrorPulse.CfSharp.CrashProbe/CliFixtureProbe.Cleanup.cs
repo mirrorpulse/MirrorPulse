@@ -60,7 +60,7 @@ public static partial class CliFixtureProbe
             {
                 if (renamedRoot is not null) throw new InvalidDataException("The controlled file fixture cannot also own a root Label change.");
                 setStage("ControlledMoveValidation");
-                movedFile = await AuthenticateCleanupMovedFileAsync(catalog, registration, operation);
+                movedFile = await AuthenticateCleanupMovedFileAsync(catalog, registration, operation, marker.IntermediateMoveOperationId);
             }
             roots = [registration];
         }
@@ -76,24 +76,51 @@ public static partial class CliFixtureProbe
     }
 
     private static async Task<CleanupMovedFile?> AuthenticateCleanupMovedFileAsync(MirrorPulseProductCatalog catalog,
-        RootRegistration root, Guid operationId)
+        RootRegistration root, Guid operationId, Guid? intermediateOperationId)
     {
         string source = root.DirectoryName + "/cli-roundtrip.txt", target = root.DirectoryName + "/cli-roundtrip-moved.txt";
-        var move = await catalog.ReadNamespaceMemberMoveAsync(operationId);
-        if (move is null) return null;
-        if (move is not { Version: 1, RemoteEntry: null, DirectoryMoveEvidence: null } || move.RootId != root.RootId ||
-            move.Source.RelativePath != source || move.Target.RelativePath != target || move.Source.ParentMemberId != move.Target.ParentMemberId)
-            throw new InvalidDataException("Fixture cleanup requires the exact original controlled file Move.");
-        var completed = await catalog.ReadNamespaceMemberMoveCompletionAsync(operationId);
-        if (completed is null) return null; // The old path remains the only admitted name until the move is complete.
-        var member = await catalog.ReadNamespaceMemberByBindingAsync(move.LocalObject);
-        var location = await catalog.ReadNamespaceMemberLocationAsync(move.MemberId);
-        if (completed.IsDirectory || completed.ItemId != move.ItemId || completed.RelativePath != target ||
-            completed.Child.LocalObject != move.LocalObject || completed.Child.OwnerSid != move.OwnerSid ||
-            member is not { IsDirectory: false } || member.MemberId != move.MemberId || member.RootId != root.RootId ||
-            location.RelativePath != target || location.ParentMemberId != move.Target.ParentMemberId || location.CurrentPositionOperationId != operationId)
+        MirrorPulseNamespaceMemberMoveIntent? first = null;
+        if (intermediateOperationId is { } intermediate)
+        {
+            string intermediatePath = root.DirectoryName + "/cli-roundtrip-intermediate.txt";
+            first = await ReadCompletedMoveAsync(intermediate, source, intermediatePath);
+            if (first is null)
+            {
+                if (await catalog.ReadNamespaceMemberMoveAsync(operationId) is not null)
+                    throw new InvalidDataException("The final fixture move has no completed intermediate move.");
+                return null;
+            }
+            source = intermediatePath;
+        }
+        var final = await ReadCompletedMoveAsync(operationId, source, target);
+        if (first is not null && final is not null &&
+            ((final.SourcePositionOperationId ?? final.PreviousMoveOperationId) != first.OperationId ||
+             final.MemberId != first.MemberId || final.ItemId != first.ItemId || final.LocalObject != first.LocalObject ||
+             final.Source.ParentMemberId != first.Target.ParentMemberId))
+            throw new InvalidDataException("The completed fixture moves do not form one native file lineage.");
+        if ((final ?? first) is not { } current) return null;
+        var member = await catalog.ReadNamespaceMemberByBindingAsync(current.LocalObject);
+        var location = await catalog.ReadNamespaceMemberLocationAsync(current.MemberId);
+        if (member is not { IsDirectory: false } || member.MemberId != current.MemberId || member.RootId != root.RootId ||
+            location.RelativePath != current.Target.RelativePath || location.ParentMemberId != current.Target.ParentMemberId ||
+            location.CurrentPositionOperationId != current.OperationId)
             throw new InvalidDataException("The moved fixture file lost its exact current placement or original native binding.");
-        return new(target, move.LocalObject);
+        return new(current.Target.RelativePath, current.LocalObject);
+
+        async Task<MirrorPulseNamespaceMemberMoveIntent?> ReadCompletedMoveAsync(Guid id, string from, string to)
+        {
+            var move = await catalog.ReadNamespaceMemberMoveAsync(id);
+            if (move is null) return null;
+            if (move is not { Version: 1, RemoteEntry: null, DirectoryMoveEvidence: null } || move.RootId != root.RootId ||
+                move.Source.RelativePath != from || move.Target.RelativePath != to || move.Source.ParentMemberId != move.Target.ParentMemberId)
+                throw new InvalidDataException("Fixture cleanup requires the exact original controlled file Move.");
+            var completed = await catalog.ReadNamespaceMemberMoveCompletionAsync(id);
+            if (completed is null) return null;
+            if (completed.IsDirectory || completed.ItemId != move.ItemId || completed.RelativePath != to ||
+                completed.Child.LocalObject != move.LocalObject || completed.Child.OwnerSid != move.OwnerSid)
+                throw new InvalidDataException("The fixture Move completion lost its original file binding.");
+            return move;
+        }
     }
 
     private static async Task<CliFixtureCleanupResult> CleanupAuthenticatedInventoryAsync(string root,

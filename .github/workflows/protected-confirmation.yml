@@ -19,6 +19,7 @@ on:
           - signed-create-host
           - signed-empty-create-host
           - signed-move-host
+          - signed-move-only-host
           - signed-disabled-host
         default: prototype
 
@@ -27,7 +28,7 @@ permissions:
 
 jobs:
   probe:
-    if: inputs.contract != 'signed-keep-remote' && inputs.contract != 'signed-post-move' && inputs.contract != 'signed-create-conflict' && inputs.contract != 'signed-create-host' && inputs.contract != 'signed-empty-create-host' && inputs.contract != 'signed-move-host' && inputs.contract != 'signed-disabled-host'
+    if: inputs.contract != 'signed-keep-remote' && inputs.contract != 'signed-post-move' && inputs.contract != 'signed-create-conflict' && inputs.contract != 'signed-create-host' && inputs.contract != 'signed-empty-create-host' && inputs.contract != 'signed-move-host' && inputs.contract != 'signed-move-only-host' && inputs.contract != 'signed-disabled-host'
     strategy:
       fail-fast: false
       matrix:
@@ -141,7 +142,7 @@ jobs:
           if-no-files-found: error
 
   signed-keep-remote:
-    if: inputs.contract == 'signed-keep-remote' || inputs.contract == 'signed-post-move' || inputs.contract == 'signed-create-conflict' || inputs.contract == 'signed-create-host' || inputs.contract == 'signed-empty-create-host' || inputs.contract == 'signed-move-host' || inputs.contract == 'signed-disabled-host'
+    if: inputs.contract == 'signed-keep-remote' || inputs.contract == 'signed-post-move' || inputs.contract == 'signed-create-conflict' || inputs.contract == 'signed-create-host' || inputs.contract == 'signed-empty-create-host' || inputs.contract == 'signed-move-host' || inputs.contract == 'signed-move-only-host' || inputs.contract == 'signed-disabled-host'
     runs-on: windows-11-arm
     timeout-minutes: ${{ inputs.contract == 'signed-disabled-host' && 25 || 20 }}
     steps:
@@ -259,6 +260,27 @@ jobs:
         with:
           name: cli-move-keep-remote-arm64-originals
           path: artifacts/evidence/cli-move-keep-remote/**
+          if-no-files-found: ignore
+
+      - name: Verify signed ARM64 pure rename KeepRemote through the default Host
+        if: inputs.contract == 'signed-move-only-host'
+        shell: pwsh
+        timeout-minutes: 10
+        env:
+          MIRRORPULSE_NATIVE_TEST: '1'
+        run: |
+          $packages = @(Get-ChildItem -LiteralPath artifacts/official-local -Recurse -Filter '*.mpadapter' -File)
+          if ($packages.Count -ne 1 -or -not (Test-Path -LiteralPath ($packages[0].FullName + '.signature.json'))) { throw 'Require one frozen official signed Local package.' }
+          New-Item -ItemType Directory -Path artifacts/evidence/cli-move-only-keep-remote -Force | Out-Null
+          pwsh ./eng/verify-cli-integration.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName -Coalescing -CoalescingAction KeepRemote -MoveOnlyConflict -EvidencePath artifacts/evidence/cli-move-only-keep-remote/report.json
+          if ($LASTEXITCODE -ne 0) { throw 'The default Host pure rename KeepRemote fixture failed.' }
+
+      - name: Preserve signed ARM64 pure rename originals
+        if: always() && inputs.contract == 'signed-move-only-host'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: cli-move-only-keep-remote-arm64-originals
+          path: artifacts/evidence/cli-move-only-keep-remote/**
           if-no-files-found: ignore
 
       - name: Verify signed ARM64 disabled operations and independent active progress through the default Host

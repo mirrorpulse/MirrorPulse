@@ -16,6 +16,7 @@ function Invoke-CliCoalescingContentConflict {
         [switch]$ControlledCreate,
         [switch]$EmptyCreate,
         [switch]$MovedFile,
+        [switch]$MoveOnly,
         [Parameter(Mandatory)][string]$InstanceId,
         [Parameter(Mandatory)][string]$MappedRoot,
         [Parameter(Mandatory)][string]$SourceRoot,
@@ -23,8 +24,11 @@ function Invoke-CliCoalescingContentConflict {
     )
     if($ControlledCreate -and $Action -cne 'KeepRemote'){throw 'The controlled-Create fixture requires KeepRemote.'}
     if($EmptyCreate -and -not $ControlledCreate){throw 'Empty creation requires its controlled-Create fixture.'}
-    if($MovedFile -and ($Action -cne 'KeepRemote' -or $ControlledCreate -or $EmptyCreate)){throw 'The moved-file fixture requires its independent KeepRemote choice.'}
-    $expectedEffect=if($MovedFile){'MoveAndUpdateFile'}elseif($ControlledCreate){'CreateFile'}else{'UpdateFile'}
+    $moving=$MovedFile -or $MoveOnly
+    if($moving -and ($Action -cne 'KeepRemote' -or $ControlledCreate -or $EmptyCreate -or ($MovedFile -and $MoveOnly))){
+        throw 'The moved-file fixture requires its independent KeepRemote choice.'
+    }
+    $expectedEffect=if($MoveOnly){'MoveFile'}elseif($MovedFile){'MoveAndUpdateFile'}elseif($ControlledCreate){'CreateFile'}else{'UpdateFile'}
     $originals=Join-Path ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($EvidencePath))) 'coalescing.originals'
     New-Item -ItemType Directory -Path $originals -Force|Out-Null
     function Invoke-CoalescingCli([string]$Name,[string[]]$Arguments) {
@@ -33,8 +37,8 @@ function Invoke-CliCoalescingContentConflict {
         $result|ConvertTo-Json -Depth 12|Set-Content -LiteralPath (Join-Path $originals ($Name+'.json')) -Encoding utf8
         $result.data
     }
-    function Read-CoalescingEdit([string]$Name) {
-        $observation=& $ReadStoppedEdit
+    function Read-CoalescingEdit([string]$Name,[bool]$Intermediate=$false) {
+        $observation=& $ReadStoppedEdit $Intermediate
         Assert-CliCoalescingEditSnapshot $observation
         $observation|ConvertTo-Json -Depth 8|Set-Content -LiteralPath (Join-Path $originals ($Name+'.json')) -Encoding utf8
         return $observation
@@ -43,7 +47,7 @@ function Invoke-CliCoalescingContentConflict {
         $status=Invoke-CoalescingCli $Name @('--json','--developer-mode','status')
         $instance=@($status.instances|Where-Object instanceId -CEQ $InstanceId)
         if($instance.Count -ne 1 -or $instance[0].enabled -ne $false -or $instance[0].workerConnected -ne $false){
-            throw 'Both actual edits require the retained disabled instance without a connected Worker.'
+            throw 'The local operations require the retained disabled instance without a connected Worker.'
         }
         return $status
     }
@@ -77,6 +81,36 @@ function Invoke-CliCoalescingContentConflict {
             throw 'The signed KeepRemote fixture requires the same fully resident native placeholder throughout its original local edits.'
         }
     }
+    function Invoke-ControlledFixtureMove([string]$Suffix,[string]$Operation,[string]$From,[string]$Name,$Member,$Parent) {
+        Invoke-CoalescingCli "prepare-local-move$Suffix" @('--json','--developer-mode','namespace','member','prepare-move',
+            ([string]$Member.memberId),([string]$Parent.memberId),$Name,'--operation-id',$Operation)|Out-Null
+        $moved=Invoke-CoalescingCli "execute-local-move$Suffix" @('--json','--developer-mode','namespace','member','move',$Operation)
+        $current=Invoke-CoalescingCli "inspect-local-move$Suffix" @('--json','--developer-mode','namespace','member','inspect',
+            ([IO.Path]::GetFileName($MappedRoot)+'/'+$Name))
+        if($moved.operationId -cne $Operation -or $moved.currentNameCommitted -ne $true -or $moved.isDirectory -ne $false -or
+            $current.memberId -cne $Member.memberId -or [string]::IsNullOrEmpty($Member.nativeItemId) -or
+            $current.nativeItemId -cne $Member.nativeItemId -or $current.rootId -cne $Member.rootId -or
+            (Test-Path -LiteralPath $From) -or (Test-Path -LiteralPath (Join-Path $SourceRoot $Name))){
+            throw 'The public controlled Move lost its original member or native identity, or changed the disabled source.'
+        }
+        Assert-CoalescingHash (Join-Path $MappedRoot $Name) $seedHash $false
+        Assert-CoalescingHash $source $seedHash $false
+    }
+    function Get-MoveOnlyJournal($Snapshot) {
+        Assert-KeepRemoteResident $Snapshot $onlineSeedIdentity
+        $target=@($Snapshot.journal|Where-Object associatedWithTarget)
+        if(-not $Snapshot.targetItemId -or $Snapshot.targetItemIsTombstone -or
+            @($target|Where-Object {$_.kind -cnotin @('Move','MetadataUpdate')}).Count -ne 0){
+            throw 'The pure rename fixture observed an unexpected target content operation or replacement.'
+        }
+        $target|Where-Object kind -CEQ 'Move'|Sort-Object sequence
+    }
+    function Assert-BackendMoveTargetsAbsent {
+        if($MoveOnly -and ((Test-Path -LiteralPath (Join-Path $SourceRoot $intermediateName)) -or
+            (Test-Path -LiteralPath (Join-Path $SourceRoot $finalName)))){
+            throw 'The rejected remote Move unexpectedly changed a backend destination.'
+        }
+    }
     function Wait-CoalescingEdit([string]$Phase,$Before,[DateTimeOffset]$WrittenAt,[byte[]]$Bytes,[long]$Baseline,[guid[]]$Required=@()) {
         $state=@{lastStatus=$null}
         $completed=Wait-CliCoalescingEditWitness -Before $Before -WrittenAt $WrittenAt -LocalPath $local -ExpectedContent $Bytes `
@@ -106,7 +140,8 @@ function Invoke-CliCoalescingContentConflict {
         $completed
     }
     $source=Join-Path $SourceRoot 'cli-roundtrip.txt';$local=Join-Path $MappedRoot 'cli-roundtrip.txt'
-    $finalName=if($MovedFile){'cli-roundtrip-moved.txt'}else{'cli-roundtrip.txt'}
+    $finalName=if($moving){'cli-roundtrip-moved.txt'}else{'cli-roundtrip.txt'}
+    $intermediateName='cli-roundtrip-intermediate.txt'
     $seed=Get-CliCoalescingSeedBytes
     if($EmptyCreate){$seed=[byte[]]::new(0)}
     $first=[Text.Encoding]::UTF8.GetBytes('signed coalescing first local edit')
@@ -114,6 +149,7 @@ function Invoke-CliCoalescingContentConflict {
     $remote=[Text.Encoding]::UTF8.GetBytes('signed coalescing independently selected remote version')
     $seedHash=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($seed))
     $latestHash=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($latest))
+    if($MoveOnly){$latestHash=$seedHash}
     $remoteHash=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($remote))
     $onlineSeedIdentity=''
     if($ControlledCreate){
@@ -141,23 +177,48 @@ function Invoke-CliCoalescingContentConflict {
     $baseline=[long]$disabled.pendingUploads
     $importOperation=$null
     $moveOperation=$null
-    if($MovedFile){
+    $intermediateOperation=[guid]::Empty
+    $moveOnlyOriginals=@()
+    $firstWitness=$null;$secondWitness=$null
+    if($moving){
         $parent=Invoke-CoalescingCli 'move-parent' @('--json','--developer-mode','namespace','member','inspect',([IO.Path]::GetFileName($MappedRoot)),'--directory')
         $original=Invoke-CoalescingCli 'move-original' @('--json','--developer-mode','namespace','member','inspect',([IO.Path]::GetFileName($MappedRoot)+'/cli-roundtrip.txt'))
         $moveOperation=[guid]::NewGuid().ToString('D')
-        & $RecordControlledMove $moveOperation
-        Invoke-CoalescingCli 'prepare-local-move' @('--json','--developer-mode','namespace','member','prepare-move',([string]$original.memberId),([string]$parent.memberId),$finalName,'--operation-id',$moveOperation)|Out-Null
-        $moved=Invoke-CoalescingCli 'execute-local-move' @('--json','--developer-mode','namespace','member','move',$moveOperation)
-        $current=Invoke-CoalescingCli 'inspect-local-move' @('--json','--developer-mode','namespace','member','inspect',([IO.Path]::GetFileName($MappedRoot)+'/'+$finalName))
-        if($moved.operationId -cne $moveOperation -or $moved.currentNameCommitted -ne $true -or $moved.isDirectory -ne $false -or
-            $current.memberId -cne $original.memberId -or
-            [string]::IsNullOrEmpty($original.nativeItemId) -or $current.nativeItemId -cne $original.nativeItemId -or
-            $current.rootId -cne $original.rootId -or (Test-Path -LiteralPath $local) -or (Test-Path -LiteralPath (Join-Path $SourceRoot $finalName))){
-            throw 'The public controlled Move lost its original member/native identity or touched the disabled source.'
+        if($MoveOnly){$intermediateOperation=[guid]::NewGuid()}
+        & $RecordControlledMove $moveOperation $intermediateOperation
+        if($MoveOnly){
+            Confirm-CoalescingDisabled 'before-intermediate-move-status'|Out-Null
+            $intermediateStartedAt=[DateTimeOffset]::UtcNow
+            Invoke-ControlledFixtureMove '-intermediate' ($intermediateOperation.ToString('D')) $local $intermediateName $original $parent
+            Invoke-CoalescingCli 'stop-after-intermediate-move' @('--json','--developer-mode','host','stop')|Out-Null
+            & $WaitHostStopped
+            $firstMoveSnapshot=Read-CoalescingEdit 'intermediate-move-originals' $true
+            $firstMoves=@(Get-MoveOnlyJournal $firstMoveSnapshot)
+            if($firstMoves.Count -ne 1 -or (ConvertTo-CliCoalescingEditTimestamp $firstMoves[0].createdAt) -lt $intermediateStartedAt){
+                throw 'The first controlled rename requires exactly one fresh pending SDK Move.'
+            }
+            Invoke-CoalescingCli 'start-before-final-move' @('--json','--developer-mode','host','start')|Out-Null
+            Confirm-CoalescingDisabled 'before-final-move-status'|Out-Null
+            $local=Join-Path $MappedRoot $intermediateName
         }
+        $finalMoveStartedAt=[DateTimeOffset]::UtcNow
+        Invoke-ControlledFixtureMove '' $moveOperation $local $finalName $original $parent
         $local=Join-Path $MappedRoot $finalName
-        Assert-CoalescingHash $local $seedHash $false
-        Assert-CoalescingHash $source $seedHash $false
+        Assert-BackendMoveTargetsAbsent
+        if($MoveOnly){
+            Invoke-CoalescingCli 'stop-after-final-move' @('--json','--developer-mode','host','stop')|Out-Null
+            & $WaitHostStopped
+            $lastMoveSnapshot=Read-CoalescingEdit 'final-move-originals'
+            $moves=@(Get-MoveOnlyJournal $lastMoveSnapshot)
+            if($moves.Count -ne 2 -or $lastMoveSnapshot.targetItemId -cne $firstMoveSnapshot.targetItemId -or
+                $moves[0].operationId -cne $firstMoves[0].operationId -or $moves[0].sequence -ne $firstMoves[0].sequence -or
+                $moves[0].payloadSha256 -cne $firstMoves[0].payloadSha256 -or $moves[0].createdAt -cne $firstMoves[0].createdAt -or
+                $moves[1].sequence -le $firstMoveSnapshot.throughSequence -or
+                (ConvertTo-CliCoalescingEditTimestamp $moves[1].createdAt) -lt $finalMoveStartedAt){
+                throw 'Both ordered SDK Move rows must retain the same original item and first operation.'
+            }
+            $moveOnlyOriginals=@($moves.operationId)
+        }
     }
     if($ControlledCreate){
         # Public creation/import runs through the default Host while its instance
@@ -177,22 +238,24 @@ function Invoke-CliCoalescingContentConflict {
         if(Test-Path -LiteralPath $source){throw 'The disabled controlled Create touched the backend.'}
         Confirm-CoalescingDisabled 'after-create-status'|Out-Null
     }
-    Invoke-CoalescingCli 'stop-before-edit-baseline' @('--json','--developer-mode','host','stop')|Out-Null
-    & $WaitHostStopped
-    $editBaseline=Read-CoalescingEdit 'edit-baseline'
-    Assert-KeepRemoteResident $editBaseline $onlineSeedIdentity
-    Invoke-CoalescingCli 'start-before-first-edit' @('--json','--developer-mode','host','start')|Out-Null
-    $baseline=[long](Confirm-CoalescingDisabled 'before-first-edit-status').pendingUploads
-    $firstWrittenAt=[DateTimeOffset]::UtcNow
-    Write-CoalescingEdit $first
-    $firstObserved=Wait-CoalescingEdit 'first' $editBaseline $firstWrittenAt $first $baseline
-    $firstOriginals=$firstObserved.snapshot;$firstWitness=$firstObserved.witness
-    Invoke-CoalescingCli 'start-before-second-edit' @('--json','--developer-mode','host','start')|Out-Null
-    $firstCount=[long](Confirm-CoalescingDisabled 'before-second-edit-status').pendingUploads
-    $secondWrittenAt=[DateTimeOffset]::UtcNow
-    Write-CoalescingEdit $latest
-    $secondObserved=Wait-CoalescingEdit 'second' $firstOriginals $secondWrittenAt $latest $firstCount $firstWitness.originalOperationIds
-    $secondOriginals=$secondObserved.snapshot;$secondWitness=$secondObserved.witness
+    if(-not $MoveOnly){
+        Invoke-CoalescingCli 'stop-before-edit-baseline' @('--json','--developer-mode','host','stop')|Out-Null
+        & $WaitHostStopped
+        $editBaseline=Read-CoalescingEdit 'edit-baseline'
+        Assert-KeepRemoteResident $editBaseline $onlineSeedIdentity
+        Invoke-CoalescingCli 'start-before-first-edit' @('--json','--developer-mode','host','start')|Out-Null
+        $baseline=[long](Confirm-CoalescingDisabled 'before-first-edit-status').pendingUploads
+        $firstWrittenAt=[DateTimeOffset]::UtcNow
+        Write-CoalescingEdit $first
+        $firstObserved=Wait-CoalescingEdit 'first' $editBaseline $firstWrittenAt $first $baseline
+        $firstOriginals=$firstObserved.snapshot;$firstWitness=$firstObserved.witness
+        Invoke-CoalescingCli 'start-before-second-edit' @('--json','--developer-mode','host','start')|Out-Null
+        $firstCount=[long](Confirm-CoalescingDisabled 'before-second-edit-status').pendingUploads
+        $secondWrittenAt=[DateTimeOffset]::UtcNow
+        Write-CoalescingEdit $latest
+        $secondObserved=Wait-CoalescingEdit 'second' $firstOriginals $secondWrittenAt $latest $firstCount $firstWitness.originalOperationIds
+        $secondOriginals=$secondObserved.snapshot;$secondWitness=$secondObserved.witness
+    }
     Invoke-CoalescingCli 'queued-status' @('--json','--developer-mode','status')|Out-Null
     [IO.File]::WriteAllBytes($source,$remote)
     Invoke-CoalescingCli 'enable' @('--json','--developer-mode','instance','enable','--instance-id',$InstanceId)|Out-Null
@@ -209,17 +272,23 @@ function Invoke-CliCoalescingContentConflict {
         Start-Sleep -Milliseconds 100
     }while([DateTimeOffset]::UtcNow -lt $deadline)
     if($null -eq $conflict -or $conflict.source -cne 'Upload' -or $conflict.reason -cne 'StaleRemoteRevision'){
-        throw 'The signed Worker did not expose the expected real conditional upload conflict.'
+        throw 'The signed Worker did not expose the expected real conditional journal conflict.'
     }
     Invoke-CoalescingCli 'conflicts-before-choice' @('--json','--developer-mode','conflict','list')|Out-Null
     Invoke-CoalescingCli 'stop-before-choice' @('--json','--developer-mode','host','stop')|Out-Null
     & $WaitHostStopped
     $pending=& $ReadStoppedAudit $false
+    $pending|ConvertTo-Json -Depth 8|Set-Content -LiteralPath (Join-Path $originals 'pending-before-choice.json') -Encoding utf8
     if($MovedFile -and (@($pending.pendingMoveOriginalOperationIds).Count -lt 1 -or
         @($pending.pendingMoveOriginalOperationIds|Where-Object {$_ -cnotin $pending.originalOperationIds}).Count)){
         throw 'The actual moved-file conflict must retain its original SDK Move in the complete group.'
     }
-    foreach($id in @($firstWitness.originalOperationIds)+@($secondWitness.originalOperationIds)){
+    if($MoveOnly -and (($moveOnlyOriginals -join ',') -cne (@($pending.originalOperationIds) -join ',') -or
+        ($moveOnlyOriginals -join ',') -cne (@($pending.pendingMoveOriginalOperationIds) -join ','))){
+        throw 'The rejected MoveFile group must contain exactly the two observed SDK Move originals in order.'
+    }
+    $editOriginals=if(-not $MoveOnly){@($firstWitness.originalOperationIds)+@($secondWitness.originalOperationIds)}
+    foreach($id in $editOriginals){
         if($id -cnotin @($pending.originalOperationIds)){throw 'The retained conflict group lost an actual first or second edit original.'}
     }
     if($pending.rawEffect -cne $expectedEffect -or $pending.originalCount -lt 2 -or
@@ -227,11 +296,17 @@ function Invoke-CliCoalescingContentConflict {
         $pending.originalEffectState -cne 'Conflict'){
         throw 'The stopped pre-choice oracle did not retain every actual original under its exact rejected effect.'
     }
-    $pending|ConvertTo-Json -Depth 8|Set-Content -LiteralPath (Join-Path $originals 'pending-before-choice.json') -Encoding utf8
     if(((-not $ControlledCreate) -and [string]::IsNullOrEmpty($conflict.localRevision)) -or [string]::IsNullOrEmpty($conflict.remoteRevision)){
         throw "The actual conflict did not expose the selected revisions required for $Action."
     }
     $observation=$pending.selectedRemoteObservation
+    if($MoveOnly){
+        $expectedRevisionHash=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($conflict.localRevision)))
+        if($pending.moveOnlyExpectedRevisionSha256 -cne $expectedRevisionHash -or $conflict.localRevision -ceq $conflict.remoteRevision -or
+            (@($pending.originalExecutionStepKinds) -join ',') -cne 'Move'){
+            throw 'The pure rename conflict lost its original conditional revision or Move-only execution.'
+        }
+    }
     if($null -ne $observation){
         $selectedRevisionHash=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($conflict.remoteRevision)))
         $requestRevisionHash=if($ControlledCreate){$null}else{[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($conflict.localRevision)))}
@@ -281,6 +356,7 @@ function Invoke-CliCoalescingContentConflict {
     $resolvedHash=if($Action -ceq 'KeepRemote'){$remoteHash}else{$latestHash}
     Assert-CoalescingHash $source $resolvedHash $false
     Assert-CoalescingHash $local $resolvedHash $false
+    Assert-BackendMoveTargetsAbsent
     Invoke-CoalescingCli 'stop-before-audit' @('--json','--developer-mode','host','stop')|Out-Null
     & $WaitHostStopped
     $before=& $ReadStoppedAudit $true
@@ -290,7 +366,7 @@ function Invoke-CliCoalescingContentConflict {
         $before.planId -cne $pending.planId -or $before.commandId -cne $command.ToString('D') -or
         (@($before.originalOperationIds) -join ',') -cne (@($pending.originalOperationIds) -join ',') -or
         ($Action -ceq 'KeepRemote' -and ($before.preservedLocalSha256 -cne $latestHash -or -not $before.acknowledgementId))){
-        throw "The stopped original oracle did not prove the complete signed UpdateFile/$Action boundary."
+        throw "The stopped original oracle did not prove the complete signed $expectedEffect/$Action boundary."
     }
     if($ControlledCreate -and ($before.originalBirthOperationId -cne $importOperation -or
         $before.originalBirthSha256 -cnotmatch '^[A-F0-9]{64}$' -or $before.backendAddressDiffersFromOriginalBirth -ne $true -or
@@ -314,6 +390,7 @@ function Invoke-CliCoalescingContentConflict {
     if($connected.Count -ne 1){throw 'The actual signed Worker did not reconnect after the choice.'}
     Assert-CoalescingHash $source $resolvedHash $false
     Assert-CoalescingHash $local $resolvedHash $false
+    Assert-BackendMoveTargetsAbsent
     Invoke-CoalescingCli 'stop-after-restart' @('--json','--developer-mode','host','stop')|Out-Null
     & $WaitHostStopped
     $after=& $ReadStoppedAudit $true
@@ -323,10 +400,14 @@ function Invoke-CliCoalescingContentConflict {
     }
     $report=[ordered]@{schemaVersion=1;sourceSha=$env:GITHUB_SHA;runId=$env:GITHUB_RUN_ID;defaultHostIntegrated=$true;signedWorker=$true;
         rawEffect=$expectedEffect;action=$Action;originalCount=$before.originalCount;actualNativeConfirmation=$true;
-        firstEditOriginalOperationIds=@($firstWitness.originalOperationIds);secondEditOriginalOperationIds=@($secondWitness.originalOperationIds);
-        actualEditOriginalJournalWitness=$true;globalPendingCountUsedAsEditProof=$false;
+        firstEditOriginalOperationIds=@();secondEditOriginalOperationIds=@();
+        actualEditOriginalJournalWitness=(-not $MoveOnly);globalPendingCountUsedAsEditProof=$false;
         localSha256=$resolvedHash;preservedRemoteSha256=$remoteHash;unchangedRetainedFactsAfterActualRestart=$true;
         fullSevenEffectMatrixAccepted=$false;fullP076Accepted=$false;teardownCompleted=$false}
+    if(-not $MoveOnly){
+        $report.firstEditOriginalOperationIds=@($firstWitness.originalOperationIds)
+        $report.secondEditOriginalOperationIds=@($secondWitness.originalOperationIds)
+    }
     if($Action -ceq 'KeepRemote'){
         $report.preservedLocalSha256=$before.preservedLocalSha256
         $report.acknowledgementId=$before.acknowledgementId
@@ -340,11 +421,16 @@ function Invoke-CliCoalescingContentConflict {
         $report.currentNativeOriginalBindingVerified=$true
         $report.originalExpectedRevisionPresent=$false
     }
-    if($MovedFile){
+    if($moving){
         $report.originalControlledMoveOperationId=$moveOperation
         $report.originalMoveJournalOperationIds=@($pending.pendingMoveOriginalOperationIds)
         $report.originalPath='cli-roundtrip.txt';$report.finalPath=$finalName
         $report.originalExpectedRevisionPresent=$true
+    }
+    if($MoveOnly){
+        $report.intermediateControlledMoveOperationId=$intermediateOperation.ToString('D')
+        $report.intermediatePath=$intermediateName
+        $report.backendMoveTargetsAbsentAfterRestart=$true
     }
     $report
 }

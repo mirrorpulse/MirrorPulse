@@ -47,6 +47,12 @@ public sealed record CliCoalescingFixtureAudit(int SchemaVersion, bool Exclusive
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyList<Guid>? PendingMoveOriginalOperationIds { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<string>? OriginalExecutionStepKinds { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? MoveOnlyExpectedRevisionSha256 { get; init; }
 }
 
 public sealed record CliCoalescingObservedVersionAudit(int Version, Guid ObservationId, Guid RejectedEffectId,
@@ -63,9 +69,11 @@ public static partial class CliCoalescingFixtureProbe
     private sealed record Marker(int SchemaVersion, string InstanceId, string RootId, string RootKey, string DirectoryName);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
-    public static async Task<int> RunAsync(string directory, bool completed, bool keepRemote = false, bool controlledCreate = false, bool movedFile = false)
+    public static async Task<int> RunAsync(string directory, bool completed, bool keepRemote = false, bool controlledCreate = false,
+        bool movedFile = false, bool moveOnly = false)
     {
-        if (movedFile && (!keepRemote || controlledCreate)) return 2;
+        bool moving = movedFile || moveOnly;
+        if (moving && (!keepRemote || controlledCreate || movedFile && moveOnly)) return 2;
         string root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory));
         const string prefix = "MirrorPulse-cli-integration-";
         string name = Path.GetFileName(root);
@@ -92,22 +100,24 @@ public static partial class CliCoalescingFixtureProbe
             route.State != RootRegistrationState.Active) throw new InvalidDataException("The fixture route changed.");
         var plans = await catalog.ReadJournalCoalescingPlansAsync();
         if (plans.Count > 64) throw new InvalidDataException("The isolated fixture exceeds its plan bound.");
-        string finalPath = movedFile ? "cli-roundtrip-moved.txt" : "cli-roundtrip.txt";
+        string finalPath = moving ? "cli-roundtrip-moved.txt" : "cli-roundtrip.txt";
         var selected = plans.Where(plan => plan.InstanceId == route.InstanceId && plan.RootKey == route.UniquenessKey &&
             plan.OriginalPath == "cli-roundtrip.txt" && plan.FinalPath == finalPath).ToArray();
-        var expectedEffect = movedFile ? MirrorPulseCoalescedEffect.MoveAndUpdateFile :
+        var expectedEffect = moveOnly ? MirrorPulseCoalescedEffect.MoveFile : movedFile ? MirrorPulseCoalescedEffect.MoveAndUpdateFile :
             controlledCreate ? MirrorPulseCoalescedEffect.CreateFile : MirrorPulseCoalescedEffect.UpdateFile;
         if (selected.Length != 1 || selected[0].Effect != expectedEffect || selected[0].Members.Count is < 2 or > 64 || controlledCreate && !keepRemote)
-            throw new InvalidDataException("The fixture requires one actual original repeated-content group of its selected kind.");
+            throw new InvalidDataException("The fixture requires one actual original coalescing group of its selected kind.");
         var plan = selected[0];
         var execution = await catalog.ReadJournalCoalescingExecutionAsync(plan.PlanId)
             ?? throw new InvalidDataException("The original execution is missing.");
-        bool expectedSteps = movedFile ? execution.Steps.Count == 2 && execution.Steps[0].Kind == MirrorPulseCoalescingStepKind.Move &&
-            execution.Steps[0].PreviousRelativePath == plan.OriginalPath && execution.Steps[0].RelativePath == plan.FinalPath &&
-            execution.Steps[1].Kind == MirrorPulseCoalescingStepKind.Upload && execution.Steps[1].RelativePath == plan.FinalPath :
-            execution.Steps.Count == 1 && execution.Steps[0].Kind == MirrorPulseCoalescingStepKind.Upload;
+        bool expectedSteps = moving
+            ? execution.Steps.Count == (moveOnly ? 1 : 2) && execution.Steps[0].Kind == MirrorPulseCoalescingStepKind.Move &&
+              execution.Steps[0].PreviousRelativePath == plan.OriginalPath && execution.Steps[0].RelativePath == plan.FinalPath &&
+              (moveOnly || execution.Steps[1].Kind == MirrorPulseCoalescingStepKind.Upload && execution.Steps[1].RelativePath == plan.FinalPath)
+            : execution.Steps.Count == 1 && execution.Steps[0].Kind == MirrorPulseCoalescingStepKind.Upload;
         if ((controlledCreate ? execution.ExpectedRevision is not null : string.IsNullOrEmpty(execution.ExpectedRevision)) ||
-            execution.Content is null || !expectedSteps) throw new InvalidDataException("The original ordered effects, baseline or content proof are missing.");
+            (execution.Content is null) != moveOnly || !expectedSteps || moveOnly && plan.Members.Count != 2)
+            throw new InvalidDataException("The original ordered effects, baseline or content proof do not match the selected fixture.");
         if (movedFile && await catalog.ReadMutationAsync(execution.Steps[1].OperationId) is { } laterUpload &&
             (laterUpload.ExecutionEvidence != MirrorPulseMutationExecutionEvidence.NeverStarted ||
              laterUpload.State is not (MirrorPulseMutationState.Prepared or MirrorPulseMutationState.Superseded)))
@@ -117,10 +127,10 @@ public static partial class CliCoalescingFixtureProbe
         var rejected = await catalog.ReadMutationAsync(rejectedId);
         if (originalIds.Contains(rejectedId) || rejected is not { State: MirrorPulseMutationState.Conflict } ||
             rejected.Intent.Origin != MirrorPulseMutationOrigin.CoalescedJournal || rejected.Intent.ExpectedRevision != execution.ExpectedRevision ||
-            rejected.Intent.Kind != (movedFile ? MirrorPulseWorkerChangeKind.Move :
+            rejected.Intent.Kind != (moving ? MirrorPulseWorkerChangeKind.Move :
                 controlledCreate ? MirrorPulseWorkerChangeKind.Create : MirrorPulseWorkerChangeKind.ContentUpdate))
             throw new InvalidDataException("The original rejected effect must remain distinct and unchanged.");
-        if (movedFile && (rejected.Intent.RelativePath != plan.FinalPath || rejected.Intent.PreviousRelativePath != plan.OriginalPath))
+        if (moving && (rejected.Intent.RelativePath != plan.FinalPath || rejected.Intent.PreviousRelativePath != plan.OriginalPath))
             throw new InvalidDataException("The rejected Move lost its exact original and final addresses.");
         var selectedObservation = await catalog.ReadCoalescedConflictRemoteObservationAsync(rejectedId);
         if (selectedObservation is not null && (selectedObservation.PlanId != plan.PlanId ||
@@ -131,11 +141,13 @@ public static partial class CliCoalescingFixtureProbe
         int pending = 0; var moveOriginals = new List<Guid>();
         await using (var transaction = await store.BeginTransactionAsync())
         {
-            foreach (Guid id in originalIds)
-                if (await transaction.Operations.GetAsync(id) is { } original)
+            foreach (var member in plan.Members)
+                if (await transaction.Operations.GetAsync(member.OperationId) is { } original)
                 {
                     pending++;
-                    if (original.Kind.ToString() == "Move") moveOriginals.Add(id);
+                    if (moveOnly && (original.Kind != CloudStateOperationKind.Move || original.ItemId != plan.ItemId || original.Sequence != member.Sequence))
+                        throw new InvalidDataException("The pure rename original is not the expected typed SDK journal row.");
+                    if (original.Kind == CloudStateOperationKind.Move) moveOriginals.Add(member.OperationId);
                 }
             await transaction.RollbackAsync();
         }
@@ -148,7 +160,7 @@ public static partial class CliCoalescingFixtureProbe
         string? currentNativeIdentity = null;
         if (!completed)
         {
-            if (movedFile && moveOriginals.Count == 0) throw new InvalidDataException("The selected group has no actual original SDK Move.");
+            if (moving && moveOriginals.Count == 0) throw new InvalidDataException("The selected group has no actual original SDK Move.");
             if (pending != originalIds.Length || (await catalog.ReadCurrentCoalescingKeepBothCommandsAsync(plan.PlanId)).Count != 0)
                 throw new InvalidDataException("Every original must still be pending before the choice.");
             var conflicts = await catalog.ReadUploadConflictsAsync();
@@ -236,7 +248,9 @@ public static partial class CliCoalescingFixtureProbe
             pending, originalIds.Length - pending, execution.ExpectedRevision is not null, rejected.State.ToString(), rejectedId, commandId, acceptedId,
             localHash, preservedHash, completed)
         {
-            PendingMoveOriginalOperationIds = movedFile && !completed ? moveOriginals : null,
+            PendingMoveOriginalOperationIds = moving && !completed ? moveOriginals : null,
+            OriginalExecutionStepKinds = moveOnly ? execution.Steps.Select(step => step.Kind.ToString()).ToArray() : null,
+            MoveOnlyExpectedRevisionSha256 = moveOnly ? HashRevision(execution.ExpectedRevision) : null,
             PreservedLocalSha256 = preservedLocalHash,
             AcknowledgementId = acknowledgementId,
             OriginalBirthOperationId = originalBirth?.OperationId,

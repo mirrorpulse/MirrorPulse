@@ -13,6 +13,7 @@ namespace MirrorPulse.CfSharp.CrashProbe;
 public sealed record CliFixtureMarker(int SchemaVersion, string InstanceId, string RootId, string RootKey, string DirectoryName)
 {
     public Guid? ControlledMoveOperationId { get; init; }
+    public Guid? IntermediateMoveOperationId { get; init; }
 }
 public sealed record CliFixtureReadResult(int SchemaVersion, int WholeFileReads, int RangeReads, long BinaryLength, string BinarySha256);
 public sealed record CliFixtureAuditResult(int SchemaVersion, bool RouteVerified, int EnumeratedMutations,
@@ -46,7 +47,9 @@ public static partial class CliFixtureProbe
             new FileInfo(markerPath).Length > 4096) return 2;
         CliFixtureMarker marker = JsonSerializer.Deserialize<CliFixtureMarker>(await File.ReadAllTextAsync(markerPath), JsonOptions)
             ?? throw new InvalidDataException("The CLI fixture marker is empty.");
-        if (marker.ControlledMoveOperationId == Guid.Empty || marker.SchemaVersion != 1 && marker.ControlledMoveOperationId is not null) return 2;
+        if (marker.ControlledMoveOperationId == Guid.Empty || marker.SchemaVersion != 1 && marker.ControlledMoveOperationId is not null ||
+            marker.IntermediateMoveOperationId is { } intermediate &&
+            (intermediate == Guid.Empty || marker.ControlledMoveOperationId is null || marker.ControlledMoveOperationId == intermediate)) return 2;
         bool anchorCleanup = cleanup && IsAnchorOnlyCleanup(marker);
         if (!anchorCleanup && (marker.SchemaVersion != 1 || !Guid.TryParse(marker.InstanceId, out Guid instance) || instance == Guid.Empty ||
             !Guid.TryParse(marker.RootId, out Guid rootId) || rootId == Guid.Empty || string.IsNullOrWhiteSpace(marker.RootKey) ||

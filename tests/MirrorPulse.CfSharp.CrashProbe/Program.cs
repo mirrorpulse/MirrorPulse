@@ -47,7 +47,7 @@ if (args.Length == 4 && args[0] == "--namespace-source-consumer")
     }
 }
 
-if (args.Length == 2 && args[0] is "--audit-cli-disabled-fixture" or "--cleanup-cli-disabled-fixture" or "--read-cli-fixture" or "--audit-cli-fixture" or "--inspect-cli-fixture" or "--cleanup-cli-fixture" or "--cleanup-cli-transfer-fixture" or "--audit-cli-transfer-fixture" or "--observe-cli-transfer-failure" or "--audit-cli-coalescing-pending" or "--audit-cli-coalescing-completed" or "--audit-cli-coalescing-keep-remote" or "--audit-cli-coalescing-edit" or "--observe-cli-coalescing-edit" or "--audit-cli-create-pending" or "--audit-cli-create-keep-remote" or "--audit-cli-move-pending" or "--audit-cli-move-keep-remote" or "--observe-cli-move-coalescing-edit")
+if (args.Length == 2 && args[0] is "--audit-cli-disabled-fixture" or "--cleanup-cli-disabled-fixture" or "--read-cli-fixture" or "--audit-cli-fixture" or "--inspect-cli-fixture" or "--cleanup-cli-fixture" or "--cleanup-cli-transfer-fixture" or "--audit-cli-transfer-fixture" or "--observe-cli-transfer-failure" or "--audit-cli-coalescing-pending" or "--audit-cli-coalescing-completed" or "--audit-cli-coalescing-keep-remote" or "--audit-cli-coalescing-edit" or "--observe-cli-coalescing-edit" or "--audit-cli-create-pending" or "--audit-cli-create-keep-remote" or "--audit-cli-move-pending" or "--audit-cli-move-keep-remote" or "--observe-cli-move-coalescing-edit" or "--observe-cli-intermediate-move" or "--audit-cli-move-only-pending" or "--audit-cli-move-only-keep-remote")
 {
     try
     {
@@ -57,6 +57,10 @@ if (args.Length == 2 && args[0] is "--audit-cli-disabled-fixture" or "--cleanup-
             return await CliCoalescingFixtureProbe.RunAsync(args[1], args[0] == "--audit-cli-create-keep-remote", keepRemote: true, controlledCreate: true);
         if (args[0] is "--audit-cli-move-pending" or "--audit-cli-move-keep-remote")
             return await CliCoalescingFixtureProbe.RunAsync(args[1], args[0] == "--audit-cli-move-keep-remote", keepRemote: true, movedFile: true);
+        if (args[0] is "--audit-cli-move-only-pending" or "--audit-cli-move-only-keep-remote")
+            return await CliCoalescingFixtureProbe.RunAsync(args[1], args[0] == "--audit-cli-move-only-keep-remote", keepRemote: true, moveOnly: true);
+        if (args[0] == "--observe-cli-intermediate-move")
+            return await CliCoalescingFixtureProbe.ObserveEditAsync(args[1], inspectNative: true, intermediateMove: true);
         if (args[0] == "--observe-cli-move-coalescing-edit")
             return await CliCoalescingFixtureProbe.ObserveEditAsync(args[1], inspectNative: true, movedFile: true);
         if (args[0] is "--audit-cli-coalescing-edit" or "--observe-cli-coalescing-edit")

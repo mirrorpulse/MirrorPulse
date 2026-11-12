@@ -11,13 +11,15 @@ param(
     [switch]$CreateConflict,
     [switch]$EmptyCreate,
     [switch]$MoveConflict,
+    [switch]$MoveOnlyConflict,
     [ValidateSet("Debug", "Release")]
     [string]$Configuration = "Release",
     [string]$EvidencePath
 )
 
 $ErrorActionPreference = "Stop"
-if ($MoveConflict -and (-not $Coalescing -or $CoalescingAction -cne 'KeepRemote' -or $CreateConflict -or $EmptyCreate)) {
+if (($MoveConflict -or $MoveOnlyConflict) -and (-not $Coalescing -or $CoalescingAction -cne 'KeepRemote' -or
+    $CreateConflict -or $EmptyCreate -or ($MoveConflict -and $MoveOnlyConflict))) {
     throw 'The moved-file fixture requires its independent KeepRemote coalescing choice.'
 }
 if ($EmptyCreate -and -not $CreateConflict) {
@@ -344,8 +346,11 @@ try {
     if ($Coalescing) {
         $coalescingEvidence = Invoke-CliCoalescingContentConflict -InvokeCli { param($arguments) Invoke-MirrorPulseCli $arguments } `
             -WaitHostStopped { Wait-MirrorPulseHostStopped } `
-            -ReadStoppedAudit { param($completed) Invoke-CliStoppedCoalescingOracle -ProbeAssembly $script:probeAssembly -FixtureRoot $runRoot -Completed $completed -Action $CoalescingAction -ControlledCreate:$CreateConflict -MovedFile:$MoveConflict } `
-            -ReadStoppedEdit { Read-CliStoppedCoalescingEdit -ProbeAssembly $script:probeAssembly -FixtureRoot $runRoot -MovedFile:$MoveConflict } `
+            -ReadStoppedAudit { param($completed) Invoke-CliStoppedCoalescingOracle -ProbeAssembly $script:probeAssembly -FixtureRoot $runRoot -Completed $completed -Action $CoalescingAction -ControlledCreate:$CreateConflict -MovedFile:$MoveConflict -MoveOnly:$MoveOnlyConflict } `
+            -ReadStoppedEdit {
+                param([bool]$intermediate)
+                Read-CliStoppedCoalescingEdit -ProbeAssembly $script:probeAssembly -FixtureRoot $runRoot -MovedFile:($MoveConflict -or $MoveOnlyConflict) -IntermediateMove:$intermediate
+            } `
             -InspectOnlineSeed {
                 $inspection = Invoke-CliFixtureProbe -Mode inspect -Phase BeforeCoalescingDisable
                 $target = @($inspection.items | Where-Object role -CEQ 'RoundTripFile')
@@ -354,15 +359,17 @@ try {
             } `
             -ResolveChoice { param($conflict) Invoke-CliCoalescingChoice -CliPath $script:cliExecutable -FixtureRoot $runRoot -ConflictId $conflict -Action $CoalescingAction } `
             -RecordControlledMove {
-                param([guid]$operation)
-                [ordered]@{schemaVersion=1;instanceId=$instanceId;rootId=$registeredRoot.rootId
-                    rootKey=$registeredRoot.uniquenessKey;directoryName=$rootDirectory;controlledMoveOperationId=$operation.ToString('D')} |
-                    ConvertTo-Json | Set-Content -LiteralPath (Join-Path $runRoot '.mp-cli-fixture.json') -Encoding utf8
+                param([guid]$operation,[guid]$intermediateOperation)
+                $marker=[ordered]@{schemaVersion=1;instanceId=$instanceId;rootId=$registeredRoot.rootId
+                    rootKey=$registeredRoot.uniquenessKey;directoryName=$rootDirectory;controlledMoveOperationId=$operation.ToString('D')}
+                if($intermediateOperation -ne [guid]::Empty){$marker.intermediateMoveOperationId=$intermediateOperation.ToString('D')}
+                $marker | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $runRoot '.mp-cli-fixture.json') -Encoding utf8
             } `
             -Action $CoalescingAction `
             -ControlledCreate:$CreateConflict `
             -EmptyCreate:$EmptyCreate `
             -MovedFile:$MoveConflict `
+            -MoveOnly:$MoveOnlyConflict `
             -InstanceId $instanceId -MappedRoot $mappedRoot -SourceRoot $sourceRoot -EvidencePath $EvidencePath
         $coalescingEvidence.packageSha256 = (Get-FileHash -LiteralPath $PackagePath).Hash
         $coalescingEvidence.signatureSha256 = (Get-FileHash -LiteralPath ($PackagePath + '.signature.json')).Hash
@@ -611,7 +618,7 @@ catch {
         try {
             Invoke-MirrorPulseCli @('--json', '--developer-mode', 'host', 'stop') | Out-Null
             Wait-MirrorPulseHostStopped
-            Invoke-CliCoalescingEditFailureObservation -ProbeAssembly $script:probeAssembly -FixtureRoot $runRoot -EvidencePath $EvidencePath -MovedFile:$MoveConflict
+            Invoke-CliCoalescingEditFailureObservation -ProbeAssembly $script:probeAssembly -FixtureRoot $runRoot -EvidencePath $EvidencePath -MovedFile:($MoveConflict -or $MoveOnlyConflict)
         } catch { Write-Host "Stopped coalescing edit observation also failed: $($_.Exception.GetType().Name)." }
     }
     throw $primaryFailure
