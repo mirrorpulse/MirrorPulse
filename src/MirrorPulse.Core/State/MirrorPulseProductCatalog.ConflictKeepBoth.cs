@@ -74,6 +74,7 @@ public sealed partial class MirrorPulseProductCatalog
                 throw new InvalidOperationException("The preservation choice must retain exactly the local-content proof required by its original program.");
             foreach (Guid original in selection.Originals)
             {
+                await RequireNotOriginalDirectoryPlanMemberAsync(original, transaction, token).ConfigureAwait(false);
                 await using var owner = _connection.CreateCommand(); owner.Transaction = transaction;
                 owner.CommandText = "SELECT 1 FROM conflict_deletion_members WHERE original_id=$id UNION ALL SELECT 1 FROM conflict_local_removal_members WHERE original_id=$id UNION ALL SELECT 1 FROM conflict_keep_remote_members WHERE original_id=$id UNION ALL SELECT 1 FROM conflict_keep_both_owners WHERE original_id=$id LIMIT 1;";
                 owner.Parameters.AddWithValue("$id", original.ToString("D"));

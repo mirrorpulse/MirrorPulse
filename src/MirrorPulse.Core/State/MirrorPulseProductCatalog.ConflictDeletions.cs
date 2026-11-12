@@ -84,6 +84,7 @@ public sealed partial class MirrorPulseProductCatalog
                 throw new InvalidOperationException("Remote deletion requires an explicitly observed remote revision.");
             foreach (Guid original in originals)
             {
+                await RequireNotOriginalDirectoryPlanMemberAsync(original, transaction, cancellationToken).ConfigureAwait(false);
                 await using var query = _connection.CreateCommand(); query.Transaction = transaction;
                 query.CommandText = "SELECT 1 FROM conflict_deletion_members WHERE original_id=$original UNION ALL SELECT 1 FROM conflict_local_removal_members WHERE original_id=$original UNION ALL SELECT 1 FROM conflict_keep_remote_members WHERE original_id=$original UNION ALL SELECT 1 FROM conflict_keep_both_owners WHERE original_id=$original LIMIT 1;";
                 query.Parameters.AddWithValue("$original", original.ToString("D"));

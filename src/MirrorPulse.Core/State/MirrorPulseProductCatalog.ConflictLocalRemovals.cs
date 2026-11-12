@@ -51,6 +51,7 @@ public sealed partial class MirrorPulseProductCatalog
                 false, transaction, cancellationToken).ConfigureAwait(false);
             foreach (Guid original in selected.Originals)
             {
+                await RequireNotOriginalDirectoryPlanMemberAsync(original, transaction, cancellationToken).ConfigureAwait(false);
                 await using var owner = _connection.CreateCommand(); owner.Transaction = transaction;
                 owner.CommandText = "SELECT 1 FROM conflict_deletion_members WHERE original_id=$id UNION ALL SELECT 1 FROM conflict_local_removal_members WHERE original_id=$id UNION ALL SELECT 1 FROM conflict_keep_remote_members WHERE original_id=$id UNION ALL SELECT 1 FROM conflict_keep_both_owners WHERE original_id=$id LIMIT 1;";
                 owner.Parameters.AddWithValue("$id", original.ToString("D"));

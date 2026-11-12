@@ -80,8 +80,7 @@ public sealed partial class AdapterWorkerV2SessionTests
             await supervisor.StartAsync(topology);
             while (!supervisor.IsConnected(instance)) await Task.Delay(25, timeout.Token);
 
-            var request = RetirementRequest(instance, "left");
-            await catalog.PrepareMutationAsync(RetirementIntent(request), timeout.Token);
+            var request = await PrepareRetirementAsync(catalog, RetirementPlan(instance, "left"), token: timeout.Token);
             switch (mode)
             {
                 case "Normal":
@@ -91,8 +90,7 @@ public sealed partial class AdapterWorkerV2SessionTests
                     Assert.AreEqual("left/revision", await supervisor.StatAsync(new(instance, "same.txt", "left"), timeout.Token));
                     break;
                 case "OriginalDirectory":
-                    var disabled = RetirementRequest(instance, "right");
-                    await catalog.PrepareMutationAsync(RetirementIntent(disabled), timeout.Token);
+                    var disabled = await PrepareRetirementAsync(catalog, RetirementPlan(instance, "right"), token: timeout.Token);
                     var offline = await Assert.ThrowsExactlyAsync<IOException>(() =>
                         supervisor.RetireOriginalDirectoryAsync(disabled, timeout.Token).AsTask());
                     Assert.AreEqual("RootOffline", offline.Message);
@@ -115,7 +113,7 @@ public sealed partial class AdapterWorkerV2SessionTests
         finally { Directory.Delete(directory, true); }
     }
 
-    private static AdapterDirectoryRetirementRequest RetirementRequest(InstanceId instance, string rootKey, string? targetRootKey = null)
+    private static MirrorPulseOriginalDirectoryPlan RetirementPlan(InstanceId instance, string rootKey, string? targetRootKey = null)
     {
         string digest = new('A', 64);
         Guid admission = Guid.NewGuid();
@@ -123,33 +121,61 @@ public sealed partial class AdapterWorkerV2SessionTests
             new(rootKey, ""), "root-generation", "root-revision", null, digest, "AQID");
         var original = new AdapterDirectoryGenerationWitness(1, instance.Value, admission, Guid.NewGuid(),
             new(rootKey, "tree"), "tree-generation", "tree-revision", root.Generation, digest, "AQID");
-        var child = new AdapterOwnedChildEffectReceipt(1, instance.Value, admission, Guid.NewGuid(), Guid.NewGuid(),
-            "Delete", digest, new(rootKey, "tree/leaf"), "leaf-generation", null,
-            [new(original, original.OriginalRevision, "tree-without-leaf", null, "AQID")]);
-        var evidence = new AdapterDirectoryRetirementEvidence(1, original, digest,
-            [new(child.OperationId, child.RequestFingerprint, child.Child, child.OriginalChildGeneration)], [child],
-            child.Parents.Single().AfterRevision, AdapterDirectoryEffects.Fingerprint(child));
         bool moving = targetRootKey is not null;
         AdapterDirectoryGenerationWitness[] parents = moving
             ? [root, root with { WitnessId = Guid.NewGuid(), Directory = new(targetRootKey!, ""), Generation = "target-generation" }]
             : [root];
-        var request = new AdapterDirectoryRetirementRequest(1, moving ? "Move" : "Delete",
+        var directory = new MirrorPulseOriginalDirectoryStep(moving ? "Move" : "Delete",
             new(Guid.NewGuid(), rootKey, original.Directory.Path, targetRootKey, moving ? "target-tree" : null,
-                new(evidence.FinalExpectedRevision), IsDirectory: true), evidence, parents, [], "");
-        return request with { RequestFingerprint = request.CalculateFingerprint() };
+                new(original.OriginalRevision), IsDirectory: true), original.Generation, original, parents);
+        var leaf = new MirrorPulseOriginalDirectoryStep("Delete",
+            new(Guid.NewGuid(), rootKey, "tree/leaf", Preconditions: new("leaf-revision")), "leaf-generation", null, [original]);
+        return new(instance, admission, [leaf, directory]);
     }
 
-    private static MirrorPulseMutationIntent RetirementIntent(AdapterDirectoryRetirementRequest request)
+    private static async Task<AdapterDirectoryRetirementRequest> PrepareRetirementAsync(MirrorPulseProductCatalog catalog,
+        MirrorPulseOriginalDirectoryPlan plan, bool prepareOwners = true, CancellationToken token = default)
     {
-        var operation = request.Operation;
-        var original = request.Retirement.OriginalDirectory;
-        var instance = new InstanceId(original.InstanceId);
-        return request.OperationKind == "Move"
+        if (prepareOwners) await PrepareDirectoryPlanOwnersAsync(catalog, plan, token);
+        await catalog.SealOriginalDirectoryPlanAsync(plan, token);
+        var leaf = await catalog.StartOriginalDirectoryLeafAsync(plan.Steps[0].Operation.OperationId, token);
+        await catalog.AcceptOriginalDirectoryLeafAsync(leaf.Step.Operation.OperationId, LeafReceipt(plan, leaf, "tree-without-leaf"), token);
+        return await catalog.ReadOriginalDirectoryPlanRetirementAsync(plan.Steps[^1].Operation.OperationId, token);
+    }
+
+    private static async Task PrepareDirectoryPlanOwnersAsync(MirrorPulseProductCatalog catalog,
+        MirrorPulseOriginalDirectoryPlan plan, CancellationToken token = default)
+    {
+        foreach (var step in plan.Steps)
+            await catalog.PrepareMutationAsync(RetirementIntent(plan.InstanceId, step), token);
+    }
+
+    private static AdapterOwnedChildEffectReceipt LeafReceipt(MirrorPulseOriginalDirectoryPlan plan,
+        MirrorPulseOriginalDirectoryLeaf leaf, string after)
+    {
+        var operation = leaf.Step.Operation;
+        return new(1, plan.InstanceId.Value, plan.AdmissionId, Guid.NewGuid(), operation.OperationId, leaf.Step.OperationKind,
+            leaf.RequestFingerprint, new(operation.RootKey, operation.Path), leaf.Step.OriginalGeneration,
+            leaf.Step.OperationKind == "Move" ? "leaf-moved-revision" : null,
+            leaf.Step.Parents.Select(parent =>
+            {
+                var previous = leaf.ParentPredecessors.SingleOrDefault(value => value.Parent == parent)?.Receipt;
+                return new AdapterOwnedParentTransition(parent,
+                    previous?.Parents.Single(value => value.OriginalParent == parent).AfterRevision ?? parent.OriginalRevision,
+                    after, previous is null ? null : AdapterDirectoryEffects.Fingerprint(previous), "AQID");
+            }).ToArray(),
+            leaf.Step.OperationKind == "Move" ? new(operation.DestinationRootKey!, operation.DestinationPath!) : null);
+    }
+
+    private static MirrorPulseMutationIntent RetirementIntent(InstanceId instance, MirrorPulseOriginalDirectoryStep step)
+    {
+        var operation = step.Operation;
+        return step.OperationKind == "Move"
             ? new(operation.OperationId, instance, operation.DestinationRootKey!, MirrorPulseWorkerChangeKind.Move,
-                operation.DestinationPath!, operation.Path, true, original.OriginalRevision, null, null,
+                operation.DestinationPath!, operation.Path, operation.IsDirectory, operation.Preconditions!.ExpectedRevision, null, null,
                 MirrorPulseMutationOrigin.Journal, PreviousRootKey: operation.RootKey)
             : new MirrorPulseMutationIntent(operation.OperationId, instance, operation.RootKey, MirrorPulseWorkerChangeKind.Delete,
-                operation.Path, null, true, original.OriginalRevision, null, null, MirrorPulseMutationOrigin.Journal)
+                operation.Path, null, operation.IsDirectory, operation.Preconditions!.ExpectedRevision, null, null, MirrorPulseMutationOrigin.Journal)
             { JournalItemId = Guid.NewGuid() };
     }
 

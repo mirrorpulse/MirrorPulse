@@ -169,6 +169,7 @@ public sealed partial class MirrorPulseProductCatalog
             foreach (var member in plan.Members)
             {
                 await RequireNotNamespaceTransferOwnerAsync(member.OperationId, transaction, cancellationToken).ConfigureAwait(false);
+                await RequireNotOriginalDirectoryPlanMemberAsync(member.OperationId, transaction, cancellationToken).ConfigureAwait(false);
                 await using var deletion = _connection.CreateCommand(); deletion.Transaction = transaction;
                 deletion.CommandText = "SELECT 1 FROM conflict_deletion_members WHERE original_id=$operation UNION ALL SELECT 1 FROM conflict_local_removal_members WHERE original_id=$operation UNION ALL SELECT 1 FROM conflict_keep_remote_members WHERE original_id=$operation LIMIT 1;";
                 deletion.Parameters.AddWithValue("$operation", member.OperationId.ToString("D"));

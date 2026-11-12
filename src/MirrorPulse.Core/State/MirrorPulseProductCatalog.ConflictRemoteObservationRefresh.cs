@@ -197,6 +197,7 @@ public sealed partial class MirrorPulseProductCatalog
 
     private async Task RequireUnownedRemoteObservationOriginalAsync(Guid originalId, SqliteTransaction transaction, CancellationToken token)
     {
+        await RequireNotOriginalDirectoryPlanMemberAsync(originalId, transaction, token).ConfigureAwait(false);
         await using var owner = _connection.CreateCommand(); owner.Transaction = transaction;
         owner.CommandText = "SELECT 1 FROM conflict_deletion_members WHERE original_id=$id UNION ALL SELECT 1 FROM conflict_local_removal_members WHERE original_id=$id UNION ALL SELECT 1 FROM conflict_keep_remote_members WHERE original_id=$id UNION ALL SELECT 1 FROM conflict_keep_both_owners WHERE original_id=$id LIMIT 1;";
         owner.Parameters.AddWithValue("$id", originalId.ToString("D"));

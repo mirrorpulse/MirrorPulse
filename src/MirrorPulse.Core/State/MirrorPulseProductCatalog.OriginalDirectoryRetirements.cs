@@ -94,6 +94,10 @@ public sealed partial class MirrorPulseProductCatalog
             if (owner.State != MirrorPulseMutationState.Prepared || owner.ExecutionEvidence != MirrorPulseMutationExecutionEvidence.NeverStarted ||
                 owner.AcceptedRevision is not null)
                 throw new InvalidOperationException("A previously started mutation cannot acquire new directory retirement evidence.");
+            var step = await RequireDirectoryPlanStepAsync(operationId, transaction, token).ConfigureAwait(false);
+            var derived = await BuildDirectoryPlanRetirementAsync(step, transaction, token).ConfigureAwait(false);
+            if (frozen.RequestFingerprint != derived.RequestFingerprint)
+                throw new InvalidDataException("The Worker retirement request differs from the sealed directory plan.");
 
             await using var insert = _connection.CreateCommand();
             insert.Transaction = transaction;
@@ -134,6 +138,13 @@ public sealed partial class MirrorPulseProductCatalog
                 transaction.Commit();
                 return accepted;
             }
+            var step = await ReadDirectoryPlanStepCoreAsync(operationId, transaction, token).ConfigureAwait(false);
+            if (step is not null)
+            {
+                var derived = await BuildDirectoryPlanRetirementAsync(step, transaction, token).ConfigureAwait(false);
+                if (retained.Request.RequestFingerprint != derived.RequestFingerprint)
+                    throw new InvalidDataException("The retirement receipt lost its original directory plan request.");
+            }
 
             await using var update = _connection.CreateCommand();
             update.Transaction = transaction;
@@ -148,6 +159,8 @@ public sealed partial class MirrorPulseProductCatalog
                 throw new InvalidOperationException("The directory retirement receipt changed during acceptance.");
             await SetDirectoryRetirementStateAsync(operationId, MirrorPulseMutationState.Executing, MirrorPulseMutationState.RemoteAccepted,
                 frozen.AcceptedRevision, transaction, token).ConfigureAwait(false);
+            if (step is not null)
+                await StoreDirectoryPlanReceiptAsync(step, frozen, transaction, token).ConfigureAwait(false);
             transaction.Commit();
             return frozen;
         }
@@ -189,23 +202,26 @@ public sealed partial class MirrorPulseProductCatalog
         return new(request, receipt);
     }
 
-    private async Task<MirrorPulseMutationRecord> RequireDirectoryRetirementOwnerAsync(AdapterDirectoryRetirementRequest request,
-        SqliteTransaction transaction, CancellationToken token)
+    private Task<MirrorPulseMutationRecord> RequireDirectoryRetirementOwnerAsync(AdapterDirectoryRetirementRequest request,
+        SqliteTransaction transaction, CancellationToken token) =>
+        RequireOriginalDirectoryOwnerAsync(request.Retirement.OriginalDirectory.InstanceId, request.OperationKind, request.Operation,
+            request.Retirement.OriginalDirectory.OriginalRevision, transaction, token);
+
+    private async Task<MirrorPulseMutationRecord> RequireOriginalDirectoryOwnerAsync(Guid instanceId, string operationKind,
+        AdapterOperationRequest operation, string originalRevision, SqliteTransaction transaction, CancellationToken token)
     {
-        var operation = request.Operation;
-        var original = request.Retirement.OriginalDirectory;
         var owner = await ReadMutationCoreAsync(operation.OperationId, token, transaction).ConfigureAwait(false)
             ?? throw new InvalidOperationException("The directory retirement requires an original journal mutation.");
         var intent = owner.Intent;
-        bool matchesAddress = request.OperationKind == "Delete"
+        bool matchesAddress = operationKind == "Delete"
             ? intent.Kind == MirrorPulseWorkerChangeKind.Delete && intent.RootKey == operation.RootKey &&
                 intent.RelativePath.Replace('\\', '/') == operation.Path &&
                 (intent.Origin != MirrorPulseMutationOrigin.Journal || intent.JournalItemId is not null)
             : intent.Kind == MirrorPulseWorkerChangeKind.Move && (intent.PreviousRootKey ?? intent.RootKey) == operation.RootKey &&
                 intent.PreviousRelativePath?.Replace('\\', '/') == operation.Path && intent.RootKey == operation.DestinationRootKey &&
                 intent.RelativePath.Replace('\\', '/') == operation.DestinationPath;
-        if (!intent.IsDirectory || intent.Origin is not (MirrorPulseMutationOrigin.Journal or MirrorPulseMutationOrigin.CoalescedJournal) ||
-            intent.InstanceId.Value != original.InstanceId || intent.ExpectedRevision != original.OriginalRevision || !matchesAddress)
+        if (intent.IsDirectory != operation.IsDirectory || intent.Origin is not (MirrorPulseMutationOrigin.Journal or MirrorPulseMutationOrigin.CoalescedJournal) ||
+            intent.InstanceId.Value != instanceId || intent.ExpectedRevision != originalRevision || !matchesAddress)
             throw new InvalidDataException("The directory retirement does not match its original journal mutation.");
         return owner;
     }
