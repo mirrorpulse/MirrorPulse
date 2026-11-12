@@ -122,7 +122,9 @@ public sealed partial class MirrorPulseProductCatalog
             command.CommandText = """
                 UPDATE mutation_intents SET state=$to, accepted_revision=COALESCE($revision,accepted_revision),
                     updated_utc=$updated, execution_started=CASE WHEN $to=$executing THEN 1 ELSE execution_started END
-                WHERE operation_id=$operation AND state=$from;
+                WHERE operation_id=$operation AND state=$from AND NOT EXISTS (
+                    SELECT 1 FROM original_directory_retirements WHERE operation_id=$operation
+                );
                 """;
             command.Parameters.AddWithValue("$operation", operationId.ToString("D"));
             command.Parameters.AddWithValue("$from", (int)from);

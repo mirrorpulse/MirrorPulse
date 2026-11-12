@@ -38,7 +38,7 @@ if (mode == "UnexpectedHello")
 }
 Guid helloId = Guid.NewGuid();
 string[] capabilities = ["root-addresses", "stable-operations", "conditional-targets", "bounded-streams", "cancel-ack"];
-if (mode is "OriginalDirectory" or "WrongOriginalDirectory" or "OrdinaryDirectoryReply")
+if (mode is "OriginalDirectory" or "WrongOriginalDirectory" or "OrdinaryDirectoryReply" or "LostOriginalDirectoryReply")
     capabilities = [.. capabilities, AdapterDirectoryEffects.Capability];
 await SendAsync(new(1, "Hello", helloId, instance, session, false, JsonSerializer.SerializeToElement(new
 {
@@ -94,6 +94,17 @@ while (true)
             mode == "WrongOriginalDirectory" ? "later-generation" : original.Generation, null,
             retirement.OriginalParents.Select(parent => new AdapterOwnedParentTransition(parent, parent.OriginalRevision,
                 "after-retirement", null, "AQID")).ToArray());
+        if (mode == "LostOriginalDirectoryReply")
+        {
+            string receiptPath = Path.Combine(cache!, ".mp-original-directory-fixture-receipt");
+            if (!File.Exists(receiptPath))
+            {
+                await File.WriteAllBytesAsync(receiptPath, AdapterProtocolJson.Encode(receipt));
+                return;
+            }
+            receipt = AdapterProtocolJson.Decode<AdapterOwnedChildEffectReceipt>(await File.ReadAllBytesAsync(receiptPath));
+            retirement.RequireAcceptedReceipt(receipt);
+        }
         await SendAsync(new(2, AdapterDirectoryRetirementWire.ResponseMessage, request.RequestId, instance, session, true,
             AdapterProtocolJson.ToElement(receipt)));
         continue;

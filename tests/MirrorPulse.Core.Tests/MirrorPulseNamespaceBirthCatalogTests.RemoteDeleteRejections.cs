@@ -174,7 +174,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         await using (var connection = Connection(fixture.Paths))
         {
             await connection.OpenAsync(); await using var version = connection.CreateCommand(); version.CommandText = "PRAGMA user_version;";
-            Assert.AreEqual(104L, await version.ExecuteScalarAsync());
+            Assert.AreEqual(105L, await version.ExecuteScalarAsync());
         }
         await ExecuteSqlAsync(fixture.Paths, drop);
         await Assert.ThrowsExactlyAsync<InvalidDataException>(async () => { await using var rejected = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths); });

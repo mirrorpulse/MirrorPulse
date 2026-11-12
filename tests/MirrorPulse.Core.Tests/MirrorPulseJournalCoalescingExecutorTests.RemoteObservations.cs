@@ -194,7 +194,7 @@ public sealed partial class MirrorPulseJournalCoalescingExecutorTests
         finally { if (unexpected is not null) await unexpected.DisposeAsync(); }
         await using var inspected = new SqliteConnection(options.ToString()); await inspected.OpenAsync(); await using var inspect = inspected.CreateCommand();
         inspect.CommandText = "PRAGMA user_version;";
-        Assert.AreEqual(boundary == "downgraded-version" ? 92L : 104L, await inspect.ExecuteScalarAsync());
+        Assert.AreEqual(boundary == "downgraded-version" ? 92L : 105L, await inspect.ExecuteScalarAsync());
         inspect.CommandText = "SELECT COUNT(*) FROM upload_conflicts;";
         Assert.AreEqual(fixture.Plan.Members.Count * 2L, await inspect.ExecuteScalarAsync());
         if (boundary != "downgraded-version")

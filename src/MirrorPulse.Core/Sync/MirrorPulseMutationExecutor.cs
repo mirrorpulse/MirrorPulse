@@ -21,6 +21,9 @@ public sealed class MirrorPulseMutationExecutor(MirrorPulseProductCatalog catalo
         if (record.State == MirrorPulseMutationState.Conflict)
             throw new MirrorPulseWorkerMutationConflictException(record.Intent.ExpectedRevision, record.AcceptedRevision);
         if (record.State == MirrorPulseMutationState.Prepared) throw new MirrorPulseMutationAmbiguousException();
+        if (record.Intent.IsDirectory && record.Intent.Kind is (MirrorPulseWorkerChangeKind.Delete or MirrorPulseWorkerChangeKind.Move) &&
+            await _catalog.ReadOriginalDirectoryRetirementAsync(record.Intent.OperationId, cancellationToken).ConfigureAwait(false) is not null)
+            throw new MirrorPulseMutationAmbiguousException("The directory mutation requires typed retirement recovery.");
         if (record.State == MirrorPulseMutationState.RemoteAccepted &&
             await _catalog.ReadContentAcceptanceProofAsync(record.Intent.OperationId, cancellationToken).ConfigureAwait(false) is { } retained)
         {

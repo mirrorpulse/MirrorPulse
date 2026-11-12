@@ -6,12 +6,13 @@ using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.Host;
 using MirrorPulse.Core.Security;
 using MirrorPulse.Core.State;
+using MirrorPulse.Core.Sync;
 using MirrorPulse.Worker.ProtocolFixture;
 
 namespace MirrorPulse.Core.Tests;
 
 [TestClass]
-public sealed class AdapterWorkerV2SessionTests
+public sealed partial class AdapterWorkerV2SessionTests
 {
     [TestMethod]
     public async Task RealWorkerProcessNegotiatesTwoRootsWithTheProductionSupervisor()
@@ -80,6 +81,7 @@ public sealed class AdapterWorkerV2SessionTests
             while (!supervisor.IsConnected(instance)) await Task.Delay(25, timeout.Token);
 
             var request = RetirementRequest(instance, "left");
+            await catalog.PrepareMutationAsync(RetirementIntent(request), timeout.Token);
             switch (mode)
             {
                 case "Normal":
@@ -89,11 +91,16 @@ public sealed class AdapterWorkerV2SessionTests
                     Assert.AreEqual("left/revision", await supervisor.StatAsync(new(instance, "same.txt", "left"), timeout.Token));
                     break;
                 case "OriginalDirectory":
+                    var disabled = RetirementRequest(instance, "right");
+                    await catalog.PrepareMutationAsync(RetirementIntent(disabled), timeout.Token);
                     var offline = await Assert.ThrowsExactlyAsync<IOException>(() =>
-                        supervisor.RetireOriginalDirectoryAsync(RetirementRequest(instance, "right"), timeout.Token).AsTask());
+                        supervisor.RetireOriginalDirectoryAsync(disabled, timeout.Token).AsTask());
                     Assert.AreEqual("RootOffline", offline.Message);
-                    var receipt = await supervisor.RetireOriginalDirectoryAsync(request, timeout.Token);
+                    var replies = await Task.WhenAll(supervisor.RetireOriginalDirectoryAsync(request, timeout.Token).AsTask(),
+                        supervisor.RetireOriginalDirectoryAsync(request, timeout.Token).AsTask());
+                    var receipt = replies[0];
                     Assert.IsNull(receipt.AcceptedRevision);
+                    Assert.AreEqual(receipt.ReceiptId, replies[1].ReceiptId);
                     Assert.AreEqual(request.RequestFingerprint, receipt.RequestFingerprint);
                     Assert.AreEqual(request.Operation.OperationId, receipt.OperationId);
                     Assert.AreEqual("after-retirement", receipt.Parents.Single().AfterRevision);
@@ -108,7 +115,7 @@ public sealed class AdapterWorkerV2SessionTests
         finally { Directory.Delete(directory, true); }
     }
 
-    private static AdapterDirectoryRetirementRequest RetirementRequest(InstanceId instance, string rootKey)
+    private static AdapterDirectoryRetirementRequest RetirementRequest(InstanceId instance, string rootKey, string? targetRootKey = null)
     {
         string digest = new('A', 64);
         Guid admission = Guid.NewGuid();
@@ -122,10 +129,28 @@ public sealed class AdapterWorkerV2SessionTests
         var evidence = new AdapterDirectoryRetirementEvidence(1, original, digest,
             [new(child.OperationId, child.RequestFingerprint, child.Child, child.OriginalChildGeneration)], [child],
             child.Parents.Single().AfterRevision, AdapterDirectoryEffects.Fingerprint(child));
-        var request = new AdapterDirectoryRetirementRequest(1, "Delete",
-            new(Guid.NewGuid(), rootKey, original.Directory.Path, Preconditions: new(evidence.FinalExpectedRevision), IsDirectory: true),
-            evidence, [root], [], "");
+        bool moving = targetRootKey is not null;
+        AdapterDirectoryGenerationWitness[] parents = moving
+            ? [root, root with { WitnessId = Guid.NewGuid(), Directory = new(targetRootKey!, ""), Generation = "target-generation" }]
+            : [root];
+        var request = new AdapterDirectoryRetirementRequest(1, moving ? "Move" : "Delete",
+            new(Guid.NewGuid(), rootKey, original.Directory.Path, targetRootKey, moving ? "target-tree" : null,
+                new(evidence.FinalExpectedRevision), IsDirectory: true), evidence, parents, [], "");
         return request with { RequestFingerprint = request.CalculateFingerprint() };
+    }
+
+    private static MirrorPulseMutationIntent RetirementIntent(AdapterDirectoryRetirementRequest request)
+    {
+        var operation = request.Operation;
+        var original = request.Retirement.OriginalDirectory;
+        var instance = new InstanceId(original.InstanceId);
+        return request.OperationKind == "Move"
+            ? new(operation.OperationId, instance, operation.DestinationRootKey!, MirrorPulseWorkerChangeKind.Move,
+                operation.DestinationPath!, operation.Path, true, original.OriginalRevision, null, null,
+                MirrorPulseMutationOrigin.Journal, PreviousRootKey: operation.RootKey)
+            : new MirrorPulseMutationIntent(operation.OperationId, instance, operation.RootKey, MirrorPulseWorkerChangeKind.Delete,
+                operation.Path, null, true, original.OriginalRevision, null, null, MirrorPulseMutationOrigin.Journal)
+            { JournalItemId = Guid.NewGuid() };
     }
 
     private static MirrorPulseAdapterTopology CreateFixtureTopology(string directory, InstanceId instanceId,

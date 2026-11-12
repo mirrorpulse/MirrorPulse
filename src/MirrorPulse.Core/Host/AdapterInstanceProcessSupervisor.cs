@@ -137,14 +137,23 @@ public sealed class AdapterInstanceProcessSupervisor :
         AdapterDirectoryRetirementRequest request, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
-        request.Validate();
-        var instanceId = new InstanceId(request.Retirement.OriginalDirectory.InstanceId);
+        var retained = await _catalog.StartOriginalDirectoryRetirementAsync(request, cancellationToken).ConfigureAwait(false);
+        if (retained.Receipt is { } accepted) return accepted;
+        Guid operationId = retained.Request.Operation.OperationId;
+        var instanceId = new InstanceId(retained.Request.Retirement.OriginalDirectory.InstanceId);
         if (!IsConnected(instanceId) || !_mutations.TryGetValue(instanceId, out var client) ||
             !_instanceOperations.TryGetValue(instanceId, out var operation))
             throw new AdapterWorkerOperationException("Disconnected");
 
         await operation.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try { return await client.RetireOriginalDirectoryAsync(request, cancellationToken).ConfigureAwait(false); }
+        try
+        {
+            var current = await _catalog.ReadOriginalDirectoryRetirementAsync(operationId, cancellationToken).ConfigureAwait(false)
+                ?? throw new InvalidDataException("The original directory retirement request disappeared.");
+            if (current.Receipt is { } completed) return completed;
+            var receipt = await client.RetireOriginalDirectoryAsync(current.Request, cancellationToken).ConfigureAwait(false);
+            return await _catalog.AcceptOriginalDirectoryRetirementAsync(operationId, receipt, cancellationToken).ConfigureAwait(false);
+        }
         finally { operation.Release(); }
     }
 
