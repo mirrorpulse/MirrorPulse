@@ -3,6 +3,7 @@ using System.IO.Pipes;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using MirrorPulse.Adapter.Sdk;
 using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.Transport;
 
@@ -37,6 +38,8 @@ if (mode == "UnexpectedHello")
 }
 Guid helloId = Guid.NewGuid();
 string[] capabilities = ["root-addresses", "stable-operations", "conditional-targets", "bounded-streams", "cancel-ack"];
+if (mode is "OriginalDirectory" or "WrongOriginalDirectory" or "OrdinaryDirectoryReply")
+    capabilities = [.. capabilities, AdapterDirectoryEffects.Capability];
 await SendAsync(new(1, "Hello", helloId, instance, session, false, JsonSerializer.SerializeToElement(new
 {
     supportedVersions = new { minimum = mode == "RejectedHello" ? 2 : 1, maximum = 2 },
@@ -45,6 +48,9 @@ await SendAsync(new(1, "Hello", helloId, instance, session, false, JsonSerialize
 ControlFrameEnvelope ready = await ReadAsync();
 if (mode == "RejectedHello") await Task.Delay(Timeout.InfiniteTimeSpan);
 if (ready.MessageType != "Ready" || !ready.IsResponse || ready.RequestId != helloId) return;
+string[] selectedCapabilities = ready.ProtocolVersion == 2
+    ? ready.Payload.GetProperty("capabilities").EnumerateArray().Select(value => value.GetString()!).ToArray()
+    : [];
 if (ready.ProtocolVersion == 2)
 {
     JsonElement[] roots = ready.Payload.GetProperty("roots").EnumerateArray().ToArray();
@@ -71,6 +77,26 @@ while (true)
     {
         if (mode == "IgnoreStopWithOpenFile") await Task.Delay(Timeout.InfiniteTimeSpan);
         return;
+    }
+    if (request.MessageType == AdapterDirectoryRetirementWire.RequestMessage)
+    {
+        var retirement = AdapterDirectoryRetirementWire.ReadRequest(new(request.ProtocolVersion, request.MessageType,
+            request.RequestId, instance.Value, session.Value, request.IsResponse, request.Payload), selectedCapabilities);
+        var original = retirement.Retirement.OriginalDirectory;
+        if (mode == "OrdinaryDirectoryReply")
+        {
+            await SendAsync(new(2, "MutationComplete", request.RequestId, instance, session, true,
+                JsonSerializer.SerializeToElement(new { rootKey = original.Directory.RootKey, operationId = retirement.Operation.OperationId })));
+            continue;
+        }
+        var receipt = new AdapterOwnedChildEffectReceipt(1, instance.Value, original.AdmissionId, Guid.NewGuid(),
+            retirement.Operation.OperationId, retirement.OperationKind, retirement.RequestFingerprint, original.Directory,
+            mode == "WrongOriginalDirectory" ? "later-generation" : original.Generation, null,
+            retirement.OriginalParents.Select(parent => new AdapterOwnedParentTransition(parent, parent.OriginalRevision,
+                "after-retirement", null, "AQID")).ToArray());
+        await SendAsync(new(2, AdapterDirectoryRetirementWire.ResponseMessage, request.RequestId, instance, session, true,
+            AdapterProtocolJson.ToElement(receipt)));
+        continue;
     }
     string requestRoot = request.Payload.GetProperty("rootKey").GetString()!;
     string requestPath = request.Payload.TryGetProperty("path", out JsonElement pathElement) ? pathElement.GetString()! : "";

@@ -216,7 +216,8 @@
       "mirrorpulse.core": {
         "type": "Project",
         "dependencies": {
-          "Microsoft.Data.Sqlite": "[8.0.31, )"
+          "Microsoft.Data.Sqlite": "[8.0.31, )",
+          "MirrorPulse.Adapter.Sdk": "[0.3.0, 0.3.0]"
         }
       },
       "CfSharp": {

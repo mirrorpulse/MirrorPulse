@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Text.Json;
+using MirrorPulse.Adapter.Sdk;
 using MirrorPulse.Core.Contracts;
 
 namespace MirrorPulse.Core.Host;
@@ -11,15 +12,17 @@ public sealed class AdapterWorkerProtocolSession
         ["root-addresses", "stable-operations", "conditional-targets", "bounded-streams", "cancel-ack"];
     private readonly RootRegistration[] _roots;
 
-    private AdapterWorkerProtocolSession(int version, RootRegistration[] roots)
+    private AdapterWorkerProtocolSession(int version, RootRegistration[] roots, string[] capabilities)
     {
         ProtocolVersion = version;
         _roots = roots;
+        Capabilities = Array.AsReadOnly(capabilities);
     }
 
     public int ProtocolVersion { get; }
+    internal IReadOnlyList<string> Capabilities { get; }
 
-    public JsonElement RoutePayload(string? rootKey, JsonElement payload)
+    internal void RequireActiveRoot(string? rootKey)
     {
         if (rootKey is not null)
         {
@@ -27,6 +30,12 @@ public sealed class AdapterWorkerProtocolSession
             if (root is null) throw new InvalidDataException("UnknownRoot");
             if (root.State != RootRegistrationState.Active) throw new IOException("RootOffline");
         }
+        else if (ProtocolVersion == 2) throw new InvalidDataException("RootRequired");
+    }
+
+    public JsonElement RoutePayload(string? rootKey, JsonElement payload)
+    {
+        RequireActiveRoot(rootKey);
         if (ProtocolVersion == 1) return payload;
         if (string.IsNullOrWhiteSpace(rootKey)) throw new InvalidDataException("RootRequired");
         Dictionary<string, JsonElement> fields = payload.EnumerateObject().ToDictionary(p => p.Name, p => p.Value.Clone(), StringComparer.Ordinal);
@@ -70,6 +79,7 @@ public sealed class AdapterWorkerProtocolSession
         int selected = Math.Min(2, Math.Min(maximum, packageVersions.Maximum));
         if (selected < Math.Max(minimum, packageVersions.Minimum))
             throw new InvalidDataException("ProtocolVersionUnsupported");
+        string[] negotiated = [];
         if (selected == 2)
         {
             if (!hello.TryGetProperty("capabilities", out JsonElement capabilities) ||
@@ -82,9 +92,12 @@ public sealed class AdapterWorkerProtocolSession
                 throw new InvalidDataException("RequiredCapabilityMissing");
             if (configured.Length == 0 || configured.Select(r => r.UniquenessKey).Distinct(StringComparer.Ordinal).Count() != configured.Length)
                 throw new InvalidDataException("InvalidRoots");
+            negotiated = offered.Contains(AdapterDirectoryEffects.Capability, StringComparer.Ordinal)
+                ? [.. RequiredCapabilities, AdapterDirectoryEffects.Capability]
+                : RequiredCapabilities;
         }
         else if (configured.Length > 1) throw new InvalidDataException("MultipleRootsRequireProtocolV2");
-        return new(selected, configured);
+        return new(selected, configured, negotiated);
     }
 
     private static bool ReadVersion(JsonElement value, out int version)
@@ -100,7 +113,7 @@ public sealed class AdapterWorkerProtocolSession
         return JsonSerializer.SerializeToElement(new
         {
             selectedVersion = ProtocolVersion,
-            capabilities = RequiredCapabilities,
+            capabilities = Capabilities,
             roots = _roots.Select(root => new
             {
                 rootKey = root.UniquenessKey,

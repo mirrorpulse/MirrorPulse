@@ -1,4 +1,5 @@
 using System.Text.Json;
+using MirrorPulse.Adapter.Sdk;
 using MirrorPulse.Core.CloudFiles;
 using MirrorPulse.Core.Configuration;
 using MirrorPulse.Core.Contracts;
@@ -16,23 +17,8 @@ public sealed class AdapterWorkerV2SessionTests
     public async Task RealWorkerProcessNegotiatesTwoRootsWithTheProductionSupervisor()
     {
         string directory = Path.Combine(Path.GetTempPath(), "MirrorPulse-tests", Guid.NewGuid().ToString("N"));
-        string executable = Path.ChangeExtension(typeof(ProtocolFixtureMarker).Assembly.Location, ".exe");
-        AdapterId adapter = AdapterId.Parse("example.protocolfixture");
         InstanceId instanceId = InstanceId.New();
-        InstallId installId = InstallId.New();
-        var manifest = new AdapterManifest(1, adapter, "Fixture", "1.0.0", new(1, 2),
-            new Dictionary<string, string> { ["win-x64"] = Path.GetFileName(executable), ["win-arm64"] = Path.GetFileName(executable) },
-            new(null), new(null, null), new(true, false, true, true), ["en-US"], "1.0.0");
-        var installed = new InstalledAdapter(manifest, installId, Path.GetDirectoryName(executable)!,
-            new(new string('A', 64)), AdapterInstallSource.LocalFile, null, true, DateTimeOffset.UtcNow, AdapterLifecycleState.Installed);
-        var instance = new AdapterInstance(adapter, installId, instanceId, "Fixture", new Dictionary<string, string>
-        {
-            ["root.left.sourcePath"] = "left-source",
-            ["root.right.sourcePath"] = "right-source",
-        }, [], Path.Combine(directory, "files"), Path.Combine(directory, "transfers"), true,
-            AdapterLifecycleState.Enabled, null, DateTimeOffset.UtcNow);
-        RootRegistration Root(string key) => new(adapter, instanceId, RootId.New(), key, key, key, false, RootRegistrationState.Active, DateTimeOffset.UtcNow);
-        var topology = new MirrorPulseAdapterTopology([installed], [instance], [Root("left"), Root("right")]);
+        var topology = CreateFixtureTopology(directory, instanceId);
         try
         {
             await using var catalog = await MirrorPulseProductCatalog.OpenAsync(new(Path.Combine(directory, "sync"), Path.Combine(directory, "data")));
@@ -69,6 +55,99 @@ public sealed class AdapterWorkerV2SessionTests
             Assert.AreEqual("left/revision", await supervisor.StatAsync(new(instanceId, "same.txt", "left"), timeout.Token));
         }
         finally { Directory.Delete(directory, true); }
+    }
+
+    [TestMethod]
+    [DataRow("OriginalDirectory")]
+    [DataRow("Normal")]
+    [DataRow("WrongOriginalDirectory")]
+    [DataRow("OrdinaryDirectoryReply")]
+    public async Task RealWorkerRetirementRequiresCapabilityAndTheExactTypedReceipt(string mode)
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "MirrorPulse-tests", Guid.NewGuid().ToString("N"));
+        InstanceId instance = InstanceId.New();
+        var topology = CreateFixtureTopology(directory, instance, RootRegistrationState.Disabled);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        try
+        {
+            string cache = topology.Instances.Single().TransferCacheDirectory;
+            Directory.CreateDirectory(cache);
+            await File.WriteAllTextAsync(Path.Combine(cache, ".mp-startup-fixture-mode"), mode, timeout.Token);
+            await using var catalog = await MirrorPulseProductCatalog.OpenAsync(new(Path.Combine(directory, "sync"), Path.Combine(directory, "data")));
+            await catalog.SaveAdapterTopologyAsync(topology);
+            await using var supervisor = new AdapterInstanceProcessSupervisor(catalog, new WindowsCredentialManagerStore());
+            await supervisor.StartAsync(topology);
+            while (!supervisor.IsConnected(instance)) await Task.Delay(25, timeout.Token);
+
+            var request = RetirementRequest(instance, "left");
+            switch (mode)
+            {
+                case "Normal":
+                    var unsupported = await Assert.ThrowsExactlyAsync<NotSupportedException>(() =>
+                        supervisor.RetireOriginalDirectoryAsync(request, timeout.Token).AsTask());
+                    Assert.AreEqual("OriginalDirectoryEffectsUnsupported", unsupported.Message);
+                    Assert.AreEqual("left/revision", await supervisor.StatAsync(new(instance, "same.txt", "left"), timeout.Token));
+                    break;
+                case "OriginalDirectory":
+                    var offline = await Assert.ThrowsExactlyAsync<IOException>(() =>
+                        supervisor.RetireOriginalDirectoryAsync(RetirementRequest(instance, "right"), timeout.Token).AsTask());
+                    Assert.AreEqual("RootOffline", offline.Message);
+                    var receipt = await supervisor.RetireOriginalDirectoryAsync(request, timeout.Token);
+                    Assert.IsNull(receipt.AcceptedRevision);
+                    Assert.AreEqual(request.RequestFingerprint, receipt.RequestFingerprint);
+                    Assert.AreEqual(request.Operation.OperationId, receipt.OperationId);
+                    Assert.AreEqual("after-retirement", receipt.Parents.Single().AfterRevision);
+                    break;
+                default:
+                    var rejected = await Assert.ThrowsExactlyAsync<IOException>(() =>
+                        supervisor.RetireOriginalDirectoryAsync(request, timeout.Token).AsTask());
+                    Assert.AreEqual("The Adapter Worker disconnected.", rejected.Message);
+                    break;
+            }
+        }
+        finally { Directory.Delete(directory, true); }
+    }
+
+    private static AdapterDirectoryRetirementRequest RetirementRequest(InstanceId instance, string rootKey)
+    {
+        string digest = new('A', 64);
+        Guid admission = Guid.NewGuid();
+        var root = new AdapterDirectoryGenerationWitness(1, instance.Value, admission, Guid.NewGuid(),
+            new(rootKey, ""), "root-generation", "root-revision", null, digest, "AQID");
+        var original = new AdapterDirectoryGenerationWitness(1, instance.Value, admission, Guid.NewGuid(),
+            new(rootKey, "tree"), "tree-generation", "tree-revision", root.Generation, digest, "AQID");
+        var child = new AdapterOwnedChildEffectReceipt(1, instance.Value, admission, Guid.NewGuid(), Guid.NewGuid(),
+            "Delete", digest, new(rootKey, "tree/leaf"), "leaf-generation", null,
+            [new(original, original.OriginalRevision, "tree-without-leaf", null, "AQID")]);
+        var evidence = new AdapterDirectoryRetirementEvidence(1, original, digest,
+            [new(child.OperationId, child.RequestFingerprint, child.Child, child.OriginalChildGeneration)], [child],
+            child.Parents.Single().AfterRevision, AdapterDirectoryEffects.Fingerprint(child));
+        var request = new AdapterDirectoryRetirementRequest(1, "Delete",
+            new(Guid.NewGuid(), rootKey, original.Directory.Path, Preconditions: new(evidence.FinalExpectedRevision), IsDirectory: true),
+            evidence, [root], [], "");
+        return request with { RequestFingerprint = request.CalculateFingerprint() };
+    }
+
+    private static MirrorPulseAdapterTopology CreateFixtureTopology(string directory, InstanceId instanceId,
+        RootRegistrationState rightState = RootRegistrationState.Active)
+    {
+        string executable = Path.ChangeExtension(typeof(ProtocolFixtureMarker).Assembly.Location, ".exe");
+        AdapterId adapter = AdapterId.Parse("example.protocolfixture");
+        InstallId installId = InstallId.New();
+        var manifest = new AdapterManifest(1, adapter, "Fixture", "1.0.0", new(1, 2),
+            new Dictionary<string, string> { ["win-x64"] = Path.GetFileName(executable), ["win-arm64"] = Path.GetFileName(executable) },
+            new(null), new(null, null), new(true, false, true, true), ["en-US"], "1.0.0");
+        var installed = new InstalledAdapter(manifest, installId, Path.GetDirectoryName(executable)!,
+            new(new string('A', 64)), AdapterInstallSource.LocalFile, null, true, DateTimeOffset.UtcNow, AdapterLifecycleState.Installed);
+        var instance = new AdapterInstance(adapter, installId, instanceId, "Fixture", new Dictionary<string, string>
+        {
+            ["root.left.sourcePath"] = "left-source",
+            ["root.right.sourcePath"] = "right-source",
+        }, [], Path.Combine(directory, "files"), Path.Combine(directory, "transfers"), true,
+            AdapterLifecycleState.Enabled, null, DateTimeOffset.UtcNow);
+        RootRegistration Root(string key, RootRegistrationState state) =>
+            new(adapter, instanceId, RootId.New(), key, key, key, false, state, DateTimeOffset.UtcNow);
+        return new([installed], [instance], [Root("left", RootRegistrationState.Active), Root("right", rightState)]);
     }
 
     [TestMethod]

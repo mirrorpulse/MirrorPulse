@@ -46,7 +46,8 @@
       "mirrorpulse.core": {
         "type": "Project",
         "dependencies": {
-          "Microsoft.Data.Sqlite": "[8.0.31, )"
+          "Microsoft.Data.Sqlite": "[8.0.31, )",
+          "MirrorPulse.Adapter.Sdk": "[0.3.0, 0.3.0]"
         }
       },
       "Microsoft.Data.Sqlite": {
@@ -58,6 +59,12 @@
           "Microsoft.Data.Sqlite.Core": "8.0.31",
           "SQLitePCLRaw.bundle_e_sqlite3": "2.1.12"
         }
+      },
+      "MirrorPulse.Adapter.Sdk": {
+        "type": "CentralTransitive",
+        "requested": "[0.3.0, 0.3.0]",
+        "resolved": "0.3.0",
+        "contentHash": "OhugOeH/gX//UQrDTLkYhKEdrpRpLFteY3qflsbT1LHfptgUqftTrNCTi6lgoEXU0wgwm8f/MtG2E0tp06qYDQ=="
       }
     },
     "net10.0-windows7.0/win-arm64": {

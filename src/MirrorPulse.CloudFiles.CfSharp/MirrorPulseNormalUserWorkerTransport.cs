@@ -1,4 +1,5 @@
 using System.Runtime.Versioning;
+using MirrorPulse.Adapter.Sdk;
 using MirrorPulse.Core.CloudFiles;
 using MirrorPulse.Core.Host;
 
@@ -14,7 +15,7 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 [SupportedOSPlatform("windows10.0.26100")]
 public sealed class MirrorPulseNormalUserWorkerTransport : IMirrorPulseWorkerRangeTransport,
     IMirrorPulseWorkerUploadTransport, IMirrorPulseWorkerStatTransport,
-    IMirrorPulseWorkerDirectoryPageSource, IMirrorPulseWorkerMutationTransport
+    IMirrorPulseWorkerDirectoryPageSource, IMirrorPulseWorkerMutationTransport, IMirrorPulseOriginalDirectoryRetirementTransport
 {
     private readonly MirrorPulseNamespaceExecutionSession _session;
     private readonly IMirrorPulseWorkerRangeTransport _ranges;
@@ -79,4 +80,13 @@ public sealed class MirrorPulseNormalUserWorkerTransport : IMirrorPulseWorkerRan
     public async ValueTask<string> MoveAsync(MirrorPulseWorkerMoveRequest request, CancellationToken cancellationToken) =>
         await _session.RunNormalUserOperationAsync(async () =>
             await _mutations.MoveAsync(request, cancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
+
+    public async ValueTask<AdapterOwnedChildEffectReceipt> RetireOriginalDirectoryAsync(
+        AdapterDirectoryRetirementRequest request, CancellationToken cancellationToken)
+    {
+        if (_mutations is not IMirrorPulseOriginalDirectoryRetirementTransport retirement)
+            throw new NotSupportedException("OriginalDirectoryEffectsUnsupported");
+        return await _session.RunNormalUserOperationAsync(async () =>
+            await retirement.RetireOriginalDirectoryAsync(request, cancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
+    }
 }

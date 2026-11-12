@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.IO.Pipes;
 using System.Text;
 using System.Text.Json;
+using MirrorPulse.Adapter.Sdk;
 using MirrorPulse.Core.CloudFiles;
 using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.Diagnostics;
@@ -17,7 +18,7 @@ namespace MirrorPulse.Core.Host;
 public sealed class AdapterInstanceProcessSupervisor :
     IMirrorPulseWorkerRangeTransport, IMirrorPulseWorkerUploadTransport,
     IMirrorPulseWorkerStatTransport, IMirrorPulseWorkerDirectoryPageSource,
-    IMirrorPulseWorkerMutationTransport, IAsyncDisposable
+    IMirrorPulseWorkerMutationTransport, IMirrorPulseOriginalDirectoryRetirementTransport, IAsyncDisposable
 {
     private readonly MirrorPulseProductCatalog _catalog;
     private readonly ISecureCredentialStore _credentials;
@@ -129,6 +130,21 @@ public sealed class AdapterInstanceProcessSupervisor :
             throw new AdapterWorkerOperationException("Disconnected");
         await operation.WaitAsync(cancellationToken).ConfigureAwait(false);
         try { return await client.CreateDirectoryAsync(request, cancellationToken).ConfigureAwait(false); }
+        finally { operation.Release(); }
+    }
+
+    public async ValueTask<AdapterOwnedChildEffectReceipt> RetireOriginalDirectoryAsync(
+        AdapterDirectoryRetirementRequest request, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        request.Validate();
+        var instanceId = new InstanceId(request.Retirement.OriginalDirectory.InstanceId);
+        if (!IsConnected(instanceId) || !_mutations.TryGetValue(instanceId, out var client) ||
+            !_instanceOperations.TryGetValue(instanceId, out var operation))
+            throw new AdapterWorkerOperationException("Disconnected");
+
+        await operation.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try { return await client.RetireOriginalDirectoryAsync(request, cancellationToken).ConfigureAwait(false); }
         finally { operation.Release(); }
     }
 
@@ -566,7 +582,8 @@ public sealed class AdapterInstanceProcessSupervisor :
             stat.Close();
             directory.Close();
             mutations.Close();
-            instanceOperations.Dispose();
+            // RPCs already holding or waiting on this managed-only gate can still unwind.
+            // Removing the gate from the session lookup lets those callers drain it safely.
         }
     }
 

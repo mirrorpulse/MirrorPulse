@@ -8,6 +8,7 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.Sqlite" />
+    <PackageReference Include="MirrorPulse.Adapter.Sdk" />
     <EmbeddedResource Include="State/CatalogSchema102.sql" LogicalName="MirrorPulse.Core.State.CatalogSchema102.sql" />
   </ItemGroup>
 

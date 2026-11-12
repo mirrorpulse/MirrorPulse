@@ -1,3 +1,4 @@
+using MirrorPulse.Adapter.Sdk;
 using MirrorPulse.Core.Contracts;
 
 namespace MirrorPulse.Core.CloudFiles;
@@ -38,6 +39,13 @@ public interface IMirrorPulseWorkerMutationTransport
     ValueTask<string> MoveAsync(
         MirrorPulseWorkerMoveRequest request,
         CancellationToken cancellationToken);
+}
+
+/// <summary>Returns the Worker receipt for a sealed, original directory retirement request.</summary>
+public interface IMirrorPulseOriginalDirectoryRetirementTransport
+{
+    ValueTask<AdapterOwnedChildEffectReceipt> RetireOriginalDirectoryAsync(
+        AdapterDirectoryRetirementRequest request, CancellationToken cancellationToken);
 }
 
 public sealed class MirrorPulseWorkerMutationConflictException : IOException
