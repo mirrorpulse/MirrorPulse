@@ -10,9 +10,9 @@
       },
       "MirrorPulse.Adapter.Sdk": {
         "type": "Direct",
-        "requested": "[0.2.0, 0.2.0]",
-        "resolved": "0.2.0",
-        "contentHash": "xzz57ZRJg8nQzkGQFIyJp+blVNSLzs+l6XGNnyXj/mfJuur6hEVPkTzNcj27K+0IGWyd9aDz4qdH31eDwakSJg=="
+        "requested": "[0.3.0, 0.3.0]",
+        "resolved": "0.3.0",
+        "contentHash": "OhugOeH/gX//UQrDTLkYhKEdrpRpLFteY3qflsbT1LHfptgUqftTrNCTi6lgoEXU0wgwm8f/MtG2E0tp06qYDQ=="
       }
     },
     "net10.0-windows7.0/win-arm64": {},

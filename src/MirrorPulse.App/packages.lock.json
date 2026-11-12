@@ -190,7 +190,7 @@
         "dependencies": {
           "CfSharp": "[0.1.0-preview.12, )",
           "CfSharp.Storage.Sqlite": "[0.1.0-preview.12, )",
-          "MirrorPulse.Adapter.Sdk": "[0.2.0, 0.2.0]",
+          "MirrorPulse.Adapter.Sdk": "[0.3.0, 0.3.0]",
           "MirrorPulse.Core": "[1.0.0, )"
         }
       },
@@ -231,9 +231,9 @@
       },
       "MirrorPulse.Adapter.Sdk": {
         "type": "CentralTransitive",
-        "requested": "[0.2.0, 0.2.0]",
-        "resolved": "0.2.0",
-        "contentHash": "xzz57ZRJg8nQzkGQFIyJp+blVNSLzs+l6XGNnyXj/mfJuur6hEVPkTzNcj27K+0IGWyd9aDz4qdH31eDwakSJg=="
+        "requested": "[0.3.0, 0.3.0]",
+        "resolved": "0.3.0",
+        "contentHash": "OhugOeH/gX//UQrDTLkYhKEdrpRpLFteY3qflsbT1LHfptgUqftTrNCTi6lgoEXU0wgwm8f/MtG2E0tp06qYDQ=="
       }
     },
     "net10.0-windows10.0.26100/win-arm64": {

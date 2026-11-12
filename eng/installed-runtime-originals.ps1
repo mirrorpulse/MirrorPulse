@@ -86,7 +86,7 @@ function Get-InstalledInputMetadata([string]$Path, [string]$Runtime, [string]$So
             if ($versions.Count -ne 1 -or [string]::IsNullOrEmpty($versions[0])) { throw 'An installed input lacks one unambiguous source version.' }
             $version = $versions[0]
             if ($assemblyName -ceq 'MirrorPulse.Adapter.Sdk') {
-                $valid = $version -ceq '0.2.0+1008894b495bb57fe8661a6106dcf8954fbe037d'
+                $valid = $version -ceq '0.3.0+ebb31a608360b3ac946c716cde3a6c1499ed299c'
             } elseif ($assemblyName -clike 'CfSharp*') {
                 $valid = $version -ceq '0.1.0-preview.12+cfbc7f83b26b5b6515710a8c490428d2989d8c06'
             } else {
