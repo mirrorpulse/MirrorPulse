@@ -55,15 +55,41 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
     [TestMethod]
     public async Task KeepRemoteResidentStartCannotTreatARejectedMoveAsAcknowledgedContentWork()
     {
-        using var fixture = new Fixture(); await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
-        var setup = await PrepareKeepRemoteFileAsync(catalog, rejectMove: true);
-        Assert.AreEqual(MirrorPulseWorkerChangeKind.Move, setup.Preparation.Intent.RejectedEffect.Kind);
-        string rejected = JsonSerializer.Serialize(await catalog.ReadMutationAsync(setup.Preparation.Intent.RejectedEffect.OperationId));
-        await Assert.ThrowsExactlyAsync<InvalidDataException>(() => StartKeepRemoteFileAsync(catalog, setup));
-        Assert.IsNull(await catalog.ReadConflictKeepRemoteFileStartAsync(setup.Preparation.Intent.CommandId));
-        Assert.AreEqual(rejected, JsonSerializer.Serialize(await catalog.ReadMutationAsync(setup.Preparation.Intent.RejectedEffect.OperationId)));
-        Assert.AreEqual("pending", (await catalog.ReadUserCommandAsync(setup.Preparation.Intent.CommandId))!.State);
-        Assert.HasCount(2, await catalog.ReadUploadConflictsAsync());
+        using var fixture = new Fixture(); KeepRemoteFileSetup setup;
+        Guid uploadId; string rejectedHistory; string journalHistory;
+        MirrorPulseConflictKeepRemoteFileStart start;
+        await using (var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths))
+        {
+            setup = await PrepareKeepRemoteFileAsync(catalog, rejectMove: true);
+            var intent = setup.Preparation.Intent;
+            var plan = await catalog.ReadJournalCoalescingOwnerAsync(intent.OriginalOperationIds[0]);
+            Assert.IsNotNull(plan); Assert.AreEqual(MirrorPulseCoalescedEffect.MoveAndUpdateFile, plan.Effect);
+            var execution = await catalog.ReadJournalCoalescingExecutionAsync(plan.PlanId); Assert.IsNotNull(execution);
+            CollectionAssert.AreEqual(new[] { MirrorPulseCoalescingStepKind.Move, MirrorPulseCoalescingStepKind.Upload },
+                execution.Steps.Select(step => step.Kind).ToArray());
+            Assert.AreEqual(execution.Steps[0].OperationId, intent.RejectedEffect.OperationId);
+            Assert.AreEqual(MirrorPulseWorkerChangeKind.Move, intent.RejectedEffect.Kind);
+            Assert.AreEqual("baseline", intent.RejectedEffect.ExpectedRevision);
+            Assert.AreEqual(plan.OriginalPath, intent.RemoteSource.RelativePath);
+            Assert.AreEqual(plan.FinalPath, intent.LocalRelativePath);
+            var rejected = await catalog.ReadMutationAsync(intent.RejectedEffect.OperationId); Assert.IsNotNull(rejected);
+            Assert.AreEqual(MirrorPulseMutationState.Conflict, rejected.State);
+            Assert.IsNull(rejected.AcceptedRevision);
+            rejectedHistory = JsonSerializer.Serialize(rejected);
+            journalHistory = JsonSerializer.Serialize(await catalog.ReadConflictKeepRemoteJournalAsync(intent.CommandId));
+            uploadId = execution.Steps[1].OperationId;
+            Assert.IsNull(await catalog.ReadMutationAsync(uploadId));
+            start = await StartKeepRemoteFileAsync(catalog, setup);
+        }
+        await using var reopened = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        Assert.AreEqual(JsonSerializer.Serialize(start), JsonSerializer.Serialize(await reopened.ReadConflictKeepRemoteFileStartAsync(start.CommandId)));
+        Assert.AreEqual(JsonSerializer.Serialize(start), JsonSerializer.Serialize(await StartKeepRemoteFileAsync(reopened, setup)));
+        Assert.AreEqual(rejectedHistory, JsonSerializer.Serialize(await reopened.ReadMutationAsync(setup.Preparation.Intent.RejectedEffect.OperationId)));
+        Assert.AreEqual(journalHistory, JsonSerializer.Serialize(await reopened.ReadConflictKeepRemoteJournalAsync(start.CommandId)));
+        Assert.IsNull(await reopened.ReadMutationAsync(uploadId));
+        Assert.IsNull(await reopened.ReadConflictKeepRemoteAcknowledgementAsync(start.CommandId));
+        Assert.AreEqual("pending", (await reopened.ReadUserCommandAsync(start.CommandId))!.State);
+        Assert.HasCount(2, await reopened.ReadUploadConflictsAsync());
     }
 
     [TestMethod]

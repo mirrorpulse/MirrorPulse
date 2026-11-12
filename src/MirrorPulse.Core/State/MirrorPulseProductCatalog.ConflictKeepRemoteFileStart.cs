@@ -1,8 +1,8 @@
 using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
+using MirrorPulse.Core.Conflicts;
 using MirrorPulse.Core.Contracts;
-using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.Core.State;
 
@@ -193,10 +193,7 @@ public sealed partial class MirrorPulseProductCatalog
         if (start.Version != 1 || start.StoreFileId == Guid.Empty || start.StartedAt < journal.ObservedAt ||
             start.JournalBindingSha256 != Convert.ToHexString(SHA256.HashData(KeepRemoteJournalPayload(journal))) ||
             plan.InstanceId != intent.InstanceId || plan.RootKey != intent.RemoteSource.RootKey || plan.ItemId != intent.ItemId ||
-            intent.RejectedEffect is not { IsDirectory: false } rejected ||
-            rejected.Kind != MirrorPulseWorkerChangeKind.ContentUpdate &&
-                (rejected.Kind != MirrorPulseWorkerChangeKind.Create || rejected.ExpectedRevision is not null ||
-                 plan.Effect != MirrorPulseCoalescedEffect.CreateFile) || intent.LocalContent is null ||
+            !MirrorPulseConflictKeepRemote.SupportsProtectedFileEffect(plan, intent.RejectedEffect) || intent.LocalContent is null ||
             preparation.LocalPreservation?.Copy is null || preparation.RemoteCopy is null ||
             child?.Context?.Member is not { IsDirectory: false, RootId: not null } member || child.Identity is null ||
             child.Context.Location is null || child.Context.Protection is null || child.Context.Verification is null ||
@@ -207,12 +204,8 @@ public sealed partial class MirrorPulseProductCatalog
             child.Context.Location.ParentMemberId != parentMember.MemberId || child.Context.Location.MemberId != member.MemberId ||
             child.Context.Protection.RoleSid != parent.Context.Protection.RoleSid || member.OwnerSid != parentMember.OwnerSid)
             throw new InvalidDataException("A file start requires the complete original file decision, copies, journal, object, identity and direct parent.");
-        // The retained preparation already revalidates the exact current rejected program.
-        // A prior Move can be acknowledged while this same group's ContentUpdate is rejected;
-        // preserve that prefix instead of treating its raw plan kind as a new file operation.
-        // A rejected Create keeps its original absence condition and complete file
-        // program. KeepRemote preserves that history instead of retrying an upload
-        // against a newly observed baseline.
+        // The retained preparation revalidates the rejected step and its selected source.
+        // Retaining the file start neither accepts a rejected Move nor dispatches its later Upload.
     }
 
     private async Task RequireKeepRemoteFileStartRootAsync(MirrorPulseConflictKeepRemoteFileStart start,

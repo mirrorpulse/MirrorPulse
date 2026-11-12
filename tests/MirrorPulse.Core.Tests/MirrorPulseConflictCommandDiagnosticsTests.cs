@@ -78,6 +78,7 @@ public sealed class MirrorPulseConflictCommandDiagnosticsTests
     [DataRow("KeepRemote requires the original protected file and direct parent before any write.", MirrorPulseConflictCommandBoundary.NativeObject)]
     [DataRow("KeepRemote requires the exact original resident placeholder without source recall.", MirrorPulseConflictCommandBoundary.ResidentIdentity)]
     [DataRow("A file start requires the complete original UpdateFile decision, copies, journal, object, identity and direct parent.", MirrorPulseConflictCommandBoundary.StartRelations)]
+    [DataRow("A file start requires the complete original file decision, copies, journal, object, identity and direct parent.", MirrorPulseConflictCommandBoundary.StartRelations)]
     [DataRow("synthetic-private KeepRemote requires the original registered file.", MirrorPulseConflictCommandBoundary.Unknown)]
     [DataRow("KeepRemote requires the original registered file. synthetic-private", MirrorPulseConflictCommandBoundary.Unknown)]
     public async Task OnlyAnExactProductGuardProducesAClosedBoundaryWithoutRecordingItsText(string message,

@@ -46,14 +46,7 @@ public sealed partial class MirrorPulseUploadConflictActions
         var target = await _catalog.ReadCoalescedConflictRemoteTargetAsync(conflict.ConflictId, token).ConfigureAwait(false);
         if (target.InstanceId != group.InstanceId || target.RootKey != group.RootKey || target.ItemId != group.ItemId)
             throw new InvalidDataException("KeepRemote lost the original rejected file update.");
-        if (target.RejectedEffect is not { IsDirectory: false } rejected)
-            throw new NotSupportedException("This KeepRemote effect requires its own protected execution.");
-        bool originalCreate = rejected.Kind == MirrorPulseWorkerChangeKind.Create && rejected.ExpectedRevision is null &&
-            group.Effect == MirrorPulseCoalescedEffect.CreateFile;
-        bool originalMove = rejected.Kind == MirrorPulseWorkerChangeKind.Move &&
-            group.Effect == MirrorPulseCoalescedEffect.MoveAndUpdateFile && !string.IsNullOrEmpty(rejected.ExpectedRevision) &&
-            rejected.PreviousRelativePath == group.OriginalPath && rejected.RelativePath == group.FinalPath && group.OriginalPath != group.FinalPath;
-        if (rejected.Kind != MirrorPulseWorkerChangeKind.ContentUpdate && !originalCreate && !originalMove)
+        if (!MirrorPulseConflictKeepRemote.SupportsProtectedFileEffect(group, target.RejectedEffect))
             throw new NotSupportedException("This KeepRemote effect requires its own protected execution.");
         var source = await MirrorPulseConflictCommandDiagnostics.AtStageAsync(MirrorPulseConflictCommandStage.RemoteSource,
             () =>

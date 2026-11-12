@@ -31,6 +31,7 @@ public static class MirrorPulseConflictCommandDiagnostics
             "KeepRemote lost the original direct parent." => MirrorPulseConflictCommandBoundary.DirectParent,
             "KeepRemote requires the original protected file and direct parent before any write." => MirrorPulseConflictCommandBoundary.NativeObject,
             "KeepRemote requires the exact original resident placeholder without source recall." => MirrorPulseConflictCommandBoundary.ResidentIdentity,
+            "A file start requires the complete original file decision, copies, journal, object, identity and direct parent." or
             "A file start requires the complete original UpdateFile decision, copies, journal, object, identity and direct parent." => MirrorPulseConflictCommandBoundary.StartRelations,
             _ => MirrorPulseConflictCommandBoundary.Unknown
         };
