@@ -11,6 +11,7 @@ function Invoke-CliCoalescingContentConflict {
         [Parameter(Mandatory)][scriptblock]$ReadStoppedEdit,
         [Parameter(Mandatory)][scriptblock]$InspectOnlineSeed,
         [Parameter(Mandatory)][scriptblock]$ResolveChoice,
+        [Parameter(Mandatory)][scriptblock]$RecordControlledMove,
         [ValidateSet('KeepBoth','KeepRemote', IgnoreCase = $false)][string]$Action = 'KeepBoth',
         [switch]$ControlledCreate,
         [switch]$EmptyCreate,
@@ -144,6 +145,7 @@ function Invoke-CliCoalescingContentConflict {
         $parent=Invoke-CoalescingCli 'move-parent' @('--json','--developer-mode','namespace','member','inspect',([IO.Path]::GetFileName($MappedRoot)),'--directory')
         $original=Invoke-CoalescingCli 'move-original' @('--json','--developer-mode','namespace','member','inspect',([IO.Path]::GetFileName($MappedRoot)+'/cli-roundtrip.txt'))
         $moveOperation=[guid]::NewGuid().ToString('D')
+        & $RecordControlledMove $moveOperation
         Invoke-CoalescingCli 'prepare-local-move' @('--json','--developer-mode','namespace','member','prepare-move',([string]$original.memberId),([string]$parent.memberId),$finalName,'--operation-id',$moveOperation)|Out-Null
         $moved=Invoke-CoalescingCli 'execute-local-move' @('--json','--developer-mode','namespace','member','move',$moveOperation)
         $current=Invoke-CoalescingCli 'inspect-local-move' @('--json','--developer-mode','namespace','member','inspect',([IO.Path]::GetFileName($MappedRoot)+'/'+$finalName))

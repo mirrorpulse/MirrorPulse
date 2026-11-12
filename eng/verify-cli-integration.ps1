@@ -353,6 +353,12 @@ try {
                 @{ nativeInspected = $true; native = $target[0]; nativeIdentitySha256 = $inspection.roundTripIdentitySha256 }
             } `
             -ResolveChoice { param($conflict) Invoke-CliCoalescingChoice -CliPath $script:cliExecutable -FixtureRoot $runRoot -ConflictId $conflict -Action $CoalescingAction } `
+            -RecordControlledMove {
+                param([guid]$operation)
+                [ordered]@{schemaVersion=1;instanceId=$instanceId;rootId=$registeredRoot.rootId
+                    rootKey=$registeredRoot.uniquenessKey;directoryName=$rootDirectory;controlledMoveOperationId=$operation.ToString('D')} |
+                    ConvertTo-Json | Set-Content -LiteralPath (Join-Path $runRoot '.mp-cli-fixture.json') -Encoding utf8
+            } `
             -Action $CoalescingAction `
             -ControlledCreate:$CreateConflict `
             -EmptyCreate:$EmptyCreate `

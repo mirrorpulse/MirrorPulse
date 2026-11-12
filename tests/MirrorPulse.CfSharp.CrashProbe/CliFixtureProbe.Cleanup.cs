@@ -14,6 +14,8 @@ public sealed record CliFixtureCleanupResult(int SchemaVersion, bool ExclusiveCa
 
 public static partial class CliFixtureProbe
 {
+    private sealed record CleanupMovedFile(string RelativePath, MirrorPulseLocalFileBinding LocalObject);
+
     // This entry point is available only in the test probe. RunAsync has already
     // validated the exact temporary GUID directory and its bounded fixture marker.
     // No arbitrary path or recursive ACL operation is accepted.
@@ -37,6 +39,7 @@ public static partial class CliFixtureProbe
         setStage("RouteValidation");
         bool anchorOnly = IsAnchorOnlyCleanup(marker);
         CleanupRootLabelRoute? renamedRoot = null;
+        CleanupMovedFile? movedFile = null;
         RootRegistration[] roots;
         if (anchorOnly)
         {
@@ -53,6 +56,12 @@ public static partial class CliFixtureProbe
                 throw new InvalidDataException("Fixture cleanup requires the exact synthetic route.");
             if (registration.DirectoryName != marker.DirectoryName)
                 renamedRoot = await AuthenticateRenamedCleanupRootAsync(catalog, marker, registration);
+            if (marker.ControlledMoveOperationId is { } operation)
+            {
+                if (renamedRoot is not null) throw new InvalidDataException("The controlled file fixture cannot also own a root Label change.");
+                setStage("ControlledMoveValidation");
+                movedFile = await AuthenticateCleanupMovedFileAsync(catalog, registration, operation);
+            }
             roots = [registration];
         }
         var allowed = new Dictionary<string, bool>(StringComparer.Ordinal) { [""] = true };
@@ -61,14 +70,36 @@ public static partial class CliFixtureProbe
             string name = renamedRoot?.DirectoryName ?? marker.DirectoryName;
             allowed.Add(name, true); allowed.Add(name + "/nested", true);
             allowed.Add(name + "/nested/fixture.txt", false); allowed.Add(name + "/nested/fixture.bin", false);
-            allowed.Add(name + "/cli-roundtrip.txt", false); allowed.Add(name + "/queued-upload.txt", false);
+            allowed.Add(movedFile?.RelativePath ?? name + "/cli-roundtrip.txt", false); allowed.Add(name + "/queued-upload.txt", false);
         }
-        return await CleanupAuthenticatedInventoryAsync(root, paths, catalog, roots, allowed, setStage, renamedRoot);
+        return await CleanupAuthenticatedInventoryAsync(root, paths, catalog, roots, allowed, setStage, renamedRoot, movedFile);
+    }
+
+    private static async Task<CleanupMovedFile?> AuthenticateCleanupMovedFileAsync(MirrorPulseProductCatalog catalog,
+        RootRegistration root, Guid operationId)
+    {
+        string source = root.DirectoryName + "/cli-roundtrip.txt", target = root.DirectoryName + "/cli-roundtrip-moved.txt";
+        var move = await catalog.ReadNamespaceMemberMoveAsync(operationId);
+        if (move is null) return null;
+        if (move is not { Version: 1, RemoteEntry: null, DirectoryMoveEvidence: null } || move.RootId != root.RootId ||
+            move.Source.RelativePath != source || move.Target.RelativePath != target || move.Source.ParentMemberId != move.Target.ParentMemberId)
+            throw new InvalidDataException("Fixture cleanup requires the exact original controlled file Move.");
+        var completed = await catalog.ReadNamespaceMemberMoveCompletionAsync(operationId);
+        if (completed is null) return null; // The old path remains the only admitted name until the move is complete.
+        var member = await catalog.ReadNamespaceMemberByBindingAsync(move.LocalObject);
+        var location = await catalog.ReadNamespaceMemberLocationAsync(move.MemberId);
+        if (completed.IsDirectory || completed.ItemId != move.ItemId || completed.RelativePath != target ||
+            completed.Child.LocalObject != move.LocalObject || completed.Child.OwnerSid != move.OwnerSid ||
+            member is not { IsDirectory: false } || member.MemberId != move.MemberId || member.RootId != root.RootId ||
+            location.RelativePath != target || location.ParentMemberId != move.Target.ParentMemberId || location.CurrentPositionOperationId != operationId)
+            throw new InvalidDataException("The moved fixture file lost its exact current placement or original native binding.");
+        return new(target, move.LocalObject);
     }
 
     private static async Task<CliFixtureCleanupResult> CleanupAuthenticatedInventoryAsync(string root,
         MirrorPulseStoragePaths paths, MirrorPulseProductCatalog catalog, IReadOnlyList<RootRegistration> roots,
-        IReadOnlyDictionary<string, bool> allowed, Action<string> setStage, CleanupRootLabelRoute? renamedRoot = null)
+        IReadOnlyDictionary<string, bool> allowed, Action<string> setStage, CleanupRootLabelRoute? renamedRoot = null,
+        CleanupMovedFile? movedFile = null)
     {
         // An unprotected fixture requires no permission restoration.
         // Every MP ACL write is preceded by a permission intent or birth intent.
@@ -98,6 +129,7 @@ public static partial class CliFixtureProbe
             var leases = new List<MirrorPulseWindowsNamespacePermissionLease>();
             var observed = new HashSet<string>(StringComparer.Ordinal);
             var pending = new Queue<CloudItem>(); pending.Enqueue(fileSystem.Root);
+            bool restored = false;
             try
             {
                 while (pending.TryDequeue(out var item))
@@ -114,6 +146,8 @@ public static partial class CliFixtureProbe
                         throw new InvalidDataException("Fixture cleanup cannot change a foreign or aliased object.");
                     if (renamedRoot is not null && relative == renamedRoot.DirectoryName && facts.LocalObject != renamedRoot.LocalObject)
                         throw new InvalidDataException("The renamed fixture root no longer has its authenticated original binding.");
+                    if (movedFile is not null && relative == movedFile.RelativePath && facts.LocalObject != movedFile.LocalObject)
+                        throw new InvalidDataException("The moved fixture file no longer has its authenticated original binding.");
                     // Public inspection and retained object/ancestor handles reject foreign
                     // reparse points without following a directory link or reading content.
                     if (item is CloudDirectory folder)
@@ -124,6 +158,8 @@ public static partial class CliFixtureProbe
                             pending.Enqueue(child);
                         }
                 }
+                if (movedFile is not null && !observed.Contains(movedFile.RelativePath))
+                    throw new InvalidDataException("The authenticated moved fixture file is missing.");
                 // Complete validation precedes the first ACL write. Children are restored
                 // before their parents; all names remain retained until writes finish.
                 for (int index = leases.Count - 1; index >= 0; index--)
@@ -134,14 +170,17 @@ public static partial class CliFixtureProbe
                         throw new InvalidDataException("A fixture object changed before permission cleanup.");
                     if (renamedRoot is not null && facts.RelativePath == renamedRoot.DirectoryName && facts.LocalObject != renamedRoot.LocalObject)
                         throw new InvalidDataException("The renamed fixture root changed before permission cleanup.");
+                    if (movedFile is not null && facts.RelativePath == movedFile.RelativePath && facts.LocalObject != movedFile.LocalObject)
+                        throw new InvalidDataException("The moved fixture file changed before permission cleanup.");
                     string access = CreateCleanupAccessDescriptor(new SecurityIdentifier(owner), facts.IsDirectory);
                     await leases[index].ApplyDaclAsync(access, CancellationToken.None);
                 }
                 result = new(1, true, observed.Count, leases.Count);
+                restored = true;
             }
             finally
             {
-                setStage("PermissionLeaseDisposal");
+                if (restored) setStage("PermissionLeaseDisposal");
                 for (int index = leases.Count - 1; index >= 0; index--) await leases[index].DisposeAsync();
             }
             setStage("SdkDisposal");
