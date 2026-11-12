@@ -146,6 +146,64 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         Assert.AreEqual("v2", (await snapshots.LoadAsync(root))!["backend-file"].RemoteRevision);
     }
 
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task ReactivatedRootDoesNotReuseAnAcknowledgedBaselineForALaterGeneration(bool scoped)
+    {
+        using var fixture = new Fixture();
+        var source = new GenerationPollSource();
+        var batches = new List<CloudRemoteChangeBatch>();
+        var snapshots = new MirrorPulseFileRemotePollSnapshotStore(fixture.Paths.DataRootPath);
+        await using (var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths))
+        {
+            var prepared = await PrepareCanonicalResolverSourceAsync(catalog, scoped);
+            var root = prepared.Root;
+            RootRegistration[] current = [root];
+            var instance = (await catalog.ReadAdapterTopologyAsync()).Instances.Single(item => item.InstanceId == root.InstanceId);
+            var pending = new MirrorPulseCatalogRemotePollPendingStore(catalog);
+            var resolver = new MirrorPulseRemoteIdentityResolver(catalog, new TransferClock(DateTimeOffset.UtcNow.AddDays(1)));
+            await using var poller = new MirrorPulseActiveRemotePoller(source, [instance], [root],
+                (_, batch, _) => { batches.Add(batch); return ValueTask.FromResult(new MirrorPulseRemotePollApplyOutcome(true, batch.FinalCursor)); },
+                snapshotStore: snapshots, pendingStore: pending, identityResolver: resolver, currentRoots: () => current);
+            Assert.IsFalse(await poller.PollOnceAsync(root.InstanceId));
+            Assert.AreEqual("accepted", (await snapshots.LoadAsync(root))!["backend-file"].RemoteRevision);
+            Assert.AreEqual(prepared.Plan.Source.Identity.ItemId, (await snapshots.LoadAsync(root))!["backend-file"].PublicIdentity!.ItemId);
+            Assert.IsNull(await catalog.ReadRemoteIdentityGenerationAsync(root.RootId, prepared.Plan.Source.Identity.ItemId!.Value));
+            current = [new(root.AdapterId, root.InstanceId, root.RootId, root.UniquenessKey, root.Label, root.DirectoryName,
+                root.CustomEntry, RootRegistrationState.Disabled, root.RegisteredAt, root.IdentityScope)];
+            source.Revision = "later-v2";
+            var target = await PrepareSettledTransferAsync(catalog, scoped, originalPlan: prepared.Plan);
+            var start = await StartTransferAckAsync(catalog, target);
+            await catalog.CompleteNamespaceTransferAcknowledgementAsync(start.Acknowledgement!, start.Acknowledgement!.StartedAt.AddSeconds(1));
+            string history = await ReadTransferRetirementBytesAsync(fixture.Paths);
+            int reads = source.Reads;
+            Assert.IsFalse(await poller.PollOnceAsync(root.InstanceId));
+            Assert.AreEqual(reads, source.Reads);
+            Assert.IsEmpty(batches);
+            Assert.AreEqual("accepted", (await snapshots.LoadAsync(root))!["backend-file"].RemoteRevision);
+            Assert.IsNull(await pending.LoadAsync(root, default));
+            Assert.IsNull(await catalog.ReadRemoteIdentityGenerationAsync(root.RootId, prepared.Plan.Source.Identity.ItemId!.Value));
+            current = [root];
+            Assert.IsTrue(await poller.PollOnceAsync(root.InstanceId));
+            Assert.AreEqual(reads + 1, source.Reads);
+            var birth = batches.Single().Changes.Single();
+            Assert.IsNull(birth.PreviousRemoteRevision);
+            Assert.IsNull(birth.PreviousRelativePath);
+            Assert.AreEqual(CloudRemoteChangeKind.FileUpsert, birth.Kind);
+            Assert.AreEqual("later-v2", birth.RemoteRevision);
+            Assert.AreNotEqual(prepared.Plan.Source.Identity.ItemId, birth.ItemId);
+            var successor = await resolver.ResolveAsync(root, "backend-file", "later-v2");
+            Assert.AreEqual(successor.ItemId, birth.ItemId);
+            Assert.AreEqual(successor.RemoteId, birth.RemoteId);
+            Assert.AreEqual("later-v2", (await snapshots.LoadAsync(root))!["backend-file"].RemoteRevision);
+            Assert.AreEqual(successor.ItemId, (await snapshots.LoadAsync(root))!["backend-file"].PublicIdentity!.ItemId);
+            Assert.AreEqual(history, await ReadTransferRetirementBytesAsync(fixture.Paths));
+        }
+        Assert.IsFalse(File.Exists(fixture.Paths.CfSharpStateDatabasePath));
+        Assert.IsFalse(Directory.Exists(fixture.Paths.SyncRootPath));
+    }
+
     private sealed class GenerationPollSource : IMirrorPulseDirectoryPageSource
     {
         internal string Revision = "accepted";

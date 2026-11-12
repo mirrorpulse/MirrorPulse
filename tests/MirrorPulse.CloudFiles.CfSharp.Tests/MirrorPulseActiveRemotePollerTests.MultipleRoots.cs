@@ -98,6 +98,64 @@ public sealed partial class MirrorPulseActiveRemotePollerTests
     }
 
     [TestMethod]
+    public async Task QueuedPendingBatchKeepsItsOriginalIdentityAndBaselineThroughDisableAndReenable()
+    {
+        await using var fixture = await RootPollFixture.CreateAsync();
+        bool fail = true;
+        ValueTask<MirrorPulseRemotePollApplyOutcome> Apply(InstanceId _, CloudRemoteChangeBatch batch, CancellationToken __)
+        {
+            fixture.Applied.Add(batch);
+            return fail && batch.BatchId.StartsWith(MirrorPulseRemotePollBatchScope.Prefix(fixture.First), StringComparison.Ordinal)
+                ? ValueTask.FromException<MirrorPulseRemotePollApplyOutcome>(new IOException("Queued root effect interrupted."))
+                : ValueTask.FromResult(new MirrorPulseRemotePollApplyOutcome(true, batch.FinalCursor));
+        }
+        await using var poller = fixture.Poller(Apply);
+        Assert.IsFalse(await poller.PollOnceAsync(fixture.Instance)); Assert.IsFalse(await poller.PollOnceAsync(fixture.Instance));
+        fixture.Source.Set(fixture.First, "v2");
+        await Assert.ThrowsExactlyAsync<IOException>(() => poller.PollOnceAsync(fixture.Instance).AsTask());
+        var queued = fixture.Applied.Single();
+        var pending = (await fixture.Pending.LoadAsync(fixture.First, default))!;
+        Assert.AreEqual(queued.BatchId, pending.BatchId);
+        CollectionAssert.AreEqual(queued.Fingerprint.ToArray(), pending.Fingerprint);
+        Assert.AreEqual("v1", queued.Changes.Single().PreviousRemoteRevision);
+        Assert.AreEqual("v2", queued.Changes.Single().RemoteRevision);
+        Assert.AreEqual("v1", (await fixture.Snapshots.LoadAsync(fixture.First))!["same"].RemoteRevision);
+        fixture.Roots = [CopyRoot(fixture.First, RootRegistrationState.Disabled), fixture.Second];
+        fixture.Source.Set(fixture.First, "v3"); fixture.Source.Set(fixture.Second, "v3");
+        int reads = fixture.Source.Calls.Count;
+        Assert.IsTrue(await poller.PollOnceAsync(fixture.Instance));
+        Assert.AreEqual(fixture.Second.UniquenessKey, fixture.Source.Calls.Last());
+        Assert.IsFalse(fixture.Source.Calls.Skip(reads).Contains(fixture.First.UniquenessKey));
+        Assert.AreEqual("v3", fixture.Applied.Last().Changes.Single().RemoteRevision);
+        var held = (await fixture.Pending.LoadAsync(fixture.First, default))!;
+        Assert.AreEqual(pending.BatchId, held.BatchId);
+        CollectionAssert.AreEqual(pending.Fingerprint, held.Fingerprint);
+        Assert.AreEqual("v1", held.Previous["same"].RemoteRevision);
+        Assert.AreEqual("v2", held.Candidate["same"].RemoteRevision);
+        Assert.AreEqual("v1", (await fixture.Snapshots.LoadAsync(fixture.First))!["same"].RemoteRevision);
+        fixture.Roots = [fixture.First, fixture.Second]; fail = false;
+        int firstReads = fixture.Source.Calls.Count(call => call == fixture.First.UniquenessKey);
+        int applied = fixture.Applied.Count;
+        bool replayedOriginal = false;
+        for (int turn = 0; turn < 2 && !replayedOriginal; turn++)
+        {
+            bool published = await poller.PollOnceAsync(fixture.Instance);
+            replayedOriginal = published && fixture.Applied.Count == applied + 1 && fixture.Applied.Last().BatchId == queued.BatchId;
+        }
+        Assert.IsTrue(replayedOriginal);
+        Assert.AreEqual(firstReads, fixture.Source.Calls.Count(call => call == fixture.First.UniquenessKey));
+        var replayed = fixture.Applied.Last();
+        Assert.AreEqual(queued.BatchId, replayed.BatchId);
+        Assert.AreEqual(queued.Changes.Single().ChangeId, replayed.Changes.Single().ChangeId);
+        Assert.AreEqual(queued.Changes.Single().ItemId, replayed.Changes.Single().ItemId);
+        CollectionAssert.AreEqual(queued.Fingerprint.ToArray(), replayed.Fingerprint.ToArray());
+        Assert.AreEqual("v1", replayed.Changes.Single().PreviousRemoteRevision);
+        Assert.AreEqual("v2", replayed.Changes.Single().RemoteRevision);
+        Assert.AreEqual("v2", (await fixture.Snapshots.LoadAsync(fixture.First))!["same"].RemoteRevision);
+        Assert.IsNull(await fixture.Pending.LoadAsync(fixture.First, default));
+    }
+
+    [TestMethod]
     [DataRow(false)]
     [DataRow(true)]
     public async Task PendingRootCannotAcquireAnotherLabelOrSourceMapping(bool changeSourceKey)
