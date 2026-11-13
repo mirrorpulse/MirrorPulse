@@ -96,6 +96,8 @@
     ]
   },
   "allowSkipped": [
+    "MirrorPulse.Core.Tests.AdapterWorkerV2SessionTests.RealHostNegotiatesAndRecoversADurableContainerMoveAcrossWorkerOwners",
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeControlledNonemptyDirectoryMoveCharacterizesItsOriginalJournalAcrossRuntimeOwners",
     "MirrorPulse.Core.Tests.AdapterWorkerV2SessionTests.RealHostAndLocalWorkerRecoverWholeBatchAfterCatalogCommitInterruption",
     "MirrorPulse.Core.Tests.AdapterWorkerV2SessionTests.AtomicDirectoryReservationRollsBackAllOwnersBeforeAnyWorkerMutation",
     "MirrorPulse.Core.Tests.AdapterWorkerV2SessionTests.AtomicBatchLedgerMigratesSchema106AndRefusesLostSchema107Evidence",
@@ -508,6 +510,7 @@
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeLocalTombstoneDeleteRecoversActualSdkReceiptAcrossFreshRoles"
     ],
     "native": [
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeControlledNonemptyDirectoryMoveCharacterizesItsOriginalJournalAcrossRuntimeOwners",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeRootLabelPreparationSealsOnlyItsOriginalProtectedSubtreeAcrossOwners",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeDefaultProviderApprovesOnlyTheCurrentOriginalRootRenameAndRetainsRecoveryAcrossOwners",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseManagedRootNamespaceTests.NativeRootRenamePreparationCutsRetainOnlyCompleteOriginalProductProofAcrossOwners",

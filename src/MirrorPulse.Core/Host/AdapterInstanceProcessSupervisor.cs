@@ -207,6 +207,9 @@ public sealed class AdapterInstanceProcessSupervisor :
     internal bool SupportsAtomicDirectoryDeletion(InstanceId instanceId) => IsConnected(instanceId) &&
         _mutations.TryGetValue(instanceId, out var client) && client.SupportsAtomicDirectoryDeletion;
 
+    public bool SupportsDurableDirectoryMove(InstanceId instanceId) => IsConnected(instanceId) &&
+        _mutations.TryGetValue(instanceId, out var client) && client.SupportsDurableDirectoryMove;
+
     private async ValueTask<Stream> ReadRangeCoreAsync(
         MirrorPulseWorkerReadRangeRequest request,
         CancellationToken cancellationToken)

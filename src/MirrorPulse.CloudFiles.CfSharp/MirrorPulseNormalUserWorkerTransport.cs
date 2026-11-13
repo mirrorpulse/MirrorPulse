@@ -94,6 +94,9 @@ public sealed class MirrorPulseNormalUserWorkerTransport : IMirrorPulseWorkerRan
     bool IMirrorPulseAtomicDirectoryDeletionTransport.SupportsAtomicDirectoryDeletion(MirrorPulse.Core.Contracts.InstanceId instanceId) =>
         _mutations is IMirrorPulseAtomicDirectoryDeletionTransport atomic && atomic.SupportsAtomicDirectoryDeletion(instanceId);
 
+    public bool SupportsDurableDirectoryMove(MirrorPulse.Core.Contracts.InstanceId instanceId) =>
+        _mutations.SupportsDurableDirectoryMove(instanceId);
+
     async ValueTask<AdapterAtomicDirectoryDeletionReceipt> IMirrorPulseAtomicDirectoryDeletionTransport.ExecuteAtomicDirectoryDeletionAsync(
         AdapterDirectoryAdmissionRequest original, CancellationToken token,
         IReadOnlyList<MirrorPulse.Core.Sync.MirrorPulseWorkerChangeCommand>? originals)

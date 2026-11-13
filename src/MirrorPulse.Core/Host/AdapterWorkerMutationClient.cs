@@ -54,13 +54,19 @@ public sealed class AdapterWorkerMutationClient
         MirrorPulseWorkerMoveRequest request,
         CancellationToken cancellationToken = default)
     {
-        return await SendAsync("Move", new
+        if (request.RequireDurableDirectoryMove && (!SupportsDurableDirectoryMove || !request.IsDirectory ||
+            request.OperationId is not { } operationId || operationId == Guid.Empty ||
+            string.IsNullOrEmpty(request.ExpectedRevision) || !request.DestinationMustBeAbsent))
+            throw new NotSupportedException("DurableDirectoryMoveRequiresNegotiatedOriginalRequest");
+        var payload = new Dictionary<string, object?>
         {
-            sourcePath = request.SourcePath,
-            destinationPath = request.DestinationPath,
-            expectedRevision = request.ExpectedRevision,
-            isDirectory = request.IsDirectory,
-        }, request.OperationId, request.RootKey, request.DestinationRootKey ?? request.RootKey,
+            ["sourcePath"] = request.SourcePath,
+            ["destinationPath"] = request.DestinationPath,
+            ["expectedRevision"] = request.ExpectedRevision,
+            ["isDirectory"] = request.IsDirectory,
+        };
+        if (request.RequireDurableDirectoryMove) payload.Add("durableDirectoryMove", true);
+        return await SendAsync("Move", payload, request.OperationId, request.RootKey, request.DestinationRootKey ?? request.RootKey,
             request.ExpectedRevision, request.DestinationMustBeAbsent, cancellationToken).ConfigureAwait(false) ??
             throw new IOException("The Adapter Worker did not return a moved revision.");
     }
@@ -96,6 +102,9 @@ public sealed class AdapterWorkerMutationClient
     internal bool SupportsAtomicDirectoryDeletion => _channel.Protocol is { ProtocolVersion: 2 } protocol &&
         protocol.Capabilities.Contains(AdapterOriginalDirectoryWire.Capability, StringComparer.Ordinal) &&
         protocol.Capabilities.Contains(AdapterAtomicDirectoryDeletionWire.Capability, StringComparer.Ordinal);
+
+    internal bool SupportsDurableDirectoryMove => _channel.Protocol is { ProtocolVersion: 2 } protocol &&
+        protocol.Capabilities.Contains(AdapterWorkerProtocolSession.DurableDirectoryMoveCapability, StringComparer.Ordinal);
 
     internal void RequireAtomicDirectorySupport(AdapterDirectoryAdmissionRequest request)
     {

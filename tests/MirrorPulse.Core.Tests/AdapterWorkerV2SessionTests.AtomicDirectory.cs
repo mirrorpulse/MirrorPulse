@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using Microsoft.Data.Sqlite;
 using MirrorPulse.Adapter.Sdk;
+using MirrorPulse.Core.CloudFiles;
 using MirrorPulse.Core.Configuration;
 using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.Host;
@@ -12,6 +13,55 @@ namespace MirrorPulse.Core.Tests;
 
 public sealed partial class AdapterWorkerV2SessionTests
 {
+    [TestMethod]
+    public async Task RealHostNegotiatesAndRecoversADurableContainerMoveAcrossWorkerOwners()
+    {
+        using var fixture = new AtomicHostFixture();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        CancellationToken token = deadline.Token;
+        InstanceId instance = fixture.Topology.Instances.Single().InstanceId;
+        MirrorPulseWorkerMoveRequest request;
+        string accepted;
+        string originalFileRevision;
+        await using (var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths, token))
+        {
+            await catalog.SaveAdapterTopologyAsync(fixture.Topology, token);
+            await using var worker = new AdapterInstanceProcessSupervisor(catalog, new WindowsCredentialManagerStore());
+            await worker.StartAsync(fixture.Topology);
+            while (!worker.IsConnected(instance)) await Task.Delay(25, token);
+            Assert.IsTrue(worker.SupportsDurableDirectoryMove(instance));
+            string? revision = await worker.StatAsync(new(instance, "tree", "docs"), token);
+            Assert.IsNotNull(revision);
+            originalFileRevision = await worker.StatAsync(new(instance, "tree/first.txt", "docs"), token)
+                ?? throw new InvalidOperationException("The fixture did not return the original file revision.");
+            request = new(instance, "tree", "moved", revision, true, Guid.NewGuid(), "docs", "docs")
+            { RequireDurableDirectoryMove = true };
+            accepted = await worker.MoveAsync(request, token);
+            Assert.AreEqual(revision, accepted);
+        }
+
+        Directory.CreateDirectory(fixture.Tree);
+        string successor = Path.Combine(fixture.Tree, "later.txt");
+        await File.WriteAllTextAsync(successor, "later source", token);
+        await using var reopened = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths, token);
+        await using var restarted = new AdapterInstanceProcessSupervisor(reopened, new WindowsCredentialManagerStore());
+        await restarted.StartAsync(fixture.Topology);
+        while (!restarted.IsConnected(instance)) await Task.Delay(25, token);
+        Assert.AreEqual(accepted, await restarted.MoveAsync(request, token));
+        Assert.AreEqual("later source", await File.ReadAllTextAsync(successor, token));
+        Assert.AreEqual("first", await File.ReadAllTextAsync(Path.Combine(fixture.Source, "moved", "first.txt"), token));
+        Assert.AreEqual("second", await File.ReadAllTextAsync(Path.Combine(fixture.Source, "moved", "second.txt"), token));
+        string movedFile = Path.Combine(fixture.Source, "moved", "first.txt");
+        await File.WriteAllTextAsync(movedFile, "later content on the original object", token);
+        string? changedRevision = await restarted.StatAsync(new(instance, "moved/first.txt", "docs"), token);
+        Assert.AreNotEqual(originalFileRevision, changedRevision);
+        Assert.IsTrue(MirrorPulseLocalDirectoryMoveRevision.IsSameObject(originalFileRevision, changedRevision, isDirectory: false));
+        File.Move(movedFile, Path.Combine(fixture.Source, "retained-first.txt"));
+        await File.WriteAllTextAsync(movedFile, "later replacement object", token);
+        string? replacementRevision = await restarted.StatAsync(new(instance, "moved/first.txt", "docs"), token);
+        Assert.IsFalse(MirrorPulseLocalDirectoryMoveRevision.IsSameObject(originalFileRevision, replacementRevision, isDirectory: false));
+    }
+
     [TestMethod]
     public async Task RealHostAndLocalWorkerRecoverWholeBatchAfterCatalogCommitInterruption()
     {

@@ -29,6 +29,7 @@ public sealed partial class AdapterWorkerV2SessionTests
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
             while ((await catalog.ReadInstanceRuntimeStateAsync(instanceId, timeout.Token))?.Phase != "Connected")
                 await Task.Delay(25, timeout.Token);
+            Assert.IsFalse(supervisor.SupportsDurableDirectoryMove(instanceId));
             foreach (string key in new[] { "left", "right" })
             {
                 Assert.AreEqual(key + "/revision", await supervisor.StatAsync(new(instanceId, "same.txt", key), timeout.Token));
@@ -41,6 +42,12 @@ public sealed partial class AdapterWorkerV2SessionTests
             await Assert.ThrowsExactlyAsync<InvalidDataException>(() => supervisor.StatAsync(new(instanceId, "same.txt", "unconfigured"), timeout.Token).AsTask());
             Assert.AreEqual("directory", await supervisor.CreateDirectoryAsync(new(instanceId, "left", "new", Guid.NewGuid()), timeout.Token));
             Assert.IsNull(await supervisor.StatAsync(new(instanceId, "new", "right"), timeout.Token));
+            var durableDirectoryMove = new MirrorPulseWorkerMoveRequest(instanceId, "new", "not-moved", "directory",
+                true, Guid.NewGuid(), "left", "left")
+            { RequireDurableDirectoryMove = true };
+            await Assert.ThrowsExactlyAsync<NotSupportedException>(() => supervisor.MoveAsync(durableDirectoryMove, timeout.Token).AsTask());
+            Assert.AreEqual("directory", await supervisor.StatAsync(new(instanceId, "new", "left"), timeout.Token));
+            Assert.IsNull(await supervisor.StatAsync(new(instanceId, "not-moved", "left"), timeout.Token));
             using var upload = new MemoryStream(new byte[] { 4, 5, 6 });
             string uploaded = await supervisor.UploadAsync(new(instanceId, "upload.txt", null, upload, upload.Length, Guid.NewGuid(), RootKey: "left"), timeout.Token);
             Assert.AreEqual(uploaded, await supervisor.StatAsync(new(instanceId, "upload.txt", "left"), timeout.Token));

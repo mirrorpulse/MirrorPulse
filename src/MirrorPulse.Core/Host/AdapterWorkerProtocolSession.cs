@@ -8,6 +8,8 @@ namespace MirrorPulse.Core.Host;
 /// <summary>Owns the negotiated wire version and configured root bindings for one session.</summary>
 public sealed class AdapterWorkerProtocolSession
 {
+    internal const string DurableDirectoryMoveCapability = "local-durable-directory-move";
+
     private static readonly string[] RequiredCapabilities =
         ["root-addresses", "stable-operations", "conditional-targets", "bounded-streams", "cancel-ack"];
     private readonly RootRegistration[] _roots;
@@ -101,6 +103,8 @@ public sealed class AdapterWorkerProtocolSession
                 if (offered.Contains(AdapterAtomicDirectoryDeletionWire.Capability, StringComparer.Ordinal))
                     negotiated = [.. negotiated, AdapterAtomicDirectoryDeletionWire.Capability];
             }
+            if (offered.Contains(DurableDirectoryMoveCapability, StringComparer.Ordinal))
+                negotiated = [.. negotiated, DurableDirectoryMoveCapability];
         }
         else if (configured.Length > 1) throw new InvalidDataException("MultipleRootsRequireProtocolV2");
         return new(selected, configured, negotiated);

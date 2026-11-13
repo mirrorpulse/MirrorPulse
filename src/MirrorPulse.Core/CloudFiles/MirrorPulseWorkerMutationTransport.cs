@@ -22,13 +22,19 @@ public sealed record MirrorPulseWorkerMoveRequest(
     Guid? OperationId = null,
     string? RootKey = null,
     string? DestinationRootKey = null,
-    bool DestinationMustBeAbsent = true);
+    bool DestinationMustBeAbsent = true)
+{
+    /// <summary>Requires restart-safe replay on the actual session that will send this request.</summary>
+    internal bool RequireDurableDirectoryMove { get; init; }
+}
 
 public sealed record MirrorPulseWorkerCreateDirectoryRequest(InstanceId InstanceId, string RootKey,
     string NormalizedPath, Guid OperationId, bool MustBeAbsent = true);
 
 public interface IMirrorPulseWorkerMutationTransport
 {
+    bool SupportsDurableDirectoryMove(InstanceId instanceId) => false;
+
     ValueTask<string> CreateDirectoryAsync(MirrorPulseWorkerCreateDirectoryRequest request,
         CancellationToken cancellationToken) => ValueTask.FromException<string>(new NotSupportedException("CreateDirectoryUnsupported"));
 
