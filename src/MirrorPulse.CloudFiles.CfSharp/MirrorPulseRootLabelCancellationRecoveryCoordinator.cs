@@ -18,28 +18,65 @@ internal sealed class MirrorPulseRootLabelCancellationRecoveryCoordinator(CloudF
 {
     internal Func<MirrorPulseNamespaceBornMemberRecoveryCheckpoint, CancellationToken, ValueTask>? BornCheckpoint { get; init; }
 
-    internal async ValueTask ReplayAsync(Guid operationId, CancellationToken cancellationToken)
+    internal ValueTask ReplayAsync(Guid operationId, CancellationToken cancellationToken) => ReplayAsync(operationId, false, cancellationToken);
+
+    internal async ValueTask ReplayAsync(Guid operationId, bool forExecution, CancellationToken cancellationToken)
     {
-        // A born first-level root can inherit a later anchor role even when startup
+        // A registered first-level root can retain an earlier role even when startup
         // correctly leaves its original Label closed. Persist that exact recovery
         // purpose before any native work; retries retain the original initializer.
         if (await catalog.ReadUnsealedRootLabelCancellationAsync(operationId, cancellationToken).ConfigureAwait(false) is not null) return;
-        _ = await MirrorPulseRootLabelCancellationFailureDiagnostics.AtStageAsync(MirrorPulseRootLabelCancellationStage.PendingCancellationInitialization,
+        MirrorPulseNamespaceInitializationRoot? executionRoot = null;
+        if (forExecution)
+        {
+            var history = await catalog.ReadManagedRootRenameHistoryAsync(operationId, cancellationToken).ConfigureAwait(false)
+                ?? throw new FileNotFoundException("Label recovery lost its original public preparation.");
+            var registration = router.FindRegistration(history.Intent.RootId)
+                ?? throw new InvalidOperationException("The original Label root is no longer configured.");
+            executionRoot = (await MirrorPulseNamespaceCurrentRootSelector.SelectAsync(fileSystem, catalog, [registration],
+                cancellationToken).ConfigureAwait(false)).Single();
+        }
+        var initialization = await MirrorPulseRootLabelCancellationFailureDiagnostics.AtStageAsync(MirrorPulseRootLabelCancellationStage.PendingCancellationInitialization,
             async () => await catalog.PrepareRootLabelCancellationInitializationAsync(operationId, Guid.NewGuid(),
-                DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
+                DateTimeOffset.UtcNow, executionRoot, cancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
+        if (forExecution && initialization is not { Version: 4 or 5, Roots.Count: 1 })
+            throw new InvalidOperationException("The pending initializer requires its original complete recovery before Label execution.");
         // Permission replay owns its actor turn and execution scope. Do not nest either.
         _ = await MirrorPulseRootLabelCancellationFailureDiagnostics.AtStageAsync(MirrorPulseRootLabelCancellationStage.PendingOriginalPermissions,
             () => new MirrorPulseRootLabelPendingPermissionRecoveryCoordinator(fileSystem, catalog, router, execution, actor, permissions)
                 .ReplayAsync(operationId, cancellationToken)).ConfigureAwait(false);
+        if (forExecution)
+        {
+            var plan = await catalog.ReadRootLabelPendingPermissionRecoveryAsync(operationId, cancellationToken).ConfigureAwait(false)
+                ?? throw new InvalidDataException("Label execution lost its admitted recovery inventory.");
+            var originals = new MirrorPulseNamespaceOriginalMemberRecoveryCoordinator(fileSystem, catalog, router,
+                execution, actor, scheduler, permissions);
+            foreach (Guid memberId in plan.Members)
+            {
+                var member = await catalog.ReadNamespaceMemberAsync(memberId, cancellationToken).ConfigureAwait(false)
+                    ?? throw new InvalidDataException("The admitted Label recovery member is missing.");
+                if (member.Origin == MirrorPulseNamespaceMemberOrigin.CapturedOriginal)
+                {
+                    var result = await originals.RecoverAsync(plan.Owner.InitializationOperationId, memberId, cancellationToken).ConfigureAwait(false);
+                    if (result.Permission?.Outcome is not (MirrorPulseNamespacePermissionOutcome.Verified or MirrorPulseNamespacePermissionOutcome.AlreadyVerified) ||
+                        result.Receipt is not { Outcome: CloudProtectedLocalOperationOutcome.Completed, Drained: true })
+                        throw new IOException("Original Label permission recovery did not complete and drain.");
+                }
+                else
+                    _ = await actor.RunAsync(token => ReplayBornAdmittedAsync(operationId, plan, memberId, token), cancellationToken).ConfigureAwait(false);
+            }
+            return;
+        }
         _ = await MirrorPulseRootLabelCancellationFailureDiagnostics.AtStageAsync(MirrorPulseRootLabelCancellationStage.PendingBornPermissions,
-            () => actor.RunAsync(token => ReplayBornAdmittedAsync(operationId, token), cancellationToken)).ConfigureAwait(false);
+            () => actor.RunAsync(token => ReplayBornAdmittedAsync(operationId, null, null, token), cancellationToken)).ConfigureAwait(false);
     }
 
-    private async ValueTask<int> ReplayBornAdmittedAsync(Guid operationId, CancellationToken token)
+    private async ValueTask<int> ReplayBornAdmittedAsync(Guid operationId,
+        MirrorPulseRootLabelPendingPermissionRecovery? retained, Guid? selectedMember, CancellationToken token)
     {
         actor.AssertAccess();
         if (await catalog.ReadUnsealedRootLabelCancellationAsync(operationId, token).ConfigureAwait(false) is not null) return 0;
-        var plan = await catalog.ReadRootLabelPendingPermissionRecoveryAsync(operationId, token).ConfigureAwait(false);
+        var plan = retained ?? await catalog.ReadRootLabelPendingPermissionRecoveryAsync(operationId, token).ConfigureAwait(false);
         if (plan is null) return 0;
         if (plan.PendingOriginals.Count != 0)
             throw new InvalidOperationException("Original permission intents must settle before born cancellation recovery.");
@@ -53,7 +90,8 @@ internal sealed class MirrorPulseRootLabelCancellationRecoveryCoordinator(CloudF
         var recovery = new MirrorPulseNamespaceBornMemberRecoveryCoordinator(fileSystem, catalog, router, execution, actor, scheduler, permissions)
         { Checkpoint = BornCheckpoint, Progress = MirrorPulseRootLabelCancellationBornDiagnostics.Capture };
         int settled = 0;
-        foreach (Guid memberId in plan.BornMembers)
+        IEnumerable<Guid> members = selectedMember is { } selected ? [selected] : plan.BornMembers;
+        foreach (Guid memberId in members)
         {
             token.ThrowIfCancellationRequested();
             if (await catalog.ReadRootLabelCancellationRecoveryOwnerAsync(operationId, token).ConfigureAwait(false) != plan.Owner)

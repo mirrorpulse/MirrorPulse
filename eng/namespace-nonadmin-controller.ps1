@@ -1,5 +1,5 @@
 function Get-OrdinaryUserNamespaceBudgetMilliseconds {
-    param([Parameter(Mandatory)][ValidateRange(1, 164)][int]$TestCount, [string[]]$TestNames,
+    param([Parameter(Mandatory)][ValidateRange(1, 165)][int]$TestCount, [string[]]$TestNames,
         [ValidateSet('AllRetained', 'S06')][string]$Scope = 'AllRetained')
     if ($Scope -ceq 'S06' -and -not $PSBoundParameters.ContainsKey('TestNames')) {
         throw 'S06 scope requires its explicit selected test names.'
@@ -13,6 +13,7 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
     $rootAdmission = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeRootLabelJournalAdmissionRequiresCurrentTreeAndActualSdkReturnBeforeReadmission'
     $rootPublic = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicRuntimeExecutesOnlyOriginalProtectedRootLabelsAndAuditsCurrentReadmission'
     $rootUnsealedExecution = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicRuntimeExecutesUnsealedBornRootLabelAcrossDisposedRoles'
+    $capturedUnsealedExecution = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicRuntimeExecutesUnsealedCapturedRootLabelAcrossDisposedRoles'
     $rootCancellation = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicRuntimeCancelsOnlyUnstartedOriginalRootLabelsAcrossRolesAndRetainsLaterNames'
     $unsealedCancellation = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicRuntimeCancelsOriginalUnsealedRootPreparationsAfterIndependentRoleDisposal'
     $legacyInitializer = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicCancellationRetainsAndResumesItsOriginalPartiallyRotatedInitializer'
@@ -62,7 +63,7 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
     $directoryJournal.Add($prefix+'NativeProductionDirectoryGroupRereadsRealLateChildOriginalsBeforeDispatchAcrossOwners', @{ Cases=2; Deadline=95000 })
     $directoryJournal.Add($prefix+'NativeProductionDirectoryAbsencePreservesALaterBackendFileOrDirectoryAcrossOwners', @{ Cases=2; Deadline=95000 })
     $directoryJournal.Add($prefix+'NativeProductionDirectoryGroupRecoversAcceptedEffectsBeforeOriginalAckAcrossFreshRoles', @{ Cases=2; Deadline=95000 })
-    $additionalSelections = @(@($preparation,$approval,$rootPreparation,$rootExecution,$rootRecovery,$rootRuntime,$rootAdmission,$rootPublic,$rootUnsealedExecution,$rootCancellation,$unsealedCancellation,$legacyInitializer,$bornCancellation,$disabledImport,$disabledCreation,$disabledCreationRole,$disabledMove,$disabledRetirement,$disabledReplacement,$residentReplacement,$journalRescan)+@($keepRemote.Keys)+@($deleteRejections.Keys)+@($directoryJournal.Keys) | Where-Object {$_ -cin $TestNames}).Count
+    $additionalSelections = @(@($preparation,$approval,$rootPreparation,$rootExecution,$rootRecovery,$rootRuntime,$rootAdmission,$rootPublic,$rootUnsealedExecution,$capturedUnsealedExecution,$rootCancellation,$unsealedCancellation,$legacyInitializer,$bornCancellation,$disabledImport,$disabledCreation,$disabledCreationRole,$disabledMove,$disabledRetirement,$disabledReplacement,$residentReplacement,$journalRescan)+@($keepRemote.Keys)+@($deleteRejections.Keys)+@($directoryJournal.Keys) | Where-Object {$_ -cin $TestNames}).Count
     if ($TestCount -gt 112 -and (-not $PSBoundParameters.ContainsKey('TestNames') -or $additionalSelections -lt $TestCount-112)) {
         throw 'The additional namespace case requires its explicit original preparation selection.'
     }
@@ -97,6 +98,7 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
         $repeated.Add($rootAdmission, 6)
         $repeated.Add($rootPublic, 4)
         $repeated.Add($rootUnsealedExecution, 2)
+        $repeated.Add($capturedUnsealedExecution, 2)
         $repeated.Add($rootCancellation, 6)
         $repeated.Add($unsealedCancellation, 2)
         $repeated.Add($legacyInitializer, 16)
@@ -136,7 +138,7 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
                 # Each original transfer scope/cutpoint already owns a 45-second
                 # native deadline. The aggregate controller must preserve it;
                 # its ordinary 15-second per-case estimate cannot replace it.
-                $additional = if ($name -ceq $rootUnsealedExecution) { 75000 } elseif ($name -cin @($rootRuntime,$rootPublic,$rootCancellation,$unsealedCancellation,$legacyInitializer,$bornCancellation)) { 45000 } elseif ($name -cin @($preparation,$approval,$rootPreparation,$rootExecution,$rootRecovery,$rootAdmission)) { 15000 } else { 30000 }
+                $additional = if ($name -cin @($rootUnsealedExecution,$capturedUnsealedExecution)) { 75000 } elseif ($name -cin @($rootRuntime,$rootPublic,$rootCancellation,$unsealedCancellation,$legacyInitializer,$bornCancellation)) { 45000 } elseif ($name -cin @($preparation,$approval,$rootPreparation,$rootExecution,$rootRecovery,$rootAdmission)) { 15000 } else { 30000 }
                 $transferDeadlineMilliseconds += $repeated[$name] * $additional
             }
         }
@@ -163,7 +165,7 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
 }
 
 function Get-OrdinaryUserNamespaceStepTimeoutMinutes {
-    param([Parameter(Mandatory)][ValidateRange(1, 164)][int]$TestCount, [string[]]$TestNames,
+    param([Parameter(Mandatory)][ValidateRange(1, 165)][int]$TestCount, [string[]]$TestNames,
         [ValidateSet('AllRetained', 'S06')][string]$Scope = 'AllRetained')
     # The workflow must let the existing child budget expire and allow the
     # controller to preserve diagnostics and remove its disposable user/profile.

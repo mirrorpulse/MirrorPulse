@@ -10,6 +10,8 @@ public sealed record MirrorPulseRootLabelPendingPermissionRecovery(MirrorPulseRo
 {
     /// <summary>Registered born member IDs in direct parent-first order; no native protection is implied.</summary>
     public IReadOnlyList<Guid> BornMembers { get; init; } = [];
+    /// <summary>The complete registered recovery order, with every direct parent before its children.</summary>
+    public IReadOnlyList<Guid> Members { get; init; } = [];
 }
 
 public sealed partial class MirrorPulseProductCatalog
@@ -50,6 +52,7 @@ public sealed partial class MirrorPulseProductCatalog
                 throw new InvalidOperationException("Pending permission recovery cannot reinterpret the original root mapping or lifecycle.");
             var pending = new List<MirrorPulseNamespaceMemberRecoveryContext>();
             var born = new List<Guid>();
+            var members = new List<Guid>();
             var admitted = new HashSet<Guid> { root.MemberId };
             var queue = new Queue<(Guid MemberId, Guid? ParentId)>();
             queue.Enqueue((root.MemberId, rootLocation.ParentMemberId));
@@ -61,6 +64,7 @@ public sealed partial class MirrorPulseProductCatalog
                 if (context.Member.RootId != root.RootId || context.Member.OwnerSid != root.OwnerSid ||
                     context.Location.ParentMemberId != selected.ParentId)
                     throw new InvalidDataException("Pending permission recovery cannot replace any original member or committed parent.");
+                members.Add(context.Member.MemberId);
                 if (context.Permission is { Phase: not MirrorPulseNamespacePermissionPhase.Verified } permission)
                 {
                     if (permission.Phase == MirrorPulseNamespacePermissionPhase.RecoveryRequired ||
@@ -100,7 +104,8 @@ public sealed partial class MirrorPulseProductCatalog
                     after = page[^1].NameKey;
                 }
             }
-            transaction.Commit(); return new(owner, root.MemberId, pending.AsReadOnly()) { BornMembers = born.AsReadOnly() };
+            transaction.Commit(); return new(owner, root.MemberId, pending.AsReadOnly())
+            { BornMembers = born.AsReadOnly(), Members = members.AsReadOnly() };
         }
         finally { _gate.Release(); }
     }

@@ -1,5 +1,6 @@
 using System.Security.Principal;
 using System.Text.Json;
+using CfSharp;
 using MirrorPulse.Core.CloudFiles;
 using MirrorPulse.Core.Configuration;
 using MirrorPulse.Core.Contracts;
@@ -15,7 +16,18 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     [TestCategory("NativeCloudFiles")]
     [DataRow(false)]
     [DataRow(true)]
-    public async Task NativePublicRuntimeExecutesUnsealedBornRootLabelAcrossDisposedRoles(bool disabled)
+    public Task NativePublicRuntimeExecutesUnsealedBornRootLabelAcrossDisposedRoles(bool disabled) =>
+        ProbeUnsealedRootLabelExecutionAcrossDisposedRolesAsync(disabled, capturedRoot: false);
+
+    [TestMethod]
+    [DoNotParallelize]
+    [TestCategory("NativeCloudFiles")]
+    [DataRow(false)]
+    [DataRow(true)]
+    public Task NativePublicRuntimeExecutesUnsealedCapturedRootLabelAcrossDisposedRoles(bool disabled) =>
+        ProbeUnsealedRootLabelExecutionAcrossDisposedRolesAsync(disabled, capturedRoot: true);
+
+    private async Task ProbeUnsealedRootLabelExecutionAcrossDisposedRolesAsync(bool disabled, bool capturedRoot)
     {
         if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
             Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
@@ -23,7 +35,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         string directory = Path.Combine(Path.GetTempPath(), "MirrorPulse-native-tests", Guid.NewGuid().ToString("N"));
         var paths = new MirrorPulseStoragePaths(Path.Combine(directory, "sync"), Path.Combine(directory, "data"));
         var registry = new CfSharpMirrorPulseCloudRootRegistry();
-        RootRegistration root = AdapterRootRegistrationMapper.Map(AdapterId.Parse("example.unsealed-born-root-label"), InstanceId.New(),
+        RootRegistration root = AdapterRootRegistrationMapper.Map(AdapterId.Parse(capturedRoot
+                ? "example.unsealed-captured-root-label" : "example.unsealed-born-root-label"), InstanceId.New(),
             new AdapterRootDefinition("docs", "Docs", "Docs", false),
             disabled ? RootRegistrationState.Disabled : RootRegistrationState.Active, identityScope: RootIdentityScope.InstanceRoot);
         var router = new MirrorPulseRootRouter(paths.SyncRootPath, [root]);
@@ -35,17 +48,61 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         const string childName = "original.bin";
         MirrorPulseNamespaceMemberRegistration rootMember = null!;
         MirrorPulseNamespaceMemberRegistration child = null!;
-        MirrorPulseNamespaceBirthObservation rootObservation = null!;
+        MirrorPulseNamespacePermissionBaseline? rootBaseline = null;
+        MirrorPulseNamespaceBirthObservation? rootObservation = null;
         MirrorPulseNamespaceBirthObservation childObservation = null!;
         MirrorPulseRootRenameHistory prepared = null!;
         string priorRole = string.Empty;
         MirrorPulseNormalUserWorkerTransportTests.IdentityProbeWorker firstProbe = null!;
+        // A fenced role handoff cannot supply current authorization snapshots. Captured
+        // originals keep their permission epoch; born objects keep their birth protection.
+        async Task AssertOriginProtectionRoleAsync(MirrorPulseProductCatalog catalog, MirrorPulseNamespaceMemberRegistration member, string roleSid)
+        {
+            if (member.Origin == MirrorPulseNamespaceMemberOrigin.CapturedOriginal)
+            {
+                var permission = await catalog.ReadLatestNamespacePermissionChangeAsync(member.OriginId, deadline.Token);
+                Assert.IsNotNull(permission);
+                Assert.AreEqual(MirrorPulseNamespacePermissionPhase.Verified, permission.Phase);
+                Assert.AreEqual(member.OriginId, permission.Intent.EvidenceId);
+                Assert.AreEqual(roleSid, permission.Intent.RoleSid);
+            }
+            else
+            {
+                var protection = await catalog.ReadLatestNamespaceBirthProtectionAsync(member.OriginId, deadline.Token);
+                Assert.IsNotNull(protection);
+                Assert.AreEqual(roleSid, protection.RoleSid);
+            }
+        }
         try
         {
             registry.Register(new(paths.SyncRootPath, "0.1.0", Guid.NewGuid(), [4, 7, 2]));
             await File.WriteAllTextAsync(Path.Combine(directory, ".mp-permission-fixture"), string.Empty, deadline.Token);
-            // The first runtime auto-creates the born root. Preparation keeps only public proof;
-            // subtree admission waits for a fully disposed role to hand the born objects over.
+            if (capturedRoot)
+            {
+                // This library only seeds the public root placeholder. It is disposed before
+                // the protected runtime starts, so startup captures that original instead of
+                // auto-creating a born root. Full population keeps the later audit local.
+                var setupState = new MirrorPulseCfSharpStateSession(paths);
+                await using (var fileSystem = new MirrorPulseCloudFileSystemBuilder(paths).WithStateStore(setupState)
+                    .WithContentProvider(MirrorPulseDemandProvider.CreateWithoutAdapters(paths.SyncRootPath)).Build())
+                {
+                    await fileSystem.StartAsync(deadline.Token);
+                    await using (var feed = fileSystem.CreateLocalChangeFeed())
+                    {
+                        await feed.StartAsync(deadline.Token);
+                        (await new MirrorPulseRootPopulationCoordinator(fileSystem, feed).PopulateAsync(router, deadline.Token)).ThrowIfAnyFailed();
+                        var placeholder = fileSystem.GetDirectory(sourceName);
+                        Assert.IsTrue((await placeholder.InspectAsync(deadline.Token)).IsPlaceholder);
+                        await placeholder.SetPopulationStateAsync(CloudDirectoryPopulationState.Complete, cancellationToken: deadline.Token);
+                        SetProtectedFixtureUserOwner(fileSystem.Root, caller.User!);
+                        SetProtectedFixtureUserOwner(placeholder, caller.User!);
+                    }
+                }
+                Assert.IsTrue(Directory.Exists(Path.Combine(paths.SyncRootPath, sourceName)));
+            }
+            // Born startup auto-creates the missing root. Captured startup keeps the seeded
+            // placeholder as an original. Preparation keeps only public proof; subtree
+            // admission waits for a fully disposed role to hand the objects over.
             await using (var role = new MirrorPulseNamespaceExecutionSession())
             await using (var catalog = await MirrorPulseProductCatalog.OpenAsync(paths, deadline.Token))
             await using (var actor = new MirrorPulseNamespaceActor())
@@ -67,7 +124,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 Assert.AreEqual(!disabled, work.IsAdmitted(root.RootId));
                 var inspectedRoot = await runtime.InspectNamespaceMemberAsync(sourceName, true, deadline.Token);
                 rootMember = (await catalog.ReadNamespaceMemberAsync(inspectedRoot.MemberId, deadline.Token))!;
-                Assert.AreEqual(MirrorPulseNamespaceMemberOrigin.ProtectedBirth, rootMember.Origin);
+                Assert.AreEqual(capturedRoot ? MirrorPulseNamespaceMemberOrigin.CapturedOriginal : MirrorPulseNamespaceMemberOrigin.ProtectedBirth, rootMember.Origin);
                 Assert.AreEqual(root.RootId, rootMember.RootId);
                 Assert.AreEqual(sourceName, rootMember.RelativePath);
                 child = await runtime.CreateNamespaceMemberAsync(Guid.NewGuid(), rootMember.MemberId, childName, false, deadline.Token);
@@ -83,7 +140,16 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 }
                 CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(childPath, deadline.Token));
                 Assert.AreEqual(child.MemberId, (await runtime.InspectNamespaceMemberAsync(sourceName + "/" + childName, false, deadline.Token)).MemberId);
-                rootObservation = (await catalog.ReadNamespaceBirthObservationAsync(rootMember.OriginId, deadline.Token))!;
+                if (capturedRoot)
+                {
+                    rootBaseline = await catalog.ReadNamespacePermissionBaselineAsync(rootMember.OriginId, deadline.Token);
+                    Assert.IsNotNull(rootBaseline);
+                    Assert.AreEqual(rootMember.OriginId, rootBaseline.EvidenceId);
+                    Assert.AreEqual(sourceName, rootBaseline.RelativePath);
+                    Assert.IsTrue(rootBaseline.IsDirectory);
+                    Assert.IsNull(await catalog.ReadNamespaceBirthObservationAsync(rootMember.OriginId, deadline.Token));
+                }
+                else rootObservation = (await catalog.ReadNamespaceBirthObservationAsync(rootMember.OriginId, deadline.Token))!;
                 childObservation = (await catalog.ReadNamespaceBirthObservationAsync(child.OriginId, deadline.Token))!;
                 Assert.IsEmpty(await catalog.ReadPendingNamespaceInitializationsAsync(deadline.Token));
                 Assert.IsEmpty(await catalog.ReadNamespaceDispatchFencedRootsAsync(deadline.Token));
@@ -94,8 +160,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 Assert.AreEqual(targetName, prepared.Intent.TargetName);
                 Assert.IsNotNull(prepared.Proof);
                 Assert.IsNull(await catalog.ReadNamespaceMemberMoveAsync(prepared.Intent.OperationId, deadline.Token));
-                Assert.AreEqual(priorRole, (await catalog.ReadLatestNamespaceBirthProtectionAsync(rootMember.OriginId, deadline.Token))!.RoleSid);
-                Assert.AreEqual(priorRole, (await catalog.ReadLatestNamespaceBirthProtectionAsync(child.OriginId, deadline.Token))!.RoleSid);
+                await AssertOriginProtectionRoleAsync(catalog, rootMember, priorRole);
+                await AssertOriginProtectionRoleAsync(catalog, child, priorRole);
                 Assert.IsFalse(work.IsAdmitted(root.RootId));
                 Assert.IsEmpty(firstProbe.Calls);
             }
@@ -129,8 +195,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             Assert.AreEqual(rootMember.MemberId, (await currentRuntime.InspectNamespaceMemberAsync(sourceName, true, deadline.Token)).MemberId);
             Assert.AreEqual(child.MemberId, (await currentRuntime.InspectNamespaceMemberAsync(sourceName + "/" + childName, false, deadline.Token)).MemberId);
             CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(Path.Combine(paths.SyncRootPath, sourceName, childName), deadline.Token));
-            Assert.AreEqual(priorRole, (await currentCatalog.ReadLatestNamespaceBirthProtectionAsync(rootMember.OriginId, deadline.Token))!.RoleSid);
-            Assert.AreEqual(priorRole, (await currentCatalog.ReadLatestNamespaceBirthProtectionAsync(child.OriginId, deadline.Token))!.RoleSid);
+            await AssertOriginProtectionRoleAsync(currentCatalog, rootMember, priorRole);
+            await AssertOriginProtectionRoleAsync(currentCatalog, child, priorRole);
             var initializersBeforeExecute = await currentCatalog.ReadNamespaceInitializationsAsync(cancellationToken: deadline.Token);
             Assert.IsNotEmpty(initializersBeforeExecute);
             Assert.IsTrue(initializersBeforeExecute.All(item => item.Completion is not null));
@@ -161,7 +227,12 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             Assert.IsFalse(completion.PublicResult.RequiresFullRescan);
             Assert.AreEqual(rootMember, await currentCatalog.ReadNamespaceMemberAsync(rootMember.MemberId, deadline.Token));
             Assert.AreEqual(child, await currentCatalog.ReadNamespaceMemberAsync(child.MemberId, deadline.Token));
-            Assert.AreEqual(rootObservation, await currentCatalog.ReadNamespaceBirthObservationAsync(rootMember.OriginId, deadline.Token));
+            if (capturedRoot)
+            {
+                Assert.AreEqual(rootBaseline, await currentCatalog.ReadNamespacePermissionBaselineAsync(rootMember.OriginId, deadline.Token));
+                Assert.IsNull(await currentCatalog.ReadNamespaceBirthObservationAsync(rootMember.OriginId, deadline.Token));
+            }
+            else Assert.AreEqual(rootObservation, await currentCatalog.ReadNamespaceBirthObservationAsync(rootMember.OriginId, deadline.Token));
             Assert.AreEqual(childObservation, await currentCatalog.ReadNamespaceBirthObservationAsync(child.OriginId, deadline.Token));
             Assert.AreEqual(targetName, (await currentCatalog.ReadNamespaceMemberLocationAsync(rootMember.MemberId, deadline.Token)).RelativePath);
             var childLocation = await currentCatalog.ReadNamespaceMemberLocationAsync(child.MemberId, deadline.Token);
@@ -171,8 +242,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             Assert.AreEqual(child.MemberId, (await currentRuntime.InspectNamespaceMemberAsync(targetName + "/" + childName, false, deadline.Token)).MemberId);
             Assert.AreEqual(currentRole.RoleSid.Value, (await currentCatalog.ReadNamespaceMemberProtectionSnapshotAsync(rootMember.MemberId, deadline.Token))!.Context.Protection.RoleSid);
             Assert.AreEqual(currentRole.RoleSid.Value, (await currentCatalog.ReadNamespaceMemberProtectionSnapshotAsync(child.MemberId, deadline.Token))!.Context.Protection.RoleSid);
-            Assert.AreEqual(currentRole.RoleSid.Value, (await currentCatalog.ReadLatestNamespaceBirthProtectionAsync(rootMember.OriginId, deadline.Token))!.RoleSid);
-            Assert.AreEqual(currentRole.RoleSid.Value, (await currentCatalog.ReadLatestNamespaceBirthProtectionAsync(child.OriginId, deadline.Token))!.RoleSid);
+            await AssertOriginProtectionRoleAsync(currentCatalog, rootMember, currentRole.RoleSid.Value);
+            await AssertOriginProtectionRoleAsync(currentCatalog, child, currentRole.RoleSid.Value);
             Assert.AreNotEqual(priorRole, currentRole.RoleSid.Value);
             var initializersAfter = await currentCatalog.ReadNamespaceInitializationsAsync(cancellationToken: deadline.Token);
             foreach (var prior in initializersBeforeExecute)
@@ -180,6 +251,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 var retained = initializersAfter.Single(item => item.Intent.OperationId == prior.Intent.OperationId);
                 Assert.AreEqual(JsonSerializer.Serialize(prior), JsonSerializer.Serialize(retained));
             }
+            // Recovery may append any number of initializers. Keep each earlier record and
+            // require every new completion to belong to this role and root.
             foreach (var recovery in initializersAfter.Where(item => initializersBeforeExecute.All(prior => prior.Intent.OperationId != item.Intent.OperationId)))
             {
                 Assert.IsNotNull(recovery.Completion);
@@ -217,9 +290,13 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(payload, deadline.Token));
             Assert.IsEmpty(firstProbe.Calls);
             Assert.IsEmpty(currentBoundary.Probe.Calls);
-            TestContext.WriteLine($"PublicUnsealedBornRootExecutionActual: disabled={disabled}; autoCreatedProtectedBirth=True; bornChild=True; exactBytes=True; " +
-                "unsealedPreparation=True; independentRoleDisposed=True; newRole=True; pendingInitializerCompleted=True; stableRootAndMemberIds=True; " +
-                "completeMembers=2; historicalReplay=True; sourceCalls=0; independentHostRestart=False; signedWorker=False.");
+            TestContext.WriteLine(capturedRoot
+                ? $"PublicUnsealedCapturedRootExecutionActual: disabled={disabled}; capturedOriginalRoot=True; autoCreatedProtectedBirth=False; bornChild=True; exactBytes=True; " +
+                    "unsealedPreparation=True; independentRoleDisposed=True; newRole=True; pendingInitializerCompleted=True; stableRootAndMemberIds=True; " +
+                    "completeMembers=2; historicalReplay=True; sourceCalls=0; independentHostRestart=False; signedWorker=False."
+                : $"PublicUnsealedBornRootExecutionActual: disabled={disabled}; autoCreatedProtectedBirth=True; bornChild=True; exactBytes=True; " +
+                    "unsealedPreparation=True; independentRoleDisposed=True; newRole=True; pendingInitializerCompleted=True; stableRootAndMemberIds=True; " +
+                    "completeMembers=2; historicalReplay=True; sourceCalls=0; independentHostRestart=False; signedWorker=False.");
         }
         finally
         {

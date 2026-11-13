@@ -175,7 +175,8 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         MirrorPulseNamespaceMemberRegistration Anchor, MirrorPulseNamespaceMemberRegistration Root,
         MirrorPulseNamespaceMemberRegistration[] Members, MirrorPulseNamespaceMemberMoveIntent Move);
 
-    private static async Task<RootSubtreeFixture> PrepareRootSubtreeFixtureAsync(MirrorPulseProductCatalog catalog, bool enabled = true)
+    private static async Task<RootSubtreeFixture> PrepareRootSubtreeFixtureAsync(MirrorPulseProductCatalog catalog, bool enabled = true,
+        bool captureOriginalRoot = false)
     {
         var manifest = new AdapterManifest(1, AdapterId.Parse("example.root-subtree"), "Example", "1.0.0", new(1, 1),
             new Dictionary<string, string> { ["win-x64"] = "worker/adapter.exe", ["win-arm64"] = "worker/adapter.exe" },
@@ -189,7 +190,16 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             await catalog.SetInstanceEnabledAsync((await catalog.ReadAdapterTopologyAsync()).Instances.Single().InstanceId, false);
         var registration = (await catalog.ReadAdapterTopologyAsync()).Roots.Single();
         var original = Baseline() with { RootId = registration.RootId };
-        var proof = Protection(original); await ProtectAsync(catalog, original, proof);
+        var proof = Protection(original);
+        if (captureOriginalRoot)
+        {
+            var preparation = new MirrorPulseNamespacePermissionPreparation(original, proof);
+            var definition = new MirrorPulseNamespacePermissionTreeDefinition(Guid.NewGuid(), preparation, 1, original.CapturedAt);
+            await catalog.CreateNamespacePermissionTreeAsync(definition);
+            await catalog.AppendNamespacePermissionTreeMembersAsync(definition.ManifestId, [new(0, null, preparation)]);
+            await catalog.SealNamespacePermissionTreeAsync(definition.ManifestId, proof.PreparedAt.AddSeconds(1));
+        }
+        await ProtectAsync(catalog, original, proof);
         var root = await RegisterOriginalParentMembersAsync(catalog, original, proof);
         var anchor = (await catalog.ReadNamespaceMemberAsync(root.ParentMemberId!.Value))!;
         var childBorn = await AddBornAsync(catalog, Birth(original, proof) with { IsDirectory = true });

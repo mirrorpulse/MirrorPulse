@@ -1684,7 +1684,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                         if (tree.RecoveryOwner is not null || tree.Members.Any(member => member.Context.Protection.RoleSid != _namespaceExecution.RoleSid.Value))
                         {
                             await new MirrorPulseRootLabelCancellationRecoveryCoordinator(fileSystem, catalog, router, _namespaceExecution,
-                                _namespaceActor, instances, _permissions).ReplayAsync(operationId, token).ConfigureAwait(false);
+                                _namespaceActor, instances, _permissions).ReplayAsync(operationId, true, token).ConfigureAwait(false);
                             recoveredPreparation = true;
                         }
                     }

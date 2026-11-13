@@ -37,6 +37,13 @@ public sealed partial class NamespaceNonAdminControllerTests
         RunAsync("unsealed-execution-" + selection);
 
     [TestMethod]
+    [DataRow("selected")]
+    [DataRow("missing")]
+    [DataRow("foreign")]
+    public Task ControllerRetainsCapturedRootExecutionRowsWithoutChangingTheBornRootSelection(string selection) =>
+        RunAsync("captured-unsealed-execution-" + selection);
+
+    [TestMethod]
     [DataRow("mismatch")]
     [DataRow("duplicate")]
     [DataRow("empty")]
@@ -63,6 +70,7 @@ public sealed partial class NamespaceNonAdminControllerTests
                 . $Policy
                 $rejectionPrefix='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.'
                 $unsealedExecution=$rejectionPrefix+'NativePublicRuntimeExecutesUnsealedBornRootLabelAcrossDisposedRoles'
+                $capturedUnsealedExecution=$rejectionPrefix+'NativePublicRuntimeExecutesUnsealedCapturedRootLabelAcrossDisposedRoles'
                 $rejections=@(
                     $rejectionPrefix+'NativeMissingOriginalRemoteDeleteRetainsActualSdkConflictWithoutInventingMemberRetirementAcrossOwners'
                     $rejectionPrefix+'NativeMiddleMissingRemoteDeleteSettlesOriginalRejectionBeforeLaterSdkEntryAndCursorAcrossOwners'
@@ -84,7 +92,7 @@ public sealed partial class NamespaceNonAdminControllerTests
                 )|ForEach-Object {$rejectionPrefix+$_}
                 function ReadPreDirectoryNamespaceCatalog([string]$Path) {
                     $value=Get-Content -LiteralPath $Path -Raw|ConvertFrom-Json
-                    $value.required.namespace=@($value.required.namespace|Where-Object {$_ -cnotin $directories -and $_ -cne $unsealedExecution})
+                    $value.required.namespace=@($value.required.namespace|Where-Object {$_ -cnotin $directories -and $_ -cnotin @($unsealedExecution,$capturedUnsealedExecution)})
                     return $value
                 }
                 function ReadHistoricalNamespaceCatalog([string]$Path) {
@@ -93,9 +101,34 @@ public sealed partial class NamespaceNonAdminControllerTests
                     $value.required.namespace=@($value.required.namespace|Where-Object {$_ -cnotin $rejections})
                     return $value
                 }
-                if ($Scenario -like 'unsealed-execution-*') {
+                if ($Scenario -like 'captured-unsealed-execution-*') {
                     $actual=Get-Content -LiteralPath (Join-Path (Split-Path $Policy -Parent) 'test-suites.json') -Raw|ConvertFrom-Json
                     $names=@($actual.required.namespace)
+                    $prior=@($names|Where-Object {$_ -cne $capturedUnsealedExecution})
+                    if($names.Count -ne 165 -or $prior.Count -ne 164){throw 'Retain every prior method and both born-root rows.'}
+                    foreach($selection in @(@{names=$actual.required.namespace},@{names=$actual.required.native},@{names=$actual.allowSkipped})){
+                        if(@($selection.names|Where-Object {$_ -ceq $capturedUnsealedExecution}).Count -ne 1){throw 'Require the captured-root method exactly once.'}
+                    }
+                    $rows=@($actual.requiredCases.($capturedUnsealedExecution))
+                    if($rows.Count -ne 2 -or $rows[0] -cne 'NativePublicRuntimeExecutesUnsealedCapturedRootLabelAcrossDisposedRoles (False)' -or
+                       $rows[1] -cne 'NativePublicRuntimeExecutesUnsealedCapturedRootLabelAcrossDisposedRoles (True)'){throw 'Require both exact captured-root rows.'}
+                    foreach($scope in @('AllRetained','S06')){
+                        $old=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 164 -TestNames $prior -Scope $scope
+                        if($Scenario -ceq 'captured-unsealed-execution-selected'){
+                            $now=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 165 -TestNames $names -Scope $scope
+                            if($now -ne $old+180000){throw 'Preserve every earlier deadline and add both captured-root deadlines.'}
+                        }else{
+                            $invalid=if($Scenario -ceq 'captured-unsealed-execution-missing'){$prior}else{@($names|ForEach-Object {if($_ -ceq $capturedUnsealedExecution){'Fixture.Unrelated'}else{$_}})}
+                            $refused=$false
+                            try{Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 165 -TestNames $invalid -Scope $scope|Out-Null}catch{$refused=$true}
+                            if(-not $refused){throw 'Incomplete selections cannot claim captured-root deadlines.'}
+                        }
+                    }
+                    exit 0
+                }
+                if ($Scenario -like 'unsealed-execution-*') {
+                    $actual=Get-Content -LiteralPath (Join-Path (Split-Path $Policy -Parent) 'test-suites.json') -Raw|ConvertFrom-Json
+                    $names=@($actual.required.namespace|Where-Object {$_ -cne $capturedUnsealedExecution})
                     $prior=@($names|Where-Object {$_ -cne $unsealedExecution})
                     if($names.Count -ne 164 -or $prior.Count -ne 163){throw 'Retain the original namespace methods and one two-row execution method.'}
                     foreach($selection in @(@{names=$actual.required.namespace},@{names=$actual.required.native},@{names=$actual.allowSkipped})){
@@ -118,7 +151,7 @@ public sealed partial class NamespaceNonAdminControllerTests
                 }
                 if ($Scenario -like 'directory-journal-*') {
                     $actual=Get-Content -LiteralPath (Join-Path (Split-Path $Policy -Parent) 'test-suites.json') -Raw|ConvertFrom-Json
-                    $names=@($actual.required.namespace|Where-Object {$_ -cne $unsealedExecution});$prior=@($names|Where-Object {$_ -cnotin $directories})
+                    $names=@($actual.required.namespace|Where-Object {$_ -cnotin @($unsealedExecution,$capturedUnsealedExecution)});$prior=@($names|Where-Object {$_ -cnotin $directories})
                     if($names.Count -ne 163 -or $prior.Count -ne 158){throw 'Retain all158 original namespace methods and exactly five new directory methods.'}
                     $expectedRows=@(4,4,2,2,2)
                     for($index=0;$index -lt $directories.Count;$index++){
@@ -791,8 +824,8 @@ public sealed partial class NamespaceNonAdminControllerTests
                     if ($Scenario -eq 'budget-rejected') {
                         if (-not $rejected) { throw 'An invalid or unbounded selection was accepted.' }
                     } else {
-                        $unsealedExecutionBudget=2*90000
-                        $originalCatalogCount=$Count-1
+                        $unsealedExecutionBudget=4*90000
+                        $originalCatalogCount=$Count-2
                         $maximum=if ($Scenario -eq 'budget-catalog') {4755000+4*60000+10*60000+2*60000+65000+29*65000+65000+65000+65000+65000+65000+90000+65000+13*65000+6*65000+4*60000+10*95000+$unsealedExecutionBudget} else {1800000}
                         if ($rejected -or $budget -lt 600000 -or $budget -gt $maximum) { throw 'The whole-suite envelope is missing or unbounded.' }
                         if ($Scenario -eq 'budget-catalog' -and $budget -ne 120000+($originalCatalogCount-10+51)*15000+18*30000+28*15000+6*45000+6*15000+4*45000+5*15000+6*45000+2*45000+2*45000+4*60000+10*60000+15000+2*45000+50000+13*15000+29*50000+50000+50000+50000+50000+50000+75000+50000+19*65000+4*60000+10*95000-5*15000+$unsealedExecutionBudget) {

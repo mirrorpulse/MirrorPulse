@@ -19,7 +19,7 @@ public sealed record MirrorPulseNamespaceInitializationRoot(RootId RootId, Guid 
 /// <remarks>Version 3 explicitly admits an empty Adapter inventory with a selected recovery route.
 /// Versions 1 and 2 retain their nonempty root requirements and historical payloads.
 /// Version 4 explicitly selects one current root. Version 5 binds that selection
-/// to the original unsealed Label and registered born root for permission recovery
+/// to the original unsealed Label and registered root provenance for permission recovery
 /// before that same operation executes or cancels.</remarks>
 public sealed record MirrorPulseNamespaceInitializationIntent(int Version, Guid OperationId,
     IReadOnlyList<MirrorPulseNamespaceInitializationRoot> Roots, DateTimeOffset PreparedAt)
