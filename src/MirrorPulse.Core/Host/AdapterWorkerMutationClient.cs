@@ -24,7 +24,13 @@ public sealed class AdapterWorkerMutationClient
         public TaskCompletionSource<MutationReply> Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
-    private readonly record struct MutationReply(string? Revision, AdapterOwnedChildEffectReceipt? DirectoryReceipt = null);
+    private readonly record struct MutationReply(string? Revision, AdapterOwnedChildEffectReceipt? DirectoryReceipt = null)
+    {
+#if HOST_ATOMIC_DIRECTORY_CANDIDATE
+        internal AdapterDirectoryAdmission? Admission { get; init; }
+        internal AdapterAtomicDirectoryDeletionReceipt? AtomicReceipt { get; init; }
+#endif
+    }
 
     public AdapterWorkerMutationClient(
         AdapterWorkerReadRangeClient channel,
@@ -88,6 +94,44 @@ public sealed class AdapterWorkerMutationClient
         var reply = await SendCoreAsync(pending, cancellationToken).ConfigureAwait(false);
         return reply.DirectoryReceipt ?? throw new InvalidDataException("DirectoryRetirementReceiptRequired");
     }
+
+#if HOST_ATOMIC_DIRECTORY_CANDIDATE
+    internal void RequireAtomicDirectorySupport(AdapterDirectoryAdmissionRequest request)
+    {
+        var protocol = _channel.Protocol;
+        if (protocol?.ProtocolVersion != 2 || !protocol.Capabilities.Contains(AdapterOriginalDirectoryWire.Capability, StringComparer.Ordinal) ||
+            !protocol.Capabilities.Contains(AdapterAtomicDirectoryDeletionWire.Capability, StringComparer.Ordinal))
+            throw new NotSupportedException("AtomicDirectoryDeletionUnsupported");
+        if (request.InstanceId != _instanceId.Value) throw new InvalidDataException("InstanceMismatch");
+        request.Validate();
+        foreach (var step in request.Operations)
+        {
+            protocol.RequireActiveRoot(step.Operation.RootKey);
+            if (step.OperationKind != "Delete") throw new NotSupportedException("AtomicDirectoryDeletionRequiresDeletePlan");
+        }
+    }
+
+    internal async ValueTask<AdapterDirectoryAdmission> AdmitAtomicDirectoryAsync(AdapterDirectoryAdmissionRequest request, CancellationToken token)
+    {
+        RequireAtomicDirectorySupport(request);
+        var operation = request.Operations[^1].Operation;
+        var frame = new ControlFrameEnvelope(2, AdapterOriginalDirectoryWire.AdmissionRequestMessage, Guid.NewGuid(),
+            _instanceId, _sessionId, false, AdapterProtocolJson.ToElement(request));
+        var reply = await SendCoreAsync(new(frame, operation.OperationId, operation.RootKey), token).ConfigureAwait(false);
+        return reply.Admission ?? throw new InvalidDataException("OriginalDirectoryAdmissionRequired");
+    }
+
+    internal async ValueTask<AdapterAtomicDirectoryDeletionReceipt> DeleteAtomicDirectoryAsync(AdapterAtomicDirectoryDeletionRequest request,
+        CancellationToken token)
+    {
+        RequireAtomicDirectorySupport(request.OriginalRequest);
+        var operation = request.OriginalRequest.Operations[^1].Operation;
+        var frame = new ControlFrameEnvelope(2, AdapterAtomicDirectoryDeletionWire.RequestMessage, Guid.NewGuid(),
+            _instanceId, _sessionId, false, AdapterProtocolJson.ToElement(request));
+        var reply = await SendCoreAsync(new(frame, operation.OperationId, operation.RootKey), token).ConfigureAwait(false);
+        return reply.AtomicReceipt ?? throw new InvalidDataException("AtomicDirectoryDeletionReceiptRequired");
+    }
+#endif
 
     private async ValueTask<string?> SendAsync(
         string messageType,
@@ -167,6 +211,33 @@ public sealed class AdapterWorkerMutationClient
         }
 
         var completion = pending.Completion;
+#if HOST_ATOMIC_DIRECTORY_CANDIDATE
+        if (pending.Request.MessageType is AdapterOriginalDirectoryWire.AdmissionRequestMessage or AdapterAtomicDirectoryDeletionWire.RequestMessage)
+        {
+            if (frame.MessageType == "OperationError")
+            {
+                if (!frame.IsResponse || frame.ProtocolVersion != 2)
+                    throw new InvalidDataException("AtomicDirectoryResponseProtocolMismatch");
+                // Typed requests carry their addresses inside the body. Local emits
+                // a correlated envelope error without a separate root or operation.
+                string error = frame.Payload.GetProperty("code").GetString() ?? "Unknown";
+                completion.TrySetException(new AdapterWorkerOperationException(error));
+            }
+            else if (pending.Request.MessageType == AdapterOriginalDirectoryWire.AdmissionRequestMessage)
+            {
+                var admission = AdapterOriginalDirectoryWire.ReadAdmissionResponse(ToSdkFrame(pending.Request), ToSdkFrame(frame),
+                    _channel.Protocol?.Capabilities);
+                completion.TrySetResult(new MutationReply(null) { Admission = admission });
+            }
+            else
+            {
+                var receipt = AdapterAtomicDirectoryDeletionWire.ReadResponse(ToSdkFrame(pending.Request), ToSdkFrame(frame),
+                    _channel.Protocol?.Capabilities);
+                completion.TrySetResult(new MutationReply(null) { AtomicReceipt = receipt });
+            }
+            return ValueTask.CompletedTask;
+        }
+#endif
         if (pending.Request.MessageType == AdapterDirectoryRetirementWire.RequestMessage && frame.MessageType != "OperationError")
         {
             var receipt = AdapterDirectoryRetirementWire.ReadResponse(ToSdkFrame(pending.Request), ToSdkFrame(frame),

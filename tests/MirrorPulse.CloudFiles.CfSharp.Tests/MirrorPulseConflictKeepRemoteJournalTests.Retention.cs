@@ -181,7 +181,7 @@ public sealed partial class MirrorPulseConflictKeepRemoteJournalTests
         };
         await query.ExecuteNonQueryAsync();
         await Assert.ThrowsExactlyAsync<InvalidDataException>(async () => { await using var refused = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths); });
-        query.CommandText = "PRAGMA user_version;"; Assert.AreEqual(damage == "downgraded-nonempty" ? 94L : 106L, await query.ExecuteScalarAsync());
+        query.CommandText = "PRAGMA user_version;"; Assert.AreEqual(damage == "downgraded-nonempty" ? 94L : MirrorPulseProductCatalog.CurrentSchemaVersion, await query.ExecuteScalarAsync());
         query.CommandText = "SELECT state FROM user_commands WHERE command_id=$id;";
         query.Parameters.AddWithValue("$id", fixture.Copies.Preparation.Intent.CommandId.ToString("D"));
         Assert.AreEqual("pending", await query.ExecuteScalarAsync());

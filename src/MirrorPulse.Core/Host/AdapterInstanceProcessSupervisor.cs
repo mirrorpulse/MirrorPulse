@@ -158,6 +158,43 @@ public sealed class AdapterInstanceProcessSupervisor :
         finally { operation.Release(); }
     }
 
+#if HOST_ATOMIC_DIRECTORY_CANDIDATE
+    internal async ValueTask<AdapterAtomicDirectoryDeletionReceipt> ExecuteAtomicDirectoryDeletionAsync(
+        AdapterDirectoryAdmissionRequest original, CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(original);
+        original = AdapterProtocolJson.Decode<AdapterDirectoryAdmissionRequest>(AdapterProtocolJson.Encode(original));
+        original.Validate();
+        var retained = await _catalog.ReadAtomicDirectoryBatchAsync(original.AdmissionId, token).ConfigureAwait(false);
+        if (retained is not null && retained.Request.OriginalRequest.RequestFingerprint != original.RequestFingerprint)
+            throw new InvalidDataException("The original atomic directory admission request changed.");
+        if (retained?.Receipt is { } accepted) return accepted;
+        var instanceId = new InstanceId(original.InstanceId);
+        if (!IsConnected(instanceId) || !_mutations.TryGetValue(instanceId, out var client) ||
+            !_instanceOperations.TryGetValue(instanceId, out var gate))
+            throw new AdapterWorkerOperationException("Disconnected");
+
+        await gate.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            retained = await _catalog.ReadAtomicDirectoryBatchAsync(original.AdmissionId, token).ConfigureAwait(false);
+            if (retained is not null && retained.Request.OriginalRequest.RequestFingerprint != original.RequestFingerprint)
+                throw new InvalidDataException("The original atomic directory admission request changed.");
+            if (retained?.Receipt is { } completed) return completed;
+            client.RequireAtomicDirectorySupport(original);
+            if (retained is null)
+            {
+                var admission = await client.AdmitAtomicDirectoryAsync(original, token).ConfigureAwait(false);
+                retained = await _catalog.StartAtomicDirectoryBatchAsync(original, admission, token).ConfigureAwait(false);
+            }
+            if (retained.Receipt is { } alreadyAccepted) return alreadyAccepted;
+            var receipt = await client.DeleteAtomicDirectoryAsync(retained.Request, token).ConfigureAwait(false);
+            return await _catalog.AcceptAtomicDirectoryBatchAsync(original.AdmissionId, receipt, token).ConfigureAwait(false);
+        }
+        finally { gate.Release(); }
+    }
+#endif
+
     private async ValueTask<Stream> ReadRangeCoreAsync(
         MirrorPulseWorkerReadRangeRequest request,
         CancellationToken cancellationToken)

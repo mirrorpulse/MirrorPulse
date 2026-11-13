@@ -42,6 +42,11 @@ public sealed record MirrorPulseInstanceRuntimeState(
 /// </summary>
 public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
 {
+#if HOST_ATOMIC_DIRECTORY_CANDIDATE
+    public const long CurrentSchemaVersion = 107;
+#else
+    public const long CurrentSchemaVersion = 106;
+#endif
     private readonly FileStream _owner;
     private readonly SqliteConnection _connection;
     internal string WorkerStateRootPath { get; }
@@ -119,7 +124,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
                 version.CommandText = "PRAGMA user_version;";
                 currentVersion = (long)(await version.ExecuteScalarAsync(cancellationToken)
                     .ConfigureAwait(false) ?? 0L);
-                if (currentVersion > 106)
+                if (currentVersion > CurrentSchemaVersion)
                 {
                     throw new InvalidDataException("The MP product catalog schema is newer than this Host supports.");
                 }
@@ -541,6 +546,9 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
             await EnsureDirectoryAcceptanceSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
             await EnsureOriginalDirectoryRetirementSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
             await EnsureOriginalDirectoryPlanSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
+#if HOST_ATOMIC_DIRECTORY_CANDIDATE
+            await EnsureAtomicDirectoryBatchSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
+#endif
             openObservation.Mark(MirrorPulseCatalogOpenPhase.RecoverySchemaPrepared);
             openObservation.Mark(MirrorPulseCatalogOpenPhase.Completed);
             return catalog;

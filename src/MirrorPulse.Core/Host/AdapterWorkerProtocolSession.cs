@@ -95,6 +95,14 @@ public sealed class AdapterWorkerProtocolSession
             negotiated = offered.Contains(AdapterDirectoryEffects.Capability, StringComparer.Ordinal)
                 ? [.. RequiredCapabilities, AdapterDirectoryEffects.Capability]
                 : RequiredCapabilities;
+#if HOST_ATOMIC_DIRECTORY_CANDIDATE
+            if (offered.Contains(AdapterOriginalDirectoryWire.Capability, StringComparer.Ordinal))
+            {
+                negotiated = [.. negotiated, AdapterOriginalDirectoryWire.Capability];
+                if (offered.Contains(AdapterAtomicDirectoryDeletionWire.Capability, StringComparer.Ordinal))
+                    negotiated = [.. negotiated, AdapterAtomicDirectoryDeletionWire.Capability];
+            }
+#endif
         }
         else if (configured.Length > 1) throw new InvalidDataException("MultipleRootsRequireProtocolV2");
         return new(selected, configured, negotiated);

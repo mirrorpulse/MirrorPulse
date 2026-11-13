@@ -17,6 +17,9 @@ public sealed class MirrorPulseMutationProjectionRecovery(MirrorPulseProductCata
         {
             if (record.Intent.Origin != MirrorPulseMutationOrigin.Journal || record.State != MirrorPulseMutationState.RemoteAccepted ||
                 await isPending(record.Intent.OperationId, cancellationToken).ConfigureAwait(false)) continue;
+            // Directory-owned effects need the exact typed receipt and their own
+            // original-journal settlement before product projection can advance.
+            if (await catalog.HasTypedDirectoryMutationOwnerAsync(record.Intent.OperationId, cancellationToken).ConfigureAwait(false)) continue;
             if (!record.Intent.IsDirectory && record.Intent.Kind is MirrorPulseWorkerChangeKind.Create or MirrorPulseWorkerChangeKind.ContentUpdate)
             {
                 if (record.Intent.UploadBinding is null)
