@@ -37,10 +37,9 @@ public sealed partial class MirrorPulseAtomicDirectoryJournalTests
         var router = new MirrorPulseRootRouter(fixture.Paths.SyncRootPath, [registration]);
         string cache = Path.Combine(fixture.Paths.DataRootPath, "transfer-cache");
         string owned = Path.Combine(cache, "temporary", "mp-local-atomic-" + Guid.NewGuid().ToString("N"));
-        string backend = Path.Combine(owned, "source");
+        string backend = Path.Combine(owned, "configured-storage");
         string backendTree = Path.Combine(backend, "tree");
         Directory.CreateDirectory(backendTree);
-        await File.WriteAllTextAsync(Path.Combine(owned, ".mp-atomic-test-fixture"), Path.GetFileName(owned), token);
         await File.WriteAllTextAsync(Path.Combine(backendTree, "leaf.txt"), "original bytes", token);
         await File.WriteAllTextAsync(Path.Combine(backend, "peer.txt"), "peer bytes", token);
         var manifest = new AdapterManifest(1, adapter, "Atomic Local fixture", "1.0.0", new(2, 2),
