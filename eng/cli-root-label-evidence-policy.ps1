@@ -14,11 +14,11 @@ function Assert-CliRootLabelLifecycleEvidence {
         if ([string]$Value -cnotmatch '\A[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\z' -or
             [guid]::Parse([string]$Value) -eq [guid]::Empty) { throw 'An original stable root identity is missing.' }
     }
-    foreach ($field in @('defaultHostIntegrated','actualWorkerRequired','preparedIntentAcrossNewRole','interruptedNativeExecution','journalAckReceiptInspected')) {
+    foreach ($field in @('defaultHostIntegrated','actualWorkerRequired','interruptedNativeExecution','journalAckReceiptInspected')) {
         if ($Evidence.$field -isnot [bool]) { throw 'Lifecycle evidence requires actual Boolean observations.' }
     }
-    if ($Evidence.schemaVersion -ne 1 -or $Evidence.defaultHostIntegrated -ne $true -or $Evidence.actualWorkerRequired -ne $true -or
-        $Evidence.preparedIntentAcrossNewRole -ne $false -or $Evidence.interruptedNativeExecution -ne $false -or
+    if ($Evidence.schemaVersion -ne 2 -or $Evidence.defaultHostIntegrated -ne $true -or $Evidence.actualWorkerRequired -ne $true -or
+        $Evidence.interruptedNativeExecution -ne $false -or
         $Evidence.journalAckReceiptInspected -ne $false -or $Evidence.memberCount -lt 3) { throw 'Require the exact public Host lifecycle boundary without unexecuted recovery or ACK claims.' }
     foreach ($field in @('rootId','instanceId','memberId','nativeItemId')) { Require-RootLabelGuid $Evidence.$field }
     $executions = @($Evidence.executions)
@@ -55,6 +55,7 @@ function Assert-CliRootLabelLifecycleEvidence {
         $previous -cne $Evidence.restoredDirectoryName) { throw 'Require an actual case-only Label and restoration of the fixture name.' }
     foreach ($pair in @(@{phase='active-restart';record=$Evidence.activeRestart},
         @{phase='disabled-selection-restart';record=$Evidence.disabledSelectionRestart},
+        @{phase='disabled-case-prepared-restart';record=$case.preparedRestart},
         @{phase='disabled-restart';record=$Evidence.disabledRestart},@{phase='restored-restart';record=$Evidence.restoredRestart})) {
         $before = Read-RootLabelOriginal ($pair.phase + '-before')
         $after = Read-RootLabelOriginal ($pair.phase + '-after')
@@ -64,9 +65,26 @@ function Assert-CliRootLabelLifecycleEvidence {
             $before.processId -eq $after.processId -or $pair.record.previousProcessId -ne $before.processId -or
             $pair.record.currentProcessId -ne $after.processId) { throw 'Require the actual original and independently restarted Host process identities.' }
     }
+    $executionHost = Read-RootLabelOriginal 'disabled-case-execution-host'
     if ($Evidence.disabledSelectionRestart.previousProcessId -ne $Evidence.activeRestart.currentProcessId -or
-        $Evidence.disabledSelectionRestart.currentProcessId -ne $Evidence.disabledRestart.previousProcessId) {
+        $Evidence.disabledSelectionRestart.currentProcessId -ne $case.preparedRestart.previousProcessId -or
+        $case.preparedRestart.currentProcessId -ne $Evidence.disabledRestart.previousProcessId -or
+        $executionHost.processId -ne $case.preparedRestart.currentProcessId) {
         throw 'Disabled selection and the later Label must retain their actual independently restarted Host process chain.'
+    }
+    foreach ($phase in @('disabled-case-prepared','disabled-case-recovered')) {
+        $roots = @(Read-RootLabelOriginal ($phase + '-roots'))
+        $status = Read-RootLabelOriginal ($phase + '-status')
+        $root = @($roots | Where-Object { $_.root.rootId -ceq $Evidence.rootId })
+        $instance = @($status.instances | Where-Object instanceId -ceq $Evidence.instanceId)
+        if ($root.Count -ne 1 -or $instance.Count -ne 1 -or
+            $root[0].root.directoryName -cne $case.sourceName -or $root[0].root.label -cne $case.sourceName -or
+            $root[0].syncState -cne 'NamespaceRecovery' -or $root[0].pendingRename.operationId -cne $case.operationId -or
+            $root[0].pendingRename.phase -cne 'Prepared' -or $root[0].namespaceReady -isnot [bool] -or
+            $root[0].namespaceReady -ne $false -or $instance[0].phase -cne 'Offline' -or
+            $instance[0].workerConnected -isnot [bool] -or $instance[0].workerConnected -ne $false) {
+            throw 'The original pending Label and disabled isolation must survive the Host restart.'
+        }
     }
     foreach ($phase in @('active','active-restarted','disabled-case','disabled-restarted','restore','restored')) {
         $disabled = $phase -cin @('disabled-case','disabled-restarted','restore')

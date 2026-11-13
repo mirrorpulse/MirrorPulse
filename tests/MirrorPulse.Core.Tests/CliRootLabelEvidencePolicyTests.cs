@@ -24,6 +24,10 @@ public sealed class CliRootLabelEvidencePolicyTests
     [DataRow("disabled-selection-exit-string")]
     [DataRow("disabled-selection-foreign-receipt")]
     [DataRow("disabled-selection-missing-start")]
+    [DataRow("prepared-restart-same-host")]
+    [DataRow("recovered-foreign-operation")]
+    [DataRow("recovered-early-admission")]
+    [DataRow("wrong-execution-host")]
     [DataRow("old-label-reverted")]
     [DataRow("changed-bytes")]
     [DataRow("invented-ack")]
@@ -52,6 +56,10 @@ public sealed class CliRootLabelEvidencePolicyTests
                 case "disabled-selection-exit-string": evidence["disabledSelectionRestart"]!["previousProcessExited"] = "true"; break;
                 case "disabled-selection-foreign-receipt": evidence["disabledSelectionRestart"]!["currentProcessId"] = 999; break;
                 case "disabled-selection-missing-start": File.Delete(Path.Combine(directory, "disabled-selection-restart-start.json")); break;
+                case "prepared-restart-same-host": ChangeOriginal(directory, "disabled-case-prepared-restart-after", node => node["processId"] = 103); break;
+                case "recovered-foreign-operation": ChangeOriginal(directory, "disabled-case-recovered-roots", node => node[0]!["pendingRename"]!["operationId"] = Guid.NewGuid().ToString("D")); break;
+                case "recovered-early-admission": ChangeOriginal(directory, "disabled-case-recovered-roots", node => node[0]!["namespaceReady"] = true); break;
+                case "wrong-execution-host": ChangeOriginal(directory, "disabled-case-execution-host", node => node["processId"] = 103); break;
                 case "old-label-reverted": ChangeOriginal(directory, "historical-replay", node => node["currentDirectoryName"] = "Docs Label"); break;
                 case "changed-bytes":
                     string path = Path.Combine(directory, "active-restarted-bytes.json");
@@ -155,7 +163,7 @@ public sealed class CliRootLabelEvidencePolicyTests
         Original("historical-replay", historical);
         var evidence = new JsonObject
         {
-            ["schemaVersion"] = 1,
+            ["schemaVersion"] = 2,
             ["rootId"] = root,
             ["instanceId"] = instance,
             ["memberId"] = member,
@@ -167,19 +175,36 @@ public sealed class CliRootLabelEvidencePolicyTests
             ["restoredDirectoryName"] = "Docs",
             ["defaultHostIntegrated"] = true,
             ["actualWorkerRequired"] = true,
-            ["preparedIntentAcrossNewRole"] = false,
             ["interruptedNativeExecution"] = false,
             ["journalAckReceiptInspected"] = false
         };
         int process = 101;
         foreach (var pair in new (string Phase, string Field)[] { ("active-restart", "activeRestart"), ("disabled-selection-restart", "disabledSelectionRestart"),
-            ("disabled-restart", "disabledRestart"), ("restored-restart", "restoredRestart") })
+            ("disabled-case-prepared-restart", "preparedRestart"), ("disabled-restart", "disabledRestart"), ("restored-restart", "restoredRestart") })
         {
             Original(pair.Phase + "-before", new JsonObject { ["processId"] = process });
             Original(pair.Phase + "-stop", new JsonObject { ["processId"] = process });
             Original(pair.Phase + "-start", new JsonObject { ["processId"] = process + 1 });
             Original(pair.Phase + "-after", new JsonObject { ["processId"] = process + 1 });
-            evidence[pair.Field] = new JsonObject { ["previousProcessId"] = process, ["currentProcessId"] = process + 1, ["previousProcessExited"] = true }; process++;
+            JsonObject owner = pair.Field == "preparedRestart" ? executions[1]!.AsObject() : evidence;
+            owner[pair.Field] = new JsonObject { ["previousProcessId"] = process, ["currentProcessId"] = process + 1, ["previousProcessExited"] = true };
+            process++;
+        }
+        var disabledCase = executions[1]!;
+        Original("disabled-case-execution-host", new JsonObject { ["processId"] = disabledCase["preparedRestart"]!["currentProcessId"]!.DeepClone() });
+        foreach (string phase in new[] { "disabled-case-prepared", "disabled-case-recovered" })
+        {
+            Original(phase + "-roots", new JsonArray(new JsonObject
+            {
+                ["root"] = new JsonObject { ["rootId"] = root, ["directoryName"] = "Docs Label", ["label"] = "Docs Label" },
+                ["syncState"] = "NamespaceRecovery",
+                ["namespaceReady"] = false,
+                ["pendingRename"] = new JsonObject { ["operationId"] = disabledCase["operationId"]!.DeepClone(), ["phase"] = "Prepared" }
+            }));
+            Original(phase + "-status", new JsonObject
+            {
+                ["instances"] = new JsonArray(new JsonObject { ["instanceId"] = instance, ["phase"] = "Offline", ["workerConnected"] = false })
+            });
         }
         return evidence;
     }

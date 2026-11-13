@@ -17,7 +17,7 @@ function Invoke-CliRootLabelLifecycle {
         }
         return $response.data
     }
-    function Read-RootLabelState([string]$Phase, [string]$Name, [bool]$Disabled) {
+    function Read-RootLabelState([string]$Phase, [string]$Name, [bool]$Disabled, [AllowNull()][string]$PendingOperation) {
         $deadline = [DateTime]::UtcNow.AddSeconds(30)
         do {
             $roots = Invoke-RootLabelCli ($Phase + '-roots') @('root', 'list')
@@ -26,9 +26,10 @@ function Invoke-CliRootLabelLifecycle {
             $instance = @($status.instances | Where-Object instanceId -ceq $InstanceId)
             if ($selected.Count -eq 1 -and $instance.Count -eq 1 -and
                 $selected[0].root.directoryName -ceq $Name -and $selected[0].root.label -ceq $Name -and
-                $selected[0].syncState -ceq $(if ($Disabled) { 'Disabled' } else { 'Active' }) -and
-                $null -eq $selected[0].pendingRename -and $selected[0].namespaceReady -is [bool] -and
-                $selected[0].namespaceReady -eq (-not $Disabled) -and
+                $selected[0].syncState -ceq $(if ($PendingOperation) { 'NamespaceRecovery' } elseif ($Disabled) { 'Disabled' } else { 'Active' }) -and
+                $(if ($PendingOperation) { $selected[0].pendingRename.operationId -ceq $PendingOperation -and
+                    $selected[0].pendingRename.phase -ceq 'Prepared' } else { $null -eq $selected[0].pendingRename }) -and
+                $selected[0].namespaceReady -is [bool] -and $selected[0].namespaceReady -eq (-not ($Disabled -or $PendingOperation)) -and
                 $(if ($Disabled) { $instance[0].phase -ceq 'Offline' -and -not $instance[0].workerConnected }
                   else { $selected[0].namespaceReady -eq $true -and $instance[0].workerConnected -eq $true })) {
                 return $selected[0]
@@ -93,16 +94,28 @@ function Invoke-CliRootLabelLifecycle {
         if ($prepared.rootId -cne $RootId -or $prepared.sourceName -cne $SourceName -or
             $prepared.targetName -cne $TargetName -or $prepared.phase -cne 'Prepared' -or
             [guid]::Parse($prepared.operationId) -eq [guid]::Empty) { throw 'The public preparation did not preserve its original root and endpoints.' }
+        $preparedRestart = $null
+        if ($Phase -ceq 'disabled-case') {
+            Read-RootLabelState 'disabled-case-prepared' $SourceName $true $prepared.operationId | Out-Null
+            $preparedRestart = Restart-RootLabelHost 'disabled-case-prepared-restart'
+            Read-RootLabelState 'disabled-case-recovered' $SourceName $true $prepared.operationId | Out-Null
+        }
         $completed = Invoke-RootLabelCli ($Phase + '-execute') @('root', 'execute-rename', $prepared.operationId)
         if ($completed.operationId -cne $prepared.operationId -or $completed.rootId -cne $RootId -or
             $completed.phase -cne 'Completed' -or $completed.sourceName -cne $SourceName -or $completed.targetName -cne $TargetName -or
             $completed.currentDirectoryName -cne $TargetName -or $completed.memberCount -ne $tree.Count -or
             $completed.currentTreeAudited -ne $true -or ($Disabled -and $completed.namespaceReady -ne $false)) { throw 'The public root command did not return its complete original local receipt and fresh audit.' }
+        if ($preparedRestart) {
+            $executionHost = Invoke-RootLabelCli 'disabled-case-execution-host' @('host', 'status')
+            if ($executionHost.processId -ne $preparedRestart.currentProcessId) {
+                throw 'The prepared Label did not execute in the independently restarted Host.'
+            }
+        }
         Read-RootLabelState $Phase $TargetName $Disabled | Out-Null
         Assert-RootLabelTree $Phase $TargetName
         $records.Add([ordered]@{phase=$Phase;operationId=$prepared.operationId;rootId=$RootId;memberId=$member.memberId;
             nativeItemId=$member.nativeItemId;sourceName=$SourceName;targetName=$TargetName;memberCount=$tree.Count;
-            currentTreeAudited=$true;disabled=$Disabled;originalReceipt=$completed})
+            currentTreeAudited=$true;disabled=$Disabled;originalReceipt=$completed;preparedRestart=$preparedRestart})
         return $completed
     }
     $label = $DirectoryName + ' Label'
@@ -134,11 +147,11 @@ function Invoke-CliRootLabelLifecycle {
     $finalRestart = Restart-RootLabelHost 'restored-restart'
     Read-RootLabelState 'restored' $DirectoryName $false | Out-Null
     Assert-RootLabelTree 'restored' $DirectoryName
-    $result = [ordered]@{schemaVersion=1;rootId=$RootId;instanceId=$InstanceId;memberId=$member.memberId;nativeItemId=$member.nativeItemId;
+    $result = [ordered]@{schemaVersion=2;rootId=$RootId;instanceId=$InstanceId;memberId=$member.memberId;nativeItemId=$member.nativeItemId;
         memberCount=$tree.Count;executions=$records.ToArray();residentAndSourceBytes=$bytes;
         activeRestart=$activeRestart;disabledSelectionRestart=$disabledSelectionRestart;disabledRestart=$disabledRestart;restoredRestart=$finalRestart;
         historicalReplay=$historical;restoredDirectoryName=$DirectoryName;defaultHostIntegrated=$true;
-        actualWorkerRequired=$true;preparedIntentAcrossNewRole=$false;interruptedNativeExecution=$false;journalAckReceiptInspected=$false}
+        actualWorkerRequired=$true;interruptedNativeExecution=$false;journalAckReceiptInspected=$false}
     if ($originals) { $result | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $originals 'completed.json') -Encoding utf8 }
     return $result
 }
