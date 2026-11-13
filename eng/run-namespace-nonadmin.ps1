@@ -48,6 +48,15 @@ try {
     $env:MIRRORPULSE_NATIVE_TEST = '1'
     $env:MIRRORPULSE_NAMESPACE_TEST_ARCHITECTURE = $architecture
     $env:MIRRORPULSE_NAMESPACE_REQUIRE_NONADMIN = '1'
+    if ($configuration.signedAtomicDirectoryPackage) {
+        $package = Join-Path $PSScriptRoot 'Local.mpadapter'
+        if ($configuration.signedAtomicDirectoryPackage -cne $package -or
+            (Get-FileHash -LiteralPath $package).Hash -cne $configuration.signedAtomicDirectoryPackageSha256 -or
+            (Get-FileHash -LiteralPath ($package + '.signature.json')).Hash -cne $configuration.signedAtomicDirectorySignatureSha256) {
+            throw 'The signed Local acceptance input differs from the controller copy.'
+        }
+        $env:MP_SIGNED_LOCAL_PACKAGE = $package
+    }
     New-Item -ItemType Directory -Path $env:TEMP -Force | Out-Null
     [ordered]@{ schemaVersion=1; architecture=$architecture; nonAdministrator=$true; expectedUserMatched=$true;
         profileLoaded=$true } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $configuration.workDirectory 'context.json') -Encoding utf8

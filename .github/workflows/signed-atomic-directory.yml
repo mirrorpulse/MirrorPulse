@@ -1,0 +1,91 @@
+name: Signed Local atomic directory acceptance
+
+on:
+  workflow_call:
+    inputs:
+      local_preview:
+        description: Published Local preview tag to qualify instead of the stable release
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  freeze:
+    runs-on: windows-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Verify and freeze one official Local package
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MP_LOCAL_PREVIEW: ${{ inputs.local_preview }}
+        run: |
+          $argsForResolve = @{ OutputPath = 'artifacts/atomic-directory-release-lock.json' }
+          $preview = -not [string]::IsNullOrWhiteSpace($env:MP_LOCAL_PREVIEW)
+          if ($preview) {
+            New-Item -ItemType Directory -Path artifacts -Force | Out-Null
+            @{ schemaVersion = 1; adapters = @(@{ adapterId = 'com.mirrorpulse.adapter.local'; tag = $env:MP_LOCAL_PREVIEW }) } |
+              ConvertTo-Json -Depth 4 | Set-Content -LiteralPath artifacts/atomic-directory-preview.json -Encoding utf8
+            $argsForResolve.PreviewReleaseMapPath = 'artifacts/atomic-directory-preview.json'
+          }
+          ./eng/resolve-official-adapter-releases.ps1 @argsForResolve
+          ./eng/aggregate-official-adapters.ps1 -ReleaseLockPath $argsForResolve.OutputPath `
+            -AdapterIds com.mirrorpulse.adapter.local -OutputDirectory artifacts/atomic-directory-local -AllowPreview:$preview
+          ./eng/restore-adapter-sdk.ps1
+      - uses: actions/upload-artifact@043fb46d1a93c77ae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: signed-atomic-directory-inputs
+          path: |
+            artifacts/atomic-directory-local
+            artifacts/atomic-directory-release-lock.json
+            artifacts/sdk-feed
+          if-no-files-found: error
+
+  verify:
+    needs: freeze
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            architecture: X64
+          - runner: windows-11-arm
+            architecture: Arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          global-json-file: global.json
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v6
+        with:
+          name: signed-atomic-directory-inputs
+          path: artifacts
+      - name: Restore and build the native acceptance assembly
+        shell: pwsh
+        run: |
+          ./eng/restore-adapter-sdk.ps1 -RequireCachedPackage
+          dotnet restore tests/MirrorPulse.CloudFiles.CfSharp.Tests --locked-mode
+          if ($LASTEXITCODE -ne 0) { throw 'Locked native restore failed.' }
+          dotnet build tests/MirrorPulse.CloudFiles.CfSharp.Tests -c Release --no-restore
+          if ($LASTEXITCODE -ne 0) { throw 'The native acceptance assembly could not build.' }
+      - name: Verify original directory deletion through the installed signed Local Worker
+        shell: pwsh
+        env:
+          MP_TEST_ARCHITECTURE: ${{ matrix.architecture }}
+        run: |
+          ./eng/prepare-native-ci-volume.ps1
+          $packages = @(Get-ChildItem -LiteralPath artifacts/atomic-directory-local -Recurse -Filter '*.mpadapter' -File)
+          if ($packages.Count -ne 1) { throw 'Require the one frozen official Local package.' }
+          ./eng/verify-namespace-nonadmin.ps1 -ExpectedArchitecture $env:MP_TEST_ARCHITECTURE `
+            -SignedAtomicDirectoryPackage $packages[0].FullName
+      - uses: actions/upload-artifact@043fb46d1a93c77ae656e7c1c64a875d1fc6a0a # v7
+        if: always()
+        with:
+          name: signed-atomic-directory-${{ matrix.runner }}-originals
+          path: artifacts/test-results/signed-atomic-directory-nonadmin-*/
+          if-no-files-found: ignore

@@ -1,6 +1,11 @@
 {
   "schemaVersion": 1,
   "requiredCases": {
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseAtomicDirectoryJournalTests.NativeAtomicDirectoryPumpRecoversAroundPublicFeedAcknowledgementAndRetainsTheLaterDelete": [
+      "NativeAtomicDirectoryPumpRecoversAroundPublicFeedAcknowledgementAndRetainsTheLaterDelete (False,False)",
+      "NativeAtomicDirectoryPumpRecoversAroundPublicFeedAcknowledgementAndRetainsTheLaterDelete (True,False)",
+      "NativeAtomicDirectoryPumpRecoversAroundPublicFeedAcknowledgementAndRetainsTheLaterDelete (False,True)"
+    ],
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicRuntimeExecutesUnsealedBornRootLabelAcrossDisposedRoles": [
       "NativePublicRuntimeExecutesUnsealedBornRootLabelAcrossDisposedRoles (False)",
       "NativePublicRuntimeExecutesUnsealedBornRootLabelAcrossDisposedRoles (True)"
@@ -91,6 +96,11 @@
     ]
   },
   "allowSkipped": [
+    "MirrorPulse.Core.Tests.AdapterWorkerV2SessionTests.RealHostAndLocalWorkerRecoverWholeBatchAfterCatalogCommitInterruption",
+    "MirrorPulse.Core.Tests.AdapterWorkerV2SessionTests.AtomicDirectoryReservationRollsBackAllOwnersBeforeAnyWorkerMutation",
+    "MirrorPulse.Core.Tests.AdapterWorkerV2SessionTests.AtomicBatchLedgerMigratesSchema106AndRefusesLostSchema107Evidence",
+    "MirrorPulse.Core.Tests.AdapterWorkerV2SessionTests.RealHostAndLocalWorkerRecoverWhenTheWorkerExitsAfterCommitWithoutReplying",
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseAtomicDirectoryJournalTests.NativeAtomicDirectoryPumpRecoversAroundPublicFeedAcknowledgementAndRetainsTheLaterDelete",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.SignedLocalKeepRemoteAfterAcknowledgedMovePreservesActualVersionsAndOriginalJournalAcrossOwners",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.SignedLocalKeepRemoteControlledCreatePreservesActualVersionsAndOriginalBirthAcrossOwners",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeRootLabelPreparationSealsOnlyItsOriginalProtectedSubtreeAcrossOwners",
@@ -310,6 +320,9 @@
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeLocalTombstoneDeleteRecoversActualSdkReceiptAcrossFreshRoles"
   ],
   "required": {
+    "signedAtomicDirectory": [
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseAtomicDirectoryJournalTests.NativeAtomicDirectoryPumpRecoversAroundPublicFeedAcknowledgementAndRetainsTheLaterDelete"
+    ],
     "deferredP079": [
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeP079SameInstanceTransferRetainsSourceAndBothFencesAfterOriginalCopyAndWholeTargetVerification",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeP079SameInstanceTransferDeletesOnlyOriginalRemoteSourceWhileRetainingGuardedLocalBytes",

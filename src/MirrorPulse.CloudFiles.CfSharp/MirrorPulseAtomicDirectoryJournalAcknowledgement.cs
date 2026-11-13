@@ -1,4 +1,3 @@
-#if HOST_ATOMIC_DIRECTORY_CANDIDATE
 using System.Runtime.Versioning;
 using CfSharp;
 using MirrorPulse.Core.State;
@@ -46,4 +45,3 @@ internal sealed class MirrorPulseAtomicDirectoryJournalAcknowledgement(MirrorPul
         return pending;
     }
 }
-#endif

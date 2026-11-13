@@ -1,5 +1,6 @@
-#if HOST_ATOMIC_DIRECTORY_CANDIDATE
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using System.Security.Cryptography;
 using CfSharp;
 using MirrorPulse.Core.CloudFiles;
 using MirrorPulse.Core.Contracts;
@@ -12,29 +13,24 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 
 public sealed partial class MirrorPulseAtomicDirectoryJournalTests
 {
-    [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles")]
+    public TestContext TestContext { get; set; } = null!;
+
+    [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles"), TestCategory("SignedAtomicDirectory")]
     [DataRow(false, false)]
     [DataRow(true, false)]
     [DataRow(false, true)]
     [SupportedOSPlatform("windows10.0.26100")]
     public async Task NativeAtomicDirectoryPumpRecoversAroundPublicFeedAcknowledgementAndRetainsTheLaterDelete(
-        bool failOfficialCommit, bool loseWorkerReply)
+        bool failOfficialCommit, bool failHostReceiptCommit)
     {
-        if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
+        string? package = Environment.GetEnvironmentVariable("MP_SIGNED_LOCAL_PACKAGE");
+        string? executable = Environment.GetEnvironmentVariable("MP_S06_ATOMIC_LOCAL_WORKER_EXE");
+        if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1" || (package is null && executable is null))
             Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
         MirrorPulseNamespaceExecutionSessionTests.AssertExpectedArchitecture();
-        string executable = Environment.GetEnvironmentVariable("MP_S06_ATOMIC_LOCAL_WORKER_EXE")
-            ?? throw new InvalidOperationException("The native gate requires the real Local Worker candidate.");
-        Assert.IsTrue(File.Exists(executable));
         using var fixture = new Fixture();
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(60));
         CancellationToken token = deadline.Token;
-        var instance = InstanceId.New();
-        var adapter = new AdapterId("example.atomic-local");
-        var installationId = InstallId.New();
-        var registration = new RootRegistration(adapter, instance, RootId.New(), "docs", "Docs", "Docs", false,
-            RootRegistrationState.Active, DateTimeOffset.UtcNow, RootIdentityScope.InstanceRoot);
-        var router = new MirrorPulseRootRouter(fixture.Paths.SyncRootPath, [registration]);
         string cache = Path.Combine(fixture.Paths.DataRootPath, "transfer-cache");
         string owned = Path.Combine(cache, "temporary", "mp-local-atomic-" + Guid.NewGuid().ToString("N"));
         string backend = Path.Combine(owned, "configured-storage");
@@ -42,15 +38,11 @@ public sealed partial class MirrorPulseAtomicDirectoryJournalTests
         Directory.CreateDirectory(backendTree);
         await File.WriteAllTextAsync(Path.Combine(backendTree, "leaf.txt"), "original bytes", token);
         await File.WriteAllTextAsync(Path.Combine(backend, "peer.txt"), "peer bytes", token);
-        var manifest = new AdapterManifest(1, adapter, "Atomic Local fixture", "1.0.0", new(2, 2),
-            new Dictionary<string, string> { ["win-x64"] = Path.GetFileName(executable), ["win-arm64"] = Path.GetFileName(executable) },
-            new(null), new(null, null), new(true, false, true, true), ["en-US"], "1.0.0");
-        var installation = new InstalledAdapter(manifest, installationId, Path.GetDirectoryName(executable)!,
-            new(new string('A', 64)), AdapterInstallSource.LocalFile, null, true, DateTimeOffset.UtcNow, AdapterLifecycleState.Installed);
-        var configuration = new AdapterInstance(adapter, installationId, instance, "Atomic Local",
-            new Dictionary<string, string> { ["root.docs.sourceDirectory"] = backend }, [], Path.Combine(fixture.Paths.DataRootPath, "files"),
-            cache, true, AdapterLifecycleState.Enabled, null, DateTimeOffset.UtcNow);
-        var topology = new MirrorPulseAdapterTopology([installation], [configuration], [registration]);
+        var topology = await PrepareTopologyAsync();
+        var registration = topology.Roots.Single();
+        var instance = registration.InstanceId;
+        string rootKey = registration.UniquenessKey;
+        var router = new MirrorPulseRootRouter(fixture.Paths.SyncRootPath, topology.Roots);
         var registry = new CfSharpMirrorPulseCloudRootRegistry();
         bool registered = false;
         try
@@ -78,6 +70,7 @@ public sealed partial class MirrorPulseAtomicDirectoryJournalTests
                 await catalog.SaveAdapterTopologyAsync(topology, token);
                 await worker.StartAsync(topology);
                 while (!worker.IsConnected(instance)) await Task.Delay(25, token);
+                Assert.IsTrue(worker.SupportsAtomicDirectoryDeletion(instance));
                 await ApplyOriginalPlaceholdersAsync(sdk, worker);
                 await using var feed = sdk.CreateLocalChangeFeed();
                 await feed.StartAsync(token);
@@ -88,10 +81,9 @@ public sealed partial class MirrorPulseAtomicDirectoryJournalTests
                 admissionId = tree.OperationId;
                 originals = [leaf.OperationId, tree.OperationId];
                 if (failOfficialCommit) sdkFault.Arm(tree.OperationId);
-                string lostReply = Path.Combine(workerState, admissionId.ToString("N") + ".fixture-lose-reply");
-                if (loseWorkerReply)
+                string nativeReceiptPath = Path.Combine(workerState, admissionId.ToString("N") + ".committed.json");
+                if (failHostReceiptCommit)
                 {
-                    await File.WriteAllTextAsync(lostReply, string.Empty, token);
                     await fixture.ProductSqlAsync("""
                         CREATE TRIGGER interrupt_native_receipt BEFORE UPDATE OF receipt ON original_atomic_directory_batches
                         BEGIN SELECT RAISE(ABORT,'interrupted native receipt'); END;
@@ -115,10 +107,10 @@ public sealed partial class MirrorPulseAtomicDirectoryJournalTests
                     ranges: transport, directories: transport, fileSystem: sdk, namespaceWork: work))
                 {
                     await pump.StartAsync(token);
-                    if (loseWorkerReply)
+                    if (failHostReceiptCommit)
                     {
-                        while (!File.Exists(lostReply + ".observed")) await Task.Delay(25, token);
-                        nativeReceipt = await File.ReadAllBytesAsync(Path.Combine(workerState, admissionId.ToString("N") + ".committed.json"), token);
+                        while (!File.Exists(nativeReceiptPath)) await Task.Delay(25, token);
+                        nativeReceipt = await File.ReadAllBytesAsync(nativeReceiptPath, token);
                         Assert.IsNull((await catalog.ReadAtomicDirectoryBatchAsync(admissionId, token))!.Receipt);
                         foreach (Guid original in originals) Assert.IsTrue(await IsPendingAsync(state.OpenStore, original));
                     }
@@ -134,7 +126,7 @@ public sealed partial class MirrorPulseAtomicDirectoryJournalTests
                         Assert.IsFalse(await IsPendingAsync(state.OpenStore, leaf.OperationId));
                     }
                     Assert.IsFalse(Directory.Exists(backendTree));
-                    if (!loseWorkerReply)
+                    if (!failHostReceiptCommit)
                     {
                         var retained = await catalog.ReadAcceptedAtomicDirectoryJournalAsync(admissionId, token);
                         Assert.IsNotNull(retained.ReceiptFingerprint);
@@ -150,7 +142,7 @@ public sealed partial class MirrorPulseAtomicDirectoryJournalTests
                     .Any(operation => operation.RelativePath == "Docs/tree"));
                 CollectionAssert.AreEquivalent(originals,
                     (await catalog.ReadUnsettledAtomicDirectoryOperationIdsAsync(token)).ToArray());
-                if (loseWorkerReply) await catalog.BeginFullRescanAsync(token);
+                if (failHostReceiptCommit) await catalog.BeginFullRescanAsync(token);
                 else
                 {
                     await sdk.GetFile("Docs/peer.txt").DeleteAsync(token);
@@ -159,7 +151,7 @@ public sealed partial class MirrorPulseAtomicDirectoryJournalTests
                 }
             }
             await fixture.ProductSqlAsync("DROP TRIGGER interrupt_native_atomic_ack;");
-            if (loseWorkerReply) await fixture.ProductSqlAsync("DROP TRIGGER interrupt_native_receipt;");
+            if (failHostReceiptCommit) await fixture.ProductSqlAsync("DROP TRIGGER interrupt_native_receipt;");
             Directory.CreateDirectory(backendTree);
             await File.WriteAllTextAsync(Path.Combine(backendTree, "leaf.txt"), "successor bytes", token);
             var reopenedState = new MirrorPulseCfSharpStateSession(fixture.Paths);
@@ -174,7 +166,7 @@ public sealed partial class MirrorPulseAtomicDirectoryJournalTests
             await using var restartedExecution = new MirrorPulseNamespaceExecutionSession();
             var restartedTransport = new MirrorPulseNormalUserWorkerTransport(restartedExecution,
                 restartedWorker, restartedWorker, restartedWorker, restartedWorker, restartedWorker);
-            if (loseWorkerReply)
+            if (failHostReceiptCommit)
             {
                 Assert.IsNotNull(await reopenedCatalog.ReadFullRescanAsync(token));
                 await restartedWorker.StartAsync(topology);
@@ -185,7 +177,7 @@ public sealed partial class MirrorPulseAtomicDirectoryJournalTests
             var reopenedCompletion = new MirrorPulseJournalUploadCompletion(reopenedFeed, reopenedState,
                 new BackoffPolicy(TimeSpan.FromMilliseconds(100), TimeSpan.FromSeconds(1)));
             await using var recovery = new MirrorPulseJournalUploadPump(reopenedFeed, router, reopenedCatalog, restartedTransport, restartedTransport,
-                reopenedState, fixture.Paths.SyncRootPath, fixture.Paths.DataRootPath, _ => loseWorkerReply, reopenedCompletion,
+                reopenedState, fixture.Paths.SyncRootPath, fixture.Paths.DataRootPath, _ => failHostReceiptCommit, reopenedCompletion,
                 mutations: restartedTransport, ranges: restartedTransport, directories: restartedTransport, fileSystem: reopenedSdk, namespaceWork: restartedWork);
             await recovery.StartAsync(token);
             while (!(await reopenedCatalog.ReadAtomicDirectoryJournalAsync(admissionId, token)).Completed)
@@ -207,6 +199,12 @@ public sealed partial class MirrorPulseAtomicDirectoryJournalTests
             }
             Assert.AreEqual("successor bytes", await File.ReadAllTextAsync(Path.Combine(backendTree, "leaf.txt"), token));
             Assert.AreEqual("peer bytes", await File.ReadAllTextAsync(Path.Combine(backend, "peer.txt"), token));
+            if (package is not null)
+            {
+                await using var packageStream = File.OpenRead(package);
+                string digest = Convert.ToHexString(await SHA256.HashDataAsync(packageStream, token));
+                TestContext.WriteLine($"SignedAtomicDirectory: packageSha256={digest}; originalCount={originals.Length}; failOfficialCommit={failOfficialCommit}; failHostReceiptCommit={failHostReceiptCommit}.");
+            }
         }
         finally { if (registered) registry.Unregister(fixture.Paths.SyncRootPath); }
 
@@ -216,8 +214,8 @@ public sealed partial class MirrorPulseAtomicDirectoryJournalTests
             foreach (string relative in new[] { "tree", "tree/leaf.txt", "peer.txt" })
             {
                 bool directory = relative == "tree";
-                string revision = (await worker.StatAsync(new(instance, relative, "docs"), token))!;
-                var identity = router.CreateFileIdentity(instance, "docs", relative, revision);
+                string revision = (await worker.StatAsync(new(instance, relative, rootKey), token))!;
+                var identity = router.CreateFileIdentity(instance, rootKey, relative, revision);
                 var metadata = directory ? CloudPlaceholderMetadata.CreateDirectoryBuilder().Build() : CloudPlaceholderMetadata.CreateFileBuilder().Build();
                 changes.Add(new("seed-" + relative, directory ? CloudRemoteChangeKind.DirectoryUpsert : CloudRemoteChangeKind.FileUpsert,
                     identity.RemoteId, revision, directory ? CloudItemKind.Directory : CloudItemKind.File, "Docs/" + relative, identity.ItemId,
@@ -228,6 +226,41 @@ public sealed partial class MirrorPulseAtomicDirectoryJournalTests
                 changes, new byte[] { 3 }), new CloudRemoteApplyOptions { MaximumEntries = 3 }, token);
             Assert.AreEqual(CloudRemoteBatchStatus.Applied, applied.Status);
             Assert.IsEmpty(applied.ConflictIds);
+        }
+
+        async Task<MirrorPulseAdapterTopology> PrepareTopologyAsync()
+        {
+            string files = Path.Combine(fixture.Paths.DataRootPath, "files");
+            if (package is not null)
+            {
+                await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths, token);
+                string runtime = RuntimeInformation.ProcessArchitecture == Architecture.Arm64 ? "win-arm64" : "win-x64";
+                var installed = await catalog.InstallSignedAdapterAsync(package, package + ".signature.json",
+                    Path.Combine(fixture.Paths.DataRootPath, "installed"), runtime, cancellationToken: token);
+                Assert.IsTrue(installed.IsSigned);
+                Assert.AreEqual("com.mirrorpulse.adapter.local", installed.AdapterId.Value);
+                string key = installed.Manifest.RootDefinitions.Single().Key;
+                await catalog.CreateInstanceAsync(installed.InstallId, "Docs",
+                    new Dictionary<string, string> { ["sourceDirectory"] = backend }, [], files, cache,
+                    rootLabels: new Dictionary<string, string> { [key] = "Docs" }, cancellationToken: token);
+                return await catalog.ReadAdapterTopologyAsync(token);
+            }
+
+            Assert.IsTrue(File.Exists(executable));
+            var id = InstanceId.New();
+            var adapter = new AdapterId("example.atomic-local");
+            var installationId = InstallId.New();
+            var root = new RootRegistration(adapter, id, RootId.New(), "docs", "Docs", "Docs", false,
+                RootRegistrationState.Active, DateTimeOffset.UtcNow, RootIdentityScope.InstanceRoot);
+            var manifest = new AdapterManifest(1, adapter, "Atomic Local fixture", "1.0.0", new(2, 2),
+                new Dictionary<string, string> { ["win-x64"] = Path.GetFileName(executable), ["win-arm64"] = Path.GetFileName(executable) },
+                new(null), new(null, null), new(true, false, true, true), ["en-US"], "1.0.0");
+            var installation = new InstalledAdapter(manifest, installationId, Path.GetDirectoryName(executable)!,
+                new(new string('A', 64)), AdapterInstallSource.LocalFile, null, true, DateTimeOffset.UtcNow, AdapterLifecycleState.Installed);
+            var configuration = new AdapterInstance(adapter, installationId, id, "Atomic Local",
+                new Dictionary<string, string> { ["root.docs.sourceDirectory"] = backend }, [], files,
+                cache, true, AdapterLifecycleState.Enabled, null, DateTimeOffset.UtcNow);
+            return new([installation], [configuration], [root]);
         }
 
         async Task<CloudLocalChange> ReadDeleteAsync(CloudLocalChangeFeed feed, string path)
@@ -253,4 +286,3 @@ public sealed partial class MirrorPulseAtomicDirectoryJournalTests
         }
     }
 }
-#endif

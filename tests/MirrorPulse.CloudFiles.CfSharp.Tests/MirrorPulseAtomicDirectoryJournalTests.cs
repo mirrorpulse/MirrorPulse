@@ -1,4 +1,3 @@
-#if HOST_ATOMIC_DIRECTORY_CANDIDATE
 using System.Runtime.Versioning;
 using CfSharp;
 using Microsoft.Data.Sqlite;
@@ -246,4 +245,3 @@ public sealed partial class MirrorPulseAtomicDirectoryJournalTests
         }
     }
 }
-#endif

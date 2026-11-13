@@ -1,4 +1,3 @@
-#if HOST_ATOMIC_DIRECTORY_CANDIDATE
 using System.Runtime.Versioning;
 using CfSharp;
 using MirrorPulse.Adapter.Sdk;
@@ -235,4 +234,3 @@ public sealed partial class MirrorPulseJournalUploadPump
     private static bool Within(string root, string path) =>
         root.Length == 0 || path.Equals(root, StringComparison.OrdinalIgnoreCase) || path.StartsWith(root + "/", StringComparison.OrdinalIgnoreCase);
 }
-#endif

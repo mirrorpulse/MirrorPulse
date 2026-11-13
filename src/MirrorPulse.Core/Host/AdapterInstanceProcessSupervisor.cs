@@ -19,9 +19,7 @@ public sealed class AdapterInstanceProcessSupervisor :
     IMirrorPulseWorkerRangeTransport, IMirrorPulseWorkerUploadTransport,
     IMirrorPulseWorkerStatTransport, IMirrorPulseWorkerDirectoryPageSource,
     IMirrorPulseWorkerMutationTransport, IMirrorPulseOriginalDirectoryRetirementTransport,
-#if HOST_ATOMIC_DIRECTORY_CANDIDATE
     IMirrorPulseAtomicDirectoryDeletionTransport,
-#endif
     IAsyncDisposable
 {
     private readonly MirrorPulseProductCatalog _catalog;
@@ -162,7 +160,6 @@ public sealed class AdapterInstanceProcessSupervisor :
         finally { operation.Release(); }
     }
 
-#if HOST_ATOMIC_DIRECTORY_CANDIDATE
     bool IMirrorPulseAtomicDirectoryDeletionTransport.SupportsAtomicDirectoryDeletion(InstanceId instanceId) =>
         SupportsAtomicDirectoryDeletion(instanceId);
 
@@ -209,7 +206,6 @@ public sealed class AdapterInstanceProcessSupervisor :
 
     internal bool SupportsAtomicDirectoryDeletion(InstanceId instanceId) => IsConnected(instanceId) &&
         _mutations.TryGetValue(instanceId, out var client) && client.SupportsAtomicDirectoryDeletion;
-#endif
 
     private async ValueTask<Stream> ReadRangeCoreAsync(
         MirrorPulseWorkerReadRangeRequest request,

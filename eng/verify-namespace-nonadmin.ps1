@@ -1,5 +1,6 @@
 [CmdletBinding()]
-param([Parameter(Mandatory)][ValidateSet('X64', 'Arm64')][string]$ExpectedArchitecture)
+param([Parameter(Mandatory)][ValidateSet('X64', 'Arm64')][string]$ExpectedArchitecture,
+    [string]$SignedAtomicDirectoryPackage)
 
 $ErrorActionPreference = 'Stop'
 if (-not $IsWindows -or $env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted') {
@@ -23,13 +24,18 @@ if (-not (Test-Path -LiteralPath (Join-Path $payload $assemblyName) -PathType Le
 }
 $catalog = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'test-suites.json') -Raw | ConvertFrom-Json
 . (Join-Path $PSScriptRoot 'namespace-nonadmin-controller.ps1')
-$childBudgetMilliseconds = Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount @($catalog.required.namespace).Count -TestNames @($catalog.required.namespace) -Scope S06
-Write-Output ("Ordinary-user catalog: selected={0}; controllerBudgetSeconds={1}; nativeCaseDeadlinesUnchanged=True." -f @($catalog.required.namespace).Count, ($childBudgetMilliseconds / 1000))
-$filter = (@($catalog.required.namespace) | ForEach-Object { 'FullyQualifiedName=' + $_ }) -join '|'
-$evidenceDirectory = Join-Path $repository ('artifacts/test-results/namespace-nonadmin-' + $ExpectedArchitecture.ToLowerInvariant())
+$suite = if ($SignedAtomicDirectoryPackage) { 'signedAtomicDirectory' } else { 'namespace' }
+$testNames = @($catalog.required.$suite)
+$childBudgetMilliseconds = if ($SignedAtomicDirectoryPackage) { 300000 } else {
+    Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $testNames.Count -TestNames $testNames -Scope S06
+}
+Write-Output ("Ordinary-user catalog: selected={0}; controllerBudgetSeconds={1}; nativeCaseDeadlinesUnchanged=True." -f $testNames.Count, ($childBudgetMilliseconds / 1000))
+$filter = ($testNames | ForEach-Object { 'FullyQualifiedName=' + $_ }) -join '|'
+$evidenceStem = if ($SignedAtomicDirectoryPackage) { 'signed-atomic-directory-nonadmin-' } else { 'namespace-nonadmin-' }
+$evidenceDirectory = Join-Path $repository ('artifacts/test-results/' + $evidenceStem + $ExpectedArchitecture.ToLowerInvariant())
 New-Item -ItemType Directory -Path $evidenceDirectory -Force | Out-Null
 $identifier = [guid]::NewGuid().ToString('N')
-$nativeOriginalsDirectory = Join-Path $repository ('artifacts/test-results/namespace-nonadmin-' + $ExpectedArchitecture.ToLowerInvariant() + '-originals/' + $identifier)
+$nativeOriginalsDirectory = Join-Path $repository ('artifacts/test-results/' + $evidenceStem + $ExpectedArchitecture.ToLowerInvariant() + '-originals/' + $identifier)
 . (Join-Path $PSScriptRoot 'native-test-original-bundle.ps1')
 $baseDirectory = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData)) 'MirrorPulseCi'
 $scratch = [IO.Path]::GetFullPath((Join-Path $baseDirectory $identifier))
@@ -83,6 +89,23 @@ try {
     if ((Get-FileHash -LiteralPath (Join-Path $copiedPayload $assemblyName) -Algorithm SHA256).Hash.ToLowerInvariant() -cne $assemblyHash) {
         throw 'The copied test assembly differs from the compiled source.'
     }
+    $copiedPackage = $null
+    $packageHash = $null
+    $signatureHash = $null
+    if ($SignedAtomicDirectoryPackage) {
+        . (Join-Path $PSScriptRoot 'native-test-originals.ps1')
+        $package = Get-NativeOriginalPath -Path $SignedAtomicDirectoryPackage -Workspace $repository
+        $signature = Get-NativeOriginalPath -Path ($package + '.signature.json') -Workspace $repository
+        $copiedPackage = Join-Path $scratch 'Local.mpadapter'
+        Copy-Item -LiteralPath $package -Destination $copiedPackage
+        Copy-Item -LiteralPath $signature -Destination ($copiedPackage + '.signature.json')
+        $packageHash = (Get-FileHash -LiteralPath $package).Hash
+        $signatureHash = (Get-FileHash -LiteralPath $signature).Hash
+        if ((Get-FileHash -LiteralPath $copiedPackage).Hash -cne $packageHash -or
+            (Get-FileHash -LiteralPath ($copiedPackage + '.signature.json')).Hash -cne $signatureHash) {
+            throw 'The copied official package or detached signature differs from its original.'
+        }
+    }
     # Passwords remain in memory and are never passed as arguments, written, or printed.
     $password = ConvertTo-SecureString ('Aa1!' + [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(32))) -AsPlainText -Force
     try {
@@ -98,7 +121,8 @@ try {
         [ordered]@{ schemaVersion=1; expectedArchitecture=$ExpectedArchitecture; expectedUserSid=$user.SID.Value;
             expectedUserName=$userName; workDirectory=$work; testAssembly=(Join-Path $copiedPayload $assemblyName);
             sourceSha=$sourceSha; testAssemblySha256=$assemblyHash;
-            filter=$filter; dotnetPath=(Get-Command dotnet -CommandType Application).Source;
+            filter=$filter; signedAtomicDirectoryPackage=$copiedPackage; signedAtomicDirectoryPackageSha256=$packageHash;
+            signedAtomicDirectorySignatureSha256=$signatureHash; dotnetPath=(Get-Command dotnet -CommandType Application).Source;
             systemRoot=$env:SystemRoot; computerName=$env:COMPUTERNAME } |
             ConvertTo-Json | Set-Content -LiteralPath $configuration -Encoding utf8
         $childEnvironment = @{}
@@ -144,8 +168,12 @@ try {
             $context.nonAdministrator -ne $true -or $context.expectedUserMatched -ne $true -or $context.profileLoaded -ne $true) {
             throw 'The actual ordinary-user execution context was not verified.'
         }
-        & (Join-Path $PSScriptRoot 'verify-test-results.ps1') -Suite namespace -ResultsDirectory $evidenceDirectory `
+        & (Join-Path $PSScriptRoot 'verify-test-results.ps1') -Suite $suite -ResultsDirectory $evidenceDirectory `
             -OutputPath (Join-Path $evidenceDirectory 'test-evidence.json')
+        if ($copiedPackage) {
+            . (Join-Path $PSScriptRoot 'signed-atomic-directory-evidence.ps1')
+            Confirm-SignedAtomicDirectoryReport -ReportPath (Join-Path $evidenceDirectory 'namespace.trx') -PackageSha256 $packageHash
+        }
         Copy-OrdinaryUserNativeOriginals -Workspace $scratch -Identifier $identifier -SourceSha $sourceSha `
             -ExpectedTestAssemblySha256 $assemblyHash -ExpectedCollectorSha256 $nativeCollectorHash `
             -DestinationWorkspace $repository -DestinationDirectory $nativeOriginalsDirectory -RequireCollection $true
@@ -209,7 +237,7 @@ try {
 }
 if ($null -ne $primaryFailure -or $cleanupFailures.Count -gt 0) {
     [ordered]@{ schemaVersion=1; sourceSha=$sourceSha; architecture=$ExpectedArchitecture;
-        selectedTests=@($catalog.required.namespace).Count; controllerBudgetMilliseconds=$childBudgetMilliseconds;
+        selectedTests=$testNames.Count; controllerBudgetMilliseconds=$childBudgetMilliseconds;
         childStopped=$childStopped; testsVerified=$success; accountRemoved=$userRemoved;
         profileRemoved=$profileRemoved; workspaceRemoved=$workspaceRemoved;
         primaryFailure=if ($null -ne $primaryFailure) { @{type=$primaryFailure.GetType().FullName;hresult=$primaryFailure.HResult} } else { $null };
@@ -224,6 +252,7 @@ if ($success -and $userRemoved -and $profileRemoved -and $workspaceRemoved) {
     [ordered]@{ schemaVersion=1; sourceSha=$sourceSha; architecture=$ExpectedArchitecture; nonAdministrator=$true;
         freshUser=$true; expectedUserMatched=$true; profileLoaded=$true; accountRemoved=$true; profileRemoved=$true;
         workspaceRemoved=$true; testAssemblySha256=$assemblyHash;
+        signedPackageSha256=$packageHash; signedSignatureSha256=$signatureHash;
         contextSha256=(Get-FileHash -LiteralPath (Join-Path $evidenceDirectory 'context.json') -Algorithm SHA256).Hash.ToLowerInvariant();
         trxSha256=(Get-FileHash -LiteralPath (Join-Path $evidenceDirectory 'namespace.trx') -Algorithm SHA256).Hash.ToLowerInvariant();
         tests=(Get-Content -LiteralPath (Join-Path $evidenceDirectory 'test-evidence.json') -Raw | ConvertFrom-Json) } |

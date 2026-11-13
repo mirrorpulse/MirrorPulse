@@ -1,4 +1,3 @@
-#if HOST_ATOMIC_DIRECTORY_CANDIDATE
 using System.Security.Cryptography;
 using Microsoft.Data.Sqlite;
 using MirrorPulse.Adapter.Sdk;
@@ -138,6 +137,8 @@ public sealed partial class AdapterWorkerV2SessionTests
     [TestMethod]
     public async Task RealHostAndLocalWorkerRecoverWhenTheWorkerExitsAfterCommitWithoutReplying()
     {
+        if (Environment.GetEnvironmentVariable("MP_S06_ATOMIC_FIXTURE_LOST_REPLY") != "1")
+            Assert.Inconclusive("Requires the isolated pre-release Worker with the original process-exit fault.");
         using var fixture = new AtomicHostFixture();
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(25));
         CancellationToken token = deadline.Token;
@@ -207,8 +208,9 @@ public sealed partial class AdapterWorkerV2SessionTests
 
         public AtomicHostFixture()
         {
-            string executable = Environment.GetEnvironmentVariable("MP_S06_ATOMIC_LOCAL_WORKER_EXE")
-                ?? throw new InvalidOperationException("The combined gate requires the actual Local Worker candidate path.");
+            string? executable = Environment.GetEnvironmentVariable("MP_S06_ATOMIC_LOCAL_WORKER_EXE");
+            if (string.IsNullOrWhiteSpace(executable))
+                Assert.Inconclusive("Requires the actual Local Worker executable for the combined gate.");
             Assert.IsTrue(File.Exists(executable));
             Paths = new(Path.Combine(_directory, "sync"), Path.Combine(_directory, "data"));
             string cache = Path.Combine(_directory, "transfers");
@@ -270,4 +272,3 @@ public sealed partial class AdapterWorkerV2SessionTests
         }
     }
 }
-#endif

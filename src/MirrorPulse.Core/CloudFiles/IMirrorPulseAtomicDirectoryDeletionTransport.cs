@@ -1,4 +1,3 @@
-#if HOST_ATOMIC_DIRECTORY_CANDIDATE
 using MirrorPulse.Adapter.Sdk;
 using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.Sync;
@@ -12,4 +11,3 @@ internal interface IMirrorPulseAtomicDirectoryDeletionTransport
         AdapterDirectoryAdmissionRequest original, CancellationToken token,
         IReadOnlyList<MirrorPulseWorkerChangeCommand>? originals = null);
 }
-#endif

@@ -1,14 +1,23 @@
 <Project>
-  <PropertyGroup Condition="'$(HostAtomicSdkProject)' != ''">
-    <NuGetLockFilePath>$(MSBuildProjectDirectory)/obj/host-atomic-candidate.packages.lock.json</NuGetLockFilePath>
-    <DefineConstants>$(DefineConstants);HOST_ATOMIC_DIRECTORY_CANDIDATE</DefineConstants>
-    <IsPublishable>false</IsPublishable>
+  <PropertyGroup>
+    <RepositoryName>MirrorPulse</RepositoryName>
+    <RepositoryRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)'))</RepositoryRoot>
   </PropertyGroup>
-  <ItemGroup Condition="'$(HostAtomicSdkProject)' != '' And
-      ('$(MSBuildProjectName)' == 'MirrorPulse.Core' Or '$(MSBuildProjectName)' == 'MirrorPulse.Core.Tests' Or
-       '$(MSBuildProjectName)' == 'MirrorPulse.CloudFiles.CfSharp' Or '$(MSBuildProjectName)' == 'MirrorPulse.CloudFiles.CfSharp.Tests' Or
-       '$(MSBuildProjectName)' == 'MirrorPulse.Adapter.Ftp.Worker' Or '$(MSBuildProjectName)' == 'MirrorPulse.Adapter.Sftp.Worker')">
-    <PackageReference Remove="MirrorPulse.Adapter.Sdk" />
-    <ProjectReference Include="$(HostAtomicSdkProject)" />
+
+  <ItemGroup Condition="'$(MSBuildProjectName)' == 'MirrorPulse.Cli' or '$(MSBuildProjectName)' == 'MirrorPulse.Host'">
+    <None Include="$(RepositoryRoot)LICENSE;$(RepositoryRoot)NOTICE;$(RepositoryRoot)docs\third-party-notices.md">
+      <Link>ThirdParty\%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </None>
+    <None Include="$(RepositoryRoot)docs\dependencies\**\*">
+      <Link>ThirdParty\dependencies\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </None>
   </ItemGroup>
+
+  <Target Name="ValidateMirrorPulseTargetFramework" BeforeTargets="BeforeBuild">
+    <Error Condition="'$(TargetFrameworkIdentifier)' != '.NETCoreApp'" Text="MirrorPulse projects must target .NET." />
+  </Target>
 </Project>

@@ -1,4 +1,3 @@
-#if HOST_ATOMIC_DIRECTORY_CANDIDATE
 using System.Security.Cryptography;
 using Microsoft.Data.Sqlite;
 using MirrorPulse.Adapter.Sdk;
@@ -239,4 +238,3 @@ public sealed partial class MirrorPulseProductCatalog
         original.ItemId == intent.JournalItemId && original.IsDirectory == intent.IsDirectory && original.ObservedAt != default &&
         original.RelativePath.Replace('\\', '/') == intent.RelativePath.Replace('\\', '/');
 }
-#endif

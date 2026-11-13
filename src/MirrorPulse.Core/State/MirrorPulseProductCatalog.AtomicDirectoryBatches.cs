@@ -1,4 +1,3 @@
-#if HOST_ATOMIC_DIRECTORY_CANDIDATE
 using System.Security.Cryptography;
 using Microsoft.Data.Sqlite;
 using MirrorPulse.Adapter.Sdk;
@@ -238,4 +237,3 @@ public sealed partial class MirrorPulseProductCatalog
         return plan;
     }
 }
-#endif

@@ -92,14 +92,12 @@ public sealed class MirrorPulseFullRescanPolicy(CloudFileSystem fileSystem, Clou
             known.Where(item => item.IsTombstone).Select(item => item.ItemId).ToHashSet(), cancellationToken).ConfigureAwait(false))
             .ToLookup(completed => completed.ItemId);
         IReadOnlyList<MirrorPulseMutationRecord> incomplete = await catalog.ReadIncompleteMutationsAsync(cancellationToken).ConfigureAwait(false);
-#if HOST_ATOMIC_DIRECTORY_CANDIDATE
         var atomicDeletes = new HashSet<Guid>();
         var atomicOperations = await catalog.ReadUnsettledAtomicDirectoryOperationIdsAsync(cancellationToken).ConfigureAwait(false);
         foreach (var record in incomplete)
             if (record.Intent is { Kind: MirrorPulseWorkerChangeKind.Delete, JournalItemId: { } item } &&
                 atomicOperations.Contains(record.Intent.OperationId))
                 atomicDeletes.Add(item);
-#endif
         int count = 0;
         var blockedDirectories = new List<string>();
         foreach (var (path, observation) in observations.OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase))
@@ -226,11 +224,9 @@ public sealed class MirrorPulseFullRescanPolicy(CloudFileSystem fileSystem, Clou
         // directory deletion: an unmaterialized remote subtree requires a separate policy decision.
         foreach (CloudItemState item in known.Where(item => !observations.ContainsKey(NormalizePath(item.RelativePath)) && !string.IsNullOrEmpty(item.RemoteRevision)))
         {
-#if HOST_ATOMIC_DIRECTORY_CANDIDATE
             // An executing or accepted batch retains the original source effect
             // while the separate official journal acknowledgement is pending.
             if (atomicDeletes.Contains(item.ItemId)) continue;
-#endif
             string path = NormalizePath(item.RelativePath);
             MirrorPulseRoutedItem route;
             try { route = router.ResolvePath(path); }

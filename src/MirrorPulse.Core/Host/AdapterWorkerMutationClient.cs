@@ -26,10 +26,8 @@ public sealed class AdapterWorkerMutationClient
 
     private readonly record struct MutationReply(string? Revision, AdapterOwnedChildEffectReceipt? DirectoryReceipt = null)
     {
-#if HOST_ATOMIC_DIRECTORY_CANDIDATE
         internal AdapterDirectoryAdmission? Admission { get; init; }
         internal AdapterAtomicDirectoryDeletionReceipt? AtomicReceipt { get; init; }
-#endif
     }
 
     public AdapterWorkerMutationClient(
@@ -95,7 +93,6 @@ public sealed class AdapterWorkerMutationClient
         return reply.DirectoryReceipt ?? throw new InvalidDataException("DirectoryRetirementReceiptRequired");
     }
 
-#if HOST_ATOMIC_DIRECTORY_CANDIDATE
     internal bool SupportsAtomicDirectoryDeletion => _channel.Protocol is { ProtocolVersion: 2 } protocol &&
         protocol.Capabilities.Contains(AdapterOriginalDirectoryWire.Capability, StringComparer.Ordinal) &&
         protocol.Capabilities.Contains(AdapterAtomicDirectoryDeletionWire.Capability, StringComparer.Ordinal);
@@ -134,7 +131,6 @@ public sealed class AdapterWorkerMutationClient
         var reply = await SendCoreAsync(new(frame, operation.OperationId, operation.RootKey), token).ConfigureAwait(false);
         return reply.AtomicReceipt ?? throw new InvalidDataException("AtomicDirectoryDeletionReceiptRequired");
     }
-#endif
 
     private async ValueTask<string?> SendAsync(
         string messageType,
@@ -214,7 +210,6 @@ public sealed class AdapterWorkerMutationClient
         }
 
         var completion = pending.Completion;
-#if HOST_ATOMIC_DIRECTORY_CANDIDATE
         if (pending.Request.MessageType is AdapterOriginalDirectoryWire.AdmissionRequestMessage or AdapterAtomicDirectoryDeletionWire.RequestMessage)
         {
             if (frame.MessageType == "OperationError")
@@ -240,7 +235,6 @@ public sealed class AdapterWorkerMutationClient
             }
             return ValueTask.CompletedTask;
         }
-#endif
         if (pending.Request.MessageType == AdapterDirectoryRetirementWire.RequestMessage && frame.MessageType != "OperationError")
         {
             var receipt = AdapterDirectoryRetirementWire.ReadResponse(ToSdkFrame(pending.Request), ToSdkFrame(frame),

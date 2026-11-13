@@ -8,6 +8,14 @@ on:
         description: Run the Shell registration probe from the installed App process
         type: boolean
         default: false
+      verify_atomic_directory:
+        description: Run the signed Local atomic directory acceptance on x64 and ARM64
+        type: boolean
+        default: false
+      local_atomic_preview:
+        description: Published Local preview tag for atomic directory acceptance
+        type: string
+        required: false
   push:
     branches:
       - main
@@ -17,6 +25,12 @@ permissions:
   contents: read
 
 jobs:
+  signed-atomic-directory:
+    if: github.event_name == 'workflow_dispatch' && inputs.verify_atomic_directory
+    uses: ./.github/workflows/signed-atomic-directory.yml
+    with:
+      local_preview: ${{ inputs.local_atomic_preview }}
+
   official-adapter-candidate:
     runs-on: windows-latest
     steps:

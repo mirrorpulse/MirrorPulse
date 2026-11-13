@@ -269,9 +269,7 @@ public sealed partial class MirrorPulseProductCatalog
                 reader.GetString(3) != plan.AdmissionId.ToString("D"))
                 throw new InvalidDataException("The original directory plan index changed.");
         }
-#if HOST_ATOMIC_DIRECTORY_CANDIDATE
         await RequireNoAtomicDirectoryBatchAsync(plan.AdmissionId, transaction, token).ConfigureAwait(false);
-#endif
         return await ReadDirectoryPlanMemberAsync(plan, fingerprint, ordinal, transaction, token).ConfigureAwait(false);
     }
 
