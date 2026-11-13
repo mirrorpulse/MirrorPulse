@@ -16,6 +16,14 @@ public sealed class DeferredP079GateTests
             $ErrorActionPreference='Stop'
             . (Join-Path $Repository 'eng/namespace-nonadmin-controller.ps1')
             $catalog=Get-Content (Join-Path $Repository 'eng/test-suites.json') -Raw|ConvertFrom-Json
+            # Retain this original transfer selection. Root execution rows have their
+            # own exact ninety-second deadlines in NamespaceNonAdminControllerTests.
+            $unsealedRootExecutions=@(
+                'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicRuntimeExecutesUnsealedBornRootLabelAcrossDisposedRoles',
+                'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativePublicRuntimeExecutesUnsealedCapturedRootLabelAcrossDisposedRoles'
+            )
+            $catalog.required.namespace=@($catalog.required.namespace|Where-Object {$_ -cnotin $unsealedRootExecutions})
+            $catalog.required.native=@($catalog.required.native|Where-Object {$_ -cnotin $unsealedRootExecutions})
             # The new directory cohort owns a separate exact fourteen-execution budget.
             $directoryPrefix='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.'
             $directories=@('NativeDirectoryConfirmationRetainsOriginalBindingAndTypedIdentityAcrossOwners',
