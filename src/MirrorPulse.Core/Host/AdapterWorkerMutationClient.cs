@@ -96,11 +96,14 @@ public sealed class AdapterWorkerMutationClient
     }
 
 #if HOST_ATOMIC_DIRECTORY_CANDIDATE
+    internal bool SupportsAtomicDirectoryDeletion => _channel.Protocol is { ProtocolVersion: 2 } protocol &&
+        protocol.Capabilities.Contains(AdapterOriginalDirectoryWire.Capability, StringComparer.Ordinal) &&
+        protocol.Capabilities.Contains(AdapterAtomicDirectoryDeletionWire.Capability, StringComparer.Ordinal);
+
     internal void RequireAtomicDirectorySupport(AdapterDirectoryAdmissionRequest request)
     {
         var protocol = _channel.Protocol;
-        if (protocol?.ProtocolVersion != 2 || !protocol.Capabilities.Contains(AdapterOriginalDirectoryWire.Capability, StringComparer.Ordinal) ||
-            !protocol.Capabilities.Contains(AdapterAtomicDirectoryDeletionWire.Capability, StringComparer.Ordinal))
+        if (protocol is null || !SupportsAtomicDirectoryDeletion)
             throw new NotSupportedException("AtomicDirectoryDeletionUnsupported");
         if (request.InstanceId != _instanceId.Value) throw new InvalidDataException("InstanceMismatch");
         request.Validate();

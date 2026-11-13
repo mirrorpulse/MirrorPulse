@@ -908,7 +908,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             await using var disabledAdmission = registration.State == RootRegistrationState.Disabled
                 ? await EnterDisabledLocalBirthAsync(registration, operationId, MirrorPulseNamespaceBirthOrigin.Import,
                     cancellationToken).ConfigureAwait(false) : null;
-            var inputs = new MirrorPulseLocalImportStagingStore(new(syncRootPath, dataRootPath));
+            var inputs = new MirrorPulseLocalImportStagingStore(new MirrorPulseStoragePaths(syncRootPath, dataRootPath));
             // A source may hydrate through this SDK owner. Retain it while capturing input,
             // then release that scope before waiting for the instance's execution admission.
             var content = await WithCurrentLibraryAsync(async token => await _namespaceExecution!.RunNormalUserOperationAsync(
@@ -1021,7 +1021,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             var registration = router!.Registrations.Single(root => root.RootId == birth.RootId);
             await using var admission = namespaceWork is null ? null :
                 await namespaceWork.EnterPendingOperationAsync(registration.RootId, cancellationToken).ConfigureAwait(false);
-            var inputs = new MirrorPulseLocalImportStagingStore(new(syncRootPath, dataRootPath));
+            var inputs = new MirrorPulseLocalImportStagingStore(new MirrorPulseStoragePaths(syncRootPath, dataRootPath));
             MirrorPulseNamespaceMemberRegistration result;
             if (!status.ContentRecorded && !status.Registered)
             {
@@ -1091,7 +1091,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                     throw new InvalidOperationException("The existing replacement admission cannot replay this preparation.");
                 return replay;
             }
-            var inputs = new MirrorPulseLocalImportStagingStore(new(syncRootPath, dataRootPath));
+            var inputs = new MirrorPulseLocalImportStagingStore(new MirrorPulseStoragePaths(syncRootPath, dataRootPath));
             var materialized = await WithCurrentLibraryAsync(token => new MirrorPulseNamespaceReplacementPreparationCoordinator(fileSystem,
                 state, catalog, router, _namespaceExecution!, _namespaceActor!, _scheduler, inputs, mayDispatch ?? (_ => false))
                 .MaterializeAsync(operationId, original, sourcePath, token), cancellationToken).ConfigureAwait(false);

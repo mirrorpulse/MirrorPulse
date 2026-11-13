@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using Microsoft.Data.Sqlite;
 using MirrorPulse.Adapter.Sdk;
 using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.Core.State;
 
@@ -48,7 +49,8 @@ public sealed partial class MirrorPulseProductCatalog
     }
 
     internal async Task<MirrorPulseAtomicDirectoryBatch> StartAtomicDirectoryBatchAsync(
-        AdapterDirectoryAdmissionRequest original, AdapterDirectoryAdmission admission, CancellationToken token)
+        AdapterDirectoryAdmissionRequest original, AdapterDirectoryAdmission admission, CancellationToken token,
+        IReadOnlyList<MirrorPulseWorkerChangeCommand>? originals = null)
     {
         original = AdapterProtocolJson.Decode<AdapterDirectoryAdmissionRequest>(EncodeDirectoryRetirementEvidence(original));
         admission = AdapterProtocolJson.Decode<AdapterDirectoryAdmission>(EncodeDirectoryRetirementEvidence(admission));
@@ -59,6 +61,12 @@ public sealed partial class MirrorPulseProductCatalog
         var request = new AdapterAtomicDirectoryDeletionRequest(1, original, admission, Convert.ToHexString(manifestHash), string.Empty);
         request = request with { RequestFingerprint = request.CalculateFingerprint() };
         byte[] payload = EncodeDirectoryRetirementEvidence(request);
+        var journal = originals is null ? null : AdapterProtocolJson.Decode<MirrorPulseAtomicDirectoryJournal>(
+            EncodeDirectoryRetirementEvidence(new MirrorPulseAtomicDirectoryJournal(original.AdmissionId, original.RequestFingerprint, originals)));
+        if (journal is not null && (journal.Originals.Count != plan.Steps.Count ||
+            journal.Originals.Select(value => value.Sequence).Distinct().Count() != plan.Steps.Count ||
+            journal.Originals.Select(value => value.ItemId).Distinct().Count() != plan.Steps.Count))
+            throw new InvalidDataException("The original journal batch requires distinct ordered observations.");
         await _gate.WaitAsync(token).ConfigureAwait(false);
         try
         {
@@ -69,6 +77,12 @@ public sealed partial class MirrorPulseProductCatalog
             {
                 if (existing.Request.RequestFingerprint != request.RequestFingerprint)
                     throw new InvalidDataException("The original atomic directory batch authorization changed.");
+                if (journal is not null)
+                {
+                    var retained = await ReadAtomicDirectoryJournalCoreAsync(original.AdmissionId, transaction, token).ConfigureAwait(false);
+                    if (retained is null || !retained.Originals.SequenceEqual(journal.Originals))
+                        throw new InvalidDataException("The original atomic journal observations changed.");
+                }
                 transaction.Commit();
                 return existing;
             }
@@ -77,7 +91,8 @@ public sealed partial class MirrorPulseProductCatalog
             {
                 var member = await ReadDirectoryPlanMemberAsync(plan, request.ManifestFingerprint, ordinal, transaction, token).ConfigureAwait(false);
                 if (member.Receipt is not null || member.Owner.State != MirrorPulseMutationState.Prepared ||
-                    member.Owner.Intent.Origin != MirrorPulseMutationOrigin.Journal)
+                    member.Owner.Intent.Origin != MirrorPulseMutationOrigin.Journal ||
+                    journal is not null && !MatchesAtomicJournalOriginal(journal.Originals[ordinal], member.Owner.Intent))
                     throw new InvalidOperationException("A started directory operation cannot join an atomic batch.");
                 await SetDirectoryRetirementStateAsync(member.Step.Operation.OperationId, MirrorPulseMutationState.Prepared,
                     MirrorPulseMutationState.Executing, null, transaction, token).ConfigureAwait(false);
@@ -91,6 +106,8 @@ public sealed partial class MirrorPulseProductCatalog
             command.Parameters.AddWithValue("$request", payload);
             command.Parameters.AddWithValue("$hash", SHA256.HashData(payload));
             await command.ExecuteNonQueryAsync(token).ConfigureAwait(false);
+            if (journal is not null)
+                await WriteAtomicDirectoryJournalAsync(journal, insert: true, transaction, token).ConfigureAwait(false);
             transaction.Commit();
             return new(request, null);
         }
@@ -179,11 +196,20 @@ public sealed partial class MirrorPulseProductCatalog
                 throw new InvalidDataException("The atomic directory batch lost its original plan.");
         }
         receipt?.RequireRequest(request);
-        var state = receipt is null ? MirrorPulseMutationState.Executing : MirrorPulseMutationState.RemoteAccepted;
+        var journal = await ReadAtomicDirectoryJournalCoreAsync(id, transaction, token).ConfigureAwait(false);
+        if (journal is not null && journal.AdmissionRequestFingerprint != request.OriginalRequest.RequestFingerprint)
+            throw new InvalidDataException("The journal acknowledgement lost its original request.");
+        if (journal?.ReceiptFingerprint is { } fingerprint &&
+            (receipt is null || receipt.Fingerprint() != fingerprint))
+            throw new InvalidDataException("The journal acknowledgement lost its original Worker receipt.");
+        var state = receipt is null ? MirrorPulseMutationState.Executing : journal?.Completed == true
+            ? MirrorPulseMutationState.Acknowledged : MirrorPulseMutationState.RemoteAccepted;
         for (int ordinal = 0; ordinal < plan.Steps.Count; ordinal++)
         {
             var member = await ReadDirectoryPlanMemberAsync(plan, request.ManifestFingerprint, ordinal, transaction, token, state).ConfigureAwait(false);
-            if (member.Owner.Intent.Origin != MirrorPulseMutationOrigin.Journal)
+            if (member.Owner.Intent.Origin != MirrorPulseMutationOrigin.Journal ||
+                journal is not null && (journal.Originals.Count != plan.Steps.Count ||
+                    !MatchesAtomicJournalOriginal(journal.Originals[ordinal], member.Owner.Intent)))
                 throw new InvalidDataException("The atomic batch lost its original journal owner.");
         }
         return new(request, receipt);

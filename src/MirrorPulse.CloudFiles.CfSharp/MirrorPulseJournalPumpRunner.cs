@@ -13,6 +13,11 @@ public sealed class MirrorPulseJournalPumpRunner
     private readonly ConcurrentDictionary<Guid, string> _coalescingRecoveryFaults = new();
     private readonly ConcurrentDictionary<Guid, string> _conflictDeletionRecoveryFaults = new();
     private readonly ConcurrentDictionary<Guid, string> _keepBothRecoveryFaults = new();
+#if HOST_ATOMIC_DIRECTORY_CANDIDATE
+    private readonly ConcurrentDictionary<Guid, string> _atomicDirectoryRecoveryFaults = new();
+    internal void RetainAtomicDirectoryRecoveryFault(Guid id) => _atomicDirectoryRecoveryFaults[id] = "AtomicDirectoryJournalAcknowledgementFailed";
+    internal void ClearAtomicDirectoryRecoveryFault(Guid id) => _atomicDirectoryRecoveryFaults.TryRemove(id, out _);
+#endif
     private readonly int _maximumCommandsPerCycle;
     private readonly int _maximumCommandsPerRoot;
     private (InstanceId Instance, string Root)? _nextRoute;
@@ -37,9 +42,20 @@ public sealed class MirrorPulseJournalPumpRunner
     internal IReadOnlyList<Guid> ReadKeepBothRecoveryFaults(Guid? after) => _keepBothRecoveryFaults.Keys
         .Where(id => after is null || string.CompareOrdinal(id.ToString("D"), after.Value.ToString("D")) > 0)
         .OrderBy(id => id.ToString("D"), StringComparer.Ordinal).Take(64).ToArray();
-    public MirrorPulseJournalPumpHealth Health => new(_faults.IsEmpty && _coalescingRecoveryFaults.IsEmpty && _conflictDeletionRecoveryFaults.IsEmpty && _keepBothRecoveryFaults.IsEmpty,
-        _faults.Count + _coalescingRecoveryFaults.Count + _conflictDeletionRecoveryFaults.Count + _keepBothRecoveryFaults.Count,
-        _faults.Values.Concat(_coalescingRecoveryFaults.Values).Concat(_conflictDeletionRecoveryFaults.Values).Concat(_keepBothRecoveryFaults.Values).Order(StringComparer.Ordinal).FirstOrDefault());
+    public MirrorPulseJournalPumpHealth Health
+    {
+        get
+        {
+            var errors = _faults.Values.Concat(_coalescingRecoveryFaults.Values).Concat(_conflictDeletionRecoveryFaults.Values)
+                .Concat(_keepBothRecoveryFaults.Values);
+            int count = _faults.Count + _coalescingRecoveryFaults.Count + _conflictDeletionRecoveryFaults.Count + _keepBothRecoveryFaults.Count;
+#if HOST_ATOMIC_DIRECTORY_CANDIDATE
+            errors = errors.Concat(_atomicDirectoryRecoveryFaults.Values);
+            count += _atomicDirectoryRecoveryFaults.Count;
+#endif
+            return new(count == 0, count, errors.Order(StringComparer.Ordinal).FirstOrDefault());
+        }
+    }
 
     public async ValueTask<bool> RunCycleAsync(
         Func<CancellationToken, ValueTask<MirrorPulseJournalUploadBatch>> read,

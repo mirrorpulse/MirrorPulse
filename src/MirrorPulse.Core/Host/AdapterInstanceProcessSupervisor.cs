@@ -160,7 +160,8 @@ public sealed class AdapterInstanceProcessSupervisor :
 
 #if HOST_ATOMIC_DIRECTORY_CANDIDATE
     internal async ValueTask<AdapterAtomicDirectoryDeletionReceipt> ExecuteAtomicDirectoryDeletionAsync(
-        AdapterDirectoryAdmissionRequest original, CancellationToken token)
+        AdapterDirectoryAdmissionRequest original, CancellationToken token,
+        IReadOnlyList<MirrorPulse.Core.Sync.MirrorPulseWorkerChangeCommand>? originals = null)
     {
         ArgumentNullException.ThrowIfNull(original);
         original = AdapterProtocolJson.Decode<AdapterDirectoryAdmissionRequest>(AdapterProtocolJson.Encode(original));
@@ -185,7 +186,7 @@ public sealed class AdapterInstanceProcessSupervisor :
             if (retained is null)
             {
                 var admission = await client.AdmitAtomicDirectoryAsync(original, token).ConfigureAwait(false);
-                retained = await _catalog.StartAtomicDirectoryBatchAsync(original, admission, token).ConfigureAwait(false);
+                retained = await _catalog.StartAtomicDirectoryBatchAsync(original, admission, token, originals).ConfigureAwait(false);
             }
             if (retained.Receipt is { } alreadyAccepted) return alreadyAccepted;
             var receipt = await client.DeleteAtomicDirectoryAsync(retained.Request, token).ConfigureAwait(false);
@@ -193,6 +194,9 @@ public sealed class AdapterInstanceProcessSupervisor :
         }
         finally { gate.Release(); }
     }
+
+    internal bool SupportsAtomicDirectoryDeletion(InstanceId instanceId) => IsConnected(instanceId) &&
+        _mutations.TryGetValue(instanceId, out var client) && client.SupportsAtomicDirectoryDeletion;
 #endif
 
     private async ValueTask<Stream> ReadRangeCoreAsync(
