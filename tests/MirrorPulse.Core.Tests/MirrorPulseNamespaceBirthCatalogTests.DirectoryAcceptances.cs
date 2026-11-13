@@ -44,6 +44,39 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
     }
 
     [TestMethod]
+    public async Task ControlledDirectoryMoveRetainsAConfirmedDirectoryIdentityAcrossOwners()
+    {
+        using var fixture = new Fixture();
+        MirrorPulseNamespaceMemberMoveIntent move;
+        MirrorPulseNamespaceDirectoryMoveCompletion completion;
+        MirrorPulseDirectoryAcceptance proof;
+        await using (var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths))
+        {
+            var setup = await PrepareMovableMemberAsync(catalog, directory: true);
+            var root = await AddIdentityTopologyAsync(catalog, setup.Move.RootId);
+            proof = await PrepareDirectoryIdentityAsync(catalog, setup, root);
+            var receipt = DirectoryReceipt(proof, setup.Member.RegisteredAt.AddSeconds(1));
+            await Assert.ThrowsExactlyAsync<FileNotFoundException>(() => catalog.PrepareNamespaceMemberMoveAsync(setup.Move with
+            {
+                IdentityAcceptanceOperationId = proof.OperationId,
+                ItemId = proof.AcceptedItemId,
+                RemoteId = proof.RemoteId
+            }));
+            await catalog.RecordDirectoryConfirmationAsync(receipt);
+            move = WithAcceptedMoveIdentity(setup.Move, await catalog.ReadNamespaceMemberIdentityAsync(setup.Member.MemberId),
+                receipt.ObservedAt.AddSeconds(1));
+            completion = await PrepareDirectoryCompletionFactsAsync(catalog, setup with { Move = move });
+            await catalog.CompleteNamespaceDirectoryMoveAsync(completion);
+        }
+        await using var reopened = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        Assert.AreEqual(move, await reopened.ReadNamespaceMemberMoveAsync(move.OperationId));
+        Assert.AreEqual(completion.Root, (await reopened.ReadNamespaceDirectoryMoveCompletionAsync(move.OperationId))!.Root);
+        var snapshot = await reopened.ReadNamespaceDirectoryMoveSnapshotAsync(move.OperationId);
+        Assert.AreEqual(proof.OperationId, snapshot!.Entries.Single().Identity.AcceptanceOperationId);
+        Assert.AreEqual(proof.AcceptedItemId, snapshot.Entries.Single().Identity.ItemId);
+    }
+
+    [TestMethod]
     [DataRow("file-member")]
     [DataRow("file-mutation")]
     [DataRow("content")]

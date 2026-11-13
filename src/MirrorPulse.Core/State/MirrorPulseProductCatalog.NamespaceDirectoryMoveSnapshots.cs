@@ -166,12 +166,11 @@ public sealed partial class MirrorPulseProductCatalog
         Guid? itemId = original.ItemId; string? remoteId = original.RemoteId;
         if (entry.Identity.AcceptanceOperationId is { } acceptanceId)
         {
-            var accepted = await ReadNamespaceIdentityAcceptanceCoreAsync(acceptanceId, transaction, token).ConfigureAwait(false)
-                ?? throw new InvalidDataException("The sealed member lost its accepted identity.");
-            if (accepted.MemberId != member.MemberId || accepted.RootId != rootId ||
-                accepted.Proof.UploadBinding.LocalObject != member.LocalObject || accepted.Confirmation.ObservedAt > preparedAt)
-                throw new InvalidDataException("The sealed identity must belong to the same object before admission.");
-            itemId = accepted.Proof.AcceptedItemId; remoteId = accepted.Proof.RemoteId;
+            if (member.RootId != rootId || entry.Identity.ItemId is not { } expectedItem || entry.Identity.RemoteId is not { } expectedRemote)
+                throw new InvalidDataException("The sealed identity must belong to the same root and object before admission.");
+            var accepted = await ValidateNamespaceIdentityHistoryAsync(member, acceptanceId, original, expectedItem,
+                expectedRemote, preparedAt, transaction, token).ConfigureAwait(false);
+            itemId = accepted.ItemId; remoteId = accepted.RemoteId;
         }
         if (entry.Identity.ItemId != itemId || entry.Identity.RemoteId != remoteId ||
             entry.Identity.OriginalItemId != original.ItemId || entry.Identity.OriginalRemoteId != original.RemoteId)

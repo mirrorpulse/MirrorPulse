@@ -121,11 +121,17 @@ public sealed partial class MirrorPulseProductCatalog
             throw new InvalidDataException("The remote update changed its first public identity.");
         if (identity.AcceptanceOperationId is { } acceptedId)
         {
-            var accepted = await ReadNamespaceIdentityAcceptanceCoreAsync(acceptedId, transaction, token).ConfigureAwait(false)
-                ?? throw new InvalidDataException("The remote update lost its confirmed upload identity.");
-            if (accepted.MemberId != member.MemberId || accepted.Confirmation.ObservedAt > preparedAt ||
-                identity.ItemId != accepted.Proof.AcceptedItemId || identity.RemoteId != accepted.Proof.RemoteId)
+            if (identity.ItemId is not { } expectedItem || identity.RemoteId is not { } expectedRemote)
                 throw new InvalidDataException("The remote update changed its historical identity acceptance.");
+            try
+            {
+                await ValidateNamespaceIdentityHistoryAsync(member, acceptedId, original, expectedItem, expectedRemote,
+                    preparedAt, transaction, token).ConfigureAwait(false);
+            }
+            catch (Exception error) when (error is FileNotFoundException or InvalidOperationException)
+            {
+                throw new InvalidDataException("The remote update changed its historical identity acceptance.", error);
+            }
         }
         else if (identity.ItemId != original.ItemId || identity.RemoteId != original.RemoteId)
             throw new InvalidDataException("The remote update cannot invent an unconfirmed identity.");
