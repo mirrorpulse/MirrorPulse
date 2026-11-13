@@ -186,9 +186,9 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 Assert.AreEqual(0, finalReads.Reads);
                 var moveRow = durable.Values.Single(row => row.Kind == nameof(CloudStateOperationKind.Move) &&
                     !before.ContainsKey(row.OperationId));
-                var actual = decoded.Paths[moveRow.OperationId];
-                Assert.AreEqual(sourceDirectory, actual.PreviousPath?.Replace('\\', '/'));
-                Assert.AreEqual(targetDirectory, actual.RelativePath.Replace('\\', '/'));
+                var originalMovePaths = decoded.Paths[moveRow.OperationId];
+                Assert.AreEqual(sourceDirectory, originalMovePaths.PreviousPath?.Replace('\\', '/'));
+                Assert.AreEqual(targetDirectory, originalMovePaths.RelativePath.Replace('\\', '/'));
                 await using var catalog = await MirrorPulseProductCatalog.OpenAsync(paths, deadline.Token);
                 var admission = await new MirrorPulseJournalDirectoryMoveAdmissionReader(catalog,
                     finalState, router, inspect)
@@ -231,6 +231,21 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     Assert.AreEqual(original.Kind, retained.Kind);
                     Assert.AreEqual(original.PayloadSha256, retained.PayloadSha256);
                 }
+                Assert.IsNull(projectedJournal[moveRow.OperationId].ItemId);
+                await using var movedFeed = inspect.CreateLocalChangeFeed();
+                await movedFeed.StartAsync(deadline.Token);
+                var projectedPaths = await ReadRecursiveJournalPathsAsync(movedFeed, deadline.Token);
+                Assert.IsFalse(projectedPaths.RescanWithheld);
+                Assert.IsNull(projectedPaths.UndecodedOperationId);
+                Assert.AreEqual(originalMovePaths, projectedPaths.Paths[moveRow.OperationId]);
+                await movedFeed.AcknowledgeAsync([new CloudLocalChangeAcknowledgement(moveRow.OperationId, admission.Root.OriginalRevision)], deadline.Token);
+                var acknowledged = await ReadRecursiveJournalOriginalsAsync(finalState.OpenStore, deadline.Token);
+                Assert.IsFalse(acknowledged.ContainsKey(moveRow.OperationId));
+                foreach (var retained in projectedJournal.Values.Where(row => row.OperationId != moveRow.OperationId))
+                {
+                    Assert.IsTrue(acknowledged.TryGetValue(retained.OperationId, out var other));
+                    Assert.AreEqual(retained.PayloadSha256, other.PayloadSha256);
+                }
             }
 
             var added = durable.Values.Where(row => !before.ContainsKey(row.OperationId)).OrderBy(row => row.Sequence).ThenBy(row => row.OperationId).ToArray();
@@ -256,7 +271,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 "; stableAfterCount=" + after.Count + "; durableCount=" + durable.Count + "; addedCount=" + added.Length + "; addedKinds=" + kinds +
                 "; rawMoveCount=" + rawMoveCount + "; decodedMoveCount=" + decodedMoveCount + "; descendantOriginals=" + descendantOriginals +
                 "; descendantPaths=" + descendantPaths + "; shownMoves=" + shown.Length + "; moves=" + moveText + "; undecoded=" + undecoded +
-                "; rescanWithheld=" + decoded.RescanWithheld + "; originalRowsUnchangedAcrossReopen=True; acknowledgementsInvented=False; probeCalls=0; " +
+                "; rescanWithheld=" + decoded.RescanWithheld + "; originalRowsUnchangedAcrossReopen=True; exactRootMoveAcknowledgedAfterProjection=True; probeCalls=0; " +
                 "coldOnlineOnly=True; byteTransferProved=False; signedProcessExecutionProved=False.");
         }
         finally
