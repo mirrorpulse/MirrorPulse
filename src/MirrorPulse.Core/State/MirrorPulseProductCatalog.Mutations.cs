@@ -125,6 +125,7 @@ public sealed partial class MirrorPulseProductCatalog
                 WHERE operation_id=$operation AND state=$from AND NOT EXISTS (
                     SELECT 1 FROM original_directory_retirements WHERE operation_id=$operation
                     UNION ALL SELECT 1 FROM original_directory_plan_members WHERE operation_id=$operation
+                    UNION ALL SELECT 1 FROM journal_directory_moves WHERE operation_id=$operation
                 );
                 """;
             command.Parameters.AddWithValue("$operation", operationId.ToString("D"));

@@ -14,12 +14,8 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
 {
     // Remote ids, revisions, change ids, and the 4-byte length are synthetic fixture inputs.
-    // Raw official rows retain their payload hash. Paths come only from CloudLocalChangeFeed,
-    // and no row is acknowledged. A transfer-only runtime starts that
-    // feed without uploads, stats, mutations, or the upload pump; the setup feed is disposed
-    // before ApplyRemoteChangesAsync. The watcher drain is asynchronous, so this test waits for
-    // a stable official set and does not assume a move count, including zero. The 16-page ceiling
-    // only stops an unbounded read. This test does not prove file byte transfer or signed process execution.
+    // Capture the settled native Move without an upload pump, then project and acknowledge
+    // its exact original using public CfSharp APIs. Other journal rows retain their payloads.
     [TestMethod]
     [DoNotParallelize]
     [TestCategory("NativeCloudFiles")]
@@ -201,6 +197,37 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 Assert.HasCount(3, admission.Members);
                 Assert.AreEqual(coldIdentity.ItemId, admission.Members.Single(member => member.TargetPath == targetCold).OriginalItemId);
                 await AssertRecursiveJournalRemoteProjectionAsync(admission, root, router, deadline.Token);
+                var mutation = new MirrorPulseMutationIntent(moveRow.OperationId, root.InstanceId, root.UniquenessKey,
+                    MirrorPulseWorkerChangeKind.Move, "relocated", "album", true, admission.Root.OriginalRevision,
+                    null, null, MirrorPulseMutationOrigin.Journal);
+                var startedMove = await catalog.StartJournalDirectoryMoveAsync(admission, mutation, deadline.Token);
+                Assert.AreEqual(MirrorPulseMutationState.Executing, startedMove.Mutation.State);
+                await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => catalog.TransitionMutationAsync(moveRow.OperationId,
+                    MirrorPulseMutationState.Executing, MirrorPulseMutationState.RemoteAccepted, admission.Root.OriginalRevision, deadline.Token));
+                await Assert.ThrowsExactlyAsync<InvalidDataException>(() =>
+                    catalog.AcceptJournalDirectoryMoveAsync(moveRow.OperationId, "another revision", deadline.Token));
+                await catalog.AcceptJournalDirectoryMoveAsync(moveRow.OperationId, admission.Root.OriginalRevision!, deadline.Token);
+                var targetPlan = admission.Members.Select(member =>
+                {
+                    string path = member.TargetPath[(root.DirectoryName.Length + 1)..];
+                    var identity = router.CreateFileIdentity(root.InstanceId, root.UniquenessKey, path, member.OriginalRevision);
+                    return new MirrorPulseDirectoryMoveTarget(member.MemberId, identity.ItemId, identity.RemoteId, identity.RemoteRevision);
+                }).ToArray();
+                var saved = await catalog.SaveJournalDirectoryMoveTargetsAsync(moveRow.OperationId, targetPlan, deadline.Token);
+                Assert.IsFalse(saved.AcknowledgementStarted);
+                Assert.AreEqual(0, saved.ProjectedMemberCount);
+                await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
+                    catalog.BeginJournalDirectoryMoveAcknowledgementAsync(moveRow.OperationId, deadline.Token));
+                await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
+                    catalog.CompleteJournalDirectoryMoveAcknowledgementAsync(moveRow.OperationId, deadline.Token));
+                var changedTarget = targetPlan.ToArray();
+                changedTarget[1] = changedTarget[1] with { ItemId = Guid.NewGuid() };
+                await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
+                    catalog.SaveJournalDirectoryMoveTargetsAsync(moveRow.OperationId, changedTarget, deadline.Token));
+                await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
+                    catalog.RecordJournalDirectoryMoveProjectionAsync(moveRow.OperationId, 0, targetPlan[1], deadline.Token));
+                await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
+                    catalog.RecordJournalDirectoryMoveProjectionAsync(moveRow.OperationId, 1, targetPlan[1], deadline.Token));
                 await using var role = new MirrorPulseNamespaceExecutionSession();
                 await using var actor = new MirrorPulseNamespaceActor();
                 await using var scheduler = new MirrorPulseInstanceScheduler();
@@ -211,16 +238,28 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 await using var guard = started.Guard;
                 Assert.IsTrue(started.Roots.Single().Admitted);
                 var originalCold = admission.Members.Single(member => member.TargetPath == targetCold);
-                var projectedCold = router.CreateFileIdentity(root.InstanceId, root.UniquenessKey, "relocated/nested/cold.bin", originalCold.OriginalRevision);
+                var projectedCold = router.CreateFileIdentity(root.InstanceId, root.UniquenessKey, "relocated/cold.bin", originalCold.OriginalRevision);
                 var patch = new MirrorPulseJournalDirectoryMoveIdentityPatch(inspect, finalState, catalog, router, actor, role);
-                foreach (var directoryMember in admission.Members.Where(member => member.IsDirectory))
+                for (int ordinal = 0; ordinal < admission.Members.Count; ordinal++)
                 {
-                    string workerPath = directoryMember.TargetPath[(root.DirectoryName.Length + 1)..];
-                    var identity = router.CreateFileIdentity(root.InstanceId, root.UniquenessKey, workerPath, directoryMember.OriginalRevision);
-                    Assert.IsTrue(await patch.ApplyAsync(admission, new(directoryMember, identity), deadline.Token));
+                    var target = targetPlan[ordinal];
+                    var identity = new CloudPlaceholderIdentity(target.ItemId, target.RemoteId, target.Revision);
+                    var projection = new MirrorPulseJournalDirectoryMoveProjection(admission.Members[ordinal], identity);
+                    var observed = await patch.ApplyAsync(admission, projection, deadline.Token);
+                    if (ordinal == 0)
+                    {
+                        // Native projection committed, but the Host has not yet retained its readback.
+                        var interrupted = await catalog.ReadJournalDirectoryMoveAsync(moveRow.OperationId, deadline.Token);
+                        Assert.AreEqual(0, interrupted!.ProjectedMemberCount);
+                        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
+                            catalog.BeginJournalDirectoryMoveAcknowledgementAsync(moveRow.OperationId, deadline.Token));
+                        Assert.AreEqual(observed, await patch.ApplyAsync(admission, projection, deadline.Token));
+                    }
+                    var recorded = await catalog.RecordJournalDirectoryMoveProjectionAsync(moveRow.OperationId, ordinal, observed, deadline.Token);
+                    Assert.AreEqual(ordinal + 1, recorded.ProjectedMemberCount);
+                    var replay = await catalog.RecordJournalDirectoryMoveProjectionAsync(moveRow.OperationId, ordinal, observed, deadline.Token);
+                    Assert.AreEqual(recorded.ProjectedMemberCount, replay.ProjectedMemberCount);
                 }
-                Assert.IsTrue(await patch.ApplyAsync(admission, new(originalCold, projectedCold), deadline.Token));
-                Assert.IsTrue(await patch.ApplyAsync(admission, new(originalCold, projectedCold), deadline.Token));
                 await AssertRecursiveJournalColdFileAsync(inspect, targetCold, projectedCold.ItemId, fixtureColdLength, deadline.Token);
                 Assert.AreEqual(0, finalReads.Reads);
                 var projectedJournal = await ReadRecursiveJournalOriginalsAsync(finalState.OpenStore, deadline.Token);
@@ -238,6 +277,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 Assert.IsFalse(projectedPaths.RescanWithheld);
                 Assert.IsNull(projectedPaths.UndecodedOperationId);
                 Assert.AreEqual(originalMovePaths, projectedPaths.Paths[moveRow.OperationId]);
+                await catalog.BeginJournalDirectoryMoveAcknowledgementAsync(moveRow.OperationId, deadline.Token);
                 await movedFeed.AcknowledgeAsync([new CloudLocalChangeAcknowledgement(moveRow.OperationId, admission.Root.OriginalRevision)], deadline.Token);
                 var acknowledged = await ReadRecursiveJournalOriginalsAsync(finalState.OpenStore, deadline.Token);
                 Assert.IsFalse(acknowledged.ContainsKey(moveRow.OperationId));
@@ -246,6 +286,17 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     Assert.IsTrue(acknowledged.TryGetValue(retained.OperationId, out var other));
                     Assert.AreEqual(retained.PayloadSha256, other.PayloadSha256);
                 }
+                var transport = new RecursiveJournalProjectionWorker(admission.Members, root.DirectoryName);
+                var recovery = new MirrorPulseJournalDirectoryMoveRecovery(catalog, finalState, router, movedFeed,
+                    transport, transport, patch);
+                Assert.IsTrue(await recovery.ResumeAsync(moveRow.OperationId, deadline.Token));
+                Assert.IsTrue(await recovery.ResumeAsync(moveRow.OperationId, deadline.Token));
+                var finished = await catalog.ReadJournalDirectoryMoveAsync(moveRow.OperationId, deadline.Token);
+                Assert.IsNotNull(finished);
+                Assert.AreEqual(MirrorPulseMutationState.Acknowledged, finished.Mutation.State);
+                Assert.IsTrue(finished.AcknowledgementStarted);
+                Assert.AreEqual(admission.Members.Count, finished.ProjectedMemberCount);
+                CollectionAssert.AreEqual(targetPlan, finished.Targets!.ToArray());
             }
 
             var added = durable.Values.Where(row => !before.ContainsKey(row.OperationId)).OrderBy(row => row.Sequence).ThenBy(row => row.OperationId).ToArray();
@@ -309,9 +360,15 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     }
 
     private sealed class RecursiveJournalProjectionWorker(IReadOnlyList<MirrorPulseJournalDirectoryMoveMember> members, string label)
-        : IMirrorPulseWorkerDirectoryPageSource
+        : IMirrorPulseWorkerDirectoryPageSource, IMirrorPulseWorkerMutationTransport
     {
         public bool ReplaceFileGeneration { get; set; }
+
+        public ValueTask<string?> DeleteAsync(MirrorPulseWorkerDeleteRequest request, CancellationToken cancellationToken) =>
+            throw new AssertFailedException("Directory Move recovery must not send a Delete.");
+
+        public ValueTask<string> MoveAsync(MirrorPulseWorkerMoveRequest request, CancellationToken cancellationToken) =>
+            throw new AssertFailedException("A retained accepted directory Move must not be sent again.");
 
         public ValueTask<MirrorPulseWorkerDirectoryPage> ReadDirectoryPageAsync(MirrorPulseWorkerDirectoryPageRequest request,
             CancellationToken cancellationToken)

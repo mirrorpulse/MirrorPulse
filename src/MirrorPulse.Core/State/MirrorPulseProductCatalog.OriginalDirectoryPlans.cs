@@ -212,15 +212,22 @@ public sealed partial class MirrorPulseProductCatalog
         try
         {
             ThrowIfDisposed();
-            await using var command = _connection.CreateCommand();
-            command.CommandText = """
-                SELECT 1 FROM original_directory_plan_members WHERE operation_id=$operation
-                UNION ALL SELECT 1 FROM original_directory_retirements WHERE operation_id=$operation LIMIT 1;
-                """;
-            command.Parameters.AddWithValue("$operation", operationId.ToString("D"));
-            return await command.ExecuteScalarAsync(token).ConfigureAwait(false) is not null;
+            return await HasTypedDirectoryMutationOwnerCoreAsync(operationId, null, token).ConfigureAwait(false);
         }
         finally { _gate.Release(); }
+    }
+
+    private async Task<bool> HasTypedDirectoryMutationOwnerCoreAsync(Guid operationId, SqliteTransaction? transaction, CancellationToken token)
+    {
+        await using var command = _connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            SELECT 1 FROM original_directory_plan_members WHERE operation_id=$operation
+            UNION ALL SELECT 1 FROM original_directory_retirements WHERE operation_id=$operation
+            UNION ALL SELECT 1 FROM journal_directory_moves WHERE operation_id=$operation LIMIT 1;
+            """;
+        command.Parameters.AddWithValue("$operation", operationId.ToString("D"));
+        return await command.ExecuteScalarAsync(token).ConfigureAwait(false) is not null;
     }
 
     private async Task RequireNotOriginalDirectoryPlanMemberAsync(Guid operationId, SqliteTransaction transaction, CancellationToken token)

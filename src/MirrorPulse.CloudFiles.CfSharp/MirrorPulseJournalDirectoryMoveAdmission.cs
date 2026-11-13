@@ -7,17 +7,6 @@ using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.CloudFiles.CfSharp;
 
-internal sealed record MirrorPulseJournalDirectoryMoveMember(Guid MemberId, MirrorPulseLocalFileBinding Binding,
-    string SourcePath, string TargetPath, bool IsDirectory, Guid OriginalItemId, string OriginalRemoteId,
-    string? OriginalRevision, string? OriginalNativeRevision, Guid? PreviousIdentityAcceptance);
-
-internal sealed record MirrorPulseJournalDirectoryMoveAdmission(Guid JournalOperationId, long JournalSequence,
-    string OriginalJournalPayloadSha256, Guid LocalMoveOperationId, RootId RootId, InstanceId InstanceId,
-    string RootKey, IReadOnlyList<MirrorPulseJournalDirectoryMoveMember> Members)
-{
-    internal MirrorPulseJournalDirectoryMoveMember Root => Members[0];
-}
-
 /// <summary>Correlates the exact CfSharp root Move with the previously settled controlled subtree.</summary>
 [SupportedOSPlatform("windows10.0.16299")]
 internal sealed class MirrorPulseJournalDirectoryMoveAdmissionReader(MirrorPulseProductCatalog catalog,
