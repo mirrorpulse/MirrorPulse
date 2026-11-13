@@ -4,14 +4,14 @@ using Microsoft.Data.Sqlite;
 
 namespace MirrorPulse.Core.State;
 
-/// <summary>The immutable original Label, public proof and registered objects selecting cancellation recovery.</summary>
+/// <summary>The immutable original Label, public proof and registered objects selecting pending Label recovery.</summary>
 /// <remarks>This purpose grants neither native permission nor current-tree readiness.</remarks>
 public sealed record MirrorPulseRootLabelCancellationInitialization(Guid RootLabelOperationId,
     Guid RootMemberId, Guid AnchorMemberId, string LabelProofSha256);
 
 public sealed partial class MirrorPulseProductCatalog
 {
-    /// <summary>Retains the existing initializer or admits one exact born-root cancellation owner atomically.</summary>
+    /// <summary>Retains the existing initializer or admits one exact born-root Label recovery owner atomically.</summary>
     /// <remarks>Captured roots without an initializer keep their existing cancellation route. No native
     /// facts are adopted, permissions changed, cancellation recorded or dispatch fence released here.</remarks>
     public async Task<MirrorPulseNamespaceInitializationIntent?> PrepareRootLabelCancellationInitializationAsync(

@@ -19,7 +19,8 @@ public sealed record MirrorPulseNamespaceInitializationRoot(RootId RootId, Guid 
 /// <remarks>Version 3 explicitly admits an empty Adapter inventory with a selected recovery route.
 /// Versions 1 and 2 retain their nonempty root requirements and historical payloads.
 /// Version 4 explicitly selects one current root. Version 5 binds that selection
-/// to the original unsealed Label cancellation and registered born root.</remarks>
+/// to the original unsealed Label and registered born root for permission recovery
+/// before that same operation executes or cancels.</remarks>
 public sealed record MirrorPulseNamespaceInitializationIntent(int Version, Guid OperationId,
     IReadOnlyList<MirrorPulseNamespaceInitializationRoot> Roots, DateTimeOffset PreparedAt)
 {
@@ -27,7 +28,7 @@ public sealed record MirrorPulseNamespaceInitializationIntent(int Version, Guid 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public MirrorPulseNamespaceInitializationInventoryKind? RequestedInventoryKind { get; init; }
 
-    /// <summary>The exact original cancellation purpose of a version 5 admission.</summary>
+    /// <summary>The exact original Label recovery purpose of a version 5 admission, retaining its serialized field name.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public MirrorPulseRootLabelCancellationInitialization? RootLabelCancellation { get; init; }
 }

@@ -9,6 +9,41 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
 {
     [TestMethod]
     [TestCategory("RootLabelCancellationInitialization")]
+    [DataRow(true)]
+    [DataRow(false)]
+    public async Task PendingLabelInitializerCanCompleteAfterItsSameOriginalSubtreeExecutes(bool enabled)
+    {
+        using var fixture = new Fixture();
+        await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        var setup = await PrepareCancellationInitializationFixtureAsync(catalog, enabled, true);
+        var initializer = (await catalog.PrepareRootLabelCancellationInitializationAsync(setup.Move.OperationId,
+            Guid.NewGuid(), setup.Move.PreparedAt.AddSeconds(1)))!;
+        var protection = (await catalog.ReadNamespaceMemberProtectionSnapshotAsync(setup.Root.MemberId))!;
+        setup = setup with
+        {
+            Move = setup.Move with
+            {
+                ProtectionId = protection.Context.Protection.ProtectionId,
+                PreparedAt = initializer.PreparedAt.AddSeconds(1)
+            }
+        };
+        var original = await catalog.ReadManagedRootRenameHistoryAsync(setup.Move.OperationId);
+        var before = await catalog.ReadNamespaceCurrentRootSnapshotAsync(setup.Anchor.MemberId, setup.Move.RootId);
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => catalog.CompleteNamespaceCurrentInitializationAsync(
+            initializer.OperationId, before, setup.Move.PreparedAt));
+        var receipt = await PrepareRootSubtreeFactsAsync(catalog, setup);
+        await catalog.CompleteNamespaceDirectoryMoveAsync(receipt);
+        var after = await catalog.ReadNamespaceCurrentRootSnapshotAsync(setup.Anchor.MemberId, setup.Move.RootId);
+        var completed = await catalog.CompleteNamespaceCurrentInitializationAsync(initializer.OperationId, after, receipt.Root.VerifiedAt.AddSeconds(1));
+        Assert.AreEqual(initializer.OperationId, completed.OperationId);
+        Assert.AreEqual(original!.Proof, (await catalog.ReadManagedRootRenameHistoryAsync(setup.Move.OperationId))!.Proof);
+        Assert.IsEmpty(await catalog.ReadPendingNamespaceInitializationsAsync());
+        Assert.IsEmpty(await catalog.ReadNamespaceDispatchFencedRootsAsync());
+        Assert.IsNull(await catalog.ReadUnsealedRootLabelCancellationAsync(setup.Move.OperationId));
+    }
+
+    [TestMethod]
+    [TestCategory("RootLabelCancellationInitialization")]
     [DataRow(true, false)]
     [DataRow(false, false)]
     [DataRow(true, true)]

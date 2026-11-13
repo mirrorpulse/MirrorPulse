@@ -1672,10 +1672,18 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             // Do not own instance/library serialization while earlier work drains.
             await using (var drained = await MirrorPulseRootLabelExecutionFailureDiagnostics.AtStageAsync(MirrorPulseRootLabelExecutionStage.RootWorkDrain, () => namespaceWork.WaitForRecoveryAsync([root.RootId], stop.Token)).ConfigureAwait(false))
             {
-                result = await MirrorPulseRootLabelExecutionFailureDiagnostics.AtStageAsync(MirrorPulseRootLabelExecutionStage.InstanceLibrary, () => WithInstanceLibraryAsync(root.InstanceId, async token =>
+                result = await MirrorPulseRootLabelExecutionFailureDiagnostics.AtStageAsync(MirrorPulseRootLabelExecutionStage.InstanceLibrary, () => WithAdmittedInstanceLibraryAsync(root.InstanceId, async (instances, token) =>
                 {
                     var anchor = RequireCurrentStartupAnchor();
                     var moves = new MirrorPulseNamespaceMemberMoveCoordinator(fileSystem, state, catalog, router, _namespaceExecution, _namespaceActor);
+                    if (history.Intent.Phase == MirrorPulseRootRenamePhase.Prepared &&
+                        await catalog.ReadNamespaceMemberMoveAsync(operationId, token).ConfigureAwait(false) is null)
+                    {
+                        var tree = await catalog.ReadRootLabelCancellationTreeAsync(operationId, token).ConfigureAwait(false);
+                        if (tree.RecoveryOwner is not null || tree.Members.Any(member => member.Context.Protection.RoleSid != _namespaceExecution.RoleSid.Value))
+                            await new MirrorPulseRootLabelCancellationRecoveryCoordinator(fileSystem, catalog, router, _namespaceExecution,
+                                _namespaceActor, instances, _permissions).ReplayAsync(operationId, token).ConfigureAwait(false);
+                    }
                     _ = await MirrorPulseRootLabelExecutionFailureDiagnostics.AtStageAsync(MirrorPulseRootLabelExecutionStage.SubtreePreparation, () => moves.PrepareRootLabelAsync(operationId, token)).ConfigureAwait(false);
                     _ = await MirrorPulseRootLabelExecutionFailureDiagnostics.AtStageAsync(MirrorPulseRootLabelExecutionStage.OriginalExecution, () => moves.ExecuteRootLabelAsync(operationId, token)).ConfigureAwait(false);
                     var completed = await catalog.ReadManagedRootRenameHistoryAsync(operationId, token).ConfigureAwait(false)
@@ -1686,11 +1694,24 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                         throw new InvalidOperationException("Root execution requires atomic Label settlement and this Host's current guard.");
                     var member = await catalog.ReadNamespaceMemberByBindingAsync(anchor.Original.LocalObject, token).ConfigureAwait(false)
                         ?? throw new InvalidDataException("Root execution lost its current registered sync-root anchor.");
+                    var initialization = (await catalog.ReadPendingNamespaceInitializationsAsync(token).ConfigureAwait(false))
+                        .SingleOrDefault(pending => pending.Intent.RootLabelCancellation?.RootLabelOperationId == operationId);
+                    var auditAnchor = anchor;
+                    if (initialization is not null)
+                    {
+                        await using var restored = await new MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(fileSystem, catalog, router,
+                            _namespaceExecution, _namespaceActor, instances, _permissions)
+                            .RecoverRootAsync(initialization.Intent.OperationId, root.RootId, token).ConfigureAwait(false);
+                        auditAnchor = restored.TransferAnchor();
+                        var prior = _scopedAnchorProtection;
+                        _scopedAnchorProtection = auditAnchor;
+                        if (prior is not null) await prior.DisposeAsync().ConfigureAwait(false);
+                    }
                     string currentName = string.Empty;
                     _ = await MirrorPulseRootLabelExecutionFailureDiagnostics.AtStageAsync(MirrorPulseRootLabelExecutionStage.CurrentTreeAudit, async () =>
                     {
                         await new MirrorPulseNamespaceCurrentTreeAuditCoordinator(fileSystem, catalog, router, _namespaceExecution, _namespaceActor, _permissions)
-                            .AuditRetainedRootAsync(member.MemberId, anchor, root.RootId, (audit, _) =>
+                            .AuditRetainedRootAsync(member.MemberId, auditAnchor, root.RootId, (audit, _) =>
                             {
                                 _namespaceActor.AssertAccess();
                                 var current = router.FindRegistration(root.RootId) ?? throw new InvalidOperationException("The executed root lost its current route.");

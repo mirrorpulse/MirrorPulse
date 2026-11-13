@@ -8,7 +8,7 @@ using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.CloudFiles.CfSharp;
 
-/// <summary>Settles original permission and born work before the existing guarded cancellation.</summary>
+/// <summary>Settles original permission and born work before an original unsealed Label executes or cancels.</summary>
 /// <remarks>The Host caller owns root drain and instance/library admission. This does not
 /// complete initialization, cancel Label, release fences, grant readiness or access a backend.</remarks>
 [SupportedOSPlatform("windows10.0.26100")]

@@ -38,8 +38,21 @@ public sealed partial class MirrorPulseProductCatalog
                 var cancellation = await ReadUnsealedRootLabelCancellationCoreAsync(purpose.RootLabelOperationId, transaction, cancellationToken).ConfigureAwait(false);
                 var owner = await ReadRootCancellationInitializerFingerprintCoreAsync(operationId, intent.Roots[0].RootId,
                     requirePending: true, transaction, cancellationToken, purpose.RootLabelOperationId).ConfigureAwait(false);
-                if (cancellation is null || cancellation.RootMemberId != purpose.RootMemberId || cancellation.RecoveryOwner != owner)
-                    throw new InvalidOperationException("Cancellation initialization requires its exact original atomic unsealed cancellation before current-tree completion.");
+                if (cancellation is not null)
+                {
+                    if (cancellation.RootMemberId != purpose.RootMemberId || cancellation.RecoveryOwner != owner)
+                        throw new InvalidOperationException("Label initialization lost its exact original cancellation and recovery owner.");
+                }
+                else
+                {
+                    var history = await ReadManagedRootRenameHistoryCoreAsync(purpose.RootLabelOperationId, cancellationToken, transaction).ConfigureAwait(false);
+                    var move = await ReadNamespaceMemberMoveCoreAsync(purpose.RootLabelOperationId, transaction, cancellationToken).ConfigureAwait(false);
+                    if (history.Intent.Phase != MirrorPulseRootRenamePhase.Completed || move is not { Version: 3, RemoteEntry: null } ||
+                        move.MemberId != purpose.RootMemberId || move.RootId != intent.Roots[0].RootId ||
+                        move.DirectoryMoveEvidence != history.Proof!.DirectoryMoveEvidence ||
+                        await ReadNamespaceDirectoryMoveCompletionCoreAsync(purpose.RootLabelOperationId, transaction, cancellationToken).ConfigureAwait(false) is null)
+                        throw new InvalidOperationException("Label initialization requires its exact completed original subtree before current-tree completion.");
+                }
             }
             if (auditedInventory.ScopeRoot != scope)
                 throw new InvalidDataException("The audited inventory does not match its explicit complete or selected-root admission.");
