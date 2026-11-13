@@ -16,6 +16,9 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 public sealed class MirrorPulseNormalUserWorkerTransport : IMirrorPulseWorkerRangeTransport,
     IMirrorPulseWorkerUploadTransport, IMirrorPulseWorkerStatTransport,
     IMirrorPulseWorkerDirectoryPageSource, IMirrorPulseWorkerMutationTransport, IMirrorPulseOriginalDirectoryRetirementTransport
+#if HOST_ATOMIC_DIRECTORY_CANDIDATE
+    , IMirrorPulseAtomicDirectoryDeletionTransport
+#endif
 {
     private readonly MirrorPulseNamespaceExecutionSession _session;
     private readonly IMirrorPulseWorkerRangeTransport _ranges;
@@ -89,4 +92,19 @@ public sealed class MirrorPulseNormalUserWorkerTransport : IMirrorPulseWorkerRan
         return await _session.RunNormalUserOperationAsync(async () =>
             await retirement.RetireOriginalDirectoryAsync(request, cancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
     }
+
+#if HOST_ATOMIC_DIRECTORY_CANDIDATE
+    bool IMirrorPulseAtomicDirectoryDeletionTransport.SupportsAtomicDirectoryDeletion(MirrorPulse.Core.Contracts.InstanceId instanceId) =>
+        _mutations is IMirrorPulseAtomicDirectoryDeletionTransport atomic && atomic.SupportsAtomicDirectoryDeletion(instanceId);
+
+    async ValueTask<AdapterAtomicDirectoryDeletionReceipt> IMirrorPulseAtomicDirectoryDeletionTransport.ExecuteAtomicDirectoryDeletionAsync(
+        AdapterDirectoryAdmissionRequest original, CancellationToken token,
+        IReadOnlyList<MirrorPulse.Core.Sync.MirrorPulseWorkerChangeCommand>? originals)
+    {
+        if (_mutations is not IMirrorPulseAtomicDirectoryDeletionTransport atomic)
+            throw new NotSupportedException("AtomicDirectoryDeletionUnsupported");
+        return await _session.RunNormalUserOperationAsync(async () =>
+            await atomic.ExecuteAtomicDirectoryDeletionAsync(original, token, originals).ConfigureAwait(false)).ConfigureAwait(false);
+    }
+#endif
 }

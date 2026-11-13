@@ -18,7 +18,11 @@ namespace MirrorPulse.Core.Host;
 public sealed class AdapterInstanceProcessSupervisor :
     IMirrorPulseWorkerRangeTransport, IMirrorPulseWorkerUploadTransport,
     IMirrorPulseWorkerStatTransport, IMirrorPulseWorkerDirectoryPageSource,
-    IMirrorPulseWorkerMutationTransport, IMirrorPulseOriginalDirectoryRetirementTransport, IAsyncDisposable
+    IMirrorPulseWorkerMutationTransport, IMirrorPulseOriginalDirectoryRetirementTransport,
+#if HOST_ATOMIC_DIRECTORY_CANDIDATE
+    IMirrorPulseAtomicDirectoryDeletionTransport,
+#endif
+    IAsyncDisposable
 {
     private readonly MirrorPulseProductCatalog _catalog;
     private readonly ISecureCredentialStore _credentials;
@@ -159,6 +163,14 @@ public sealed class AdapterInstanceProcessSupervisor :
     }
 
 #if HOST_ATOMIC_DIRECTORY_CANDIDATE
+    bool IMirrorPulseAtomicDirectoryDeletionTransport.SupportsAtomicDirectoryDeletion(InstanceId instanceId) =>
+        SupportsAtomicDirectoryDeletion(instanceId);
+
+    ValueTask<AdapterAtomicDirectoryDeletionReceipt> IMirrorPulseAtomicDirectoryDeletionTransport.ExecuteAtomicDirectoryDeletionAsync(
+        AdapterDirectoryAdmissionRequest original, CancellationToken token,
+        IReadOnlyList<MirrorPulse.Core.Sync.MirrorPulseWorkerChangeCommand>? originals) =>
+        ExecuteAtomicDirectoryDeletionAsync(original, token, originals);
+
     internal async ValueTask<AdapterAtomicDirectoryDeletionReceipt> ExecuteAtomicDirectoryDeletionAsync(
         AdapterDirectoryAdmissionRequest original, CancellationToken token,
         IReadOnlyList<MirrorPulse.Core.Sync.MirrorPulseWorkerChangeCommand>? originals = null)

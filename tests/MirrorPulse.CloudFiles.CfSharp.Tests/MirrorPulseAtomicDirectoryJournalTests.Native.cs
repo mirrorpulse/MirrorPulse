@@ -71,7 +71,9 @@ public sealed partial class MirrorPulseAtomicDirectoryJournalTests
             await using (var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths, token))
             await using (var worker = new AdapterInstanceProcessSupervisor(catalog, new WindowsCredentialManagerStore()))
             await using (var work = new MirrorPulseNamespaceWorkAdmission([registration.RootId]))
+            await using (var execution = new MirrorPulseNamespaceExecutionSession())
             {
+                var transport = new MirrorPulseNormalUserWorkerTransport(execution, worker, worker, worker, worker, worker);
                 await sdk.StartAsync(token);
                 (await sdk.Root.CreatePlaceholdersAsync(router.CreateRootPage().Children, cancellationToken: token)).ThrowIfAnyFailed();
                 await catalog.SaveAdapterTopologyAsync(topology, token);
@@ -109,9 +111,9 @@ public sealed partial class MirrorPulseAtomicDirectoryJournalTests
                     audit.CompleteAfterFreshAudit();
                 }
                 var completion = new MirrorPulseJournalUploadCompletion(feed, state, new BackoffPolicy(TimeSpan.FromMilliseconds(100), TimeSpan.FromSeconds(1)));
-                await using (var pump = new MirrorPulseJournalUploadPump(feed, router, catalog, worker, worker, state,
-                    fixture.Paths.SyncRootPath, fixture.Paths.DataRootPath, _ => true, completion, mutations: worker,
-                    ranges: worker, directories: worker, fileSystem: sdk, namespaceWork: work))
+                await using (var pump = new MirrorPulseJournalUploadPump(feed, router, catalog, transport, transport, state,
+                    fixture.Paths.SyncRootPath, fixture.Paths.DataRootPath, _ => true, completion, mutations: transport,
+                    ranges: transport, directories: transport, fileSystem: sdk, namespaceWork: work))
                 {
                     await pump.StartAsync(token);
                     if (loseWorkerReply)
@@ -142,8 +144,8 @@ public sealed partial class MirrorPulseAtomicDirectoryJournalTests
                 }
                 CollectionAssert.AreEquivalent(originals,
                     (await catalog.ReadUnsettledAtomicDirectoryOperationIdsAsync(token)).ToArray());
-                var rescan = new MirrorPulseFullRescanPolicy(sdk, feed, state, router, catalog, worker, worker,
-                    _ => true, worker, worker, worker, namespaceWork: work);
+                var rescan = new MirrorPulseFullRescanPolicy(sdk, feed, state, router, catalog, transport, transport,
+                    _ => true, transport, transport, transport, namespaceWork: work);
                 await rescan.ReconcileAsync(token);
                 Assert.IsFalse((await catalog.ReadBlockedLocalOperationsAsync(token))
                     .Any(operation => operation.RelativePath == "Docs/tree"));
@@ -170,6 +172,9 @@ public sealed partial class MirrorPulseAtomicDirectoryJournalTests
             await using var reopenedCatalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths, token);
             await using var restartedWorker = new AdapterInstanceProcessSupervisor(reopenedCatalog, new WindowsCredentialManagerStore());
             await using var restartedWork = new MirrorPulseNamespaceWorkAdmission([registration.RootId]);
+            await using var restartedExecution = new MirrorPulseNamespaceExecutionSession();
+            var restartedTransport = new MirrorPulseNormalUserWorkerTransport(restartedExecution,
+                restartedWorker, restartedWorker, restartedWorker, restartedWorker, restartedWorker);
             if (loseWorkerReply)
             {
                 Assert.IsNotNull(await reopenedCatalog.ReadFullRescanAsync(token));
@@ -180,9 +185,9 @@ public sealed partial class MirrorPulseAtomicDirectoryJournalTests
             }
             var reopenedCompletion = new MirrorPulseJournalUploadCompletion(reopenedFeed, reopenedState,
                 new BackoffPolicy(TimeSpan.FromMilliseconds(100), TimeSpan.FromSeconds(1)));
-            await using var recovery = new MirrorPulseJournalUploadPump(reopenedFeed, router, reopenedCatalog, restartedWorker, restartedWorker,
+            await using var recovery = new MirrorPulseJournalUploadPump(reopenedFeed, router, reopenedCatalog, restartedTransport, restartedTransport,
                 reopenedState, fixture.Paths.SyncRootPath, fixture.Paths.DataRootPath, _ => loseWorkerReply, reopenedCompletion,
-                mutations: restartedWorker, ranges: restartedWorker, directories: restartedWorker, fileSystem: reopenedSdk, namespaceWork: restartedWork);
+                mutations: restartedTransport, ranges: restartedTransport, directories: restartedTransport, fileSystem: reopenedSdk, namespaceWork: restartedWork);
             await recovery.StartAsync(token);
             while (!(await reopenedCatalog.ReadAtomicDirectoryJournalAsync(admissionId, token)).Completed)
                 await Task.Delay(25, token);

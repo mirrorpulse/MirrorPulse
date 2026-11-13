@@ -2,7 +2,7 @@
 using System.Runtime.Versioning;
 using CfSharp;
 using MirrorPulse.Adapter.Sdk;
-using MirrorPulse.Core.Host;
+using MirrorPulse.Core.CloudFiles;
 using MirrorPulse.Core.State;
 using MirrorPulse.Core.Sync;
 
@@ -15,7 +15,7 @@ public sealed partial class MirrorPulseJournalUploadPump
 
     private async ValueTask<bool?> TryDispatchAtomicDirectoryAsync(MirrorPulseWorkerChangeCommand command, CancellationToken token)
     {
-        if (command.Kind != MirrorPulseWorkerChangeKind.Delete || _mutations is not AdapterInstanceProcessSupervisor worker)
+        if (command.Kind != MirrorPulseWorkerChangeKind.Delete || _mutations is not IMirrorPulseAtomicDirectoryDeletionTransport worker)
             return null;
         var retained = await _catalog.ReadAtomicDirectoryBatchForOperationAsync(command.OperationId, token).ConfigureAwait(false);
         if (retained is not null)
@@ -174,7 +174,7 @@ public sealed partial class MirrorPulseJournalUploadPump
 
     private async ValueTask<bool> RecoverAtomicDirectoryJournalAsync(CancellationToken token)
     {
-        if (_mutations is not AdapterInstanceProcessSupervisor worker) return false;
+        if (_mutations is not IMirrorPulseAtomicDirectoryDeletionTransport worker) return false;
         const int pageSize = 4;
         var ids = await _catalog.ReadPendingAtomicDirectoryJournalAsync(_afterAtomicDirectoryJournal, pageSize, token).ConfigureAwait(false);
         bool failed = false;
@@ -203,7 +203,7 @@ public sealed partial class MirrorPulseJournalUploadPump
         return failed || ids.Count == pageSize;
     }
 
-    private async ValueTask<bool> RecoverAtomicDirectoryReceiptAsync(AdapterInstanceProcessSupervisor worker,
+    private async ValueTask<bool> RecoverAtomicDirectoryReceiptAsync(IMirrorPulseAtomicDirectoryDeletionTransport worker,
         MirrorPulseAtomicDirectoryBatch batch, CancellationToken token)
     {
         var request = batch.Request.OriginalRequest;
