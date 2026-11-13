@@ -131,6 +131,18 @@ function Wait-MirrorPulseHostStopped {
     throw "The Host did not stop after the CLI lifecycle command."
 }
 
+function Wait-MirrorPulseHostReady {
+    $deadline = [DateTime]::UtcNow.AddSeconds(60)
+    do {
+        $lifecycle = Invoke-MirrorPulseCli @('--json', '--no-start', 'host', 'status')
+        if ($lifecycle.kind -cne 'result') { throw 'Require the actual restarted Host lifecycle.' }
+        if ($lifecycle.data.state -cin @('Running', 'Degraded') -and $null -eq $lifecycle.data.startupPhase) { return }
+        if ($lifecycle.data.state -ceq 'Failed') { throw 'The restarted Host failed initialization.' }
+        Start-Sleep -Milliseconds 250
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw 'The restarted Host did not finish its protected namespace recovery.'
+}
+
 function Write-MirrorPulseUploadDiagnostics {
     $workerLog = Join-Path $dataRoot 'logs\workers\mirrorpulse.log'
     if (Test-Path -LiteralPath $workerLog) {
@@ -579,6 +591,8 @@ try {
     $restart = Invoke-MirrorPulseCli @("--json", "--developer-mode", "host", "restart")
     if ($restart.kind -ne "result") { throw "The CLI Host restart response is invalid." }
     Wait-MirrorPulseHostStopped
+    Invoke-MirrorPulseCli @('--json', '--developer-mode', 'host', 'start') | Out-Null
+    Wait-MirrorPulseHostReady
     $listed = Invoke-MirrorPulseCli @("--json", "--developer-mode", "instance", "list")
     if (-not (@($listed.data.instances) | Where-Object { $_.instanceId -eq $instanceId })) {
         throw "The instance was not retained across a CLI Host restart."

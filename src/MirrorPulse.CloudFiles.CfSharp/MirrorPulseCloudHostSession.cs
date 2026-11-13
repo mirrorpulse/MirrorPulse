@@ -1676,13 +1676,17 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                 {
                     var anchor = RequireCurrentStartupAnchor();
                     var moves = new MirrorPulseNamespaceMemberMoveCoordinator(fileSystem, state, catalog, router, _namespaceExecution, _namespaceActor);
+                    bool recoveredPreparation = false;
                     if (history.Intent.Phase == MirrorPulseRootRenamePhase.Prepared &&
                         await catalog.ReadNamespaceMemberMoveAsync(operationId, token).ConfigureAwait(false) is null)
                     {
                         var tree = await catalog.ReadRootLabelCancellationTreeAsync(operationId, token).ConfigureAwait(false);
                         if (tree.RecoveryOwner is not null || tree.Members.Any(member => member.Context.Protection.RoleSid != _namespaceExecution.RoleSid.Value))
+                        {
                             await new MirrorPulseRootLabelCancellationRecoveryCoordinator(fileSystem, catalog, router, _namespaceExecution,
                                 _namespaceActor, instances, _permissions).ReplayAsync(operationId, token).ConfigureAwait(false);
+                            recoveredPreparation = true;
+                        }
                     }
                     _ = await MirrorPulseRootLabelExecutionFailureDiagnostics.AtStageAsync(MirrorPulseRootLabelExecutionStage.SubtreePreparation, () => moves.PrepareRootLabelAsync(operationId, token)).ConfigureAwait(false);
                     _ = await MirrorPulseRootLabelExecutionFailureDiagnostics.AtStageAsync(MirrorPulseRootLabelExecutionStage.OriginalExecution, () => moves.ExecuteRootLabelAsync(operationId, token)).ConfigureAwait(false);
@@ -1697,7 +1701,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                     var initialization = (await catalog.ReadPendingNamespaceInitializationsAsync(token).ConfigureAwait(false))
                         .SingleOrDefault(pending => pending.Intent.RootLabelCancellation?.RootLabelOperationId == operationId);
                     var auditAnchor = anchor;
-                    if (initialization is not null)
+                    if (initialization is not null && !recoveredPreparation)
                     {
                         await using var restored = await new MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(fileSystem, catalog, router,
                             _namespaceExecution, _namespaceActor, instances, _permissions)
@@ -1711,15 +1715,21 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                     _ = await MirrorPulseRootLabelExecutionFailureDiagnostics.AtStageAsync(MirrorPulseRootLabelExecutionStage.CurrentTreeAudit, async () =>
                     {
                         await new MirrorPulseNamespaceCurrentTreeAuditCoordinator(fileSystem, catalog, router, _namespaceExecution, _namespaceActor, _permissions)
-                            .AuditRetainedRootAsync(member.MemberId, auditAnchor, root.RootId, (audit, _) =>
+                            .AuditRetainedRootAsync(member.MemberId, auditAnchor, root.RootId, async (audit, auditToken) =>
                             {
                                 _namespaceActor.AssertAccess();
                                 var current = router.FindRegistration(root.RootId) ?? throw new InvalidOperationException("The executed root lost its current route.");
-                                if (_startupProtection != anchor || audit.Inventory.FencedRoots.Count != 0 || audit.RoleSid != _namespaceExecution.RoleSid.Value)
+                                if (_startupProtection != anchor || audit.RoleSid != _namespaceExecution.RoleSid.Value)
+                                    throw new InvalidOperationException("Executed-root readmission requires its current protected Host owner.");
+                                if (initialization is not null && recoveredPreparation)
+                                    await catalog.CompleteNamespaceCurrentInitializationAsync(initialization.Intent.OperationId,
+                                        audit.Inventory, audit.ObservedAt, auditToken).ConfigureAwait(false);
+                                else if (audit.Inventory.FencedRoots.Count != 0)
                                     throw new InvalidOperationException("Executed-root readmission requires its fresh current unfenced audit.");
+                                if ((await catalog.ReadNamespaceDispatchFencedRootsAsync(auditToken).ConfigureAwait(false)).Contains(root.RootId))
+                                    throw new InvalidOperationException("An unresolved operation still owns the executed root.");
                                 currentName = current.DirectoryName;
                                 if (current.State == RootRegistrationState.Active) drained.CompleteAfterFreshAudit();
-                                return Task.CompletedTask;
                             }, token).ConfigureAwait(false);
                         return true;
                     }).ConfigureAwait(false);
