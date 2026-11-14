@@ -8,8 +8,40 @@ public sealed record MirrorPulseNamespaceMemberProtectionSnapshot(MirrorPulseNam
     MirrorPulseNamespaceMemberIdentity Identity, string ExpectedDacl, Guid PermissionOperationId,
     MirrorPulseNamespaceBornParent? BornParent, MirrorPulseNamespaceBirthObservation? Observation);
 
+public sealed record MirrorPulseNamespaceProtectedTreeMember(
+    MirrorPulseNamespaceMemberProtectionSnapshot Protection, int Depth);
+
 public sealed partial class MirrorPulseProductCatalog
 {
+    /// <summary>Reads one registered subtree and the current protection of every member in a single catalog snapshot.</summary>
+    public async Task<IReadOnlyList<MirrorPulseNamespaceProtectedTreeMember>> ReadNamespaceProtectedSubtreeAsync(
+        Guid memberId, CancellationToken cancellationToken = default)
+    {
+        if (memberId == Guid.Empty) throw new ArgumentException("A member ID is required.", nameof(memberId));
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            using SqliteTransaction transaction = BeginNamespaceRecoveryReadSnapshot();
+            var tree = await ReadNamespaceMemberTreeCoreAsync(memberId, transaction, cancellationToken).ConfigureAwait(false);
+            if (tree.Count > 65_536) throw new InvalidOperationException("The protected subtree is too large.");
+            var members = new List<MirrorPulseNamespaceProtectedTreeMember>(tree.Count);
+            foreach (var item in tree)
+            {
+                var protection = await ReadNamespaceMemberProtectionSnapshotCoreAsync(item.MemberId, transaction, cancellationToken).ConfigureAwait(false)
+                    ?? throw new InvalidDataException("The protected subtree lost a registered member.");
+                var (member, location) = (protection.Context.Member, protection.Context.Location);
+                if (member.LocalObject != item.LocalObject || member.IsDirectory != item.IsDirectory ||
+                    location.ParentMemberId != item.ParentMemberId || location.RelativePath != item.RelativePath)
+                    throw new InvalidDataException("The protected subtree member disagrees with its registered graph.");
+                members.Add(new(protection, item.Depth));
+            }
+            transaction.Commit();
+            return members.AsReadOnly();
+        }
+        finally { _gate.Release(); }
+    }
+
     public async Task<MirrorPulseNamespaceMemberProtectionSnapshot?> ReadNamespaceMemberProtectionSnapshotAsync(
         Guid memberId, CancellationToken cancellationToken = default)
     {

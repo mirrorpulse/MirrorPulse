@@ -29,6 +29,17 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
                 child.RegisteredAt.AddSeconds(1));
             await CompleteMoveChainStepAsync(first, move);
             childMoveId = move.OperationId;
+            var source = await first.ReadNamespaceProtectedSubtreeAsync(setup.Member.MemberId);
+            Assert.HasCount(2, source);
+            Assert.AreEqual(setup.Member.MemberId, source[0].Protection.Context.Member.MemberId);
+            Assert.AreEqual(0, source[0].Depth);
+            var movedChild = source[1];
+            Assert.AreEqual(1, movedChild.Depth);
+            Assert.AreEqual(child, movedChild.Protection.Context.Member);
+            Assert.AreEqual(move.Target.RelativePath, movedChild.Protection.Context.Location.RelativePath);
+            Assert.AreEqual(childMoveId, movedChild.Protection.Context.Location.CurrentPositionOperationId);
+            Assert.AreEqual(born.Protection.ProtectionId, movedChild.Protection.Context.Protection.ProtectionId);
+            Assert.AreEqual(born.Plan.ItemId, movedChild.Protection.Identity.ItemId);
             setup = setup with { Move = setup.Move with { PreparedAt = move.PreparedAt.AddSeconds(10) } };
             await first.PrepareNamespaceMemberMoveAsync(setup.Move);
             snapshot = (await first.ReadNamespaceDirectoryMoveSnapshotAsync(setup.Move.OperationId))!;

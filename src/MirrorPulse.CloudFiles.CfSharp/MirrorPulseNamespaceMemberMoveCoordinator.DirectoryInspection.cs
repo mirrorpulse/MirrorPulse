@@ -24,20 +24,15 @@ public sealed partial class MirrorPulseNamespaceMemberMoveCoordinator
 
     private async Task<IReadOnlyList<MirrorPulseNamespaceDirectoryMoveEntry>> ReadDirectoryMoveEntriesAsync(Guid memberId, CancellationToken token)
     {
-        var tree = await _catalog.ReadNamespaceMemberTreeAsync(memberId, token).ConfigureAwait(false);
-        if (tree.Count > 65_536) throw new InvalidOperationException("The controlled directory subtree is too large.");
+        var tree = await _catalog.ReadNamespaceProtectedSubtreeAsync(memberId, token).ConfigureAwait(false);
         var entries = new List<MirrorPulseNamespaceDirectoryMoveEntry>(tree.Count);
         foreach (var item in tree)
         {
-            var snapshot = await _catalog.ReadNamespaceMemberProtectionSnapshotAsync(item.MemberId, token).ConfigureAwait(false)
-                ?? throw new FileNotFoundException("The directory subtree lost a registered member.");
+            var snapshot = item.Protection;
             var member = snapshot.Context.Member;
             var protection = snapshot.Context.Protection;
             var location = snapshot.Context.Location;
-            if (item.RelativePath != location.RelativePath || item.ParentMemberId != location.ParentMemberId ||
-                item.LocalObject != member.LocalObject || item.IsDirectory != member.IsDirectory)
-                throw new InvalidDataException("The current directory subtree changed during admission.");
-            entries.Add(new(member.MemberId, item.ParentMemberId, item.RelativePath, member.IsDirectory, member.LocalObject,
+            entries.Add(new(member.MemberId, location.ParentMemberId, location.RelativePath, member.IsDirectory, member.LocalObject,
                 member.OwnerSid, protection.ProtectionId, protection.VerifiedAt, location.CompletedMoveOperationId,
                 snapshot.Identity, item.Depth)
             { PreviousPositionOperationId = location.PositionOperationId });
