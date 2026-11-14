@@ -1,4 +1,6 @@
 using System.Security.Cryptography;
+using MirrorPulse.Core.Caching;
+using MirrorPulse.Core.State;
 
 namespace MirrorPulse.CloudFiles.CfSharp;
 
@@ -15,6 +17,10 @@ internal sealed class MirrorPulseTransferSourceDataLease : IAsyncDisposable
     internal static MirrorPulseTransferSourceDataLease Open(string fullyResidentPath) => new(new(fullyResidentPath,
         FileMode.Open, FileAccess.ReadWrite, FileShare.Read | FileShare.Delete, 64 * 1024,
         FileOptions.Asynchronous | FileOptions.SequentialScan));
+
+    internal Task<MirrorPulseNamespaceImportContent> StageAsync(
+        MirrorPulseLocalTransferContentStore store, Guid contentId, CancellationToken token) =>
+        store.StageRetainedAsync(contentId, _file, token);
 
     internal async Task VerifyAsync(long expectedLength, string expectedSha256, CancellationToken token)
     {

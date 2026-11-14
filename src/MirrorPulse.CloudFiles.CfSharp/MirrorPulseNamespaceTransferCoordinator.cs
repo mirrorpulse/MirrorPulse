@@ -40,16 +40,21 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator(CloudFileSys
             var targetRoute = CaptureRoute(topology, targetParent);
             if (targetRoute.ProtocolVersion != 2)
                 throw new InvalidOperationException("A transfer requires a negotiated V2 target before source materialization.");
-            var file = fileSystem.GetFile(original.Context.Location.RelativePath);
-            var before = await file.InspectAsync(token).ConfigureAwait(false); RequireBinding(before, original, requireResident: false);
-            if (before.IsPlaceholder && before.ContentAvailability != CloudContentAvailability.FullyAvailable)
-            {
-                await file.HydrateAsync(CloudFileRange.WholeFile, token).ConfigureAwait(false);
-                var after = await file.InspectAsync(token).ConfigureAwait(false); RequireBinding(after, original);
-                if (after.ContentAvailability != CloudContentAvailability.FullyAvailable)
-                    throw new IOException("The transfer source is not fully resident.");
-            }
+        await MaterializeFileAsync(original, token).ConfigureAwait(false);
         });
+
+    private async Task MaterializeFileAsync(MirrorPulseNamespaceMemberProtectionSnapshot original, CancellationToken token)
+    {
+        var file = fileSystem.GetFile(original.Context.Location.RelativePath);
+        var before = await file.InspectAsync(token).ConfigureAwait(false);
+        RequireBinding(before, original, requireResident: false);
+        if (!before.IsPlaceholder || before.ContentAvailability == CloudContentAvailability.FullyAvailable) return;
+        await file.HydrateAsync(CloudFileRange.WholeFile, token).ConfigureAwait(false);
+        var after = await file.InspectAsync(token).ConfigureAwait(false);
+        RequireBinding(after, original);
+        if (after.ContentAvailability != CloudContentAvailability.FullyAvailable)
+            throw new IOException("The transfer source is not fully resident.");
+    }
 
     public async ValueTask<MirrorPulseNamespaceTransferCopy> PrepareAsync(Guid operationId,
         MirrorPulseNamespaceMemberProtectionSnapshot original, MirrorPulseNamespaceMemberProtectionSnapshot targetParent,

@@ -89,6 +89,31 @@ public sealed class MirrorPulseTransferJournalCaptureTests
         Assert.AreEqual(CloudLocalChangeKind.MetadataUpdate, observed.Kind); Assert.AreEqual(SourcePath, observed.RelativePath);
     }
 
+    [TestMethod]
+    public void DirectoryTransferClaimsOriginalChildrenAndRefusesUnknownSubtreeObservations()
+    {
+        const string directory = "Docs/subtree";
+        const string child = directory + "/leaf.bin";
+        Guid folder = Guid.NewGuid();
+        var selector = new MirrorPulseTransferJournalCapture.DirectorySourceObservations(
+            [(folder, directory, true), (SourceItem, child, false)]);
+        var create = Observation(CloudLocalChangeKind.Create) with { RelativePath = @"Docs\subtree", IsDirectory = true, ItemId = folder };
+        var content = Observation(CloudLocalChangeKind.ContentUpdate) with { RelativePath = child };
+        Assert.AreEqual(create.OperationId, selector.Select(create)?.OperationId);
+        Assert.AreEqual(content.OperationId, selector.Select(content)?.OperationId);
+        Assert.IsNull(selector.Select(content with { ItemId = Guid.NewGuid(), RelativePath = "Docs/subtree-other/leaf.bin" }));
+        Assert.ThrowsExactly<InvalidOperationException>(() => selector.Select(content with { ItemId = null }));
+        Assert.ThrowsExactly<InvalidOperationException>(() => selector.Select(content with { RelativePath = "Docs/subtree/other.bin" }));
+        Assert.ThrowsExactly<InvalidOperationException>(() => selector.Select(create with { Kind = CloudLocalChangeKind.ContentUpdate }));
+        Assert.ThrowsExactly<InvalidOperationException>(() => selector.Select(content with
+        {
+            Kind = CloudLocalChangeKind.Move,
+            ItemId = Guid.NewGuid(),
+            PreviousRelativePath = child,
+            RelativePath = "Docs/outside.bin"
+        }));
+    }
+
     private static MirrorPulseLocalChangeObservation Observation(CloudLocalChangeKind kind) => new(Guid.NewGuid(), 17,
         kind, SourceItem, SourcePath, null, false, DateTimeOffset.UtcNow);
 }
