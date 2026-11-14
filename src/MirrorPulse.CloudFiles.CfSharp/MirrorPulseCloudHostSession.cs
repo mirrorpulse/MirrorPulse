@@ -1404,6 +1404,36 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
+        private async ValueTask<bool> RecoverClosedJournalDirectoryMoveAsync(RootRegistration root, Guid operationId,
+            MirrorPulseJournalDirectoryMoveRecovery recovery, CancellationToken token)
+        {
+            if (!ReferenceEquals(_startupProtectionOwner, fileSystem) || namespaceWork is null) return false;
+            using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token, _admissionShutdown.Token);
+            await using var admission = await namespaceWork.WaitForRecoveryAsync([root.RootId], lifetime.Token).ConfigureAwait(false);
+            return await WithAdmittedInstanceLibraryAsync(root.InstanceId, async (instances, stop) =>
+            {
+                if (router!.FindRegistration(root.RootId) is not { State: RootRegistrationState.Active } current ||
+                    current.InstanceId != root.InstanceId || current.UniquenessKey != root.UniquenessKey) return false;
+                _ = RequireCurrentStartupAnchor();
+                var move = await recovery.PrepareProjectionAsync(operationId,
+                    mayDispatch?.Invoke(root.InstanceId) == true, stop).ConfigureAwait(false);
+                if (move is null) return false;
+                var initializations = await catalog!.ReadPendingNamespaceInitializationsAsync(stop).ConfigureAwait(false);
+                var existing = initializations.SingleOrDefault(item => item.Intent.Version == 4 &&
+                    item.Intent.Roots.Count == 1 && item.Intent.Roots[0].RootId == root.RootId);
+                var coordinator = new MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(fileSystem, catalog, router,
+                    _namespaceExecution!, _namespaceActor!, instances, _permissions!);
+                Guid auditId = existing?.Intent.OperationId ?? Guid.NewGuid();
+                await using var audited = await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.DirectoryMoveRootAudit,
+                    () => coordinator.RecoverJournalDirectoryMoveAsync(auditId, move, stop)).ConfigureAwait(false);
+                admission.CompleteAfterFreshAudit();
+                NamespaceStartupResults = NamespaceStartupResults.Select(result => result.RootId == root.RootId
+                    ? new MirrorPulseNamespaceStartupRoot(root.RootId, auditId, true, null) : result).ToArray();
+                return true;
+            }, lifetime.Token).ConfigureAwait(false);
+        }
+
+        [SupportedOSPlatform("windows10.0.26100")]
         private async ValueTask<bool> BootstrapNamespaceAsync(IMirrorPulseInstanceScheduler instances, CancellationToken token)
         {
             // Already accepted original ACKs are metadata settlement under the normal
@@ -1571,6 +1601,9 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                     syncRootPath, dataRootPath, mayDispatch!, completion, conflicts, notifications, mutations,
                     uploads as IMirrorPulseWorkerRangeTransport, uploads as IMirrorPulseWorkerDirectoryPageSource, fileSystem, _scheduler,
                     _namespaceActor, _namespaceExecution, namespaceWork, _conflictActions, _retiredSourceObservations, _rootLabelJournalRecovery, rootAdmission);
+                if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100) && initializeNamespaceOnStart &&
+                    namespaceWork is not null && _namespaceExecution is not null && _namespaceActor is not null && _permissions is not null)
+                    _uploadPump.UseClosedDirectoryMoveRecovery(RecoverClosedJournalDirectoryMoveAsync);
                 if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100) && _namespaceExecution is not null)
                     _remoteVersionRefresh = new(catalog!, router!, async (request, stop) =>
                     {

@@ -12,8 +12,11 @@ public sealed class MirrorPulseNamespaceOriginalMemberRecoveryCoordinator(CloudF
     MirrorPulseRootRouter router, MirrorPulseNamespaceExecutionSession execution, MirrorPulseNamespaceActor actor,
     IMirrorPulseInstanceScheduler scheduler, MirrorPulseNamespacePermissionCoordinator permissions)
 {
-    public async ValueTask<MirrorPulseProtectedNamespacePermissionResult> RecoverAsync(Guid initializationOperationId, Guid memberId,
-        CancellationToken cancellationToken = default)
+    public ValueTask<MirrorPulseProtectedNamespacePermissionResult> RecoverAsync(Guid initializationOperationId, Guid memberId,
+        CancellationToken cancellationToken = default) => RecoverAsync(initializationOperationId, memberId, null, cancellationToken);
+
+    internal async ValueTask<MirrorPulseProtectedNamespacePermissionResult> RecoverAsync(Guid initializationOperationId,
+        Guid memberId, MirrorPulseDirectoryMovePermissionIdentity? moveIdentity, CancellationToken cancellationToken)
     {
         var admitted = (await catalog.ReadNamespaceMemberRecoveryLineageAsync(initializationOperationId, memberId, cancellationToken).ConfigureAwait(false))[0];
         if (admitted.Original is null) throw new ArgumentException("Original member recovery requires captured original provenance.", nameof(memberId));
@@ -50,7 +53,7 @@ public sealed class MirrorPulseNamespaceOriginalMemberRecoveryCoordinator(CloudF
                 bool currentRoleScopeCompleted = false;
                 if (latest.Phase != MirrorPulseNamespacePermissionPhase.Verified)
                 {
-                    result = await permissions.ApplyProtectedAsync(latest.Intent.OperationId, item, router, cancellationToken: stop).ConfigureAwait(false);
+                    result = await ApplyCurrentIntentAsync(latest.Intent.OperationId, item, stop).ConfigureAwait(false);
                     if (!Verified(result)) return;
                     context = (await catalog.ReadNamespaceMemberRecoveryLineageAsync(initializationOperationId, memberId, stop).ConfigureAwait(false))[0];
                     latest = context.Permission!;
@@ -77,8 +80,9 @@ public sealed class MirrorPulseNamespaceOriginalMemberRecoveryCoordinator(CloudF
                 }
                 // Replaying a pending current-role intent already completed and drained
                 // its native scope. Keep that receipt and perform the independent final audit.
-                if (!currentRoleScopeCompleted && latest.Intent.RelativePath == context.Location.RelativePath)
-                    result = await permissions.ApplyProtectedAsync(latest.Intent.OperationId, item, router, cancellationToken: stop).ConfigureAwait(false);
+                if (!currentRoleScopeCompleted && latest.Intent.RelativePath == context.Location.RelativePath &&
+                    (moveIdentity is null || latest.Intent.Kind == MirrorPulseNamespacePermissionChangeKind.RotateRole))
+                    result = await ApplyCurrentIntentAsync(latest.Intent.OperationId, item, stop).ConfigureAwait(false);
                 else if (!currentRoleScopeCompleted)
                 {
                     // Same-role replay after a completed move does not rewrite an old intent's
@@ -94,7 +98,10 @@ public sealed class MirrorPulseNamespaceOriginalMemberRecoveryCoordinator(CloudF
                                     var observed = await lease.InspectAsync(scopeToken).ConfigureAwait(false); RequireOriginalObject(context, observed);
                                     if (observed.Dacl != latest.Verification!.Dacl)
                                         throw new InvalidDataException("The moved original descriptor changed before its fresh scope audit.");
-                                    identityFailure = await permissions.PrepareRetainedLocalIdentityAsync(latest, context.Original!, lease, null, scopeToken).ConfigureAwait(false);
+                                    if (moveIdentity is null)
+                                        identityFailure = await permissions.PrepareRetainedLocalIdentityAsync(latest, context.Original!, lease, null, scopeToken).ConfigureAwait(false);
+                                    else
+                                        await moveIdentity.RequireAsync(await lease.InspectLocalIdentityAsync(scopeToken).ConfigureAwait(false), scopeToken).ConfigureAwait(false);
                                 }, permissionToken);
                         }, stop).ConfigureAwait(false);
                     result = new(identityFailure ?? (receipt.Outcome == CloudProtectedLocalOperationOutcome.Completed
@@ -112,7 +119,10 @@ public sealed class MirrorPulseNamespaceOriginalMemberRecoveryCoordinator(CloudF
                     MirrorPulseNamespacePermissionPolicy.CreateProtectedDacl(execution, context.Member.IsDirectory), after.Dacl))
                     throw new InvalidDataException("The recovered original does not retain the live Host role policy.");
                 var snapshot = await item.InspectAsync(stop).ConfigureAwait(false);
-                MirrorPulseNamespaceBirthProtectionVerifier.RequireRegisteredPublicIdentity(snapshot, context.Identity, requirePlaceholder: !context.Member.IsDirectory);
+                if (moveIdentity is null)
+                    MirrorPulseNamespaceBirthProtectionVerifier.RequireRegisteredPublicIdentity(snapshot, context.Identity, requirePlaceholder: !context.Member.IsDirectory);
+                else
+                    await moveIdentity.RequireAsync(snapshot, stop).ConfigureAwait(false);
                 var finalLineage = await catalog.ReadNamespaceMemberRecoveryLineageAsync(initializationOperationId, memberId, stop).ConfigureAwait(false);
                 var final = finalLineage[0];
                 if (final.Member != context.Member || final.Location != context.Location || final.Identity != context.Identity ||
@@ -123,6 +133,11 @@ public sealed class MirrorPulseNamespaceOriginalMemberRecoveryCoordinator(CloudF
             }).ConfigureAwait(false);
             return result;
         }, token), cancellationToken).ConfigureAwait(false);
+
+        Task<MirrorPulseProtectedNamespacePermissionResult> ApplyCurrentIntentAsync(Guid operationId, CloudItem item,
+            CancellationToken token) => moveIdentity is null
+            ? permissions.ApplyProtectedAsync(operationId, item, router, cancellationToken: token)
+            : permissions.RotateDirectoryMoveMemberAsync(operationId, item, router, moveIdentity, token);
     }
 
     private static void RequireOriginalObject(MirrorPulseNamespaceMemberRecoveryContext context, MirrorPulseNamespacePermissionObject facts)

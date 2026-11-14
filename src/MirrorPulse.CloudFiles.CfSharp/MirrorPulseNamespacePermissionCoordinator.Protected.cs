@@ -51,9 +51,19 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinator
             cancellationToken);
     }
 
+    internal Task<MirrorPulseProtectedNamespacePermissionResult> RotateDirectoryMoveMemberAsync(Guid operationId, CloudItem item,
+        MirrorPulseRootRouter router, MirrorPulseDirectoryMovePermissionIdentity moveIdentity, CancellationToken token) =>
+        RunAdmittedPermissionWorkAsync(operationId, (change, baseline, stop) =>
+        {
+            if (change.Intent.Kind != MirrorPulseNamespacePermissionChangeKind.RotateRole || baseline.LocalObject != moveIdentity.Binding)
+                throw new InvalidOperationException("The original Move only authorizes identity verification for the same member's role rotation.");
+            return ApplyProtectedAdmittedAsync(change, baseline, item, router, null, stop, moveIdentity);
+        }, token);
+
     private async Task<MirrorPulseProtectedNamespacePermissionResult> ApplyProtectedAdmittedAsync(
         MirrorPulseNamespacePermissionChange change, MirrorPulseNamespacePermissionBaseline baseline, CloudItem item,
-        MirrorPulseRootRouter router, CloudPlaceholderIdentity? initialLocalIdentity, CancellationToken stop)
+        MirrorPulseRootRouter router, CloudPlaceholderIdentity? initialLocalIdentity, CancellationToken stop,
+        MirrorPulseDirectoryMovePermissionIdentity? moveIdentity = null)
     {
         if (initialLocalIdentity?.RemoteRevision is not null)
             throw new ArgumentException("Local permission preparation cannot introduce a remote acceptance revision.", nameof(initialLocalIdentity));
@@ -67,7 +77,13 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinator
         CloudProtectedLocalOperationResult receipt = await MirrorPulseWindowsNamespacePermissionLease.RunOwnedProtectedAsync(
             item, router, baseline.LocalObject, async (lease, token) =>
             {
-                permission = await ApplyWithinProtectionAsync(change, baseline, lease, initialLocalIdentity, token).ConfigureAwait(false);
+                if (moveIdentity is null)
+                    permission = await ApplyWithinProtectionAsync(change, baseline, lease, initialLocalIdentity, token).ConfigureAwait(false);
+                else
+                {
+                    await moveIdentity.RequireAsync(await lease.InspectLocalIdentityAsync(token).ConfigureAwait(false), token).ConfigureAwait(false);
+                    permission = await ApplyAdmittedAsync(change, baseline, lease, token).ConfigureAwait(false);
+                }
                 if (baseline.IsDirectory && permission.Outcome == MirrorPulseNamespacePermissionOutcome.RecoveryRequired)
                 {
                     // Closed presence/equality facts from the same retained native scope;

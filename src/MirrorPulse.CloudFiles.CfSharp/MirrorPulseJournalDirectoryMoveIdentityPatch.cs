@@ -30,7 +30,7 @@ internal sealed class MirrorPulseJournalDirectoryMoveIdentityPatch(CloudFileSyst
             throw new MirrorPulseMutationAmbiguousException("The directory Move projection cannot adopt a later position or native object.");
         var proof = await MirrorPulseNamespaceProtectionProofReader.ReadMemberAsync(catalog, member, admitted).ConfigureAwait(false);
         if (member.OwnerSid != execution.OwnerSid.Value || proof.RoleSid != execution.RoleSid.Value)
-            throw new MirrorPulseMutationAmbiguousException("The directory Move projection requires the current protected role.");
+            throw new MirrorPulseMutationAmbiguousException("The directory Move projection requires its verified protected owner.");
 
         CloudItem item = original.IsDirectory ? fileSystem.GetDirectory(original.TargetPath) : fileSystem.GetFile(original.TargetPath);
         byte[] previous = new CloudPlaceholderIdentity(original.OriginalItemId, original.OriginalRemoteId, original.OriginalNativeRevision).Encode();
@@ -67,6 +67,10 @@ internal sealed class MirrorPulseJournalDirectoryMoveIdentityPatch(CloudFileSyst
             new(original.MemberId, projection.TargetIdentity.ItemId, projection.TargetIdentity.RemoteId,
                 projection.TargetIdentity.RemoteRevision), DateTimeOffset.UtcNow);
     }, token);
+
+    internal MirrorPulseDirectoryMovePermissionIdentity PermissionIdentity(MirrorPulseJournalDirectoryMoveProjection projection) =>
+        new(projection, token => ReadOfficialProjectionAsync(projection.Original, projection.TargetIdentity,
+            projection.Original.IsDirectory ? CloudItemKind.Directory : CloudItemKind.File, token));
 
     private async ValueTask<(bool Original, bool Target)> ReadOfficialProjectionAsync(MirrorPulseJournalDirectoryMoveMember original,
         CloudPlaceholderIdentity target, CloudItemKind kind, CancellationToken token)

@@ -65,6 +65,16 @@ public sealed partial class MirrorPulseProductCatalog
         transaction.Commit();
     }
 
+    private async Task<MirrorPulseJournalDirectoryMove?> ReadInitializationJournalDirectoryMoveCoreAsync(
+        MirrorPulseNamespaceInitializationIntent intent, SqliteTransaction transaction, CancellationToken token)
+    {
+        if (intent.JournalDirectoryMoveOperationId is not { } operationId) return null;
+        var retained = await ReadJournalDirectoryMoveCoreAsync(operationId, transaction, token).ConfigureAwait(false);
+        if (retained is null || retained.Admission.RootId != intent.Roots[0].RootId)
+            throw new InvalidDataException("The directory Move initializer lost its original root or owning Move.");
+        return retained;
+    }
+
     internal Task<MirrorPulseJournalDirectoryMove?> ReadJournalDirectoryMoveAsync(Guid operationId, CancellationToken token) =>
         WithJournalDirectoryMoveAsync(operationId, (value, _, _) => Task.FromResult(value), token);
 

@@ -21,8 +21,12 @@ public sealed class MirrorPulseNamespaceBornMemberRecoveryCoordinator(CloudFileS
     internal Action<string>? Progress { get; init; }
     internal Func<MirrorPulseNamespaceBornMemberRecoveryCheckpoint, CancellationToken, ValueTask>? Checkpoint { get; init; }
 
-    public async ValueTask<MirrorPulseNamespaceBornMemberRecoveryResult> RecoverAsync(Guid initializationOperationId,
-        Guid actionId, Guid memberId, CancellationToken cancellationToken = default)
+    public ValueTask<MirrorPulseNamespaceBornMemberRecoveryResult> RecoverAsync(Guid initializationOperationId,
+        Guid actionId, Guid memberId, CancellationToken cancellationToken = default) =>
+        RecoverAsync(initializationOperationId, actionId, memberId, null, cancellationToken);
+
+    internal async ValueTask<MirrorPulseNamespaceBornMemberRecoveryResult> RecoverAsync(Guid initializationOperationId,
+        Guid actionId, Guid memberId, MirrorPulseDirectoryMovePermissionIdentity? moveIdentity, CancellationToken cancellationToken)
     {
         if (actionId == Guid.Empty) throw new ArgumentException("A recovery action ID is required.", nameof(actionId));
         Progress?.Invoke("NamespaceBornRecoveryHistoryBegin");
@@ -41,7 +45,7 @@ public sealed class MirrorPulseNamespaceBornMemberRecoveryCoordinator(CloudFileS
         var registration = router.Registrations.Single(root => root.RootId == member.RootId);
         return await scheduler.RunAsync(registration.InstanceId, token => actor.RunAsync(stop =>
             RecoverAdmittedAsync(initializationOperationId, actionId, memberId, member, registration,
-                retained?.RootLabelRecoveryOwner, stop), token), cancellationToken).ConfigureAwait(false);
+                retained?.RootLabelRecoveryOwner, moveIdentity, stop), token), cancellationToken).ConfigureAwait(false);
     }
 
     // The caller already owns root drain, instance/library admission and this actor.
@@ -59,13 +63,14 @@ public sealed class MirrorPulseNamespaceBornMemberRecoveryCoordinator(CloudFileS
         if (member.Origin != MirrorPulseNamespaceMemberOrigin.ProtectedBirth)
             throw new ArgumentException("Born recovery requires birth provenance.", nameof(memberId));
         var registration = router.Registrations.Single(root => root.RootId == member.RootId);
-        return await RecoverAdmittedAsync(initializationOperationId, actionId, memberId, member, registration, owner,
+        return await RecoverAdmittedAsync(initializationOperationId, actionId, memberId, member, registration, owner, null,
             cancellationToken).ConfigureAwait(false);
     }
 
     private async ValueTask<MirrorPulseNamespaceBornMemberRecoveryResult> RecoverAdmittedAsync(
         Guid initializationOperationId, Guid actionId, Guid memberId, MirrorPulseNamespaceMemberRegistration member,
-        RootRegistration registration, MirrorPulseNamespaceBornRootLabelRecoveryOwner? owner, CancellationToken stop)
+        RootRegistration registration, MirrorPulseNamespaceBornRootLabelRecoveryOwner? owner,
+        MirrorPulseDirectoryMovePermissionIdentity? moveIdentity, CancellationToken stop)
     {
         actor.AssertAccess();
         IReadOnlyList<MirrorPulseNamespaceBornMemberRecoveryAction> history = [];
@@ -135,7 +140,13 @@ public sealed class MirrorPulseNamespaceBornMemberRecoveryCoordinator(CloudFileS
                     var known = history.Select(value => value.TargetDacl).Append(current.Child.BirthProtection!.Verification.Dacl).Append(target);
                     if (!known.Any(dacl => MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(dacl, before.Dacl)))
                         throw new InvalidDataException("Born recovery cannot overwrite an unowned descriptor.");
-                    if (!member.IsDirectory)
+                    if (moveIdentity is not null)
+                    {
+                        if (moveIdentity.Binding != member.LocalObject)
+                            throw new InvalidDataException("The original Move does not own this born object.");
+                        await moveIdentity.RequireAsync(await lease.InspectLocalIdentityAsync(scopeToken).ConfigureAwait(false), scopeToken).ConfigureAwait(false);
+                    }
+                    else if (!member.IsDirectory)
                     {
                         var identity = await lease.InspectLocalIdentityAsync(scopeToken).ConfigureAwait(false);
                         if ((identity.ItemId is null) != (identity.RemoteId is null) ||
@@ -165,7 +176,7 @@ public sealed class MirrorPulseNamespaceBornMemberRecoveryCoordinator(CloudFileS
             MirrorPulseNamespaceBirthProtectionVerifier.RequireUnchangedParent(parentBefore, await parentGuard.InspectAsync(stop).ConfigureAwait(false));
             var observed = owner is null
                 ? await MirrorPulseNamespaceBirthProtectionVerifier.InspectRegisteredAsync(catalog, actionId, memberId, item, parentItem,
-                    router, actor, parent, stop).ConfigureAwait(false)
+                    router, actor, parent, stop, moveIdentity).ConfigureAwait(false)
                 : await MirrorPulseNamespaceBirthProtectionVerifier.InspectRootLabelRecoveryAsync(catalog, action, item, parentItem,
                     router, actor, stop).ConfigureAwait(false);
             Progress?.Invoke("NamespaceBornRecoveryReadbackCompleted");

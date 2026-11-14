@@ -27,8 +27,9 @@ public static partial class MirrorPulseNamespaceBirthProtectionVerifier
     internal static Task<MirrorPulseNamespaceBirthProtection> InspectRegisteredAsync(MirrorPulseProductCatalog catalog,
         Guid protectionId, Guid memberId, CloudItem item, CloudDirectory parent, MirrorPulseRootRouter router,
         MirrorPulseNamespaceActor namespaceActor, MirrorPulseNamespaceMemberProtectionSnapshot? recoveryParent,
-        CancellationToken cancellationToken) => InspectRegisteredCoreAsync(catalog, protectionId, memberId, item, parent, router,
-            namespaceActor, recoveryParent, requireParentRole: true, recoveryAction: null, cancellationToken);
+        CancellationToken cancellationToken, MirrorPulseDirectoryMovePermissionIdentity? moveIdentity = null) =>
+        InspectRegisteredCoreAsync(catalog, protectionId, memberId, item, parent, router,
+            namespaceActor, recoveryParent, requireParentRole: true, recoveryAction: null, moveIdentity, cancellationToken);
 
     // This narrow path settles the exact original Label/initializer action under the
     // current user's native owner rights. It does not rotate the parent's older role.
@@ -38,14 +39,15 @@ public static partial class MirrorPulseNamespaceBirthProtectionVerifier
     {
         namespaceActor.AssertAccess();
         var observed = await InspectRegisteredCoreAsync(catalog, action.ActionId, action.Child.Member.MemberId, item, parent, router,
-            namespaceActor, action.Parent, requireParentRole: false, action, cancellationToken).ConfigureAwait(false);
+            namespaceActor, action.Parent, requireParentRole: false, action, null, cancellationToken).ConfigureAwait(false);
         return observed;
     }
 
     private static async Task<MirrorPulseNamespaceBirthProtection> InspectRegisteredCoreAsync(MirrorPulseProductCatalog catalog,
         Guid protectionId, Guid memberId, CloudItem item, CloudDirectory parent, MirrorPulseRootRouter router,
         MirrorPulseNamespaceActor namespaceActor, MirrorPulseNamespaceMemberProtectionSnapshot? recoveryParent, bool requireParentRole,
-        MirrorPulseNamespaceBornMemberRecoveryAction? recoveryAction, CancellationToken cancellationToken)
+        MirrorPulseNamespaceBornMemberRecoveryAction? recoveryAction, MirrorPulseDirectoryMovePermissionIdentity? moveIdentity,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(catalog);
         ArgumentNullException.ThrowIfNull(item);
@@ -85,7 +87,7 @@ public static partial class MirrorPulseNamespaceBirthProtectionVerifier
         var facts = await lease.InspectAsync(cancellationToken).ConfigureAwait(false);
         var snapshot = await item.InspectAsync(cancellationToken).ConfigureAwait(false);
         RequireRegisteredNativeObject(facts, snapshot, member, location);
-        RequireRegisteredPublicIdentity(snapshot, identity, requirePlaceholder: true);
+        await RequireChildIdentityAsync(snapshot).ConfigureAwait(false);
         if (!MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(inheritedDacl, facts.Dacl))
             throw new InvalidDataException("The current born object does not inherit its actual parent's protection.");
         var parentAfter = await parentLease.InspectAsync(cancellationToken).ConfigureAwait(false);
@@ -97,7 +99,7 @@ public static partial class MirrorPulseNamespaceBirthProtectionVerifier
         var after = await lease.InspectAsync(cancellationToken).ConfigureAwait(false);
         var snapshotAfter = await item.InspectAsync(cancellationToken).ConfigureAwait(false);
         RequireRegisteredNativeObject(after, snapshotAfter, member, location);
-        RequireRegisteredPublicIdentity(snapshotAfter, identity, requirePlaceholder: true);
+        await RequireChildIdentityAsync(snapshotAfter).ConfigureAwait(false);
         if (facts.Dacl != after.Dacl)
             throw new InvalidDataException("The born object's descriptor changed during verification.");
         var retainedAfter = await ReadSnapshotAsync().ConfigureAwait(false);
@@ -121,6 +123,18 @@ public static partial class MirrorPulseNamespaceBirthProtectionVerifier
             latest.ProtectionId, birth.ParentPermissionOperationId, retainedParent.Protection.RoleSid,
             new(facts.LocalObject, facts.OwnerSid, facts.Dacl, after.ObservedAt), true, facts.LinkCount!.Value)
         { BornParent = birth.BornParent, Placement = placement };
+
+        ValueTask RequireChildIdentityAsync(CloudItemSnapshot value)
+        {
+            if (moveIdentity is not null)
+            {
+                if (moveIdentity.Binding != member.LocalObject)
+                    throw new InvalidDataException("The original Move does not own this born object.");
+                return moveIdentity.RequireAsync(value, cancellationToken);
+            }
+            RequireRegisteredPublicIdentity(value, identity, requirePlaceholder: true);
+            return ValueTask.CompletedTask;
+        }
 
         Task<MirrorPulseRegisteredNamespaceBirthSnapshot> ReadSnapshotAsync() => recoveryAction is null
             ? catalog.ReadRegisteredNamespaceBirthSnapshotAsync(memberId, recoveryParent, cancellationToken)

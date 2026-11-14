@@ -29,6 +29,7 @@ public static class SafeDiagnosticPolicy
         ["ShellRootPathMismatch"] = "The existing Shell registration belongs to another sync root.",
         ["ShellRootRegistrationFailed"] = "Windows rejected the Shell root registration.",
         ["JournalReadFailed"] = "The local journal could not be read.",
+        ["JournalDirectoryMoveRecoveryFailed"] = "An original directory Move remains pending at a recovery boundary.",
         ["RootLabelJournalRecoveryFailed"] = "An accepted root notification requires another metadata recovery attempt.",
         ["RootLabelJournalReadmissionFailed"] = "A root remains closed until its current Host namespace audit succeeds.",
         ["RootLabelJournalAdmissionFailed"] = "A root notification remains pending until its current Host admission succeeds.",

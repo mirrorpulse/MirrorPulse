@@ -168,7 +168,11 @@ public sealed partial class MirrorPulseProductCatalog
         SqliteTransaction transaction, CancellationToken token, Guid? allowedRetirement = null, Guid? allowedBatch = null, Guid? allowedReplacement = null,
         Guid? allowedBornRecoveryInitialization = null, Guid? allowedRemoteUpdate = null, Guid? allowedTransfer = null, Guid? allowedRootRename = null)
     {
-        if ((await ReadPendingJournalDirectoryMovesCoreAsync(transaction, token, rootId).ConfigureAwait(false)).Count != 0)
+        Guid? allowedJournalDirectoryMove = allowedBornRecoveryInitialization is { } initialization
+            ? (await ReadNamespaceInitializationStatusCoreAsync(initialization, transaction, token).ConfigureAwait(false)).Intent.JournalDirectoryMoveOperationId
+            : null;
+        if ((await ReadPendingJournalDirectoryMovesCoreAsync(transaction, token, rootId).ConfigureAwait(false))
+            .Any(owner => owner.OperationId != allowedJournalDirectoryMove))
             throw new InvalidOperationException("An unfinished journal directory Move has fenced this managed root.");
         if (await ReadPendingKeepRemoteFileStartForRootCoreAsync(rootId, transaction, token).ConfigureAwait(false) is not null)
             throw new InvalidOperationException("An unfinished KeepRemote file application has fenced this managed root.");

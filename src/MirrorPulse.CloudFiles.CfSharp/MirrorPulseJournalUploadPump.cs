@@ -117,7 +117,16 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
         if (conflictActions is not null) _localRemovalRecovery = new(catalog, conflictActions.ResumeConflictLocalRemovalAsync, router, mayDispatch, _runner, _log, localOnly: true);
         if (conflictActions is not null) _keepBothRecovery = new(catalog, conflictActions.ResumeConflictKeepBothAsync, router, mayDispatch, _runner, _log, namespaceWork);
         if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
+        {
             _remoteObservationRecovery = new(catalog, router, stats, mayDispatch, _scheduler, _log, conflicts, notifications, namespaceWork, namespaceExecution);
+            if (fileSystem is not null && namespaceActor is not null && namespaceExecution is not null &&
+                namespaceWork is not null && mutations is not null && directories is not null)
+            {
+                _directoryMoveAdmission = new(catalog, state, router, fileSystem);
+                _directoryMoveRecovery = new(catalog, state, router, feed, mutations, directories,
+                    new(fileSystem, state, catalog, router, namespaceActor, namespaceExecution));
+            }
+        }
         _completion = completion ?? throw new ArgumentNullException(nameof(completion));
         _source = new MirrorPulseJournalUploadSource(feed, router, catalog, mayDispatch, _completion, namespaceWork, retiredSources,
             rootLabelJournal: rootLabelJournal, rootLabelAdmission: rootLabelAdmission);
@@ -166,6 +175,8 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
         foreach (Guid original in _completedCoalescedOriginals) _runner.ClearRecoveredFault(original);
         _completedCoalescedOriginals.Clear();
         bool atomicJournalRecovery = await RecoverAtomicDirectoryJournalAsync(cancellationToken).ConfigureAwait(false);
+        bool journalMoveRecovery = OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100) &&
+            await RecoverJournalDirectoryMovesAsync(cancellationToken).ConfigureAwait(false);
         if (_deletionRecovery is not null) await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.ConflictDeletionRecovery, async () => await _deletionRecovery.RepairAsync(cancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
         if (_localRemovalRecovery is not null) await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.LocalRemovalRecovery, async () => await _localRemovalRecovery.RepairAsync(cancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
         if (_keepBothRecovery is not null) await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.KeepBothRecovery, async () => await _keepBothRecovery.RepairAsync(cancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
@@ -196,7 +207,7 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
         bool mandatoryRescan = _source.RequiresFullRescan ||
             await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.RescanDecision, async () => await _catalog.ReadFullRescanAsync(cancellationToken).ConfigureAwait(false)).ConfigureAwait(false) is not null;
         MirrorPulseJournalUploadBatch batch = mandatoryRescan ? new([], 0, true) :
-            await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.JournalSource, async () => enabledDeferredRoot || atomicJournalRecovery
+            await MirrorPulseJournalReadDiagnostics.AtStageAsync(MirrorPulseJournalReadStage.JournalSource, async () => enabledDeferredRoot || atomicJournalRecovery || journalMoveRecovery
                 ? await _source.ReadBeforeRequestedRescanAsync(cancellationToken).ConfigureAwait(false)
                 : await _source.ReadPendingAsync(cancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
         // A requested scan must not project a moved original before its authoritative
@@ -260,6 +271,8 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
         if (!await MirrorPulseJournalDispatchReadiness.MayDispatchAsync(command, _router, _catalog, _mayDispatch, cancellationToken).ConfigureAwait(false))
             return false;
         if (_completedCoalescedOriginals.Contains(command.OperationId)) return true;
+        if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100) &&
+            await TryDispatchJournalDirectoryMoveAsync(command, cancellationToken).ConfigureAwait(false) is { } directoryMove) return directoryMove;
         if (await TryDispatchAtomicDirectoryAsync(command, cancellationToken).ConfigureAwait(false) is { } atomic) return atomic;
         if (await TryDispatchCoalescedAsync(command, cancellationToken).ConfigureAwait(false) is { } coalesced) return coalesced;
         if (command.Kind is MirrorPulseWorkerChangeKind.Move or MirrorPulseWorkerChangeKind.Delete ||
@@ -645,7 +658,7 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
                 new("failureCategory", SafeDiagnosticPolicy.ClassifyFailure(exception)),
                 new("hresult", exception.HResult.ToString("X8", System.Globalization.CultureInfo.InvariantCulture)),
             };
-            if (message == "JournalReadFailed")
+            if (message is "JournalReadFailed" or "JournalDirectoryMoveRecoveryFailed")
             {
                 fields.Add(new("journalReadStage", MirrorPulseJournalReadDiagnostics.Stage(exception).ToString()));
                 fields.Add(new("journalReadFailureKind", MirrorPulseJournalReadDiagnostics.Kind(exception)));

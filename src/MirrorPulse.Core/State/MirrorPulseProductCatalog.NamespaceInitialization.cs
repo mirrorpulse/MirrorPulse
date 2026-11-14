@@ -31,6 +31,10 @@ public sealed record MirrorPulseNamespaceInitializationIntent(int Version, Guid 
     /// <summary>The exact original Label recovery purpose of a version 5 admission, retaining its serialized field name.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public MirrorPulseRootLabelCancellationInitialization? RootLabelCancellation { get; init; }
+
+    /// <summary>The original journal directory Move whose selected root needs a new role before projection.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? JournalDirectoryMoveOperationId { get; init; }
 }
 
 public enum MirrorPulseNamespaceInitializationInventoryKind { OriginalInventory, CurrentInventory }
@@ -76,6 +80,9 @@ public sealed partial class MirrorPulseProductCatalog
                     await RequireNamespaceInitializationRootsAsync(replay, transaction, cancellationToken).ConfigureAwait(false);
                 transaction.Commit(); return replay;
             }
+            if (await ReadInitializationJournalDirectoryMoveCoreAsync(intent, transaction, cancellationToken).ConfigureAwait(false) is
+                { Mutation.State: MirrorPulseMutationState.Acknowledged })
+                throw new InvalidOperationException("A new directory Move initializer requires its unfinished original Move.");
             foreach (var root in intent.Roots.Where(root => root.BornRootMemberId is not null))
                 await RequireNamespaceInitializationBornRootAsync(root, intent.PreparedAt, transaction, cancellationToken).ConfigureAwait(false);
             validation.Dispose();
@@ -191,6 +198,8 @@ public sealed partial class MirrorPulseProductCatalog
         }
         if (!actual.SequenceEqual(intent.Roots.OrderBy(root => root.RootId.Value.ToString("D"), StringComparer.Ordinal)))
             throw new InvalidDataException("Initialization lost or changed a root reservation.");
+        await reader.DisposeAsync().ConfigureAwait(false);
+        _ = await ReadInitializationJournalDirectoryMoveCoreAsync(intent, transaction, token).ConfigureAwait(false);
     }
 
     private async Task RequireNamespaceInitializationTerminalAsync(MirrorPulseNamespaceInitializationIntent intent,
@@ -209,7 +218,8 @@ public sealed partial class MirrorPulseProductCatalog
 
     private static bool SameNamespaceInitialization(MirrorPulseNamespaceInitializationIntent left, MirrorPulseNamespaceInitializationIntent right) =>
         left.Version == right.Version && left.OperationId == right.OperationId && left.PreparedAt == right.PreparedAt &&
-        left.RequestedInventoryKind == right.RequestedInventoryKind && left.RootLabelCancellation == right.RootLabelCancellation && left.Roots.SequenceEqual(right.Roots);
+        left.RequestedInventoryKind == right.RequestedInventoryKind && left.RootLabelCancellation == right.RootLabelCancellation &&
+        left.JournalDirectoryMoveOperationId == right.JournalDirectoryMoveOperationId && left.Roots.SequenceEqual(right.Roots);
 
     private static void ValidateNamespaceInitialization(MirrorPulseNamespaceInitializationIntent intent)
     {
@@ -224,6 +234,7 @@ public sealed partial class MirrorPulseProductCatalog
             intent.Roots.Select(root => root.RootId).Distinct().Count() != intent.Roots.Count ||
             intent.Roots.Where(root => root.BornRootMemberId is null).Select(root => root.ManifestId).Distinct().Count() != intent.Roots.Count(root => root.BornRootMemberId is null) ||
             intent.Roots.Where(root => root.BornRootMemberId is not null).Select(root => root.BornRootMemberId).Distinct().Count() != intent.Roots.Count(root => root.BornRootMemberId is not null) ||
+            intent.JournalDirectoryMoveOperationId is { } move && (intent.Version != 4 || move == Guid.Empty || move == intent.OperationId) ||
             !HasValidRootLabelCancellationInitializationPurpose(intent))
             throw new ArgumentException("Initialization requires distinct stable roots and explicit retained capture or born-root provenance.", nameof(intent));
     }

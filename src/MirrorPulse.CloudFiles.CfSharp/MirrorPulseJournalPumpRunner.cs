@@ -28,6 +28,7 @@ public sealed class MirrorPulseJournalPumpRunner
         _maximumCommandsPerRoot = maximumCommandsPerRoot;
     }
     public void ClearRecoveredFault(Guid operationId) => _faults.TryRemove(operationId, out _);
+    internal void RetainDirectoryMoveRecoveryFault(Guid operationId) => _faults[operationId] = "JournalDirectoryMoveRecoveryFailed";
     internal void RetainCoalescingRecoveryFault(Guid planId) => _coalescingRecoveryFaults[planId] = "JournalGroupRecoveryFailed";
     internal void ClearCoalescingRecoveryFault(Guid planId) => _coalescingRecoveryFaults.TryRemove(planId, out _);
     internal void RetainConflictDeletionRecoveryFault(Guid commandId) => _conflictDeletionRecoveryFaults[commandId] = "ConflictDeletionRecoveryFailed";
