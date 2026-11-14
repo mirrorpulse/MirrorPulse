@@ -38,33 +38,42 @@ public sealed class MirrorPulseTransferTargetVerifier(MirrorPulseProductCatalog 
             throw new MirrorPulseMutationAmbiguousException("Current readback requires the original correlated copy acceptance.");
         var plan = copy.Plan; var route = plan.TargetRoute;
         string path = plan.TargetRelativePath[(route.DirectoryName.Length + 1)..];
-        if (await _stats.StatAsync(new(route.InstanceId, path, route.RootKey), token).ConfigureAwait(false) != copy.AcceptedRevision)
+        var target = await VerifyFileAsync(route, path, plan.Length, plan.Sha256, acceptedRevision,
+            copy.TargetVerification?.RemoteId, token).ConfigureAwait(false);
+        return new(1, plan.OperationId, acceptedRevision, target.RemoteId, plan.Length, plan.Sha256, _time.GetUtcNow());
+    }
+
+    internal async Task<MirrorPulseWorkerDirectoryEntry> VerifyFileAsync(MirrorPulseTransferRoute route, string path, long length,
+        string sha256, string acceptedRevision, string? originalRemoteId, CancellationToken token)
+    {
+        if (await _stats.StatAsync(new(route.InstanceId, path, route.RootKey), token).ConfigureAwait(false) != acceptedRevision)
             throw new IOException("The transfer target no longer has its original accepted revision.");
-        var before = await ReadMetadataAsync(route, path, plan.Length, acceptedRevision, token).ConfigureAwait(false);
+        var before = await ReadMetadataAsync(route, path, length, acceptedRevision, token).ConfigureAwait(false);
+        if (originalRemoteId is not null && before.RemoteId != originalRemoteId)
+            throw new IOException("The original accepted transfer target was replaced by another remote identity.");
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        byte[] buffer = new byte[(int)Math.Min(1_048_576, length)];
+        byte[] excess = new byte[1];
         long offset = 0;
-        while (offset < plan.Length)
+        while (offset < length)
         {
-            int length = (int)Math.Min(1_048_576, plan.Length - offset);
+            int count = (int)Math.Min(buffer.Length, length - offset);
             await using var content = await _ranges.ReadRangeAsync(new(route.InstanceId, path, ReadOnlyMemory<byte>.Empty,
-                offset, length, route.RootKey)
-            { ExpectedRevision = copy.AcceptedRevision }, token).ConfigureAwait(false);
-            byte[] buffer = new byte[length];
-            await content.ReadExactlyAsync(buffer, token).ConfigureAwait(false);
-            byte[] excess = new byte[1];
+                offset, count, route.RootKey)
+            { ExpectedRevision = acceptedRevision }, token).ConfigureAwait(false);
+            await content.ReadExactlyAsync(buffer.AsMemory(0, count), token).ConfigureAwait(false);
             if (await content.ReadAsync(excess, token).ConfigureAwait(false) != 0)
                 throw new InvalidDataException("Target readback exceeded its requested range.");
-            hash.AppendData(buffer); offset += length;
+            hash.AppendData(buffer.AsSpan(0, count));
+            offset += count;
         }
-        if (Convert.ToHexString(hash.GetHashAndReset()) != plan.Sha256)
+        if (Convert.ToHexString(hash.GetHashAndReset()) != sha256)
             throw new IOException("Target bytes differ from the complete original transfer content.");
-        var after = await ReadMetadataAsync(route, path, plan.Length, acceptedRevision, token).ConfigureAwait(false);
+        var after = await ReadMetadataAsync(route, path, length, acceptedRevision, token).ConfigureAwait(false);
         if (after.RemoteId != before.RemoteId ||
-            await _stats.StatAsync(new(route.InstanceId, path, route.RootKey), token).ConfigureAwait(false) != copy.AcceptedRevision)
+            await _stats.StatAsync(new(route.InstanceId, path, route.RootKey), token).ConfigureAwait(false) != acceptedRevision)
             throw new IOException("Target identity or revision changed during whole-content readback.");
-        if (copy.TargetVerification is { } original && before.RemoteId != original.RemoteId)
-            throw new IOException("The original accepted transfer target was replaced by another remote identity.");
-        return new(1, plan.OperationId, acceptedRevision, before.RemoteId, plan.Length, plan.Sha256, _time.GetUtcNow());
+        return before;
     }
 
     /// <summary>Reads one current opaque file identity at an original conditional revision through bounded Worker pages.</summary>
