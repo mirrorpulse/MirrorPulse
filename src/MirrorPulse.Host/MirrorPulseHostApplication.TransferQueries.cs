@@ -17,9 +17,14 @@ public sealed partial class MirrorPulseHostApplication
                 if (arguments.OperationId == Guid.Empty || arguments.SourceMemberId == Guid.Empty || arguments.TargetParentMemberId == Guid.Empty)
                     throw new ArgumentException("Transfer operation, source member and target parent IDs are required.");
                 await MirrorPulseTransferAdmissionRetry.RunAsync(stop =>
-                    RunTransferPhaseAsync(arguments.OperationId, MirrorPulseTransferCommandPhase.Prepare,
-                        () => _session.PrepareNamespaceTransferAsync(arguments.OperationId, arguments.SourceMemberId,
-                            arguments.TargetParentMemberId, arguments.TargetName, stop)), token).ConfigureAwait(false);
+                    RunTransferPhaseAsync(arguments.OperationId, MirrorPulseTransferCommandPhase.Prepare, async () =>
+                    {
+                        if (await _session.PrepareDirectoryNamespaceTransferAsync(arguments.OperationId, arguments.SourceMemberId,
+                            arguments.TargetParentMemberId, arguments.TargetName, stop).ConfigureAwait(false)) return true;
+                        _ = await _session.PrepareNamespaceTransferAsync(arguments.OperationId, arguments.SourceMemberId,
+                            arguments.TargetParentMemberId, arguments.TargetName, stop).ConfigureAwait(false);
+                        return true;
+                    }), token).ConfigureAwait(false);
                 return await ResumeNamespaceTransferAsync(arguments.OperationId, token).ConfigureAwait(false);
             });
         dispatcher.Register<NamespaceTransferResumeArguments, MirrorPulseControlTransferStatus>(
@@ -39,6 +44,10 @@ public sealed partial class MirrorPulseHostApplication
     private async ValueTask<MirrorPulseControlTransferStatus> ResumeNamespaceTransferAsync(Guid operationId, CancellationToken token)
     {
         if (operationId == Guid.Empty) throw new ArgumentException("An original transfer operation ID is required.", nameof(operationId));
+        if (await RunTransferPhaseAsync(operationId, MirrorPulseTransferCommandPhase.Complete,
+            () => _session.ResumeDirectoryNamespaceTransferAsync(operationId, token)).ConfigureAwait(false))
+            return ToControlTransferStatus(await _catalog.ReadNamespaceTransferStatusAsync(operationId, token).ConfigureAwait(false)
+                ?? throw new InvalidDataException("The original directory transfer lost its durable status."));
         var copy = await RunTransferPhaseAsync(operationId, MirrorPulseTransferCommandPhase.Read,
             () => _session.ReadNamespaceTransferAsync(operationId, token)).ConfigureAwait(false);
         if (copy.Acknowledgement?.AcknowledgedAt is null)
@@ -74,5 +83,6 @@ public sealed partial class MirrorPulseHostApplication
         new(value.OperationId, value.SourceRootId.Value, value.TargetRootId.Value, value.SourceInstanceId.Value, value.TargetInstanceId.Value,
             value.SourceMemberId, value.TargetMemberId, value.SourceRelativePath, value.TargetRelativePath, value.Stage, value.PreparedAt,
             value.CopyStartedAt, value.CopyAcceptedAt, value.SourceDeleteStartedAt, value.SourceDeleteAcceptedAt, value.SourceNativeRetiredAt,
-            value.SourceNameSettledAt, value.RootsFenced, value.JournalAcknowledged, value.Completed);
+            value.SourceNameSettledAt, value.RootsFenced, value.JournalAcknowledged, value.Completed)
+        { IsDirectory = value.IsDirectory };
 }

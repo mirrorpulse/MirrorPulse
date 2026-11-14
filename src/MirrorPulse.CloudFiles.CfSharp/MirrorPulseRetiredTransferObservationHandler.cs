@@ -39,6 +39,18 @@ internal sealed class MirrorPulseRetiredTransferObservationHandler(CloudFileSyst
             var pending = await catalog.ReadPendingRetiredTransferObservationsAsync(root.RootId, limit: 2, token).ConfigureAwait(false);
             if (pending.Count != 0) _recoveryRoots.RetainPendingReplay();
             foreach (var start in pending) _ = await ReplayAcceptedAsync(start, token).ConfigureAwait(false);
+            var directoryPending = await catalog.ReadPendingDirectoryTransferLateAcknowledgementsAsync(root.RootId, token).ConfigureAwait(false);
+            if (directoryPending.Count != 0) _recoveryRoots.RetainPendingReplay();
+            foreach (var start in directoryPending)
+                if (work.TryEnter([root.RootId], out var admission))
+                {
+                    using (admission)
+                        _ = await actor.RunAsync(async stop =>
+                        {
+                            await AcknowledgeDirectoryObservationAsync(start, stop).ConfigureAwait(false);
+                            return true;
+                        }, token).ConfigureAwait(false);
+                }
         }
     }
 
@@ -67,6 +79,84 @@ internal sealed class MirrorPulseRetiredTransferObservationHandler(CloudFileSyst
             await AcknowledgeAcceptedUnderActorAsync(start, stop).ConfigureAwait(false);
             return true;
         }, token).ConfigureAwait(false);
+    }
+
+    internal async ValueTask<bool> TryAcknowledgeDirectorySourceAsync(MirrorPulseLocalChangeObservation observation,
+        MirrorPulseRetiredDirectoryTransferSource source, CancellationToken token)
+    {
+        var plan = source.Admission;
+        var retired = source.Retirement;
+        var member = plan.Members[retired.Ordinal].Source.Protection.Context;
+        if (source.AcknowledgedAt is null || retired.RetiredAt is null ||
+            observation.ItemId != retired.Projection.ItemId || observation.IsDirectory != member.Member.IsDirectory ||
+            observation.RelativePath.Replace('\\', '/') != member.Location.RelativePath ||
+            observation.PreviousRelativePath is not null ||
+            observation.Kind is not (CloudLocalChangeKind.Create or CloudLocalChangeKind.ContentUpdate or CloudLocalChangeKind.MetadataUpdate or CloudLocalChangeKind.Delete))
+            return false;
+        var root = router.FindRegistration(plan.SourceRoute.RootId);
+        if (root is null || root.State != RootRegistrationState.Active || root.InstanceId != plan.SourceRoute.InstanceId ||
+            root.UniquenessKey != plan.SourceRoute.RootKey || !mayDispatch(root.InstanceId) ||
+            !work.TryEnter([root.RootId], out var admission)) return false;
+        using var retainedAdmission = admission;
+        return await actor.RunAsync(async stop =>
+        {
+            var original = new MirrorPulseTransferJournalObservation(observation.OperationId, observation.Sequence,
+                observation.Kind switch
+                {
+                    CloudLocalChangeKind.Create => MirrorPulseWorkerChangeKind.Create,
+                    CloudLocalChangeKind.ContentUpdate => MirrorPulseWorkerChangeKind.ContentUpdate,
+                    CloudLocalChangeKind.MetadataUpdate => MirrorPulseWorkerChangeKind.MetadataUpdate,
+                    _ => MirrorPulseWorkerChangeKind.Delete
+                }, observation.ItemId, observation.RelativePath, observation.PreviousRelativePath, observation.IsDirectory, observation.ObservedAt);
+            var start = await catalog.ReadDirectoryTransferLateAcknowledgementAsync(observation.OperationId, stop).ConfigureAwait(false);
+            if (start is not null && (start.TransferId != plan.Command.CommandId || start.Observation != original))
+                return false;
+            if (start is null && (await feed.BeginScanAsync(stop).ConfigureAwait(false)).RequiresFullRescan) return false;
+            try
+            {
+                if (start is null) await execution.RunNamespaceOperationAsync(async () =>
+                {
+                    var parent = await catalog.ReadNamespaceMemberProtectionSnapshotAsync(plan.SourceParent.Context.Member.MemberId, stop)
+                        .ConfigureAwait(false);
+                    if (parent is null || parent.Context.Member.LocalObject != plan.SourceParent.Context.Member.LocalObject ||
+                        parent.Context.Location.RelativePath != plan.SourceParent.Context.Location.RelativePath ||
+                        parent.Context.Protection.RoleSid != execution.RoleSid.Value || parent.Context.Member.OwnerSid != execution.OwnerSid.Value)
+                        return;
+                    var parentItem = fileSystem.GetDirectory(parent.Context.Location.RelativePath);
+                    await using var guard = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(parentItem, router, stop).ConfigureAwait(false);
+                    if (!Matches(await guard.InspectAsync(stop).ConfigureAwait(false), parent)) return;
+                    var originalRoot = fileSystem.GetDirectory(plan.Members[0].Source.Protection.Context.Location.RelativePath);
+                    var native = await originalRoot.InspectAsync(stop).ConfigureAwait(false);
+                    if (native.Exists || !native.IsTombstone || native.ItemId != plan.Members[0].Source.Protection.Identity.ItemId)
+                        return;
+                    await using var read = await state.OpenStore.BeginTransactionAsync(stop).ConfigureAwait(false);
+                    var row = await read.Items.GetByItemIdAsync(retired.Projection.ItemId, stop).ConfigureAwait(false);
+                    try
+                    {
+                        MirrorPulseNamespaceTransferCoordinator.RequireOriginalSourceProjection(retired.Projection, row, tombstone: true,
+                            member.Member.IsDirectory ? CloudItemKind.Directory : CloudItemKind.File);
+                    }
+                    catch (InvalidDataException) { return; }
+                    await read.RollbackAsync(stop).ConfigureAwait(false);
+                    start = await catalog.StartDirectoryTransferLateAcknowledgementAsync(plan.Command.CommandId, original,
+                        DateTimeOffset.UtcNow, stop).ConfigureAwait(false);
+                }).ConfigureAwait(false);
+            }
+            catch (Exception error) when (!stop.IsCancellationRequested &&
+                error is IOException or InvalidOperationException or UnauthorizedAccessException)
+            { return false; }
+            if (start is null) return false;
+            await AcknowledgeDirectoryObservationAsync(start, stop).ConfigureAwait(false);
+            return true;
+        }, token).ConfigureAwait(false);
+    }
+
+    private async Task AcknowledgeDirectoryObservationAsync(MirrorPulseDirectoryTransferLateAcknowledgement start, CancellationToken token)
+    {
+        actor.AssertAccess();
+        await execution.RunNormalUserOperationAsync(async () => await feed.AcknowledgeAsync(
+            [new CloudLocalChangeAcknowledgement(start.Observation.OperationId, null)], token).ConfigureAwait(false)).ConfigureAwait(false);
+        await catalog.CompleteDirectoryTransferLateAcknowledgementAsync(start, DateTimeOffset.UtcNow, CancellationToken.None).ConfigureAwait(false);
     }
 
     private async ValueTask<bool> ReplayAcceptedAsync(MirrorPulseRetiredTransferObservationAcknowledgement start, CancellationToken token)

@@ -23,7 +23,7 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
 
     internal ValueTask<MirrorPulseDirectoryTransferAdmission> PrepareDirectoryAsync(Guid operationId,
         MirrorPulseNamespaceMemberProtectionSnapshot source, MirrorPulseNamespaceMemberProtectionSnapshot targetParent,
-        string targetName, CancellationToken token) => actor.RunAsync(async stop =>
+        string targetName, MirrorPulseTransferWorkerServices? workers, CancellationToken token) => actor.RunAsync(async stop =>
     {
         var historical = await catalog.ReadNamespaceDirectoryTransferAsync(operationId, stop).ConfigureAwait(false);
         if (historical is not null)
@@ -126,8 +126,16 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
                 var now = DateTimeOffset.UtcNow;
                 var feed = JournalFeed ?? throw new InvalidOperationException("The Host's running original journal is unavailable.");
                 var originals = await new MirrorPulseTransferJournalCapture(feed).CaptureDirectoryAsync(operationId, members, stop).ConfigureAwait(false);
-                prepared = await catalog.PrepareNamespaceDirectoryTransferAsync(new(1, command, sourceRoute, targetRoute,
-                    sourceParent, targetParent, members, originals, now), stop).ConfigureAwait(false);
+                var proposed = new MirrorPulseDirectoryTransferAdmission(1, command, sourceRoute, targetRoute,
+                    sourceParent, targetParent, members, originals, now);
+                if (workers is not null)
+                {
+                    if (MirrorPulseProductCatalog.CreateDirectoryTransferSourceAdmission(proposed) is not null)
+                        _ = RequireDirectoryTransferDeletionTransport(proposed, workers);
+                    await execution.RunNormalUserOperationAsync(() => RequireOriginalDirectoryRemoteSourceAsync(proposed, workers, stop))
+                        .ConfigureAwait(false);
+                }
+                prepared = await catalog.PrepareNamespaceDirectoryTransferAsync(proposed, stop).ConfigureAwait(false);
             }
             finally
             {

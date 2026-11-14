@@ -272,6 +272,18 @@ public sealed class MirrorPulseJournalUploadSource
             return true;
         }
         if (observation.ItemId is not { } itemId) return true;
+        if (OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100) &&
+            await _catalog.ReadRetiredDirectoryTransferSourceAsync(itemId, token).ConfigureAwait(false) is { } directorySource)
+        {
+            if (_retiredSources is MirrorPulseRetiredTransferObservationHandler handler &&
+                !pendingRoots.Contains(directorySource.Admission.SourceRoute.RootId) &&
+                await handler.TryAcknowledgeDirectorySourceAsync(observation, directorySource, token).ConfigureAwait(false))
+                return false;
+            _retiredHeld.Add(observation.OperationId);
+            await _catalog.SaveBlockedLocalOperationAsync(new(observation.OperationId, directorySource.Admission.SourceRoute.InstanceId, observation.RelativePath,
+                MirrorPulseLocalOperationBlockReason.RootReconciliationRequired, observation.ObservedAt), token).ConfigureAwait(false);
+            return true;
+        }
         var candidates = await _catalog.ReadNamespaceTransferSourceGenerationsAsync(itemId, token).ConfigureAwait(false);
         if (candidates.Count == 0) return true;
         bool accepted = candidates.Count == 1 && _retiredSources is not null &&

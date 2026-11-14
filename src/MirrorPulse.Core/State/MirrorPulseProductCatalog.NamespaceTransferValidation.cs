@@ -124,6 +124,7 @@ public sealed partial class MirrorPulseProductCatalog
             UNION ALL SELECT 1 FROM namespace_transfer_journal_members WHERE operation_id=$id
             UNION ALL SELECT 1 FROM namespace_directory_transfer_admissions WHERE operation_id=$id
             UNION ALL SELECT 1 FROM namespace_directory_transfer_ids WHERE operation_id=$id
+            UNION ALL SELECT 1 FROM namespace_directory_transfer_late_acknowledgements WHERE operation_id=$id
             UNION ALL SELECT 1 FROM retired_transfer_observations WHERE operation_id=$id
             UNION ALL SELECT 1 FROM root_label_journal_acknowledgements WHERE operation_id=$id
             UNION ALL SELECT 1 FROM managed_root_rename_history WHERE operation_id=$id

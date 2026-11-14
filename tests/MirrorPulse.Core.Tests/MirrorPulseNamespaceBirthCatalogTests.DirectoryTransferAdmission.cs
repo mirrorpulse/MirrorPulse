@@ -61,6 +61,37 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
     }
 
     [TestMethod]
+    public async Task DirectoryTransferSettlementMigrationRetainsBothOriginalFencesAndDetectsMissingReservation()
+    {
+        using var fixture = new Fixture();
+        MirrorPulseDirectoryTransferAdmission plan;
+        await using (var original = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths))
+        {
+            plan = await PrepareDirectoryTransferFixtureAsync(original);
+            await original.PrepareNamespaceDirectoryTransferAsync(plan);
+        }
+        await ExecuteSqlAsync(fixture.Paths, """
+            DROP TABLE namespace_directory_transfer_late_acknowledgements;
+            DROP TABLE namespace_directory_transfer_acknowledgements;
+            DROP TABLE namespace_directory_transfer_fences;
+            DROP INDEX namespace_directory_transfer_retired_item;
+            DROP INDEX namespace_directory_transfer_source_root;
+            DROP INDEX namespace_directory_transfer_target_root;
+            CREATE UNIQUE INDEX namespace_directory_transfer_source_root ON namespace_directory_transfer_admissions(source_root_id);
+            CREATE UNIQUE INDEX namespace_directory_transfer_target_root ON namespace_directory_transfer_admissions(target_root_id);
+            PRAGMA user_version=114;
+            """);
+        await using var migrated = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        CollectionAssert.AreEquivalent(new[] { plan.SourceRoute.RootId, plan.TargetRoute.RootId },
+            (await migrated.ReadNamespaceDispatchFencedRootsAsync()).ToArray());
+        Assert.AreEqual(plan.Command.CommandId, (await migrated.ReadPendingNamespaceTransferStatusesAsync(plan.TargetRoute.RootId)).Single().OperationId);
+        await ExecuteSqlAsync(fixture.Paths,
+            $"DELETE FROM namespace_directory_transfer_fences WHERE root_id='{plan.TargetRoute.RootId}';");
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(() => migrated.ReadNamespaceDispatchFencedRootsAsync());
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(() => migrated.ReadPendingNamespaceTransferStatusesAsync(plan.TargetRoute.RootId));
+    }
+
+    [TestMethod]
     public async Task DirectoryTransferRetainsOnlyTheOriginalOrderedCopyReceipts()
     {
         using var fixture = new Fixture();

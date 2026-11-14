@@ -54,9 +54,7 @@ public sealed partial class MirrorPulseProductCatalog
             ("namespace_directory_transfer_ids", DirectoryTransferIdsTable),
             ("namespace_directory_transfer_copy_steps", DirectoryTransferCopyStepTable),
             ("namespace_directory_transfer_target_verifications", DirectoryTransferTargetVerificationTable),
-            ("namespace_directory_transfer_ids_by_transfer", DirectoryTransferIdIndex),
-            ("namespace_directory_transfer_source_root", DirectoryTransferRootIndex),
-            ("namespace_directory_transfer_target_root", DirectoryTransferTargetIndex)
+            ("namespace_directory_transfer_ids_by_transfer", DirectoryTransferIdIndex)
         })
         {
             sql.Parameters.Clear();
@@ -144,6 +142,14 @@ public sealed partial class MirrorPulseProductCatalog
             write.Parameters.AddWithValue("$hash", SHA256.HashData(payload));
             await write.ExecuteNonQueryAsync(token).ConfigureAwait(false);
             write.Parameters.Clear();
+            write.CommandText = """
+                INSERT INTO namespace_directory_transfer_fences(root_id,transfer_id) VALUES($source,$transfer),($target,$transfer);
+                """;
+            write.Parameters.AddWithValue("$source", plan.SourceRoute.RootId.ToString());
+            write.Parameters.AddWithValue("$target", plan.TargetRoute.RootId.ToString());
+            write.Parameters.AddWithValue("$transfer", plan.Command.CommandId.ToString("D"));
+            await write.ExecuteNonQueryAsync(token).ConfigureAwait(false);
+            write.Parameters.Clear();
             write.CommandText = "INSERT INTO namespace_directory_transfer_ids(operation_id,transfer_id,journal_original) VALUES($id,$transfer,$journal);";
             var identifier = write.Parameters.Add("$id", SqliteType.Text);
             write.Parameters.AddWithValue("$transfer", plan.Command.CommandId.ToString("D"));
@@ -219,11 +225,13 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task RequireDirectoryTransferRootUnfencedAsync(RootId root, Guid? allowedTargetTransfer,
         SqliteTransaction transaction, CancellationToken token)
     {
+        await RequireDirectoryTransferFenceIndexAsync(transaction, token, root).ConfigureAwait(false);
         await using var query = _connection.CreateCommand();
         query.Transaction = transaction;
         query.CommandText = """
-            SELECT operation_id,source_root_id,target_root_id,payload,fingerprint
-            FROM namespace_directory_transfer_admissions WHERE source_root_id=$root OR target_root_id=$root;
+            SELECT a.operation_id,a.source_root_id,a.target_root_id,a.payload,a.fingerprint
+            FROM namespace_directory_transfer_fences f JOIN namespace_directory_transfer_admissions a ON a.operation_id=f.transfer_id
+            WHERE f.root_id=$root;
             """;
         query.Parameters.AddWithValue("$root", root.ToString());
         await using var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
@@ -241,13 +249,16 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task<IReadOnlyList<DirectoryTransferFence>> ReadDirectoryTransferFencesCoreAsync(
         SqliteTransaction transaction, CancellationToken token)
     {
+        await RequireDirectoryTransferFenceIndexAsync(transaction, token).ConfigureAwait(false);
         var fences = new List<DirectoryTransferFence>();
         var roots = new HashSet<RootId>();
         await using var query = _connection.CreateCommand();
         query.Transaction = transaction;
         query.CommandText = """
-            SELECT operation_id,source_root_id,target_root_id,payload,fingerprint
-            FROM namespace_directory_transfer_admissions ORDER BY operation_id LIMIT 4097;
+            SELECT a.operation_id,a.source_root_id,a.target_root_id,a.payload,a.fingerprint
+            FROM namespace_directory_transfer_admissions a JOIN namespace_directory_transfer_fences f
+                ON f.transfer_id=a.operation_id AND f.root_id=a.source_root_id
+            ORDER BY a.operation_id LIMIT 4097;
             """;
         var originals = new Dictionary<Guid, (Guid Owner, bool Journal)>();
         await using (var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false))
@@ -268,7 +279,11 @@ public sealed partial class MirrorPulseProductCatalog
                         throw new InvalidDataException("Two original directory transfers reserve the same identifier.");
             }
         }
-        query.CommandText = "SELECT operation_id,transfer_id,journal_original FROM namespace_directory_transfer_ids;";
+        query.CommandText = """
+            SELECT i.operation_id,i.transfer_id,i.journal_original FROM namespace_directory_transfer_ids i
+            JOIN namespace_directory_transfer_admissions a ON a.operation_id=i.transfer_id
+            JOIN namespace_directory_transfer_fences f ON f.transfer_id=a.operation_id AND f.root_id=a.source_root_id;
+            """;
         await using (var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false))
             while (await reader.ReadAsync(token).ConfigureAwait(false))
                 if (!originals.Remove(ParseNamespaceMemberId(reader.GetString(0)), out var original) ||

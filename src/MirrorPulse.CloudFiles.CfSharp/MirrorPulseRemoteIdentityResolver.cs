@@ -33,6 +33,7 @@ public sealed class MirrorPulseRemoteIdentityResolver(MirrorPulseProductCatalog 
         var selected = await _catalog.ReadRemoteIdentityGenerationAsync(root.RootId, original.ItemId, token).ConfigureAwait(false);
         var current = selected is null ? original : ValidateCurrent(root, backend, identity.RemoteRevision, original, selected);
         if (current.ItemId != identity.ItemId || current.RemoteId != identity.RemoteId ||
+            await _catalog.HasDirectoryTransferRetiredItemAsync(current.ItemId, token).ConfigureAwait(false) ||
             (await _catalog.ReadNamespaceTransferSourceGenerationsAsync(current.ItemId, token).ConfigureAwait(false)).Count != 0 ||
             (await _catalog.ReadNamespaceRemoteRetirementGenerationsAsync(current.ItemId, token).ConfigureAwait(false)).Count != 0 ||
             (await _catalog.ReadNamespaceControlledRetirementGenerationsAsync(current.ItemId, token).ConfigureAwait(false)).Count != 0)
@@ -57,6 +58,11 @@ public sealed class MirrorPulseRemoteIdentityResolver(MirrorPulseProductCatalog 
             token.ThrowIfCancellationRequested();
             var current = await _catalog.ReadRemoteIdentityGenerationAsync(root.RootId, original.ItemId, token).ConfigureAwait(false);
             CloudPlaceholderIdentity predecessor = current is null ? original : ValidateCurrent(root, remoteId, revision, original, current);
+            if (await _catalog.HasDirectoryTransferRetiredItemAsync(predecessor.ItemId, token).ConfigureAwait(false))
+            {
+                if (deferCompletedLocalRetirement) return null;
+                throw new InvalidOperationException("A retired directory transfer identity requires reconciliation before reuse.");
+            }
             var retired = await _catalog.ReadNamespaceTransferSourceGenerationsAsync(predecessor.ItemId, token).ConfigureAwait(false);
             var remote = await _catalog.ReadNamespaceRemoteRetirementGenerationsAsync(predecessor.ItemId, token).ConfigureAwait(false);
             var controlled = await _catalog.ReadNamespaceControlledRetirementGenerationsAsync(predecessor.ItemId, token).ConfigureAwait(false);

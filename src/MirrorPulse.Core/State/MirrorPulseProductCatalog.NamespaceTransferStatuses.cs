@@ -9,7 +9,10 @@ public sealed record MirrorPulseNamespaceTransferStatus(Guid OperationId, RootId
     string SourceRelativePath, string TargetRelativePath, string Stage, DateTimeOffset PreparedAt,
     DateTimeOffset? CopyStartedAt, DateTimeOffset? CopyAcceptedAt, DateTimeOffset? SourceDeleteStartedAt,
     DateTimeOffset? SourceDeleteAcceptedAt, DateTimeOffset? SourceNativeRetiredAt, DateTimeOffset? SourceNameSettledAt,
-    bool RootsFenced, bool JournalAcknowledged, bool Completed);
+    bool RootsFenced, bool JournalAcknowledged, bool Completed)
+{
+    public bool IsDirectory { get; init; }
+}
 
 public sealed partial class MirrorPulseProductCatalog
 {
@@ -22,7 +25,8 @@ public sealed partial class MirrorPulseProductCatalog
         {
             ThrowIfDisposed(); using var transaction = BeginNamespaceRecoveryReadSnapshot();
             var copy = await ReadNamespaceTransferCoreAsync(operationId, transaction, token).ConfigureAwait(false);
-            var result = copy is null ? null : await ReadTransferStatusCoreAsync(copy, transaction, token).ConfigureAwait(false);
+            var result = copy is null ? await ReadDirectoryTransferStatusCoreAsync(operationId, transaction, token).ConfigureAwait(false) :
+                await ReadTransferStatusCoreAsync(copy, transaction, token).ConfigureAwait(false);
             transaction.Commit(); return result;
         }
         finally { _gate.Release(); }
@@ -39,11 +43,64 @@ public sealed partial class MirrorPulseProductCatalog
         {
             ThrowIfDisposed(); using var transaction = BeginNamespaceRecoveryReadSnapshot();
             var copy = await ReadPendingNamespaceTransferForRootCoreAsync(rootId, transaction, token).ConfigureAwait(false);
-            MirrorPulseNamespaceTransferStatus[] result = copy is null ? [] :
-                [await ReadTransferStatusCoreAsync(copy, transaction, token).ConfigureAwait(false)];
+            await RequireDirectoryTransferFenceIndexAsync(transaction, token, rootId).ConfigureAwait(false);
+            Guid? directoryId;
+            await using (var sql = _connection.CreateCommand())
+            {
+                sql.Transaction = transaction;
+                sql.CommandText = "SELECT transfer_id FROM namespace_directory_transfer_fences WHERE root_id=$root;";
+                sql.Parameters.AddWithValue("$root", rootId.ToString());
+                directoryId = await sql.ExecuteScalarAsync(token).ConfigureAwait(false) is string id ? ParseNamespaceMemberId(id) : null;
+            }
+            if (copy is not null && directoryId is not null) throw new InvalidDataException("The root has competing transfer owners.");
+            MirrorPulseNamespaceTransferStatus? status = copy is not null
+                ? await ReadTransferStatusCoreAsync(copy, transaction, token).ConfigureAwait(false)
+                : directoryId is { } owner ? await ReadDirectoryTransferStatusCoreAsync(owner, transaction, token).ConfigureAwait(false) : null;
+            if (directoryId is not null && status is not { Completed: false })
+                throw new InvalidDataException("A pending directory transfer fence lost its original status.");
+            MirrorPulseNamespaceTransferStatus[] result = status is null ? [] : [status];
             transaction.Commit(); return result;
         }
         finally { _gate.Release(); }
+    }
+
+    private async Task<MirrorPulseNamespaceTransferStatus?> ReadDirectoryTransferStatusCoreAsync(Guid operationId,
+        SqliteTransaction transaction, CancellationToken token)
+    {
+        var admission = await ReadDirectoryTransferAdmissionCoreAsync(operationId, transaction, token).ConfigureAwait(false);
+        if (admission is null) return null;
+        var copy = await ReadDirectoryTransferCopyCoreAsync(operationId, transaction, token).ConfigureAwait(false);
+        var verified = await ReadDirectoryTransferTargetCoreAsync(copy, transaction, token).ConfigureAwait(false);
+        var birth = await ReadDirectoryTransferBirthRowAsync(operationId, 0, null, transaction, token).ConfigureAwait(false);
+        var deletion = await ReadDirectoryTransferSourceDeletionCoreAsync(operationId, transaction, token).ConfigureAwait(false);
+        var retired = await ReadDirectoryTransferRetirementsCoreAsync(operationId, transaction, token).ConfigureAwait(false);
+        var ack = await ReadDirectoryTransferAcknowledgementCoreAsync(operationId, transaction, token).ConfigureAwait(false);
+        bool completed = ack?.AcknowledgedAt is not null;
+        bool journalAcknowledged = completed && admission.Originals.Members.Count != 0;
+        DateTimeOffset? retiredAt = retired.Count == admission.Members.Count ? retired[^1].RetiredAt : null;
+        Guid? targetMember = null;
+        if (birth is not null && verified is not null)
+        {
+            ValidateRetainedDirectoryTransferBirth(admission, verified, birth);
+            await ValidateDirectoryTransferBirthArtifactsAsync(birth, transaction, token).ConfigureAwait(false);
+            if (await ReadNamespaceMemberCoreAsync(birth.Birth.OperationId, transaction, token).ConfigureAwait(false) is { } member)
+                targetMember = member.MemberId;
+        }
+        string stage = completed ? journalAcknowledged ? "Completed" : "CompletedCommandWithoutCapturedNotifications" :
+            ack is not null ? "OriginalAcknowledgementMayHaveBegun" :
+            retiredAt is not null ? "SourceNameSettled" :
+            retired.Count != 0 ? "SourceRetirementMayHaveBegun" :
+            deletion?.AcceptedAt is not null ? "SourceDeleteAccepted" :
+            deletion is not null ? "SourceDeleteMayHaveBegun" :
+            targetMember is not null ? "TargetBirthPrepared" :
+            verified is not null ? "TargetVerified" :
+            copy.Steps[^1].AcceptedAt is not null ? "CopyAccepted" : copy.Steps[0].StartedAt is not null ? "CopyMayHaveBegun" : "Prepared";
+        return new(operationId, admission.SourceRoute.RootId, admission.TargetRoute.RootId,
+            admission.SourceRoute.InstanceId, admission.TargetRoute.InstanceId, admission.Command.SourceMemberId, targetMember,
+            admission.Members[0].Source.Protection.Context.Location.RelativePath, admission.Members[0].TargetRelativePath,
+            stage, admission.PreparedAt, copy.Steps[0].StartedAt, copy.Steps[^1].AcceptedAt, deletion?.StartedAt, deletion?.AcceptedAt,
+            retiredAt, retiredAt, !completed, journalAcknowledged, completed)
+        { IsDirectory = true };
     }
 
     private async Task<MirrorPulseNamespaceTransferStatus> ReadTransferStatusCoreAsync(MirrorPulseNamespaceTransferCopy copy,

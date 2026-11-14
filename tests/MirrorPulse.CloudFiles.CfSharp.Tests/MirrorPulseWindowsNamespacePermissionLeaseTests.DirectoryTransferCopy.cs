@@ -96,6 +96,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             var source = (await catalog.ReadNamespaceMemberProtectionSnapshotAsync(folder.MemberId, token))!;
             var target = (await catalog.ReadNamespaceMemberProtectionSnapshotAsync(targetParent.MemberId, token))!;
             bool interruptNativeRetirement = false;
+            bool interruptAcknowledgement = false;
             var coordinator = new MirrorPulseNamespaceTransferCoordinator(fileSystem, state, catalog, router, role, actor,
                 new MirrorPulseLocalTransferContentStore(paths), _ => true, _ => 2)
             {
@@ -108,14 +109,29 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         throw new IOException("Fixture interruption after the original native deletion.");
                     }
                     return ValueTask.CompletedTask;
+                },
+                AcknowledgementCheckpoint = (checkpoint, _) =>
+                {
+                    if (interruptAcknowledgement && checkpoint == MirrorPulseTransferAcknowledgementCheckpoint.AfterSdkAcknowledgement)
+                    {
+                        interruptAcknowledgement = false;
+                        throw new IOException("Fixture interruption after the original SDK acknowledgement.");
+                    }
+                    return ValueTask.CompletedTask;
                 }
             };
             await coordinator.MaterializeDirectorySourceAsync(source, target, token);
-            await using var roots = await work.EnterPendingOperationAsync([sourceRoot.RootId, targetRoot.RootId], token);
+            var sourceFile = (await catalog.ReadNamespaceMemberProtectionSnapshotAsync(payload.MemberId, token))!;
+            _ = await WaitForTransferOriginalContentJournalAsync(feed, sourceFile.Identity.ItemId!.Value, token);
+            var roots = await work.EnterPendingOperationAsync([sourceRoot.RootId, targetRoot.RootId], token);
+            await using var rootLifetime = roots;
             await using var instances = await scheduler.AcquireAsync([sourceRoot.InstanceId, targetRoot.InstanceId], token);
             Guid operationId = Guid.NewGuid();
-            var plan = await coordinator.PrepareDirectoryAsync(operationId, source, target, "copied", token);
+            var plan = await coordinator.PrepareDirectoryAsync(operationId, source, target, "copied", null, token);
             Assert.HasCount(2, plan.Members);
+            var preparedStatus = (await catalog.ReadPendingNamespaceTransferStatusesAsync(sourceRoot.RootId, token)).Single();
+            Assert.IsTrue(preparedStatus.IsDirectory && preparedStatus.RootsFenced);
+            Assert.AreEqual("Prepared", preparedStatus.Stage);
             Assert.IsTrue(plan.Members.All(member => member.SourceRevision is null));
             var remote = new NativeDirectoryCopyWorker(role, caller.User!, targetRoot, sourcePath, bytes, plan);
             var transport = new MirrorPulseNormalUserWorkerTransport(role, remote, remote, remote, remote, remote);
@@ -180,6 +196,75 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             Assert.IsTrue((await fileSystem.GetFile("Archive/copied/payload.bin").InspectAsync(token)).Exists);
             Assert.IsNull(await catalog.ReadNamespaceMemberChildAsync(sourceParent.MemberId, "folder", token));
             Assert.HasCount(2, await catalog.ReadNamespaceDispatchFencedRootsAsync(token));
+
+            Assert.IsNotEmpty(plan.Originals.Members);
+            interruptAcknowledgement = true;
+            var interruptedAck = await Assert.ThrowsExactlyAsync<IOException>(async () =>
+                await coordinator.AcknowledgeDirectoryAsync(operationId, workers, token));
+            Assert.AreEqual("Fixture interruption after the original SDK acknowledgement.", interruptedAck.Message);
+            var firstAck = await catalog.ReadNamespaceDirectoryTransferAcknowledgementAsync(operationId, token);
+            Assert.IsNotNull(firstAck);
+            Assert.IsNull(firstAck.AcknowledgedAt);
+            Assert.HasCount(2, await catalog.ReadNamespaceDispatchFencedRootsAsync(token));
+            var completed = await coordinator.AcknowledgeDirectoryAsync(operationId, workers, token);
+            Assert.AreEqual(firstAck.StartedAt, completed.StartedAt);
+            Assert.IsNotNull(completed.AcknowledgedAt);
+            Assert.IsEmpty(await catalog.ReadNamespaceDispatchFencedRootsAsync(token));
+            Assert.IsEmpty(await catalog.ReadNamespacePendingOperationsAsync(sourceRoot.RootId, token));
+            Assert.IsEmpty(await catalog.ReadPendingNamespaceTransferStatusesAsync(sourceRoot.RootId, token));
+            var completedStatus = await catalog.ReadNamespaceTransferStatusAsync(operationId, token);
+            Assert.IsNotNull(completedStatus);
+            Assert.IsTrue(completedStatus.IsDirectory && completedStatus.Completed && completedStatus.JournalAcknowledged);
+            Assert.IsFalse(completedStatus.RootsFenced);
+            var originalIds = await ReadTransferOriginalJournalIdsAsync(feed, token);
+            foreach (var original in plan.Originals.Members)
+            {
+                Assert.DoesNotContain(original.OperationId, originalIds);
+                Assert.IsTrue(await catalog.HasDirectoryTransferRetiredItemAsync(original.ItemId!.Value, token));
+            }
+            Guid lateId = await WaitForRetiredTransferDeleteAsync(feed, sourceFile.Identity.ItemId!.Value, token);
+            await roots.DisposeAsync();
+            await using (var recovery = await work.BeginRecoveryAsync([sourceRoot.RootId], token))
+                recovery.CompleteAfterFreshAudit();
+            var handler = new MirrorPulseRetiredTransferObservationHandler(fileSystem, feed, state, catalog, router, role, actor, work, _ => true);
+            var upload = new MirrorPulseJournalUploadSource(feed, router, catalog, _ => true, namespaceWork: work, retiredSources: handler);
+            await ExecuteTransferPublicationFixtureSqlAsync(paths, $"""
+                CREATE TRIGGER interrupt_late_directory_receipt BEFORE UPDATE ON namespace_directory_transfer_late_acknowledgements
+                WHEN NEW.operation_id='{lateId:D}' AND NEW.acknowledged=1
+                BEGIN SELECT RAISE(ABORT, 'Fixture interruption before the product receipt'); END;
+                """, token);
+            try
+            {
+                await Assert.ThrowsExactlyAsync<Microsoft.Data.Sqlite.SqliteException>(async () => await upload.ReadBeforeRequestedRescanAsync(token));
+            }
+            finally
+            {
+                await ExecuteTransferPublicationFixtureSqlAsync(paths, "DROP TRIGGER interrupt_late_directory_receipt;", CancellationToken.None);
+            }
+            Assert.DoesNotContain(lateId, await ReadTransferOriginalJournalIdsAsync(feed, token));
+            var pendingLate = await catalog.ReadDirectoryTransferLateAcknowledgementAsync(lateId, token);
+            Assert.IsNotNull(pendingLate);
+            Assert.IsNull(pendingLate.AcknowledgedAt);
+            await handler.RecoverPendingAsync(token);
+            var late = await catalog.ReadDirectoryTransferLateAcknowledgementAsync(lateId, token);
+            Assert.IsNotNull(late?.AcknowledgedAt);
+            Assert.AreEqual(operationId, late.TransferId);
+            Assert.AreEqual(pendingLate.StartedAt, late.StartedAt);
+
+            // Reopen the public runtime and replay the completed original command.
+            await feed.DisposeAsync();
+            await fileSystem.DisposeAsync();
+            await instances.DisposeAsync();
+            await using var publicWork = new MirrorPulseNamespaceWorkAdmission([sourceRoot.RootId, targetRoot.RootId]);
+            var factory = new CfSharpMirrorPulseCloudRuntimeFactory(router: router, catalog: catalog, mayDispatch: _ => true,
+                scheduler: scheduler, namespaceExecution: role, namespaceActor: actor, namespaceWork: publicWork, transfers: workers);
+            await using var runtime = factory.Create(paths);
+            await runtime.StartAsync(token);
+            Assert.IsTrue(await runtime.PrepareDirectoryNamespaceTransferAsync(operationId, folder.MemberId, targetParent.MemberId, "copied", token));
+            Assert.IsTrue(await runtime.ResumeDirectoryNamespaceTransferAsync(operationId, token));
+            Assert.IsFalse(publicWork.IsAdmitted(sourceRoot.RootId));
+            Assert.IsFalse(publicWork.IsAdmitted(targetRoot.RootId));
+            Assert.AreEqual(1, remote.Uploads, "Public replay of a completed transfer must use the original history.");
         }
         finally
         {

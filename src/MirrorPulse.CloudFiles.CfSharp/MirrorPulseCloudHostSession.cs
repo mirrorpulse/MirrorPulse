@@ -18,6 +18,12 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 public interface IMirrorPulseCloudRuntime : IAsyncDisposable
 {
     [SupportedOSPlatform("windows10.0.26100")]
+    ValueTask<bool> PrepareDirectoryNamespaceTransferAsync(Guid operationId, Guid memberId,
+        Guid targetParentMemberId, string name, CancellationToken token) => ValueTask.FromResult(false);
+    [SupportedOSPlatform("windows10.0.26100")]
+    ValueTask<bool> ResumeDirectoryNamespaceTransferAsync(Guid operationId, CancellationToken token) => ValueTask.FromResult(false);
+
+    [SupportedOSPlatform("windows10.0.26100")]
     ValueTask<MirrorPulseNamespaceTransferCopy> PrepareNamespaceTransferAsync(Guid operationId, Guid memberId,
         Guid targetParentMemberId, string name, CancellationToken token) => ValueTask.FromException<MirrorPulseNamespaceTransferCopy>(
             new NotSupportedException("This runtime does not prepare original file transfers."));
@@ -418,6 +424,85 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                 JournalFeed = _transferJournal,
                 RetiredSourceObservations = _retiredSourceObservations
             };
+        }
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        public async ValueTask<bool> PrepareDirectoryNamespaceTransferAsync(Guid operationId, Guid memberId,
+            Guid targetParentMemberId, string name, CancellationToken token)
+        {
+            RequireImportBoundary();
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
+            var existing = await catalog!.ReadNamespaceDirectoryTransferAsync(operationId, token).ConfigureAwait(false);
+            if (existing is not null)
+            {
+                if (existing.Command.SourceMemberId != memberId || existing.Command.TargetParentMemberId != targetParentMemberId ||
+                    existing.Command.TargetName != name)
+                    throw new InvalidOperationException("The original operation belongs to a different directory transfer request.");
+                return true;
+            }
+            if (await catalog.ReadNamespaceTransferAsync(operationId, token).ConfigureAwait(false) is not null ||
+                await catalog.ReadNamespaceMemberAsync(memberId, token).ConfigureAwait(false) is not { IsDirectory: true })
+                return false;
+            ArgumentException.ThrowIfNullOrWhiteSpace(name);
+            if (name.Contains('/') || name.Contains('\\')) throw new ArgumentException("A transfer requires one direct child name.", nameof(name));
+            if (namespaceWork is null || transfers is null)
+                throw new NotSupportedException("Directory transfers require Host root admissions and Worker transports.");
+            var source = await catalog.ReadNamespaceMemberProtectionSnapshotAsync(memberId, token).ConfigureAwait(false)
+                ?? throw new FileNotFoundException("The transfer source directory is not registered.");
+            var target = await catalog.ReadNamespaceMemberProtectionSnapshotAsync(targetParentMemberId, token).ConfigureAwait(false)
+                ?? throw new FileNotFoundException("The transfer target parent is not registered.");
+            if (!target.Context.Member.IsDirectory || source.Context.Member.RootId is not { } sourceRoot ||
+                target.Context.Member.RootId is not { } targetRoot || sourceRoot == targetRoot)
+                throw new InvalidOperationException("A directory transfer requires distinct managed source and target roots.");
+            var coordinator = TransferCoordinator();
+            using var admission = namespaceWork.Enter([sourceRoot, targetRoot]);
+            await WithCurrentLibraryAsync(async stop =>
+            {
+                await coordinator.MaterializeDirectorySourceAsync(source, target, stop).ConfigureAwait(false);
+                return true;
+            }, token).ConfigureAwait(false);
+            var instances = router!.Registrations.Where(root => root.RootId == sourceRoot || root.RootId == targetRoot)
+                .Select(root => root.InstanceId).Distinct();
+            _ = await WithAdmittedInstancesLibraryAsync(instances, (_, stop) =>
+                coordinator.PrepareDirectoryAsync(operationId, source, target, name, transfers, stop), token).ConfigureAwait(false);
+            return true;
+        }
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        public async ValueTask<bool> ResumeDirectoryNamespaceTransferAsync(Guid operationId, CancellationToken token)
+        {
+            RequireImportBoundary();
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
+            var plan = await catalog!.ReadNamespaceDirectoryTransferAsync(operationId, token).ConfigureAwait(false);
+            if (plan is null) return false;
+            if ((await catalog.ReadNamespaceDirectoryTransferAcknowledgementAsync(operationId, token).ConfigureAwait(false))?.AcknowledgedAt is not null)
+                return true;
+            if (namespaceWork is null || transfers is null || _retiredSourceObservations is null)
+                throw new NotSupportedException("Directory transfer completion requires root admission and late journal recovery.");
+            var coordinator = TransferCoordinator();
+            RootId[] roots = [plan.SourceRoute.RootId, plan.TargetRoute.RootId];
+            InstanceId[] instances = [plan.SourceRoute.InstanceId, plan.TargetRoute.InstanceId];
+            await using var recovery = await namespaceWork.BeginRecoveryAsync(roots, token).ConfigureAwait(false);
+            await WithAdmittedInstancesLibraryAsync(instances, async (instanceAdmission, stop) =>
+            {
+                _ = await coordinator.CopyDirectoryAsync(operationId, transfers, stop).ConfigureAwait(false);
+                _ = await coordinator.VerifyDirectoryTargetAsync(operationId, transfers, stop).ConfigureAwait(false);
+                _ = await coordinator.DeleteDirectorySourceAsync(operationId, transfers, stop).ConfigureAwait(false);
+                _ = await coordinator.RetireDirectorySourceAsync(operationId, transfers, stop).ConfigureAwait(false);
+                _ = await coordinator.AcknowledgeDirectoryAsync(operationId, transfers, stop).ConfigureAwait(false);
+                var audit = new MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(fileSystem, catalog, router!,
+                    _namespaceExecution!, _namespaceActor!, instanceAdmission, _permissions!);
+                foreach (var root in roots)
+                {
+                    await using var restored = await audit.RecoverRootAsync(Guid.NewGuid(), root, stop).ConfigureAwait(false);
+                    var prior = _scopedAnchorProtection;
+                    _scopedAnchorProtection = restored.TransferAnchor();
+                    if (prior is not null) await prior.DisposeAsync().ConfigureAwait(false);
+                }
+                recovery.CompleteAfterFreshAudit();
+                return true;
+            }, token).ConfigureAwait(false);
+            return true;
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
@@ -2408,6 +2493,21 @@ public sealed class MirrorPulseCloudHostSession : IAsyncDisposable
     {
         if (!_started || _runtime is null) throw new InvalidOperationException("The Cloud Files Host session has not started.");
         return _runtime.PrepareNamespaceTransferAsync(operationId, memberId, targetParentMemberId, name, token);
+    }
+
+    [SupportedOSPlatform("windows10.0.26100")]
+    public ValueTask<bool> PrepareDirectoryNamespaceTransferAsync(Guid operationId, Guid memberId,
+        Guid targetParentMemberId, string name, CancellationToken token)
+    {
+        if (!_started || _runtime is null) throw new InvalidOperationException("The Cloud Files Host session has not started.");
+        return _runtime.PrepareDirectoryNamespaceTransferAsync(operationId, memberId, targetParentMemberId, name, token);
+    }
+
+    [SupportedOSPlatform("windows10.0.26100")]
+    public ValueTask<bool> ResumeDirectoryNamespaceTransferAsync(Guid operationId, CancellationToken token)
+    {
+        if (!_started || _runtime is null) throw new InvalidOperationException("The Cloud Files Host session has not started.");
+        return _runtime.ResumeDirectoryNamespaceTransferAsync(operationId, token);
     }
 
     [SupportedOSPlatform("windows10.0.26100")]

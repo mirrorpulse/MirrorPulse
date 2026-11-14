@@ -148,10 +148,10 @@ without a fresh audit. Worker calls execute in the normal Host user context.
 Historical accepted stages remain readable after a new role or offline instance;
 they perform no Worker call and cannot refresh native authority.
 
-## Controlled file move and recovery
+## Controlled move and recovery
 
 `mp namespace transfer move OPERATION_ID SOURCE_MEMBER_ID TARGET_PARENT_ID NAME`
-starts one retained file transfer. Choose a unique operation ID and preserve it
+starts one retained file or directory transfer. Choose a unique operation ID and preserve it
 for `mp namespace transfer resume OPERATION_ID`. Status and list remain read-only.
 The CLI sends typed requests over the versioned Control pipe; only the Host opens
 the product catalog or the official CfSharp SQLite store. The Host drives copy,
@@ -159,6 +159,13 @@ whole-target verification, protected destination publication, conditional source
 deletion, local source retirement and original journal acknowledgement. An
 ambiguous copy or delete remains pending for explicit reconciliation; resume
 does not authorize another remote effect from matching target bytes.
+
+Directory transfers preserve the complete source inventory and publish each
+verified target member under its original target parent. A remote source
+requires the V2 Worker to admit and atomically retire the original subtree.
+Members that exist only locally require proof of remote absence. Native source
+retirement proceeds from children to parents, and the completed journal
+acknowledgement releases both durable root fences.
 
 The read-only list for one root uses derived indexes of the original pending
 source and destination routes, plus the retained root reservation. It validates

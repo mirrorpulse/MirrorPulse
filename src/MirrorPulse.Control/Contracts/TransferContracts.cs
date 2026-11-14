@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace MirrorPulse.Control.Contracts;
 
 public sealed record NamespaceTransferStatusArguments(Guid OperationId) : IMirrorPulseControlArguments;
@@ -12,6 +14,10 @@ public sealed record MirrorPulseControlTransferStatus(Guid OperationId, Guid Sou
     string SourceRelativePath, string TargetRelativePath, string Stage, DateTimeOffset PreparedAt,
     DateTimeOffset? CopyStartedAt, DateTimeOffset? CopyAcceptedAt, DateTimeOffset? SourceDeleteStartedAt,
     DateTimeOffset? SourceDeleteAcceptedAt, DateTimeOffset? SourceNativeRetiredAt, DateTimeOffset? SourceNameSettledAt,
-    bool RootsFenced, bool JournalAcknowledged, bool Completed);
+    bool RootsFenced, bool JournalAcknowledged, bool Completed)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool IsDirectory { get; init; }
+}
 
 public sealed record MirrorPulseControlTransfers(IReadOnlyList<MirrorPulseControlTransferStatus> Entries);
