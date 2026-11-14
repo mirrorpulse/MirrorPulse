@@ -53,9 +53,17 @@ public sealed partial class MirrorPulseProductCatalog
         try
         {
             ThrowIfDisposed();
-            await using (var ownership = _connection.CreateCommand())
-            {
-                ownership.CommandText = """
+            await RequireNotJournalGroupOrConflictOwnerAsync(intent.OperationId, null, cancellationToken).ConfigureAwait(false);
+            return await PrepareMutationCoreAsync(intent, payload, cancellationToken).ConfigureAwait(false);
+        }
+        finally { _gate.Release(); }
+    }
+
+    private async Task RequireNotJournalGroupOrConflictOwnerAsync(Guid operationId, SqliteTransaction? transaction, CancellationToken token)
+    {
+        await using var ownership = _connection.CreateCommand();
+        ownership.Transaction = transaction;
+        ownership.CommandText = """
                     SELECT 1 FROM journal_coalescing_members WHERE operation_id=$operation
                     UNION ALL SELECT 1 FROM journal_coalescing_plans WHERE plan_id=$operation
                     UNION ALL SELECT 1 FROM conflict_deletion_members WHERE original_id=$operation
@@ -63,13 +71,9 @@ public sealed partial class MirrorPulseProductCatalog
                     UNION ALL SELECT 1 FROM journal_coalescing_retries WHERE operation_id=$operation OR followup_operation_id=$operation
                     UNION ALL SELECT 1 FROM journal_coalescing_steps WHERE operation_id=$operation LIMIT 1;
                     """;
-                ownership.Parameters.AddWithValue("$operation", intent.OperationId.ToString());
-                if (await ownership.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null)
-                    throw new InvalidOperationException("The operation ID belongs to an immutable coalescing plan.");
-            }
-            return await PrepareMutationCoreAsync(intent, payload, cancellationToken).ConfigureAwait(false);
-        }
-        finally { _gate.Release(); }
+        ownership.Parameters.AddWithValue("$operation", operationId.ToString("D"));
+        if (await ownership.ExecuteScalarAsync(token).ConfigureAwait(false) is not null)
+            throw new InvalidOperationException("The operation ID belongs to an immutable coalescing or conflict plan.");
     }
 
     public async Task<MirrorPulseMutationRecord?> ReadMutationAsync(Guid operationId, CancellationToken cancellationToken = default)

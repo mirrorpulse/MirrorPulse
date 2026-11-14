@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
+using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.Core.State;
@@ -67,6 +68,62 @@ public sealed partial class MirrorPulseProductCatalog
     internal Task<MirrorPulseJournalDirectoryMove?> ReadJournalDirectoryMoveAsync(Guid operationId, CancellationToken token) =>
         WithJournalDirectoryMoveAsync(operationId, (value, _, _) => Task.FromResult(value), token);
 
+    internal async Task<IReadOnlyList<MirrorPulseNamespacePendingOperation>> ReadPendingJournalDirectoryMovesAsync(
+        Guid? after, int limit, CancellationToken token)
+    {
+        if (limit is < 1 or > 256) throw new ArgumentOutOfRangeException(nameof(limit));
+        await _gate.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            using var transaction = BeginNamespaceRecoveryReadSnapshot();
+            var result = await ReadPendingJournalDirectoryMovesCoreAsync(transaction, token, after: after, limit: limit).ConfigureAwait(false);
+            transaction.Commit();
+            return result;
+        }
+        finally { _gate.Release(); }
+    }
+
+    private async Task<IReadOnlyList<MirrorPulseNamespacePendingOperation>> ReadPendingJournalDirectoryMovesCoreAsync(
+        SqliteTransaction transaction, CancellationToken token, RootId? rootId = null, Guid? after = null, int limit = 4097)
+    {
+        var pending = new List<(Guid OperationId, RootId RootId)>();
+        await using (var query = _connection.CreateCommand())
+        {
+            query.Transaction = transaction;
+            query.CommandText = """
+                SELECT j.operation_id,m.root_id FROM journal_directory_moves j
+                LEFT JOIN mutation_intents u ON j.operation_id=u.operation_id
+                LEFT JOIN namespace_member_moves m ON j.local_move_id=m.operation_id
+                WHERE (u.state IS NULL OR u.state<>$acknowledged) AND (m.root_id IS NULL OR $root IS NULL OR m.root_id=$root)
+                AND j.operation_id>$after ORDER BY j.operation_id LIMIT $limit;
+                """;
+            query.Parameters.AddWithValue("$acknowledged", (int)MirrorPulseMutationState.Acknowledged);
+            query.Parameters.AddWithValue("$root", rootId is { } root ? root.ToString() : (object)DBNull.Value);
+            query.Parameters.AddWithValue("$after", after?.ToString("D") ?? string.Empty);
+            query.Parameters.AddWithValue("$limit", limit);
+            await using var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
+            while (await reader.ReadAsync(token).ConfigureAwait(false))
+            {
+                if (reader.IsDBNull(1) || !RootId.TryParse(reader.GetString(1), out var indexedRoot) || indexedRoot.ToString() != reader.GetString(1))
+                    throw new InvalidDataException("The original journal directory Move lost its controlled root index.");
+                pending.Add((ParseNamespaceMemberId(reader.GetString(0)), indexedRoot));
+            }
+        }
+        if (pending.Count > 4096) throw new InvalidDataException("Pending directory Move recovery exceeds the root inventory bound.");
+        var roots = new HashSet<RootId>();
+        var result = new List<MirrorPulseNamespacePendingOperation>(pending.Count);
+        foreach (var item in pending)
+        {
+            var retained = await ReadJournalDirectoryMoveCoreAsync(item.OperationId, transaction, token).ConfigureAwait(false)
+                ?? throw new InvalidDataException("A pending directory Move lost its durable owner.");
+            if (retained.Admission.RootId != item.RootId || !roots.Add(item.RootId))
+                throw new InvalidDataException("The pending directory Move does not have an exclusive original root.");
+            result.Add(new(item.OperationId, item.RootId, MirrorPulseNamespacePendingOperationKind.JournalDirectoryMove));
+        }
+        return result.AsReadOnly();
+    }
+
     internal async Task<MirrorPulseJournalDirectoryMove> StartJournalDirectoryMoveAsync(MirrorPulseJournalDirectoryMoveAdmission admission,
         MirrorPulseMutationIntent mutation, CancellationToken token)
     {
@@ -82,7 +139,17 @@ public sealed partial class MirrorPulseProductCatalog
             await ValidateJournalDirectoryMoveAdmissionAsync(admission, mutation, transaction, stop).ConfigureAwait(false);
             if (await HasTypedDirectoryMutationOwnerCoreAsync(mutation.OperationId, transaction, stop).ConfigureAwait(false))
                 throw new InvalidOperationException("The original directory Move already has a typed owner.");
+            await RequireNotJournalGroupOrConflictOwnerAsync(mutation.OperationId, transaction, stop).ConfigureAwait(false);
             await RequireNamespaceMoveRootUnfencedAsync(admission.RootId, null, transaction, stop).ConfigureAwait(false);
+            await using (var topology = _connection.CreateCommand())
+            {
+                topology.Transaction = transaction;
+                topology.CommandText = "SELECT payload FROM adapter_topology WHERE id=1;";
+                if (await topology.ExecuteScalarAsync(stop).ConfigureAwait(false) is not string json ||
+                    !DeserializeTopology(json).Roots.Any(root => root.RootId == admission.RootId && root.InstanceId == admission.InstanceId &&
+                        root.UniquenessKey == admission.RootKey && root.State == RootRegistrationState.Active))
+                    throw new InvalidOperationException("The original directory Move requires its active configured Adapter root.");
+            }
             foreach (var original in admission.Members)
             {
                 var member = await ReadNamespaceMemberCoreAsync(original.MemberId, transaction, stop).ConfigureAwait(false)
@@ -344,6 +411,7 @@ public sealed partial class MirrorPulseProductCatalog
             string.IsNullOrWhiteSpace(admission.RootKey) || admission.RootKey != mutation.RootKey ||
             (mutation.PreviousRootKey ?? mutation.RootKey) != mutation.RootKey ||
             mutation.Origin != MirrorPulseMutationOrigin.Journal || mutation.Kind != MirrorPulseWorkerChangeKind.Move || !mutation.IsDirectory ||
+            mutation.ContentLength is not null || mutation.ContentSha256 is not null || mutation.UploadBinding is not null ||
             admission.Members is not { Count: > 0 and <= 65536 } || !admission.Root.IsDirectory ||
             string.IsNullOrEmpty(mutation.ExpectedRevision) || mutation.ExpectedRevision != admission.Root.OriginalRevision ||
             mutation.PreviousRelativePath is not { Length: > 0 } source || string.IsNullOrWhiteSpace(mutation.RelativePath) ||

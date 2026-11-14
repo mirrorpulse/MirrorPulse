@@ -70,6 +70,12 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             var intent = new MirrorPulseMutationIntent(operationId, root.InstanceId, root.UniquenessKey, MirrorPulseWorkerChangeKind.Move,
                 "moved.txt", "new.txt", true, admission.Root.OriginalRevision, null, null, MirrorPulseMutationOrigin.Journal);
             await first.StartJournalDirectoryMoveAsync(admission, intent, default);
+            CollectionAssert.AreEqual(new[] { root.RootId }, (await first.ReadNamespaceDispatchFencedRootsAsync()).ToArray());
+            var pending = (await first.ReadNamespacePendingOperationsAsync(root.RootId)).Single();
+            Assert.AreEqual(new MirrorPulseNamespacePendingOperation(operationId, root.RootId, MirrorPulseNamespacePendingOperationKind.JournalDirectoryMove), pending);
+            Assert.IsEmpty(await first.ReadNamespacePendingOperationsAsync(RootId.New()));
+            Assert.AreEqual(pending, (await first.ReadPendingJournalDirectoryMovesAsync(null, 1, default)).Single());
+            Assert.IsEmpty(await first.ReadPendingJournalDirectoryMovesAsync(operationId, 1, default));
             await first.AcceptJournalDirectoryMoveAsync(operationId, admission.Root.OriginalRevision!, default);
             targets = originals.Select(member => new MirrorPulseDirectoryMoveTarget(member.MemberId, Guid.NewGuid(),
                 "target:" + member.TargetPath, member.OriginalRevision)).ToArray();
@@ -89,6 +95,8 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             }
             await first.BeginJournalDirectoryMoveAcknowledgementAsync(operationId, default);
             await first.CompleteJournalDirectoryMoveAcknowledgementAsync(operationId, default);
+            Assert.IsEmpty(await first.ReadNamespaceDispatchFencedRootsAsync());
+            Assert.IsEmpty(await first.ReadPendingJournalDirectoryMovesAsync(null, 4, default));
         }
 
         MirrorPulseNamespaceIdentityAcceptance uploadIdentity;

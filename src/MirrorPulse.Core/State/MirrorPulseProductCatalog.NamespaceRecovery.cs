@@ -87,6 +87,8 @@ public sealed partial class MirrorPulseProductCatalog
         await RequireRemoteTreeSettlementOwnershipIntegrityAsync(transaction, cancellationToken).ConfigureAwait(false);
         await RequireRemoteDeleteResolutionOwnershipIntegrityAsync(transaction, cancellationToken).ConfigureAwait(false);
         HashSet<RootId> roots = [];
+        foreach (var move in await ReadPendingJournalDirectoryMovesCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
+            roots.Add(move.RootId);
         await foreach (var rejection in ReadPendingRemoteDeleteRejectionsCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
             if (rejection.Admission.OperationId != admittedRemoteDeleteRejectionId) roots.Add(rejection.Admission.RootId);
         await AddKeepRemoteFileStartRootFencesAsync(roots, transaction, cancellationToken).ConfigureAwait(false);
