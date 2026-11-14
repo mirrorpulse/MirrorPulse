@@ -19,7 +19,7 @@ public sealed class AdapterInstanceProcessSupervisor :
     IMirrorPulseWorkerRangeTransport, IMirrorPulseWorkerUploadTransport,
     IMirrorPulseWorkerStatTransport, IMirrorPulseWorkerDirectoryPageSource,
     IMirrorPulseWorkerMutationTransport, IMirrorPulseOriginalDirectoryRetirementTransport,
-    IMirrorPulseAtomicDirectoryDeletionTransport,
+    IMirrorPulseAtomicDirectoryDeletionTransport, IMirrorPulseDirectoryTransferDeletionTransport,
     IAsyncDisposable
 {
     private readonly MirrorPulseProductCatalog _catalog;
@@ -206,6 +206,29 @@ public sealed class AdapterInstanceProcessSupervisor :
 
     internal bool SupportsAtomicDirectoryDeletion(InstanceId instanceId) => IsConnected(instanceId) &&
         _mutations.TryGetValue(instanceId, out var client) && client.SupportsAtomicDirectoryDeletion;
+
+    bool IMirrorPulseDirectoryTransferDeletionTransport.SupportsDirectoryTransferDeletion(InstanceId instanceId) =>
+        SupportsAtomicDirectoryDeletion(instanceId);
+
+    ValueTask<AdapterDirectoryAdmission> IMirrorPulseDirectoryTransferDeletionTransport.AdmitDirectoryTransferSourceAsync(
+        AdapterDirectoryAdmissionRequest original, CancellationToken token) =>
+        RunDirectoryTransferSourceOperationAsync(new(original.InstanceId), (client, stop) => client.AdmitAtomicDirectoryAsync(original, stop), token);
+
+    ValueTask<AdapterAtomicDirectoryDeletionReceipt> IMirrorPulseDirectoryTransferDeletionTransport.DeleteDirectoryTransferSourceAsync(
+        AdapterAtomicDirectoryDeletionRequest original, CancellationToken token) =>
+        RunDirectoryTransferSourceOperationAsync(new(original.OriginalRequest.InstanceId),
+            (client, stop) => client.DeleteAtomicDirectoryAsync(original, stop), token);
+
+    private async ValueTask<T> RunDirectoryTransferSourceOperationAsync<T>(InstanceId instanceId,
+        Func<AdapterWorkerMutationClient, CancellationToken, ValueTask<T>> operation, CancellationToken token)
+    {
+        if (!IsConnected(instanceId) || !_mutations.TryGetValue(instanceId, out var client) ||
+            !_instanceOperations.TryGetValue(instanceId, out var gate))
+            throw new AdapterWorkerOperationException("Disconnected");
+        await gate.WaitAsync(token).ConfigureAwait(false);
+        try { return await operation(client, token).ConfigureAwait(false); }
+        finally { gate.Release(); }
+    }
 
     public bool SupportsDurableDirectoryMove(InstanceId instanceId) => IsConnected(instanceId) &&
         _mutations.TryGetValue(instanceId, out var client) && client.SupportsDurableDirectoryMove;

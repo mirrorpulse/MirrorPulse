@@ -127,6 +127,43 @@ public sealed partial class AdapterWorkerV2SessionTests
     }
 
     [TestMethod]
+    public async Task DirectoryTransferTransportReplaysItsOwnedDeletionWithoutTouchingLaterOccupants()
+    {
+        using var fixture = new AtomicHostFixture();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        CancellationToken token = deadline.Token;
+        AdapterAtomicDirectoryDeletionRequest request;
+        string receiptFingerprint;
+        await using (var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths, token))
+        {
+            await catalog.SaveAdapterTopologyAsync(fixture.Topology, token);
+            await using var supervisor = await fixture.StartAsync(catalog, token);
+            var transport = (IMirrorPulseDirectoryTransferDeletionTransport)supervisor;
+            var originals = await fixture.ReadRequestAsync(supervisor, token);
+            Assert.IsTrue(transport.SupportsDirectoryTransferDeletion(new(originals.InstanceId)));
+            var admission = await transport.AdmitDirectoryTransferSourceAsync(originals, token);
+            Assert.IsTrue(Directory.Exists(fixture.Tree));
+            request = MirrorPulseProductCatalog.CreateDirectoryTransferSourceDeleteRequest(originals, admission);
+            var deleted = await transport.DeleteDirectoryTransferSourceAsync(request, token);
+            Assert.HasCount(3, deleted.DeletedOriginals);
+            Assert.IsFalse(Directory.Exists(fixture.Tree));
+            Assert.IsNull(await catalog.ReadAtomicDirectoryBatchAsync(originals.AdmissionId, token));
+            receiptFingerprint = deleted.Fingerprint();
+        }
+
+        Directory.CreateDirectory(fixture.Tree);
+        string successor = Path.Combine(fixture.Tree, "later.txt");
+        await File.WriteAllTextAsync(successor, "later generation", token);
+        await using var reopened = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths, token);
+        await using var restarted = await fixture.StartAsync(reopened, token);
+        var recovery = (IMirrorPulseDirectoryTransferDeletionTransport)restarted;
+        var replay = await recovery.DeleteDirectoryTransferSourceAsync(request, token);
+        Assert.AreEqual(receiptFingerprint, replay.Fingerprint());
+        Assert.AreEqual("later generation", await File.ReadAllTextAsync(successor, token));
+        Assert.AreEqual("peer", await File.ReadAllTextAsync(Path.Combine(fixture.Source, "peer.txt"), token));
+    }
+
+    [TestMethod]
     public async Task AtomicDirectoryReservationRollsBackAllOwnersBeforeAnyWorkerMutation()
     {
         using var fixture = new AtomicHostFixture();

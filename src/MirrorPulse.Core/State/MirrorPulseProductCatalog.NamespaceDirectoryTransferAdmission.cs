@@ -279,7 +279,7 @@ public sealed partial class MirrorPulseProductCatalog
     }
 
     private async Task RequireCurrentDirectoryTransferTreeAsync(MirrorPulseDirectoryTransferAdmission plan,
-        SqliteTransaction transaction, CancellationToken token)
+        SqliteTransaction transaction, CancellationToken token, Guid? publishedRoot = null)
     {
         foreach (var parent in new[] { plan.SourceParent, plan.TargetParent })
             if (await ReadNamespaceMemberProtectionSnapshotCoreAsync(parent.Context.Member.MemberId, transaction, token).ConfigureAwait(false) != parent)
@@ -297,11 +297,11 @@ public sealed partial class MirrorPulseProductCatalog
         }
         await using var query = _connection.CreateCommand();
         query.Transaction = transaction;
-        query.CommandText = "SELECT 1 FROM namespace_member_names WHERE parent_member_id=$parent AND child_name_key=$name;";
+        query.CommandText = "SELECT member_id FROM namespace_member_names WHERE parent_member_id=$parent AND child_name_key=$name;";
         query.Parameters.AddWithValue("$parent", plan.Command.TargetParentMemberId.ToString("D"));
         query.Parameters.AddWithValue("$name", NamespaceMemberNameKey(plan.Members[0].TargetRelativePath));
-        if (await query.ExecuteScalarAsync(token).ConfigureAwait(false) is not null)
-            throw new InvalidOperationException("An existing member owns the directory transfer destination.");
+        if (!Equals(await query.ExecuteScalarAsync(token).ConfigureAwait(false), publishedRoot?.ToString("D")))
+            throw new InvalidOperationException("The directory transfer destination is occupied or no longer owns its original published name.");
     }
 
     private static IEnumerable<(Guid Id, bool JournalOriginal)> DirectoryTransferIds(MirrorPulseDirectoryTransferAdmission plan)

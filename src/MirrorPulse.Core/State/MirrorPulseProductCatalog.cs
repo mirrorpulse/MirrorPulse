@@ -42,7 +42,7 @@ public sealed record MirrorPulseInstanceRuntimeState(
 /// </summary>
 public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
 {
-    public const long CurrentSchemaVersion = 112;
+    public const long CurrentSchemaVersion = 113;
     private readonly FileStream _owner;
     private readonly SqliteConnection _connection;
     internal string WorkerStateRootPath { get; }
@@ -548,6 +548,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
             await EnsureNamespaceIdentityMoveLinksSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
             await EnsureDirectoryTransferAdmissionSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
             await EnsureDirectoryTransferBirthSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
+            await EnsureDirectoryTransferSourceDeletionSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
             openObservation.Mark(MirrorPulseCatalogOpenPhase.RecoverySchemaPrepared);
             openObservation.Mark(MirrorPulseCatalogOpenPhase.Completed);
             return catalog;

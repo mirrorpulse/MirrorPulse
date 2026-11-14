@@ -143,6 +143,14 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             Assert.HasCount(2, await catalog.ReadNamespaceDispatchFencedRootsAsync(token));
             Assert.AreEqual(1, remote.Creates);
             Assert.AreEqual(1, remote.Uploads);
+            var absence = await coordinator.DeleteDirectorySourceAsync(operationId, workers, token);
+            Assert.IsNotNull(absence.AcceptedAt);
+            Assert.IsNull(absence.Request);
+            Assert.IsNull(absence.Receipt);
+            var replayedAbsence = await coordinator.DeleteDirectorySourceAsync(operationId, workers, token);
+            Assert.AreEqual(absence.AcceptedAt, replayedAbsence.AcceptedAt);
+            CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(sourcePath, token));
+            Assert.HasCount(2, await catalog.ReadNamespaceDispatchFencedRootsAsync(token));
         }
         finally
         {

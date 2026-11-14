@@ -1,6 +1,7 @@
 using System.Runtime.Versioning;
 using MirrorPulse.Adapter.Sdk;
 using MirrorPulse.Core.CloudFiles;
+using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.Host;
 
 namespace MirrorPulse.CloudFiles.CfSharp;
@@ -15,8 +16,8 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 [SupportedOSPlatform("windows10.0.26100")]
 public sealed class MirrorPulseNormalUserWorkerTransport : IMirrorPulseWorkerRangeTransport,
     IMirrorPulseWorkerUploadTransport, IMirrorPulseWorkerStatTransport,
-    IMirrorPulseWorkerDirectoryPageSource, IMirrorPulseWorkerMutationTransport, IMirrorPulseOriginalDirectoryRetirementTransport
-    , IMirrorPulseAtomicDirectoryDeletionTransport
+    IMirrorPulseWorkerDirectoryPageSource, IMirrorPulseWorkerMutationTransport, IMirrorPulseOriginalDirectoryRetirementTransport,
+    IMirrorPulseAtomicDirectoryDeletionTransport, IMirrorPulseDirectoryTransferDeletionTransport
 {
     private readonly MirrorPulseNamespaceExecutionSession _session;
     private readonly IMirrorPulseWorkerRangeTransport _ranges;
@@ -91,8 +92,29 @@ public sealed class MirrorPulseNormalUserWorkerTransport : IMirrorPulseWorkerRan
             await retirement.RetireOriginalDirectoryAsync(request, cancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
     }
 
-    bool IMirrorPulseAtomicDirectoryDeletionTransport.SupportsAtomicDirectoryDeletion(MirrorPulse.Core.Contracts.InstanceId instanceId) =>
+    bool IMirrorPulseAtomicDirectoryDeletionTransport.SupportsAtomicDirectoryDeletion(InstanceId instanceId) =>
         _mutations is IMirrorPulseAtomicDirectoryDeletionTransport atomic && atomic.SupportsAtomicDirectoryDeletion(instanceId);
+
+    bool IMirrorPulseDirectoryTransferDeletionTransport.SupportsDirectoryTransferDeletion(InstanceId instanceId) =>
+        _mutations is IMirrorPulseDirectoryTransferDeletionTransport transfer && transfer.SupportsDirectoryTransferDeletion(instanceId);
+
+    async ValueTask<AdapterDirectoryAdmission> IMirrorPulseDirectoryTransferDeletionTransport.AdmitDirectoryTransferSourceAsync(
+        AdapterDirectoryAdmissionRequest original, CancellationToken token)
+    {
+        if (_mutations is not IMirrorPulseDirectoryTransferDeletionTransport transfer)
+            throw new NotSupportedException("DirectoryTransferSourceDeletionUnsupported");
+        return await _session.RunNormalUserOperationAsync(async () =>
+            await transfer.AdmitDirectoryTransferSourceAsync(original, token).ConfigureAwait(false)).ConfigureAwait(false);
+    }
+
+    async ValueTask<AdapterAtomicDirectoryDeletionReceipt> IMirrorPulseDirectoryTransferDeletionTransport.DeleteDirectoryTransferSourceAsync(
+        AdapterAtomicDirectoryDeletionRequest original, CancellationToken token)
+    {
+        if (_mutations is not IMirrorPulseDirectoryTransferDeletionTransport transfer)
+            throw new NotSupportedException("DirectoryTransferSourceDeletionUnsupported");
+        return await _session.RunNormalUserOperationAsync(async () =>
+            await transfer.DeleteDirectoryTransferSourceAsync(original, token).ConfigureAwait(false)).ConfigureAwait(false);
+    }
 
     public bool SupportsDurableDirectoryMove(MirrorPulse.Core.Contracts.InstanceId instanceId) =>
         _mutations.SupportsDurableDirectoryMove(instanceId);

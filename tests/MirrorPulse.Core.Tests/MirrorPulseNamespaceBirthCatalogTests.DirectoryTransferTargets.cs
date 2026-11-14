@@ -1,3 +1,4 @@
+using MirrorPulse.Adapter.Sdk;
 using MirrorPulse.Core.Caching;
 using MirrorPulse.Core.State;
 using MirrorPulse.Core.Sync;
@@ -72,9 +73,11 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         MirrorPulseDirectoryTransferTargetBirth directory;
         MirrorPulseDirectoryTransferTargetBirth file;
         MirrorPulseDirectoryTransferTargetVerification verified;
+        AdapterAtomicDirectoryDeletionRequest deleteRequest;
         await using (var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths))
         {
             var original = await PrepareDirectoryTransferFixtureAsync(catalog, TransferBytes);
+            deleteRequest = DirectoryTransferDeleteRequest(original);
             await catalog.PrepareNamespaceDirectoryTransferAsync(original);
             var worker = new DirectoryTransferCopyWorker { Plan = original };
             var inputs = new MirrorPulseLocalTransferContentStore(fixture.Paths);
@@ -116,14 +119,53 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             var snapshot = (await catalog.ReadNamespaceMemberProtectionSnapshotAsync(registered.MemberId))!;
             file = DirectoryTransferBirth(original, verified, snapshot, 1, registered.RegisteredAt.AddSeconds(1));
         }
-        await using var reopened = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
-        Assert.AreEqual(directory, await reopened.ReadNamespaceDirectoryTransferBirthAsync(directory.TransferId, 0, default));
-        Assert.AreEqual(file, await reopened.PrepareNamespaceDirectoryTransferBirthAsync(file, default));
-        Assert.AreEqual(file, await reopened.PrepareNamespaceDirectoryTransferBirthAsync(file, default));
-        Assert.AreEqual(file.Birth, await reopened.ReadNamespaceBirthAsync(file.Birth.OperationId));
-        Assert.AreEqual(file.Plan, await reopened.ReadNamespaceBirthPlanAsync(file.Birth.OperationId));
-        Assert.IsNull(await reopened.ReadNamespaceBirthStartAsync(file.Birth.OperationId));
-        Assert.HasCount(2, await reopened.ReadNamespaceDispatchFencedRootsAsync());
+        var fresh = verified with { VerifiedAt = file.Birth.PreparedAt.AddSeconds(10) };
+        DateTimeOffset started = fresh.VerifiedAt.AddSeconds(1);
+        var originalReceipt = new AdapterAtomicDirectoryDeletionReceipt(1, deleteRequest.OriginalRequest.InstanceId, directory.TransferId,
+            Guid.NewGuid(), deleteRequest.RequestFingerprint, deleteRequest.Admission.AdmissionFingerprint, deleteRequest.ManifestFingerprint,
+            deleteRequest.OriginalRequest.Operations.Select((step, ordinal) => new AdapterAtomicDirectoryDeletedOriginal(
+                step.Operation.OperationId, new(step.Operation.RootKey, step.Operation.Path),
+                deleteRequest.Admission.Operations[ordinal].OriginalGeneration)).ToArray(), "AQ==");
+        await using (var reopened = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths))
+        {
+            Assert.AreEqual(directory, await reopened.ReadNamespaceDirectoryTransferBirthAsync(directory.TransferId, 0, default));
+            Assert.AreEqual(file, await reopened.PrepareNamespaceDirectoryTransferBirthAsync(file, default));
+            Assert.AreEqual(file, await reopened.PrepareNamespaceDirectoryTransferBirthAsync(file, default));
+            Assert.AreEqual(file.Birth, await reopened.ReadNamespaceBirthAsync(file.Birth.OperationId));
+            Assert.AreEqual(file.Plan, await reopened.ReadNamespaceBirthPlanAsync(file.Birth.OperationId));
+            Assert.IsNull(await reopened.ReadNamespaceBirthStartAsync(file.Birth.OperationId));
+            await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => reopened.StartNamespaceDirectoryTransferSourceDeletionAsync(
+                directory.TransferId, fresh, deleteRequest, started, default));
+            Assert.IsNull(await reopened.ReadNamespaceDirectoryTransferSourceDeletionAsync(directory.TransferId, default));
+
+            var start = Start(file.Plan);
+            await reopened.RecordNamespaceBirthStartAsync(start);
+            var observation = Observation(file.Birth, file.Plan, start) with { IsInSync = true };
+            await reopened.RecordNamespaceBirthObservationAsync(observation);
+            var protection = new MirrorPulseNamespaceBirthProtection(2, Guid.NewGuid(), file.Birth.OperationId, null, Guid.Empty,
+                file.Birth.RoleSid, new(observation.LocalObject, observation.OwnerSid, observation.BirthDacl,
+                    observation.ObservedAt.AddSeconds(1)), true, 1)
+            { BornParent = file.Birth.BornParent };
+            await reopened.RecordNamespaceBirthProtectionAsync(protection);
+            var parent = (await reopened.ReadNamespaceMemberAsync(directory.Birth.OperationId))!;
+            await reopened.RegisterNamespaceMemberAsync(BornMember(new(file.Birth, file.Plan, start, observation, protection), parent)
+                with
+            { MemberId = file.Birth.OperationId });
+            var first = await reopened.StartNamespaceDirectoryTransferSourceDeletionAsync(directory.TransferId, fresh, deleteRequest, started, default);
+            Assert.IsNull(first.AcceptedAt);
+            Assert.IsNull(first.Receipt);
+            Assert.HasCount(2, await reopened.ReadNamespaceDispatchFencedRootsAsync());
+        }
+        await using var final = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        var pending = await final.ReadNamespaceDirectoryTransferSourceDeletionAsync(directory.TransferId, default);
+        Assert.IsNotNull(pending);
+        Assert.AreEqual(deleteRequest.RequestFingerprint, pending.Request!.RequestFingerprint);
+        Assert.IsNull(pending.Receipt);
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(() => final.AcceptNamespaceDirectoryTransferSourceDeletionAsync(directory.TransferId,
+            originalReceipt with { DeletedOriginals = originalReceipt.DeletedOriginals.Reverse().ToArray() }, started.AddSeconds(1), default));
+        var accepted = await final.AcceptNamespaceDirectoryTransferSourceDeletionAsync(directory.TransferId, originalReceipt, started.AddSeconds(1), default);
+        Assert.AreEqual(originalReceipt.Fingerprint(), accepted.Receipt!.Fingerprint());
+        Assert.HasCount(2, await final.ReadNamespaceDispatchFencedRootsAsync());
     }
 
     private static MirrorPulseDirectoryTransferTargetBirth DirectoryTransferBirth(MirrorPulseDirectoryTransferAdmission original,
@@ -145,5 +187,21 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             "target:" + selected.RemoteId, selected.Revision, time)
         { Content = selected.Content };
         return new(original.Command.CommandId, ordinal, birth, plan);
+    }
+
+    private static AdapterAtomicDirectoryDeletionRequest DirectoryTransferDeleteRequest(MirrorPulseDirectoryTransferAdmission original)
+    {
+        var request = MirrorPulseProductCatalog.CreateDirectoryTransferSourceAdmission(original)!;
+        var leaf = request.Operations[0].Operation;
+        var root = request.Operations[1].Operation;
+        var parent = new AdapterDirectoryGenerationWitness(1, request.InstanceId, request.AdmissionId, Guid.NewGuid(),
+            new(root.RootKey, ""), "remote-parent-generation", "remote-parent-revision", null, request.RequestFingerprint, "AQ==");
+        var directory = new AdapterDirectoryGenerationWitness(1, request.InstanceId, request.AdmissionId, Guid.NewGuid(),
+            new(root.RootKey, root.Path), "remote-directory-generation", root.Preconditions!.ExpectedRevision!,
+            parent.Generation, request.RequestFingerprint, "AQ==");
+        var admission = new AdapterDirectoryAdmission(1, request.InstanceId, request.AdmissionId, request.RequestFingerprint,
+            [new(leaf.OperationId, "remote-leaf-generation", null, [directory]), new(root.OperationId, directory.Generation, directory, [parent])], "");
+        return MirrorPulseProductCatalog.CreateDirectoryTransferSourceDeleteRequest(request,
+            admission with { AdmissionFingerprint = admission.CalculateFingerprint() });
     }
 }
