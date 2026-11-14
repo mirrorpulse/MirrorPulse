@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Security.Cryptography;
+using System.Text.Json;
 using CfSharp;
 using MirrorPulse.Core.CloudFiles;
 using MirrorPulse.Core.Configuration;
@@ -207,6 +208,15 @@ public sealed partial class MirrorPulseAtomicDirectoryJournalTests
                 TestContext.WriteLine($"SignedAtomicDirectory: packageSha256={digest}; originalCount={originals.Length}; failOfficialCommit={failOfficialCommit}; failHostReceiptCommit={failHostReceiptCommit}.");
             }
         }
+        catch (OperationCanceledException) when (deadline.IsCancellationRequested)
+        {
+            try { ReportAtomicDirectoryPumpFailures(fixture.Paths.DataRootPath); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                TestContext.WriteLine("AtomicDirectoryTimeout: classified journal failures could not be read.");
+            }
+            throw;
+        }
         finally { if (registered) registry.Unregister(fixture.Paths.SyncRootPath); }
 
         async Task ApplyOriginalPlaceholdersAsync(CloudFileSystem sdk, AdapterInstanceProcessSupervisor worker)
@@ -250,6 +260,34 @@ public sealed partial class MirrorPulseAtomicDirectoryJournalTests
             await tx.RollbackAsync(token);
             return pending;
         }
+    }
+
+    private void ReportAtomicDirectoryPumpFailures(string dataRoot)
+    {
+        var path = Path.Combine(dataRoot, "logs", "mirrorpulse.log");
+        if (!File.Exists(path))
+        {
+            TestContext.WriteLine("AtomicDirectoryTimeout: no journal failure log was recorded.");
+            return;
+        }
+        var failures = new HashSet<string>(StringComparer.Ordinal);
+        foreach (string line in File.ReadLines(path).TakeLast(32))
+        {
+            try
+            {
+                using var json = JsonDocument.Parse(line);
+                var entry = json.RootElement;
+                if (entry.GetProperty("Category").GetString() != "CloudFiles.Upload") continue;
+                var fields = entry.GetProperty("Fields");
+                string Read(string name) => fields.TryGetProperty(name, out var value) ? value.GetString() ?? "None" : "None";
+                string summary = $"AtomicDirectoryTimeout: event={entry.GetProperty("Code").GetString()}; " +
+                    $"category={Read("failureCategory")}; hresult={Read("hresult")}; worker={Read("workerFailureCode")}; " +
+                    $"mutation={Read("mutationState")}; boundary={Read("journalReadFailureKind")}; dispatch={Read("dispatchPhase")}.";
+                if (failures.Add(summary)) TestContext.WriteLine(summary);
+            }
+            catch (JsonException) { }
+        }
+        if (failures.Count == 0) TestContext.WriteLine("AtomicDirectoryTimeout: the journal pump recorded no classified failures.");
     }
 
     internal static async Task<MirrorPulseAdapterTopology> PrepareDirectoryJournalTopologyAsync(MirrorPulseStoragePaths paths,
