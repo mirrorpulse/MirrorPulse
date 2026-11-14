@@ -10,6 +10,10 @@ on:
       - eng/verify-directory-journal-native.ps1
       - eng/test-suites.json
       - src/MirrorPulse.CloudFiles.CfSharp/MirrorPulseJournalUploadPump.Coalescing.cs
+      - src/MirrorPulse.CloudFiles.CfSharp/MirrorPulseJournal*DirectoryMove*.cs
+      - src/MirrorPulse.CloudFiles.CfSharp/MirrorPulseDirectoryMovePermissionIdentity.cs
+      - src/MirrorPulse.Core/State/MirrorPulseProductCatalog.JournalDirectoryMoves.cs
+      - tests/MirrorPulse.CloudFiles.CfSharp.Tests/MirrorPulseWindowsNamespacePermissionLeaseTests.RecursiveJournalShape.cs
       - src/MirrorPulse.CloudFiles.CfSharp/MirrorPulseNamespaceDirectoryConfirmation*.cs
       - src/MirrorPulse.Core/State/MirrorPulseProductCatalog.ControlledRetirementContexts.cs
       - tests/MirrorPulse.CloudFiles.CfSharp.Tests/MirrorPulseWindowsNamespacePermissionLeaseTests.DirectoryGroups.cs
@@ -34,8 +38,8 @@ jobs:
           - runner: windows-11-arm
             architecture: Arm64
     runs-on: ${{ matrix.runner }}
-    # 26 minutes retain every fixture deadline and collection; seven more cover setup/export.
-    timeout-minutes: 33
+    # The per-step budget retains all fixture deadlines and collection. Allow seven more minutes for setup and export.
+    timeout-minutes: 34
     steps:
       - name: Check out the exact selected source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

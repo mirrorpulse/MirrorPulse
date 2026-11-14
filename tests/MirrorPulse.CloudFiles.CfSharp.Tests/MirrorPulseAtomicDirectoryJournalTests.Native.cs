@@ -3,6 +3,7 @@ using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using CfSharp;
 using MirrorPulse.Core.CloudFiles;
+using MirrorPulse.Core.Configuration;
 using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.Host;
 using MirrorPulse.Core.Security;
@@ -38,7 +39,7 @@ public sealed partial class MirrorPulseAtomicDirectoryJournalTests
         Directory.CreateDirectory(backendTree);
         await File.WriteAllTextAsync(Path.Combine(backendTree, "leaf.txt"), "original bytes", token);
         await File.WriteAllTextAsync(Path.Combine(backend, "peer.txt"), "peer bytes", token);
-        var topology = await PrepareTopologyAsync();
+        var topology = await PrepareDirectoryJournalTopologyAsync(fixture.Paths, package, executable, backend, cache, token);
         var registration = topology.Roots.Single();
         var instance = registration.InstanceId;
         string rootKey = registration.UniquenessKey;
@@ -228,41 +229,6 @@ public sealed partial class MirrorPulseAtomicDirectoryJournalTests
             Assert.IsEmpty(applied.ConflictIds);
         }
 
-        async Task<MirrorPulseAdapterTopology> PrepareTopologyAsync()
-        {
-            string files = Path.Combine(fixture.Paths.DataRootPath, "files");
-            if (package is not null)
-            {
-                await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths, token);
-                string runtime = RuntimeInformation.ProcessArchitecture == Architecture.Arm64 ? "win-arm64" : "win-x64";
-                var installed = await catalog.InstallSignedAdapterAsync(package, package + ".signature.json",
-                    Path.Combine(fixture.Paths.DataRootPath, "installed"), runtime, cancellationToken: token);
-                Assert.IsTrue(installed.IsSigned);
-                Assert.AreEqual("com.mirrorpulse.adapter.local", installed.AdapterId.Value);
-                string key = installed.Manifest.RootDefinitions.Single().Key;
-                await catalog.CreateInstanceAsync(installed.InstallId, "Docs",
-                    new Dictionary<string, string> { ["sourceDirectory"] = backend }, [], files, cache,
-                    rootLabels: new Dictionary<string, string> { [key] = "Docs" }, cancellationToken: token);
-                return await catalog.ReadAdapterTopologyAsync(token);
-            }
-
-            Assert.IsTrue(File.Exists(executable));
-            var id = InstanceId.New();
-            var adapter = new AdapterId("example.atomic-local");
-            var installationId = InstallId.New();
-            var root = new RootRegistration(adapter, id, RootId.New(), "docs", "Docs", "Docs", false,
-                RootRegistrationState.Active, DateTimeOffset.UtcNow, RootIdentityScope.InstanceRoot);
-            var manifest = new AdapterManifest(1, adapter, "Atomic Local fixture", "1.0.0", new(2, 2),
-                new Dictionary<string, string> { ["win-x64"] = Path.GetFileName(executable), ["win-arm64"] = Path.GetFileName(executable) },
-                new(null), new(null, null), new(true, false, true, true), ["en-US"], "1.0.0");
-            var installation = new InstalledAdapter(manifest, installationId, Path.GetDirectoryName(executable)!,
-                new(new string('A', 64)), AdapterInstallSource.LocalFile, null, true, DateTimeOffset.UtcNow, AdapterLifecycleState.Installed);
-            var configuration = new AdapterInstance(adapter, installationId, id, "Atomic Local",
-                new Dictionary<string, string> { ["root.docs.sourceDirectory"] = backend }, [], files,
-                cache, true, AdapterLifecycleState.Enabled, null, DateTimeOffset.UtcNow);
-            return new([installation], [configuration], [root]);
-        }
-
         async Task<CloudLocalChange> ReadDeleteAsync(CloudLocalChangeFeed feed, string path)
         {
             while (true)
@@ -284,5 +250,41 @@ public sealed partial class MirrorPulseAtomicDirectoryJournalTests
             await tx.RollbackAsync(token);
             return pending;
         }
+    }
+
+    internal static async Task<MirrorPulseAdapterTopology> PrepareDirectoryJournalTopologyAsync(MirrorPulseStoragePaths paths,
+        string? package, string? executable, string backend, string cache, CancellationToken token)
+    {
+        string files = Path.Combine(paths.DataRootPath, "files");
+        if (package is not null)
+        {
+            await using var catalog = await MirrorPulseProductCatalog.OpenAsync(paths, token);
+            string runtime = RuntimeInformation.ProcessArchitecture == Architecture.Arm64 ? "win-arm64" : "win-x64";
+            var installed = await catalog.InstallSignedAdapterAsync(package, package + ".signature.json",
+                Path.Combine(paths.DataRootPath, "installed"), runtime, cancellationToken: token);
+            Assert.IsTrue(installed.IsSigned);
+            Assert.AreEqual("com.mirrorpulse.adapter.local", installed.AdapterId.Value);
+            string key = installed.Manifest.RootDefinitions.Single().Key;
+            await catalog.CreateInstanceAsync(installed.InstallId, "Docs",
+                new Dictionary<string, string> { ["sourceDirectory"] = backend }, [], files, cache,
+                rootLabels: new Dictionary<string, string> { [key] = "Docs" }, cancellationToken: token);
+            return await catalog.ReadAdapterTopologyAsync(token);
+        }
+
+        Assert.IsTrue(File.Exists(executable));
+        var id = InstanceId.New();
+        var adapter = new AdapterId("example.atomic-local");
+        var installationId = InstallId.New();
+        var root = new RootRegistration(adapter, id, RootId.New(), "docs", "Docs", "Docs", false,
+            RootRegistrationState.Active, DateTimeOffset.UtcNow, RootIdentityScope.InstanceRoot);
+        var manifest = new AdapterManifest(1, adapter, "Atomic Local fixture", "1.0.0", new(2, 2),
+            new Dictionary<string, string> { ["win-x64"] = Path.GetFileName(executable), ["win-arm64"] = Path.GetFileName(executable) },
+            new(null), new(null, null), new(true, false, true, true), ["en-US"], "1.0.0");
+        var installation = new InstalledAdapter(manifest, installationId, Path.GetDirectoryName(executable)!,
+            new(new string('A', 64)), AdapterInstallSource.LocalFile, null, true, DateTimeOffset.UtcNow, AdapterLifecycleState.Installed);
+        var configuration = new AdapterInstance(adapter, installationId, id, "Atomic Local",
+            new Dictionary<string, string> { ["root.docs.sourceDirectory"] = backend }, [], files,
+            cache, true, AdapterLifecycleState.Enabled, null, DateTimeOffset.UtcNow);
+        return new([installation], [configuration], [root]);
     }
 }

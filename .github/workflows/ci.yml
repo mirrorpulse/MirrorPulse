@@ -12,8 +12,12 @@ on:
         description: Run the signed Local atomic directory acceptance on x64 and ARM64
         type: boolean
         default: false
+      verify_directory_move:
+        description: Run signed Local directory Move acceptance on x64 and ARM64
+        type: boolean
+        default: false
       local_atomic_preview:
-        description: Published Local preview tag for atomic directory acceptance
+        description: Published Local preview tag for signed directory acceptance
         type: string
         required: false
   push:
@@ -26,10 +30,12 @@ permissions:
 
 jobs:
   signed-atomic-directory:
-    if: github.event_name == 'workflow_dispatch' && inputs.verify_atomic_directory
+    if: github.event_name == 'workflow_dispatch' && (inputs.verify_atomic_directory || inputs.verify_directory_move)
     uses: ./.github/workflows/signed-atomic-directory.yml
     with:
       local_preview: ${{ inputs.local_atomic_preview }}
+      verify_atomic_directory: ${{ inputs.verify_atomic_directory }}
+      verify_directory_move: ${{ inputs.verify_directory_move }}
 
   official-adapter-candidate:
     runs-on: windows-latest

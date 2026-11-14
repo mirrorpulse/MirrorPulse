@@ -512,7 +512,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         }
     }
 
-    private sealed class RemoteMovementContentGuard : ICloudFileContentProvider
+    private sealed class RemoteMovementContentGuard : ICloudDemandProvider
     {
         private int _reads;
         public int Reads => Volatile.Read(ref _reads);

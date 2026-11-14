@@ -96,6 +96,7 @@
     ]
   },
   "allowSkipped": [
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeProductionDirectoryMoveSettlesTheOriginalThroughInstalledLocalWorker",
     "MirrorPulse.Core.Tests.AdapterWorkerV2SessionTests.RealHostNegotiatesAndRecoversADurableContainerMoveAcrossWorkerOwners",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeControlledNonemptyDirectoryMoveCharacterizesItsOriginalJournalAcrossRuntimeOwners",
     "MirrorPulse.Core.Tests.AdapterWorkerV2SessionTests.RealHostAndLocalWorkerRecoverWholeBatchAfterCatalogCommitInterruption",
@@ -322,6 +323,9 @@
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeLocalTombstoneDeleteRecoversActualSdkReceiptAcrossFreshRoles"
   ],
   "required": {
+    "signedDirectoryMove": [
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeProductionDirectoryMoveSettlesTheOriginalThroughInstalledLocalWorker"
+    ],
     "signedAtomicDirectory": [
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseAtomicDirectoryJournalTests.NativeAtomicDirectoryPumpRecoversAroundPublicFeedAcknowledgementAndRetainsTheLaterDelete"
     ],
