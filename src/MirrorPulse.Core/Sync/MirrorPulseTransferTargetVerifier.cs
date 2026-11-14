@@ -82,8 +82,39 @@ public sealed class MirrorPulseTransferTargetVerifier(MirrorPulseProductCatalog 
     {
         int separator = path.LastIndexOf('/');
         string parent = separator < 0 ? string.Empty : path[..separator];
+        MirrorPulseWorkerDirectoryEntry? found = null;
+        await foreach (var entry in ReadDirectoryEntriesAsync(route, parent, token).ConfigureAwait(false))
+        {
+            if (entry.RelativePath != path) continue;
+            if (found is not null) throw new InvalidDataException("More than one remote entry claims the transfer destination.");
+            if (entry.IsDeleted || entry.ItemKind != "File" || expectedLength is { } length && entry.Length != length || entry.RemoteRevision != expectedRevision ||
+                string.IsNullOrWhiteSpace(entry.RemoteId) || entry.RemoteId.Length > 4096 || entry.RemoteId.Contains('\0'))
+                throw new IOException("The target is not the original accepted file with the complete expected length.");
+            found = entry;
+        }
+        return found ?? throw new IOException("The original transfer target is absent.");
+    }
+
+    internal async Task RequireDirectoryInventoryAsync(MirrorPulseTransferRoute route, string parent,
+        IReadOnlyCollection<MirrorPulseWorkerDirectoryEntry> expectedChildren, CancellationToken token)
+    {
+        var remaining = expectedChildren.ToDictionary(entry => entry.RelativePath, StringComparer.Ordinal);
+        await foreach (var entry in ReadDirectoryEntriesAsync(route, parent, token).ConfigureAwait(false))
+        {
+            if (!remaining.Remove(entry.RelativePath, out var expected) || entry.IsDeleted ||
+                entry.ItemKind != expected.ItemKind || entry.RemoteId != expected.RemoteId ||
+                entry.RemoteRevision != expected.RemoteRevision || entry.Length != expected.Length)
+                throw new IOException("The transfer directory contains an unexpected or changed member.");
+        }
+        if (remaining.Count != 0)
+            throw new IOException("The transfer directory no longer contains every verified member.");
+    }
+
+    private async IAsyncEnumerable<MirrorPulseWorkerDirectoryEntry> ReadDirectoryEntriesAsync(MirrorPulseTransferRoute route,
+        string parent, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken token)
+    {
         ReadOnlyMemory<byte> cursor = ReadOnlyMemory<byte>.Empty;
-        var seen = new HashSet<string>(StringComparer.Ordinal); MirrorPulseWorkerDirectoryEntry? found = null;
+        var seen = new HashSet<string>(StringComparer.Ordinal);
         for (int page = 0; page < 128; page++)
         {
             var result = await _directories.ReadDirectoryPageAsync(new(route.InstanceId, parent, cursor, 512, route.RootKey), token).ConfigureAwait(false);
@@ -92,14 +123,9 @@ public sealed class MirrorPulseTransferTargetVerifier(MirrorPulseProductCatalog 
             foreach (var entry in result.Entries)
             {
                 if (entry is null) throw new InvalidDataException("Target metadata contains an empty entry.");
-                if (entry.RelativePath != path) continue;
-                if (found is not null) throw new InvalidDataException("More than one remote entry claims the transfer destination.");
-                if (entry.IsDeleted || entry.ItemKind != "File" || expectedLength is { } length && entry.Length != length || entry.RemoteRevision != expectedRevision ||
-                    string.IsNullOrWhiteSpace(entry.RemoteId) || entry.RemoteId.Length > 4096 || entry.RemoteId.Contains('\0'))
-                    throw new IOException("The target is not the original accepted file with the complete expected length.");
-                found = entry;
+                yield return entry;
             }
-            if (result.IsComplete) return found ?? throw new IOException("The original transfer target is absent.");
+            if (result.IsComplete) yield break;
             cursor = result.ContinuationCursor;
             if (cursor.IsEmpty || !seen.Add(Convert.ToHexString(SHA256.HashData(cursor.Span))))
                 throw new InvalidDataException("Target directory pagination did not advance.");

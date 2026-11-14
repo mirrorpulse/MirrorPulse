@@ -171,6 +171,30 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         Assert.IsNull((await catalog.ReadNamespaceTransferAsync(plan.OperationId))!.TargetVerification);
     }
 
+    [TestMethod]
+    public async Task TargetDirectoryInventoryRequiresEveryExactChildAcrossAllPages()
+    {
+        using var fixture = new Fixture();
+        await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        var plan = (await PrepareTransferFixtureAsync(catalog)).Plan;
+        var worker = new TransferTarget(TransferBytes) { Plan = plan };
+        var verifier = new MirrorPulseTransferTargetVerifier(catalog, worker, worker, worker);
+        var entry = new MirrorPulseWorkerDirectoryEntry("original-target-id", "accepted-target-v1", "File", "moved.txt",
+            TransferBytes.LongLength, null, null, false);
+        await verifier.RequireDirectoryInventoryAsync(plan.TargetRoute, "", [entry], default);
+
+        foreach (string failure in new[] { "absent", "duplicate-later-page", "changed-id", "type", "revision", "length", "deleted" })
+        {
+            worker.Failure = failure;
+            worker.Pages = failure == "changed-id" ? 1 : 0;
+            await Assert.ThrowsExactlyAsync<IOException>(() =>
+                verifier.RequireDirectoryInventoryAsync(plan.TargetRoute, "", [entry], default));
+        }
+        worker.Failure = "";
+        await Assert.ThrowsExactlyAsync<IOException>(() =>
+            verifier.RequireDirectoryInventoryAsync(plan.TargetRoute, "", [], default));
+    }
+
     private static async Task<MirrorPulseNamespaceTransferPlan> PrepareAcceptedTransferTargetAsync(MirrorPulseProductCatalog catalog,
         byte[] bytes, bool sameInstance = false, bool localOnlySource = false, bool captureOriginalJournal = false, bool emptyJournal = false,
         MirrorPulseNamespaceTransferPlan? originalPlan = null)
