@@ -296,8 +296,22 @@ public sealed partial class MirrorPulseProductCatalog
     }
 
     private async Task RequireDirectoryTransferSettledSourceNamesAsync(MirrorPulseDirectoryTransferAdmission plan,
-        IReadOnlyList<MirrorPulseDirectoryTransferRetirement> rows, SqliteTransaction transaction, CancellationToken token)
+        IReadOnlyList<MirrorPulseDirectoryTransferRetirement> rows, SqliteTransaction transaction, CancellationToken token,
+        Guid? replacementRootMemberId = null)
     {
+        if (replacementRootMemberId is { } replacementId)
+        {
+            var original = plan.Members[0].Source.Protection;
+            var replacement = await ReadNamespaceMemberProtectionSnapshotCoreAsync(replacementId, transaction, token).ConfigureAwait(false);
+            if (replacement is null || replacement.Context.Member.MemberId == original.Context.Member.MemberId ||
+                replacement.Context.Member.LocalObject == original.Context.Member.LocalObject ||
+                replacement.Context.Member.RootId != plan.SourceRoute.RootId ||
+                replacement.Context.Location.ParentMemberId != plan.SourceParent.Context.Member.MemberId ||
+                replacement.Context.Location.RelativePath != original.Context.Location.RelativePath ||
+                replacement.Identity.ItemId is null || rows.Any(row => row.Projection.ItemId == replacement.Identity.ItemId))
+                throw new InvalidOperationException("The source replacement requires its own registered binding and public identity.");
+            await RequireNamespaceMemberNameAsync(replacement.Context.Member, transaction, token).ConfigureAwait(false);
+        }
         await using var sql = _connection.CreateCommand();
         sql.Transaction = transaction;
         sql.CommandText = "SELECT member_id FROM namespace_member_names WHERE parent_member_id=$parent AND child_name_key=$name;";
@@ -309,8 +323,11 @@ public sealed partial class MirrorPulseProductCatalog
             Guid parentId = source.ParentMemberId!.Value;
             parent.Value = parentId.ToString("D");
             name.Value = NamespaceMemberNameKey(source.RelativePath);
-            if (await sql.ExecuteScalarAsync(token).ConfigureAwait(false) is not null ||
-                await ReadNamespaceNameEpochCoreAsync(parentId, source.RelativePath, transaction, token).ConfigureAwait(false) != row.NameEpoch)
+            bool replaced = row.Ordinal == 0 && replacementRootMemberId is not null;
+            string? nameOwner = (await sql.ExecuteScalarAsync(token).ConfigureAwait(false)) as string;
+            long? expectedEpoch = replaced ? checked(row.NameEpoch + 1) : row.NameEpoch;
+            if (nameOwner != (replaced ? replacementRootMemberId?.ToString("D") : null) ||
+                await ReadNamespaceNameEpochCoreAsync(parentId, source.RelativePath, transaction, token).ConfigureAwait(false) != expectedEpoch)
                 throw new InvalidOperationException("An original retired source name changed before directory transfer acknowledgement.");
         }
     }

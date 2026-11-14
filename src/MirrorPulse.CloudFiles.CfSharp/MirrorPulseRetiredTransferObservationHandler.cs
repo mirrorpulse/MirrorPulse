@@ -125,10 +125,21 @@ internal sealed class MirrorPulseRetiredTransferObservationHandler(CloudFileSyst
                     var parentItem = fileSystem.GetDirectory(parent.Context.Location.RelativePath);
                     await using var guard = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(parentItem, router, stop).ConfigureAwait(false);
                     if (!Matches(await guard.InspectAsync(stop).ConfigureAwait(false), parent)) return;
-                    var originalRoot = fileSystem.GetDirectory(plan.Members[0].Source.Protection.Context.Location.RelativePath);
-                    var native = await originalRoot.InspectAsync(stop).ConfigureAwait(false);
-                    if (native.Exists || !native.IsTombstone || native.ItemId != plan.Members[0].Source.Protection.Identity.ItemId)
-                        return;
+                    var originalRoot = plan.Members[0].Source.Protection;
+                    string sourcePath = originalRoot.Context.Location.RelativePath;
+                    string sourceName = sourcePath[(sourcePath.LastIndexOf('/') + 1)..];
+                    var replacementMember = await catalog.ReadNamespaceMemberChildAsync(parent.Context.Member.MemberId, sourceName, stop)
+                        .ConfigureAwait(false);
+                    var replacement = replacementMember is null ? null :
+                        await catalog.ReadNamespaceMemberProtectionSnapshotAsync(replacementMember.MemberId, stop).ConfigureAwait(false);
+                    CloudItem atSource = replacement?.Context.Member.IsDirectory == false ? fileSystem.GetFile(sourcePath) : fileSystem.GetDirectory(sourcePath);
+                    var native = await atSource.InspectAsync(stop).ConfigureAwait(false);
+                    if (native.Exists != (replacement is not null)) return;
+                    if (!native.Exists && (!native.IsTombstone || native.ItemId != originalRoot.Identity.ItemId)) return;
+                    await using var successorGuard = !native.Exists ? null : await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(atSource, router, stop)
+                        .ConfigureAwait(false);
+                    if (successorGuard is not null && (native.IsTombstone || replacement!.Identity.ItemId is null ||
+                        native.ItemId != replacement.Identity.ItemId || !Matches(await successorGuard.InspectAsync(stop).ConfigureAwait(false), replacement))) return;
                     await using var read = await state.OpenStore.BeginTransactionAsync(stop).ConfigureAwait(false);
                     var row = await read.Items.GetByItemIdAsync(retired.Projection.ItemId, stop).ConfigureAwait(false);
                     try
@@ -139,7 +150,7 @@ internal sealed class MirrorPulseRetiredTransferObservationHandler(CloudFileSyst
                     catch (InvalidDataException) { return; }
                     await read.RollbackAsync(stop).ConfigureAwait(false);
                     start = await catalog.StartDirectoryTransferLateAcknowledgementAsync(plan.Command.CommandId, original,
-                        DateTimeOffset.UtcNow, stop).ConfigureAwait(false);
+                        DateTimeOffset.UtcNow, stop, replacement?.Context.Member.MemberId).ConfigureAwait(false);
                 }).ConfigureAwait(false);
             }
             catch (Exception error) when (!stop.IsCancellationRequested &&

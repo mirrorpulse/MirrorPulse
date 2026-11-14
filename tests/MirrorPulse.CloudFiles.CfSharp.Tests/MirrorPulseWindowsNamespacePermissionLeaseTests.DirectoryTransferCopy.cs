@@ -224,6 +224,12 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             }
             Guid lateId = await WaitForRetiredTransferDeleteAsync(feed, sourceFile.Identity.ItemId!.Value, token);
             await roots.DisposeAsync();
+            var successorIdentity = router.CreateFileIdentity(sourceRoot.InstanceId, sourceRoot.UniquenessKey, "successor-directory", "v2");
+            var successor = await new MirrorPulseNamespaceRemoteCreationCoordinator(fileSystem, catalog, router, role, actor)
+                .CreateAsync(Guid.NewGuid(), sourceParent.MemberId, CloudDirectoryPlaceholderSpec.CreateBuilder("folder", successorIdentity)
+                    .WithInSyncState(true).WithPopulationState(CloudDirectoryPopulationState.Complete).Build(), token);
+            Assert.AreNotEqual(folder.MemberId, successor.MemberId);
+            Assert.AreNotEqual(folder.LocalObject, successor.LocalObject);
             await using (var recovery = await work.BeginRecoveryAsync([sourceRoot.RootId], token))
                 recovery.CompleteAfterFreshAudit();
             var handler = new MirrorPulseRetiredTransferObservationHandler(fileSystem, feed, state, catalog, router, role, actor, work, _ => true);
@@ -250,6 +256,9 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             Assert.IsNotNull(late?.AcknowledgedAt);
             Assert.AreEqual(operationId, late.TransferId);
             Assert.AreEqual(pendingLate.StartedAt, late.StartedAt);
+            Assert.AreEqual(successor.MemberId, late.ReplacementRootMemberId);
+            Assert.AreEqual(successor, await catalog.ReadNamespaceMemberChildAsync(sourceParent.MemberId, "folder", token));
+            Assert.IsTrue((await fileSystem.GetDirectory("Docs/folder").InspectAsync(token)).Exists);
 
             // Reopen the public runtime and replay the completed original command.
             await feed.DisposeAsync();

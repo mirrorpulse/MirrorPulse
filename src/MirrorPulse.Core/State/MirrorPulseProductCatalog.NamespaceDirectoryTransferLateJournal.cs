@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Data.Sqlite;
 using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.Sync;
@@ -7,12 +8,17 @@ using MirrorPulse.Core.Sync;
 namespace MirrorPulse.Core.State;
 
 internal sealed record MirrorPulseDirectoryTransferLateAcknowledgement(Guid TransferId, RootId SourceRootId,
-    MirrorPulseTransferJournalObservation Observation, DateTimeOffset StartedAt, DateTimeOffset? AcknowledgedAt = null);
+    MirrorPulseTransferJournalObservation Observation, DateTimeOffset StartedAt, DateTimeOffset? AcknowledgedAt = null)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? ReplacementRootMemberId { get; init; }
+}
 
 public sealed partial class MirrorPulseProductCatalog
 {
     internal async Task<MirrorPulseDirectoryTransferLateAcknowledgement> StartDirectoryTransferLateAcknowledgementAsync(
-        Guid transferId, MirrorPulseTransferJournalObservation observation, DateTimeOffset startedAt, CancellationToken token)
+        Guid transferId, MirrorPulseTransferJournalObservation observation, DateTimeOffset startedAt, CancellationToken token,
+        Guid? replacementRootMemberId = null)
     {
         await _gate.WaitAsync(token).ConfigureAwait(false);
         try
@@ -23,7 +29,7 @@ public sealed partial class MirrorPulseProductCatalog
             var prior = await ReadDirectoryTransferLateAcknowledgementCoreAsync(observation.OperationId, transaction, token).ConfigureAwait(false);
             if (prior is not null)
             {
-                if (prior.TransferId != transferId || prior.Observation != observation)
+                if (prior.TransferId != transferId || prior.Observation != observation || prior.ReplacementRootMemberId != replacementRootMemberId)
                     throw new InvalidOperationException("The original late directory journal notification cannot change owners.");
                 transaction.Commit();
                 return prior;
@@ -41,9 +47,10 @@ public sealed partial class MirrorPulseProductCatalog
                     MirrorPulseWorkerChangeKind.MetadataUpdate or MirrorPulseWorkerChangeKind.Delete) ||
                 plan.Originals.Members.Any(original => original.OperationId == observation.OperationId))
                 throw new InvalidOperationException("The late notification does not identify an original retired directory transfer member.");
-            await RequireDirectoryTransferSettledSourceNamesAsync(plan, retirements, transaction, token).ConfigureAwait(false);
+            await RequireDirectoryTransferSettledSourceNamesAsync(plan, retirements, transaction, token, replacementRootMemberId).ConfigureAwait(false);
             await RequireNamespaceTransferIdAvailableAsync(observation.OperationId, transaction, token).ConfigureAwait(false);
-            var result = new MirrorPulseDirectoryTransferLateAcknowledgement(transferId, plan.SourceRoute.RootId, observation, startedAt);
+            var result = new MirrorPulseDirectoryTransferLateAcknowledgement(transferId, plan.SourceRoute.RootId, observation, startedAt)
+            { ReplacementRootMemberId = replacementRootMemberId };
             validation.Dispose();
             await WriteDirectoryTransferLateAcknowledgementAsync(result, true, transaction, token).ConfigureAwait(false);
             transaction.Commit();
@@ -144,7 +151,7 @@ public sealed partial class MirrorPulseProductCatalog
         return ReadNamespaceMovePayload<MirrorPulseDirectoryTransferLateAcknowledgement>((byte[])reader[1], (byte[])reader[2],
             131_072, row =>
             {
-                if (row.TransferId != owner || row.Observation?.OperationId != operationId || row.Observation.ItemId is null ||
+                if (row.TransferId != owner || row.Observation?.OperationId != operationId || row.Observation.ItemId is null || row.ReplacementRootMemberId == Guid.Empty ||
                     row.StartedAt < row.Observation.ObservedAt || row.AcknowledgedAt < row.StartedAt ||
                     row.SourceRootId.ToString() != reader.GetString(3) || reader.GetString(3) != reader.GetString(5) ||
                     (row.AcknowledgedAt is null ? 0 : 1) != reader.GetInt64(4))
