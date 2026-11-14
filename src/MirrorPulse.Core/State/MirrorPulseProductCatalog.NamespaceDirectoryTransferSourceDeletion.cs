@@ -113,7 +113,8 @@ public sealed partial class MirrorPulseProductCatalog
             ValidateDirectoryTransferSourceDeletion(plan, originalTarget, start);
             await RequireNamespaceTransferRoutesAsync([plan.SourceRoute, plan.TargetRoute], transaction, token,
                 requireSingleRoot: true).ConfigureAwait(false);
-            await RequireCurrentDirectoryTransferPublicationAsync(plan, originalTarget, transaction, token).ConfigureAwait(false);
+            await RequireCurrentDirectoryTransferPublicationAsync(plan, originalTarget, transaction, requireUnretiredSource: true, token)
+                .ConfigureAwait(false);
             validation.Dispose();
             await WriteDirectoryTransferSourceDeletionAsync(start, true, transaction, token).ConfigureAwait(false);
             transaction.Commit();
@@ -153,8 +154,12 @@ public sealed partial class MirrorPulseProductCatalog
     }
 
     private async Task RequireCurrentDirectoryTransferPublicationAsync(MirrorPulseDirectoryTransferAdmission plan,
-        MirrorPulseDirectoryTransferTargetVerification verified, SqliteTransaction transaction, CancellationToken token)
+        MirrorPulseDirectoryTransferTargetVerification verified, SqliteTransaction transaction, bool requireUnretiredSource,
+        CancellationToken token)
     {
+        if (await ReadNamespaceMemberProtectionSnapshotCoreAsync(plan.TargetParent.Context.Member.MemberId, transaction, token)
+                .ConfigureAwait(false) != plan.TargetParent)
+            throw new InvalidOperationException("The original target parent changed before source retirement.");
         Guid operationId = plan.Command.CommandId;
         var members = new Dictionary<Guid, Guid> { [plan.SourceParent.Context.Member.MemberId] = plan.TargetParent.Context.Member.MemberId };
         var targetMembers = new HashSet<Guid>();
@@ -183,7 +188,8 @@ public sealed partial class MirrorPulseProductCatalog
         var inventory = await ReadNamespaceMemberTreeCoreAsync(rootBirth, transaction, token).ConfigureAwait(false);
         if (inventory.Count != plan.Members.Count || inventory.Any(entry => !targetMembers.Contains(entry.MemberId)))
             throw new InvalidOperationException("The registered directory transfer target inventory changed.");
-        await RequireCurrentDirectoryTransferTreeAsync(plan, transaction, token, rootBirth).ConfigureAwait(false);
+        if (requireUnretiredSource)
+            await RequireCurrentDirectoryTransferTreeAsync(plan, transaction, token, rootBirth).ConfigureAwait(false);
     }
 
     private async Task<MirrorPulseDirectoryTransferSourceDeletion?> ReadDirectoryTransferSourceDeletionCoreAsync(

@@ -35,10 +35,10 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
     }
 
     internal static void RequireOriginalSourceProjection(MirrorPulseNamespaceTransferSourceProjection original,
-        CloudItemState? current, bool tombstone)
+        CloudItemState? current, bool tombstone, CloudItemKind kind = CloudItemKind.File)
     {
         if (current is null || current.ItemId != original.ItemId || current.RemoteId != original.RemoteId ||
-            current.RelativePath != original.RelativePath || current.Kind != CloudItemKind.File ||
+            current.RelativePath != original.RelativePath || current.Kind != kind ||
             current.RemoteRevision != original.RemoteRevision || current.LocalFileId != original.OfficialLocalFileId ||
             current.IsTombstone != tombstone)
             throw new InvalidDataException("The public SDK source no longer matches its retained original generation.");

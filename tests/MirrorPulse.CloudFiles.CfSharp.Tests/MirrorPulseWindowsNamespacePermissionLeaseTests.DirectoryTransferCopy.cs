@@ -95,9 +95,21 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             await File.WriteAllBytesAsync(sourcePath, bytes, token);
             var source = (await catalog.ReadNamespaceMemberProtectionSnapshotAsync(folder.MemberId, token))!;
             var target = (await catalog.ReadNamespaceMemberProtectionSnapshotAsync(targetParent.MemberId, token))!;
+            bool interruptNativeRetirement = false;
             var coordinator = new MirrorPulseNamespaceTransferCoordinator(fileSystem, state, catalog, router, role, actor,
                 new MirrorPulseLocalTransferContentStore(paths), _ => true, _ => 2)
-            { JournalFeed = feed };
+            {
+                JournalFeed = feed,
+                SourceRetirementCheckpoint = (checkpoint, _) =>
+                {
+                    if (interruptNativeRetirement && checkpoint == MirrorPulseTransferSourceRetirementCheckpoint.AfterNativeDeletion)
+                    {
+                        interruptNativeRetirement = false;
+                        throw new IOException("Fixture interruption after the original native deletion.");
+                    }
+                    return ValueTask.CompletedTask;
+                }
+            };
             await coordinator.MaterializeDirectorySourceAsync(source, target, token);
             await using var roots = await work.EnterPendingOperationAsync([sourceRoot.RootId, targetRoot.RootId], token);
             await using var instances = await scheduler.AcquireAsync([sourceRoot.InstanceId, targetRoot.InstanceId], token);
@@ -151,6 +163,23 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             Assert.AreEqual(absence.AcceptedAt, replayedAbsence.AcceptedAt);
             CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(sourcePath, token));
             Assert.HasCount(2, await catalog.ReadNamespaceDispatchFencedRootsAsync(token));
+
+            remote.RequireSourceWriterExclusion = false;
+            interruptNativeRetirement = true;
+            var interrupted = await Assert.ThrowsExactlyAsync<IOException>(async () =>
+                await coordinator.RetireDirectorySourceAsync(operationId, workers, token));
+            Assert.AreEqual("Fixture interruption after the original native deletion.", interrupted.Message);
+            var pending = await catalog.ReadNamespaceDirectoryTransferRetirementsAsync(operationId, token);
+            Assert.HasCount(1, pending);
+            Assert.AreEqual(payload.MemberId, pending[0].MemberId);
+            Assert.IsNull(pending[0].RetiredAt);
+            var retired = await coordinator.RetireDirectorySourceAsync(operationId, workers, token);
+            CollectionAssert.AreEqual(new[] { payload.MemberId, folder.MemberId }, retired.Select(row => row.MemberId).ToArray());
+            Assert.IsTrue(retired.All(row => row.RetiredAt is not null && row.NameEpoch >= 2));
+            Assert.IsFalse((await fileSystem.GetDirectory("Docs/folder").InspectAsync(token)).Exists);
+            Assert.IsTrue((await fileSystem.GetFile("Archive/copied/payload.bin").InspectAsync(token)).Exists);
+            Assert.IsNull(await catalog.ReadNamespaceMemberChildAsync(sourceParent.MemberId, "folder", token));
+            Assert.HasCount(2, await catalog.ReadNamespaceDispatchFencedRootsAsync(token));
         }
         finally
         {
@@ -179,13 +208,14 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         internal int Uploads;
         internal int Reads;
         internal bool SourceOccupied;
+        internal bool RequireSourceWriterExclusion = true;
 
         private void RequireNormalUser()
         {
             using var identity = WindowsIdentity.GetCurrent();
             Assert.AreEqual(owner, identity.User);
             Assert.IsFalse(identity.Groups?.Contains(role.RoleSid) ?? false);
-            Assert.ThrowsExactly<IOException>(() =>
+            if (RequireSourceWriterExclusion) Assert.ThrowsExactly<IOException>(() =>
             {
                 using var write = new FileStream(sourcePath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
             });

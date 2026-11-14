@@ -306,6 +306,15 @@ public sealed partial class MirrorPulseProductCatalog
         object? value = await query.ExecuteScalarAsync(token).ConfigureAwait(false);
         bool leaf = value is long phase && phase == (long)MirrorPulseNamespaceRetirementPhase.Completed;
         var tree = await ReadRemovedRemoteTreeMemberCoreAsync(memberId, transaction, token).ConfigureAwait(false);
+        query.CommandText = "SELECT transfer_id FROM namespace_directory_transfer_retirements WHERE member_id=$member AND completed=1;";
+        var directoryTransfer = await query.ExecuteScalarAsync(token).ConfigureAwait(false);
+        if (directoryTransfer is string transferId)
+        {
+            var rows = await ReadDirectoryTransferRetirementsCoreAsync(ParseNamespaceMemberId(transferId), transaction, token).ConfigureAwait(false);
+            if (!rows.Any(row => row.MemberId == memberId && row.RetiredAt is not null) || leaf || tree is not null)
+                throw new InvalidDataException("The retired member lost its sole original directory transfer owner.");
+            return true;
+        }
         if (leaf && tree is not null) throw new InvalidDataException("A retired member has competing original leaf and tree owners.");
         return leaf || tree is not null;
     }
