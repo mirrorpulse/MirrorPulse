@@ -19,7 +19,14 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     [TestMethod]
     [DoNotParallelize]
     [TestCategory("NativeCloudFiles")]
-    public async Task NativeControlledNonemptyDirectoryMoveCharacterizesItsOriginalJournalAcrossRuntimeOwners()
+    public Task NativeControlledNonemptyDirectoryMoveCharacterizesItsOriginalJournalAcrossRuntimeOwners() =>
+        VerifyRecursiveJournalMoveAsync(protectedBirths: false);
+
+    [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles")]
+    public Task NativeProtectedBirthDirectoryMoveRecoversItsOriginalProjectionAcrossRuntimeOwners() =>
+        VerifyRecursiveJournalMoveAsync(protectedBirths: true);
+
+    private async Task VerifyRecursiveJournalMoveAsync(bool protectedBirths)
     {
         if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
             Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
@@ -71,25 +78,54 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     await feed.StartAsync(deadline.Token);
                     (await new MirrorPulseRootPopulationCoordinator(setup, feed).PopulateAsync(router, deadline.Token)).ThrowIfAnyFailed();
                 }
-                var applied = await setup.ApplyRemoteChangesAsync(batch, cancellationToken: deadline.Token);
-                Assert.AreEqual(CloudRemoteBatchStatus.Applied, applied.Status);
-                Assert.IsFalse(applied.RequiresRetry);
-                Assert.AreEqual(3, applied.AppliedEntryCount);
-                Assert.IsEmpty(applied.ConflictIds);
-                int appliedEntries = 0;
-                foreach (var entry in applied.Entries)
+                if (protectedBirths)
                 {
-                    Assert.AreEqual(CloudRemoteApplyEntryStatus.Applied, entry.Status);
-                    appliedEntries++;
+                    await setup.GetDirectory("Docs").SetPopulationStateAsync(CloudDirectoryPopulationState.Complete, cancellationToken: deadline.Token);
+                    SetProtectedFixtureUserOwner(setup.Root, fixtureOwner);
+                    SetProtectedFixtureUserOwner(setup.GetDirectory("Docs"), fixtureOwner);
+                    await using var seedCatalog = await MirrorPulseProductCatalog.OpenAsync(paths, deadline.Token);
+                    await SaveAcceptedIdentityFixtureTopologyAsync(seedCatalog, root, deadline.Token);
+                    await using var seedRole = new MirrorPulseNamespaceExecutionSession();
+                    await using var seedActor = new MirrorPulseNamespaceActor();
+                    await using var seedScheduler = new MirrorPulseInstanceScheduler();
+                    await using var seedPermissions = new MirrorPulseNamespacePermissionCoordinator(seedCatalog);
+                    await using var initialization = await new MirrorPulseNamespaceInitializationCoordinator(setup, seedCatalog, router,
+                        seedRole, seedActor, seedScheduler, seedPermissions).InitializeAsync(Guid.NewGuid(), deadline.Token);
+                    var parent = (await seedCatalog.ReadNamespaceMemberTreeAsync(initialization.Completion.AnchorMemberId, deadline.Token))
+                        .Single(entry => entry.RelativePath == "Docs");
+                    var creator = new MirrorPulseNamespaceRemoteCreationCoordinator(setup, seedCatalog, router, seedRole, seedActor);
+                    var album = await creator.CreateAsync(Guid.NewGuid(), parent.MemberId,
+                        CloudDirectoryPlaceholderSpec.CreateBuilder("album", albumIdentity).WithInSyncState(true)
+                            .WithPopulationState(CloudDirectoryPopulationState.Complete).Build(), deadline.Token);
+                    _ = await creator.CreateAsync(Guid.NewGuid(), album.MemberId,
+                        CloudDirectoryPlaceholderSpec.CreateBuilder("nested", nestedIdentity).WithInSyncState(true)
+                            .WithPopulationState(CloudDirectoryPopulationState.Complete).Build(), deadline.Token);
+                    _ = await creator.CreateAsync(Guid.NewGuid(), album.MemberId,
+                        CloudFilePlaceholderSpec.CreateBuilder("cold.bin", coldIdentity, fixtureColdLength).WithInSyncState(true)
+                            .WithInitialAvailability(CloudAvailabilityTarget.OnlineOnly).Build(), deadline.Token);
                 }
-                Assert.AreEqual(3, appliedEntries);
-                foreach (string path in new[] { "Docs", sourceDirectory, nestedDirectory })
-                    await setup.GetDirectory(path).SetPopulationStateAsync(CloudDirectoryPopulationState.Complete, cancellationToken: deadline.Token);
-                SetProtectedFixtureUserOwner(setup.Root, fixtureOwner);
-                SetProtectedFixtureUserOwner(setup.GetDirectory("Docs"), fixtureOwner);
-                SetProtectedFixtureUserOwner(setup.GetDirectory(sourceDirectory), fixtureOwner);
-                SetProtectedFixtureUserOwner(setup.GetDirectory(nestedDirectory), fixtureOwner);
-                SetProtectedFixtureUserOwner(setup.GetFile(coldFile), fixtureOwner);
+                else
+                {
+                    var applied = await setup.ApplyRemoteChangesAsync(batch, cancellationToken: deadline.Token);
+                    Assert.AreEqual(CloudRemoteBatchStatus.Applied, applied.Status);
+                    Assert.IsFalse(applied.RequiresRetry);
+                    Assert.AreEqual(3, applied.AppliedEntryCount);
+                    Assert.IsEmpty(applied.ConflictIds);
+                    int appliedEntries = 0;
+                    foreach (var entry in applied.Entries)
+                    {
+                        Assert.AreEqual(CloudRemoteApplyEntryStatus.Applied, entry.Status);
+                        appliedEntries++;
+                    }
+                    Assert.AreEqual(3, appliedEntries);
+                    foreach (string path in new[] { "Docs", sourceDirectory, nestedDirectory })
+                        await setup.GetDirectory(path).SetPopulationStateAsync(CloudDirectoryPopulationState.Complete, cancellationToken: deadline.Token);
+                    SetProtectedFixtureUserOwner(setup.Root, fixtureOwner);
+                    SetProtectedFixtureUserOwner(setup.GetDirectory("Docs"), fixtureOwner);
+                    SetProtectedFixtureUserOwner(setup.GetDirectory(sourceDirectory), fixtureOwner);
+                    SetProtectedFixtureUserOwner(setup.GetDirectory(nestedDirectory), fixtureOwner);
+                    SetProtectedFixtureUserOwner(setup.GetFile(coldFile), fixtureOwner);
+                }
                 await AssertRecursiveJournalColdFileAsync(setup, coldFile, coldIdentity.ItemId, fixtureColdLength, deadline.Token);
                 Assert.AreEqual(0, setupReads.Reads);
             }
@@ -117,10 +153,10 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 Assert.AreEqual(string.Empty, anchor.RelativePath);
                 Assert.IsTrue(anchor.IsDirectory);
                 Assert.AreEqual(retainedDocs.LocalObject.SyncRootFileId, anchor.LocalObject.LocalFileId);
-                docsMember = await ReadRecursiveJournalCapturedMemberAsync(first.Catalog, docs, anchor.MemberId, "Docs", deadline.Token);
-                albumMember = await ReadRecursiveJournalCapturedMemberAsync(first.Catalog, album, docs.MemberId, sourceDirectory, deadline.Token);
-                nestedMember = await ReadRecursiveJournalCapturedMemberAsync(first.Catalog, nested, album.MemberId, nestedDirectory, deadline.Token);
-                coldMember = await ReadRecursiveJournalCapturedMemberAsync(first.Catalog, cold, album.MemberId, coldFile, deadline.Token);
+                docsMember = await ReadRecursiveJournalMemberAsync(first.Catalog, docs, anchor.MemberId, "Docs", deadline.Token);
+                albumMember = await ReadRecursiveJournalMemberAsync(first.Catalog, album, docs.MemberId, sourceDirectory, deadline.Token, protectedBirths ? MirrorPulseNamespaceMemberOrigin.ProtectedBirth : MirrorPulseNamespaceMemberOrigin.CapturedOriginal);
+                nestedMember = await ReadRecursiveJournalMemberAsync(first.Catalog, nested, album.MemberId, nestedDirectory, deadline.Token, protectedBirths ? MirrorPulseNamespaceMemberOrigin.ProtectedBirth : MirrorPulseNamespaceMemberOrigin.CapturedOriginal);
+                coldMember = await ReadRecursiveJournalMemberAsync(first.Catalog, cold, album.MemberId, coldFile, deadline.Token, protectedBirths ? MirrorPulseNamespaceMemberOrigin.ProtectedBirth : MirrorPulseNamespaceMemberOrigin.CapturedOriginal);
                 Assert.AreEqual(albumIdentity.ItemId, album.NativeItemId);
                 Assert.AreEqual(nestedIdentity.ItemId, nested.NativeItemId);
                 Assert.AreEqual(coldIdentity.ItemId, cold.NativeItemId);
@@ -442,7 +478,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             Guid? undecodedOperation = decoded.UndecodedOperationId;
             string undecoded = undecodedOperation is null ? "none" : undecodedOperation.Value.ToString("D") + "@" + decoded.UndecodedSequence;
             TestContext.WriteLine("RecursiveJournalShape: " +
-                "nativeGenerationRevisions=True; fixtureColdLength=" + fixtureColdLength + "; capturedOriginals=True; retainedMemberIds=True; " +
+                "nativeGenerationRevisions=True; fixtureColdLength=" + fixtureColdLength + "; protectedBirths=" + protectedBirths + "; retainedMemberIds=True; " +
                 "retainedNativeItemIds=True; sameRootRuntimeDirectoryMove=True; sourceAbsent=True; targetPresent=True; beforeCount=" + before.Count +
                 "; stableAfterCount=" + after.Count + "; durableCount=" + durable.Count + "; addedCount=" + added.Length + "; addedKinds=" + kinds +
                 "; rawMoveCount=" + rawMoveCount + "; decodedMoveCount=" + decodedMoveCount + "; descendantOriginals=" + descendantOriginals +
@@ -596,14 +632,15 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         Assert.IsNull(started.RecoveryCode);
     }
 
-    private static async Task<MirrorPulseNamespaceMemberRegistration> ReadRecursiveJournalCapturedMemberAsync(
-        MirrorPulseProductCatalog catalog, MirrorPulseNamespaceMemberInspection inspection, Guid? parentMemberId, string relativePath, CancellationToken token)
+    private static async Task<MirrorPulseNamespaceMemberRegistration> ReadRecursiveJournalMemberAsync(
+        MirrorPulseProductCatalog catalog, MirrorPulseNamespaceMemberInspection inspection, Guid? parentMemberId, string relativePath, CancellationToken token,
+        MirrorPulseNamespaceMemberOrigin origin = MirrorPulseNamespaceMemberOrigin.CapturedOriginal)
     {
         Assert.AreEqual(parentMemberId, inspection.ActualParentMemberId);
         Assert.AreEqual(relativePath, inspection.RelativePath.Replace('\\', '/'));
         var member = await catalog.ReadNamespaceMemberAsync(inspection.MemberId, token);
         Assert.IsNotNull(member);
-        Assert.AreEqual(MirrorPulseNamespaceMemberOrigin.CapturedOriginal, member.Origin);
+        Assert.AreEqual(origin, member.Origin);
         Assert.AreEqual(inspection.MemberId, member.MemberId);
         Assert.AreEqual(relativePath, member.RelativePath.Replace('\\', '/'));
         Assert.AreEqual(inspection.IsDirectory, member.IsDirectory);

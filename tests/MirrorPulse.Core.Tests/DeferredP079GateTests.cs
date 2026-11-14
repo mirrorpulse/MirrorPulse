@@ -35,14 +35,17 @@ public sealed class DeferredP079GateTests
             $catalog.required.native=@($catalog.required.native|Where-Object {$_ -cnotin $directories})
             # This historical budget predates the separate controlled-directory Move
             # boundary. Require its exact native selection before retaining the old scope.
-            $controlledMove=$directoryPrefix+'NativeControlledNonemptyDirectoryMoveCharacterizesItsOriginalJournalAcrossRuntimeOwners'
-            if(@($catalog.required.native|Where-Object {$_ -ceq $controlledMove}).Count -ne 1 -or
-               @($catalog.required.namespace|Where-Object {$_ -ceq $controlledMove}).Count -ne 0){throw 'The controlled Move must retain its explicit native selection.'}
-            $moveSelection=@(1..108|ForEach-Object {'Fixture.Case'+$_})+@($controlledMove)
-            $moveBaseline=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 109
-            if((Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 109 -TestNames $moveSelection -Scope S06) -ne $moveBaseline+75000 -or
-               (Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 109 -TestNames $moveSelection) -ne $moveBaseline+75000){throw 'The controlled Move must retain its complete ninety-second deadline in both scopes.'}
-            $catalog.required.native=@($catalog.required.native|Where-Object {$_ -cne $controlledMove})
+            $controlledMoves=@('NativeControlledNonemptyDirectoryMoveCharacterizesItsOriginalJournalAcrossRuntimeOwners',
+                'NativeProtectedBirthDirectoryMoveRecoversItsOriginalProjectionAcrossRuntimeOwners')|ForEach-Object {$directoryPrefix+$_}
+            foreach($controlledMove in $controlledMoves){
+                if(@($catalog.required.native|Where-Object {$_ -ceq $controlledMove}).Count -ne 1 -or
+                   @($catalog.required.namespace|Where-Object {$_ -ceq $controlledMove}).Count -ne 0){throw 'Each controlled Move must retain its explicit native selection.'}
+                $moveSelection=@(1..108|ForEach-Object {'Fixture.Case'+$_})+@($controlledMove)
+                $moveBaseline=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 109
+                if((Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 109 -TestNames $moveSelection -Scope S06) -ne $moveBaseline+75000 -or
+                   (Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 109 -TestNames $moveSelection) -ne $moveBaseline+75000){throw 'Each controlled Move must retain its complete ninety-second deadline in both scopes.'}
+            }
+            $catalog.required.native=@($catalog.required.native|Where-Object {$_ -cnotin $controlledMoves})
             # Preserve the historical selection below; the new explicit-rescan boundary has its own exact gate.
             $catalog.required.namespace=@($catalog.required.namespace|Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeProductionPumpSettlesOriginalJournalBeforeAnExplicitRescanAcrossOwners'})
             $catalog.required.native=@($catalog.required.native|Where-Object {$_ -cne 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeProductionPumpSettlesOriginalJournalBeforeAnExplicitRescanAcrossOwners'})

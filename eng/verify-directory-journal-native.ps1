@@ -12,6 +12,7 @@ $catalog = Get-Content -LiteralPath $catalogPath -Raw | ConvertFrom-Json
 $fixture = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.'
 $selected = @(
     ($fixture + 'NativeControlledNonemptyDirectoryMoveCharacterizesItsOriginalJournalAcrossRuntimeOwners')
+    ($fixture + 'NativeProtectedBirthDirectoryMoveRecoversItsOriginalProjectionAcrossRuntimeOwners')
     ($fixture + 'NativeDirectoryConfirmationRetainsOriginalBindingAndTypedIdentityAcrossOwners')
     ($fixture + 'NativeProductionDirectoryGroupSettlesOriginalCreateMoveOrRetirementAcrossOwners')
     ($fixture + 'NativeProductionDirectoryGroupRereadsRealLateChildOriginalsBeforeDispatchAcrossOwners')
@@ -24,10 +25,10 @@ $selected = @(
 )
 if (@($selected | Where-Object { $_ -cnotin $catalog.required.native }).Count) { throw 'Retain every exact directory and original native regression method.' }
 $count = Get-RequiredTestExecutionCount -Catalog $catalog -Names $selected
-if ($count -ne 19) { throw 'Require the controlled Move, four confirmation cases, ten journal/fresh-role cases and all four original regressions.' }
-# Preserve the 90-second Move, four 60-second confirmations, ten 95-second journal cases,
+if ($count -ne 20) { throw 'Require both controlled Moves, four confirmation cases, ten journal/fresh-role cases and all four original regressions.' }
+# Preserve both 90-second Moves, four 60-second confirmations, ten 95-second journal cases,
 # both original 45-second directory fixtures, completion and the 60-second overflow cases.
-$fixtureBudgetMilliseconds = 90000 + 4 * 60000 + 10 * 95000 + 2 * 45000 + 65000 + 60000
+$fixtureBudgetMilliseconds = 2 * 90000 + 4 * 60000 + 10 * 95000 + 2 * 45000 + 65000 + 60000
 if ($BudgetOnly) { [int][Math]::Ceiling(($fixtureBudgetMilliseconds + 120000) / 60000.0); exit 0 }
 if (-not $IsWindows) { throw 'Directory native verification requires Windows.' }
 $architecture = [Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString()

@@ -58,6 +58,8 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
         ($prefix+'NativeLocalTombstoneDeleteRecoversActualSdkReceiptAcrossFreshRoles') = 2
     }
     $directoryJournal = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
+    $directoryJournal.Add($prefix+'NativeControlledNonemptyDirectoryMoveCharacterizesItsOriginalJournalAcrossRuntimeOwners', @{ Cases=1; Deadline=90000 })
+    $directoryJournal.Add($prefix+'NativeProtectedBirthDirectoryMoveRecoversItsOriginalProjectionAcrossRuntimeOwners', @{ Cases=1; Deadline=90000 })
     $directoryJournal.Add($prefix+'NativeDirectoryConfirmationRetainsOriginalBindingAndTypedIdentityAcrossOwners', @{ Cases=4; Deadline=60000 })
     $directoryJournal.Add($prefix+'NativeProductionDirectoryGroupSettlesOriginalCreateMoveOrRetirementAcrossOwners', @{ Cases=4; Deadline=95000 })
     $directoryJournal.Add($prefix+'NativeProductionDirectoryGroupRereadsRealLateChildOriginalsBeforeDispatchAcrossOwners', @{ Cases=2; Deadline=95000 })
@@ -116,9 +118,6 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
             if ($name -ceq $disabledRetirement) { $transferDeadlineMilliseconds += 50000 }
             if ($name -ceq $disabledReplacement) { $transferDeadlineMilliseconds += 50000 }
             if ($name -ceq $journalRescan) { $transferDeadlineMilliseconds += 50000 }
-            if ($name -ceq ($prefix+'NativeControlledNonemptyDirectoryMoveCharacterizesItsOriginalJournalAcrossRuntimeOwners')) {
-                $transferDeadlineMilliseconds += 75000
-            }
             # Two independent 45-second original identity starts retain their full deadlines.
             if ($name -ceq $residentReplacement) { $executions++; $transferDeadlineMilliseconds += 60000 }
             if ($directoryJournal.ContainsKey($name)) {

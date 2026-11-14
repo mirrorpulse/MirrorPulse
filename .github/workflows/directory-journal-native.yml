@@ -39,7 +39,7 @@ jobs:
             architecture: Arm64
     runs-on: ${{ matrix.runner }}
     # The per-step budget retains all fixture deadlines and collection. Allow seven more minutes for setup and export.
-    timeout-minutes: 34
+    timeout-minutes: 36
     steps:
       - name: Check out the exact selected source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
