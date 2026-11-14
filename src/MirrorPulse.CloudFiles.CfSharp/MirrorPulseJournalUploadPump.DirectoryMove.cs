@@ -26,12 +26,17 @@ public sealed partial class MirrorPulseJournalUploadPump
             _directoryMoveRecovery is null) return null;
         var originalOwner = await _catalog.ReadJournalDirectoryMoveAsync(command.OperationId, token).ConfigureAwait(false);
         if (originalOwner is not null) return originalOwner.Mutation.State == MirrorPulseMutationState.Acknowledged;
-        if (_mutations?.SupportsDurableDirectoryMove(command.InstanceId) != true) return null;
         var retained = await _catalog.ReadMutationAsync(command.OperationId, token).ConfigureAwait(false);
         if (retained is { State: not MirrorPulseMutationState.Prepared }) return null;
         if (retained is { ExecutionEvidence: not MirrorPulseMutationExecutionEvidence.NeverStarted }) return null;
         var admission = await _directoryMoveAdmission.ReadAsync(command, token).ConfigureAwait(false);
-        if (admission is null || string.IsNullOrEmpty(admission.Root.OriginalRevision)) return null;
+        if (admission is null) return null;
+        if (_mutations?.SupportsDurableDirectoryMove(command.InstanceId) != true || string.IsNullOrEmpty(admission.Root.OriginalRevision))
+        {
+            await _catalog.SaveBlockedLocalOperationAsync(new(command.OperationId, command.InstanceId, command.RelativePath,
+                MirrorPulseLocalOperationBlockReason.UnsupportedDurableDirectoryMove, command.ObservedAt), token).ConfigureAwait(false);
+            return false;
+        }
         var intent = Intent(command, admission.Root.OriginalRevision);
         if (retained is not null && retained.Intent != intent) return null;
         await _catalog.StartJournalDirectoryMoveAsync(admission, intent, token).ConfigureAwait(false);

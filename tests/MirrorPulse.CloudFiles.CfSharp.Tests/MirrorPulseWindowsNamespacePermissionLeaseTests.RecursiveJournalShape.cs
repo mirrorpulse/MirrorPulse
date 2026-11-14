@@ -382,9 +382,21 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     docsMember.MemberId, RecursiveJournalDispatchWorker.Destination, deadline.Token);
                 Assert.AreEqual(targetDirectory, prepared.Source.RelativePath);
                 await dispatch.Runtime.ExecuteNamespaceMemberMoveAsync(local, deadline.Token);
-                Guid original = await source.FirstMove.Task.WaitAsync(TimeSpan.FromSeconds(15), deadline.Token);
                 using var dispatchDeadline = CancellationTokenSource.CreateLinkedTokenSource(deadline.Token);
                 dispatchDeadline.CancelAfter(TimeSpan.FromSeconds(15));
+                MirrorPulseBlockedLocalOperation? blocked;
+                do
+                {
+                    blocked = (await dispatch.Catalog.ReadBlockedLocalOperationsAsync(dispatchDeadline.Token))
+                        .SingleOrDefault(item => item.Reason == MirrorPulseLocalOperationBlockReason.UnsupportedDurableDirectoryMove);
+                    if (blocked is null) await Task.Delay(50, dispatchDeadline.Token);
+                }
+                while (blocked is null);
+                Assert.IsNull(await dispatch.Catalog.ReadMutationAsync(blocked.OperationId, dispatchDeadline.Token));
+                Assert.AreEqual(0, source.MoveCalls);
+                source.EnableDurableMove();
+                Guid original = await source.FirstMove.Task.WaitAsync(dispatchDeadline.Token);
+                Assert.AreEqual(blocked.OperationId, original);
                 MirrorPulseJournalDirectoryMove? settled;
                 do
                 {
@@ -465,13 +477,16 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         internal const string Destination = "final";
         private MirrorPulseNormalUserWorkerTransportTests.IdentityProbeWorker? _probe;
         private int _moveCalls;
+        private int _durableMove;
         internal int MoveCalls => Volatile.Read(ref _moveCalls);
         internal System.Collections.Concurrent.ConcurrentQueue<string> ReadPaths { get; } = new();
         internal TaskCompletionSource<Guid> FirstMove { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         internal void Attach(MirrorPulseNormalUserWorkerTransportTests.IdentityProbeWorker probe) => _probe = probe;
 
-        public bool SupportsDurableDirectoryMove(InstanceId instanceId) => instanceId == root.InstanceId;
+        internal void EnableDurableMove() => Volatile.Write(ref _durableMove, 1);
+
+        public bool SupportsDurableDirectoryMove(InstanceId instanceId) => instanceId == root.InstanceId && Volatile.Read(ref _durableMove) != 0;
 
         public ValueTask<string?> DeleteAsync(MirrorPulseWorkerDeleteRequest request, CancellationToken cancellationToken) =>
             throw new AssertFailedException("A controlled Move must not be sent as a Delete.");

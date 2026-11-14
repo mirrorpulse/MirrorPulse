@@ -8,7 +8,7 @@ public enum MirrorPulseLocalOperationBlockReason
     RootReconciliationRequired, UnregisteredPath, CrossRootMove, InvalidMove,
     UnsupportedDirectoryCreate, UnsupportedMetadataChange, UnsupportedChangeKind, RequestIdentityMismatch,
     IncompleteLocalContent, UnsupportedRescanDirectoryDeletion,
-    MissingUploadBinding,
+    MissingUploadBinding, UnsupportedDurableDirectoryMove,
 }
 
 public sealed record MirrorPulseBlockedLocalOperation(Guid OperationId, InstanceId? InstanceId,
