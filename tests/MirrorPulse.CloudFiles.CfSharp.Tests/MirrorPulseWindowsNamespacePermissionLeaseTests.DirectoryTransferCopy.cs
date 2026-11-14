@@ -109,6 +109,11 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             var transport = new MirrorPulseNormalUserWorkerTransport(role, remote, remote, remote, remote, remote);
             var result = await coordinator.CopyDirectoryAsync(operationId, new(transport, transport, transport, transport, _ => 2, transport), token);
             Assert.IsTrue(result.Steps.All(step => step.AcceptedAt is not null));
+            var verification = await coordinator.VerifyDirectoryTargetAsync(operationId,
+                new(transport, transport, transport, transport, _ => 2, transport), token);
+            Assert.AreEqual("target-directory-after-children", verification.Members[0].Revision);
+            Assert.AreEqual("uploaded-file", verification.Members[1].Revision);
+            Assert.AreEqual(1, remote.Reads);
             Assert.HasCount(2, await catalog.ReadNamespaceDispatchFencedRootsAsync(token));
             CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(sourcePath, token));
             Assert.IsFalse(Directory.Exists(Path.Combine(paths.SyncRootPath, "Archive", "copied")));
@@ -143,6 +148,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     {
         internal int Creates;
         internal int Uploads;
+        internal int Reads;
 
         private void RequireNormalUser()
         {
@@ -181,9 +187,32 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             return "uploaded-file";
         }
 
-        public ValueTask<string?> StatAsync(MirrorPulseWorkerStatRequest request, CancellationToken token) => throw new AssertFailedException("Unexpected stat.");
-        public ValueTask<Stream> ReadRangeAsync(MirrorPulseWorkerReadRangeRequest request, CancellationToken token) => throw new AssertFailedException("Unexpected read.");
-        public ValueTask<MirrorPulseWorkerDirectoryPage> ReadDirectoryPageAsync(MirrorPulseWorkerDirectoryPageRequest request, CancellationToken token) => throw new AssertFailedException("Unexpected listing.");
+        public ValueTask<string?> StatAsync(MirrorPulseWorkerStatRequest request, CancellationToken token)
+        {
+            RequireNormalUser();
+            Assert.AreEqual(target.InstanceId, request.InstanceId);
+            return ValueTask.FromResult<string?>(request.NormalizedPath == "copied" ? "target-directory-after-children" : "uploaded-file");
+        }
+
+        public ValueTask<Stream> ReadRangeAsync(MirrorPulseWorkerReadRangeRequest request, CancellationToken token)
+        {
+            RequireNormalUser();
+            Assert.AreEqual("uploaded-file", request.ExpectedRevision);
+            Assert.AreEqual("copied/payload.bin", request.NormalizedPath);
+            Reads++;
+            return ValueTask.FromResult<Stream>(new MemoryStream(bytes, writable: false));
+        }
+
+        public ValueTask<MirrorPulseWorkerDirectoryPage> ReadDirectoryPageAsync(MirrorPulseWorkerDirectoryPageRequest request, CancellationToken token)
+        {
+            RequireNormalUser();
+            var directory = new MirrorPulseWorkerDirectoryEntry("target-directory", "target-directory-after-children",
+                "Directory", "copied", null, null, null, false);
+            var file = new MirrorPulseWorkerDirectoryEntry("target-file", "uploaded-file", "File",
+                "copied/payload.bin", bytes.LongLength, null, null, false);
+            return ValueTask.FromResult(new MirrorPulseWorkerDirectoryPage(request.NormalizedPath == "" ? [directory] : [file],
+                ReadOnlyMemory<byte>.Empty, true));
+        }
         public ValueTask<string?> DeleteAsync(MirrorPulseWorkerDeleteRequest request, CancellationToken token) => throw new AssertFailedException("Unexpected deletion.");
         public ValueTask<string> MoveAsync(MirrorPulseWorkerMoveRequest request, CancellationToken token) => throw new AssertFailedException("Unexpected Move.");
     }

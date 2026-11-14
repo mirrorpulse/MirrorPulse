@@ -53,6 +53,7 @@ public sealed partial class MirrorPulseProductCatalog
             ("namespace_directory_transfer_admissions", DirectoryTransferAdmissionTable),
             ("namespace_directory_transfer_ids", DirectoryTransferIdsTable),
             ("namespace_directory_transfer_copy_steps", DirectoryTransferCopyStepTable),
+            ("namespace_directory_transfer_target_verifications", DirectoryTransferTargetVerificationTable),
             ("namespace_directory_transfer_ids_by_transfer", DirectoryTransferIdIndex),
             ("namespace_directory_transfer_source_root", DirectoryTransferRootIndex),
             ("namespace_directory_transfer_target_root", DirectoryTransferTargetIndex)
@@ -76,7 +77,8 @@ public sealed partial class MirrorPulseProductCatalog
             sql.CommandText = """
                 SELECT 1 FROM namespace_directory_transfer_admissions
                 UNION ALL SELECT 1 FROM namespace_directory_transfer_ids
-                UNION ALL SELECT 1 FROM namespace_directory_transfer_copy_steps LIMIT 1;
+                UNION ALL SELECT 1 FROM namespace_directory_transfer_copy_steps
+                UNION ALL SELECT 1 FROM namespace_directory_transfer_target_verifications LIMIT 1;
                 """;
             if (await sql.ExecuteScalarAsync(token).ConfigureAwait(false) is not null)
                 throw new InvalidDataException("An older catalog cannot supply original directory transfer evidence.");
@@ -128,6 +130,7 @@ public sealed partial class MirrorPulseProductCatalog
                 catch (InvalidOperationException) when (journalOriginal) { throw new MirrorPulseTransferAdmissionBusyException(); }
             }
 
+            validation.Dispose();
             await using var write = _connection.CreateCommand();
             write.Transaction = transaction;
             write.CommandText = """

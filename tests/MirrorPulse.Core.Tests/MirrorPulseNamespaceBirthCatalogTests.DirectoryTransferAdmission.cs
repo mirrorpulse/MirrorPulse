@@ -179,12 +179,39 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             copied, journal, prepared);
     }
 
-    private sealed class DirectoryTransferCopyWorker : IMirrorPulseWorkerUploadTransport, IMirrorPulseWorkerMutationTransport
+    private sealed class DirectoryTransferCopyWorker : IMirrorPulseWorkerUploadTransport, IMirrorPulseWorkerMutationTransport,
+        IMirrorPulseWorkerStatTransport, IMirrorPulseWorkerDirectoryPageSource, IMirrorPulseWorkerRangeTransport
     {
         internal MirrorPulseDirectoryTransferAdmission Plan = null!;
         internal int Creates;
         internal int Uploads;
         internal byte[] Bytes = [];
+        internal bool ExtraTargetChild;
+        internal bool ChangedTargetDirectory;
+        internal bool DuplicateTargetIdentity;
+
+        public ValueTask<string?> StatAsync(MirrorPulseWorkerStatRequest request, CancellationToken token) =>
+            ValueTask.FromResult<string?>(request.NormalizedPath == "moved.txt" ? ChangedTargetDirectory ? "later-directory" : "directory-after-children" : "file-upload-receipt");
+
+        public ValueTask<Stream> ReadRangeAsync(MirrorPulseWorkerReadRangeRequest request, CancellationToken token)
+        {
+            Assert.AreEqual("file-upload-receipt", request.ExpectedRevision);
+            Assert.AreEqual("moved.txt/payload.bin", request.NormalizedPath);
+            return ValueTask.FromResult<Stream>(new MemoryStream(Bytes.AsSpan((int)request.Offset, (int)request.Length).ToArray(), writable: false));
+        }
+
+        public ValueTask<MirrorPulseWorkerDirectoryPage> ReadDirectoryPageAsync(MirrorPulseWorkerDirectoryPageRequest request, CancellationToken token)
+        {
+            Assert.IsTrue(request.ContinuationCursor.IsEmpty);
+            var directory = new MirrorPulseWorkerDirectoryEntry("directory-id", ChangedTargetDirectory ? "later-directory" : "directory-after-children",
+                "Directory", "moved.txt", null, null, null, false);
+            var file = new MirrorPulseWorkerDirectoryEntry(DuplicateTargetIdentity ? "directory-id" : "file-id",
+                "file-upload-receipt", "File", "moved.txt/payload.bin", Bytes.LongLength, null, null, false);
+            MirrorPulseWorkerDirectoryEntry[] entries = request.NormalizedPath == "" ? [directory] : ExtraTargetChild
+                ? [file, file with { RemoteId = "another-file-id", RelativePath = "moved.txt/another.bin" }]
+                : [file];
+            return ValueTask.FromResult(new MirrorPulseWorkerDirectoryPage(entries, ReadOnlyMemory<byte>.Empty, true));
+        }
 
         public ValueTask<string> CreateDirectoryAsync(MirrorPulseWorkerCreateDirectoryRequest request, CancellationToken cancellationToken)
         {

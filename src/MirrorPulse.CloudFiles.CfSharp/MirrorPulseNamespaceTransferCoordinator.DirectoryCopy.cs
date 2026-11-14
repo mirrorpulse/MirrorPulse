@@ -11,13 +11,37 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
     {
         var copy = await catalog.ReadNamespaceDirectoryTransferCopyAsync(operationId, stop).ConfigureAwait(false);
         if (copy.Steps.All(step => step.AcceptedAt is not null)) return copy;
-        var plan = copy.Admission;
         var mutations = workers.Mutations ?? throw new NotSupportedException("Directory transfer requires the normal-user mutation transport.");
+        return await WithDirectoryTransferGuardsAsync(copy.Admission, () =>
+            new MirrorPulseDirectoryTransferCopyExecutor(catalog, inputs, workers.Uploads, mutations).CopyAsync(operationId, stop),
+            stop).ConfigureAwait(false);
+    }, token);
+
+    internal ValueTask<MirrorPulseDirectoryTransferTargetVerification> VerifyDirectoryTargetAsync(Guid operationId,
+        MirrorPulseTransferWorkerServices workers, CancellationToken token) => actor.RunAsync(async stop =>
+    {
+        var saved = await catalog.ReadNamespaceDirectoryTransferTargetAsync(operationId, stop).ConfigureAwait(false);
+        if (saved is not null) return saved;
+        var copy = await catalog.ReadNamespaceDirectoryTransferCopyAsync(operationId, stop).ConfigureAwait(false);
+        return await WithDirectoryTransferGuardsAsync(copy.Admission, async () =>
+        {
+            var verifier = new MirrorPulseDirectoryTransferTargetVerifier(
+                new MirrorPulseTransferTargetVerifier(catalog, workers.Stats, workers.Ranges, workers.Directories), workers.Stats);
+            var verified = await verifier.ReadCurrentAsync(copy, null, stop).ConfigureAwait(false);
+            return await catalog.RecordNamespaceDirectoryTransferTargetAsync(verified, stop).ConfigureAwait(false);
+        }, stop).ConfigureAwait(false);
+    }, token);
+
+    private async Task<T> WithDirectoryTransferGuardsAsync<T>(MirrorPulseDirectoryTransferAdmission plan,
+        Func<Task<T>> operation, CancellationToken stop)
+    {
+        actor.AssertAccess();
         var topology = await catalog.ReadAdapterTopologyAsync(stop).ConfigureAwait(false);
         var (sourceRoute, targetRoute) = RequireDirectoryTransferRoutes(topology, plan.Members[0].Source.Protection, plan.TargetParent);
         if (sourceRoute != plan.SourceRoute || targetRoute != plan.TargetRoute)
             throw new InvalidOperationException("The original directory transfer configuration changed.");
 
+        T result = default!;
         await execution.RunNamespaceOperationAsync(async () =>
         {
             await using var sourceParent = await OpenTransferDirectoryGuardAsync(plan.SourceParent, stop).ConfigureAwait(false);
@@ -75,9 +99,7 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
                         throw new InvalidDataException("A directory transfer requires its original directory placeholders.");
                 }
                 await RequireExactTransferDirectoryInventoryAsync(plan.Members.Select(member => member.Source).ToArray(), stop).ConfigureAwait(false);
-                copy = await execution.RunNormalUserOperationAsync(() =>
-                    new MirrorPulseDirectoryTransferCopyExecutor(catalog, inputs, workers.Uploads, mutations)
-                        .CopyAsync(operationId, stop)).ConfigureAwait(false);
+                result = await execution.RunNormalUserOperationAsync(operation).ConfigureAwait(false);
                 foreach (var (lease, content) in data)
                     await lease.VerifyAsync(content.Length, content.Sha256, stop).ConfigureAwait(false);
                 for (int index = 0; index < plan.Members.Count; index++)
@@ -93,6 +115,6 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
                 for (int index = guards.Count - 1; index >= 0; index--) await guards[index].DisposeAsync().ConfigureAwait(false);
             }
         }).ConfigureAwait(false);
-        return copy;
-    }, token);
+        return result;
+    }
 }

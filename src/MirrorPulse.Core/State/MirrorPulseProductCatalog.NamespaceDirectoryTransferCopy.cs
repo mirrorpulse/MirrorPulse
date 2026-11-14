@@ -57,42 +57,49 @@ public sealed partial class MirrorPulseProductCatalog
         {
             ThrowIfDisposed();
             using var transaction = BeginNamespaceRecoveryReadSnapshot();
-            var plan = await ReadDirectoryTransferAdmissionCoreAsync(transferId, transaction, token).ConfigureAwait(false)
-                ?? throw new FileNotFoundException("The original directory transfer is missing.");
-            await using var sql = _connection.CreateCommand();
-            sql.Transaction = transaction;
-            sql.CommandText = """
-                SELECT ordinal,effect_id,started_at,accepted_revision,accepted_at,effect_fingerprint
-                FROM namespace_directory_transfer_copy_steps WHERE transfer_id=$transfer ORDER BY ordinal;
-                """;
-            sql.Parameters.AddWithValue("$transfer", transferId.ToString("D"));
-            var steps = new List<MirrorPulseDirectoryTransferCopyStep>(plan.Members.Count);
-            DateTimeOffset? previous = plan.Originals.CapturedAt;
-            await using (var reader = await sql.ExecuteReaderAsync(token).ConfigureAwait(false))
-            {
-                while (await reader.ReadAsync(token).ConfigureAwait(false))
-                {
-                    if (steps.Count == plan.Members.Count || reader.GetInt64(0) != steps.Count ||
-                        reader.GetString(1) != plan.Members[steps.Count].CopyOperationId.ToString("D") ||
-                        !DirectoryTransferCopyFingerprint(plan.Members[steps.Count]).AsSpan().SequenceEqual((byte[])reader[5]))
-                        throw new InvalidDataException("The directory transfer lost its original copy order or effect identity.");
-                    var started = ReadDirectoryTransferTime(reader, 2);
-                    string? revision = reader.IsDBNull(3) ? null : reader.GetString(3);
-                    var accepted = ReadDirectoryTransferTime(reader, 4);
-                    if ((started is { } start && (previous is null || start < previous.Value)) ||
-                        (accepted is { } acceptance && (started is null || acceptance < started.Value ||
-                            InvalidRemoteUpdateText(revision, 4096))) || (accepted is null && revision is not null))
-                        throw new InvalidDataException("The directory transfer contains inconsistent original copy receipts.");
-                    steps.Add(new(plan.Members[steps.Count].CopyOperationId, started, revision, accepted));
-                    previous = accepted;
-                }
-            }
-            if (steps.Count != plan.Members.Count)
-                throw new InvalidDataException("One or more original directory transfer copy steps are missing.");
+            var result = await ReadDirectoryTransferCopyCoreAsync(transferId, transaction, token).ConfigureAwait(false);
             transaction.Commit();
-            return new(plan, steps.AsReadOnly());
+            return result;
         }
         finally { _gate.Release(); }
+    }
+
+    private async Task<MirrorPulseDirectoryTransferCopy> ReadDirectoryTransferCopyCoreAsync(Guid transferId,
+        SqliteTransaction transaction, CancellationToken token)
+    {
+        var plan = await ReadDirectoryTransferAdmissionCoreAsync(transferId, transaction, token).ConfigureAwait(false)
+            ?? throw new FileNotFoundException("The original directory transfer is missing.");
+        await using var sql = _connection.CreateCommand();
+        sql.Transaction = transaction;
+        sql.CommandText = """
+            SELECT ordinal,effect_id,started_at,accepted_revision,accepted_at,effect_fingerprint
+            FROM namespace_directory_transfer_copy_steps WHERE transfer_id=$transfer ORDER BY ordinal;
+            """;
+        sql.Parameters.AddWithValue("$transfer", transferId.ToString("D"));
+        var steps = new List<MirrorPulseDirectoryTransferCopyStep>(plan.Members.Count);
+        DateTimeOffset? previous = plan.Originals.CapturedAt;
+        await using (var reader = await sql.ExecuteReaderAsync(token).ConfigureAwait(false))
+        {
+            while (await reader.ReadAsync(token).ConfigureAwait(false))
+            {
+                if (steps.Count == plan.Members.Count || reader.GetInt64(0) != steps.Count ||
+                    reader.GetString(1) != plan.Members[steps.Count].CopyOperationId.ToString("D") ||
+                    !DirectoryTransferCopyFingerprint(plan.Members[steps.Count]).AsSpan().SequenceEqual((byte[])reader[5]))
+                    throw new InvalidDataException("The directory transfer lost its original copy order or effect identity.");
+                var started = ReadDirectoryTransferTime(reader, 2);
+                string? revision = reader.IsDBNull(3) ? null : reader.GetString(3);
+                var accepted = ReadDirectoryTransferTime(reader, 4);
+                if ((started is { } start && (previous is null || start < previous.Value)) ||
+                    (accepted is { } acceptance && (started is null || acceptance < started.Value ||
+                        InvalidRemoteUpdateText(revision, 4096))) || (accepted is null && revision is not null))
+                    throw new InvalidDataException("The directory transfer contains inconsistent original copy receipts.");
+                steps.Add(new(plan.Members[steps.Count].CopyOperationId, started, revision, accepted));
+                previous = accepted;
+            }
+        }
+        if (steps.Count != plan.Members.Count)
+            throw new InvalidDataException("One or more original directory transfer copy steps are missing.");
+        return new(plan, steps.AsReadOnly());
     }
 
     private static DateTimeOffset? ReadDirectoryTransferTime(SqliteDataReader reader, int ordinal)

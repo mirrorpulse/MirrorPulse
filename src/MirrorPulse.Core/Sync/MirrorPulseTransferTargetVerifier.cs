@@ -77,8 +77,16 @@ public sealed class MirrorPulseTransferTargetVerifier(MirrorPulseProductCatalog 
     }
 
     /// <summary>Reads one current opaque file identity at an original conditional revision through bounded Worker pages.</summary>
-    public async Task<MirrorPulseWorkerDirectoryEntry> ReadMetadataAsync(MirrorPulseTransferRoute route,
-        string path, long? expectedLength, string expectedRevision, CancellationToken token)
+    public Task<MirrorPulseWorkerDirectoryEntry> ReadMetadataAsync(MirrorPulseTransferRoute route,
+        string path, long? expectedLength, string expectedRevision, CancellationToken token) =>
+        ReadMetadataCoreAsync(route, path, "File", expectedLength, expectedRevision, token);
+
+    internal Task<MirrorPulseWorkerDirectoryEntry> ReadDirectoryMetadataAsync(MirrorPulseTransferRoute route,
+        string path, string expectedRevision, CancellationToken token) =>
+        ReadMetadataCoreAsync(route, path, "Directory", null, expectedRevision, token);
+
+    private async Task<MirrorPulseWorkerDirectoryEntry> ReadMetadataCoreAsync(MirrorPulseTransferRoute route,
+        string path, string itemKind, long? expectedLength, string expectedRevision, CancellationToken token)
     {
         int separator = path.LastIndexOf('/');
         string parent = separator < 0 ? string.Empty : path[..separator];
@@ -87,9 +95,10 @@ public sealed class MirrorPulseTransferTargetVerifier(MirrorPulseProductCatalog 
         {
             if (entry.RelativePath != path) continue;
             if (found is not null) throw new InvalidDataException("More than one remote entry claims the transfer destination.");
-            if (entry.IsDeleted || entry.ItemKind != "File" || expectedLength is { } length && entry.Length != length || entry.RemoteRevision != expectedRevision ||
+            if (entry.IsDeleted || entry.ItemKind != itemKind || expectedLength is { } length && entry.Length != length ||
+                itemKind == "Directory" && entry.Length is not null || entry.RemoteRevision != expectedRevision ||
                 string.IsNullOrWhiteSpace(entry.RemoteId) || entry.RemoteId.Length > 4096 || entry.RemoteId.Contains('\0'))
-                throw new IOException("The target is not the original accepted file with the complete expected length.");
+                throw new IOException("The transfer target changed its expected type, revision, identity or length.");
             found = entry;
         }
         return found ?? throw new IOException("The original transfer target is absent.");
