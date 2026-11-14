@@ -159,13 +159,19 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
                 InstanceId instanceId,
                 CloudRemoteChangeBatch batch,
                 CancellationToken batchCancellationToken)
+                => await ApplyAdmittedCloudRemoteBatchAsync(instanceId, batch, null, batchCancellationToken).ConfigureAwait(false);
+
+            async ValueTask<MirrorPulseRemotePollApplyOutcome> ApplyAdmittedCloudRemoteBatchAsync(
+                InstanceId instanceId, CloudRemoteChangeBatch batch, MirrorPulseNamespaceWorkAdmission.WorkLease? admission,
+                CancellationToken batchCancellationToken)
             {
                 await namespaceFence.EnsureApplyAllowedAsync(instanceId, batch, batchCancellationToken).ConfigureAwait(false);
-                MirrorPulseRemoteBatchResult result = await (currentSession ??
-                    throw new InvalidOperationException("The Cloud Files session has not started."))
-                    .ApplyRemoteBatchAsync(
-                        instanceId, batch, catalog, conflictCenter, conflictNotifications,
-                        cancellationToken: batchCancellationToken).ConfigureAwait(false);
+                var current = currentSession ?? throw new InvalidOperationException("The Cloud Files session has not started.");
+                MirrorPulseRemoteBatchResult result = admission is null
+                    ? await current.ApplyRemoteBatchAsync(instanceId, batch, catalog, conflictCenter, conflictNotifications,
+                        cancellationToken: batchCancellationToken).ConfigureAwait(false)
+                    : await current.ApplyAdmittedRemoteBatchAsync(instanceId, batch, catalog, conflictCenter, conflictNotifications,
+                        admission, cancellationToken: batchCancellationToken).ConfigureAwait(false);
                 if (result.RequiresRetry)
                 {
                     await catalog.SaveInstanceRuntimeStateAsync(
@@ -222,7 +228,8 @@ public sealed partial class MirrorPulseHostApplication : IAsyncDisposable
                 snapshotStore: remoteSnapshotStore,
                 pendingStore: new MirrorPulseCatalogRemotePollPendingStore(catalog), scheduler: remoteScheduler,
                 mayPoll: namespaceFence.CanPollAsync, currentRoots: () => rootRouter.Registrations, namespaceWork: namespaceWork,
-                diagnosticsDirectory: Path.Combine(paths.DataRootPath, "logs", "remote-poll"), identityResolver: identityResolver);
+                diagnosticsDirectory: Path.Combine(paths.DataRootPath, "logs", "remote-poll"), identityResolver: identityResolver,
+                applyAdmitted: ApplyAdmittedCloudRemoteBatchAsync);
 
             var application = new MirrorPulseHostApplication(
                 paths, configurationStore, configuration, hostLease, catalog, conflictCenter, systemNotifications,

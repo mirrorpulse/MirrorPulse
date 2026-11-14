@@ -233,6 +233,11 @@ public interface IMirrorPulseCloudRuntime : IAsyncDisposable
         CloudRemoteApplyOptions? options, CancellationToken cancellationToken) => ValueTask.FromException<MirrorPulseRemoteBatchResult>(
             new NotSupportedException("This Cloud Files runtime does not project incoming Adapter batches."));
 
+    ValueTask<MirrorPulseRemoteBatchResult> ApplyAdmittedRemoteBatchAsync(InstanceId instanceId, CloudRemoteChangeBatch batch,
+        MirrorPulseProductCatalog catalog, MirrorPulseConflictCenter center, MirrorPulseConflictNotificationBridge notifications,
+        MirrorPulseNamespaceWorkAdmission.WorkLease admission, CloudRemoteApplyOptions? options, CancellationToken cancellationToken) =>
+        ValueTask.FromException<MirrorPulseRemoteBatchResult>(new NotSupportedException("This runtime does not continue admitted remote polling."));
+
     [SupportedOSPlatform("windows10.0.26100")]
     ValueTask<MirrorPulseCoalescedConflictRemoteObservation?> RefreshConflictVersionAsync(Guid commandId, Guid conflictId,
         CancellationToken cancellationToken) => ValueTask.FromException<MirrorPulseCoalescedConflictRemoteObservation?>(
@@ -2023,16 +2028,31 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             return await ApplyRetainedRemoteBatchAsync(instanceId, projected, catalog, center, notifications, options, token).ConfigureAwait(false);
         }, cancellationToken);
 
+        public ValueTask<MirrorPulseRemoteBatchResult> ApplyAdmittedRemoteBatchAsync(InstanceId instanceId, CloudRemoteChangeBatch batch,
+            MirrorPulseProductCatalog catalog, MirrorPulseConflictCenter center, MirrorPulseConflictNotificationBridge notifications,
+            MirrorPulseNamespaceWorkAdmission.WorkLease admission, CloudRemoteApplyOptions? options, CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(admission);
+            if (router is null || namespaceWork is null)
+                throw new NotSupportedException("Admitted polling requires the current Host's root-work boundary.");
+            return WithCurrentLibraryAsync(token => ApplyRetainedRemoteBatchAsync(instanceId, batch, catalog, center,
+                notifications, options, token, admission), cancellationToken);
+        }
+
         private async ValueTask<MirrorPulseRemoteBatchResult> ApplyRetainedRemoteBatchAsync(InstanceId instanceId, CloudRemoteChangeBatch batch,
             MirrorPulseProductCatalog catalog, MirrorPulseConflictCenter center, MirrorPulseConflictNotificationBridge notifications,
-            CloudRemoteApplyOptions? options, CancellationToken token)
+            CloudRemoteApplyOptions? options, CancellationToken token, MirrorPulseNamespaceWorkAdmission.WorkLease? admitted = null)
         {
             if (router is null) return await ApplyRemoteBatchCoreAsync(instanceId, batch, catalog, center, notifications, options, token).ConfigureAwait(false);
+            // Acquire or retain the actual batch's root work before persisting a new
+            // incoming envelope. Recovery drains this scope through durable settlement.
+            using var work = EnterRemoteBatchWork(instanceId, batch, admitted);
             MirrorPulseRemoteBatchResult? result = null;
             var retained = new MirrorPulseRetainedRemoteBatchCoordinator(catalog, state.OpenStore, router,
                 async (instance, original, policy, stop) =>
                 {
-                    result = await ApplyRemoteBatchCoreAsync(instance, original, catalog, center, notifications, policy, stop).ConfigureAwait(false);
+                    result = await ApplyRemoteBatchCoreAsync(instance, original, catalog, center, notifications, policy, stop,
+                        original.BatchId == batch.BatchId ? work : null).ConfigureAwait(false);
                     return MirrorPulseRemotePollApplyOutcome.FromResult(result);
                 });
             await retained.ApplyAsync(instanceId, batch, options ?? CloudRemoteApplyOptions.Default, token).ConfigureAwait(false);
@@ -2046,10 +2066,17 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
 
         private async ValueTask<MirrorPulseRemoteBatchResult> ApplyRemoteBatchCoreAsync(InstanceId instanceId,
             CloudRemoteChangeBatch batch, MirrorPulseProductCatalog catalog, MirrorPulseConflictCenter center,
-            MirrorPulseConflictNotificationBridge notifications, CloudRemoteApplyOptions? options, CancellationToken cancellationToken)
+            MirrorPulseConflictNotificationBridge notifications, CloudRemoteApplyOptions? options, CancellationToken cancellationToken,
+            MirrorPulseNamespaceWorkAdmission.WorkLease? admitted = null)
+        {
+            using var work = EnterRemoteBatchWork(instanceId, batch, admitted);
+            return await ApplyRemoteBatchContentsAsync(instanceId, batch, catalog, center, notifications, options, cancellationToken).ConfigureAwait(false);
+        }
+
+        private MirrorPulseNamespaceWorkAdmission.WorkLease? EnterRemoteBatchWork(InstanceId instanceId,
+            CloudRemoteChangeBatch batch, MirrorPulseNamespaceWorkAdmission.WorkLease? admitted)
         {
             var pollingRoot = MirrorPulseRemotePollBatchScope.RequireCurrentMapping(instanceId, batch, router);
-            MirrorPulseNamespaceWorkAdmission.WorkLease? admission = null;
             if (namespaceWork is not null)
             {
                 if (router is null) throw new InvalidOperationException("Remote namespace admission requires current root routing.");
@@ -2062,36 +2089,41 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                             if (route.InstanceId != instanceId) throw new InvalidDataException("The remote batch belongs to another Adapter instance.");
                             return router.GetRegistration(route.InstanceId, route.RootKey).RootId;
                         });
-                admission = namespaceWork.Enter(affected.Distinct());
+                return admitted is null ? namespaceWork.Enter(affected.Distinct()) : namespaceWork.Retain(admitted, affected.Distinct());
             }
-            using (admission)
+            if (admitted is not null) throw new InvalidOperationException("Admitted polling requires this runtime's root-work owner.");
+            return null;
+        }
+
+        private async ValueTask<MirrorPulseRemoteBatchResult> ApplyRemoteBatchContentsAsync(InstanceId instanceId,
+            CloudRemoteChangeBatch batch, MirrorPulseProductCatalog catalog, MirrorPulseConflictCenter center,
+            MirrorPulseConflictNotificationBridge notifications, CloudRemoteApplyOptions? options, CancellationToken cancellationToken)
+        {
+            var projector = new MirrorPulseRemoteConflictProjector(fileSystem, catalog, center, notifications);
+            if (initializeNamespaceOnStart)
             {
-                var projector = new MirrorPulseRemoteConflictProjector(fileSystem, catalog, center, notifications);
-                if (initializeNamespaceOnStart)
-                {
-                    if (router is null || _namespaceExecution is null || _namespaceActor is null)
-                        throw new InvalidOperationException("Managed remote batches require the complete Host namespace boundary.");
-                    if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
-                        throw new PlatformNotSupportedException("Managed remote batches require Windows 11 24H2 or later.");
-                    await new MirrorPulseRemoteNamespaceFence(router, catalog, allowOriginalMoveRecovery: true)
-                        .EnsureApplyAllowedAsync(instanceId, batch, cancellationToken).ConfigureAwait(false);
-                    var driver = new MirrorPulseRemoteNamespaceBatchDriver(fileSystem, state, catalog, router, _namespaceExecution, _namespaceActor);
-                    return await new MirrorPulseRemoteBatchCoordinator(fileSystem, state, projector, driver)
-                        .ApplyAsync(instanceId, batch, options, cancellationToken).ConfigureAwait(false);
-                }
-                var coordinator = new MirrorPulseRemoteBatchCoordinator(fileSystem, state, projector);
-                if (_namespaceActor is null) return await coordinator.ApplyAsync(instanceId, batch, options, cancellationToken).ConfigureAwait(false);
-                return await _namespaceActor.RunAsync(async token =>
-                {
-                    if (_namespaceExecution is null) return await coordinator.ApplyAsync(instanceId, batch, options, token).ConfigureAwait(false);
-                    if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
-                        throw new PlatformNotSupportedException("Remote namespace execution requires Windows 11 24H2 or later.");
-                    MirrorPulseRemoteBatchResult result = null!;
-                    await _namespaceExecution.RunNamespaceOperationAsync(async () =>
-                        result = await coordinator.ApplyAsync(instanceId, batch, options, token).ConfigureAwait(false)).ConfigureAwait(false);
-                    return result;
-                }, cancellationToken).ConfigureAwait(false);
+                if (router is null || _namespaceExecution is null || _namespaceActor is null)
+                    throw new InvalidOperationException("Managed remote batches require the complete Host namespace boundary.");
+                if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
+                    throw new PlatformNotSupportedException("Managed remote batches require Windows 11 24H2 or later.");
+                await new MirrorPulseRemoteNamespaceFence(router, catalog, allowOriginalMoveRecovery: true)
+                    .EnsureApplyAllowedAsync(instanceId, batch, cancellationToken).ConfigureAwait(false);
+                var driver = new MirrorPulseRemoteNamespaceBatchDriver(fileSystem, state, catalog, router, _namespaceExecution, _namespaceActor);
+                return await new MirrorPulseRemoteBatchCoordinator(fileSystem, state, projector, driver)
+                    .ApplyAsync(instanceId, batch, options, cancellationToken).ConfigureAwait(false);
             }
+            var coordinator = new MirrorPulseRemoteBatchCoordinator(fileSystem, state, projector);
+            if (_namespaceActor is null) return await coordinator.ApplyAsync(instanceId, batch, options, cancellationToken).ConfigureAwait(false);
+            return await _namespaceActor.RunAsync(async token =>
+            {
+                if (_namespaceExecution is null) return await coordinator.ApplyAsync(instanceId, batch, options, token).ConfigureAwait(false);
+                if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
+                    throw new PlatformNotSupportedException("Remote namespace execution requires Windows 11 24H2 or later.");
+                MirrorPulseRemoteBatchResult result = null!;
+                await _namespaceExecution.RunNamespaceOperationAsync(async () =>
+                    result = await coordinator.ApplyAsync(instanceId, batch, options, token).ConfigureAwait(false)).ConfigureAwait(false);
+                return result;
+            }, cancellationToken).ConfigureAwait(false);
         }
 
         private async Task StopJournalServicesAsync()
@@ -2698,6 +2730,14 @@ public sealed class MirrorPulseCloudHostSession : IAsyncDisposable
     {
         if (!_started || _runtime is null) throw new InvalidOperationException("The Cloud Files Host session has not started.");
         return _runtime.ApplyAdapterRemoteBatchAsync(instanceId, batch, catalog, center, notifications, options, cancellationToken);
+    }
+
+    public ValueTask<MirrorPulseRemoteBatchResult> ApplyAdmittedRemoteBatchAsync(InstanceId instanceId, CloudRemoteChangeBatch batch,
+        MirrorPulseProductCatalog catalog, MirrorPulseConflictCenter center, MirrorPulseConflictNotificationBridge notifications,
+        MirrorPulseNamespaceWorkAdmission.WorkLease admission, CloudRemoteApplyOptions? options = null, CancellationToken cancellationToken = default)
+    {
+        if (!_started || _runtime is null) throw new InvalidOperationException("The Cloud Files Host session has not started.");
+        return _runtime.ApplyAdmittedRemoteBatchAsync(instanceId, batch, catalog, center, notifications, admission, options, cancellationToken);
     }
 
     [SupportedOSPlatform("windows10.0.26100")]

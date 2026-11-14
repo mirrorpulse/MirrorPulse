@@ -1,7 +1,9 @@
 using CfSharp;
 using MirrorPulse.CloudFiles.CfSharp;
 using MirrorPulse.Core.CloudFiles;
+using MirrorPulse.Core.Configuration;
 using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.State;
 using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.CloudFiles.CfSharp.Tests;
@@ -51,6 +53,50 @@ public sealed partial class MirrorPulseActiveRemotePollerTests
         await using var scope = await recovering.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.AreEqual("v2", store.Snapshot!.Values.Single().RemoteRevision); Assert.IsFalse(admission.IsAdmitted(root.RootId));
         scope.CompleteAfterFreshAudit();
+    }
+
+    [TestMethod]
+    public async Task AnAcceptedPollRetainsItsExactRootThroughRecoveryAndClearsItsOriginalIntent()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "MirrorPulse-poll-drain", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var root = AdmissionRoot("Files");
+            var paths = new MirrorPulseStoragePaths(Path.Combine(directory, "sync"), Path.Combine(directory, "data"));
+            await using var catalog = await MirrorPulseProductCatalog.OpenAsync(paths);
+            await using var admission = new MirrorPulseNamespaceWorkAdmission([root.RootId]);
+            await OpenPollAdmissionAsync(admission, root.RootId);
+            var source = new FakeDirectorySource(); source.Set(new FakeEntry("file", "v1", CloudItemKind.File, "file.bin", 3));
+            var snapshots = new MirrorPulseFileRemotePollSnapshotStore(paths.DataRootPath);
+            var pending = new MirrorPulseCatalogRemotePollPendingStore(catalog);
+            Task<MirrorPulseNamespaceWorkAdmission.RecoveryLease>? recovering = null;
+            string? originalId = null;
+            await using var poller = new MirrorPulseActiveRemotePoller(source, [AdmissionAdapter(root)], [root],
+                (_, _, _) => throw new AssertFailedException("The Host must receive the actual poll admission."),
+                snapshotStore: snapshots, pendingStore: pending, namespaceWork: admission,
+                applyAdmitted: async (instance, batch, work, token) =>
+                {
+                    originalId = (await pending.LoadAsync(root, token))!.BatchId;
+                    Assert.AreEqual(originalId, batch.BatchId);
+                    recovering = admission.WaitForRecoveryAsync([root.RootId], token).AsTask();
+                    Assert.IsFalse(admission.TryEnter([root.RootId], out _));
+                    using var downstream = admission.Retain(work, [root.RootId]);
+                    Assert.IsFalse(recovering.IsCompleted);
+                    return new(true, batch.FinalCursor);
+                });
+            Assert.IsFalse(await poller.PollOnceAsync(root.InstanceId));
+            source.Set(new FakeEntry("file", "v2", CloudItemKind.File, "moved.bin", 4));
+            Assert.IsTrue(await poller.PollOnceAsync(root.InstanceId));
+            Assert.IsNotNull(originalId); Assert.IsNotNull(recovering);
+            await using var recovery = await recovering.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.IsNull(await pending.LoadAsync(root, default));
+            Assert.AreEqual("v2", (await snapshots.LoadAsync(root))!["file"].RemoteRevision);
+            Assert.IsFalse(admission.IsAdmitted(root.RootId));
+            int reads = source.Reads;
+            Assert.IsFalse(await poller.PollOnceAsync(root.InstanceId));
+            Assert.AreEqual(reads, source.Reads);
+        }
+        finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }
     }
 
     [TestMethod]

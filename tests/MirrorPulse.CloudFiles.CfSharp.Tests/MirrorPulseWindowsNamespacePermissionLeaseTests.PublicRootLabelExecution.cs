@@ -2,6 +2,7 @@ using System.Security.Principal;
 using CfSharp;
 using MirrorPulse.Core.CloudFiles;
 using MirrorPulse.Core.Configuration;
+using MirrorPulse.Core.Conflicts;
 using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.State;
 using MirrorPulse.Core.Sync;
@@ -114,6 +115,19 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 {
                     Task<MirrorPulseRootRenameHistory> preparing = runtime.PrepareManagedRootRenameAsync(root.RootId, target, deadline.Token).AsTask();
                     while (work.IsAdmitted(root.RootId)) await Task.Delay(10, deadline.Token);
+                    Assert.IsFalse(preparing.IsCompleted);
+                    // A poll accepted before the Label drain must still settle its
+                    // exact original SDK/product cursor before preparation captures proof.
+                    var poll = new CloudRemoteChangeBatch(root.InstanceId + "/label-drain", ReadOnlyMemory<byte>.Empty, [], new byte[] { 41 });
+                    var center = new MirrorPulseConflictCenter();
+                    var notifications = new MirrorPulseConflictNotificationBridge((_, _) => ValueTask.CompletedTask);
+                    await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => runtime.ApplyRemoteBatchAsync(
+                        root.InstanceId, poll, currentCatalog, center, notifications, null, deadline.Token).AsTask());
+                    Assert.IsNull(await currentCatalog.ReadRetainedRemoteBatchAsync(root.InstanceId, deadline.Token));
+                    var applied = await currentScheduler.RunAsync(root.InstanceId, token => runtime.ApplyAdmittedRemoteBatchAsync(
+                        root.InstanceId, poll, currentCatalog, center, notifications, held, null, token), deadline.Token);
+                    Assert.IsFalse(applied.RequiresRetry);
+                    Assert.IsNull(await currentCatalog.ReadRetainedRemoteBatchAsync(root.InstanceId, deadline.Token));
                     Assert.IsFalse(preparing.IsCompleted);
                     held.Dispose();
                     original = await preparing;

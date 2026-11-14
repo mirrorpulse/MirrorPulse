@@ -68,6 +68,21 @@ public sealed partial class MirrorPulseNamespaceWorkAdmission : IAsyncDisposable
         using var lease = Enter([root]); return await work(cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Retains downstream work within an existing live root admission, including while recovery drains it.</summary>
+    public WorkLease Retain(WorkLease admitted, IEnumerable<RootId> roots)
+    {
+        ArgumentNullException.ThrowIfNull(admitted);
+        RootId[] requested = Normalize(roots, allowEmpty: false);
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_closing, this);
+            if (!admitted.Covers(this, requested))
+                throw new InvalidOperationException("Downstream work requires this Host's live admission for every selected root.");
+            foreach (RootId root in requested) _roots[root].Active++;
+            _operations++; return new(this, requested);
+        }
+    }
+
     /// <summary>Retains execution of an already admitted durable operation, including on a closed root.</summary>
     /// <remarks>The Host must validate the original operation before entering. A closed-root
     /// execution drains earlier work and remains closed afterwards; completion is not a fresh audit.
@@ -190,6 +205,8 @@ public sealed partial class MirrorPulseNamespaceWorkAdmission : IAsyncDisposable
         private MirrorPulseNamespaceWorkAdmission? _owner;
         private readonly RootId[] _roots;
         internal WorkLease(MirrorPulseNamespaceWorkAdmission owner, RootId[] roots) => (_owner, _roots) = (owner, roots);
+        internal bool Covers(MirrorPulseNamespaceWorkAdmission owner, RootId[] roots) =>
+            ReferenceEquals(Volatile.Read(ref _owner), owner) && roots.All(_roots.Contains);
         public void Dispose() => Interlocked.Exchange(ref _owner, null)?.ReleaseWork(_roots);
     }
 
