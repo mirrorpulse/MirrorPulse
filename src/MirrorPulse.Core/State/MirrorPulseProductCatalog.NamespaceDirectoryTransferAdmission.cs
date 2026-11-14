@@ -216,6 +216,28 @@ public sealed partial class MirrorPulseProductCatalog
 
     private sealed record DirectoryTransferFence(Guid OperationId, RootId Source, RootId Target);
 
+    private async Task RequireDirectoryTransferRootUnfencedAsync(RootId root, Guid? allowedTargetTransfer,
+        SqliteTransaction transaction, CancellationToken token)
+    {
+        await using var query = _connection.CreateCommand();
+        query.Transaction = transaction;
+        query.CommandText = """
+            SELECT operation_id,source_root_id,target_root_id,payload,fingerprint
+            FROM namespace_directory_transfer_admissions WHERE source_root_id=$root OR target_root_id=$root;
+            """;
+        query.Parameters.AddWithValue("$root", root.ToString());
+        await using var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
+        if (!await reader.ReadAsync(token).ConfigureAwait(false)) return;
+        var plan = ReadNamespaceMovePayload<MirrorPulseDirectoryTransferAdmission>((byte[])reader[3], (byte[])reader[4],
+            DirectoryTransferAdmissionLimit, ValidateDirectoryTransferAdmission);
+        if (reader.GetString(0) != plan.Command.CommandId.ToString("D") ||
+            reader.GetString(1) != plan.SourceRoute.RootId.ToString() || reader.GetString(2) != plan.TargetRoute.RootId.ToString() ||
+            await reader.ReadAsync(token).ConfigureAwait(false))
+            throw new InvalidDataException("The directory transfer root fence disagrees with its original admission.");
+        if (plan.Command.CommandId != allowedTargetTransfer || plan.TargetRoute.RootId != root)
+            throw new InvalidOperationException("An unresolved directory transfer has fenced this managed root.");
+    }
+
     private async Task<IReadOnlyList<DirectoryTransferFence>> ReadDirectoryTransferFencesCoreAsync(
         SqliteTransaction transaction, CancellationToken token)
     {

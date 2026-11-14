@@ -142,6 +142,15 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             (await third.ReadNamespaceDispatchFencedRootsAsync()).ToArray());
         var pending = await third.ReadNamespacePendingOperationsAsync(plan.TargetRoute.RootId);
         Assert.AreEqual(plan.Command.CommandId, pending.Single(x => x.Kind == MirrorPulseNamespacePendingOperationKind.Transfer).OperationId);
+        foreach (var parent in new[] { plan.SourceParent, plan.TargetParent })
+        {
+            var member = parent.Context.Member;
+            var intent = new MirrorPulseNamespaceBirthIntent(1, Guid.NewGuid(), member.RootId!.Value,
+                member.OriginId, parent.PermissionOperationId, member.LocalObject, member.RelativePath + "/unrelated.txt",
+                false, MirrorPulseNamespaceBirthOrigin.ControlledCreation, parent.Context.Protection.RoleSid, plan.PreparedAt.AddSeconds(1));
+            await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => third.PrepareNamespaceBirthAsync(intent));
+            Assert.IsNull(await third.ReadNamespaceBirthAsync(intent.OperationId));
+        }
         Assert.AreEqual(plan.Command, (await third.PrepareNamespaceDirectoryTransferAsync(plan)).Command);
         await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
             third.PrepareNamespaceDirectoryTransferAsync(plan with

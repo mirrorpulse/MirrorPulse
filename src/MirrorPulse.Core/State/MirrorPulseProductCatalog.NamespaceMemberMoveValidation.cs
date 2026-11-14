@@ -182,6 +182,7 @@ public sealed partial class MirrorPulseProductCatalog
             if ((transfer.Plan.SourceRoute.RootId == rootId || transfer.Plan.TargetRoute.RootId == rootId) &&
                 !(transfer.Plan.OperationId == allowedTransfer && transfer.Plan.TargetRoute.RootId == rootId))
                 throw new InvalidOperationException("An unresolved persistent transfer has fenced this managed root.");
+        await RequireDirectoryTransferRootUnfencedAsync(rootId, allowedTransfer, transaction, token).ConfigureAwait(false);
         await foreach (var update in ReadPendingRemoteUpdatesCoreAsync(transaction, token).ConfigureAwait(false))
             if (update.Plan.Child.Context.Member.RootId == rootId && update.Plan.OperationId != allowedRemoteUpdate)
                 throw new InvalidOperationException("An unresolved original remote update has fenced this managed root.");
