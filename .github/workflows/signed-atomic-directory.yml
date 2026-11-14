@@ -34,6 +34,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           MP_LOCAL_PREVIEW: ${{ inputs.local_preview }}
+          MP_VERIFY_DIRECTORY_TRANSFER: ${{ inputs.verify_directory_transfer }}
         run: |
           $argsForResolve = @{ OutputPath = 'artifacts/atomic-directory-release-lock.json' }
           $preview = -not [string]::IsNullOrWhiteSpace($env:MP_LOCAL_PREVIEW)
@@ -46,12 +47,17 @@ jobs:
           ./eng/resolve-official-adapter-releases.ps1 @argsForResolve
           ./eng/aggregate-official-adapters.ps1 -ReleaseLockPath $argsForResolve.OutputPath `
             -AdapterIds com.mirrorpulse.adapter.local -OutputDirectory artifacts/atomic-directory-local -AllowPreview:$preview
+          if ($env:MP_VERIFY_DIRECTORY_TRANSFER -eq 'true') {
+            ./eng/aggregate-official-adapters.ps1 -ReleaseLockPath $argsForResolve.OutputPath `
+              -AdapterIds com.mirrorpulse.adapter.webdav -OutputDirectory artifacts/directory-transfer-webdav -AllowPreview:$preview
+          }
           ./eng/restore-adapter-sdk.ps1
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: signed-atomic-directory-inputs
           path: |
             artifacts/atomic-directory-local
+            artifacts/directory-transfer-webdav
             artifacts/atomic-directory-release-lock.json
             artifacts/sdk-feed
           if-no-files-found: error
@@ -107,15 +113,17 @@ jobs:
           $packages = @(Get-ChildItem -LiteralPath artifacts/atomic-directory-local -Recurse -Filter '*.mpadapter' -File)
           if ($packages.Count -ne 1) { throw 'Require the one frozen official Local package.' }
           ./eng/verify-namespace-nonadmin.ps1 -ExpectedArchitecture $env:MP_TEST_ARCHITECTURE -SignedAtomicDirectoryPackage $packages[0].FullName -VerifyDirectoryMove
-      - name: Verify cross-instance directory transfer through the installed signed Local Workers
+      - name: Verify cross-instance directory transfer through installed signed Workers
         if: (success() || failure()) && steps.native-volume.outcome == 'success' && inputs.verify_directory_transfer
         shell: pwsh
         env:
           MP_TEST_ARCHITECTURE: ${{ matrix.architecture }}
         run: |
           $packages = @(Get-ChildItem -LiteralPath artifacts/atomic-directory-local -Recurse -Filter '*.mpadapter' -File)
-          if ($packages.Count -ne 1) { throw 'Require the one frozen official Local package.' }
-          ./eng/verify-namespace-nonadmin.ps1 -ExpectedArchitecture $env:MP_TEST_ARCHITECTURE -SignedAtomicDirectoryPackage $packages[0].FullName -VerifyDirectoryTransfer
+          $webDav = @(Get-ChildItem -LiteralPath artifacts/directory-transfer-webdav -Recurse -Filter '*.mpadapter' -File)
+          if ($packages.Count -ne 1 -or $webDav.Count -ne 1) { throw 'Require the frozen official Local and WebDAV packages.' }
+          ./eng/verify-namespace-nonadmin.ps1 -ExpectedArchitecture $env:MP_TEST_ARCHITECTURE `
+            -SignedAtomicDirectoryPackage $packages[0].FullName -VerifyDirectoryTransfer -SignedDirectoryTransferWebDavPackage $webDav[0].FullName
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: always() && inputs.verify_atomic_directory
         with:

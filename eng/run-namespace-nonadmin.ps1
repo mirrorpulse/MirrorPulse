@@ -57,6 +57,15 @@ try {
         }
         $env:MP_SIGNED_LOCAL_PACKAGE = $package
     }
+    if ($configuration.signedDirectoryTransferWebDavPackage) {
+        $package = Join-Path $PSScriptRoot 'WebDav.mpadapter'
+        if ($configuration.signedDirectoryTransferWebDavPackage -cne $package -or
+            (Get-FileHash -LiteralPath $package).Hash -cne $configuration.signedDirectoryTransferWebDavPackageSha256 -or
+            (Get-FileHash -LiteralPath ($package + '.signature.json')).Hash -cne $configuration.signedDirectoryTransferWebDavSignatureSha256) {
+            throw 'The signed WebDAV acceptance input differs from the controller copy.'
+        }
+        $env:MP_SIGNED_WEBDAV_PACKAGE = $package
+    }
     New-Item -ItemType Directory -Path $env:TEMP -Force | Out-Null
     [ordered]@{ schemaVersion=1; architecture=$architecture; nonAdministrator=$true; expectedUserMatched=$true;
         profileLoaded=$true } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $configuration.workDirectory 'context.json') -Encoding utf8

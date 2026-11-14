@@ -23,7 +23,7 @@ try {
     $env:MIRRORPULSE_NATIVE_TEST = "1"
     Invoke-NativeTestWithOriginals -Workspace $workspace -SourceSha $sourceSha -Suite native -TestAssembly $testAssembly `
         -ResultsDirectory $resultsDirectory -OutputDirectory $originalsDirectory -ExpectedTestAssemblySha256 (Get-FileHash -LiteralPath $testAssembly).Hash -Action {
-        & dotnet test $testProject --configuration Release --no-build --filter "(FullyQualifiedName~Native|FullyQualifiedName~RetainedHandleRejectsExistingAndNewlyObservedAliasesWithoutAclWrites)&TestCategory!=DeferredP079&TestCategory!=SignedAtomicDirectory" `
+        & dotnet test $testProject --configuration Release --no-build --filter "(FullyQualifiedName~Native|FullyQualifiedName~RetainedHandleRejectsExistingAndNewlyObservedAliasesWithoutAclWrites)&TestCategory!=DeferredP079&TestCategory!=SignedAtomicDirectory&TestCategory!=SignedDirectoryTransfer" `
             --logger trx --results-directory $resultsDirectory
         if ($LASTEXITCODE -ne 0) {
             throw "Native Cloud Files verification failed with exit code $LASTEXITCODE."

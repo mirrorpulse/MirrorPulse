@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param([Parameter(Mandatory)][ValidateSet('X64', 'Arm64')][string]$ExpectedArchitecture,
-    [string]$SignedAtomicDirectoryPackage, [switch]$VerifyDirectoryMove, [switch]$VerifyDirectoryTransfer)
+    [string]$SignedAtomicDirectoryPackage, [switch]$VerifyDirectoryMove, [switch]$VerifyDirectoryTransfer,
+    [string]$SignedDirectoryTransferWebDavPackage)
 
 $ErrorActionPreference = 'Stop'
 if (-not $IsWindows -or $env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted') {
@@ -26,6 +27,7 @@ $catalog = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'test-suites.json')
 . (Join-Path $PSScriptRoot 'namespace-nonadmin-controller.ps1')
 if ($VerifyDirectoryMove -and $VerifyDirectoryTransfer) { throw 'Select one focused directory suite per disposable profile.' }
 if (($VerifyDirectoryMove -or $VerifyDirectoryTransfer) -and -not $SignedAtomicDirectoryPackage) { throw 'Signed directory acceptance requires the frozen Local package.' }
+if ([bool]$VerifyDirectoryTransfer -ne [bool]$SignedDirectoryTransferWebDavPackage) { throw 'Cross-instance directory acceptance requires the frozen WebDAV package.' }
 $suite = if ($VerifyDirectoryTransfer) { 'signedDirectoryTransfer' } elseif ($VerifyDirectoryMove) { 'signedDirectoryMove' } elseif ($SignedAtomicDirectoryPackage) { 'signedAtomicDirectory' } else { 'namespace' }
 $testNames = @($catalog.required.$suite)
 $childBudgetMilliseconds = if ($SignedAtomicDirectoryPackage) { 300000 } else {
@@ -94,6 +96,9 @@ try {
     $copiedPackage = $null
     $packageHash = $null
     $signatureHash = $null
+    $copiedWebDavPackage = $null
+    $webDavPackageHash = $null
+    $webDavSignatureHash = $null
     if ($SignedAtomicDirectoryPackage) {
         . (Join-Path $PSScriptRoot 'native-test-originals.ps1')
         $package = Get-NativeOriginalPath -Path $SignedAtomicDirectoryPackage -Workspace $repository
@@ -106,6 +111,19 @@ try {
         if ((Get-FileHash -LiteralPath $copiedPackage).Hash -cne $packageHash -or
             (Get-FileHash -LiteralPath ($copiedPackage + '.signature.json')).Hash -cne $signatureHash) {
             throw 'The copied official package or detached signature differs from its original.'
+        }
+    }
+    if ($SignedDirectoryTransferWebDavPackage) {
+        $webDavPackage = Get-NativeOriginalPath -Path $SignedDirectoryTransferWebDavPackage -Workspace $repository
+        $webDavSignature = Get-NativeOriginalPath -Path ($webDavPackage + '.signature.json') -Workspace $repository
+        $copiedWebDavPackage = Join-Path $scratch 'WebDav.mpadapter'
+        Copy-Item -LiteralPath $webDavPackage -Destination $copiedWebDavPackage
+        Copy-Item -LiteralPath $webDavSignature -Destination ($copiedWebDavPackage + '.signature.json')
+        $webDavPackageHash = (Get-FileHash -LiteralPath $webDavPackage).Hash
+        $webDavSignatureHash = (Get-FileHash -LiteralPath $webDavSignature).Hash
+        if ((Get-FileHash -LiteralPath $copiedWebDavPackage).Hash -cne $webDavPackageHash -or
+            (Get-FileHash -LiteralPath ($copiedWebDavPackage + '.signature.json')).Hash -cne $webDavSignatureHash) {
+            throw 'The copied official WebDAV package or detached signature differs from its original.'
         }
     }
     # Passwords remain in memory and are never passed as arguments, written, or printed.
@@ -124,7 +142,9 @@ try {
             expectedUserName=$userName; workDirectory=$work; testAssembly=(Join-Path $copiedPayload $assemblyName);
             sourceSha=$sourceSha; testAssemblySha256=$assemblyHash;
             filter=$filter; signedAtomicDirectoryPackage=$copiedPackage; signedAtomicDirectoryPackageSha256=$packageHash;
-            signedAtomicDirectorySignatureSha256=$signatureHash; dotnetPath=(Get-Command dotnet -CommandType Application).Source;
+            signedAtomicDirectorySignatureSha256=$signatureHash; signedDirectoryTransferWebDavPackage=$copiedWebDavPackage;
+            signedDirectoryTransferWebDavPackageSha256=$webDavPackageHash; signedDirectoryTransferWebDavSignatureSha256=$webDavSignatureHash;
+            dotnetPath=(Get-Command dotnet -CommandType Application).Source;
             systemRoot=$env:SystemRoot; computerName=$env:COMPUTERNAME } |
             ConvertTo-Json | Set-Content -LiteralPath $configuration -Encoding utf8
         $childEnvironment = @{}
@@ -175,7 +195,8 @@ try {
         if ($copiedPackage) {
             . (Join-Path $PSScriptRoot 'signed-atomic-directory-evidence.ps1')
             if ($VerifyDirectoryTransfer) {
-                Confirm-SignedDirectoryTransferReport -ReportPath (Join-Path $evidenceDirectory 'namespace.trx') -PackageSha256 $packageHash
+                Confirm-SignedDirectoryTransferReport -ReportPath (Join-Path $evidenceDirectory 'namespace.trx') `
+                    -PackageSha256 $packageHash -WebDavPackageSha256 $webDavPackageHash
             } elseif ($VerifyDirectoryMove) {
                 Confirm-SignedDirectoryMoveReport -ReportPath (Join-Path $evidenceDirectory 'namespace.trx') -PackageSha256 $packageHash
             } else {
@@ -261,6 +282,7 @@ if ($success -and $userRemoved -and $profileRemoved -and $workspaceRemoved) {
         freshUser=$true; expectedUserMatched=$true; profileLoaded=$true; accountRemoved=$true; profileRemoved=$true;
         workspaceRemoved=$true; testAssemblySha256=$assemblyHash;
         signedPackageSha256=$packageHash; signedSignatureSha256=$signatureHash;
+        signedWebDavPackageSha256=$webDavPackageHash; signedWebDavSignatureSha256=$webDavSignatureHash;
         contextSha256=(Get-FileHash -LiteralPath (Join-Path $evidenceDirectory 'context.json') -Algorithm SHA256).Hash.ToLowerInvariant();
         trxSha256=(Get-FileHash -LiteralPath (Join-Path $evidenceDirectory 'namespace.trx') -Algorithm SHA256).Hash.ToLowerInvariant();
         tests=(Get-Content -LiteralPath (Join-Path $evidenceDirectory 'test-evidence.json') -Raw | ConvertFrom-Json) } |

@@ -7,13 +7,24 @@ using MirrorPulse.Core.Host;
 using MirrorPulse.Core.Security;
 using MirrorPulse.Core.State;
 using MirrorPulse.Core.Sync;
+using MirrorPulse.Core.Tests;
 
 namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 
 public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
 {
     [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles"), TestCategory("SignedDirectoryTransfer")]
-    public async Task NativeSignedLocalDirectoryTransferResumesAcrossTwoSingleRootInstances()
+    public Task NativeSignedLocalDirectoryTransferResumesAcrossTwoSingleRootInstances() => VerifySignedDirectoryTransferAsync(null);
+
+    [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles"), TestCategory("SignedDirectoryTransfer")]
+    public Task NativeSignedLocalDirectoryTransferToWebDavRejectsUnsupportedReverseBeforeMutation()
+    {
+        string? webDavPackage = Environment.GetEnvironmentVariable("MP_SIGNED_WEBDAV_PACKAGE");
+        if (string.IsNullOrWhiteSpace(webDavPackage)) Assert.Inconclusive("Requires the frozen signed WebDAV package.");
+        return VerifySignedDirectoryTransferAsync(webDavPackage);
+    }
+
+    private async Task VerifySignedDirectoryTransferAsync(string? webDavPackage)
     {
         string? package = Environment.GetEnvironmentVariable("MP_SIGNED_LOCAL_PACKAGE");
         if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1" || string.IsNullOrWhiteSpace(package))
@@ -30,6 +41,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         const string original = "tree/deep/payload.bin";
         const string transferred = "copied/deep/payload.bin";
         byte[] bytes = [17, 31, 43, 59, 71, 83];
+        await using var webDav = webDavPackage is null ? null : new SignedWebDavV2HttpFixture("directory-transfer", null);
+        webDav?.Files.Clear();
         Directory.CreateDirectory(Path.Combine(sourceBackend, "tree", "deep"));
         Directory.CreateDirectory(targetBackend);
         await File.WriteAllBytesAsync(Path.Combine(sourceBackend, original), bytes, token);
@@ -47,14 +60,26 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 Path.Combine(paths.DataRootPath, "installed"), rid, cancellationToken: token);
             Assert.IsTrue(installed.IsSigned);
             Assert.AreEqual("com.mirrorpulse.adapter.local", installed.AdapterId.Value);
-            string key = installed.Manifest.RootDefinitions.Single().Key;
-            foreach (var (label, backend) in new[] { ("Docs", sourceBackend), ("Archive", targetBackend) })
+            var targetInstallation = installed;
+            if (webDavPackage is not null)
             {
-                await catalog.CreateInstanceAsync(installed.InstallId, label,
-                    new Dictionary<string, string> { ["sourceDirectory"] = backend }, [], Path.Combine(paths.DataRootPath, "files"),
-                    Path.Combine(paths.DataRootPath, "transfer-cache"), rootLabels: new Dictionary<string, string> { [key] = label },
-                    cancellationToken: token);
+                targetInstallation = await catalog.InstallSignedAdapterAsync(webDavPackage, webDavPackage + ".signature.json",
+                    Path.Combine(paths.DataRootPath, "installed"), rid, cancellationToken: token);
+                Assert.IsTrue(targetInstallation.IsSigned);
+                Assert.AreEqual("com.mirrorpulse.adapter.webdav", targetInstallation.AdapterId.Value);
             }
+            string files = Path.Combine(paths.DataRootPath, "files");
+            await catalog.CreateInstanceAsync(installed.InstallId, "Docs",
+                new Dictionary<string, string> { ["sourceDirectory"] = sourceBackend }, [], files,
+                Path.Combine(paths.DataRootPath, "transfer-cache"),
+                rootLabels: new Dictionary<string, string> { [installed.Manifest.RootDefinitions.Single().Key] = "Docs" }, cancellationToken: token);
+            var targetConfiguration = webDav is null
+                ? new Dictionary<string, string> { ["sourceDirectory"] = targetBackend }
+                : new Dictionary<string, string> { ["endpoint"] = webDav.Endpoint.AbsoluteUri };
+            await catalog.CreateInstanceAsync(targetInstallation.InstallId, "Archive", targetConfiguration, [], files,
+                Path.Combine(paths.DataRootPath, "transfer-cache"),
+                rootLabels: new Dictionary<string, string> { [targetInstallation.Manifest.RootDefinitions.Single().Key] = "Archive" },
+                cancellationToken: token);
             var topology = await catalog.ReadAdapterTopologyAsync(token);
             var sourceRoot = topology.Roots.Single(root => root.Label == "Docs");
             var targetRoot = topology.Roots.Single(root => root.Label == "Archive");
@@ -117,7 +142,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             var deletion = await catalog.ReadNamespaceDirectoryTransferSourceDeletionAsync(operationId, token);
             Assert.IsNotNull(deletion?.Receipt);
             Assert.IsFalse(Directory.Exists(Path.Combine(sourceBackend, "tree")));
-            CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(Path.Combine(targetBackend, transferred), token));
+            byte[] targetBytes = webDav is null ? await File.ReadAllBytesAsync(Path.Combine(targetBackend, transferred), token) : webDav.Files[transferred];
+            CollectionAssert.AreEqual(bytes, targetBytes);
             Assert.IsTrue((await catalog.ReadNamespaceTransferStatusAsync(operationId, token))!.RootsFenced);
             Assert.IsTrue(await runtime.ResumeDirectoryNamespaceTransferAsync(operationId, token));
             var replayed = await catalog.ReadNamespaceDirectoryTransferSourceDeletionAsync(operationId, token);
@@ -146,7 +172,28 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             Assert.AreEqual(completed, await catalog.ReadNamespaceTransferStatusAsync(operationId, token));
             await using var packageSource = File.OpenRead(package);
             string digest = Convert.ToHexString(await SHA256.HashDataAsync(packageSource, token));
-            TestContext.WriteLine($"SignedDirectoryTransfer: packageSha256={digest}; distinctSingleRootInstances=True; sourceMembers=3; atomicSourceReceipt=True; interruptedNativeRetirement=True; reopenedRoots=True; targetBytesVerified=True.");
+            if (webDav is null)
+            {
+                TestContext.WriteLine($"SignedDirectoryTransfer: packageSha256={digest}; distinctSingleRootInstances=True; sourceMembers=3; atomicSourceReceipt=True; interruptedNativeRetirement=True; reopenedRoots=True; targetBytesVerified=True.");
+            }
+            else
+            {
+                Assert.IsFalse(worker.SupportsAtomicDirectoryDeletion(targetRoot.InstanceId));
+                var reverseParent = await runtime.InspectNamespaceMemberAsync("Docs", true, token);
+                Guid reverseId = Guid.NewGuid();
+                int before = webDav.MutationRequests;
+                var denied = await Assert.ThrowsExactlyAsync<NotSupportedException>(async () =>
+                    await runtime.PrepareDirectoryNamespaceTransferAsync(reverseId, published.MemberId, reverseParent.MemberId, "reverse", token));
+                StringAssert.Contains(denied.Message, "cannot safely retire a remote directory transfer");
+                Assert.IsNull(await catalog.ReadNamespaceTransferStatusAsync(reverseId, token));
+                Assert.AreEqual(before, webDav.MutationRequests);
+                Assert.IsFalse(Directory.Exists(Path.Combine(sourceBackend, "reverse")));
+                CollectionAssert.AreEqual(bytes, webDav.Files[transferred]);
+                Assert.IsTrue(work.IsAdmitted(sourceRoot.RootId) && work.IsAdmitted(targetRoot.RootId));
+                await using var webDavPackageSource = File.OpenRead(webDavPackage!);
+                string webDavDigest = Convert.ToHexString(await SHA256.HashDataAsync(webDavPackageSource, token));
+                TestContext.WriteLine($"SignedCrossPackageDirectoryTransfer: localSha256={digest}; webDavSha256={webDavDigest}; targetBytesVerified=True; reverseRejectedBeforeAdmission=True; reverseSourcePreserved=True.");
+            }
             succeeded = true;
         }
         finally
