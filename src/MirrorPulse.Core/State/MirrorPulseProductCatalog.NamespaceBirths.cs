@@ -204,8 +204,11 @@ public sealed partial class MirrorPulseProductCatalog
         if (intent.RemoteEntry is not null) ValidateNamespaceRemoteBirthReference(intent);
         if ((intent.Version == 4) != (intent.TransferEntry is not null) ||
             (intent.Origin == MirrorPulseNamespaceBirthOrigin.TransferTarget) != (intent.TransferEntry is not null) ||
-            intent.TransferEntry is { } transfer && (transfer.Version != 1 || transfer.OperationId == Guid.Empty || transfer.OperationId == intent.OperationId ||
-                transfer.TargetVerificationSha256 is not { Length: 64 } || transfer.TargetVerificationSha256.Any(character => !char.IsAsciiHexDigitUpper(character)) || intent.IsDirectory))
+            intent.TransferEntry is { } transfer && (transfer.OperationId == Guid.Empty || transfer.OperationId == intent.OperationId ||
+                transfer.TargetVerificationSha256 is not { Length: 64 } || transfer.TargetVerificationSha256.Any(character => !char.IsAsciiHexDigitUpper(character)) ||
+                !(transfer.Version == 1 && transfer.CopyOperationId is null && !intent.IsDirectory ||
+                  transfer.Version == 2 && transfer.CopyOperationId is { } effect && effect != Guid.Empty &&
+                  effect != transfer.OperationId && effect != intent.OperationId)))
             throw new ArgumentException("A transfer target requires its explicit original verified-copy owner.", nameof(intent));
     }
 

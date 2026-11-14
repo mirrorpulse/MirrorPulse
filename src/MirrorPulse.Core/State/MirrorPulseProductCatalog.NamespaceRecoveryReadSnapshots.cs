@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using Microsoft.Data.Sqlite;
 using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.Core.State;
 
@@ -18,6 +19,9 @@ public sealed partial class MirrorPulseProductCatalog
         internal NamespaceHistoryCache<MirrorPulseNamespaceMemberRegistration, MirrorPulseNamespaceMemberLocation> Locations { get; } = new();
         internal NamespaceHistoryCache<(MirrorPulseNamespaceMemberRegistration Member, MirrorPulseNamespaceMemberPosition Head), long> ValidatedPositionHistories { get; } = new();
         internal NamespaceHistoryCache<MirrorPulseNamespaceBirthIntent, bool> BirthReferenceIndexes { get; } = new();
+        internal NamespaceHistoryCache<(MirrorPulseDirectoryTransferAdmission Admission, MirrorPulseDirectoryTransferTargetVerification Verification)>
+            DirectoryTransferBirthEvidence
+        { get; } = new();
         internal NamespaceHistoryCache<MirrorPulseNamespaceInitializationStatus> Initializations { get; } = new();
         internal NamespaceHistoryCache<MirrorPulseNamespaceBirthIntent> ValidatedBirths { get; } = new();
         internal NamespaceHistoryCache<MirrorPulseNamespaceBirthObservation> ValidatedBirthObservations { get; } = new();

@@ -62,12 +62,19 @@ public sealed partial class MirrorPulseProductCatalog
                     ?? throw new FileNotFoundException("The original birth admission is missing.");
                 if (birth.TransferEntry is { } transfer)
                 {
-                    var copy = await ReadNamespaceTransferCoreAsync(transfer.OperationId, transaction, cancellationToken).ConfigureAwait(false)
-                        ?? throw new FileNotFoundException("The original target transfer is missing.");
-                    if (copy.TargetBirth?.Birth != birth || member.MemberId != birth.OperationId)
-                        throw new InvalidOperationException("A target registration requires its exact original transfer and stable birth member ID.");
-                    await RequireCurrentNamespaceTransferAsync(copy.Plan, transaction, cancellationToken, admitted: true,
-                        targetBirth: copy.TargetBirth).ConfigureAwait(false);
+                    if (member.MemberId != birth.OperationId)
+                        throw new InvalidOperationException("A transfer target registration requires its stable birth member ID.");
+                    if (transfer.Version == 2)
+                        await ValidateCurrentDirectoryTransferBirthRegistrationAsync(birth, member, transaction, cancellationToken).ConfigureAwait(false);
+                    else
+                    {
+                        var copy = await ReadNamespaceTransferCoreAsync(transfer.OperationId, transaction, cancellationToken).ConfigureAwait(false)
+                            ?? throw new FileNotFoundException("The original target transfer is missing.");
+                        if (copy.TargetBirth?.Birth != birth)
+                            throw new InvalidOperationException("A target registration requires its exact original transfer.");
+                        await RequireCurrentNamespaceTransferAsync(copy.Plan, transaction, cancellationToken, admitted: true,
+                            targetBirth: copy.TargetBirth).ConfigureAwait(false);
+                    }
                     allowedTransfer = transfer.OperationId;
                 }
             }

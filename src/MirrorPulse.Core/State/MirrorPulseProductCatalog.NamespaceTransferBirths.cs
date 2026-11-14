@@ -1,18 +1,27 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Data.Sqlite;
+using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.Core.State;
 
 /// <summary>Original verified copy ownership, independent of an SDK remote batch or generic import.</summary>
 public sealed record MirrorPulseNamespaceTransferBirthReference(int Version, Guid OperationId, string TargetVerificationSha256)
 {
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? CopyOperationId { get; init; }
+
     public static MirrorPulseNamespaceTransferBirthReference Create(MirrorPulseNamespaceTransferCopy copy)
     {
         ArgumentNullException.ThrowIfNull(copy);
         var verification = copy.TargetVerification ?? throw new InvalidOperationException("A target birth requires the original verified upload receipt.");
         return new(1, copy.Plan.OperationId, Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(verification))));
     }
+
+    internal static MirrorPulseNamespaceTransferBirthReference Create(MirrorPulseDirectoryTransferTargetVerification verification, Guid effectId) =>
+        new(2, verification.OperationId, Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(verification))))
+        { CopyOperationId = effectId };
 }
 
 /// <summary>One immutable target birth and public identity plan, selected before native creation.</summary>
@@ -58,7 +67,7 @@ public sealed partial class MirrorPulseProductCatalog
                 if (await existing.ExecuteScalarAsync(token).ConfigureAwait(false) is not null)
                     throw new InvalidOperationException("A transfer target cannot adopt an existing public item identity.");
             }
-            await InsertNamespaceTransferBirthArtifactsAsync(target, transaction, token).ConfigureAwait(false);
+            await InsertNamespaceTransferBirthArtifactsAsync(target.Birth, target.Plan, transaction, token).ConfigureAwait(false);
             byte[] payload = JsonSerializer.SerializeToUtf8Bytes(target, TopologyJsonOptions);
             if (payload.Length > 262_144) throw new ArgumentException("The transfer target birth is not bounded.", nameof(target));
             await using (var insert = _connection.CreateCommand())
@@ -100,11 +109,13 @@ public sealed partial class MirrorPulseProductCatalog
             throw new ArgumentException("The target birth must retain its separate identity, exact protected destination and original accepted bytes.", nameof(target));
     }
 
-    private async Task InsertNamespaceTransferBirthArtifactsAsync(MirrorPulseNamespaceTransferTargetBirth target,
-        SqliteTransaction transaction, CancellationToken token)
+    private async Task InsertNamespaceTransferBirthArtifactsAsync(MirrorPulseNamespaceBirthIntent birth,
+        MirrorPulseNamespaceBirthPlan plan, SqliteTransaction transaction, CancellationToken token)
     {
-        var birth = target.Birth; byte[] birthPayload = JsonSerializer.SerializeToUtf8Bytes(birth, TopologyJsonOptions);
-        byte[] planPayload = JsonSerializer.SerializeToUtf8Bytes(target.Plan, TopologyJsonOptions);
+        byte[] birthPayload = JsonSerializer.SerializeToUtf8Bytes(birth, TopologyJsonOptions);
+        byte[] planPayload = JsonSerializer.SerializeToUtf8Bytes(plan, TopologyJsonOptions);
+        if (birthPayload.Length > 131_072 || planPayload.Length > 131_072)
+            throw new ArgumentException("A transfer target birth and identity plan must be bounded.");
         await using var insert = _connection.CreateCommand(); insert.Transaction = transaction;
         insert.CommandText = """
             INSERT INTO namespace_birth_intents(operation_id,parent_evidence_id,parent_operation_id,parent_birth_operation_id,
@@ -122,7 +133,7 @@ public sealed partial class MirrorPulseProductCatalog
         insert.Parameters.AddWithValue("$kind", birth.BornParent is null ? 0 : 1);
         insert.Parameters.AddWithValue("$parent", NamespaceBirthParentId(birth).ToString("D"));
         insert.Parameters.AddWithValue("$name", birth.RelativePath[(birth.RelativePath.LastIndexOf('/') + 1)..].ToUpperInvariant());
-        insert.Parameters.AddWithValue("$item", target.Plan.ItemId.ToString("D"));
+        insert.Parameters.AddWithValue("$item", plan.ItemId.ToString("D"));
         insert.Parameters.AddWithValue("$birthPayload", birthPayload); insert.Parameters.AddWithValue("$birthHash", SHA256.HashData(birthPayload));
         insert.Parameters.AddWithValue("$planPayload", planPayload); insert.Parameters.AddWithValue("$planHash", SHA256.HashData(planPayload));
         await insert.ExecuteNonQueryAsync(token).ConfigureAwait(false);
@@ -170,6 +181,14 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task ValidateNamespaceTransferBirthReferenceIndexAsync(MirrorPulseNamespaceBirthIntent birth, SqliteTransaction? transaction, CancellationToken token)
     {
         var target = await ReadNamespaceTransferTargetBirthRowAsync(null, birth.OperationId, transaction, token).ConfigureAwait(false);
+        if (birth.TransferEntry?.Version == 2)
+        {
+            if (target is not null) throw new InvalidDataException("A directory transfer target cannot adopt a file transfer owner.");
+            await ValidateDirectoryTransferBirthReferenceIndexAsync(birth, transaction, token).ConfigureAwait(false);
+            return;
+        }
+        if (await ReadDirectoryTransferBirthRowAsync(null, null, birth.OperationId, transaction, token).ConfigureAwait(false) is not null)
+            throw new InvalidDataException("The birth lost its original directory transfer reference.");
         if (birth.TransferEntry is null)
         {
             if (target is not null) throw new InvalidDataException("A generic birth cannot adopt transfer target ownership.");

@@ -1,5 +1,6 @@
 using System.Runtime.Versioning;
 using CfSharp;
+using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.State;
 using MirrorPulse.Core.Sync;
 
@@ -20,16 +21,34 @@ internal sealed class MirrorPulseNamespaceTransferTargetPublisher(CloudFileSyste
         actor.AssertAccess();
         copy = await catalog.ValidateNamespaceTransferTargetPublicationAsync(copy.Plan.OperationId, token).ConfigureAwait(false);
         if (copy.TargetPublication is not null) return copy;
-        var target = copy.TargetBirth!; var birth = target.Birth; var plan = target.Plan;
-        var parent = fileSystem.GetDirectory(copy.Plan.TargetParent.Context.Location.RelativePath);
-        var item = fileSystem.GetFile(birth.RelativePath);
-        var proof = MirrorPulseNamespaceProtectionProofReader.FromSnapshot(copy.Plan.TargetParent);
+        var target = copy.TargetBirth!;
+        var (member, protection) = await PublishMemberUnderActorAsync(target.Birth, target.Plan, copy.Plan.TargetParent,
+            router.GetRegistration(copy.Plan.TargetRoute.InstanceId, copy.Plan.TargetRoute.RootKey),
+            copy.TargetVerification!.RemoteId, copy.AcceptedRevision!, token).ConfigureAwait(false);
+        return await catalog.RecordNamespaceTransferTargetPublicationAsync(new(1, copy.Plan.OperationId, target.Birth.OperationId,
+            member.MemberId, target.Plan.ItemId, member.LocalObject, protection.ProtectionId, DateTimeOffset.UtcNow),
+            CancellationToken.None).ConfigureAwait(false);
+    }
+
+    internal async Task<(MirrorPulseNamespaceMemberRegistration Member, MirrorPulseNamespaceBirthProtection Protection)>
+        PublishMemberUnderActorAsync(MirrorPulseNamespaceBirthIntent birth, MirrorPulseNamespaceBirthPlan plan,
+            MirrorPulseNamespaceMemberProtectionSnapshot parentSnapshot, RootRegistration root, string backendId, string revision,
+            CancellationToken token)
+    {
+        actor.AssertAccess();
+        var parent = fileSystem.GetDirectory(parentSnapshot.Context.Location.RelativePath);
+        CloudItem item = birth.IsDirectory ? fileSystem.GetDirectory(birth.RelativePath) : fileSystem.GetFile(birth.RelativePath);
+        var proof = MirrorPulseNamespaceProtectionProofReader.FromSnapshot(parentSnapshot);
         var identity = new CloudPlaceholderIdentity(plan.ItemId, plan.RemoteId, plan.RemoteRevision);
-        if (!MirrorPulsePlaceholderIdentity.IdentifiesBackendObject(router.GetRegistration(copy.Plan.TargetRoute.InstanceId,
-                copy.Plan.TargetRoute.RootKey), copy.TargetVerification!.RemoteId, identity) || identity.RemoteRevision != copy.AcceptedRevision)
+        if (!MirrorPulsePlaceholderIdentity.IdentifiesBackendObject(root, backendId, identity) || identity.RemoteRevision != revision ||
+            (plan.Content is null) != birth.IsDirectory)
             throw new InvalidDataException("Target publication cannot change its original scoped public identity.");
-        var specification = CloudFilePlaceholderSpec.CreateBuilder(birth.RelativePath[(birth.RelativePath.LastIndexOf('/') + 1)..], identity, copy.Plan.Length).WithInSyncState(true)
-            .WithCollisionBehavior(CloudPlaceholderCollisionBehavior.Fail).WithInitialAvailability(CloudAvailabilityTarget.OnlineOnly).Build();
+        string name = birth.RelativePath[(birth.RelativePath.LastIndexOf('/') + 1)..];
+        CloudPlaceholderSpec specification = birth.IsDirectory
+            ? CloudDirectoryPlaceholderSpec.CreateBuilder(name, identity).WithInSyncState(true)
+                .WithCollisionBehavior(CloudPlaceholderCollisionBehavior.Fail).WithPopulationState(CloudDirectoryPopulationState.Complete).Build()
+            : CloudFilePlaceholderSpec.CreateBuilder(name, identity, plan.Content!.Length).WithInSyncState(true)
+                .WithCollisionBehavior(CloudPlaceholderCollisionBehavior.Fail).WithInitialAvailability(CloudAvailabilityTarget.OnlineOnly).Build();
         await using var guard = await MirrorPulseWindowsNamespacePermissionLease.OpenAsync(parent, router, token).ConfigureAwait(false);
         var before = await MirrorPulseNamespaceBirthProtectionVerifier.InspectRetainedParentAsync(birth, parent, proof, guard, token).ConfigureAwait(false);
         var start = await catalog.ReadNamespaceBirthStartAsync(birth.OperationId, token).ConfigureAwait(false);
@@ -65,7 +84,7 @@ internal sealed class MirrorPulseNamespaceTransferTargetPublisher(CloudFileSyste
             var childBefore = await childGuard.InspectAsync(token).ConfigureAwait(false);
             if (childBefore.LocalObject != observed.LocalObject || childBefore.OwnerSid != observed.OwnerSid || childBefore.LinkCount != 1 ||
                 !MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(
-                    MirrorPulseWindowsNamespaceInheritance.CreateInheritedDacl(before.Dacl, false), childBefore.Dacl))
+                    MirrorPulseWindowsNamespaceInheritance.CreateInheritedDacl(before.Dacl, birth.IsDirectory), childBefore.Dacl))
                 throw new InvalidDataException("Target projection recovery requires its original object and current owned inherited protection.");
             // A prepared logical row is not a completed native projection. Replay the SDK's identity-match
             // transaction only after binding the known original object. OnlineOnly performs no hydration,
@@ -78,56 +97,56 @@ internal sealed class MirrorPulseNamespaceTransferTargetPublisher(CloudFileSyste
             var childAfter = await childGuard.InspectAsync(CancellationToken.None).ConfigureAwait(false);
             if (childAfter.LocalObject != childBefore.LocalObject || childAfter.OwnerSid != childBefore.OwnerSid ||
                 childAfter.Dacl != childBefore.Dacl || childAfter.RootId != childBefore.RootId ||
-                childAfter.RelativePath != childBefore.RelativePath || childAfter.IsDirectory || childAfter.LinkCount != 1)
+                childAfter.RelativePath != childBefore.RelativePath || childAfter.IsDirectory != birth.IsDirectory || childAfter.LinkCount != 1)
                 throw new InvalidDataException("The original transfer target changed during SDK projection recovery.");
             _ = await MirrorPulseNamespaceBirthObserver.RecordAsync(catalog, birth.OperationId, item, router, CancellationToken.None).ConfigureAwait(false);
         }
         CancellationToken durable = CancellationToken.None;
-        if (!await HasProjectionAsync(target, item, durable).ConfigureAwait(false))
+        if (!await HasProjectionAsync(birth, plan, item, durable).ConfigureAwait(false))
             throw new InvalidDataException("The original target has no complete official SDK projection.");
         var latest = await catalog.ReadLatestNamespaceBirthProtectionAsync(birth.OperationId, durable).ConfigureAwait(false);
         var protection = await MirrorPulseNamespaceBirthProtectionVerifier.RecordAsync(catalog, latest?.ProtectionId ?? Guid.NewGuid(),
             birth.OperationId, item, parent, router, durable).ConfigureAwait(false);
         MirrorPulseNamespaceBirthProtectionVerifier.RequireUnchangedParent(before, await guard.InspectAsync(durable).ConfigureAwait(false));
-        var position = copy.Plan.TargetParent.Context.Location.CurrentPositionOperationId;
+        var position = parentSnapshot.Context.Location.CurrentPositionOperationId;
         var member = await catalog.ReadNamespaceMemberAsync(birth.OperationId, durable).ConfigureAwait(false)
             ?? new MirrorPulseNamespaceMemberRegistration(position is null ? 1 : 2, birth.OperationId,
-                copy.Plan.TargetParent.Context.Member.MemberId, MirrorPulseNamespaceMemberOrigin.ProtectedBirth, birth.OperationId,
-                protection.ProtectionId, birth.RootId, birth.RelativePath, observed!.LocalObject, false, observed.OwnerSid, DateTimeOffset.UtcNow)
+                parentSnapshot.Context.Member.MemberId, MirrorPulseNamespaceMemberOrigin.ProtectedBirth, birth.OperationId,
+                protection.ProtectionId, birth.RootId, birth.RelativePath, observed!.LocalObject, birth.IsDirectory, observed.OwnerSid, DateTimeOffset.UtcNow)
             { FirstParentPositionOperationId = position };
         member = await MirrorPulseNamespaceMemberRegistrar.RegisterAsync(catalog, member, item, parent, router, actor, durable).ConfigureAwait(false);
         await CheckpointAsync(MirrorPulseTransferPublicationCheckpoint.AfterRegistration, durable).ConfigureAwait(false);
-        if (!await HasProjectionAsync(target, item, durable).ConfigureAwait(false))
+        if (!await HasProjectionAsync(birth, plan, item, durable).ConfigureAwait(false))
             throw new InvalidDataException("The native target projection changed before its first publication receipt.");
         var native = await item.InspectAsync(durable).ConfigureAwait(false);
-        if (!native.Exists || native.IsTombstone || !native.IsPlaceholder || native.Kind != CloudItemKind.File ||
+        if (!native.Exists || native.IsTombstone || !native.IsPlaceholder || native.Kind != item.Kind ||
             native.ItemId != plan.ItemId || native.RemoteId != plan.RemoteId || native.RemoteRevision != plan.RemoteRevision ||
-            native.Length != copy.Plan.Length || native.SynchronizationState != CloudSynchronizationState.InSync ||
+            plan.Content is { } content && native.Length != content.Length || native.SynchronizationState != CloudSynchronizationState.InSync ||
             native.LocalBinding is not { } binding || member.LocalObject != new MirrorPulseLocalFileBinding(
                 binding.VolumeSerialNumber, binding.SyncRootFileId, binding.LocalFileId) ||
             !native.PlaceholderIdentity.Span.SequenceEqual(identity.Encode()))
             throw new InvalidDataException("The original native target changed before its first accepted placeholder publication.");
         MirrorPulseNamespaceBirthProtectionVerifier.RequireUnchangedParent(before, await guard.InspectAsync(durable).ConfigureAwait(false));
-        return await catalog.RecordNamespaceTransferTargetPublicationAsync(new(1, copy.Plan.OperationId, birth.OperationId,
-            member.MemberId, plan.ItemId, member.LocalObject, protection.ProtectionId, DateTimeOffset.UtcNow), durable).ConfigureAwait(false);
+        return (member, protection);
     }
 
-    private async Task<bool> HasProjectionAsync(MirrorPulseNamespaceTransferTargetBirth target, CloudFile item, CancellationToken token)
+    private async Task<bool> HasProjectionAsync(MirrorPulseNamespaceBirthIntent birth, MirrorPulseNamespaceBirthPlan plan,
+        CloudItem item, CancellationToken token)
     {
         await using var transaction = await state.OpenStore.BeginTransactionAsync(token).ConfigureAwait(false);
-        var id = await transaction.Items.GetByItemIdAsync(target.Plan.ItemId, token).ConfigureAwait(false);
+        var id = await transaction.Items.GetByItemIdAsync(plan.ItemId, token).ConfigureAwait(false);
         var path = await transaction.Items.GetByRelativePathAsync(item.RelativePath, token).ConfigureAwait(false);
-        var remote = await transaction.Items.GetByRemoteIdAsync(target.Plan.RemoteId, token).ConfigureAwait(false);
+        var remote = await transaction.Items.GetByRemoteIdAsync(plan.RemoteId, token).ConfigureAwait(false);
         bool matches = Matches(id) && Matches(path) && Matches(remote) && id!.UpdatedAt == path!.UpdatedAt && id.UpdatedAt == remote!.UpdatedAt;
         await transaction.RollbackAsync(token).ConfigureAwait(false);
         return matches;
 
-        bool Matches(CloudItemState? row) => row is not null && !row.IsTombstone && row.Kind == CloudItemKind.File &&
-            row.ItemId == target.Plan.ItemId && row.RemoteId == target.Plan.RemoteId && row.RemoteRevision == target.Plan.RemoteRevision &&
-            row.RelativePath.Replace('\\', '/') == target.Birth.RelativePath;
+        bool Matches(CloudItemState? row) => row is not null && !row.IsTombstone && row.Kind == item.Kind &&
+            row.ItemId == plan.ItemId && row.RemoteId == plan.RemoteId && row.RemoteRevision == plan.RemoteRevision &&
+            row.RelativePath.Replace('\\', '/') == birth.RelativePath;
     }
 
-    private static void RequireCreated(CloudPlaceholderBatchResult result, CloudFilePlaceholderSpec specification)
+    private static void RequireCreated(CloudPlaceholderBatchResult result, CloudPlaceholderSpec specification)
     {
         if (result.Entries.Count != 1 || result.Entries[0].Specification != specification ||
             !result.Entries[0].Progress.HasFlag(CloudPlaceholderCreationProgress.PlaceholderCreated) ||

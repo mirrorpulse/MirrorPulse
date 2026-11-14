@@ -16,7 +16,8 @@ public sealed partial class MirrorPulseProductCatalog
             await using var query = _connection.CreateCommand(); query.Transaction = transaction;
             query.CommandText = """
                 SELECT 1 FROM namespace_remote_birth_entries WHERE operation_id=$operation
-                UNION ALL SELECT 1 FROM namespace_transfer_target_births WHERE birth_id=$operation LIMIT 1;
+                UNION ALL SELECT 1 FROM namespace_transfer_target_births WHERE birth_id=$operation
+                UNION ALL SELECT 1 FROM namespace_directory_transfer_target_births WHERE birth_id=$operation LIMIT 1;
                 """;
             query.Parameters.AddWithValue("$operation", birth.OperationId.ToString("D"));
             // Writers and ordinary reads recheck every invocation. Explicitly

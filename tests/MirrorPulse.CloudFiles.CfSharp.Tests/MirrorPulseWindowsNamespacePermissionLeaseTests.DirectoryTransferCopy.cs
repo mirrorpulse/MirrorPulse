@@ -13,7 +13,7 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
 {
     [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles")]
-    public async Task NativeDirectoryTransferCopyRetainsOriginalGuardsBytesAndBothFences()
+    public async Task NativeDirectoryTransferPublishesVerifiedTargetAndRetainsOriginalSource()
     {
         if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
             Assert.Inconclusive("Requires the disposable native Windows environment.");
@@ -107,10 +107,10 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             Assert.IsTrue(plan.Members.All(member => member.SourceRevision is null));
             var remote = new NativeDirectoryCopyWorker(role, caller.User!, targetRoot, sourcePath, bytes, plan);
             var transport = new MirrorPulseNormalUserWorkerTransport(role, remote, remote, remote, remote, remote);
-            var result = await coordinator.CopyDirectoryAsync(operationId, new(transport, transport, transport, transport, _ => 2, transport), token);
+            var workers = new MirrorPulseTransferWorkerServices(transport, transport, transport, transport, _ => 2, transport);
+            var result = await coordinator.CopyDirectoryAsync(operationId, workers, token);
             Assert.IsTrue(result.Steps.All(step => step.AcceptedAt is not null));
-            var verification = await coordinator.VerifyDirectoryTargetAsync(operationId,
-                new(transport, transport, transport, transport, _ => 2, transport), token);
+            var verification = await coordinator.VerifyDirectoryTargetAsync(operationId, workers, token);
             Assert.AreEqual("target-directory-after-children", verification.Members[0].Revision);
             Assert.AreEqual("uploaded-file", verification.Members[1].Revision);
             Assert.AreEqual(1, remote.Reads);
@@ -119,7 +119,23 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             Assert.IsFalse(Directory.Exists(Path.Combine(paths.SyncRootPath, "Archive", "copied")));
             Assert.AreEqual(1, remote.Creates);
             Assert.AreEqual(1, remote.Uploads);
-            _ = await coordinator.CopyDirectoryAsync(operationId, new(transport, transport, transport, transport, _ => 2, transport), token);
+            _ = await coordinator.CopyDirectoryAsync(operationId, workers, token);
+            Assert.AreEqual(1, remote.Creates);
+            Assert.AreEqual(1, remote.Uploads);
+
+            var published = await coordinator.PublishDirectoryTargetAsync(operationId, workers, token);
+            Assert.HasCount(2, published);
+            Assert.AreEqual(published[0].Protection.Context.Member.MemberId, published[1].Protection.Context.Member.ParentMemberId);
+            Assert.AreEqual("Archive/copied/payload.bin", published[1].Protection.Context.Location.RelativePath);
+            var targetFile = await fileSystem.GetFile("Archive/copied/payload.bin").InspectAsync(token);
+            Assert.AreEqual(CloudSynchronizationState.InSync, targetFile.SynchronizationState);
+            Assert.AreEqual("uploaded-file", targetFile.RemoteRevision);
+            Assert.AreNotEqual(payload.LocalObject, published[1].Protection.Context.Member.LocalObject);
+            var replayed = await coordinator.PublishDirectoryTargetAsync(operationId, workers, token);
+            CollectionAssert.AreEqual(published.Select(item => item.Protection.Context.Member).ToArray(),
+                replayed.Select(item => item.Protection.Context.Member).ToArray());
+            CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(sourcePath, token));
+            Assert.HasCount(2, await catalog.ReadNamespaceDispatchFencedRootsAsync(token));
             Assert.AreEqual(1, remote.Creates);
             Assert.AreEqual(1, remote.Uploads);
         }
