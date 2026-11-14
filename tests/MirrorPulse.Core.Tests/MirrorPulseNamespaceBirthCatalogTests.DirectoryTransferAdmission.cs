@@ -7,6 +7,47 @@ namespace MirrorPulse.Core.Tests;
 public sealed partial class MirrorPulseNamespaceBirthCatalogTests
 {
     [TestMethod]
+    public async Task DirectoryTransferRetainsOnlyTheOriginalOrderedCopyReceipts()
+    {
+        using var fixture = new Fixture();
+        MirrorPulseDirectoryTransferAdmission plan;
+        DateTimeOffset started;
+        DateTimeOffset accepted;
+        await using (var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths))
+        {
+            plan = await PrepareDirectoryTransferFixtureAsync(catalog);
+            await catalog.PrepareNamespaceDirectoryTransferAsync(plan);
+            started = plan.Originals.CapturedAt.AddTicks(1);
+            accepted = started.AddTicks(1);
+            await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
+                catalog.RecordNamespaceDirectoryTransferCopyAcceptedAsync(plan.Command.CommandId, 0,
+                    plan.Members[0].CopyOperationId, "unproved", accepted, default));
+            await Assert.ThrowsExactlyAsync<MirrorPulseMutationAmbiguousException>(() =>
+                catalog.StartNamespaceDirectoryTransferCopyAsync(plan, 1, started, default));
+            await catalog.StartNamespaceDirectoryTransferCopyAsync(plan, 0, started, default);
+            await catalog.RecordNamespaceDirectoryTransferCopyAcceptedAsync(plan.Command.CommandId, 0,
+                plan.Members[0].CopyOperationId, "target-directory-receipt", accepted, default);
+            await catalog.StartNamespaceDirectoryTransferCopyAsync(plan, 1, accepted, default);
+        }
+
+        await using var reopened = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        var copy = await reopened.ReadNamespaceDirectoryTransferCopyAsync(plan.Command.CommandId, default);
+        Assert.AreEqual(new MirrorPulseDirectoryTransferCopyStep(plan.Members[0].CopyOperationId, started,
+            "target-directory-receipt", accepted), copy.Steps[0]);
+        Assert.AreEqual(new MirrorPulseDirectoryTransferCopyStep(plan.Members[1].CopyOperationId, accepted, null, null), copy.Steps[1]);
+        await Assert.ThrowsExactlyAsync<MirrorPulseMutationAmbiguousException>(() =>
+            reopened.StartNamespaceDirectoryTransferCopyAsync(plan, 1, accepted.AddTicks(1), default));
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
+            reopened.RecordNamespaceDirectoryTransferCopyAcceptedAsync(plan.Command.CommandId, 0,
+                plan.Members[0].CopyOperationId, "later-revision", accepted, default));
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
+            reopened.RecordNamespaceDirectoryTransferCopyAcceptedAsync(plan.Command.CommandId, 1,
+                plan.Members[0].CopyOperationId, "different-member", accepted, default));
+        CollectionAssert.AreEquivalent(new[] { plan.SourceRoute.RootId, plan.TargetRoute.RootId },
+            (await reopened.ReadNamespaceDispatchFencedRootsAsync()).ToArray());
+    }
+
+    [TestMethod]
     public async Task DirectoryTransferSealsEveryOriginalAndBothRootsInTheSameCommitAcrossOwners()
     {
         using var fixture = new Fixture();
