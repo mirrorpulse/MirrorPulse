@@ -12,9 +12,12 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
         var copy = await catalog.ReadNamespaceDirectoryTransferCopyAsync(operationId, stop).ConfigureAwait(false);
         if (copy.Steps.All(step => step.AcceptedAt is not null)) return copy;
         var mutations = workers.Mutations ?? throw new NotSupportedException("Directory transfer requires the normal-user mutation transport.");
-        return await WithDirectoryTransferGuardsAsync(copy.Admission, () =>
-            new MirrorPulseDirectoryTransferCopyExecutor(catalog, inputs, workers.Uploads, mutations).CopyAsync(operationId, stop),
-            stop).ConfigureAwait(false);
+        return await WithDirectoryTransferGuardsAsync(copy.Admission, async () =>
+        {
+            await RequireOriginalDirectoryRemoteSourceAsync(copy.Admission, workers, stop).ConfigureAwait(false);
+            return await new MirrorPulseDirectoryTransferCopyExecutor(catalog, inputs, workers.Uploads, mutations)
+                .CopyAsync(operationId, stop).ConfigureAwait(false);
+        }, stop).ConfigureAwait(false);
     }, token);
 
     internal ValueTask<MirrorPulseDirectoryTransferTargetVerification> VerifyDirectoryTargetAsync(Guid operationId,

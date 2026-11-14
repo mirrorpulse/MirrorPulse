@@ -85,6 +85,15 @@ public sealed class MirrorPulseTransferTargetVerifier(MirrorPulseProductCatalog 
         string path, string expectedRevision, CancellationToken token) =>
         ReadMetadataCoreAsync(route, path, "Directory", null, expectedRevision, token);
 
+    internal async Task RequireAbsentEntryAsync(MirrorPulseTransferRoute route, string path, CancellationToken token)
+    {
+        int separator = path.LastIndexOf('/');
+        string parent = separator < 0 ? string.Empty : path[..separator];
+        await foreach (var entry in ReadDirectoryEntriesAsync(route, parent, token).ConfigureAwait(false))
+            if (string.Equals(entry.RelativePath, path, StringComparison.OrdinalIgnoreCase) && !entry.IsDeleted)
+                throw new IOException("The original local-only transfer member has a remote occupant.");
+    }
+
     private async Task<MirrorPulseWorkerDirectoryEntry> ReadMetadataCoreAsync(MirrorPulseTransferRoute route,
         string path, string itemKind, long? expectedLength, string expectedRevision, CancellationToken token)
     {

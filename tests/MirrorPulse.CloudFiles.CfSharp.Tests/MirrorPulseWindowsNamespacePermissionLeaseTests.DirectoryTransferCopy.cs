@@ -108,6 +108,11 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             var remote = new NativeDirectoryCopyWorker(role, caller.User!, targetRoot, sourcePath, bytes, plan);
             var transport = new MirrorPulseNormalUserWorkerTransport(role, remote, remote, remote, remote, remote);
             var workers = new MirrorPulseTransferWorkerServices(transport, transport, transport, transport, _ => 2, transport);
+            remote.SourceOccupied = true;
+            await Assert.ThrowsExactlyAsync<IOException>(async () => await coordinator.CopyDirectoryAsync(operationId, workers, token));
+            Assert.AreEqual(0, remote.Creates);
+            Assert.AreEqual(0, remote.Uploads);
+            remote.SourceOccupied = false;
             var result = await coordinator.CopyDirectoryAsync(operationId, workers, token);
             Assert.IsTrue(result.Steps.All(step => step.AcceptedAt is not null));
             var verification = await coordinator.VerifyDirectoryTargetAsync(operationId, workers, token);
@@ -165,6 +170,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         internal int Creates;
         internal int Uploads;
         internal int Reads;
+        internal bool SourceOccupied;
 
         private void RequireNormalUser()
         {
@@ -206,6 +212,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         public ValueTask<string?> StatAsync(MirrorPulseWorkerStatRequest request, CancellationToken token)
         {
             RequireNormalUser();
+            if (request.InstanceId == plan.SourceRoute.InstanceId)
+                return ValueTask.FromResult(SourceOccupied ? "unexpected-source-generation" : null);
             Assert.AreEqual(target.InstanceId, request.InstanceId);
             return ValueTask.FromResult<string?>(request.NormalizedPath == "copied" ? "target-directory-after-children" : "uploaded-file");
         }
@@ -222,6 +230,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         public ValueTask<MirrorPulseWorkerDirectoryPage> ReadDirectoryPageAsync(MirrorPulseWorkerDirectoryPageRequest request, CancellationToken token)
         {
             RequireNormalUser();
+            if (request.InstanceId == plan.SourceRoute.InstanceId)
+                return ValueTask.FromResult(new MirrorPulseWorkerDirectoryPage([], ReadOnlyMemory<byte>.Empty, true));
             var directory = new MirrorPulseWorkerDirectoryEntry("target-directory", "target-directory-after-children",
                 "Directory", "copied", null, null, null, false);
             var file = new MirrorPulseWorkerDirectoryEntry("target-file", "uploaded-file", "File",
