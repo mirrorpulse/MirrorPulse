@@ -47,6 +47,17 @@ public static partial class CliTransferFixtureLayout
         allowed.Add(sides["left"].DirectoryName + "/reverse-moved.bin", false);
         allowed.Add(sides["right"].DirectoryName + "/reverse.bin", false);
         allowed.Add(sides["right"].DirectoryName + "/forward-moved.bin", false);
+        if (marker.DirectoryTransferOperationId is { } directoryOperation)
+        {
+            if (directoryOperation == Guid.Empty || marker.TransferOperationIds?.Contains(directoryOperation) != false)
+                throw new InvalidDataException("Directory transfer requires a distinct original operation ID.");
+            foreach (string path in new[] { sides["left"].DirectoryName + "/transfer-tree", sides["right"].DirectoryName + "/transferred-tree" })
+            {
+                allowed.Add(path, true);
+                allowed.Add(path + "/nested", true);
+                allowed.Add(path + "/nested/payload.bin", false);
+            }
+        }
         return new(Array.AsReadOnly(new[] { sides["left"], sides["right"] }), new ReadOnlyDictionary<string, bool>(allowed));
     }
 }

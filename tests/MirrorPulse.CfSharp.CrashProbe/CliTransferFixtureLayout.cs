@@ -11,6 +11,7 @@ public sealed record CliTransferFixtureRoute(string InstanceId, string RootId, s
 public sealed record CliTransferFixtureMarker(int SchemaVersion, IReadOnlyList<CliTransferFixtureRoute> Routes)
 {
     public IReadOnlyList<Guid>? TransferOperationIds { get; init; }
+    public Guid? DirectoryTransferOperationId { get; init; }
     public string? WebDavEndpoint { get; init; }
 }
 public sealed record CliTransferFixtureInventory(IReadOnlyList<RootRegistration> Roots, IReadOnlyDictionary<string, bool> AllowedEntries);
@@ -29,6 +30,8 @@ public static partial class CliTransferFixtureLayout
         ArgumentNullException.ThrowIfNull(marker); ArgumentNullException.ThrowIfNull(topology);
         string root = RequireFixtureDirectory(directory);
         if (marker.SchemaVersion == 2) return AuthenticateSingleRootInstances(root, marker, topology);
+        if (marker.DirectoryTransferOperationId is not null)
+            throw new InvalidDataException("This transfer fixture does not own an additional directory operation.");
         if (marker.SchemaVersion == 3) return AuthenticateCrossPackageInstances(root, marker, topology);
         if (marker.SchemaVersion != 1 || marker.Routes is not { Count: 3 } || topology.Roots.Count != 3 ||
             topology.Instances.Count != 2 || topology.Installations.Count != 1)

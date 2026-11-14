@@ -3,6 +3,7 @@ param(
     [ValidateSet('win-x64', 'win-arm64')][string]$Runtime = 'win-arm64',
     [Parameter(Mandatory)][string]$PackagePath,
     [string]$WebDavPackagePath,
+    [switch]$VerifyDirectoryTransfer,
     [ValidateSet('Debug', 'Release')][string]$Configuration = 'Release',
     [Parameter(Mandatory)][string]$EvidencePath
 )
@@ -19,6 +20,7 @@ $fixture = Join-Path ([IO.Path]::GetTempPath()) ('MirrorPulse-cli-transfer-' + [
 $sync = Join-Path $fixture 'sync'; $data = Join-Path $fixture 'data'
 $evidenceFile = [IO.Path]::GetFullPath($EvidencePath)
 $crossPackage = -not [string]::IsNullOrWhiteSpace($WebDavPackagePath)
+if ($VerifyDirectoryTransfer -and $crossPackage) { throw 'The CLI directory command fixture requires two Local instances.' }
 $schemaVersion = if ($crossPackage) { 3 } else { 2 }
 $originals = Join-Path ([IO.Path]::GetDirectoryName($evidenceFile)) $(if ($crossPackage) { 'cli-cross-package.originals' } else { 'cli-transfers.originals' })
 New-Item -ItemType Directory -Path $originals -Force | Out-Null
@@ -30,6 +32,8 @@ $script:transferCli = $null; $script:transferProbe = $null; $script:ownedTransfe
 $script:webDavProcess = $null
 $primaryFailure = $null; $phase = 'Setup'; $report = $null
 $cases = [Collections.Generic.List[object]]::new()
+$directoryCase = $null
+$directoryOperation = if ($VerifyDirectoryTransfer) { [guid]::NewGuid().ToString('D') } else { $null }
 
 function Invoke-TransferCli {
     param([Parameter(Mandatory)][AllowEmptyString()][string[]]$Arguments)
@@ -168,6 +172,11 @@ try {
         $payloads[$entry.name] = $bytes
         [IO.File]::WriteAllBytes((Join-Path $fixture ('source/' + $entry.side + '/' + $entry.name)), $bytes)
     }
+    if ($VerifyDirectoryTransfer) {
+        $sourceDirectory = Join-Path $fixture 'source/left/transfer-tree/nested'
+        New-Item -ItemType Directory -Path $sourceDirectory | Out-Null
+        [IO.File]::WriteAllBytes((Join-Path $sourceDirectory 'payload.bin'), [Text.Encoding]::UTF8.GetBytes('Original signed CLI directory bytes.'))
+    }
     foreach ($publish in @(@{project='src/MirrorPulse.Cli/MirrorPulse.Cli.csproj';directory='cli';native=$true},
         @{project='src/MirrorPulse.Host/MirrorPulse.Host.csproj';directory='host';native=$true},
         @{project='tests/MirrorPulse.CfSharp.CrashProbe/MirrorPulse.CfSharp.CrashProbe.csproj';directory='probe';native=$false})) {
@@ -225,6 +234,7 @@ try {
     $operations = @([guid]::NewGuid().ToString('D'), [guid]::NewGuid().ToString('D'))
     $marker = [ordered]@{schemaVersion=$schemaVersion;routes=$script:transferRoutes;transferOperationIds=$operations}
     if ($crossPackage) { $marker.webDavEndpoint = $endpoint.AbsoluteUri }
+    if ($VerifyDirectoryTransfer) { $marker.directoryTransferOperationId = $directoryOperation }
     $marker |
         ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $fixture '.mp-cli-transfer-fixture.json') -Encoding utf8
     Invoke-TransferCli @('--json', 'host', 'restart') | Out-Null; Wait-TransferHostStopped
@@ -310,6 +320,38 @@ try {
         $case.resumedSourceSha256 = Read-TransferHash $sourceRemote; $case.laterRemoteSourcePreserved = $case.laterSourceSha256 -ieq $case.resumedSourceSha256
         $cases.Add($case); Write-TransferOriginal -Name ('case-' + $direction) -Value $case
     }
+    if ($VerifyDirectoryTransfer) {
+        $phase = 'DirectoryTransfer.Commands'
+        $source = @($script:transferRoutes | Where-Object fixtureSide -ceq 'left')[0]
+        $target = @($script:transferRoutes | Where-Object fixtureSide -ceq 'right')[0]
+        $originalRelative = $source.directoryName + '/transfer-tree'
+        $targetRelative = $target.directoryName + '/transferred-tree'
+        $originalLocal = Join-Path $sync $originalRelative
+        $targetLocalDirectory = Join-Path $sync $targetRelative
+        $originalRemote = Join-Path $fixture 'source/left/transfer-tree'
+        $targetRemoteDirectory = Join-Path $fixture 'source/right/transferred-tree'
+        $directoryHash = Read-TransferHash (Join-Path $originalRemote 'nested/payload.bin')
+        Get-ChildItem -LiteralPath (Join-Path $sync $source.directoryName) | Out-Null
+        Get-ChildItem -LiteralPath $originalLocal | Out-Null
+        Get-ChildItem -LiteralPath (Join-Path $originalLocal 'nested') | Out-Null
+        Wait-TransferHash (Join-Path $originalLocal 'nested/payload.bin') $directoryHash
+        $member = (Invoke-TransferCli @('--json', '--no-start', 'namespace', 'member', 'inspect', $originalRelative, '--directory')).data
+        $parent = (Invoke-TransferCli @('--json', '--no-start', 'namespace', 'member', 'inspect', $target.directoryName, '--directory')).data
+        $moved = (Invoke-TransferCli @('--json', '--no-start', 'namespace', 'transfer', 'move', $directoryOperation, $member.memberId, $parent.memberId, 'transferred-tree')).data
+        Wait-TransferHash (Join-Path $targetRemoteDirectory 'nested/payload.bin') $directoryHash
+        Wait-TransferHash (Join-Path $targetLocalDirectory 'nested/payload.bin') $directoryHash
+        Assert-TransferRootsReady
+        $status = (Invoke-TransferCli @('--json', '--no-start', 'namespace', 'transfer', 'status', $directoryOperation)).data
+        $sourcePending = (Invoke-TransferCli @('--json', '--no-start', 'namespace', 'transfer', 'list', $source.rootId)).data.entries
+        $targetPending = (Invoke-TransferCli @('--json', '--no-start', 'namespace', 'transfer', 'list', $target.rootId)).data.entries
+        $directoryCase = [ordered]@{operationId=$directoryOperation; sourceRootId=$source.rootId; targetRootId=$target.rootId;
+            sourceMemberId=$member.memberId; sourceRelativePath=$originalRelative; targetRelativePath=$targetRelative;
+            move=$moved; status=$status; pendingSource=@($sourcePending).Count; pendingTarget=@($targetPending).Count;
+            sourceLocalMissing=!(Test-Path -LiteralPath $originalLocal); sourceRemoteMissing=!(Test-Path -LiteralPath $originalRemote);
+            originalSha256=$directoryHash; targetLocalSha256=(Read-TransferHash (Join-Path $targetLocalDirectory 'nested/payload.bin'));
+            targetRemoteSha256=(Read-TransferHash (Join-Path $targetRemoteDirectory 'nested/payload.bin'))}
+        Write-TransferOriginal -Name 'directory-move' -Value $directoryCase
+    }
     $phase = 'RestartAndHistoricalReplay'
     Invoke-TransferCli @('--json', 'host', 'restart') | Out-Null; Wait-TransferHostStopped
     Invoke-TransferCli @('--json', 'host', 'start') | Out-Null
@@ -324,6 +366,12 @@ try {
         $case.resumedSourceSha256 = Read-TransferHash (Join-Path $fixture ('source/' + $sourceSide + '/' + $sourceName))
         $case.laterRemoteSourcePreserved = $case.laterSourceSha256 -ieq $case.resumedSourceSha256
     }
+    if ($null -ne $directoryCase) {
+        $phase = 'DirectoryTransfer.RestartAndResume'
+        $directoryCase.restarted = (Invoke-TransferCli @('--json', '--no-start', 'namespace', 'transfer', 'resume', $directoryOperation)).data
+        $directoryCase.restartedTargetSha256 = Read-TransferHash (Join-Path $sync ($directoryCase.targetRelativePath + '/nested/payload.bin'))
+        Write-TransferOriginal -Name 'directory-restart' -Value $directoryCase
+    }
     Invoke-TransferCli @('--json', '--no-start', 'host', 'stop') | Out-Null; Wait-TransferHostStopped
     Stop-TransferWebDav
     $phase = 'StoppedHostReceipts'
@@ -337,7 +385,8 @@ try {
         $report.workerBindings = $workerBindings.ToArray()
         $report.webDavServer = Get-Content -Raw -LiteralPath (Join-Path $fixture 'webdav-server.json') | ConvertFrom-Json
     }
-    Assert-CliTransferObservations -Evidence ([pscustomobject]$report) -BeforeCleanup -RequireSingleRoot
+    if ($null -ne $directoryCase) { $report.directory = $directoryCase }
+    Assert-CliTransferObservations -Evidence ([pscustomobject]$report) -BeforeCleanup -RequireSingleRoot -RequireDirectory:$VerifyDirectoryTransfer
     Write-TransferOriginal -Name 'completed-execution' -Value $report
 } catch {
     $primaryFailure = $_
@@ -444,6 +493,6 @@ try {
         foreach ($name in $savedEnvironment.Keys) { [Environment]::SetEnvironmentVariable($name, $savedEnvironment[$name], 'Process') }
     }
 }
-Assert-CliTransferObservations -Evidence ([pscustomobject]$report) -RequireSingleRoot
+Assert-CliTransferObservations -Evidence ([pscustomobject]$report) -RequireSingleRoot -RequireDirectory:$VerifyDirectoryTransfer
 $report | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $evidenceFile -Encoding utf8
 Write-Output "Verified forward and reverse transfers between real signed single-root instances for $Runtime (schema $schemaVersion)."

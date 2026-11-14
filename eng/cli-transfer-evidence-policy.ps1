@@ -1,5 +1,5 @@
 function Assert-CliTransferObservations {
-    param([Parameter(Mandatory)][object]$Evidence, [switch]$BeforeCleanup, [switch]$RequireSingleRoot)
+    param([Parameter(Mandatory)][object]$Evidence, [switch]$BeforeCleanup, [switch]$RequireSingleRoot, [switch]$RequireDirectory)
 
     $crossPackage = $Evidence.schemaVersion -eq 3
     $singleRoot = $Evidence.schemaVersion -in @(2, 3)
@@ -119,6 +119,32 @@ function Assert-CliTransferObservations {
     if ($Evidence.audit.schemaVersion -ne $Evidence.schemaVersion -or $Evidence.audit.exclusiveCatalogOwner -isnot [bool] -or -not $Evidence.audit.exclusiveCatalogOwner -or
         @($Evidence.audit.transfers).Count -ne 2 -or $Evidence.hostProcessBeforeRestart -le 0 -or $Evidence.hostProcessAfterRestart -le 0 -or
         $Evidence.hostProcessBeforeRestart -eq $Evidence.hostProcessAfterRestart) { throw 'The transfer oracle requires exclusive catalog ownership and an actual Host process restart.' }
+    if ($RequireDirectory -or $null -ne $Evidence.directory -or $null -ne $Evidence.audit.directoryTransfer) {
+        $case = $Evidence.directory
+        $receipt = $Evidence.audit.directoryTransfer
+        $deleteReceipt = [guid]::Empty
+        if ($Evidence.schemaVersion -ne 2 -or !$case -or !$receipt -or $case.operationId -cne $receipt.operationId -or
+            $case.sourceRootId -cne $receipt.sourceRootId -or $case.targetRootId -cne $receipt.targetRootId -or
+            $case.sourceMemberId -cne $receipt.sourceMemberId -or $case.sourceRootId -ceq $case.targetRootId -or
+            $case.sourceLocalMissing -ne $true -or $case.sourceRemoteMissing -ne $true -or
+            $null -eq $case.pendingSource -or $null -eq $case.pendingTarget -or $case.pendingSource -ne 0 -or $case.pendingTarget -ne 0 -or
+            $case.originalSha256 -cnotmatch '\A[A-F0-9]{64}\z' -or
+            @(@($case.targetLocalSha256, $case.targetRemoteSha256, $case.restartedTargetSha256, $receipt.sha256) | Where-Object { $_ -cne $case.originalSha256 }).Count -or
+            $receipt.originalMemberCount -ne 3 -or $receipt.length -le 0 -or $null -eq $receipt.originalJournalCount -or $receipt.originalJournalCount -lt 0 -or
+            ![guid]::TryParseExact($receipt.sourceDeleteReceiptId, 'D', [ref]$deleteReceipt) -or $deleteReceipt -eq [guid]::Empty -or !$receipt.acknowledgedAt) {
+            throw 'Directory CLI evidence lost its actual copied bytes, retained original receipt, source absence or root status.'
+        }
+        foreach ($status in @($case.move, $case.status, $case.restarted)) {
+            if ($status.operationId -cne $receipt.operationId -or $status.sourceRootId -cne $receipt.sourceRootId -or
+                $status.targetRootId -cne $receipt.targetRootId -or $status.sourceMemberId -cne $receipt.sourceMemberId -or
+                $status.targetMemberId -cne $receipt.targetMemberId -or $status.sourceRelativePath -cne $case.sourceRelativePath -or
+                $status.targetRelativePath -cne $case.targetRelativePath -or $status.isDirectory -ne $true -or
+                $status.completed -ne $true -or $status.rootsFenced -ne $false -or
+                $status.journalAcknowledged -ne ($receipt.originalJournalCount -gt 0)) {
+                throw 'Directory move, status and restarted resume must report the same original directory completion.'
+            }
+        }
+    }
     if (-not $BeforeCleanup -and ($Evidence.cleanup.exclusiveCatalogOwner -ne $true -or $Evidence.cleanup.protectedNamespace -ne $true -or
         $Evidence.cleanup.validatedObjects -lt 4 -or $Evidence.cleanup.restoredObjects -ne $Evidence.cleanup.validatedObjects -or
         $Evidence.cleanup.cloudRootUnregistered -ne $true -or $Evidence.fixtureRemoved -ne $true)) {

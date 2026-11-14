@@ -529,7 +529,7 @@ jobs:
         run: |
           $packages = @(Get-ChildItem -LiteralPath artifacts/official-local -Recurse -Filter '*.mpadapter' -File)
           if ($packages.Count -ne 1) { throw 'The exact frozen signed Local package is required.' }
-          pwsh ./eng/verify-cli-transfers.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName -EvidencePath artifacts/evidence/cli-transfers.json
+          pwsh ./eng/verify-cli-transfers.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName -VerifyDirectoryTransfer -EvidencePath artifacts/evidence/cli-transfers.json
           if ($LASTEXITCODE -ne 0) { throw 'The real signed CLI transfer matrix failed.' }
 
       - name: Preserve original signed ARM64 CLI transfer results and failures
