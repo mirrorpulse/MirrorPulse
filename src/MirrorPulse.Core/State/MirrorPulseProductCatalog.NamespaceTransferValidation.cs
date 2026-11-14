@@ -75,7 +75,7 @@ public sealed partial class MirrorPulseProductCatalog
             admittedTransferBirthId: admitted ? targetBirth?.Birth.OperationId : null).ConfigureAwait(false);
         if (roots.Contains(plan.SourceRoute.RootId) || roots.Contains(plan.TargetRoute.RootId))
             throw new InvalidOperationException("Another original namespace owner prevents this transfer.");
-        await RequireNamespaceTransferRoutesAsync(plan, transaction, token).ConfigureAwait(false);
+        await RequireNamespaceTransferRoutesAsync([plan.SourceRoute, plan.TargetRoute], transaction, token).ConfigureAwait(false);
         await using var query = _connection.CreateCommand(); query.Transaction = transaction;
         query.CommandText = "SELECT member_id FROM namespace_member_names WHERE parent_member_id=$parent AND child_name_key=$name;";
         query.Parameters.AddWithValue("$parent", plan.TargetParent.Context.Member.MemberId.ToString("D"));
@@ -92,7 +92,7 @@ public sealed partial class MirrorPulseProductCatalog
         }
     }
 
-    private async Task RequireNamespaceTransferRoutesAsync(MirrorPulseNamespaceTransferPlan plan,
+    private async Task RequireNamespaceTransferRoutesAsync(IReadOnlyList<MirrorPulseTransferRoute> routes,
         SqliteTransaction transaction, CancellationToken token)
     {
         await using var query = _connection.CreateCommand(); query.Transaction = transaction;
@@ -100,7 +100,7 @@ public sealed partial class MirrorPulseProductCatalog
         var payload = await query.ExecuteScalarAsync(token).ConfigureAwait(false) as string
             ?? throw new InvalidOperationException("Transfer execution requires its current registered topology.");
         var topology = DeserializeTopology(payload);
-        foreach (var route in new[] { plan.SourceRoute, plan.TargetRoute })
+        foreach (var route in routes)
         {
             var instance = topology.Instances.SingleOrDefault(item => item.InstanceId == route.InstanceId)
                 ?? throw new InvalidOperationException("The original transfer instance is missing.");
@@ -120,6 +120,8 @@ public sealed partial class MirrorPulseProductCatalog
             UNION ALL SELECT 1 FROM namespace_transfer_effects WHERE effect_id=$id
             UNION ALL SELECT 1 FROM namespace_transfer_target_births WHERE birth_id=$id
             UNION ALL SELECT 1 FROM namespace_transfer_journal_members WHERE operation_id=$id
+            UNION ALL SELECT 1 FROM namespace_directory_transfer_admissions WHERE operation_id=$id
+            UNION ALL SELECT 1 FROM namespace_directory_transfer_ids WHERE operation_id=$id
             UNION ALL SELECT 1 FROM retired_transfer_observations WHERE operation_id=$id
             UNION ALL SELECT 1 FROM root_label_journal_acknowledgements WHERE operation_id=$id
             UNION ALL SELECT 1 FROM managed_root_rename_history WHERE operation_id=$id

@@ -114,7 +114,7 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task RequireCurrentTransferSettlementAsync(MirrorPulseNamespaceTransferCopy copy, Guid targetProtectionId,
         SqliteTransaction transaction, CancellationToken token)
     {
-        await RequireNamespaceTransferRoutesAsync(copy.Plan, transaction, token).ConfigureAwait(false);
+        await RequireNamespaceTransferRoutesAsync([copy.Plan.SourceRoute, copy.Plan.TargetRoute], transaction, token).ConfigureAwait(false);
         foreach (var parent in new[] { copy.Plan.SourceParent, copy.Plan.TargetParent })
             if (await ReadNamespaceMemberProtectionSnapshotCoreAsync(parent.Context.Member.MemberId, transaction, token).ConfigureAwait(false) != parent)
                 throw new InvalidOperationException("Unfinished transfer settlement requires its exact current parents and execution role.");

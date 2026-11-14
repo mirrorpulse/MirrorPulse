@@ -408,9 +408,10 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
     private sealed record TransferFixture(MoveFixture Source, MirrorPulseNamespacePermissionBaseline Target,
         MirrorPulseNamespacePermissionIntent TargetProof, MirrorPulseNamespaceTransferPlan Plan);
 
-    private static async Task<TransferFixture> PrepareTransferFixtureAsync(MirrorPulseProductCatalog catalog, bool sameInstance = false)
+    private static async Task<TransferFixture> PrepareTransferFixtureAsync(MirrorPulseProductCatalog catalog, bool sameInstance = false,
+        bool directory = false)
     {
-        var source = await PrepareMovableMemberAsync(catalog);
+        var source = await PrepareMovableMemberAsync(catalog, directory);
         var target = source.Parent with
         {
             EvidenceId = Guid.NewGuid(),
@@ -439,7 +440,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         var destination = (await catalog.ReadNamespaceMemberProtectionSnapshotAsync(targetMember.MemberId))!;
         var prepared = new[] { DateTimeOffset.UtcNow, child.Context.Verification.ObservedAt, parent.Context.Verification.ObservedAt,
             destination.Context.Verification.ObservedAt, child.Context.Member.RegisteredAt, targetMember.RegisteredAt }.Max().AddSeconds(1);
-        var plan = new MirrorPulseNamespaceTransferPlan(1, Guid.NewGuid(), MirrorPulseTransferRoute.Capture(sourceInstance, sourceRoot, sameInstance ? 2 : 1),
+        var plan = new MirrorPulseNamespaceTransferPlan(1, Guid.NewGuid(), MirrorPulseTransferRoute.Capture(sourceInstance, sourceRoot, sameInstance || directory ? 2 : 1),
             MirrorPulseTransferRoute.Capture(targetInstance, targetRoot, 2), child, parent, destination, "Archive/moved.txt", "source-v1",
             Guid.NewGuid(), TransferBytes.LongLength, Convert.ToHexString(SHA256.HashData(TransferBytes)), Guid.NewGuid(), Guid.NewGuid(), prepared);
         return new(source, target, proof, plan);

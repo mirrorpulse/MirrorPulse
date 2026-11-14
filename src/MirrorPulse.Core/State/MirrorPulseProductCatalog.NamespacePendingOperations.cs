@@ -35,6 +35,9 @@ public sealed partial class MirrorPulseProductCatalog
             await foreach (var transfer in ReadPendingNamespaceTransfersCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
                 if (transfer.Plan.SourceRoute.RootId == rootId || transfer.Plan.TargetRoute.RootId == rootId)
                     result.Add(new(transfer.Plan.OperationId, rootId, MirrorPulseNamespacePendingOperationKind.Transfer));
+            foreach (var transfer in await ReadDirectoryTransferFencesCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
+                if (transfer.Source == rootId || transfer.Target == rootId)
+                    result.Add(new(transfer.OperationId, rootId, MirrorPulseNamespacePendingOperationKind.Transfer));
             await foreach (var update in ReadPendingRemoteUpdatesCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
                 if (update.Plan.Child.Context.Member.RootId == rootId)
                     result.Add(new(update.Plan.OperationId, rootId, MirrorPulseNamespacePendingOperationKind.RemoteUpdate));

@@ -117,6 +117,11 @@ public sealed partial class MirrorPulseProductCatalog
                 roots.Add(transfer.Plan.SourceRoute.RootId);
                 roots.Add(transfer.Plan.TargetRoute.RootId);
             }
+        foreach (var transfer in await ReadDirectoryTransferFencesCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
+        {
+            roots.Add(transfer.Source);
+            roots.Add(transfer.Target);
+        }
         var moveRoots = new List<RootId>();
         await using (SqliteCommand query = _connection.CreateCommand())
         {
