@@ -25,6 +25,8 @@ public sealed partial class MirrorPulseActiveRemotePoller : IAsyncDisposable
     private readonly Dictionary<InstanceId, IReadOnlyList<RootRegistration>> _roots;
     private readonly Func<IReadOnlyList<RootRegistration>>? _currentRoots;
     private readonly Func<InstanceId, CloudRemoteChangeBatch, CancellationToken, ValueTask<MirrorPulseRemotePollApplyOutcome>> _apply;
+    private readonly Func<InstanceId, CloudRemoteChangeBatch, MirrorPulseNamespaceWorkAdmission.WorkLease, CancellationToken,
+        ValueTask<MirrorPulseRemotePollApplyOutcome>>? _applyAdmitted;
     private readonly TimeSpan _interval;
     private readonly int _pageSize;
     private readonly int _maximumPages;
@@ -58,12 +60,17 @@ public sealed partial class MirrorPulseActiveRemotePoller : IAsyncDisposable
         MirrorPulseNamespaceWorkAdmission? namespaceWork = null,
         Func<RootRegistration, CloudRemoteChangeBatch, CancellationToken, ValueTask<bool>>? mayReplay = null,
         string? diagnosticsDirectory = null,
-        MirrorPulseRemoteIdentityResolver? identityResolver = null)
+        MirrorPulseRemoteIdentityResolver? identityResolver = null,
+        Func<InstanceId, CloudRemoteChangeBatch, MirrorPulseNamespaceWorkAdmission.WorkLease, CancellationToken,
+            ValueTask<MirrorPulseRemotePollApplyOutcome>>? applyAdmitted = null)
     {
         _source = source ?? throw new ArgumentNullException(nameof(source));
         ArgumentNullException.ThrowIfNull(instances);
         ArgumentNullException.ThrowIfNull(roots);
         _apply = apply ?? throw new ArgumentNullException(nameof(apply));
+        if (applyAdmitted is not null && namespaceWork is null)
+            throw new ArgumentException("Admitted polling requires the Host root-work owner.", nameof(namespaceWork));
+        _applyAdmitted = applyAdmitted;
         if (pageSize is < 1 or > 512) throw new ArgumentOutOfRangeException(nameof(pageSize));
         ArgumentOutOfRangeException.ThrowIfLessThan(maximumPages, 1);
         if (interval is { } value && value <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(interval));
@@ -168,7 +175,7 @@ public sealed partial class MirrorPulseActiveRemotePoller : IAsyncDisposable
             if (_namespaceWork is not null && !_namespaceWork.TryEnter([root.RootId], out replayAdmission)) return false;
             using var retainedReplayAdmission = replayAdmission;
             // Do not enumerate a newer remote tree until this exact batch has converged.
-            return await ApplyAndCommitAsync(root, replay, candidate, scoped, legacy is not null, reportStage, cancellationToken).ConfigureAwait(false);
+            return await ApplyAndCommitAsync(root, replay, candidate, scoped, legacy is not null, replayAdmission, reportStage, cancellationToken).ConfigureAwait(false);
         }
 
         if (_mayPoll is not null && !await _mayPoll(root, cancellationToken).ConfigureAwait(false)) return false;
@@ -230,14 +237,18 @@ public sealed partial class MirrorPulseActiveRemotePoller : IAsyncDisposable
             if (scoped) await ((IMirrorPulseRootRemotePollPendingStore)_pendingStore).SaveAsync(root, captured, cancellationToken).ConfigureAwait(false);
             else await _pendingStore.SaveAsync(instanceId, captured, cancellationToken).ConfigureAwait(false);
         }
-        return await ApplyAndCommitAsync(root, batch, current, scoped, false, reportStage, cancellationToken).ConfigureAwait(false);
+        return await ApplyAndCommitAsync(root, batch, current, scoped, false, admission, reportStage, cancellationToken).ConfigureAwait(false);
     }
 
     private async ValueTask<bool> ApplyAndCommitAsync(RootRegistration root, CloudRemoteChangeBatch batch,
-        IReadOnlyDictionary<string, SnapshotEntry> current, bool scoped, bool legacy, Action<MirrorPulseRemotePollStage> reportStage, CancellationToken cancellationToken)
+        IReadOnlyDictionary<string, SnapshotEntry> current, bool scoped, bool legacy, MirrorPulseNamespaceWorkAdmission.WorkLease? admission,
+        Action<MirrorPulseRemotePollStage> reportStage, CancellationToken cancellationToken)
     {
         reportStage(MirrorPulseRemotePollStage.ApplyAndCommit);
-        MirrorPulseRemotePollApplyOutcome outcome = await _apply(root.InstanceId, batch, cancellationToken).ConfigureAwait(false);
+        MirrorPulseRemotePollApplyOutcome outcome = _applyAdmitted is null
+            ? await _apply(root.InstanceId, batch, cancellationToken).ConfigureAwait(false)
+            : await _applyAdmitted(root.InstanceId, batch, admission ??
+                throw new InvalidOperationException("The current poll lost its root-work admission."), cancellationToken).ConfigureAwait(false);
         if (!outcome.Completed) return false;
         reportStage(MirrorPulseRemotePollStage.CheckpointValidation);
         if (!outcome.SafeCursor.Span.SequenceEqual(batch.FinalCursor.Span))
