@@ -63,13 +63,17 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             await using var work = new MirrorPulseNamespaceWorkAdmission([root.RootId]);
             var transport = new MirrorPulseNormalUserWorkerTransport(execution, worker, worker, worker, worker, worker);
             var noContent = new RemoteMovementContentGuard();
+            int dispatchEnabled = 1;
+            CloudLocalChangeFeed? journal = null;
             var projection = new MirrorPulseTransferProjectionCommitFault(execution.RoleSid);
             DisabledCreationStoreObserver? store = null;
             var factory = new CfSharpMirrorPulseCloudRuntimeFactory(provider: noContent, uploads: transport, stats: transport,
-                mutations: transport, router: router, catalog: catalog, mayDispatch: worker.IsConnected, scheduler: scheduler,
+                mutations: transport, router: router, catalog: catalog,
+                mayDispatch: instance => Volatile.Read(ref dispatchEnabled) != 0 && worker.IsConnected(instance), scheduler: scheduler,
                 namespaceExecution: execution, namespaceActor: actor, namespaceWork: work, initializeNamespaceOnStart: true)
             {
-                StateStoreDecorator = inner => store = new DisabledCreationStoreObserver(projection.Wrap(inner))
+                StateStoreDecorator = inner => store = new DisabledCreationStoreObserver(projection.Wrap(inner)),
+                TransferJournalReady = feed => journal = feed
             };
             await using var runtime = factory.Create(paths);
             await runtime.StartAsync(token);
@@ -126,11 +130,60 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 Assert.AreEqual(original.MemberId, native.MemberId);
                 Assert.AreEqual(retained.Targets![index].ItemId, native.NativeItemId);
             }
+            Assert.IsNotNull(journal);
+            Volatile.Write(ref dispatchEnabled, 0);
+            var bornDirectory = await runtime.CreateNamespaceMemberAsync(Guid.NewGuid(), parent.MemberId, "created", true, token);
+            var bornNested = await runtime.CreateNamespaceMemberAsync(Guid.NewGuid(), bornDirectory.MemberId, "deep", true, token);
+            string importFile = Path.Combine(directory, "recursive-create-input.bin");
+            await File.WriteAllBytesAsync(importFile, bytes, token);
+            Guid importOperation = Guid.NewGuid();
+            await runtime.PrepareNamespaceImportAsync(importOperation, bornNested.MemberId, fileName, importFile, token);
+            var bornFile = await runtime.ExecuteNamespaceImportAsync(importOperation, token);
+            MirrorPulseNamespaceMemberRegistration[] bornMembers = [bornDirectory, bornNested, bornFile];
+            string[] bornPaths = ["Docs/created", "Docs/created/deep", "Docs/created/deep/" + fileName];
+            CloudLocalChange[] createOriginals;
+            do
+            {
+                var batch = await journal.ReadBatchAsync(token);
+                Assert.IsFalse(batch.RequiresFullRescan);
+                createOriginals = batch.Changes.Where(change => change.Kind == CloudLocalChangeKind.Create &&
+                    bornPaths.Contains(change.RelativePath.Replace('\\', '/'), StringComparer.Ordinal)).ToArray();
+                if (createOriginals.Length != bornMembers.Length) await Task.Delay(25, token);
+            }
+            while (createOriginals.Length != bornMembers.Length);
+            foreach (var original in createOriginals)
+                Assert.IsNull(await catalog.ReadMutationAsync(original.OperationId, token));
+            Assert.IsFalse(Directory.Exists(Path.Combine(backend, "created")));
+            Volatile.Write(ref dispatchEnabled, 1);
+            bool createPending;
+            do
+            {
+                await using var current = await store.Store.BeginTransactionAsync(token);
+                createPending = false;
+                foreach (var original in createOriginals)
+                    createPending |= await current.Operations.GetAsync(original.OperationId, token) is not null;
+                await current.RollbackAsync(token);
+                if (createPending) await Task.Delay(25, token);
+            }
+            while (createPending);
+            Assert.IsTrue(Directory.Exists(Path.Combine(backend, "created/deep")));
+            CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(Path.Combine(backend, "created/deep/" + fileName), token));
+            foreach (var born in bornMembers)
+            {
+                Assert.AreEqual(MirrorPulseNamespaceMemberOrigin.ProtectedBirth, born.Origin);
+                var location = await catalog.ReadNamespaceMemberLocationAsync(born.MemberId, token);
+                var identity = await catalog.ReadNamespaceMemberIdentityAsync(born.MemberId, token);
+                var native = await runtime.InspectNamespaceMemberAsync(location.RelativePath, born.IsDirectory, token);
+                Assert.AreEqual(born.MemberId, native.MemberId);
+                Assert.AreEqual(identity.ItemId, native.NativeItemId);
+                Assert.IsNotNull(identity.AcceptanceOperationId);
+            }
+            Assert.AreEqual(0, noContent.Reads);
             if (package is not null)
             {
                 await using var packageStream = File.OpenRead(package);
                 string digest = Convert.ToHexString(await SHA256.HashDataAsync(packageStream, token));
-                TestContext.WriteLine($"SignedDirectoryMove: packageSha256={digest}; originalCount=1; members=3; sourceReads=0; interruptedProjection=1.");
+                TestContext.WriteLine($"SignedDirectoryMove: packageSha256={digest}; originalCount=1; members=3; hydrationReads=0; interruptedProjection=1; createdMembers=3; createOriginals=3; createdFileBytes={bytes.Length}.");
             }
         }
         catch (Exception error) { operationFailure = error; throw; }
@@ -139,7 +192,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             try
             {
                 if (registered) await RemoveKnownRegisteredFixturePlaceholdersForCleanupAsync(directory, paths, owner,
-                    ["Docs", "Docs/tree", "Docs/tree/deep", "Docs/moved", "Docs/moved/deep"], ["Docs/" + originalFile, "Docs/" + movedFile]);
+                    ["Docs", "Docs/tree", "Docs/tree/deep", "Docs/moved", "Docs/moved/deep", "Docs/created", "Docs/created/deep"],
+                    ["Docs/" + originalFile, "Docs/" + movedFile, "Docs/created/deep/" + fileName]);
             }
             catch when (operationFailure is not null) { TestContext.WriteLine("The disposed fixture also reported a cleanup failure."); }
             finally { if (registered) registry.Unregister(paths.SyncRootPath); }
