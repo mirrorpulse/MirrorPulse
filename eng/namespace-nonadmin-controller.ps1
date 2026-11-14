@@ -116,6 +116,9 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
             if ($name -ceq $disabledRetirement) { $transferDeadlineMilliseconds += 50000 }
             if ($name -ceq $disabledReplacement) { $transferDeadlineMilliseconds += 50000 }
             if ($name -ceq $journalRescan) { $transferDeadlineMilliseconds += 50000 }
+            if ($name -ceq ($prefix+'NativeControlledNonemptyDirectoryMoveCharacterizesItsOriginalJournalAcrossRuntimeOwners')) {
+                $transferDeadlineMilliseconds += 75000
+            }
             # Two independent 45-second original identity starts retain their full deadlines.
             if ($name -ceq $residentReplacement) { $executions++; $transferDeadlineMilliseconds += 60000 }
             if ($directoryJournal.ContainsKey($name)) {
