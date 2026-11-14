@@ -43,7 +43,7 @@ jobs:
           ./eng/aggregate-official-adapters.ps1 -ReleaseLockPath $argsForResolve.OutputPath `
             -AdapterIds com.mirrorpulse.adapter.local -OutputDirectory artifacts/atomic-directory-local -AllowPreview:$preview
           ./eng/restore-adapter-sdk.ps1
-      - uses: actions/upload-artifact@043fb46d1a93c77ae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: signed-atomic-directory-inputs
           path: |
@@ -82,6 +82,7 @@ jobs:
           dotnet build tests/MirrorPulse.CloudFiles.CfSharp.Tests -c Release --no-restore
           if ($LASTEXITCODE -ne 0) { throw 'The native acceptance assembly could not build.' }
       - name: Prepare the disposable native test volume
+        id: native-volume
         shell: pwsh
         run: ./eng/prepare-native-ci-volume.ps1
       - name: Verify original directory deletion through the installed signed Local Worker
@@ -94,7 +95,7 @@ jobs:
           if ($packages.Count -ne 1) { throw 'Require the one frozen official Local package.' }
           ./eng/verify-namespace-nonadmin.ps1 -ExpectedArchitecture $env:MP_TEST_ARCHITECTURE -SignedAtomicDirectoryPackage $packages[0].FullName
       - name: Verify original directory Move through the installed signed Local Worker
-        if: inputs.verify_directory_move
+        if: (success() || failure()) && steps.native-volume.outcome == 'success' && inputs.verify_directory_move
         shell: pwsh
         env:
           MP_TEST_ARCHITECTURE: ${{ matrix.architecture }}
@@ -102,13 +103,13 @@ jobs:
           $packages = @(Get-ChildItem -LiteralPath artifacts/atomic-directory-local -Recurse -Filter '*.mpadapter' -File)
           if ($packages.Count -ne 1) { throw 'Require the one frozen official Local package.' }
           ./eng/verify-namespace-nonadmin.ps1 -ExpectedArchitecture $env:MP_TEST_ARCHITECTURE -SignedAtomicDirectoryPackage $packages[0].FullName -VerifyDirectoryMove
-      - uses: actions/upload-artifact@043fb46d1a93c77ae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: always() && inputs.verify_atomic_directory
         with:
           name: signed-atomic-directory-${{ matrix.runner }}-originals
           path: artifacts/test-results/signed-atomic-directory-nonadmin-*/
           if-no-files-found: ignore
-      - uses: actions/upload-artifact@043fb46d1a93c77ae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: always() && inputs.verify_directory_move
         with:
           name: signed-directory-move-${{ matrix.runner }}-originals

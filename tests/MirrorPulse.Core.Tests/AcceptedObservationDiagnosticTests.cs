@@ -1,12 +1,31 @@
 using System.Text.Json;
 using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.Diagnostics;
+using MirrorPulse.Core.Host;
 
 namespace MirrorPulse.Core.Tests;
 
 [TestClass]
 public sealed class AcceptedObservationDiagnosticTests
 {
+    [TestMethod]
+    public void AtomicDirectoryDiagnosticsExposeOnlyKnownWorkerCodesAndPhases()
+    {
+        var rejected = new AdapterWorkerOperationException("AtomicDirectoryJournalRecordInvalid", directoryAdmission: false);
+        var unknown = new AdapterWorkerOperationException("unrecognized worker response", directoryAdmission: true);
+        Assert.AreEqual("AtomicDirectoryJournalRecordInvalid", rejected.FailureCode);
+        Assert.AreEqual("Delete", rejected.DirectoryPhase);
+        Assert.AreEqual("Unknown", unknown.FailureCode);
+        Assert.AreEqual("Admission", unknown.DirectoryPhase);
+        Assert.AreEqual("Unknown", new AdapterWorkerOperationException(rejected.FailureCode).FailureCode);
+        var safe = SafeDiagnosticPolicy.Sanitize(new LogEntry(LogLevel.Warning, "CloudFiles.Upload",
+            "AtomicDirectoryJournalAcknowledgementFailed", DateTimeOffset.UtcNow,
+            [new("workerFailureCode", rejected.FailureCode), new("workerDirectoryPhase", rejected.DirectoryPhase!)]));
+        Assert.AreEqual("AtomicDirectoryJournalAcknowledgementFailed", safe.Code);
+        Assert.AreEqual(rejected.FailureCode, safe.Fields["workerFailureCode"]);
+        Assert.AreEqual(rejected.DirectoryPhase, safe.Fields["workerDirectoryPhase"]);
+    }
+
     [TestMethod]
     [DataRow("JournalAcceptedContentObservation")]
     [DataRow("JournalAcceptedContentAcknowledged")]

@@ -4,6 +4,10 @@ on:
   pull_request:
   workflow_dispatch:
     inputs:
+      directory_acceptance_only:
+        description: Run only signed Local directory Delete and Move acceptance
+        type: boolean
+        default: false
       verify_shell:
         description: Run the Shell registration probe from the installed App process
         type: boolean
@@ -30,14 +34,15 @@ permissions:
 
 jobs:
   signed-atomic-directory:
-    if: github.event_name == 'workflow_dispatch' && (inputs.verify_atomic_directory || inputs.verify_directory_move)
+    if: github.event_name == 'workflow_dispatch' && (inputs.directory_acceptance_only || inputs.verify_atomic_directory || inputs.verify_directory_move)
     uses: ./.github/workflows/signed-atomic-directory.yml
     with:
       local_preview: ${{ inputs.local_atomic_preview }}
-      verify_atomic_directory: ${{ inputs.verify_atomic_directory }}
-      verify_directory_move: ${{ inputs.verify_directory_move }}
+      verify_atomic_directory: ${{ inputs.directory_acceptance_only || inputs.verify_atomic_directory }}
+      verify_directory_move: ${{ inputs.directory_acceptance_only || inputs.verify_directory_move }}
 
   official-adapter-candidate:
+    if: github.event_name != 'workflow_dispatch' || !inputs.directory_acceptance_only || inputs.verify_shell
     runs-on: windows-latest
     steps:
       - name: Check out the candidate product source
