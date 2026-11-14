@@ -228,7 +228,8 @@ public sealed class AdapterWorkerMutationClient
                 // Typed requests carry their addresses inside the body. Local emits
                 // a correlated envelope error without a separate root or operation.
                 string error = frame.Payload.GetProperty("code").GetString() ?? "Unknown";
-                completion.TrySetException(new AdapterWorkerOperationException(error));
+                completion.TrySetException(new AdapterWorkerOperationException(error,
+                    directoryAdmission: pending.Request.MessageType == AdapterOriginalDirectoryWire.AdmissionRequestMessage));
             }
             else if (pending.Request.MessageType == AdapterOriginalDirectoryWire.AdmissionRequestMessage)
             {

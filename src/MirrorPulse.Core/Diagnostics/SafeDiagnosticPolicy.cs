@@ -43,6 +43,7 @@ public static class SafeDiagnosticPolicy
         ["CloudProviderRequestFailed"] = "A Windows Cloud Files request failed.",
         ["CloudFilesStartupProgress"] = "The Host reached a Cloud Files initialization boundary.",
         ["JournalCommandFailed"] = "A local journal command failed.",
+        ["AtomicDirectoryJournalAcknowledgementFailed"] = "The original atomic directory operation requires another settlement attempt.",
         ["JournalGroupRecoveryFailed"] = "A retained journal group requires recovery before its user command can complete.",
         ["JournalContentObservation"] = "A retained journal group was checked against previously accepted content.",
         ["JournalAcceptedContentObservation"] = "An original journal notification observed owned, previously accepted current content before its public acknowledgement.",
@@ -164,7 +165,9 @@ public static class SafeDiagnosticPolicy
                 "cloudRequestKind" => value is "FetchData" or "FetchPlaceholders" or "ValidateData" or "Dehydrate" or "Delete" or "Rename" or "CompletionNotification" or "Other" ? value : null,
                 "providerReadStage" => value is "Routing" or "WorkAdmission" or "IdentityValidation" or "StreamCreation" or "RangeTransport" or "RangeContent" ? value : null,
                 "providerReadFailureKind" => value is "Disposed" or "InvalidOperation" or "InvalidData" or "IO" or "Authorization" or "Cancelled" or "Argument" or "Other" ? value : null,
-                "workerFailureCode" => value is "Offline" or "Disconnected" or "InvalidRequest" or "AccessDenied" or "SourceUnavailable" or "CapabilityUnavailable" or "LocalIoFailure" or "RetryableTransferFailure" or "RemoteConflict" or "DirectoryNotEmpty" or "UncorrelatedResponse" or "InvalidConfiguration" or "WorkerFailure" or "Unknown" ? value : null,
+                "workerFailureCode" => value is "Offline" or "Disconnected" or "InvalidRequest" or "AccessDenied" or "SourceUnavailable" or "CapabilityUnavailable" or "LocalIoFailure" or "RetryableTransferFailure" or "RemoteConflict" or "DirectoryNotEmpty" or "UncorrelatedResponse" or "InvalidConfiguration" or "WorkerFailure" or "Unknown" ||
+                    AdapterWorkerOperationException.IsDirectoryFailureCode(value) ? value : null,
+                "workerDirectoryPhase" => value is "Admission" or "Delete" ? value : null,
                 "workerStage" => value is "ResolvePayload" or "CreatePipe" or "CreateJob" or "StartProcess" or "AttachJob" or "AwaitPipe" or "ValidatePeer" or "AwaitHello" or "Negotiate" or "SendReady" or "ReceiveFrames" or "StopWorker" ? value : null,
                 "workerElapsedMs" or "workerStageElapsedMs" =>
                     int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out int elapsed) && elapsed >= 0

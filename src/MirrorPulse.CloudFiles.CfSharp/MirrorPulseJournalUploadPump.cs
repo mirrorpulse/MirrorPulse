@@ -659,7 +659,11 @@ public sealed partial class MirrorPulseJournalUploadPump : IAsyncDisposable
                 new("hresult", exception.HResult.ToString("X8", System.Globalization.CultureInfo.InvariantCulture)),
             };
             if (exception.GetBaseException() is AdapterWorkerOperationException worker)
+            {
                 fields.Add(new("workerFailureCode", worker.FailureCode));
+                if (worker.DirectoryPhase is { } phase)
+                    fields.Add(new("workerDirectoryPhase", phase));
+            }
             if (message is "JournalReadFailed" or "JournalDirectoryMoveRecoveryFailed")
             {
                 fields.Add(new("journalReadStage", MirrorPulseJournalReadDiagnostics.Stage(exception).ToString()));

@@ -282,7 +282,8 @@ public sealed partial class MirrorPulseAtomicDirectoryJournalTests
                 string Read(string name) => fields.TryGetProperty(name, out var value) ? value.GetString() ?? "None" : "None";
                 string summary = $"AtomicDirectoryTimeout: event={entry.GetProperty("Code").GetString()}; " +
                     $"category={Read("failureCategory")}; hresult={Read("hresult")}; worker={Read("workerFailureCode")}; " +
-                    $"mutation={Read("mutationState")}; boundary={Read("journalReadFailureKind")}; dispatch={Read("dispatchPhase")}.";
+                    $"phase={Read("workerDirectoryPhase")}; mutation={Read("mutationState")}; " +
+                    $"boundary={Read("journalReadFailureKind")}; dispatch={Read("dispatchPhase")}.";
                 if (failures.Add(summary)) TestContext.WriteLine(summary);
             }
             catch (JsonException) { }
