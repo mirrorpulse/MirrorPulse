@@ -38,6 +38,16 @@ public sealed class MirrorPulseLocalTransferContentStore
         return new(plan.OperationId, plan.PrivateContentId, content,
             await _storage.OpenVerifiedAsync(plan.PrivateContentId, content, cancellationToken).ConfigureAwait(false));
     }
+
+    internal async Task<MirrorPulseLocalTransferContentLease> OpenLeaseAsync(Guid operationId,
+        MirrorPulseDirectoryTransferMember member, CancellationToken token)
+    {
+        if (operationId == Guid.Empty || member.PrivateContentId is not { } contentId || contentId == Guid.Empty ||
+            contentId == operationId || member.Source.Protection.Context.Member.IsDirectory || member.Content is not { } content)
+            throw new ArgumentException("A directory transfer file needs its distinct original private content.", nameof(member));
+        return new(operationId, contentId, content,
+            await _storage.OpenVerifiedAsync(contentId, content, token).ConfigureAwait(false));
+    }
 }
 
 /// <summary>Original transfer content, independently verified and held read-only; not a native execution authorization.</summary>

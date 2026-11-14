@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using MirrorPulse.Core.Sync;
 
@@ -16,6 +18,7 @@ public sealed partial class MirrorPulseProductCatalog
             transfer_id TEXT NOT NULL REFERENCES namespace_directory_transfer_admissions(operation_id),
             ordinal INTEGER NOT NULL CHECK(ordinal>=0),
             effect_id TEXT NOT NULL UNIQUE REFERENCES namespace_directory_transfer_ids(operation_id),
+            effect_fingerprint BLOB NOT NULL CHECK(length(effect_fingerprint)=32),
             started_at INTEGER CHECK(started_at>0),
             accepted_revision TEXT CHECK(length(accepted_revision) BETWEEN 1 AND 4096),
             accepted_at INTEGER,
@@ -30,16 +33,18 @@ public sealed partial class MirrorPulseProductCatalog
         await using var sql = _connection.CreateCommand();
         sql.Transaction = transaction;
         sql.CommandText = """
-            INSERT INTO namespace_directory_transfer_copy_steps(transfer_id,ordinal,effect_id)
-            VALUES($transfer,$ordinal,$effect);
+            INSERT INTO namespace_directory_transfer_copy_steps(transfer_id,ordinal,effect_id,effect_fingerprint)
+            VALUES($transfer,$ordinal,$effect,$fingerprint);
             """;
         sql.Parameters.AddWithValue("$transfer", plan.Command.CommandId.ToString("D"));
         var ordinal = sql.Parameters.Add("$ordinal", SqliteType.Integer);
         var effect = sql.Parameters.Add("$effect", SqliteType.Text);
+        var fingerprint = sql.Parameters.Add("$fingerprint", SqliteType.Blob);
         for (int index = 0; index < plan.Members.Count; index++)
         {
             ordinal.Value = index;
             effect.Value = plan.Members[index].CopyOperationId.ToString("D");
+            fingerprint.Value = DirectoryTransferCopyFingerprint(plan.Members[index]);
             await sql.ExecuteNonQueryAsync(token).ConfigureAwait(false);
         }
     }
@@ -57,7 +62,7 @@ public sealed partial class MirrorPulseProductCatalog
             await using var sql = _connection.CreateCommand();
             sql.Transaction = transaction;
             sql.CommandText = """
-                SELECT ordinal,effect_id,started_at,accepted_revision,accepted_at
+                SELECT ordinal,effect_id,started_at,accepted_revision,accepted_at,effect_fingerprint
                 FROM namespace_directory_transfer_copy_steps WHERE transfer_id=$transfer ORDER BY ordinal;
                 """;
             sql.Parameters.AddWithValue("$transfer", transferId.ToString("D"));
@@ -68,7 +73,8 @@ public sealed partial class MirrorPulseProductCatalog
                 while (await reader.ReadAsync(token).ConfigureAwait(false))
                 {
                     if (steps.Count == plan.Members.Count || reader.GetInt64(0) != steps.Count ||
-                        reader.GetString(1) != plan.Members[steps.Count].CopyOperationId.ToString("D"))
+                        reader.GetString(1) != plan.Members[steps.Count].CopyOperationId.ToString("D") ||
+                        !DirectoryTransferCopyFingerprint(plan.Members[steps.Count]).AsSpan().SequenceEqual((byte[])reader[5]))
                         throw new InvalidDataException("The directory transfer lost its original copy order or effect identity.");
                     var started = ReadDirectoryTransferTime(reader, 2);
                     string? revision = reader.IsDBNull(3) ? null : reader.GetString(3);
@@ -98,34 +104,40 @@ public sealed partial class MirrorPulseProductCatalog
         return new(ticks, TimeSpan.Zero);
     }
 
+    private static byte[] DirectoryTransferCopyFingerprint(MirrorPulseDirectoryTransferMember member) =>
+        SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(member, TopologyJsonOptions));
+
     /// <summary>Claims an original effect immediately before its first dispatch.</summary>
     internal async Task StartNamespaceDirectoryTransferCopyAsync(MirrorPulseDirectoryTransferAdmission plan,
         int ordinal, DateTimeOffset startedAt, CancellationToken token)
     {
         if (startedAt < plan.Originals.CapturedAt)
             throw new ArgumentException("Copy start must follow the original directory transfer admission.", nameof(startedAt));
+        var member = plan.Members[ordinal];
         await _gate.WaitAsync(token).ConfigureAwait(false);
         try
         {
             ThrowIfDisposed();
             using var transaction = _connection.BeginTransaction();
-            await RequireNamespaceTransferRoutesAsync([plan.SourceRoute, plan.TargetRoute], transaction, token).ConfigureAwait(false);
+            await RequireNamespaceTransferRoutesAsync([plan.SourceRoute, plan.TargetRoute], transaction, token,
+                requireSingleRoot: true).ConfigureAwait(false);
             await using var sql = _connection.CreateCommand();
             sql.Transaction = transaction;
             sql.CommandText = """
                 UPDATE namespace_directory_transfer_copy_steps SET started_at=$started
-                WHERE transfer_id=$transfer AND ordinal=$ordinal AND effect_id=$effect AND started_at IS NULL
+                WHERE transfer_id=$transfer AND ordinal=$ordinal AND effect_id=$effect AND effect_fingerprint=$fingerprint
+                  AND started_at IS NULL
                   AND EXISTS (
                       SELECT 1 FROM namespace_directory_transfer_admissions admission
-                      WHERE admission.operation_id=$transfer
-                        AND admission.source_root_id=$source AND admission.target_root_id=$target)
+                      WHERE admission.operation_id=$transfer AND admission.source_root_id=$source AND admission.target_root_id=$target)
                   AND ($ordinal=0 OR EXISTS (
                       SELECT 1 FROM namespace_directory_transfer_copy_steps prior
                       WHERE prior.transfer_id=$transfer AND prior.ordinal=$ordinal-1 AND prior.accepted_at<=$started));
                 """;
             sql.Parameters.AddWithValue("$transfer", plan.Command.CommandId.ToString("D"));
             sql.Parameters.AddWithValue("$ordinal", ordinal);
-            sql.Parameters.AddWithValue("$effect", plan.Members[ordinal].CopyOperationId.ToString("D"));
+            sql.Parameters.AddWithValue("$effect", member.CopyOperationId.ToString("D"));
+            sql.Parameters.AddWithValue("$fingerprint", DirectoryTransferCopyFingerprint(member));
             sql.Parameters.AddWithValue("$source", plan.SourceRoute.RootId.ToString());
             sql.Parameters.AddWithValue("$target", plan.TargetRoute.RootId.ToString());
             sql.Parameters.AddWithValue("$started", startedAt.UtcTicks);

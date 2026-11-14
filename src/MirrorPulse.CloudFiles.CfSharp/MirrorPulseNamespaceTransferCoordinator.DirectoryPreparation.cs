@@ -113,7 +113,7 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
                     if (sourcePath != originalPath && !sourcePath.StartsWith(originalPath + "/", StringComparison.Ordinal))
                         throw new InvalidDataException("A source member escaped the original transfer subtree.");
                     members.Add(new(member, destinationPath + sourcePath[originalPath.Length..],
-                        projection.RemoteRevision ?? throw new InvalidOperationException("Directory source retirement requires each original backend revision."),
+                        projection.RemoteRevision,
                         Guid.NewGuid(), Guid.NewGuid(), contentId, content));
                 }
                 await RequireExactTransferDirectoryInventoryAsync(tree, stop).ConfigureAwait(false);

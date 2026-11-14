@@ -93,7 +93,7 @@ public sealed partial class MirrorPulseProductCatalog
     }
 
     private async Task RequireNamespaceTransferRoutesAsync(IReadOnlyList<MirrorPulseTransferRoute> routes,
-        SqliteTransaction transaction, CancellationToken token)
+        SqliteTransaction transaction, CancellationToken token, bool requireSingleRoot = false)
     {
         await using var query = _connection.CreateCommand(); query.Transaction = transaction;
         query.CommandText = "SELECT payload FROM adapter_topology WHERE id=1;";
@@ -107,7 +107,8 @@ public sealed partial class MirrorPulseProductCatalog
             var root = topology.Roots.SingleOrDefault(item => item.RootId == route.RootId)
                 ?? throw new InvalidOperationException("The original transfer root is missing.");
             if (MirrorPulseTransferRoute.Capture(instance, root, route.ProtocolVersion) != route ||
-                route.ProtocolVersion == 1 && topology.Roots.Count(item => item.InstanceId == route.InstanceId) != 1)
+                (requireSingleRoot || route.ProtocolVersion == 1) &&
+                topology.Roots.Count(item => item.InstanceId == route.InstanceId) != 1)
                 throw new InvalidOperationException("The transfer backend, version or root configuration changed.");
         }
     }

@@ -7,7 +7,7 @@ using MirrorPulse.Core.Sync;
 namespace MirrorPulse.Core.State;
 
 internal sealed record MirrorPulseDirectoryTransferMember(
-    MirrorPulseNamespaceProtectedTreeMember Source, string TargetRelativePath, string SourceRevision,
+    MirrorPulseNamespaceProtectedTreeMember Source, string TargetRelativePath, string? SourceRevision,
     Guid CopyOperationId, Guid DeleteOperationId, Guid? PrivateContentId, MirrorPulseNamespaceImportContent? Content);
 
 internal sealed record MirrorPulseDirectoryTransferAdmission(
@@ -119,7 +119,8 @@ public sealed partial class MirrorPulseProductCatalog
             var fenced = await ReadNamespaceRootFencesCoreAsync(true, transaction, token).ConfigureAwait(false);
             if (fenced.Contains(plan.SourceRoute.RootId) || fenced.Contains(plan.TargetRoute.RootId))
                 throw new InvalidOperationException("Another original namespace owner prevents directory transfer admission.");
-            await RequireNamespaceTransferRoutesAsync([plan.SourceRoute, plan.TargetRoute], transaction, token).ConfigureAwait(false);
+            await RequireNamespaceTransferRoutesAsync([plan.SourceRoute, plan.TargetRoute], transaction, token,
+                requireSingleRoot: true).ConfigureAwait(false);
             await RequireCurrentDirectoryTransferTreeAsync(plan, transaction, token).ConfigureAwait(false);
             foreach (var (id, journalOriginal) in DirectoryTransferIds(plan))
             {
@@ -328,7 +329,7 @@ public sealed partial class MirrorPulseProductCatalog
                 context.Protection.RoleSid != plan.SourceParent.Context.Protection.RoleSid ||
                 context.Member.RegisteredAt > plan.PreparedAt || context.Verification.ObservedAt > plan.PreparedAt ||
                 context.PositionVerification is { } position && position.ObservedAt > plan.PreparedAt ||
-                InvalidRemoteUpdateText(entry.SourceRevision, 4096) ||
+                (entry.SourceRevision is not null && InvalidRemoteUpdateText(entry.SourceRevision, 4096)) ||
                 !members.TryAdd(context.Member.MemberId, entry) || !publicItems.TryAdd(itemId, entry) ||
                 !bindings.Add(context.Member.LocalObject) || !paths.Add(context.Location.RelativePath))
                 throw new ArgumentException("Every directory transfer member must retain its exact original identity, revision, position and protection.");
