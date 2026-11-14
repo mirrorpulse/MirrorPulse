@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Security.Principal;
+using CfSharp;
 using MirrorPulse.Core.Configuration;
 using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.Host;
@@ -101,17 +102,30 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             var transfers = new MirrorPulseTransferWorkerServices(transport, transport, transport, transport,
                 worker.GetConnectedProtocolVersion, transport);
             bool interrupt = true;
+            bool interruptAcknowledgement = webDav is null;
+            CloudLocalChangeFeed? journal = null;
             const string interruption = "Fixture interruption after the first original native retirement.";
-            var factory = new CfSharpMirrorPulseCloudRuntimeFactory(provider, transport, transport, transport, router, catalog,
+            const string acknowledgementInterruption = "Fixture interruption after the original SDK acknowledgement.";
+            var factory = new CfSharpMirrorPulseCloudRuntimeFactory(provider, null, transport, transport, router, catalog,
                 worker.IsConnected, scheduler: scheduler, namespaceExecution: execution, namespaceActor: actor, namespaceWork: work,
                 initializeNamespaceOnStart: true, transfers: transfers)
             {
+                TransferJournalReady = feed => journal = feed,
                 TransferSourceRetirementCheckpoint = (checkpoint, _) =>
                 {
                     if (interrupt && checkpoint == MirrorPulseTransferSourceRetirementCheckpoint.AfterNativeDeletion)
                     {
                         interrupt = false;
                         throw new IOException(interruption);
+                    }
+                    return ValueTask.CompletedTask;
+                },
+                TransferAcknowledgementCheckpoint = (checkpoint, _) =>
+                {
+                    if (interruptAcknowledgement && checkpoint == MirrorPulseTransferAcknowledgementCheckpoint.AfterSdkAcknowledgement)
+                    {
+                        interruptAcknowledgement = false;
+                        throw new IOException(acknowledgementInterruption);
                     }
                     return ValueTask.CompletedTask;
                 }
@@ -131,8 +145,25 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             }
             var source = await runtime.InspectNamespaceMemberAsync("Docs/tree", true, token);
             var target = await runtime.InspectNamespaceMemberAsync("Archive", true, token);
+            IReadOnlyList<Guid> originalNotifications = [];
+            if (webDav is null)
+            {
+                // Keep a real original content notification pending on a remote-backed file.
+                // The command, not an independent upload pump, owns its settlement in this fixture.
+                string localFile = Path.Combine(paths.SyncRootPath, "Docs", original);
+                CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(localFile, token));
+                await File.WriteAllBytesAsync(localFile, bytes, token);
+                var leaf = await runtime.InspectNamespaceMemberAsync("Docs/" + original, false, token);
+                var originalIdentity = await catalog.ReadNamespaceMemberIdentityAsync(leaf.MemberId, token);
+                Assert.IsNotNull(originalIdentity.ItemId);
+                Assert.IsNotNull(journal);
+                originalNotifications = await WaitForTransferOriginalContentJournalAsync(journal, originalIdentity.ItemId.Value, token);
+            }
             Guid operationId = Guid.NewGuid();
             Assert.IsTrue(await runtime.PrepareDirectoryNamespaceTransferAsync(operationId, source.MemberId, target.MemberId, "copied", token));
+            var plan = await catalog.ReadNamespaceDirectoryTransferAsync(operationId, token);
+            Assert.IsNotNull(plan);
+            Assert.IsTrue(originalNotifications.All(id => plan.Originals.Members.Any(change => change.OperationId == id)));
             var pending = (await catalog.ReadPendingNamespaceTransferStatusesAsync(sourceRoot.RootId, token)).Single();
             Assert.AreEqual(pending, (await catalog.ReadPendingNamespaceTransferStatusesAsync(targetRoot.RootId, token)).Single());
             Assert.IsTrue(pending.IsDirectory && pending.RootsFenced);
@@ -145,56 +176,96 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             byte[] targetBytes = webDav is null ? await File.ReadAllBytesAsync(Path.Combine(targetBackend, transferred), token) : webDav.Files[transferred];
             CollectionAssert.AreEqual(bytes, targetBytes);
             Assert.IsTrue((await catalog.ReadNamespaceTransferStatusAsync(operationId, token))!.RootsFenced);
-            Assert.IsTrue(await runtime.ResumeDirectoryNamespaceTransferAsync(operationId, token));
-            var replayed = await catalog.ReadNamespaceDirectoryTransferSourceDeletionAsync(operationId, token);
-            Assert.IsNotNull(replayed?.Receipt);
-            Assert.AreEqual(deletion.Receipt.ReceiptId, replayed.Receipt.ReceiptId);
-            Assert.AreEqual(deletion.Receipt.RequestFingerprint, replayed.Receipt.RequestFingerprint);
-            Assert.AreEqual(deletion.AcceptedAt, replayed.AcceptedAt);
-            CollectionAssert.AreEqual(deletion.Receipt.DeletedOriginals.ToArray(), replayed.Receipt.DeletedOriginals.ToArray());
-            var completed = await catalog.ReadNamespaceTransferStatusAsync(operationId, token);
-            Assert.IsNotNull(completed);
-            Assert.IsTrue(completed.Completed && completed.IsDirectory);
-            Assert.IsFalse(completed.RootsFenced);
-            Assert.IsTrue(work.IsAdmitted(sourceRoot.RootId) && work.IsAdmitted(targetRoot.RootId));
-            Assert.IsEmpty(await catalog.ReadPendingNamespaceTransferStatusesAsync(targetRoot.RootId, token));
-            Assert.HasCount(3, await catalog.ReadNamespaceDirectoryTransferRetirementsAsync(operationId, token));
-            var anchor = await runtime.InspectNamespaceMemberAsync(string.Empty, true, token);
-            var auditedSource = await catalog.ReadNamespaceCurrentRootSnapshotAsync(anchor.MemberId, sourceRoot.RootId, token);
-            Assert.HasCount(3, auditedSource.RetiredTransferMembers!);
-            Assert.IsTrue(auditedSource.RetiredTransferMembers!.All(retirement => retirement.TransferId == operationId));
-            await Assert.ThrowsExactlyAsync<FileNotFoundException>(() => catalog.ReadNamespaceMemberLocationAsync(source.MemberId, token));
-            Assert.IsFalse(Directory.Exists(Path.Combine(paths.SyncRootPath, "Docs", "tree")));
-            var published = await runtime.InspectNamespaceMemberAsync("Archive/copied", true, token);
-            Assert.AreEqual(completed.TargetMemberId, published.MemberId);
-            CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(Path.Combine(paths.SyncRootPath, "Archive", transferred), token));
-            Assert.IsTrue(await runtime.ResumeDirectoryNamespaceTransferAsync(operationId, token));
-            Assert.AreEqual(completed, await catalog.ReadNamespaceTransferStatusAsync(operationId, token));
-            await using var packageSource = File.OpenRead(package);
-            string digest = Convert.ToHexString(await SHA256.HashDataAsync(packageSource, token));
             if (webDav is null)
             {
-                TestContext.WriteLine($"SignedDirectoryTransfer: packageSha256={digest}; distinctSingleRootInstances=True; sourceMembers=3; atomicSourceReceipt=True; interruptedNativeRetirement=True; reopenedRoots=True; targetBytesVerified=True.");
+                var ackCut = await Assert.ThrowsExactlyAsync<IOException>(async () => await runtime.ResumeDirectoryNamespaceTransferAsync(operationId, token));
+                Assert.AreEqual(acknowledgementInterruption, ackCut.Message);
+                var originalAck = await catalog.ReadNamespaceDirectoryTransferAcknowledgementAsync(operationId, token);
+                Assert.IsNotNull(originalAck);
+                Assert.IsNull(originalAck.AcknowledgedAt);
+                var remaining = await ReadTransferOriginalJournalIdsAsync(journal!, token);
+                Assert.IsTrue(originalNotifications.All(id => !remaining.Contains(id)));
+                await runtime.DisposeAsync();
+                await using var newExecution = new MirrorPulseNamespaceExecutionSession();
+                Assert.AreNotEqual(execution.RoleSid, newExecution.RoleSid);
+                await using var newActor = new MirrorPulseNamespaceActor();
+                await using var newWork = new MirrorPulseNamespaceWorkAdmission([sourceRoot.RootId, targetRoot.RootId]);
+                var newTransport = new MirrorPulseNormalUserWorkerTransport(newExecution, worker, worker, worker, worker, worker);
+                var newProvider = new MirrorPulseDemandProvider(router, newTransport, new MirrorPulseAdapterDirectoryPageSource(newTransport), newWork, catalog);
+                var newTransfers = new MirrorPulseTransferWorkerServices(newTransport, newTransport, newTransport, newTransport,
+                    worker.GetConnectedProtocolVersion, newTransport);
+                var newFactory = new CfSharpMirrorPulseCloudRuntimeFactory(newProvider, newTransport, newTransport, newTransport, router, catalog,
+                    worker.IsConnected, scheduler: scheduler, namespaceExecution: newExecution, namespaceActor: newActor, namespaceWork: newWork,
+                    initializeNamespaceOnStart: true, transfers: newTransfers);
+                await using var newRuntime = newFactory.Create(paths);
+                await newRuntime.StartAsync(token);
+                Assert.HasCount(2, newRuntime.NamespaceStartupResults);
+                Assert.IsTrue(newRuntime.NamespaceStartupResults.All(root => root.Admitted && root.RecoveryCode is null));
+                Assert.IsTrue(await newRuntime.ResumeDirectoryNamespaceTransferAsync(operationId, token));
+                var recoveredAck = await catalog.ReadNamespaceDirectoryTransferAcknowledgementAsync(operationId, token);
+                Assert.IsNotNull(recoveredAck?.AcknowledgedAt);
+                Assert.AreEqual(originalAck.StartedAt, recoveredAck.StartedAt);
+                Assert.IsTrue((await catalog.ReadNamespaceTransferStatusAsync(operationId, token))!.JournalAcknowledged);
+                await AssertCompletedTransferAsync(newRuntime, newWork);
             }
             else
             {
-                Assert.IsFalse(worker.SupportsAtomicDirectoryDeletion(targetRoot.InstanceId));
-                var reverseParent = await runtime.InspectNamespaceMemberAsync("Docs", true, token);
-                Guid reverseId = Guid.NewGuid();
-                int before = webDav.MutationRequests;
-                var denied = await Assert.ThrowsExactlyAsync<NotSupportedException>(async () =>
-                    await runtime.PrepareDirectoryNamespaceTransferAsync(reverseId, published.MemberId, reverseParent.MemberId, "reverse", token));
-                StringAssert.Contains(denied.Message, "cannot safely retire a remote directory transfer");
-                Assert.IsNull(await catalog.ReadNamespaceTransferStatusAsync(reverseId, token));
-                Assert.AreEqual(before, webDav.MutationRequests);
-                Assert.IsFalse(Directory.Exists(Path.Combine(sourceBackend, "reverse")));
-                CollectionAssert.AreEqual(bytes, webDav.Files[transferred]);
-                Assert.IsTrue(work.IsAdmitted(sourceRoot.RootId) && work.IsAdmitted(targetRoot.RootId));
-                await using var webDavPackageSource = File.OpenRead(webDavPackage!);
-                string webDavDigest = Convert.ToHexString(await SHA256.HashDataAsync(webDavPackageSource, token));
-                TestContext.WriteLine($"SignedCrossPackageDirectoryTransfer: localSha256={digest}; webDavSha256={webDavDigest}; targetBytesVerified=True; reverseRejectedBeforeAdmission=True; reverseSourcePreserved=True.");
+                Assert.IsTrue(await runtime.ResumeDirectoryNamespaceTransferAsync(operationId, token));
+                await AssertCompletedTransferAsync(runtime, work);
             }
             succeeded = true;
+
+            async Task AssertCompletedTransferAsync(IMirrorPulseCloudRuntime current, MirrorPulseNamespaceWorkAdmission currentWork)
+            {
+                var replayed = await catalog.ReadNamespaceDirectoryTransferSourceDeletionAsync(operationId, token);
+                Assert.IsNotNull(replayed?.Receipt);
+                Assert.AreEqual(deletion.Receipt.ReceiptId, replayed.Receipt.ReceiptId);
+                Assert.AreEqual(deletion.Receipt.RequestFingerprint, replayed.Receipt.RequestFingerprint);
+                Assert.AreEqual(deletion.AcceptedAt, replayed.AcceptedAt);
+                CollectionAssert.AreEqual(deletion.Receipt.DeletedOriginals.ToArray(), replayed.Receipt.DeletedOriginals.ToArray());
+                var completed = await catalog.ReadNamespaceTransferStatusAsync(operationId, token);
+                Assert.IsNotNull(completed);
+                Assert.IsTrue(completed.Completed && completed.IsDirectory);
+                Assert.IsFalse(completed.RootsFenced);
+                Assert.IsTrue(currentWork.IsAdmitted(sourceRoot.RootId) && currentWork.IsAdmitted(targetRoot.RootId));
+                Assert.IsEmpty(await catalog.ReadPendingNamespaceTransferStatusesAsync(targetRoot.RootId, token));
+                Assert.HasCount(3, await catalog.ReadNamespaceDirectoryTransferRetirementsAsync(operationId, token));
+                var anchor = await current.InspectNamespaceMemberAsync(string.Empty, true, token);
+                var auditedSource = await catalog.ReadNamespaceCurrentRootSnapshotAsync(anchor.MemberId, sourceRoot.RootId, token);
+                Assert.HasCount(3, auditedSource.RetiredTransferMembers!);
+                Assert.IsTrue(auditedSource.RetiredTransferMembers!.All(retirement => retirement.TransferId == operationId));
+                await Assert.ThrowsExactlyAsync<FileNotFoundException>(() => catalog.ReadNamespaceMemberLocationAsync(source.MemberId, token));
+                Assert.IsFalse(Directory.Exists(Path.Combine(paths.SyncRootPath, "Docs", "tree")));
+                var published = await current.InspectNamespaceMemberAsync("Archive/copied", true, token);
+                Assert.AreEqual(completed.TargetMemberId, published.MemberId);
+                CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(Path.Combine(paths.SyncRootPath, "Archive", transferred), token));
+                Assert.IsTrue(await current.ResumeDirectoryNamespaceTransferAsync(operationId, token));
+                Assert.AreEqual(completed, await catalog.ReadNamespaceTransferStatusAsync(operationId, token));
+                await using var packageSource = File.OpenRead(package);
+                string digest = Convert.ToHexString(await SHA256.HashDataAsync(packageSource, token));
+                if (webDav is null)
+                {
+                    TestContext.WriteLine($"SignedDirectoryTransfer: packageSha256={digest}; distinctSingleRootInstances=True; sourceMembers=3; atomicSourceReceipt=True; interruptedNativeRetirement=True; reopenedRoots=True; targetBytesVerified=True; acknowledgementAcrossRoles=True.");
+                }
+                else
+                {
+                    Assert.IsFalse(worker.SupportsAtomicDirectoryDeletion(targetRoot.InstanceId));
+                    var reverseParent = await current.InspectNamespaceMemberAsync("Docs", true, token);
+                    Guid reverseId = Guid.NewGuid();
+                    int before = webDav.MutationRequests;
+                    var denied = await Assert.ThrowsExactlyAsync<NotSupportedException>(async () =>
+                        await current.PrepareDirectoryNamespaceTransferAsync(reverseId, published.MemberId, reverseParent.MemberId, "reverse", token));
+                    StringAssert.Contains(denied.Message, "cannot safely retire a remote directory transfer");
+                    Assert.IsNull(await catalog.ReadNamespaceTransferStatusAsync(reverseId, token));
+                    Assert.AreEqual(before, webDav.MutationRequests);
+                    Assert.IsFalse(Directory.Exists(Path.Combine(sourceBackend, "reverse")));
+                    CollectionAssert.AreEqual(bytes, webDav.Files[transferred]);
+                    Assert.IsTrue(currentWork.IsAdmitted(sourceRoot.RootId) && currentWork.IsAdmitted(targetRoot.RootId));
+                    await using var webDavPackageSource = File.OpenRead(webDavPackage!);
+                    string webDavDigest = Convert.ToHexString(await SHA256.HashDataAsync(webDavPackageSource, token));
+                    TestContext.WriteLine($"SignedCrossPackageDirectoryTransfer: localSha256={digest}; webDavSha256={webDavDigest}; targetBytesVerified=True; reverseRejectedBeforeAdmission=True; reverseSourcePreserved=True.");
+                }
+            }
         }
         finally
         {

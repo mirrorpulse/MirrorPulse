@@ -1529,6 +1529,18 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             // Already accepted original ACKs are metadata settlement under the normal
             // owner, before role rotation. Completion grants no root admission; startup
             // still requires the complete fresh current-role/native audit below.
+            if (transfers is not null && _transferJournal is not null)
+            {
+                var coordinator = TransferCoordinator();
+                foreach (Guid operation in await catalog!.ReadStartedDirectoryTransferAcknowledgementsAsync(token).ConfigureAwait(false))
+                {
+                    try { _ = await coordinator.ReplayStartedDirectoryAcknowledgementAsync(operation, token).ConfigureAwait(false); }
+                    catch (Exception error) when (error is IOException or InvalidOperationException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+                    {
+                        // The original retains both fences and startup reports its operation.
+                    }
+                }
+            }
             if (_rootLabelJournalRecovery is { } rootJournal)
                 foreach (var root in router!.Registrations)
                 {

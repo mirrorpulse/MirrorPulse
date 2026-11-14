@@ -37,7 +37,7 @@ function Confirm-SignedDirectoryTransferReport {
     $rows = @($report.TestRun.Results.UnitTestResult)
     if ($rows.Count -ne 2 -or @($rows | Where-Object outcome -CNE 'Passed').Count) { throw 'Both signed cross-instance directory cases must pass.' }
     $expected = @{
-        NativeSignedLocalDirectoryTransferResumesAcrossTwoSingleRootInstances = 'SignedDirectoryTransfer: packageSha256=' + $PackageSha256 + '; distinctSingleRootInstances=True; sourceMembers=3; atomicSourceReceipt=True; interruptedNativeRetirement=True; reopenedRoots=True; targetBytesVerified=True.'
+        NativeSignedLocalDirectoryTransferResumesAcrossTwoSingleRootInstances = 'SignedDirectoryTransfer: packageSha256=' + $PackageSha256 + '; distinctSingleRootInstances=True; sourceMembers=3; atomicSourceReceipt=True; interruptedNativeRetirement=True; reopenedRoots=True; targetBytesVerified=True; acknowledgementAcrossRoles=True.'
         NativeSignedLocalDirectoryTransferToWebDavRejectsUnsupportedReverseBeforeMutation = 'SignedCrossPackageDirectoryTransfer: localSha256=' + $PackageSha256 + '; webDavSha256=' + $WebDavPackageSha256 + '; targetBytesVerified=True; reverseRejectedBeforeAdmission=True; reverseSourcePreserved=True.'
     }
     foreach ($row in $rows) {

@@ -188,6 +188,31 @@ public sealed partial class MirrorPulseProductCatalog
         finally { _gate.Release(); }
     }
 
+    internal async Task<IReadOnlyList<Guid>> ReadStartedDirectoryTransferAcknowledgementsAsync(CancellationToken token)
+    {
+        await _gate.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            using var transaction = BeginNamespaceRecoveryReadSnapshot();
+            await RequireDirectoryTransferFenceIndexAsync(transaction, token).ConfigureAwait(false);
+            await using var query = _connection.CreateCommand();
+            query.Transaction = transaction;
+            query.CommandText = """
+                SELECT a.transfer_id FROM namespace_directory_transfer_acknowledgements a
+                JOIN namespace_directory_transfer_fences f ON f.transfer_id=a.transfer_id
+                WHERE a.acknowledged=0 GROUP BY a.transfer_id ORDER BY a.transfer_id LIMIT 2049;
+                """;
+            var pending = new List<Guid>();
+            await using (var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false))
+                while (await reader.ReadAsync(token).ConfigureAwait(false)) pending.Add(ParseNamespaceMemberId(reader.GetString(0)));
+            if (pending.Count > 2048) throw new InvalidDataException("Pending directory acknowledgements exceed the Host root bound.");
+            transaction.Commit();
+            return pending.AsReadOnly();
+        }
+        finally { _gate.Release(); }
+    }
+
     internal async Task<MirrorPulseDirectoryTransferAcknowledgement?> ReadNamespaceDirectoryTransferAcknowledgementAsync(
         Guid transferId, CancellationToken token)
     {
