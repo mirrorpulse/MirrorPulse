@@ -31,6 +31,7 @@ public sealed partial class MirrorPulseProductCatalog
         internal NamespaceHistoryCache<MirrorPulseNamespaceMemberMoveCompletion> Completions { get; } = new();
         internal NamespaceHistoryCache<NamespaceDirectoryHistoryGraph> DirectoryCompletions { get; } = new();
         internal NamespaceHistorySet DirectoryPositions { get; } = new();
+        internal HashSet<Guid> JournalDirectoryMovesBeingValidated { get; } = new();
     }
 
     private sealed record NamespaceDirectoryHistoryGraph(MirrorPulseNamespaceDirectoryMoveCompletion Completion,

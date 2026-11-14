@@ -225,9 +225,9 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
                     catalog.SaveJournalDirectoryMoveTargetsAsync(moveRow.OperationId, changedTarget, deadline.Token));
                 await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
-                    catalog.RecordJournalDirectoryMoveProjectionAsync(moveRow.OperationId, 0, targetPlan[1], deadline.Token));
+                    catalog.RecordJournalDirectoryMoveProjectionAsync(moveRow.OperationId, 0, new(targetPlan[1], DateTimeOffset.UtcNow), deadline.Token));
                 await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
-                    catalog.RecordJournalDirectoryMoveProjectionAsync(moveRow.OperationId, 1, targetPlan[1], deadline.Token));
+                    catalog.RecordJournalDirectoryMoveProjectionAsync(moveRow.OperationId, 1, new(targetPlan[1], DateTimeOffset.UtcNow), deadline.Token));
                 await using var role = new MirrorPulseNamespaceExecutionSession();
                 await using var actor = new MirrorPulseNamespaceActor();
                 await using var scheduler = new MirrorPulseInstanceScheduler();
@@ -253,12 +253,16 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         Assert.AreEqual(0, interrupted!.ProjectedMemberCount);
                         await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
                             catalog.BeginJournalDirectoryMoveAcknowledgementAsync(moveRow.OperationId, deadline.Token));
-                        Assert.AreEqual(observed, await patch.ApplyAsync(admission, projection, deadline.Token));
+                        Assert.AreEqual(observed.Target, (await patch.ApplyAsync(admission, projection, deadline.Token)).Target);
                     }
                     var recorded = await catalog.RecordJournalDirectoryMoveProjectionAsync(moveRow.OperationId, ordinal, observed, deadline.Token);
                     Assert.AreEqual(ordinal + 1, recorded.ProjectedMemberCount);
                     var replay = await catalog.RecordJournalDirectoryMoveProjectionAsync(moveRow.OperationId, ordinal, observed, deadline.Token);
                     Assert.AreEqual(recorded.ProjectedMemberCount, replay.ProjectedMemberCount);
+                    var retainedIdentity = await catalog.ReadNamespaceMemberIdentityAsync(target.MemberId, deadline.Token);
+                    Assert.AreEqual(target.ItemId, retainedIdentity.ItemId);
+                    Assert.AreEqual(target.RemoteId, retainedIdentity.RemoteId);
+                    Assert.AreEqual(moveRow.OperationId, retainedIdentity.AcceptanceOperationId);
                 }
                 await AssertRecursiveJournalColdFileAsync(inspect, targetCold, projectedCold.ItemId, fixtureColdLength, deadline.Token);
                 Assert.AreEqual(0, finalReads.Reads);
@@ -297,6 +301,23 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 Assert.IsTrue(finished.AcknowledgementStarted);
                 Assert.AreEqual(admission.Members.Count, finished.ProjectedMemberCount);
                 CollectionAssert.AreEqual(targetPlan, finished.Targets!.ToArray());
+            }
+
+            await using (var reopened = await RecursiveJournalRuntimeOwner.OpenAsync(paths, root, router, saveTopology: false, deadline.Token))
+            {
+                AssertRecursiveJournalStartup(reopened.Runtime, root.RootId);
+                foreach (var member in new[] { albumMember, nestedMember, coldMember })
+                {
+                    var location = await reopened.Catalog.ReadNamespaceMemberLocationAsync(member.MemberId, deadline.Token);
+                    var identity = await reopened.Catalog.ReadNamespaceMemberIdentityAsync(member.MemberId, deadline.Token);
+                    var observed = await reopened.Runtime.InspectNamespaceMemberAsync(location.RelativePath, member.IsDirectory, deadline.Token);
+                    Assert.AreEqual(member.MemberId, observed.MemberId);
+                    Assert.AreEqual(identity.ItemId, observed.NativeItemId);
+                    Assert.AreEqual(moveId, location.CurrentPositionOperationId);
+                    Assert.IsNotNull(identity.AcceptanceOperationId);
+                    Assert.AreNotEqual(identity.OriginalItemId, identity.ItemId);
+                }
+                Assert.IsEmpty(reopened.Probe.Calls);
             }
 
             var added = durable.Values.Where(row => !before.ContainsKey(row.OperationId)).OrderBy(row => row.Sequence).ThenBy(row => row.OperationId).ToArray();

@@ -172,14 +172,14 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         new(proof.OperationId, proof.LocalObject, "AQID", proof.AcceptedItemId, proof.RemoteId, proof.AcceptedRevision, true, true, observedAt);
 
     private static async Task<MirrorPulseDirectoryAcceptance> PrepareDirectoryIdentityAsync(MirrorPulseProductCatalog catalog,
-        MoveFixture setup, RootRegistration root, string? mismatch = null, bool save = true)
+        MoveFixture setup, RootRegistration root, string? mismatch = null, bool save = true, string workerPath = "new.txt")
     {
         var original = await catalog.ReadNamespaceMemberIdentityAsync(setup.Member.MemberId);
         var location = await catalog.ReadNamespaceMemberLocationAsync(setup.Member.MemberId);
         var intent = new MirrorPulseMutationIntent(Guid.NewGuid(), mismatch == "instance" ? InstanceId.New() : root.InstanceId,
             mismatch == "root-key" ? "another-root" : root.UniquenessKey,
             mismatch == "metadata" ? MirrorPulseWorkerChangeKind.MetadataUpdate : MirrorPulseWorkerChangeKind.Create,
-            "new.txt", null, mismatch != "file-mutation", null, mismatch == "content" ? 4 : null,
+            workerPath, null, mismatch != "file-mutation", null, mismatch == "content" ? 4 : null,
             mismatch == "content" ? new string('B', 64) : null, MirrorPulseMutationOrigin.Journal);
         await catalog.PrepareMutationAsync(intent);
         await catalog.TransitionMutationAsync(intent.OperationId, MirrorPulseMutationState.Prepared, MirrorPulseMutationState.Executing);

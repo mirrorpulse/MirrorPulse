@@ -151,10 +151,10 @@ public sealed partial class MirrorPulseProductCatalog
 
     /// <summary>Retains the next member whose public identity passed native and official readback.</summary>
     internal Task<MirrorPulseJournalDirectoryMove> RecordJournalDirectoryMoveProjectionAsync(Guid operationId,
-        int ordinal, MirrorPulseDirectoryMoveTarget readback, CancellationToken token) =>
+        int ordinal, MirrorPulseDirectoryMoveProjectionReadback readback, CancellationToken token) =>
         ChangeJournalDirectoryMoveAsync(operationId, async (value, transaction, stop) =>
         {
-            if (value.Targets is null || ordinal < 0 || ordinal >= value.Targets.Count || value.Targets[ordinal] != readback)
+            if (value.Targets is null || ordinal < 0 || ordinal >= value.Targets.Count || value.Targets[ordinal] != readback.Target)
                 throw new InvalidOperationException("The projected member does not match its sealed target.");
             if (ordinal < value.ProjectedMemberCount) return;
             if (ordinal != value.ProjectedMemberCount || value.AcknowledgementStarted)
@@ -163,9 +163,14 @@ public sealed partial class MirrorPulseProductCatalog
             var member = await ReadNamespaceMemberCoreAsync(original.MemberId, transaction, stop).ConfigureAwait(false)
                 ?? throw new InvalidDataException("The projected directory Move member is missing.");
             var position = await ReadNamespaceMemberLocationCoreAsync(member, transaction, stop).ConfigureAwait(false);
+            var identity = await ReadNamespaceMemberIdentityCoreAsync(member, transaction, stop).ConfigureAwait(false);
+            var localMove = await ReadNamespaceDirectoryMoveCompletionCoreAsync(value.Admission.LocalMoveOperationId, transaction, stop).ConfigureAwait(false)
+                ?? throw new InvalidDataException("The directory Move projection lost its original local completion.");
             if (member.LocalObject != original.Binding || position.CurrentPositionOperationId != value.Admission.LocalMoveOperationId ||
-                position.RelativePath != original.TargetPath)
-                throw new InvalidOperationException("The projected directory Move member has a later native position.");
+                position.RelativePath != original.TargetPath || identity.AcceptanceOperationId != original.PreviousIdentityAcceptance ||
+                identity.ItemId != original.OriginalItemId || identity.RemoteId != original.OriginalRemoteId ||
+                readback.ObservedAt < localMove.Root.VerifiedAt)
+                throw new InvalidOperationException("The projected directory Move member has a later position or identity.");
             await using var insert = _connection.CreateCommand();
             insert.Transaction = transaction;
             insert.CommandText = """
@@ -174,8 +179,8 @@ public sealed partial class MirrorPulseProductCatalog
                 """;
             insert.Parameters.AddWithValue("$id", operationId.ToString("D"));
             insert.Parameters.AddWithValue("$ordinal", ordinal);
-            insert.Parameters.AddWithValue("$member", readback.MemberId.ToString("D"));
-            insert.Parameters.AddWithValue("$observed", DateTimeOffset.UtcNow.UtcTicks);
+            insert.Parameters.AddWithValue("$member", readback.Target.MemberId.ToString("D"));
+            insert.Parameters.AddWithValue("$observed", readback.ObservedAt.UtcTicks);
             await insert.ExecuteNonQueryAsync(stop).ConfigureAwait(false);
         }, token);
 
@@ -249,7 +254,13 @@ public sealed partial class MirrorPulseProductCatalog
         }
         var mutation = await ReadMutationCoreAsync(id, token, transaction).ConfigureAwait(false)
             ?? throw new InvalidDataException("The original directory Move lost its owning mutation.");
-        await ValidateJournalDirectoryMoveAdmissionAsync(admission, mutation.Intent, transaction, token).ConfigureAwait(false);
+        var validating = _namespaceHistoryReads.GetOrCreateValue(transaction).JournalDirectoryMovesBeingValidated;
+        if (!validating.Add(id)) throw new InvalidDataException("The original directory Move history contains a cycle.");
+        try
+        {
+            await ValidateJournalDirectoryMoveAdmissionAsync(admission, mutation.Intent, transaction, token).ConfigureAwait(false);
+        }
+        finally { validating.Remove(id); }
         if (targets is not null) ValidateJournalDirectoryMoveTargets(admission, targets);
         int projected = await ReadJournalDirectoryMoveProjectionCountAsync(admission, targets, transaction, token).ConfigureAwait(false);
         if (mutation.ExecutionEvidence != MirrorPulseMutationExecutionEvidence.Started ||
@@ -285,6 +296,43 @@ public sealed partial class MirrorPulseProductCatalog
             projected++;
         }
         return projected;
+    }
+
+    private async Task<(int Ordinal, DateTimeOffset ObservedAt)?> ReadJournalDirectoryMoveProjectionIndexAsync(Guid memberId,
+        Guid operationId, SqliteTransaction transaction, CancellationToken token)
+    {
+        await using var query = _connection.CreateCommand();
+        query.Transaction = transaction;
+        query.CommandText = """
+            SELECT ordinal,observed_at FROM journal_directory_move_projections
+            WHERE operation_id=$operation AND member_id=$member;
+            """;
+        query.Parameters.AddWithValue("$operation", operationId.ToString("D"));
+        query.Parameters.AddWithValue("$member", memberId.ToString("D"));
+        await using var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
+        if (!await reader.ReadAsync(token).ConfigureAwait(false)) return null;
+        long ticks = reader.GetInt64(1);
+        if (ticks <= 0 || ticks > DateTimeOffset.MaxValue.UtcTicks)
+            throw new InvalidDataException("The original Move projection observation time is invalid.");
+        return (reader.GetInt32(0), new DateTimeOffset(ticks, TimeSpan.Zero));
+    }
+
+    private async Task<NamespaceIdentityTransition?> ReadJournalDirectoryMoveIdentityTransitionAsync(
+        MirrorPulseNamespaceMemberRegistration member, Guid operationId, SqliteTransaction transaction, CancellationToken token)
+    {
+        var indexed = await ReadJournalDirectoryMoveProjectionIndexAsync(member.MemberId, operationId, transaction, token).ConfigureAwait(false);
+        if (indexed is not { } proof) return null;
+        var retained = await ReadJournalDirectoryMoveCoreAsync(operationId, transaction, token).ConfigureAwait(false)
+            ?? throw new InvalidDataException("The member projection lost its original directory Move.");
+        if (proof.Ordinal < 0 || proof.Ordinal >= retained.ProjectedMemberCount || retained.Targets is null)
+            throw new InvalidDataException("The original directory Move has no verified target for this projection.");
+        var original = retained.Admission.Members[proof.Ordinal];
+        var target = retained.Targets[proof.Ordinal];
+        if (original.MemberId != member.MemberId || original.Binding != member.LocalObject ||
+            original.IsDirectory != member.IsDirectory || retained.Admission.RootId != member.RootId)
+            throw new InvalidDataException("The original directory Move projection no longer identifies the same member.");
+        return new(operationId, original.PreviousIdentityAcceptance, original.OriginalItemId, original.OriginalRemoteId,
+            target.ItemId, target.RemoteId, proof.ObservedAt);
     }
 
     private async Task ValidateJournalDirectoryMoveAdmissionAsync(MirrorPulseJournalDirectoryMoveAdmission admission,

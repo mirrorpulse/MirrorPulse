@@ -77,17 +77,24 @@ public sealed partial class MirrorPulseProductCatalog
                 Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(mutation.Intent, TopologyJsonOptions))));
             ValidateNamespaceIdentityAcceptance(accepted);
             await ValidateNamespaceIdentityAcceptanceReferencesAsync(accepted, member, transaction, cancellationToken).ConfigureAwait(false);
+            if (previousAcceptanceOperationId is { } previous)
+            {
+                var predecessor = await ReadNamespaceIdentityTransitionAsync(member, previous, transaction, cancellationToken).ConfigureAwait(false)
+                    ?? throw new FileNotFoundException("The accepted identity predecessor is missing.");
+                if (predecessor.ObservedAt > accepted.Confirmation.ObservedAt)
+                    throw new InvalidOperationException("An accepted identity cannot predate its confirmed predecessor.");
+            }
             await RequireNamespaceIdentityRootScopeAsync(accepted, transaction, cancellationToken).ConfigureAwait(false);
             byte[] payload = JsonSerializer.SerializeToUtf8Bytes(accepted, TopologyJsonOptions);
             if (payload.Length > NamespaceIdentityAcceptanceLimit) throw new ArgumentException("Identity correlation must be bounded.");
             await using var insert = _connection.CreateCommand(); insert.Transaction = transaction;
             insert.CommandText = """
-                INSERT INTO namespace_member_identity_acceptances(operation_id,member_id,previous_operation_id,payload,fingerprint)
-                VALUES($operation,$member,$previous,$payload,$hash);
+                INSERT INTO namespace_member_identity_acceptances(operation_id,member_id,previous_operation_id,previous_move_id,payload,fingerprint)
+                VALUES($operation,$member,$previous,$previousMove,$payload,$hash);
                 """;
             insert.Parameters.AddWithValue("$operation", operationId.ToString("D"));
             insert.Parameters.AddWithValue("$member", memberId.ToString("D"));
-            insert.Parameters.AddWithValue("$previous", (object?)previousAcceptanceOperationId?.ToString("D") ?? DBNull.Value);
+            await BindNamespaceIdentityPredecessorAsync(insert, memberId, previousAcceptanceOperationId, transaction, cancellationToken).ConfigureAwait(false);
             insert.Parameters.AddWithValue("$payload", payload); insert.Parameters.AddWithValue("$hash", SHA256.HashData(payload));
             await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             transaction.Commit(); return accepted;
@@ -116,44 +123,7 @@ public sealed partial class MirrorPulseProductCatalog
         _namespaceRecoveryReadSnapshots.TryGetValue(transaction, out var snapshot);
         if (snapshot?.MemberIdentities.TryGetValue(member, out var retained) == true) return retained;
         var original = await ReadOriginalNamespaceMemberIdentityAsync(member, transaction, token).ConfigureAwait(false);
-        if (member.IsDirectory)
-        {
-            var directory = await ReadDirectoryMemberIdentityCoreAsync(member, original, transaction, token).ConfigureAwait(false);
-            if (snapshot is not null) snapshot.MemberIdentities[member] = directory;
-            return directory;
-        }
-        Guid? head = null; long total;
-        await using (var query = _connection.CreateCommand())
-        {
-            query.Transaction = transaction;
-            query.CommandText = """
-                SELECT a.operation_id FROM namespace_member_identity_acceptances a WHERE a.member_id=$member
-                AND NOT EXISTS(SELECT 1 FROM namespace_member_identity_acceptances b WHERE b.previous_operation_id=a.operation_id)
-                LIMIT 2;
-                """;
-            query.Parameters.AddWithValue("$member", member.MemberId.ToString("D"));
-            await using var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
-            if (await reader.ReadAsync(token).ConfigureAwait(false)) head = ParseNamespaceMemberId(reader.GetString(0));
-            if (await reader.ReadAsync(token).ConfigureAwait(false)) throw new InvalidDataException("The member has multiple accepted identity heads.");
-        }
-        await using (var count = _connection.CreateCommand())
-        {
-            count.Transaction = transaction; count.CommandText = "SELECT COUNT(*) FROM namespace_member_identity_acceptances WHERE member_id=$member;";
-            count.Parameters.AddWithValue("$member", member.MemberId.ToString("D"));
-            total = (long)(await count.ExecuteScalarAsync(token).ConfigureAwait(false))!;
-        }
-        if (head is null)
-        {
-            if (total != 0) throw new InvalidDataException("The member's accepted identity history has no head.");
-            var result = new MirrorPulseNamespaceMemberIdentity(member.MemberId, original.ItemId, original.RemoteId, null, original.ItemId, original.RemoteId);
-            if (snapshot is not null) snapshot.MemberIdentities[member] = result;
-            return result;
-        }
-        var accepted = await ReadNamespaceIdentityAcceptanceRowAsync(head.Value, transaction, token).ConfigureAwait(false)
-            ?? throw new InvalidDataException("The accepted identity head disappeared.");
-        long length = await ValidateNamespaceIdentityAcceptanceChainAsync(accepted, transaction, token).ConfigureAwait(false);
-        if (accepted.MemberId != member.MemberId || length != total) throw new InvalidDataException("Accepted identities do not form one continuous member history.");
-        var identity = new MirrorPulseNamespaceMemberIdentity(member.MemberId, accepted.Proof.AcceptedItemId, accepted.Proof.RemoteId, head, original.ItemId, original.RemoteId);
+        var identity = await ReadCurrentNamespaceIdentityHistoryAsync(member, original, transaction, token).ConfigureAwait(false);
         if (snapshot is not null) snapshot.MemberIdentities[member] = identity;
         return identity;
     }

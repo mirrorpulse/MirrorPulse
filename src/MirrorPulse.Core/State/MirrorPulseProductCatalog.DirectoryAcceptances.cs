@@ -53,12 +53,12 @@ public sealed partial class MirrorPulseProductCatalog
             if (payload.Length > NamespaceIdentityAcceptanceLimit) throw new ArgumentException("Directory acceptance must be bounded.");
             await using var insert = _connection.CreateCommand(); insert.Transaction = transaction;
             insert.CommandText = """
-                INSERT INTO directory_acceptances(operation_id,member_id,previous_operation_id,payload,fingerprint)
-                VALUES($operation,$member,$previous,$payload,$hash);
+                INSERT INTO directory_acceptances(operation_id,member_id,previous_operation_id,previous_move_id,payload,fingerprint)
+                VALUES($operation,$member,$previous,$previousMove,$payload,$hash);
                 """;
             insert.Parameters.AddWithValue("$operation", value.OperationId.ToString("D"));
             insert.Parameters.AddWithValue("$member", value.MemberId.ToString("D"));
-            insert.Parameters.AddWithValue("$previous", (object?)value.PreviousAcceptanceOperationId?.ToString("D") ?? DBNull.Value);
+            await BindNamespaceIdentityPredecessorAsync(insert, value.MemberId, value.PreviousAcceptanceOperationId, transaction, token).ConfigureAwait(false);
             insert.Parameters.AddWithValue("$payload", payload); insert.Parameters.AddWithValue("$hash", SHA256.HashData(payload));
             await insert.ExecuteNonQueryAsync(token).ConfigureAwait(false);
             transaction.Commit(); return value;
@@ -119,7 +119,7 @@ public sealed partial class MirrorPulseProductCatalog
                 throw new InvalidOperationException("Directory confirmation cannot adopt a later member position or earlier observation.");
             if (proof.PreviousAcceptanceOperationId is { } previous)
             {
-                var predecessor = await ReadDirectoryConfirmationCoreAsync(previous, transaction, token).ConfigureAwait(false)
+                var predecessor = await ReadNamespaceIdentityTransitionAsync(member, previous, transaction, token).ConfigureAwait(false)
                     ?? throw new InvalidOperationException("Directory confirmation requires its confirmed predecessor.");
                 if (receipt.ObservedAt < predecessor.ObservedAt)
                     throw new InvalidOperationException("Directory confirmation cannot precede its predecessor observation.");
@@ -139,7 +139,7 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task<MirrorPulseDirectoryAcceptance?> ReadDirectoryAcceptanceCoreAsync(Guid operationId, SqliteTransaction transaction, CancellationToken token)
     {
         await using var query = _connection.CreateCommand(); query.Transaction = transaction;
-        query.CommandText = "SELECT member_id,previous_operation_id,payload,fingerprint FROM directory_acceptances WHERE operation_id=$operation;";
+        query.CommandText = "SELECT member_id,previous_operation_id,payload,fingerprint,previous_move_id FROM directory_acceptances WHERE operation_id=$operation;";
         query.Parameters.AddWithValue("$operation", operationId.ToString("D"));
         MirrorPulseDirectoryAcceptance value;
         await using (var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false))
@@ -147,7 +147,7 @@ public sealed partial class MirrorPulseProductCatalog
             if (!await reader.ReadAsync(token).ConfigureAwait(false)) return null;
             value = ReadNamespaceMovePayload<MirrorPulseDirectoryAcceptance>((byte[])reader[2], (byte[])reader[3], NamespaceIdentityAcceptanceLimit, ValidateDirectoryAcceptance);
             if (value.OperationId != operationId || value.MemberId.ToString("D") != reader.GetString(0) ||
-                value.PreviousAcceptanceOperationId?.ToString("D") != (reader.IsDBNull(1) ? null : reader.GetString(1)))
+                value.PreviousAcceptanceOperationId?.ToString("D") != ReadNamespaceIdentityPredecessor(reader, 1, 4))
                 throw new InvalidDataException("The directory acceptance indexes changed their original identity.");
         }
         _ = await RequireDirectoryAcceptanceReferencesAsync(value, transaction, token).ConfigureAwait(false);

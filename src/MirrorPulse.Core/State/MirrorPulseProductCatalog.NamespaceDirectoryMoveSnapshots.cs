@@ -170,7 +170,7 @@ public sealed partial class MirrorPulseProductCatalog
                 throw new InvalidDataException("The sealed identity must belong to the same root and object before admission.");
             var accepted = await ValidateNamespaceIdentityHistoryAsync(member, acceptanceId, original, expectedItem,
                 expectedRemote, preparedAt, transaction, token).ConfigureAwait(false);
-            itemId = accepted.ItemId; remoteId = accepted.RemoteId;
+            itemId = accepted.Head.ItemId; remoteId = accepted.Head.RemoteId;
         }
         if (entry.Identity.ItemId != itemId || entry.Identity.RemoteId != remoteId ||
             entry.Identity.OriginalItemId != original.ItemId || entry.Identity.OriginalRemoteId != original.RemoteId)

@@ -13,7 +13,19 @@ public sealed partial class MirrorPulseProductCatalog
         SqliteTransaction transaction, CancellationToken token)
     {
         var accepted = await ReadNamespaceIdentityAcceptanceRowAsync(operationId, transaction, token).ConfigureAwait(false);
-        if (accepted is not null) _ = await ValidateNamespaceIdentityAcceptanceChainAsync(accepted, transaction, token).ConfigureAwait(false);
+        if (accepted is null) return null;
+        try
+        {
+            var member = await ReadNamespaceMemberCoreAsync(accepted.MemberId, transaction, token).ConfigureAwait(false)
+                ?? throw new FileNotFoundException("The accepted identity lost its original member.");
+            var original = await ReadOriginalNamespaceMemberIdentityAsync(member, transaction, token).ConfigureAwait(false);
+            await ValidateNamespaceIdentityHistoryAsync(member, operationId, original, accepted.Proof.AcceptedItemId,
+                accepted.Proof.RemoteId, accepted.Confirmation.ObservedAt, transaction, token).ConfigureAwait(false);
+        }
+        catch (Exception error) when (error is InvalidOperationException or FileNotFoundException or ArgumentException or JsonException)
+        {
+            throw new InvalidDataException("The accepted identity lost its original member, upload or predecessor proof.", error);
+        }
         return accepted;
     }
 
@@ -21,7 +33,7 @@ public sealed partial class MirrorPulseProductCatalog
         SqliteTransaction transaction, CancellationToken token)
     {
         await using var query = _connection.CreateCommand(); query.Transaction = transaction;
-        query.CommandText = "SELECT operation_id,member_id,previous_operation_id,payload,fingerprint FROM namespace_member_identity_acceptances WHERE operation_id=$operation;";
+        query.CommandText = "SELECT operation_id,member_id,previous_operation_id,payload,fingerprint,previous_move_id FROM namespace_member_identity_acceptances WHERE operation_id=$operation;";
         query.Parameters.AddWithValue("$operation", operationId.ToString("D"));
         await using var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
         if (!await reader.ReadAsync(token).ConfigureAwait(false)) return null;
@@ -29,32 +41,9 @@ public sealed partial class MirrorPulseProductCatalog
             NamespaceIdentityAcceptanceLimit, ValidateNamespaceIdentityAcceptance);
         if (accepted.Proof.OperationId != operationId || reader.GetString(0) != operationId.ToString("D") ||
             reader.GetString(1) != accepted.MemberId.ToString("D") ||
-            (reader.IsDBNull(2) ? null : reader.GetString(2)) != accepted.PreviousAcceptanceOperationId?.ToString("D"))
+            ReadNamespaceIdentityPredecessor(reader, 2, 5) != accepted.PreviousAcceptanceOperationId?.ToString("D"))
             throw new InvalidDataException("The accepted identity indexes disagree with their immutable correlation.");
         return accepted;
-    }
-
-    private async Task<long> ValidateNamespaceIdentityAcceptanceChainAsync(MirrorPulseNamespaceIdentityAcceptance head,
-        SqliteTransaction transaction, CancellationToken token)
-    {
-        var visited = new HashSet<Guid>(); var current = head; long length = 0;
-        try
-        {
-            while (true)
-            {
-                token.ThrowIfCancellationRequested();
-                if (!visited.Add(current.Proof.OperationId)) throw new InvalidDataException("The accepted identity history contains a cycle.");
-                var member = await ReadNamespaceMemberCoreAsync(current.MemberId, transaction, token).ConfigureAwait(false)
-                    ?? throw new FileNotFoundException("The accepted identity lost its original member.");
-                await ValidateNamespaceIdentityAcceptanceReferencesAsync(current, member, transaction, token).ConfigureAwait(false);
-                length++;
-                if (current.PreviousAcceptanceOperationId is not { } previous) return length;
-                current = await ReadNamespaceIdentityAcceptanceRowAsync(previous, transaction, token).ConfigureAwait(false)
-                    ?? throw new FileNotFoundException("The accepted identity predecessor is missing.");
-            }
-        }
-        catch (Exception error) when (error is InvalidOperationException or FileNotFoundException or ArgumentException or JsonException)
-        { throw new InvalidDataException("The accepted identity lost its original member, upload or predecessor proof.", error); }
     }
 
     private async Task ValidateNamespaceIdentityAcceptanceReferencesAsync(MirrorPulseNamespaceIdentityAcceptance value,
@@ -81,22 +70,6 @@ public sealed partial class MirrorPulseProductCatalog
                 uploadIdentity.ItemId != value.PreviousItemId || uploadIdentity.RemoteId != value.PreviousRemoteId ||
                 uploadIdentity.AcceptanceOperationId != value.PreviousAcceptanceOperationId))
             throw new InvalidOperationException("Ordinary conversion must follow its original upload-time member identity, not a later path or head.");
-        if (value.PreviousAcceptanceOperationId is { } previousId)
-        {
-            var previous = await ReadNamespaceIdentityAcceptanceRowAsync(previousId, transaction, token).ConfigureAwait(false)
-                ?? throw new FileNotFoundException("The accepted identity predecessor is missing.");
-            if (previous.MemberId != value.MemberId || previous.RootId != value.RootId ||
-                previous.Proof.UploadBinding.LocalObject != proof.UploadBinding.LocalObject ||
-                previous.Proof.AcceptedItemId != value.PreviousItemId || previous.Proof.RemoteId != value.PreviousRemoteId ||
-                previous.Confirmation.ObservedAt > value.Confirmation.ObservedAt)
-                throw new InvalidOperationException("An accepted identity must follow the same member's confirmed identity and chronology.");
-        }
-        else
-        {
-            var original = await ReadOriginalNamespaceMemberIdentityAsync(member, transaction, token).ConfigureAwait(false);
-            if (original.ItemId != value.PreviousItemId || original.RemoteId != value.PreviousRemoteId)
-                throw new InvalidOperationException("The first accepted identity must retain the member's first public identity.");
-        }
     }
 
     private async Task RequireNamespaceIdentityRootScopeAsync(MirrorPulseNamespaceIdentityAcceptance value,

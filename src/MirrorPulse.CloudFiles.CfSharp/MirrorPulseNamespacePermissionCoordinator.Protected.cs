@@ -156,6 +156,12 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinator
         // Ordinary directories have no placeholder identity to retain. Permission work
         // must neither convert them nor invent a remote identity for them.
         if (retained is null && !local.IsPlaceholder && local.ItemId is null && local.RemoteId is null) return null;
+        var member = await _catalog.ReadNamespaceMemberByBindingAsync(baseline.LocalObject, token).ConfigureAwait(false);
+        if (member is not null && (!member.IsDirectory || member.Origin != MirrorPulseNamespaceMemberOrigin.CapturedOriginal ||
+            member.OriginId != baseline.EvidenceId || member.RootId != baseline.RootId ||
+            member.LocalObject != baseline.LocalObject || member.OwnerSid != baseline.OwnerSid))
+            throw new InvalidDataException("Original directory permission preparation cannot adopt another member's identity.");
+        var current = member is null ? null : await _catalog.ReadNamespaceMemberIdentityAsync(member.MemberId, token).ConfigureAwait(false);
         if (retained is null && !local.IsPlaceholder && local.PlaceholderIdentity is null &&
             MatchesRetainedIdentity(local, null, null))
         {
@@ -163,20 +169,13 @@ public sealed partial class MirrorPulseNamespacePermissionCoordinator
             // giving the native object a placeholder identity. Only an already
             // registered original with no past or accepted native identity may
             // retain Access-only protection. Do not adopt the journal's tracking pair.
-            var member = await _catalog.ReadNamespaceMemberByBindingAsync(baseline.LocalObject, token).ConfigureAwait(false);
-            if (member is { IsDirectory: true, Origin: MirrorPulseNamespaceMemberOrigin.CapturedOriginal } &&
-                member.OriginId == baseline.EvidenceId && member.RootId == baseline.RootId &&
-                member.LocalObject == baseline.LocalObject && member.OwnerSid == baseline.OwnerSid)
-            {
-                var identity = await _catalog.ReadNamespaceMemberIdentityAsync(member.MemberId, token).ConfigureAwait(false);
-                if (identity is { ItemId: null, RemoteId: null, OriginalItemId: null, OriginalRemoteId: null, AcceptanceOperationId: null })
-                    return null;
-            }
+            if (current is { ItemId: null, RemoteId: null, OriginalItemId: null, OriginalRemoteId: null, AcceptanceOperationId: null })
+                return null;
         }
         if (!local.IsPlaceholder || local.PlaceholderIdentity is null || local.ItemId is null || local.RemoteId is null ||
-            !MatchesRetainedIdentity(local, retained, null))
+            !MatchesRetainedIdentity(local, retained, current))
             return await FenceAsync(change, MirrorPulseNamespacePermissionRecoveryReason.ObjectChanged).ConfigureAwait(false);
-        if (retained is not null) return null;
+        if (retained is not null || current?.AcceptanceOperationId is not null) return null;
         var history = await _catalog.ReadNamespacePermissionObjectHistoryAsync(baseline.EvidenceId, token).ConfigureAwait(false);
         if (change.Phase != MirrorPulseNamespacePermissionPhase.Prepared ||
             change.Intent.Kind != MirrorPulseNamespacePermissionChangeKind.Protect || history.Count != 1)

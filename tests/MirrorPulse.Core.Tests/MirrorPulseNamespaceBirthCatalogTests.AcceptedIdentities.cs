@@ -132,7 +132,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
 
     private static async Task<(MirrorPulseContentAcceptanceProof Proof, MirrorPulseContentConfirmationReceipt Receipt)> PrepareIdentityUploadAsync(
         MirrorPulseProductCatalog catalog, MoveFixture setup, RootRegistration root, DateTimeOffset observedAt, string? mismatch = null,
-        bool ordinary = false, MirrorPulseNamespaceUploadIdentity? namespaceIdentity = null)
+        bool ordinary = false, MirrorPulseNamespaceUploadIdentity? namespaceIdentity = null, string relativePath = "new.txt")
     {
         var binding = new MirrorPulseUploadBinding(mismatch == "binding" ? setup.Member.LocalObject with { LocalFileId = Guid.NewGuid() } : setup.Member.LocalObject,
             ordinary ? MirrorPulseContentPreparation.ConvertRegularFile : MirrorPulseContentPreparation.ReplacePlaceholderIdentity,
@@ -140,7 +140,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         { NamespaceIdentity = namespaceIdentity }; // Synthetic Core facts assert no native success.
         var intent = new MirrorPulseMutationIntent(Guid.NewGuid(), mismatch == "instance" ? InstanceId.New() : root.InstanceId,
             mismatch == "root-key" ? "another-root" : root.UniquenessKey, MirrorPulseWorkerChangeKind.ContentUpdate,
-            "new.txt", null, false, null, 4, new string('B', 64), MirrorPulseMutationOrigin.Journal, binding);
+            relativePath, null, false, null, 4, new string('B', 64), MirrorPulseMutationOrigin.Journal, binding);
         await catalog.PrepareMutationAsync(intent);
         await catalog.TransitionMutationAsync(intent.OperationId, MirrorPulseMutationState.Prepared, MirrorPulseMutationState.Executing);
         await catalog.TransitionMutationAsync(intent.OperationId, MirrorPulseMutationState.Executing, MirrorPulseMutationState.RemoteAccepted, "accepted");

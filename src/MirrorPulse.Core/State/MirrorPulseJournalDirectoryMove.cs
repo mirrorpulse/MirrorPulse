@@ -15,6 +15,8 @@ internal sealed record MirrorPulseJournalDirectoryMoveAdmission(Guid JournalOper
 
 internal sealed record MirrorPulseDirectoryMoveTarget(Guid MemberId, Guid ItemId, string RemoteId, string? Revision);
 
+internal sealed record MirrorPulseDirectoryMoveProjectionReadback(MirrorPulseDirectoryMoveTarget Target, DateTimeOffset ObservedAt);
+
 internal sealed record MirrorPulseJournalDirectoryMove(MirrorPulseJournalDirectoryMoveAdmission Admission,
     MirrorPulseMutationRecord Mutation, IReadOnlyList<MirrorPulseDirectoryMoveTarget>? Targets,
     int ProjectedMemberCount, bool AcknowledgementStarted);

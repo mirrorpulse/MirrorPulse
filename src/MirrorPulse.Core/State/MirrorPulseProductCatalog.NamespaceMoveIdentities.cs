@@ -13,7 +13,7 @@ public sealed partial class MirrorPulseProductCatalog
         {
             var identity = await ValidateNamespaceIdentityHistoryAsync(member, operationId, original, intent.ItemId,
                 intent.RemoteId, intent.PreparedAt, transaction, token).ConfigureAwait(false);
-            itemId = identity.ItemId; remoteId = identity.RemoteId;
+            itemId = identity.Head.ItemId; remoteId = identity.Head.RemoteId;
         }
         if (!member.IsDirectory && itemId is null)
             throw new InvalidOperationException("An original file move requires its retained pre-conversion identity.");

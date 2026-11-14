@@ -12,7 +12,7 @@ internal sealed class MirrorPulseJournalDirectoryMoveIdentityPatch(CloudFileSyst
     MirrorPulseCfSharpStateSession state, MirrorPulseProductCatalog catalog, MirrorPulseRootRouter router,
     MirrorPulseNamespaceActor actor, MirrorPulseNamespaceExecutionSession execution)
 {
-    internal ValueTask<MirrorPulseDirectoryMoveTarget> ApplyAsync(MirrorPulseJournalDirectoryMoveAdmission admission,
+    internal ValueTask<MirrorPulseDirectoryMoveProjectionReadback> ApplyAsync(MirrorPulseJournalDirectoryMoveAdmission admission,
         MirrorPulseJournalDirectoryMoveProjection projection, CancellationToken token) => actor.RunAsync(async admitted =>
     {
         actor.AssertAccess();
@@ -63,8 +63,9 @@ internal sealed class MirrorPulseJournalDirectoryMoveIdentityPatch(CloudFileSyst
                 throw new InvalidDataException("The public identity patch did not retain the exact official target projection.");
             await transaction.RollbackAsync(durable).ConfigureAwait(false);
         }).ConfigureAwait(false);
-        return new MirrorPulseDirectoryMoveTarget(original.MemberId, projection.TargetIdentity.ItemId,
-            projection.TargetIdentity.RemoteId, projection.TargetIdentity.RemoteRevision);
+        return new MirrorPulseDirectoryMoveProjectionReadback(
+            new(original.MemberId, projection.TargetIdentity.ItemId, projection.TargetIdentity.RemoteId,
+                projection.TargetIdentity.RemoteRevision), DateTimeOffset.UtcNow);
     }, token);
 
     private static void RequireSameObject(CloudItemSnapshot snapshot, MirrorPulseNamespacePermissionObject facts,
