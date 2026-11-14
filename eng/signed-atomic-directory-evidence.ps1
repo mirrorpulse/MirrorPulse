@@ -21,7 +21,7 @@ function Confirm-SignedDirectoryMoveReport {
     $rows = @($report.TestRun.Results.UnitTestResult)
     if ($rows.Count -ne 1 -or $rows[0].outcome -cne 'Passed') { throw 'The signed directory Move case must pass.' }
     $facts = @(([string]$rows[0].Output.StdOut -split '\r?\n') | Where-Object { $_.StartsWith('SignedDirectoryMove: ', [StringComparison]::Ordinal) })
-    $expected = 'SignedDirectoryMove: packageSha256=' + $PackageSha256 + '; originalCount=1; members=3; hydrationReads=0; interruptedProjection=1; createdMembers=3; createOriginals=3; createdFileBytes=7.'
+    $expected = 'SignedDirectoryMove: packageSha256=' + $PackageSha256 + '; originalCount=1; members=3; hydrationReads=0; interruptedProjection=1; createdMembers=3; createOriginals=3; createdFileBytes=7; laterSourceContentPreserved=True.'
     if ($facts.Count -ne 1 -or $facts[0] -cne $expected) {
         throw 'The original execution does not bind the signed package, original Move and all three projections.'
     }

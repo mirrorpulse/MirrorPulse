@@ -35,6 +35,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         const string movedFile = destination + "/" + child + "/" + fileName;
         string[] originals = [source, source + "/" + child, originalFile];
         byte[] bytes = [76, 111, 99, 97, 108, 13, 10];
+        byte[] laterBytes = [.. bytes, 42, 43];
         Directory.CreateDirectory(Path.Combine(backend, source, child));
         await File.WriteAllBytesAsync(Path.Combine(backend, originalFile), bytes, token);
         var topology = await MirrorPulseAtomicDirectoryJournalTests.PrepareDirectoryJournalTopologyAsync(paths, package, executable, backend, cache, token);
@@ -61,7 +62,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             await using var actor = new MirrorPulseNamespaceActor();
             await using var scheduler = new MirrorPulseInstanceScheduler();
             await using var work = new MirrorPulseNamespaceWorkAdmission([root.RootId]);
-            var transport = new MirrorPulseNormalUserWorkerTransport(execution, worker, worker, worker, worker, worker);
+            var laterSource = new LaterDirectoryMoveSourceReadback(worker, backend, movedFile, laterBytes);
+            var transport = new MirrorPulseNormalUserWorkerTransport(execution, worker, worker, worker, laterSource, worker);
             var noContent = new RemoteMovementContentGuard();
             int dispatchEnabled = 1;
             CloudLocalChangeFeed? journal = null;
@@ -107,7 +109,10 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             Assert.AreEqual(1, projection.Failures);
             Assert.AreEqual(0, noContent.Reads);
             Assert.IsFalse(Directory.Exists(Path.Combine(backend, source)));
-            CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(Path.Combine(backend, movedFile), token));
+            CollectionAssert.AreEqual(laterBytes, await File.ReadAllBytesAsync(Path.Combine(backend, movedFile), token));
+            Assert.AreEqual(1, laterSource.Edits);
+            Assert.IsNotNull(laterSource.Revision);
+            Assert.AreNotEqual(originalBindings[^1].Revision, laterSource.Revision);
             await using (var official = await store.Store.BeginTransactionAsync(token))
             {
                 Assert.IsNull(await official.Operations.GetAsync(originalOperation, token));
@@ -183,7 +188,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             {
                 await using var packageStream = File.OpenRead(package);
                 string digest = Convert.ToHexString(await SHA256.HashDataAsync(packageStream, token));
-                TestContext.WriteLine($"SignedDirectoryMove: packageSha256={digest}; originalCount=1; members=3; hydrationReads=0; interruptedProjection=1; createdMembers=3; createOriginals=3; createdFileBytes={bytes.Length}.");
+                TestContext.WriteLine($"SignedDirectoryMove: packageSha256={digest}; originalCount=1; members=3; hydrationReads=0; interruptedProjection=1; createdMembers=3; createOriginals=3; createdFileBytes={bytes.Length}; laterSourceContentPreserved=True.");
             }
         }
         catch (Exception error) { operationFailure = error; throw; }
@@ -249,4 +254,23 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             return retained;
         }
     }
+    private sealed class LaterDirectoryMoveSourceReadback(IMirrorPulseWorkerDirectoryPageSource worker,
+        string backend, string movedFile, byte[] bytes) : IMirrorPulseWorkerDirectoryPageSource
+    {
+        private int _edits;
+        internal int Edits => Volatile.Read(ref _edits);
+        internal string? Revision { get; private set; }
+
+        public async ValueTask<MirrorPulseWorkerDirectoryPage> ReadDirectoryPageAsync(MirrorPulseWorkerDirectoryPageRequest request,
+            CancellationToken cancellationToken)
+        {
+            string parent = movedFile[..movedFile.LastIndexOf('/')];
+            bool change = request.NormalizedPath == parent && Interlocked.CompareExchange(ref _edits, 1, 0) == 0;
+            if (change) await File.WriteAllBytesAsync(Path.Combine(backend, movedFile), bytes, cancellationToken);
+            var page = await worker.ReadDirectoryPageAsync(request, cancellationToken);
+            if (change) Revision = page.Entries.Single(entry => entry.RelativePath == movedFile).RemoteRevision;
+            return page;
+        }
+    }
+
 }
