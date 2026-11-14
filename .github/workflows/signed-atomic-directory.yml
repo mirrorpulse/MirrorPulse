@@ -1,20 +1,6 @@
 name: Signed Local original directory acceptance
 
 on:
-  workflow_dispatch:
-    inputs:
-      verify_atomic_directory:
-        description: Verify original atomic directory Delete
-        type: boolean
-        default: true
-      verify_directory_move:
-        description: Verify the original durable directory Move
-        type: boolean
-        default: true
-      local_preview:
-        description: Published Local preview tag to qualify instead of the stable release
-        type: string
-        required: false
   workflow_call:
     inputs:
       verify_atomic_directory:
