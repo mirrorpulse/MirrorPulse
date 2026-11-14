@@ -174,7 +174,9 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
 
             var finalReads = new RemoteMovementContentGuard();
             var finalState = new MirrorPulseCfSharpStateSession(paths);
-            await using (var inspect = new MirrorPulseCloudFileSystemBuilder(paths).WithStateStore(finalState)
+            await using var role = new MirrorPulseNamespaceExecutionSession();
+            var projectionFault = new MirrorPulseTransferProjectionCommitFault(role.RoleSid);
+            await using (var inspect = new MirrorPulseCloudFileSystemBuilder(paths).WithStateStore(projectionFault.Wrap(finalState))
                 .WithContentProvider(finalReads).Build())
             {
                 await inspect.StartAsync(deadline.Token);
@@ -228,7 +230,6 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     catalog.RecordJournalDirectoryMoveProjectionAsync(moveRow.OperationId, 0, new(targetPlan[1], DateTimeOffset.UtcNow), deadline.Token));
                 await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
                     catalog.RecordJournalDirectoryMoveProjectionAsync(moveRow.OperationId, 1, new(targetPlan[1], DateTimeOffset.UtcNow), deadline.Token));
-                await using var role = new MirrorPulseNamespaceExecutionSession();
                 await using var actor = new MirrorPulseNamespaceActor();
                 await using var scheduler = new MirrorPulseInstanceScheduler();
                 await using var work = new MirrorPulseNamespaceWorkAdmission([root.RootId]);
@@ -245,6 +246,19 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     var target = targetPlan[ordinal];
                     var identity = new CloudPlaceholderIdentity(target.ItemId, target.RemoteId, target.Revision);
                     var projection = new MirrorPulseJournalDirectoryMoveProjection(admission.Members[ordinal], identity);
+                    if (ordinal == 0)
+                    {
+                        projectionFault.Arm(target.ItemId);
+                        await Assert.ThrowsExactlyAsync<CloudItemCoordinationException>(async () =>
+                            await patch.ApplyAsync(admission, projection, deadline.Token));
+                        Assert.AreEqual(1, projectionFault.Failures);
+                        var native = await inspect.GetDirectory(targetDirectory).InspectAsync(deadline.Token);
+                        Assert.AreEqual(target.ItemId, CloudPlaceholderIdentity.Decode(native.PlaceholderIdentity.Span).ItemId);
+                        await using var uncommitted = await finalState.OpenStore.BeginTransactionAsync(deadline.Token);
+                        Assert.IsNull(await uncommitted.Items.GetByItemIdAsync(target.ItemId, deadline.Token));
+                        Assert.IsNotNull(await uncommitted.Items.GetByItemIdAsync(admission.Root.OriginalItemId, deadline.Token));
+                        await uncommitted.RollbackAsync(deadline.Token);
+                    }
                     var observed = await patch.ApplyAsync(admission, projection, deadline.Token);
                     if (ordinal == 0)
                     {

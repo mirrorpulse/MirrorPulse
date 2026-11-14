@@ -40,10 +40,14 @@ internal sealed class MirrorPulseJournalDirectoryMoveIdentityPatch(CloudFileSyst
             await using var lease = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(item, router, admitted).ConfigureAwait(false);
             var before = await item.InspectAsync(admitted).ConfigureAwait(false);
             RequireSameObject(before, await lease.InspectAsync(admitted).ConfigureAwait(false), member, proof, original);
-            if (!before.PlaceholderIdentity.Span.SequenceEqual(target))
+            bool nativeMatches = before.PlaceholderIdentity.Span.SequenceEqual(target);
+            if (!nativeMatches && !before.PlaceholderIdentity.Span.SequenceEqual(previous))
+                throw new MirrorPulseMutationAmbiguousException("The moved placeholder has a different current identity.");
+            var official = await ReadOfficialProjectionAsync(original, projection.TargetIdentity, before.Kind, admitted).ConfigureAwait(false);
+            if (!official.Target && !official.Original)
+                throw new MirrorPulseMutationAmbiguousException("The moved placeholder has a different official projection.");
+            if (!nativeMatches || !official.Target)
             {
-                if (!before.PlaceholderIdentity.Span.SequenceEqual(previous))
-                    throw new MirrorPulseMutationAmbiguousException("The moved placeholder has a different current identity.");
                 // The native patch must never confirm dirty bytes or request hydration.
                 if (item is CloudDirectory directory)
                     await directory.UpdatePlaceholderAsync(CloudPlaceholderPatch.CreateBuilder().WithIdentity(projection.TargetIdentity).Build(), admitted).ConfigureAwait(false);
@@ -56,17 +60,32 @@ internal sealed class MirrorPulseJournalDirectoryMoveIdentityPatch(CloudFileSyst
             if (!after.PlaceholderIdentity.Span.SequenceEqual(target) || after.ContentAvailability != before.ContentAvailability ||
                 after.OnDiskDataSize != before.OnDiskDataSize || after.SynchronizationState != before.SynchronizationState)
                 throw new InvalidDataException("The directory Move identity patch changed content state or failed to retain its exact target.");
-            await using var transaction = await state.OpenStore.BeginTransactionAsync(durable).ConfigureAwait(false);
-            var row = await transaction.Items.GetByItemIdAsync(projection.TargetIdentity.ItemId, durable).ConfigureAwait(false);
-            if (row is null || row.IsTombstone || row.Kind != after.Kind || row.RelativePath.Replace('\\', '/') != original.TargetPath ||
-                row.RemoteId != projection.TargetIdentity.RemoteId || row.RemoteRevision != projection.TargetIdentity.RemoteRevision)
+            if (!(await ReadOfficialProjectionAsync(original, projection.TargetIdentity, after.Kind, durable).ConfigureAwait(false)).Target)
                 throw new InvalidDataException("The public identity patch did not retain the exact official target projection.");
-            await transaction.RollbackAsync(durable).ConfigureAwait(false);
         }).ConfigureAwait(false);
         return new MirrorPulseDirectoryMoveProjectionReadback(
             new(original.MemberId, projection.TargetIdentity.ItemId, projection.TargetIdentity.RemoteId,
                 projection.TargetIdentity.RemoteRevision), DateTimeOffset.UtcNow);
     }, token);
+
+    private async ValueTask<(bool Original, bool Target)> ReadOfficialProjectionAsync(MirrorPulseJournalDirectoryMoveMember original,
+        CloudPlaceholderIdentity target, CloudItemKind kind, CancellationToken token)
+    {
+        await using var transaction = await state.OpenStore.BeginTransactionAsync(token).ConfigureAwait(false);
+        var prior = await transaction.Items.GetByItemIdAsync(original.OriginalItemId, token).ConfigureAwait(false);
+        var current = await transaction.Items.GetByItemIdAsync(target.ItemId, token).ConfigureAwait(false);
+        await transaction.RollbackAsync(token).ConfigureAwait(false);
+        bool originalMatches = MatchesPath(prior) && prior!.RemoteId == original.OriginalRemoteId &&
+            prior.RemoteRevision == original.OriginalRevision;
+        bool targetMatches = MatchesPath(current) && current!.RemoteId == target.RemoteId &&
+            current.RemoteRevision == target.RemoteRevision;
+        if (current is not null && !targetMatches || prior is not null && prior.ItemId != target.ItemId && (!originalMatches || targetMatches))
+            return default;
+        return (originalMatches, targetMatches);
+
+        bool MatchesPath(CloudItemState? row) => row is { IsTombstone: false } &&
+            row.Kind == kind && row.RelativePath.Replace('\\', '/') == original.TargetPath;
+    }
 
     private static void RequireSameObject(CloudItemSnapshot snapshot, MirrorPulseNamespacePermissionObject facts,
         MirrorPulseNamespaceMemberRegistration member, MirrorPulseNamespaceProtectionProof proof, MirrorPulseJournalDirectoryMoveMember original)
