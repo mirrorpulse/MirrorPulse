@@ -40,7 +40,7 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator(CloudFileSys
             var targetRoute = CaptureRoute(topology, targetParent);
             if (targetRoute.ProtocolVersion != 2)
                 throw new InvalidOperationException("A transfer requires a negotiated V2 target before source materialization.");
-        await MaterializeFileAsync(original, token).ConfigureAwait(false);
+            await MaterializeFileAsync(original, token).ConfigureAwait(false);
         });
 
     private async Task MaterializeFileAsync(MirrorPulseNamespaceMemberProtectionSnapshot original, CancellationToken token)
