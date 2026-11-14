@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$ResultsDirectory,
-    [ValidateSet("managed", "native", "official", "signed", "packaged", "namespace", "cfsharpDelete", "cfsharpRecreation", "deferredP079", "signedAtomicDirectory", "signedDirectoryMove")][string]$Suite = "managed",
+    [ValidateSet("managed", "native", "official", "signed", "packaged", "namespace", "cfsharpDelete", "cfsharpRecreation", "deferredP079", "signedAtomicDirectory", "signedDirectoryMove", "signedDirectoryTransfer")][string]$Suite = "managed",
     [string]$OutputPath
 )
 
@@ -22,8 +22,8 @@ $results = @(
             if ($null -eq $definition) { throw "A TRX result has no test definition." }
             $name = "$($definition.TestMethod.className.Split(',')[0]).$($definition.TestMethod.name)"
             $category = "managed"
-            foreach ($candidate in @("native", "official", "signed", "packaged", "deferredP079", "signedAtomicDirectory", "signedDirectoryMove")) {
-                if ($catalog.required.$candidate -contains $name) { $category = if ($candidate -in @('deferredP079','signedAtomicDirectory','signedDirectoryMove')) { 'native' } else { $candidate }; break }
+            foreach ($candidate in @("native", "official", "signed", "packaged", "deferredP079", "signedAtomicDirectory", "signedDirectoryMove", "signedDirectoryTransfer")) {
+                if ($catalog.required.$candidate -contains $name) { $category = if ($candidate -in @('deferredP079','signedAtomicDirectory','signedDirectoryMove','signedDirectoryTransfer')) { 'native' } else { $candidate }; break }
             }
             [pscustomobject][ordered]@{
                 name = $name
@@ -55,7 +55,7 @@ if ($Suite -eq "managed") {
 } else {
     Assert-RequiredTestResults -Catalog $catalog -Suite $Suite -Results $results
     if ($skipped.Count -ne 0) { throw "The $Suite gate contains skipped tests." }
-    if ($Suite -in @('namespace', 'cfsharpDelete', 'cfsharpRecreation', 'deferredP079', 'signedAtomicDirectory', 'signedDirectoryMove') -and
+    if ($Suite -in @('namespace', 'cfsharpDelete', 'cfsharpRecreation', 'deferredP079', 'signedAtomicDirectory', 'signedDirectoryMove', 'signedDirectoryTransfer') -and
         $results.Count -ne (Get-RequiredTestExecutionCount -Catalog $catalog -Names @($catalog.required.$Suite))) {
         throw "The $Suite gate must select exactly the required tests."
     }

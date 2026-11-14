@@ -9,6 +9,10 @@ internal sealed record MirrorPulseDirectoryTransferRetirement(Guid TransferId, i
     Guid MemberId, MirrorPulseNamespaceTransferSourceProjection Projection, DateTimeOffset StartedAt,
     MirrorPulseNamespacePermissionVerification? Parent = null, DateTimeOffset? RetiredAt = null, long? NameEpoch = null);
 
+/// <summary>Validated historical retirement of one original directory transfer member.</summary>
+public sealed record MirrorPulseNamespaceDirectoryTransferRetiredMember(Guid TransferId, Guid EffectId,
+    MirrorPulseNamespaceMemberRegistration Member, DateTimeOffset RetiredAt, long NameEpoch);
+
 public sealed partial class MirrorPulseProductCatalog
 {
     private const string DirectoryTransferNativeRetirementTable = """
@@ -163,6 +167,37 @@ public sealed partial class MirrorPulseProductCatalog
     internal static MirrorPulseNamespaceMemberProtectionSnapshot DirectoryTransferSourceParent(MirrorPulseDirectoryTransferAdmission plan, int ordinal) =>
         ordinal == 0 ? plan.SourceParent : plan.Members.First(member => member.Source.Protection.Context.Member.MemberId ==
             plan.Members[ordinal].Source.Protection.Context.Location.ParentMemberId).Source.Protection;
+
+    private async Task<MirrorPulseNamespaceDirectoryTransferRetiredMember?> ReadCompletedDirectoryTransferRetirementForMemberCoreAsync(
+        Guid memberId, SqliteTransaction transaction, CancellationToken token)
+    {
+        Guid transferId;
+        bool complete;
+        await using (var query = _connection.CreateCommand())
+        {
+            query.Transaction = transaction;
+            query.CommandText = "SELECT transfer_id,completed FROM namespace_directory_transfer_retirements WHERE member_id=$member;";
+            query.Parameters.AddWithValue("$member", memberId.ToString("D"));
+            await using var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
+            if (!await reader.ReadAsync(token).ConfigureAwait(false)) return null;
+            transferId = ParseNamespaceMemberId(reader.GetString(0));
+            complete = reader.GetInt64(1) == 1;
+        }
+        _namespaceRecoveryReadSnapshots.TryGetValue(transaction, out var snapshot);
+        if (snapshot is null || !snapshot.DirectoryTransferRetiredMembers.TryGetValue(transferId, out var members))
+        {
+            var (plan, _) = await ReadDirectoryTransferBirthEvidenceAsync(transferId, transaction, token).ConfigureAwait(false);
+            var rows = await ReadDirectoryTransferRetirementsCoreAsync(transferId, transaction, token).ConfigureAwait(false);
+            members = rows.ToDictionary(row => row.MemberId, row => row.RetiredAt is { } retiredAt
+                ? new MirrorPulseNamespaceDirectoryTransferRetiredMember(transferId, row.EffectId,
+                    plan.Members[row.Ordinal].Source.Protection.Context.Member, retiredAt, row.NameEpoch!.Value)
+                : null);
+            if (snapshot is not null) snapshot.DirectoryTransferRetiredMembers[transferId] = members;
+        }
+        if (!members.TryGetValue(memberId, out var retirement) || complete != (retirement is not null))
+            throw new InvalidDataException("The original directory transfer retirement no longer matches its member index.");
+        return retirement;
+    }
 
     private async Task<IReadOnlyList<MirrorPulseDirectoryTransferRetirement>> ReadDirectoryTransferRetirementsCoreAsync(
         Guid transferId, SqliteTransaction transaction, CancellationToken token)

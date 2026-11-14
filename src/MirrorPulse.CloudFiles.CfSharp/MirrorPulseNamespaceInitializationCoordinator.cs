@@ -165,6 +165,7 @@ public sealed class MirrorPulseNamespaceInitializationCoordinator(CloudFileSyste
             var current = await catalog.ReadNamespaceCurrentTreeSnapshotAsync(anchor, token).ConfigureAwait(false);
             if (current.RetiredMembers.Any(item => selected.Contains(item.Intent.RootId)) ||
                 current.RetiredTreeMembers?.Any(item => item.Original.Context.Member.RootId is { } treeRoot && selected.Contains(treeRoot)) == true ||
+                current.RetiredTransferMembers?.Any(item => item.Member.RootId is { } transferRoot && selected.Contains(transferRoot)) == true ||
                 current.Members.Any(item => item.Context.Member.RootId is { } id && selected.Contains(id) &&
                     (item.Context.Member.Origin != MirrorPulseNamespaceMemberOrigin.CapturedOriginal ||
                     item.Context.Location.CurrentPositionOperationId is not null ||

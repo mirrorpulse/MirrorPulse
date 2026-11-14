@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       directory_acceptance_only:
-        description: Run only signed Local directory Delete and Move acceptance
+        description: Run only signed Local directory Delete, Move and cross-instance transfer acceptance
         type: boolean
         default: false
       verify_shell:
@@ -18,6 +18,10 @@ on:
         default: false
       verify_directory_move:
         description: Run signed Local directory Move acceptance on x64 and ARM64
+        type: boolean
+        default: false
+      verify_directory_transfer:
+        description: Run signed Local cross-instance directory transfer acceptance on x64 and ARM64
         type: boolean
         default: false
       local_atomic_preview:
@@ -34,12 +38,13 @@ permissions:
 
 jobs:
   signed-atomic-directory:
-    if: github.event_name == 'workflow_dispatch' && (inputs.directory_acceptance_only || inputs.verify_atomic_directory || inputs.verify_directory_move)
+    if: github.event_name == 'workflow_dispatch' && (inputs.directory_acceptance_only || inputs.verify_atomic_directory || inputs.verify_directory_move || inputs.verify_directory_transfer)
     uses: ./.github/workflows/signed-atomic-directory.yml
     with:
       local_preview: ${{ inputs.local_atomic_preview }}
       verify_atomic_directory: ${{ inputs.directory_acceptance_only || inputs.verify_atomic_directory }}
       verify_directory_move: ${{ inputs.directory_acceptance_only || inputs.verify_directory_move }}
+      verify_directory_transfer: ${{ inputs.directory_acceptance_only || inputs.verify_directory_transfer }}
 
   official-adapter-candidate:
     if: github.event_name != 'workflow_dispatch' || !inputs.directory_acceptance_only || inputs.verify_shell

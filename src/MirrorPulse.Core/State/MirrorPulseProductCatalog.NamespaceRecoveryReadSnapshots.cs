@@ -22,6 +22,9 @@ public sealed partial class MirrorPulseProductCatalog
         internal NamespaceHistoryCache<(MirrorPulseDirectoryTransferAdmission Admission, MirrorPulseDirectoryTransferTargetVerification Verification)>
             DirectoryTransferBirthEvidence
         { get; } = new();
+        internal NamespaceHistoryCache<IReadOnlyDictionary<Guid, MirrorPulseNamespaceDirectoryTransferRetiredMember?>>
+            DirectoryTransferRetiredMembers
+        { get; } = new();
         internal NamespaceHistoryCache<MirrorPulseNamespaceInitializationStatus> Initializations { get; } = new();
         internal NamespaceHistoryCache<MirrorPulseNamespaceBirthIntent> ValidatedBirths { get; } = new();
         internal NamespaceHistoryCache<MirrorPulseNamespaceBirthObservation> ValidatedBirthObservations { get; } = new();

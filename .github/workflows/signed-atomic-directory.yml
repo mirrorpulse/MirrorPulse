@@ -11,6 +11,10 @@ on:
         description: Verify the original durable directory Move
         type: boolean
         default: false
+      verify_directory_transfer:
+        description: Verify protected directory transfer between two single-root Local instances
+        type: boolean
+        default: false
       local_preview:
         description: Published Local preview tag to qualify instead of the stable release
         type: string
@@ -103,6 +107,15 @@ jobs:
           $packages = @(Get-ChildItem -LiteralPath artifacts/atomic-directory-local -Recurse -Filter '*.mpadapter' -File)
           if ($packages.Count -ne 1) { throw 'Require the one frozen official Local package.' }
           ./eng/verify-namespace-nonadmin.ps1 -ExpectedArchitecture $env:MP_TEST_ARCHITECTURE -SignedAtomicDirectoryPackage $packages[0].FullName -VerifyDirectoryMove
+      - name: Verify cross-instance directory transfer through the installed signed Local Workers
+        if: (success() || failure()) && steps.native-volume.outcome == 'success' && inputs.verify_directory_transfer
+        shell: pwsh
+        env:
+          MP_TEST_ARCHITECTURE: ${{ matrix.architecture }}
+        run: |
+          $packages = @(Get-ChildItem -LiteralPath artifacts/atomic-directory-local -Recurse -Filter '*.mpadapter' -File)
+          if ($packages.Count -ne 1) { throw 'Require the one frozen official Local package.' }
+          ./eng/verify-namespace-nonadmin.ps1 -ExpectedArchitecture $env:MP_TEST_ARCHITECTURE -SignedAtomicDirectoryPackage $packages[0].FullName -VerifyDirectoryTransfer
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: always() && inputs.verify_atomic_directory
         with:
@@ -114,4 +127,10 @@ jobs:
         with:
           name: signed-directory-move-${{ matrix.runner }}-originals
           path: artifacts/test-results/signed-directory-move-nonadmin-*/
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always() && inputs.verify_directory_transfer
+        with:
+          name: signed-directory-transfer-${{ matrix.runner }}-originals
+          path: artifacts/test-results/signed-directory-transfer-nonadmin-*/
           if-no-files-found: ignore

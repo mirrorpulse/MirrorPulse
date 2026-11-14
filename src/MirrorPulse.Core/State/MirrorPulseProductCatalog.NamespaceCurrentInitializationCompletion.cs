@@ -88,6 +88,9 @@ public sealed partial class MirrorPulseProductCatalog
                     if (current.RetiredTreeMembers?.Any(member => member.Original.Context.Member.RootId == root.RootId &&
                         member.Original.Context.Member.Origin != MirrorPulseNamespaceMemberOrigin.ProtectedBirth) == true)
                         throw new InvalidDataException("Tree-retired originals cannot be hidden below a born-root admission.");
+                    if (current.RetiredTransferMembers?.Any(retirement => retirement.Member.RootId == root.RootId &&
+                        retirement.Member.Origin != MirrorPulseNamespaceMemberOrigin.ProtectedBirth) == true)
+                        throw new InvalidDataException("Transfer-retired originals cannot be hidden below a born-root admission.");
                     continue;
                 }
                 var tree = await ReadPermissionTreeCoreAsync(root.ManifestId, cancellationToken, transaction).ConfigureAwait(false)
@@ -103,6 +106,8 @@ public sealed partial class MirrorPulseProductCatalog
                     registered.Add((await ReadNamespaceMemberCoreAsync(retired.Intent.MemberId, transaction, cancellationToken).ConfigureAwait(false))!);
                 if (current.RetiredTreeMembers is { } treeRetired)
                     registered.AddRange(treeRetired.Where(member => member.Original.Context.Member.RootId == root.RootId).Select(member => member.Original.Context.Member));
+                if (current.RetiredTransferMembers is { } transferRetired)
+                    registered.AddRange(transferRetired.Where(retirement => retirement.Member.RootId == root.RootId).Select(retirement => retirement.Member));
                 var originals = registered.Where(member => member.Origin == MirrorPulseNamespaceMemberOrigin.CapturedOriginal).ToDictionary(member => member.OriginId);
                 if (originals.Count != tree.CapturedMembers)
                     throw new InvalidDataException("The current graph contains original membership outside its retained capture.");

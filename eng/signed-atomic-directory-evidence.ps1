@@ -26,3 +26,16 @@ function Confirm-SignedDirectoryMoveReport {
         throw 'The original execution does not bind the signed package, original Move and all three projections.'
     }
 }
+
+function Confirm-SignedDirectoryTransferReport {
+    param([Parameter(Mandatory)][string]$ReportPath, [Parameter(Mandatory)][string]$PackageSha256)
+    if ($PackageSha256 -cnotmatch '^[A-F0-9]{64}$') { throw 'Require the SHA-256 of the original signed package.' }
+    [xml]$report = Get-Content -LiteralPath $ReportPath -Raw
+    $rows = @($report.TestRun.Results.UnitTestResult)
+    if ($rows.Count -ne 1 -or $rows[0].outcome -cne 'Passed') { throw 'The signed cross-instance directory transfer must pass.' }
+    $facts = @(([string]$rows[0].Output.StdOut -split '\r?\n') | Where-Object { $_.StartsWith('SignedDirectoryTransfer: ', [StringComparison]::Ordinal) })
+    $expected = 'SignedDirectoryTransfer: packageSha256=' + $PackageSha256 + '; distinctSingleRootInstances=True; sourceMembers=3; atomicSourceReceipt=True; interruptedNativeRetirement=True; reopenedRoots=True; targetBytesVerified=True.'
+    if ($facts.Count -ne 1 -or $facts[0] -cne $expected) {
+        throw 'The original transfer execution does not bind both installed instances, the package and the durable recovery.'
+    }
+}
