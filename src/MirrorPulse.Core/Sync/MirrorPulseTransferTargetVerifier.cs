@@ -49,8 +49,6 @@ public sealed class MirrorPulseTransferTargetVerifier(MirrorPulseProductCatalog 
         if (await _stats.StatAsync(new(route.InstanceId, path, route.RootKey), token).ConfigureAwait(false) != acceptedRevision)
             throw new IOException("The transfer target no longer has its original accepted revision.");
         var before = await ReadMetadataAsync(route, path, length, acceptedRevision, token).ConfigureAwait(false);
-        if (originalRemoteId is not null && before.RemoteId != originalRemoteId)
-            throw new IOException("The original accepted transfer target was replaced by another remote identity.");
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         byte[] buffer = new byte[(int)Math.Min(1_048_576, length)];
         byte[] excess = new byte[1];
@@ -73,6 +71,8 @@ public sealed class MirrorPulseTransferTargetVerifier(MirrorPulseProductCatalog 
         if (after.RemoteId != before.RemoteId ||
             await _stats.StatAsync(new(route.InstanceId, path, route.RootKey), token).ConfigureAwait(false) != acceptedRevision)
             throw new IOException("Target identity or revision changed during whole-content readback.");
+        if (originalRemoteId is not null && before.RemoteId != originalRemoteId)
+            throw new IOException("The original accepted transfer target was replaced by another remote identity.");
         return before;
     }
 
