@@ -1,5 +1,5 @@
 function Get-OrdinaryUserNamespaceBudgetMilliseconds {
-    param([Parameter(Mandatory)][ValidateRange(1, 165)][int]$TestCount, [string[]]$TestNames,
+    param([Parameter(Mandatory)][ValidateRange(1, 169)][int]$TestCount, [string[]]$TestNames,
         [ValidateSet('AllRetained', 'S06')][string]$Scope = 'AllRetained')
     if ($Scope -ceq 'S06' -and -not $PSBoundParameters.ContainsKey('TestNames')) {
         throw 'S06 scope requires its explicit selected test names.'
@@ -65,7 +65,12 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
     $directoryJournal.Add($prefix+'NativeProductionDirectoryGroupRereadsRealLateChildOriginalsBeforeDispatchAcrossOwners', @{ Cases=2; Deadline=95000 })
     $directoryJournal.Add($prefix+'NativeProductionDirectoryAbsencePreservesALaterBackendFileOrDirectoryAcrossOwners', @{ Cases=2; Deadline=95000 })
     $directoryJournal.Add($prefix+'NativeProductionDirectoryGroupRecoversAcceptedEffectsBeforeOriginalAckAcrossFreshRoles', @{ Cases=2; Deadline=95000 })
-    $additionalSelections = @(@($preparation,$approval,$rootPreparation,$rootExecution,$rootRecovery,$rootRuntime,$rootAdmission,$rootPublic,$rootUnsealedExecution,$capturedUnsealedExecution,$rootCancellation,$unsealedCancellation,$legacyInitializer,$bornCancellation,$disabledImport,$disabledCreation,$disabledCreationRole,$disabledMove,$disabledRetirement,$disabledReplacement,$residentReplacement,$journalRescan)+@($keepRemote.Keys)+@($deleteRejections.Keys)+@($directoryJournal.Keys) | Where-Object {$_ -cin $TestNames}).Count
+    $fileTransferRecovery = [Collections.Generic.Dictionary[string, int]]::new([StringComparer]::Ordinal)
+    $fileTransferRecovery.Add($prefix+'NativeHostTransferAuditsBothRootsBeforeResumingOriginalFileCopy', 2)
+    $fileTransferRecovery.Add($prefix+'NativeHostTransferDeletesOriginalRemoteSourceAfterBothRootAudits', 2)
+    $fileTransferRecovery.Add($prefix+'NativeHostTransferPreservesRecreatedAcceptedSourceAndBothFencesAfterRootAudits', 1)
+    $fileTransferRecovery.Add($prefix+'NativeHostTransferCompletesOriginalClaimAfterBothRootAudits', 2)
+    $additionalSelections = @(@($preparation,$approval,$rootPreparation,$rootExecution,$rootRecovery,$rootRuntime,$rootAdmission,$rootPublic,$rootUnsealedExecution,$capturedUnsealedExecution,$rootCancellation,$unsealedCancellation,$legacyInitializer,$bornCancellation,$disabledImport,$disabledCreation,$disabledCreationRole,$disabledMove,$disabledRetirement,$disabledReplacement,$residentReplacement,$journalRescan)+@($keepRemote.Keys)+@($deleteRejections.Keys)+@($directoryJournal.Keys)+@($fileTransferRecovery.Keys) | Where-Object {$_ -cin $TestNames}).Count
     if ($TestCount -gt 112 -and (-not $PSBoundParameters.ContainsKey('TestNames') -or $additionalSelections -lt $TestCount-112)) {
         throw 'The additional namespace case requires its explicit original preparation selection.'
     }
@@ -125,6 +130,11 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
                 $executions += $rule.Cases-1
                 $transferDeadlineMilliseconds += $rule.Cases*($rule.Deadline-15000)
             }
+            if ($fileTransferRecovery.ContainsKey($name)) {
+                # Each selected data row retains its original 45-second fixture deadline.
+                $executions += $fileTransferRecovery[$name]-1
+                $transferDeadlineMilliseconds += $fileTransferRecovery[$name]*30000
+            }
             if ($deleteRejections.ContainsKey($name)) {
                 # Each component/runtime/SDK characterization row keeps its actual65-second deadline.
                 $executions += $deleteRejections[$name]-1
@@ -167,7 +177,7 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
 }
 
 function Get-OrdinaryUserNamespaceStepTimeoutMinutes {
-    param([Parameter(Mandatory)][ValidateRange(1, 165)][int]$TestCount, [string[]]$TestNames,
+    param([Parameter(Mandatory)][ValidateRange(1, 169)][int]$TestCount, [string[]]$TestNames,
         [ValidateSet('AllRetained', 'S06')][string]$Scope = 'AllRetained')
     # The workflow must let the existing child budget expire and allow the
     # controller to preserve diagnostics and remove its disposable user/profile.

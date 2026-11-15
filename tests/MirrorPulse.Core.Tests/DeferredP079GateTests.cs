@@ -16,6 +16,20 @@ public sealed class DeferredP079GateTests
             $ErrorActionPreference='Stop'
             . (Join-Path $Repository 'eng/namespace-nonadmin-controller.ps1')
             $catalog=Get-Content (Join-Path $Repository 'eng/test-suites.json') -Raw|ConvertFrom-Json
+            # These later recovery rows stay in S06. Retain this test's earlier
+            # selection so its exact nine-execution P079 difference cannot drift.
+            $fileTransferPrefix='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.'
+            $fileTransferRecovery=@('NativeHostTransferAuditsBothRootsBeforeResumingOriginalFileCopy',
+                'NativeHostTransferDeletesOriginalRemoteSourceAfterBothRootAudits',
+                'NativeHostTransferPreservesRecreatedAcceptedSourceAndBothFencesAfterRootAudits',
+                'NativeHostTransferCompletesOriginalClaimAfterBothRootAudits')|ForEach-Object {$fileTransferPrefix+$_}
+            foreach($method in $fileTransferRecovery){
+                if(@($catalog.required.namespace|Where-Object {$_ -ceq $method}).Count -ne 1 -or
+                   @($catalog.required.native|Where-Object {$_ -ceq $method}).Count -ne 1 -or
+                   @($catalog.required.deferredP079|Where-Object {$_ -ceq $method}).Count -ne 0){throw 'Recovered cross-instance transfer methods must remain in S06.'}
+            }
+            $catalog.required.namespace=@($catalog.required.namespace|Where-Object {$_ -cnotin $fileTransferRecovery})
+            $catalog.required.native=@($catalog.required.native|Where-Object {$_ -cnotin $fileTransferRecovery})
             # Retain this original transfer selection. Root execution rows have their
             # own exact ninety-second deadlines in NamespaceNonAdminControllerTests.
             $unsealedRootExecutions=@(
