@@ -233,6 +233,61 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
     [TestMethod]
     [DataRow(false)]
     [DataRow(true)]
+    public async Task FileTransferRootAuditOwnsOnlyItsOriginalPendingTransfer(bool ordinaryStart)
+    {
+        using var fixture = new Fixture();
+        await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        var setup = await PrepareTransferFixtureAsync(catalog, captureRoots: true);
+        var plan = setup.Plan;
+        Guid anchor = setup.Source.ParentMember.ParentMemberId!.Value;
+        Guid sourceCapture = (await catalog.ReadNamespacePermissionTreesAsync(plan.SourceRoute.RootId)).Single().Definition.ManifestId;
+        Guid targetCapture = (await catalog.ReadNamespacePermissionTreesAsync(plan.TargetRoute.RootId)).Single().Definition.ManifestId;
+        await catalog.PrepareNamespaceTransferAsync(plan);
+        if (ordinaryStart)
+            await catalog.StartNamespaceTransferCopyAsync(plan.OperationId, plan.PreparedAt.AddSeconds(1));
+        else
+        {
+            await catalog.SelectNamespaceTransferCopyPreparationAsync(plan.OperationId, default);
+            await catalog.StartNamespaceTransferCopyAsync(plan.OperationId, plan.PreparedAt.AddSeconds(1), preparedByWorker: true, default);
+        }
+        var pending = await catalog.ReadNamespaceTransferAsync(plan.OperationId);
+        var source = Intent(plan.SourceRoute.RootId, sourceCapture);
+        var target = Intent(plan.TargetRoute.RootId, targetCapture);
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
+            catalog.PrepareNamespaceInitializationAsync(source with { FileTransferOperationId = Guid.NewGuid() }));
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
+            catalog.PrepareNamespaceInitializationAsync(source with { Roots = [new(RootId.New(), sourceCapture)] }));
+        if (ordinaryStart)
+            await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => catalog.PrepareNamespaceInitializationAsync(source));
+        else
+        {
+            foreach (var intent in new[] { source, target })
+            {
+                await catalog.PrepareNamespaceInitializationAsync(intent);
+                var inventory = await catalog.ReadNamespaceCurrentRootSnapshotAsync(anchor, intent.Roots.Single().RootId);
+                var completion = await catalog.CompleteNamespaceCurrentInitializationAsync(intent.OperationId,
+                    inventory, intent.PreparedAt.AddSeconds(1));
+                Assert.AreEqual(intent.Roots.Single().RootId, completion.ScopeRoot);
+                Assert.AreEqual(plan.OperationId, (await catalog.ReadNamespaceInitializationStatusAsync(intent.OperationId)).Intent.FileTransferOperationId);
+            }
+        }
+        Assert.AreEqual(pending, await catalog.ReadNamespaceTransferAsync(plan.OperationId));
+        Assert.IsEmpty(await catalog.ReadPendingNamespaceInitializationsAsync());
+        CollectionAssert.AreEquivalent(new[] { plan.SourceRoute.RootId, plan.TargetRoute.RootId },
+            (await catalog.ReadNamespaceDispatchFencedRootsAsync()).ToArray());
+
+        MirrorPulseNamespaceInitializationIntent Intent(RootId root, Guid manifest) =>
+            new(6, Guid.NewGuid(), [new(root, manifest)], plan.PreparedAt.AddSeconds(2))
+            {
+                RequestedInventoryKind = MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory,
+                FileTransferOperationId = plan.OperationId
+            };
+
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
     public async Task PreparedFileCopyRecoversOriginalRequestAfterLosingEitherReply(bool loseUploadReply)
     {
         using var fixture = new Fixture();
@@ -488,9 +543,9 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         MirrorPulseNamespacePermissionIntent TargetProof, MirrorPulseNamespaceTransferPlan Plan);
 
     private static async Task<TransferFixture> PrepareTransferFixtureAsync(MirrorPulseProductCatalog catalog, bool sameInstance = false,
-        bool directory = false)
+        bool directory = false, bool captureRoots = false)
     {
-        var source = await PrepareMovableMemberAsync(catalog, directory);
+        var source = captureRoots ? await PrepareCurrentMovableMemberAsync(catalog) : await PrepareMovableMemberAsync(catalog, directory);
         var target = source.Parent with
         {
             EvidenceId = Guid.NewGuid(),
@@ -498,7 +553,16 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             RelativePath = "Archive",
             LocalObject = source.Parent.LocalObject with { LocalFileId = Guid.NewGuid() }
         };
-        var proof = Protection(target); await ProtectAsync(catalog, target, proof);
+        var proof = Protection(target);
+        if (captureRoots)
+        {
+            var preparation = new MirrorPulseNamespacePermissionPreparation(target, proof);
+            var capture = new MirrorPulseNamespacePermissionTreeDefinition(Guid.NewGuid(), preparation, 1, target.CapturedAt);
+            await catalog.CreateNamespacePermissionTreeAsync(capture);
+            await catalog.AppendNamespacePermissionTreeMembersAsync(capture.ManifestId, [new(0, null, preparation)]);
+            await catalog.SealNamespacePermissionTreeAsync(capture.ManifestId, proof.PreparedAt.AddSeconds(1));
+        }
+        await ProtectAsync(catalog, target, proof);
         var targetMember = OriginalMember(target, proof, source.ParentMember.ParentMemberId); await catalog.RegisterNamespaceMemberAsync(targetMember);
         var manifest = new AdapterManifest(1, AdapterId.Parse("example.transfer"), "Example", "1.0.0", new ProtocolVersionRange(1, 2),
             new Dictionary<string, string> { ["win-x64"] = "worker/adapter.exe", ["win-arm64"] = "worker/adapter.exe" },

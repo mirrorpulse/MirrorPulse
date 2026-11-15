@@ -54,6 +54,34 @@ public sealed partial class MirrorPulseProductCatalog
         return copy;
     }
 
+    private async Task RequireFileTransferInitializationAsync(MirrorPulseNamespaceInitializationIntent intent,
+        SqliteTransaction transaction, CancellationToken token)
+    {
+        if (intent.FileTransferOperationId is not { } transferId) return;
+        var copy = await ReadNamespaceTransferCoreAsync(transferId, transaction, token).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("File transfer role recovery requires its original admission.");
+        var plan = copy.Plan;
+        RootId root = intent.Roots.Single().RootId;
+        if ((root != plan.SourceRoute.RootId && root != plan.TargetRoute.RootId) ||
+            intent.PreparedAt < plan.PreparedAt || copy.TargetBirthOperationId is not null ||
+            copy.CopyStartedAt is not null && copy.CopyAcceptedAt is null && !copy.CopyUsesWorkerPreparation)
+            throw new InvalidOperationException("File transfer role recovery requires its original pending copy or verification.");
+        await RequireFileTransferInitializationFenceAsync(intent, transaction, token).ConfigureAwait(false);
+        await RequireNamespaceTransferRoutesAsync([plan.SourceRoute, plan.TargetRoute], transaction, token).ConfigureAwait(false);
+    }
+
+    private async Task RequireFileTransferInitializationFenceAsync(MirrorPulseNamespaceInitializationIntent intent,
+        SqliteTransaction transaction, CancellationToken token)
+    {
+        if (intent.FileTransferOperationId is not { } transferId) return;
+        await using var query = _connection.CreateCommand();
+        query.Transaction = transaction;
+        query.CommandText = "SELECT operation_id FROM namespace_transfer_roots WHERE root_id=$root;";
+        query.Parameters.AddWithValue("$root", intent.Roots.Single().RootId.ToString());
+        if ((await query.ExecuteScalarAsync(token).ConfigureAwait(false)) as string != transferId.ToString("D"))
+            throw new InvalidOperationException("File transfer role recovery lost its original root fence.");
+    }
+
     private static async Task EnsureNamespaceTransferRootReadIndexesAsync(SqliteConnection connection, CancellationToken token)
     {
         using var transaction = connection.BeginTransaction();

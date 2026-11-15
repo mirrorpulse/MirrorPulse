@@ -65,7 +65,7 @@ internal sealed class MirrorPulseNamespaceStartupCoordinator(CloudFileSystem fil
                     outcomes[root.RootId] = new(root.RootId, journalMove, false, "PendingNamespaceOperationRecoveryRequired");
                     continue;
                 }
-                if (pending.Intent.DirectoryTransferOperationId is { } transfer)
+                if ((pending.Intent.DirectoryTransferOperationId ?? pending.Intent.FileTransferOperationId) is { } transfer)
                 {
                     var root = pending.Intent.Roots.Single();
                     outcomes[root.RootId] = new(root.RootId, transfer, false, "PendingNamespaceOperationRecoveryRequired");
@@ -83,7 +83,7 @@ internal sealed class MirrorPulseNamespaceStartupCoordinator(CloudFileSystem fil
                     else
                     {
                         var coordinator = new MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(fileSystem, catalog, selected, execution, actor, scheduler, permissions) { Progress = progress };
-                        result = pending.Intent.Version is 4 or 5
+                        result = pending.Intent.IsScoped
                             ? await coordinator.RecoverRootAsync(pending.Intent.OperationId, pending.Intent.Roots[0].RootId, cancellationToken).ConfigureAwait(false)
                             : await coordinator.RecoverAsync(pending.Intent.OperationId, cancellationToken).ConfigureAwait(false);
                     }

@@ -39,6 +39,11 @@ public sealed record MirrorPulseNamespaceInitializationIntent(int Version, Guid 
     /// <summary>The original directory transfer whose fenced root needs a fresh role audit.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Guid? DirectoryTransferOperationId { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? FileTransferOperationId { get; init; }
+
+    internal bool IsScoped => Version is 4 or 5 or 6;
 }
 
 public enum MirrorPulseNamespaceInitializationInventoryKind { OriginalInventory, CurrentInventory }
@@ -88,6 +93,7 @@ public sealed partial class MirrorPulseProductCatalog
                 { Mutation.State: MirrorPulseMutationState.Acknowledged })
                 throw new InvalidOperationException("A new directory Move initializer requires its unfinished original Move.");
             await RequireDirectoryTransferInitializationAsync(intent, transaction, cancellationToken).ConfigureAwait(false);
+            await RequireFileTransferInitializationAsync(intent, transaction, cancellationToken).ConfigureAwait(false);
             foreach (var root in intent.Roots.Where(root => root.BornRootMemberId is not null))
                 await RequireNamespaceInitializationBornRootAsync(root, intent.PreparedAt, transaction, cancellationToken).ConfigureAwait(false);
             validation.Dispose();
@@ -206,13 +212,14 @@ public sealed partial class MirrorPulseProductCatalog
         await reader.DisposeAsync().ConfigureAwait(false);
         _ = await ReadInitializationJournalDirectoryMoveCoreAsync(intent, transaction, token).ConfigureAwait(false);
         await RequireDirectoryTransferInitializationFenceAsync(intent, transaction, token).ConfigureAwait(false);
+        await RequireFileTransferInitializationFenceAsync(intent, transaction, token).ConfigureAwait(false);
     }
 
     private async Task RequireNamespaceInitializationTerminalAsync(MirrorPulseNamespaceInitializationIntent intent,
         MirrorPulseNamespaceInitializationCompletion completion, SqliteTransaction transaction, CancellationToken token)
     {
         if ((intent.Version == 3 ? completion.MemberCount != 1 : completion.MemberCount < 2) ||
-            (intent.Version is 4 or 5 ? completion.ScopeRoot != intent.Roots[0].RootId : completion.ScopeRoot is not null) ||
+            (intent.IsScoped ? completion.ScopeRoot != intent.Roots[0].RootId : completion.ScopeRoot is not null) ||
             completion.CompletedAt < intent.PreparedAt || intent.RequestedInventoryKind is { } requested && requested != completion.InventoryKind)
             throw new InvalidDataException("Initialization completion disagrees with its admission chronology or requested inventory kind.");
         await using SqliteCommand query = _connection.CreateCommand(); query.Transaction = transaction;
@@ -226,24 +233,27 @@ public sealed partial class MirrorPulseProductCatalog
         left.Version == right.Version && left.OperationId == right.OperationId && left.PreparedAt == right.PreparedAt &&
         left.RequestedInventoryKind == right.RequestedInventoryKind && left.RootLabelCancellation == right.RootLabelCancellation &&
         left.JournalDirectoryMoveOperationId == right.JournalDirectoryMoveOperationId &&
-        left.DirectoryTransferOperationId == right.DirectoryTransferOperationId && left.Roots.SequenceEqual(right.Roots);
+        left.DirectoryTransferOperationId == right.DirectoryTransferOperationId &&
+        left.FileTransferOperationId == right.FileTransferOperationId && left.Roots.SequenceEqual(right.Roots);
 
     private static void ValidateNamespaceInitialization(MirrorPulseNamespaceInitializationIntent intent)
     {
         ArgumentNullException.ThrowIfNull(intent);
-        if (intent.Version is not (1 or 2 or 3 or 4 or 5) || intent.OperationId == Guid.Empty || intent.PreparedAt == default || intent.Roots is null ||
+        if (intent.Version is not (1 or 2 or 3 or 4 or 5 or 6) || intent.OperationId == Guid.Empty || intent.PreparedAt == default || intent.Roots is null ||
             intent.RequestedInventoryKind is { } requested && !Enum.IsDefined(requested) ||
-            intent.Version is 2 or 4 or 5 && intent.RequestedInventoryKind != MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory ||
-            intent.Version is 4 or 5 && intent.Roots.Count != 1 ||
+            (intent.Version == 2 || intent.IsScoped) && intent.RequestedInventoryKind != MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory ||
+            intent.IsScoped && intent.Roots.Count != 1 ||
             intent.Version == 3 && (intent.Roots.Count != 0 || intent.RequestedInventoryKind is null) ||
             intent.Version != 3 && intent.Roots.Count == 0 || intent.Roots.Count > 4096 || intent.Roots.Any(root => root is null || root.RootId.Value == Guid.Empty ||
-                (root.BornRootMemberId is { } born ? intent.Version is not (2 or 4 or 5) || born == Guid.Empty || root.ManifestId != Guid.Empty : root.ManifestId == Guid.Empty)) ||
+                (root.BornRootMemberId is { } born ? (intent.Version != 2 && !intent.IsScoped) || born == Guid.Empty || root.ManifestId != Guid.Empty : root.ManifestId == Guid.Empty)) ||
             intent.Roots.Select(root => root.RootId).Distinct().Count() != intent.Roots.Count ||
             intent.Roots.Where(root => root.BornRootMemberId is null).Select(root => root.ManifestId).Distinct().Count() != intent.Roots.Count(root => root.BornRootMemberId is null) ||
             intent.Roots.Where(root => root.BornRootMemberId is not null).Select(root => root.BornRootMemberId).Distinct().Count() != intent.Roots.Count(root => root.BornRootMemberId is not null) ||
             intent.JournalDirectoryMoveOperationId is { } move && (intent.Version != 4 || move == Guid.Empty || move == intent.OperationId) ||
             intent.DirectoryTransferOperationId is { } transfer && (intent.Version != 4 || transfer == Guid.Empty ||
                 transfer == intent.OperationId || intent.JournalDirectoryMoveOperationId is not null) ||
+            (intent.Version == 6) != (intent.FileTransferOperationId is not null) ||
+            intent.FileTransferOperationId is { } fileTransfer && (fileTransfer == Guid.Empty || fileTransfer == intent.OperationId) ||
             !HasValidRootLabelCancellationInitializationPurpose(intent))
             throw new ArgumentException("Initialization requires distinct stable roots and explicit retained capture or born-root provenance.", nameof(intent));
     }

@@ -31,7 +31,8 @@ public sealed partial class MirrorPulseProductCatalog
                 transaction.Commit(); return replay;
             }
             await RequireNamespaceInitializationRootsAsync(intent, transaction, cancellationToken).ConfigureAwait(false);
-            Contracts.RootId? scope = intent.Version is 4 or 5 ? intent.Roots[0].RootId : null;
+            await RequireFileTransferInitializationAsync(intent, transaction, cancellationToken).ConfigureAwait(false);
+            Contracts.RootId? scope = intent.IsScoped ? intent.Roots[0].RootId : null;
             if (intent.RootLabelCancellation is { } purpose)
             {
                 await RequireRootLabelCancellationInitializationHistoryAsync(intent, purpose.RootLabelOperationId, transaction, cancellationToken).ConfigureAwait(false);
@@ -74,7 +75,8 @@ public sealed partial class MirrorPulseProductCatalog
                 // Initialization alone is allowed; no unfinished move, retirement, replacement,
                 // born recovery or unregistered birth may disappear behind that same root ID.
                 await RequireNamespaceMoveRootUnfencedAsync(root.RootId, null, transaction, cancellationToken,
-                    allowedDirectoryTransferRecoveryInitialization: intent.DirectoryTransferOperationId is null ? null : intent.OperationId)
+                    allowedTransferRecoveryInitialization: intent.DirectoryTransferOperationId is null && intent.FileTransferOperationId is null
+                        ? null : intent.OperationId)
                     .ConfigureAwait(false);
                 var rootMember = roots.Single(member => member.Context.Member.RootId == root.RootId).Context.Member;
                 if (root.BornRootMemberId is not null)
