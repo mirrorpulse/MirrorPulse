@@ -85,6 +85,30 @@ public sealed class AdapterWorkerMutationClient
             ?? throw new InvalidDataException("DirectoryRevisionRequired");
     }
 
+    internal async ValueTask PrepareDirectoryCopyAsync(MirrorPulseWorkerPrepareDirectoryCopyRequest request,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.InstanceId != _instanceId) throw new InvalidDataException("InstanceMismatch");
+        if (_channel.Protocol?.SupportsDurableDirectoryCopyPreparation(request.RootKey) != true)
+            throw new NotSupportedException("DurableDirectoryCopyPreparationUnavailable");
+        var payload = new Dictionary<string, object?>
+        {
+            ["path"] = request.NormalizedPath,
+            ["isDirectory"] = request.Length is null
+        };
+        if (request.ParentCopyOperationId is { } parent) payload["durableDirectoryCopyParentId"] = parent;
+        if (request.Length is { } length)
+        {
+            if (length < 0 || request.ContentSha256 is null) throw new ArgumentException("A complete upload descriptor is required.", nameof(request));
+            payload["length"] = length;
+            payload["contentSha256"] = Sha256Digest.Parse(request.ContentSha256).Hexadecimal;
+        }
+        else if (request.ContentSha256 is not null) throw new ArgumentException("A directory cannot carry a content descriptor.", nameof(request));
+        _ = await SendAsync("PrepareDirectoryCopy", payload, request.OperationId, request.RootKey, null, null,
+            destinationMustBeAbsent: true, cancellationToken).ConfigureAwait(false);
+    }
+
     public async ValueTask<AdapterOwnedChildEffectReceipt> RetireOriginalDirectoryAsync(
         AdapterDirectoryRetirementRequest request, CancellationToken cancellationToken = default)
     {
@@ -257,7 +281,13 @@ public sealed class AdapterWorkerMutationClient
         }
 
         _channel.ValidateOperationResponse(frame, pending.RootKey, pending.OperationId);
-        if (frame.MessageType == "MutationComplete")
+        bool preparing = pending.Request.MessageType == "PrepareDirectoryCopy";
+        if (preparing && frame.MessageType == "DirectoryCopyPrepared")
+        {
+            completion.TrySetResult(new MutationReply(null));
+            return ValueTask.CompletedTask;
+        }
+        if (!preparing && frame.MessageType == "MutationComplete")
         {
             string? revision = frame.Payload.TryGetProperty("revision", out JsonElement value) &&
                 value.ValueKind is not JsonValueKind.Null and not JsonValueKind.Undefined

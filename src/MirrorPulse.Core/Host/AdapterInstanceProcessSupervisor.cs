@@ -136,6 +136,17 @@ public sealed class AdapterInstanceProcessSupervisor :
         finally { operation.Release(); }
     }
 
+    public async ValueTask PrepareDirectoryCopyAsync(MirrorPulseWorkerPrepareDirectoryCopyRequest request, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (!_mutations.TryGetValue(request.InstanceId, out var client) ||
+            !_instanceOperations.TryGetValue(request.InstanceId, out var operation))
+            throw new AdapterWorkerOperationException("Disconnected");
+        await operation.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try { await client.PrepareDirectoryCopyAsync(request, cancellationToken).ConfigureAwait(false); }
+        finally { operation.Release(); }
+    }
+
     public async ValueTask<AdapterOwnedChildEffectReceipt> RetireOriginalDirectoryAsync(
         AdapterDirectoryRetirementRequest request, CancellationToken cancellationToken)
     {
@@ -235,6 +246,9 @@ public sealed class AdapterInstanceProcessSupervisor :
 
     public bool SupportsDurableDirectoryCopy(InstanceId instanceId, string rootKey) => !_shutdown.IsCancellationRequested &&
         _ready.TryGetValue(instanceId, out var channel) && channel.Protocol?.SupportsDurableDirectoryCopy(rootKey) == true;
+
+    public bool SupportsDurableDirectoryCopyPreparation(InstanceId instanceId, string rootKey) => !_shutdown.IsCancellationRequested &&
+        _ready.TryGetValue(instanceId, out var channel) && channel.Protocol?.SupportsDurableDirectoryCopyPreparation(rootKey) == true;
 
     private async ValueTask<Stream> ReadRangeCoreAsync(
         MirrorPulseWorkerReadRangeRequest request,

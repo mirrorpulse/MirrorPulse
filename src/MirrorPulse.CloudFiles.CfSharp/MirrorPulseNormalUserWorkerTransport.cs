@@ -122,6 +122,13 @@ public sealed class MirrorPulseNormalUserWorkerTransport : IMirrorPulseWorkerRan
     public bool SupportsDurableDirectoryCopy(MirrorPulse.Core.Contracts.InstanceId instanceId, string rootKey) =>
         _mutations.SupportsDurableDirectoryCopy(instanceId, rootKey);
 
+    public bool SupportsDurableDirectoryCopyPreparation(MirrorPulse.Core.Contracts.InstanceId instanceId, string rootKey) =>
+        _mutations.SupportsDurableDirectoryCopyPreparation(instanceId, rootKey);
+
+    public async ValueTask PrepareDirectoryCopyAsync(MirrorPulseWorkerPrepareDirectoryCopyRequest request, CancellationToken cancellationToken) =>
+        await _session.RunNormalUserOperationAsync(async () =>
+            await _mutations.PrepareDirectoryCopyAsync(request, cancellationToken).ConfigureAwait(false)).ConfigureAwait(false);
+
     async ValueTask<AdapterAtomicDirectoryDeletionReceipt> IMirrorPulseAtomicDirectoryDeletionTransport.ExecuteAtomicDirectoryDeletionAsync(
         AdapterDirectoryAdmissionRequest original, CancellationToken token,
         IReadOnlyList<MirrorPulse.Core.Sync.MirrorPulseWorkerChangeCommand>? originals)

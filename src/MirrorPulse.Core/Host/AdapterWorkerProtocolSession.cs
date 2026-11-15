@@ -11,6 +11,7 @@ public sealed class AdapterWorkerProtocolSession
 {
     internal const string DurableDirectoryMoveCapability = "local-durable-directory-move";
     internal const string DurableDirectoryCopyCapability = "local-durable-directory-copy";
+    internal const string DurableDirectoryCopyPreparationCapability = "local-durable-directory-copy-preparation";
 
     private static readonly string[] RequiredCapabilities =
         ["root-addresses", "stable-operations", "conditional-targets", "bounded-streams", "cancel-ack"];
@@ -47,6 +48,9 @@ public sealed class AdapterWorkerProtocolSession
 
     internal bool SupportsDurableDirectoryCopy(string? rootKey) =>
         rootKey is not null && Volatile.Read(ref _durableCopyRoots)?.Contains(rootKey) == true;
+
+    internal bool SupportsDurableDirectoryCopyPreparation(string? rootKey) => SupportsDurableDirectoryCopy(rootKey) &&
+        Capabilities.Contains(DurableDirectoryCopyPreparationCapability, StringComparer.Ordinal);
 
     internal static void AddDurableCopyMode(AdapterWorkerProtocolSession? protocol, string? rootKey,
         MirrorPulseDurableDirectoryCopyMode mode, Guid? parentCopy, bool conditionalTarget, Dictionary<string, object?> payload)
@@ -145,7 +149,11 @@ public sealed class AdapterWorkerProtocolSession
             if (offered.Contains(DurableDirectoryMoveCapability, StringComparer.Ordinal))
                 negotiated = [.. negotiated, DurableDirectoryMoveCapability];
             if (offered.Contains(DurableDirectoryCopyCapability, StringComparer.Ordinal))
+            {
                 negotiated = [.. negotiated, DurableDirectoryCopyCapability];
+                if (offered.Contains(DurableDirectoryCopyPreparationCapability, StringComparer.Ordinal))
+                    negotiated = [.. negotiated, DurableDirectoryCopyPreparationCapability];
+            }
         }
         else if (configured.Length > 1) throw new InvalidDataException("MultipleRootsRequireProtocolV2");
         return new(selected, configured, negotiated);

@@ -10,6 +10,56 @@ namespace MirrorPulse.Core.Tests;
 public sealed partial class MirrorPulseNamespaceBirthCatalogTests
 {
     [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task DirectoryTransferRestartsOnEitherSideOfItsDurableStartAfterWorkerPreparation(bool afterHostStart)
+    {
+        using var fixture = new Fixture();
+        var inputs = new MirrorPulseLocalTransferContentStore(fixture.Paths);
+        var worker = new DirectoryTransferCopyWorker { Durable = true, PreparesDurable = true };
+        MirrorPulseDirectoryTransferAdmission plan;
+        MirrorPulseDirectoryTransferCopyStep interrupted;
+        await using (var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths))
+        {
+            plan = await PrepareDirectoryTransferFixtureAsync(catalog, TransferBytes);
+            worker.Plan = plan;
+            string sourcePath = Path.Combine(fixture.Paths.DataRootPath, "prepared-transfer-content.bin");
+            await File.WriteAllBytesAsync(sourcePath, TransferBytes);
+            await using (var source = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+                await inputs.StageRetainedAsync(plan.Members[1].PrivateContentId!.Value, source);
+            await catalog.PrepareNamespaceDirectoryTransferAsync(plan);
+            var cut = afterHostStart ? MirrorPulseDirectoryTransferCopyCheckpoint.BeforeDispatch :
+                MirrorPulseDirectoryTransferCopyCheckpoint.AfterPreparation;
+            var executor = new MirrorPulseDirectoryTransferCopyExecutor(catalog, inputs, worker, worker,
+                new TransferClock(plan.PreparedAt.AddSeconds(1)))
+            {
+                Checkpoint = (checkpoint, ordinal, _) => checkpoint == cut && ordinal == 0
+                    ? ValueTask.FromException(new IOException("Interrupted copy startup.")) : ValueTask.CompletedTask
+            };
+            await Assert.ThrowsExactlyAsync<IOException>(() => executor.CopyAsync(plan.Command.CommandId, default));
+            interrupted = (await catalog.ReadNamespaceDirectoryTransferCopyAsync(plan.Command.CommandId, default)).Steps[0];
+            Assert.AreEqual(afterHostStart, interrupted.StartedAt is not null);
+            Assert.AreEqual(afterHostStart, interrupted.Durable);
+            Assert.IsNull(interrupted.AcceptedAt);
+            Assert.HasCount(1, worker.Preparations);
+            Assert.AreEqual(0, worker.Creates);
+            Assert.AreEqual(0, worker.Uploads);
+            Assert.HasCount(2, await catalog.ReadNamespaceDispatchFencedRootsAsync());
+        }
+
+        await using var reopened = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        var retry = new MirrorPulseDirectoryTransferCopyExecutor(reopened, inputs, worker, worker,
+            new TransferClock(plan.PreparedAt.AddSeconds(2)));
+        var resumed = await retry.CopyAsync(plan.Command.CommandId, default);
+        Assert.HasCount(afterHostStart ? 2 : 3, worker.Preparations);
+        Assert.AreEqual(1, worker.Creates);
+        Assert.AreEqual(1, worker.Uploads);
+        Assert.IsTrue(resumed.Steps.All(step => step.Durable && step.AcceptedAt is not null));
+        if (afterHostStart) Assert.AreEqual(interrupted.StartedAt, resumed.Steps[0].StartedAt);
+        Assert.HasCount(2, await reopened.ReadNamespaceDispatchFencedRootsAsync());
+    }
+
+    [TestMethod]
     [DataRow(false, false)]
     [DataRow(true, false)]
     [DataRow(true, true)]
@@ -245,9 +295,22 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         internal bool ChangedTargetDirectory;
         internal bool DuplicateTargetIdentity;
         internal bool Durable;
+        internal bool PreparesDurable;
+        internal List<MirrorPulseWorkerPrepareDirectoryCopyRequest> Preparations { get; } = [];
 
         public bool SupportsDurableDirectoryCopy(Contracts.InstanceId instanceId, string rootKey) =>
             Durable && instanceId == Plan.TargetRoute.InstanceId && rootKey == Plan.TargetRoute.RootKey;
+
+        public bool SupportsDurableDirectoryCopyPreparation(Contracts.InstanceId instanceId, string rootKey) =>
+            PreparesDurable && SupportsDurableDirectoryCopy(instanceId, rootKey);
+
+        public ValueTask PrepareDirectoryCopyAsync(MirrorPulseWorkerPrepareDirectoryCopyRequest request, CancellationToken cancellationToken)
+        {
+            var earlier = Preparations.Find(prepared => prepared.OperationId == request.OperationId);
+            if (earlier is not null) Assert.AreEqual(earlier, request);
+            Preparations.Add(request);
+            return ValueTask.CompletedTask;
+        }
 
         public ValueTask<string?> StatAsync(MirrorPulseWorkerStatRequest request, CancellationToken token) =>
             ValueTask.FromResult<string?>(request.NormalizedPath == "moved.txt" ? ChangedTargetDirectory ? "later-directory" : "directory-after-children" : "file-upload-receipt");
@@ -280,7 +343,10 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             Assert.AreEqual(Plan.TargetRoute.RootKey, request.RootKey);
             Assert.AreEqual("moved.txt", request.NormalizedPath);
             Assert.AreEqual(Plan.Members[0].CopyOperationId, request.OperationId);
-            Assert.AreEqual(Durable ? MirrorPulseDurableDirectoryCopyMode.Start : MirrorPulseDurableDirectoryCopyMode.Ordinary, request.DurableCopyMode);
+            Assert.AreEqual(Durable ? PreparesDurable ? MirrorPulseDurableDirectoryCopyMode.Resume : MirrorPulseDurableDirectoryCopyMode.Start
+                : MirrorPulseDurableDirectoryCopyMode.Ordinary, request.DurableCopyMode);
+            if (PreparesDurable)
+                Assert.IsTrue(Preparations.Any(prepared => prepared.OperationId == request.OperationId && prepared.Length is null));
             Assert.IsNull(request.DurableParentCopyOperationId);
             Assert.IsTrue(request.MustBeAbsent);
             return ValueTask.FromResult("directory-create-receipt");
@@ -290,8 +356,11 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         {
             Assert.AreEqual(1, Creates);
             int attempt = Uploads++;
-            Assert.AreEqual(Durable ? attempt == 0 ? MirrorPulseDurableDirectoryCopyMode.Start : MirrorPulseDurableDirectoryCopyMode.Resume
+            Assert.AreEqual(Durable ? attempt == 0 && !PreparesDurable ? MirrorPulseDurableDirectoryCopyMode.Start : MirrorPulseDurableDirectoryCopyMode.Resume
                 : MirrorPulseDurableDirectoryCopyMode.Ordinary, request.DurableCopyMode);
+            if (PreparesDurable)
+                Assert.IsTrue(Preparations.Any(prepared => prepared.OperationId == request.OperationId && prepared.Length == request.Length &&
+                    prepared.ContentSha256 == request.ExpectedContentSha256 && prepared.ParentCopyOperationId == request.DurableParentCopyOperationId));
             Assert.AreEqual(Durable ? Plan.Members[0].CopyOperationId : (Guid?)null, request.DurableParentCopyOperationId);
             Assert.AreEqual(Plan.TargetRoute.InstanceId, request.InstanceId);
             Assert.AreEqual(Plan.TargetRoute.RootKey, request.RootKey);

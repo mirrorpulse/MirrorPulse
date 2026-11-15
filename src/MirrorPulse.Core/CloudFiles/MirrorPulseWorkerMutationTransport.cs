@@ -37,10 +37,16 @@ public sealed record MirrorPulseWorkerCreateDirectoryRequest(InstanceId Instance
     internal Guid? DurableParentCopyOperationId { get; init; }
 }
 
+public sealed record MirrorPulseWorkerPrepareDirectoryCopyRequest(InstanceId InstanceId, string RootKey,
+    string NormalizedPath, Guid OperationId, Guid? ParentCopyOperationId, long? Length, string? ContentSha256);
+
 public interface IMirrorPulseWorkerMutationTransport
 {
     bool SupportsDurableDirectoryMove(InstanceId instanceId) => false;
     bool SupportsDurableDirectoryCopy(InstanceId instanceId, string rootKey) => false;
+    bool SupportsDurableDirectoryCopyPreparation(InstanceId instanceId, string rootKey) => false;
+    ValueTask PrepareDirectoryCopyAsync(MirrorPulseWorkerPrepareDirectoryCopyRequest request, CancellationToken cancellationToken) =>
+        ValueTask.FromException(new NotSupportedException("DurableDirectoryCopyPreparationUnavailable"));
 
     ValueTask<string> CreateDirectoryAsync(MirrorPulseWorkerCreateDirectoryRequest request,
         CancellationToken cancellationToken) => ValueTask.FromException<string>(new NotSupportedException("CreateDirectoryUnsupported"));
