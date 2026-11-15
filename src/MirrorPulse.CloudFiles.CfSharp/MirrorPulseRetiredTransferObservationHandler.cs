@@ -144,7 +144,7 @@ internal sealed class MirrorPulseRetiredTransferObservationHandler(CloudFileSyst
                     var row = await read.Items.GetByItemIdAsync(retired.Projection.ItemId, stop).ConfigureAwait(false);
                     try
                     {
-                        MirrorPulseNamespaceTransferCoordinator.RequireOriginalSourceProjection(retired.Projection, row, tombstone: true,
+                        MirrorPulseNamespaceTransferCoordinator.RequireOriginalSourceProjection(retired.CurrentProjection, row, tombstone: true,
                             member.Member.IsDirectory ? CloudItemKind.Directory : CloudItemKind.File);
                     }
                     catch (InvalidDataException) { return; }

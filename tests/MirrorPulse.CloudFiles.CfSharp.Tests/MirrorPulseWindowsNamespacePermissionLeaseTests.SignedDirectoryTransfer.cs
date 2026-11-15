@@ -270,9 +270,20 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 var newProvider = new MirrorPulseDemandProvider(router, newTransport, new MirrorPulseAdapterDirectoryPageSource(newTransport), newWork, catalog);
                 var newTransfers = new MirrorPulseTransferWorkerServices(newTransport, newTransport, newTransport, newTransport,
                     worker.GetConnectedProtocolVersion, newTransport);
+                CloudLocalChangeFeed? reopenedJournal = null;
+                Guid? lateDelete = null;
                 var newFactory = new CfSharpMirrorPulseCloudRuntimeFactory(newProvider, newTransport, newTransport, newTransport, router, catalog,
                     worker.IsConnected, scheduler: scheduler, namespaceExecution: newExecution, namespaceActor: newActor, namespaceWork: newWork,
-                    initializeNamespaceOnStart: true, transfers: newTransfers);
+                    initializeNamespaceOnStart: true, transfers: newTransfers)
+                {
+                    TransferJournalReady = feed => reopenedJournal = feed,
+                    TransferSourceRetirementCheckpoint = async (checkpoint, _) =>
+                    {
+                        if (interruptBeforeNativeDelete && firstRetirement is not null && lateDelete is null &&
+                            checkpoint == MirrorPulseTransferSourceRetirementCheckpoint.AfterNativeDeletion)
+                            lateDelete = await WaitForRetiredTransferDeleteAsync(reopenedJournal!, firstRetirement.Projection.ItemId, token);
+                    }
+                };
                 await using var newRuntime = newFactory.Create(paths);
                 await newRuntime.StartAsync(token);
                 Assert.HasCount(2, newRuntime.NamespaceStartupResults);
@@ -297,6 +308,12 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     Assert.IsFalse(newWork.IsAdmitted(sourceRoot.RootId) || newWork.IsAdmitted(targetRoot.RootId));
                 }
                 else Assert.IsTrue(newRuntime.NamespaceStartupResults.All(root => root.Admitted && root.RecoveryCode is null));
+                if (interruptBeforeNativeDelete)
+                {
+                    Assert.IsNotNull(reopenedJournal);
+                    while ((await reopenedJournal.BeginScanAsync(token)).RequiresFullRescan)
+                        await Task.Delay(25, token);
+                }
                 Assert.IsTrue(await newRuntime.ResumeDirectoryNamespaceTransferAsync(operationId, token));
                 var recoveredAck = await catalog.ReadNamespaceDirectoryTransferAcknowledgementAsync(operationId, token);
                 Assert.IsNotNull(recoveredAck?.AcknowledgedAt);
@@ -327,6 +344,17 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         {
                             Assert.IsNull(firstRetirement.Projection.OfficialLocalFileId);
                             Assert.IsNotNull(finishedFirst.RecoveredOfficialLocalFileId);
+                            Assert.IsNotNull(lateDelete);
+                            DateTimeOffset acknowledgementDeadline = DateTimeOffset.UtcNow.AddSeconds(12);
+                            MirrorPulseDirectoryTransferLateAcknowledgement? late;
+                            do
+                            {
+                                late = await catalog.ReadDirectoryTransferLateAcknowledgementAsync(lateDelete.Value, token);
+                                if (late?.AcknowledgedAt is null) await Task.Delay(25, token);
+                            } while (late?.AcknowledgedAt is null && DateTimeOffset.UtcNow < acknowledgementDeadline);
+                            Assert.IsNotNull(late?.AcknowledgedAt, "The late original Delete must settle with the recovered SDK local file ID.");
+                            Assert.AreEqual(operationId, late.TransferId);
+                            Assert.DoesNotContain(lateDelete.Value, await ReadTransferOriginalJournalIdsAsync(reopenedJournal!, token));
                         }
                     }
                 }
@@ -402,7 +430,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 }
                 else if (interruptBeforeNativeDelete)
                 {
-                    TestContext.WriteLine($"SignedDirectoryTransfer: packageSha256={digest}; liveOriginalSurvivedRestart=True; originalStartRetained=True; sdkLocalFileIdRecovered=True; bothRootsFenced=True; reopenedRoots=True; targetBytesVerified=True; acknowledgementAcrossRoles=True.");
+                    TestContext.WriteLine($"SignedDirectoryTransfer: packageSha256={digest}; liveOriginalSurvivedRestart=True; originalStartRetained=True; sdkLocalFileIdRecovered=True; lateDeleteAcknowledged=True; bothRootsFenced=True; reopenedRoots=True; targetBytesVerified=True; acknowledgementAcrossRoles=True.");
                 }
                 else if (restartCut is not null)
                 {
