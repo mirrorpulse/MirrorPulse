@@ -10,6 +10,34 @@ public sealed record MirrorPulseNamespaceTransferTargetPublication(int Version, 
 
 public sealed partial class MirrorPulseProductCatalog
 {
+    internal async Task<IReadOnlyList<Guid>> ReadRegisteredUnpublishedFileTransfersAsync(CancellationToken token)
+    {
+        await _gate.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            using var transaction = BeginNamespaceRecoveryReadSnapshot();
+            await using var query = _connection.CreateCommand();
+            query.Transaction = transaction;
+            query.CommandText = """
+                SELECT DISTINCT f.operation_id FROM namespace_transfer_roots f
+                JOIN namespace_transfers t ON t.operation_id=f.operation_id
+                JOIN namespace_transfer_target_births b ON b.transfer_id=t.operation_id
+                JOIN namespace_members m ON m.member_id=b.birth_id
+                WHERE json_extract(CAST(t.payload AS TEXT),'$.TargetPublication') IS NULL
+                ORDER BY f.operation_id LIMIT 2049;
+                """;
+            var pending = new List<Guid>();
+            await using (var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false))
+                while (await reader.ReadAsync(token).ConfigureAwait(false))
+                    pending.Add(ParseNamespaceMemberId(reader.GetString(0)));
+            if (pending.Count > 2048) throw new InvalidDataException("Pending file transfer publications exceed the root bound.");
+            transaction.Commit();
+            return pending.AsReadOnly();
+        }
+        finally { _gate.Release(); }
+    }
+
     /// <summary>Validates the exact original target continuation without admitting unrelated work in either root.</summary>
     public async Task<MirrorPulseNamespaceTransferCopy> ValidateNamespaceTransferTargetPublicationAsync(Guid operationId,
         CancellationToken token = default)

@@ -24,6 +24,7 @@ public sealed class DeferredP079GateTests
                 'NativeHostTransferPreservesRecreatedAcceptedSourceAndBothFencesAfterRootAudits',
                 'NativeHostTransferCompletesOriginalClaimAfterBothRootAudits',
                 'NativeHostTransferRetiresAndAcknowledgesOriginalAfterPublishedTargetRoleHandoff',
+                'NativeHostTransferPublishesOnlyUnchangedRegisteredTargetAfterRoleHandoff',
                 'NativeHostTransferAcknowledgesOriginalAfterSettledSourceRoleHandoff',
                 'NativeHostTransferResumesInterruptedSourceRetirementAcrossRoles',
                 'NativeHostTransferCompletesRecreatedAcceptedSourceAfterBothRootAudits')|ForEach-Object {$fileTransferPrefix+$_}

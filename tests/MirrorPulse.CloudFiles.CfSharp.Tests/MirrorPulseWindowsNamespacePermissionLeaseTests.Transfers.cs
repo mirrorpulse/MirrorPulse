@@ -72,6 +72,15 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     [TestCategory("NativeCloudFiles")]
     [DataRow(false)]
     [DataRow(true)]
+    public Task NativeHostTransferPublishesOnlyUnchangedRegisteredTargetAfterRoleHandoff(bool targetEdited) =>
+        RunNativeHostTransferAsync(deleteSource: true, retireLocal: true, completeOriginals: true, selectedSameInstance: false,
+            editTargetBeforePublicationHandoff: targetEdited);
+
+    [TestMethod]
+    [DoNotParallelize]
+    [TestCategory("NativeCloudFiles")]
+    [DataRow(false)]
+    [DataRow(true)]
     public Task NativeHostTransferAcknowledgesOriginalAfterSettledSourceRoleHandoff(bool loseAcknowledgementReturn) =>
         RunNativeHostTransferAsync(deleteSource: true, retireLocal: true, completeOriginals: true, selectedSameInstance: false,
             acceptDeleteBeforePublishedHandoff: false, retireBeforePublishedHandoff: true, loseAcknowledgementReturn: loseAcknowledgementReturn);
@@ -116,7 +125,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     private async Task RunNativeHostTransferAsync(bool deleteSource, bool retireLocal = false, string? retirementFault = null,
         bool completeOriginals = false, bool? selectedSameInstance = null, bool? restartBeforeVerification = null,
         bool recreateAcceptedSource = false, bool? acceptDeleteBeforePublishedHandoff = null, bool retireBeforePublishedHandoff = false,
-        bool loseAcknowledgementReturn = false)
+        bool loseAcknowledgementReturn = false, bool? editTargetBeforePublicationHandoff = null)
     {
         if (!OperatingSystem.IsWindows() || Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
             Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
@@ -581,6 +590,68 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     Assert.AreEqual(MirrorPulseNamespaceBirthOrigin.TransferTarget, verified.TargetBirth.Birth.Origin);
                     Assert.IsNull(await catalog.ReadNamespaceBirthStartAsync(verified.TargetBirth.Birth.OperationId, deadline.Token));
                     Assert.AreEqual(verified, await runtime.PrepareNamespaceTransferTargetBirthAsync(operation, deadline.Token));
+                    if (editTargetBeforePublicationHandoff is { } targetEdited)
+                    {
+                        publicationCut = MirrorPulseTransferPublicationCheckpoint.AfterRegistration;
+                        await Assert.ThrowsExactlyAsync<IOException>(async () => await runtime.PublishNamespaceTransferTargetAsync(operation, deadline.Token));
+                        Assert.AreEqual(1, publicationFaults);
+                        Guid birthId = verified.TargetBirth.Birth.OperationId;
+                        var observation = await catalog.ReadNamespaceBirthObservationAsync(birthId, deadline.Token);
+                        var registered = await catalog.ReadNamespaceMemberAsync(birthId, deadline.Token);
+                        Assert.IsNotNull(observation);
+                        Assert.IsNotNull(registered);
+                        Assert.IsNull((await runtime.ReadNamespaceTransferAsync(operation, deadline.Token)).TargetPublication);
+                        Assert.HasCount(2, await catalog.ReadNamespaceDispatchFencedRootsAsync(deadline.Token));
+                        string publicationTargetPath = Path.Combine(paths.SyncRootPath, "Archive", "moved.bin");
+                        byte[] editedTarget = [9, 8, 7, 6];
+                        if (targetEdited) await File.WriteAllBytesAsync(publicationTargetPath, editedTarget, deadline.Token);
+                        await runtime.DisposeAsync();
+                        await catalog.DisposeAsync();
+
+                        await using var reopenedCatalog = await MirrorPulseProductCatalog.OpenAsync(paths, deadline.Token);
+                        await using var reopenedWork = new MirrorPulseNamespaceWorkAdmission([sourceRoot.RootId, targetRoot.RootId]);
+                        worker.ExpectedNamespaceRole = nextRole.RoleSid;
+                        var reopenedTransport = new MirrorPulseNormalUserWorkerTransport(nextRole, worker, worker, worker, worker, worker);
+                        var reopenedFactory = new CfSharpMirrorPulseCloudRuntimeFactory(
+                            provider: new MirrorPulseDemandProvider(router, reopenedTransport, namespaceWork: reopenedWork),
+                            router: router, catalog: reopenedCatalog, mayDispatch: _ => true, scheduler: scheduler,
+                            namespaceExecution: nextRole, namespaceActor: actor, namespaceWork: reopenedWork,
+                            transfers: Services(reopenedTransport), initializeNamespaceOnStart: true);
+                        await using var nextPublisher = reopenedFactory.Create(paths);
+                        await nextPublisher.StartAsync(deadline.Token);
+                        var retainedAfterHandoff = await nextPublisher.ReadNamespaceTransferAsync(operation, deadline.Token);
+                        Assert.AreEqual(verified.TargetBirth, retainedAfterHandoff.TargetBirth);
+                        Assert.AreEqual(observation, await reopenedCatalog.ReadNamespaceBirthObservationAsync(birthId, deadline.Token));
+                        Assert.AreEqual(registered, await reopenedCatalog.ReadNamespaceMemberAsync(birthId, deadline.Token));
+                        Assert.AreEqual(1, worker.Uploads);
+                        Assert.AreEqual(0, worker.Deletes);
+                        Assert.HasCount(2, await reopenedCatalog.ReadNamespaceDispatchFencedRootsAsync(deadline.Token));
+                        if (targetEdited)
+                        {
+                            Assert.IsNull(retainedAfterHandoff.TargetPublication);
+                            await Assert.ThrowsExactlyAsync<InvalidOperationException>(async () =>
+                                await nextPublisher.PublishNamespaceTransferTargetAsync(operation, deadline.Token));
+                            Assert.AreEqual(0, worker.Deletes);
+                            CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(sourcePath, deadline.Token));
+                            CollectionAssert.AreEqual(editedTarget, await File.ReadAllBytesAsync(publicationTargetPath, deadline.Token));
+                            return;
+                        }
+                        var published = await nextPublisher.PublishNamespaceTransferTargetAsync(operation, deadline.Token);
+                        Assert.AreEqual(retainedAfterHandoff, published);
+                        Assert.IsNotNull(published.TargetPublication);
+                        Assert.AreEqual(registered.MemberId, published.TargetPublication.MemberId);
+                        Assert.AreEqual(observation.LocalObject, published.TargetPublication.LocalObject);
+                        await nextPublisher.RetireNamespaceTransferSourceAsync(operation, deadline.Token);
+                        var completed = await nextPublisher.CompleteNamespaceTransferAsync(operation, deadline.Token);
+                        Assert.AreEqual(published.TargetPublication, completed.TargetPublication);
+                        Assert.AreEqual(prepared.JournalClaim, completed.JournalClaim);
+                        Assert.IsNotNull(completed.Acknowledgement?.AcknowledgedAt);
+                        Assert.AreEqual(1, worker.Deletes);
+                        Assert.IsEmpty(await reopenedCatalog.ReadNamespaceDispatchFencedRootsAsync(deadline.Token));
+                        Assert.IsFalse(File.Exists(sourcePath));
+                        CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(publicationTargetPath, deadline.Token));
+                        return;
+                    }
                     IMirrorPulseCloudRuntime publishing = runtime; IMirrorPulseCloudRuntime? secondPublisher = null;
                     MirrorPulseNamespaceWorkAdmission? recoveryWork = null;
                     try

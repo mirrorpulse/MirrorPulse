@@ -200,26 +200,36 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator(CloudFileSys
     {
         var copy = await ReadAsync(operationId, token).ConfigureAwait(false);
         if (copy.TargetPublication is not null) return copy;
-        return await actor.RunAsync(async stop =>
-        {
-            var current = await catalog.ValidateNamespaceTransferTargetPublicationAsync(operationId, stop).ConfigureAwait(false);
-            if (current.TargetPublication is not null) return current;
-            if (protocolVersion(current.Plan.SourceRoute.InstanceId) != current.Plan.SourceRoute.ProtocolVersion ||
-                protocolVersion(current.Plan.TargetRoute.InstanceId) != current.Plan.TargetRoute.ProtocolVersion)
-                throw new InvalidOperationException("The negotiated transfer protocol changed before target publication.");
-            var members = current.TargetBirth!.Recovery is { } recovered
-                ? await catalog.ReadFileTransferRecoveryMembersAsync(operationId, recovered, stop).ConfigureAwait(false) : null;
-            var source = members?.Source ?? current.Plan.Source;
-            return await WithGuardsAsync(source, members?.SourceParent ?? current.Plan.SourceParent, members?.TargetParent ?? current.Plan.TargetParent,
-                current.Plan.TargetRelativePath, async (file, metadata) =>
-                {
-                    var projection = await ReadSourceProjectionAsync(file, source, stop).ConfigureAwait(false);
-                    if (projection.RemoteRevision != current.Plan.SourceRemoteRevision)
-                        throw new InvalidDataException("The original transfer source projection changed before target publication.");
-                    return await new MirrorPulseNamespaceTransferTargetPublisher(fileSystem, state, catalog, router, actor, TargetPublicationCheckpoint)
-                        .PublishUnderActorAsync(current, stop).ConfigureAwait(false);
-                }, stop, allowOwnedTargetBirth: true).ConfigureAwait(false);
-        }, token).ConfigureAwait(false);
+        return await actor.RunAsync(stop => PublishTargetUnderActorAsync(operationId, settleRegistered: false, stop), token).ConfigureAwait(false);
+    }
+
+    internal async ValueTask SettleRegisteredFileTransferTargetAsync(Guid operationId, CancellationToken token) =>
+        _ = await actor.RunAsync(stop => PublishTargetUnderActorAsync(operationId, settleRegistered: true, stop), token).ConfigureAwait(false);
+
+    private async ValueTask<MirrorPulseNamespaceTransferCopy> PublishTargetUnderActorAsync(Guid operationId, bool settleRegistered, CancellationToken token)
+    {
+        var copy = await catalog.ValidateNamespaceTransferTargetPublicationAsync(operationId, token).ConfigureAwait(false);
+        if (copy.TargetPublication is not null) return copy;
+        // Startup settlement is limited to local evidence. It does not need a live Worker or dispatch a remote effect.
+        if (!settleRegistered && (protocolVersion(copy.Plan.SourceRoute.InstanceId) != copy.Plan.SourceRoute.ProtocolVersion ||
+            protocolVersion(copy.Plan.TargetRoute.InstanceId) != copy.Plan.TargetRoute.ProtocolVersion))
+            throw new InvalidOperationException("The negotiated transfer protocol changed before target publication.");
+        var target = copy.TargetBirth!;
+        var members = target.Recovery is { } recovered
+            ? await catalog.ReadFileTransferRecoveryMembersAsync(operationId, recovered, token).ConfigureAwait(false) : null;
+        var source = members?.Source ?? copy.Plan.Source;
+        var parent = members?.TargetParent ?? copy.Plan.TargetParent;
+        return await WithGuardsAsync(source, members?.SourceParent ?? copy.Plan.SourceParent, parent,
+            copy.Plan.TargetRelativePath, async (file, _) =>
+            {
+                var projection = await ReadSourceProjectionAsync(file, source, token).ConfigureAwait(false);
+                if (projection.RemoteRevision != copy.Plan.SourceRemoteRevision)
+                    throw new InvalidDataException("The original transfer source projection changed before target publication.");
+                var publisher = new MirrorPulseNamespaceTransferTargetPublisher(fileSystem, state, catalog, router, actor, TargetPublicationCheckpoint);
+                return settleRegistered
+                    ? await publisher.SettleRegisteredFileUnderActorAsync(copy, parent, token).ConfigureAwait(false)
+                    : await publisher.PublishUnderActorAsync(copy, token).ConfigureAwait(false);
+            }, token, allowOwnedTargetBirth: true, retainedPublicationRole: settleRegistered ? target.Birth.RoleSid : null).ConfigureAwait(false);
     }
 
     private async Task<MirrorPulseNamespaceTransferCopy> ExecuteGuardedAsync(MirrorPulseNamespaceTransferPlan plan,
@@ -244,17 +254,24 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator(CloudFileSys
     private async Task<T> WithGuardsAsync<T>(MirrorPulseNamespaceMemberProtectionSnapshot source,
         MirrorPulseNamespaceMemberProtectionSnapshot sourceParent, MirrorPulseNamespaceMemberProtectionSnapshot targetParent,
         string targetPath, Func<CloudFile, MirrorPulseWindowsNamespacePermissionLease, Task<T>> operation, CancellationToken token,
-        bool allowOwnedTargetBirth = false, bool allowSourceRetirement = false)
+        bool allowOwnedTargetBirth = false, bool allowSourceRetirement = false, string? retainedPublicationRole = null)
     {
         actor.AssertAccess(); T result = default!;
-        await execution.RunNamespaceOperationAsync(async () =>
+        if (retainedPublicationRole is null)
+            await execution.RunNamespaceOperationAsync(GuardAsync).ConfigureAwait(false);
+        else
+            await execution.RunNormalUserOperationAsync(GuardAsync).ConfigureAwait(false);
+        return result;
+
+        async Task GuardAsync()
         {
             foreach (var retained in new[] { source, sourceParent, targetParent })
             {
                 RequireLiveRoute(retained);
-                if (retained.Context.Protection.RoleSid != execution.RoleSid.Value || retained.Context.Member.OwnerSid != execution.OwnerSid.Value ||
+                if (retained.Context.Protection.RoleSid != (retainedPublicationRole ?? execution.RoleSid.Value) ||
+                    retained.Context.Member.OwnerSid != execution.OwnerSid.Value ||
                     await catalog.ReadNamespaceMemberProtectionSnapshotAsync(retained.Context.Member.MemberId, token).ConfigureAwait(false) != retained)
-                    throw new InvalidOperationException("Transfer execution requires unchanged current-role members and positions.");
+                    throw new InvalidOperationException("Transfer execution requires unchanged protection and original member positions.");
             }
             var file = fileSystem.GetFile(source.Context.Location.RelativePath);
             var destination = fileSystem.GetFile(targetPath);
@@ -278,8 +295,7 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator(CloudFileSys
             MirrorPulseNamespaceBirthProtectionVerifier.RequireUnchangedParent(targetBefore, await targetLease.InspectAsync(token).ConfigureAwait(false));
             if (!allowOwnedTargetBirth && (await destination.InspectAsync(token).ConfigureAwait(false)).Exists)
                 throw new IOException("The native transfer destination changed during the original operation.");
-        }).ConfigureAwait(false);
-        return result;
+        }
     }
 
     private async Task<MirrorPulseNamespaceMemberLocationCandidate> ReadSourceProjectionAsync(CloudFile file,

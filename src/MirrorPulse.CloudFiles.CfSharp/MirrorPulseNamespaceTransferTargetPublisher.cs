@@ -9,8 +9,9 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 internal enum MirrorPulseTransferPublicationCheckpoint { AfterStart, AfterCreation, AfterObservation, AfterRegistration }
 
 /// <summary>Publishes the original verified remote target as a separate protected online placeholder.</summary>
-/// <remarks>The caller holds both root/instance admissions, the namespace role, shared actor and source guards.
-/// No remote batch or upload acceptance is synthesized. Source bytes and both durable fences remain retained.</remarks>
+/// <remarks>The caller holds the original instance admissions, shared actor and source guards.
+/// Startup can settle a registered target from its original protection before role rotation.
+/// Source bytes and both durable fences remain retained.</remarks>
 [SupportedOSPlatform("windows10.0.26100")]
 internal sealed class MirrorPulseNamespaceTransferTargetPublisher(CloudFileSystem fileSystem, MirrorPulseCfSharpStateSession state,
     MirrorPulseProductCatalog catalog, MirrorPulseRootRouter router, MirrorPulseNamespaceActor actor,
@@ -25,9 +26,46 @@ internal sealed class MirrorPulseNamespaceTransferTargetPublisher(CloudFileSyste
         var (member, protection) = await PublishMemberUnderActorAsync(target.Birth, target.Plan, target.RecoveredParent ?? copy.Plan.TargetParent,
             router.GetRegistration(copy.Plan.TargetRoute.InstanceId, copy.Plan.TargetRoute.RootKey),
             copy.TargetVerification!.RemoteId, copy.AcceptedRevision!, token).ConfigureAwait(false);
-        return await catalog.RecordNamespaceTransferTargetPublicationAsync(new(1, copy.Plan.OperationId, target.Birth.OperationId,
-            member.MemberId, target.Plan.ItemId, member.LocalObject, protection.ProtectionId, DateTimeOffset.UtcNow),
-            CancellationToken.None).ConfigureAwait(false);
+        return await RecordFilePublicationAsync(copy, member, protection.ProtectionId).ConfigureAwait(false);
+    }
+
+    internal async Task<MirrorPulseNamespaceTransferCopy> SettleRegisteredFileUnderActorAsync(MirrorPulseNamespaceTransferCopy copy,
+        MirrorPulseNamespaceMemberProtectionSnapshot parentSnapshot, CancellationToken token)
+    {
+        actor.AssertAccess();
+        var target = copy.TargetBirth!;
+        var (birth, plan) = (target.Birth, target.Plan);
+        var current = await catalog.ReadNamespaceMemberProtectionSnapshotAsync(birth.OperationId, token).ConfigureAwait(false)
+            ?? throw new InvalidDataException("Startup publication requires the original registered target.");
+        var member = current.Context.Member;
+        if (current.Context.Protection.RoleSid != birth.RoleSid || current.Context.Location.ParentMemberId != parentSnapshot.Context.Member.MemberId ||
+            current.Context.Location.RelativePath != birth.RelativePath || current.Context.Location.CurrentPositionOperationId is not null ||
+            member.OriginId != birth.OperationId || member.OwnerSid != parentSnapshot.Context.Member.OwnerSid ||
+            current.Observation is not { IsInSync: true } observed || observed.LocalObject != member.LocalObject)
+            throw new InvalidDataException("Startup publication lost the original target protection or registered location.");
+
+        var parent = fileSystem.GetDirectory(parentSnapshot.Context.Location.RelativePath);
+        var item = fileSystem.GetFile(birth.RelativePath);
+        await using var parentLease = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(parent, router, token).ConfigureAwait(false);
+        var before = await MirrorPulseNamespaceBirthProtectionVerifier.InspectRetainedParentAsync(birth, parent,
+            MirrorPulseNamespaceProtectionProofReader.FromSnapshot(parentSnapshot), parentLease, token).ConfigureAwait(false);
+        await using var childLease = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(item, router, token).ConfigureAwait(false);
+        var child = await childLease.InspectAsync(token).ConfigureAwait(false);
+        if (child.LocalObject != member.LocalObject || child.OwnerSid != member.OwnerSid || child.RootId != birth.RootId ||
+            child.RelativePath != birth.RelativePath || child.IsDirectory || child.LinkCount != 1 ||
+            !MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(current.ExpectedDacl, child.Dacl))
+            throw new InvalidDataException("Startup publication requires the original owned native file.");
+        await RequirePublishedProjectionAsync(birth, plan, item, member, token).ConfigureAwait(false);
+        MirrorPulseNamespaceBirthProtectionVerifier.RequireUnchangedParent(before, await parentLease.InspectAsync(token).ConfigureAwait(false));
+        return await RecordFilePublicationAsync(copy, member, current.Context.Protection.ProtectionId).ConfigureAwait(false);
+    }
+
+    private Task<MirrorPulseNamespaceTransferCopy> RecordFilePublicationAsync(MirrorPulseNamespaceTransferCopy copy,
+        MirrorPulseNamespaceMemberRegistration member, Guid protectionId)
+    {
+        var target = copy.TargetBirth!;
+        return catalog.RecordNamespaceTransferTargetPublicationAsync(new(1, copy.Plan.OperationId, target.Birth.OperationId,
+            member.MemberId, target.Plan.ItemId, member.LocalObject, protectionId, DateTimeOffset.UtcNow), CancellationToken.None);
     }
 
     internal async Task<(MirrorPulseNamespaceMemberRegistration Member, MirrorPulseNamespaceBirthProtection Protection)>
@@ -116,18 +154,24 @@ internal sealed class MirrorPulseNamespaceTransferTargetPublisher(CloudFileSyste
             { FirstParentPositionOperationId = position };
         member = await MirrorPulseNamespaceMemberRegistrar.RegisterAsync(catalog, member, item, parent, router, actor, durable).ConfigureAwait(false);
         await CheckpointAsync(MirrorPulseTransferPublicationCheckpoint.AfterRegistration, durable).ConfigureAwait(false);
-        if (!await HasProjectionAsync(birth, plan, item, durable).ConfigureAwait(false))
+        await RequirePublishedProjectionAsync(birth, plan, item, member, durable).ConfigureAwait(false);
+        MirrorPulseNamespaceBirthProtectionVerifier.RequireUnchangedParent(before, await guard.InspectAsync(durable).ConfigureAwait(false));
+        return (member, protection);
+    }
+
+    private async Task RequirePublishedProjectionAsync(MirrorPulseNamespaceBirthIntent birth, MirrorPulseNamespaceBirthPlan plan,
+        CloudItem item, MirrorPulseNamespaceMemberRegistration member, CancellationToken token)
+    {
+        if (!await HasProjectionAsync(birth, plan, item, token).ConfigureAwait(false))
             throw new InvalidDataException("The native target projection changed before its first publication receipt.");
-        var native = await item.InspectAsync(durable).ConfigureAwait(false);
+        var native = await item.InspectAsync(token).ConfigureAwait(false);
         if (!native.Exists || native.IsTombstone || !native.IsPlaceholder || native.Kind != item.Kind ||
             native.ItemId != plan.ItemId || native.RemoteId != plan.RemoteId || native.RemoteRevision != plan.RemoteRevision ||
             plan.Content is { } content && native.Length != content.Length || native.SynchronizationState != CloudSynchronizationState.InSync ||
             native.LocalBinding is not { } binding || member.LocalObject != new MirrorPulseLocalFileBinding(
                 binding.VolumeSerialNumber, binding.SyncRootFileId, binding.LocalFileId) ||
-            !native.PlaceholderIdentity.Span.SequenceEqual(identity.Encode()))
+            !native.PlaceholderIdentity.Span.SequenceEqual(new CloudPlaceholderIdentity(plan.ItemId, plan.RemoteId, plan.RemoteRevision).Encode()))
             throw new InvalidDataException("The original native target changed before its first accepted placeholder publication.");
-        MirrorPulseNamespaceBirthProtectionVerifier.RequireUnchangedParent(before, await guard.InspectAsync(durable).ConfigureAwait(false));
-        return (member, protection);
     }
 
     internal async Task<bool> SettleObservedDirectoryTransferMemberAsync(MirrorPulseDirectoryTransferTargetBirth target, CancellationToken token)
