@@ -9,7 +9,10 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
         MirrorPulseNamespaceTransferCopy copy, CloudFile file, CancellationToken token)
     {
         actor.AssertAccess();
-        var candidate = await ReadSourceProjectionAsync(file, copy.Plan.Source, token).ConfigureAwait(false);
+        var members = copy.TargetBirth?.Recovery is { } recovery
+            ? await catalog.ReadFileTransferRecoveryMembersAsync(copy.Plan.OperationId, recovery, token).ConfigureAwait(false) : null;
+        var source = members?.Source ?? copy.Plan.Source;
+        var candidate = await ReadSourceProjectionAsync(file, source, token).ConfigureAwait(false);
         // InspectAsync uses the official store itself. Never call it while holding a store transaction.
         var native = await file.InspectAsync(token).ConfigureAwait(false); RequireBinding(native, copy.Plan.Source);
         await using var read = await state.OpenStore.BeginTransactionAsync(token).ConfigureAwait(false);
@@ -22,7 +25,7 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
         {
             var identity = CloudPlaceholderIdentity.Decode(native.PlaceholderIdentity.Span);
             if (identity.ItemId != row.ItemId || identity.RemoteId != row.RemoteId ||
-                (identity.RemoteRevision ?? string.Empty) != (row.RemoteRevision ?? string.Empty))
+                !MatchesSourceRevision(native, identity, row.RemoteRevision))
                 throw new InvalidDataException("The guarded native source disagrees with its original SDK generation.");
         }
         var binding = native.LocalBinding!;
@@ -33,6 +36,15 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
         await read.RollbackAsync(token).ConfigureAwait(false);
         return projection;
     }
+
+    private static bool MatchesSourceRevision(CloudItemSnapshot native, CloudPlaceholderIdentity identity,
+        string? originalRevision) =>
+        (identity.RemoteRevision ?? string.Empty) == (originalRevision ?? string.Empty) ||
+        // Public local preparation retains the acknowledged SDK revision but cannot
+        // introduce native remote acceptance. The guarded original fully resident dirty
+        // object retains that conditional baseline; deletion independently checks it.
+        identity.RemoteRevision is null && !string.IsNullOrEmpty(originalRevision) &&
+        native.SynchronizationState == CloudSynchronizationState.NotInSync && native.ContentAvailability == CloudContentAvailability.FullyAvailable;
 
     internal static void RequireOriginalSourceProjection(MirrorPulseNamespaceTransferSourceProjection original,
         CloudItemState? current, bool tombstone, CloudItemKind kind = CloudItemKind.File)

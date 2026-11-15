@@ -98,6 +98,29 @@ See [protected content confirmation](protected-content-confirmation.md) and
 [Cloud Files lifecycle](cloud-files-lifecycle.md). Full native rescan and installed
 MSIX evidence remain required before this recovery path is accepted.
 
+## Controlled file transfer source revisions
+
+A controlled transfer copies the guarded source's selected local bytes. Its
+conditional source deletion uses the original acknowledged remote revision,
+after independent whole-target verification. A newer local edit does not replace
+that remote baseline.
+
+Protected local placeholder preparation carries no native accepted revision and
+preserves the acknowledged revision in the official store. A fully resident,
+dirty original may therefore have a local-only native identity and a retained
+official baseline. Transfer execution still requires its original member, public
+identity, complete physical binding, current permissions and write-excluding
+content guard. A nonempty native revision must match the official revision;
+an in-sync object cannot borrow this dirty-source rule.
+
+Preparation does not establish remote acceptance or acknowledge a journal.
+Before target birth is selected, a Host role change requires fresh scoped audits
+of both original roots before copying resumes. Source retirement retains the
+actual public SDK generation captured before native deletion. Local preparation may establish a previously
+missing SDK tracking ID. Retirement retains that observed value separately from
+the complete native binding, while preserving the original logical identity and
+remote baseline.
+
 ## Unsent file chains
 
 The product catalog can retain an immutable execution preparation for a complete

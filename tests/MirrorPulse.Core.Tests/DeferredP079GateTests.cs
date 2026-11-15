@@ -22,7 +22,8 @@ public sealed class DeferredP079GateTests
             $fileTransferRecovery=@('NativeHostTransferAuditsBothRootsBeforeResumingOriginalFileCopy',
                 'NativeHostTransferDeletesOriginalRemoteSourceAfterBothRootAudits',
                 'NativeHostTransferPreservesRecreatedAcceptedSourceAndBothFencesAfterRootAudits',
-                'NativeHostTransferCompletesOriginalClaimAfterBothRootAudits')|ForEach-Object {$fileTransferPrefix+$_}
+                'NativeHostTransferCompletesOriginalClaimAfterBothRootAudits',
+                'NativeHostTransferCompletesRecreatedAcceptedSourceAfterBothRootAudits')|ForEach-Object {$fileTransferPrefix+$_}
             foreach($method in $fileTransferRecovery){
                 if(@($catalog.required.namespace|Where-Object {$_ -ceq $method}).Count -ne 1 -or
                    @($catalog.required.native|Where-Object {$_ -ceq $method}).Count -ne 1 -or

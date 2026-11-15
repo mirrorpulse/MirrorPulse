@@ -45,6 +45,13 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     [TestMethod]
     [DoNotParallelize]
     [TestCategory("NativeCloudFiles")]
+    public Task NativeHostTransferCompletesRecreatedAcceptedSourceAfterBothRootAudits() =>
+        RunNativeHostTransferAsync(deleteSource: true, retireLocal: true, completeOriginals: true, selectedSameInstance: false,
+            restartBeforeVerification: false, recreateAcceptedSource: true);
+
+    [TestMethod]
+    [DoNotParallelize]
+    [TestCategory("NativeCloudFiles")]
     [DataRow(false)]
     [DataRow(true)]
     public Task NativeHostTransferCompletesOriginalClaimAfterBothRootAudits(bool loseReply) =>
@@ -187,6 +194,12 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 if (deleteSource)
                     await PrepareTransferAcceptedSourceAsync(fileSystem.GetFile("Docs/original.bin"), catalog, router, role, actor,
                         sourceRoot, bytes, deadline.Token, message => TestContext.WriteLine(message));
+                string acceptedSourceSha256 = Convert.ToHexString(SHA256.HashData(bytes));
+                if (recreateAcceptedSource)
+                {
+                    bytes[0] ^= 0x5A;
+                    bytes[^1] ^= 0xA5;
+                }
                 var nativeBefore = await fileSystem.GetFile("Docs/original.bin").InspectAsync(deadline.Token);
                 long? originalOfficialFileId = null;
                 CloudItemState? originalOfficialSource = null;
@@ -329,6 +342,11 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     worker.Plan = prepared.Plan;
                     Assert.AreEqual(nativeBefore.LocalBinding!.LocalFileId, prepared.Plan.Source.Context.Member.LocalObject.LocalFileId);
                     Assert.IsNull(prepared.CopyStartedAt); Assert.AreEqual(bytes.LongLength, prepared.Plan.Length);
+                    if (recreateAcceptedSource)
+                    {
+                        Assert.AreNotEqual(acceptedSourceSha256, prepared.Plan.Sha256);
+                        Assert.IsFalse(File.GetAttributes(sourcePath).HasFlag(FileAttributes.ReparsePoint));
+                    }
                     await Assert.ThrowsExactlyAsync<MirrorPulseMutationAmbiguousException>(async () =>
                         await runtime.PrepareNamespaceTransferTargetBirthAsync(operation, deadline.Token));
                     await Assert.ThrowsAsync<UnauthorizedAccessException>(() => Task.Run(() => File.Delete(sourcePath), deadline.Token));
@@ -393,20 +411,9 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                             var audits = await reopenedCatalog.ReadFileTransferRecoveryAuditIdsAsync(operation, nextRole.RoleSid.Value, token);
                             CollectionAssert.AreEquivalent(new[] { sourceRoot.RootId, targetRoot.RootId }, audits.Keys.ToArray());
                         };
-                        if (recreateAcceptedSource)
-                        {
-                            await Assert.ThrowsExactlyAsync<InvalidDataException>(async () =>
-                                await nextRuntime.CopyNamespaceTransferAsync(operation, deadline.Token));
-                            Assert.AreEqual(originalCopy, await nextRuntime.ReadNamespaceTransferAsync(operation, deadline.Token));
-                            Assert.AreEqual(0, worker.Uploads); Assert.AreEqual(0, worker.Deletes);
-                            Assert.IsFalse(worker.SourceDeleted);
-                            CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(sourcePath, deadline.Token));
-                            Assert.HasCount(2, await reopenedCatalog.ReadNamespaceDispatchFencedRootsAsync(deadline.Token));
-                            Assert.IsFalse(reopenedWork.IsAdmitted(sourceRoot.RootId));
-                            Assert.IsFalse(reopenedWork.IsAdmitted(targetRoot.RootId));
-                            return;
-                        }
                         var recovered = await nextRuntime.CopyNamespaceTransferAsync(operation, deadline.Token);
+                        if (recreateAcceptedSource)
+                            Assert.IsTrue(File.GetAttributes(sourcePath).HasFlag(FileAttributes.ReparsePoint));
                         Assert.AreEqual(prepared.Plan, recovered.Plan);
                         Assert.AreEqual(prepared.JournalClaim, recovered.JournalClaim);
                         Assert.AreEqual("target-v1", recovered.AcceptedRevision);
@@ -432,8 +439,35 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         Assert.AreEqual(birthed.TargetBirth.Plan.ItemId, publishedMember.NativeItemId);
                         Assert.AreEqual(published.TargetPublication.MemberId, publishedMember.MemberId);
                         Assert.AreEqual(published, await nextRuntime.PublishNamespaceTransferTargetAsync(operation, deadline.Token));
+                        if (recreateAcceptedSource && !retireLocal)
+                        {
+                            Assert.AreEqual(0, worker.Deletes); Assert.IsFalse(worker.SourceDeleted);
+                            Assert.IsNull(published.SourceDeletion);
+                            Assert.IsNull(published.Acknowledgement);
+                            CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(sourcePath, deadline.Token));
+                            Assert.HasCount(2, await reopenedCatalog.ReadNamespaceDispatchFencedRootsAsync(deadline.Token));
+                            Assert.IsFalse(reopenedWork.IsAdmitted(sourceRoot.RootId));
+                            Assert.IsFalse(reopenedWork.IsAdmitted(targetRoot.RootId));
+                            return;
+                        }
                         if (deleteSource)
                         {
+                            var sourceAtRetirement = originalOfficialSource;
+                            if (retireLocal && recreateAcceptedSource)
+                            {
+                                Assert.IsNotNull(recoveredState);
+                                await using var beforeRetirement = await recoveredState.OpenStore.BeginTransactionAsync(deadline.Token);
+                                sourceAtRetirement = await beforeRetirement.Items.GetByItemIdAsync(originalOfficialSource!.ItemId, deadline.Token);
+                                Assert.IsNotNull(sourceAtRetirement);
+                                Assert.AreEqual(originalOfficialSource.RemoteId, sourceAtRetirement.RemoteId);
+                                Assert.AreEqual(originalOfficialSource.RelativePath, sourceAtRetirement.RelativePath);
+                                Assert.AreEqual(originalOfficialSource.RemoteRevision, sourceAtRetirement.RemoteRevision);
+                                Assert.IsNotNull(sourceAtRetirement.LocalFileId);
+                                if (originalOfficialSource.LocalFileId is { } originalTrackingId)
+                                    Assert.AreEqual(originalTrackingId, sourceAtRetirement.LocalFileId.Value);
+                                Assert.IsFalse(sourceAtRetirement.IsTombstone);
+                                await beforeRetirement.RollbackAsync(deadline.Token);
+                            }
                             var deleted = await nextRuntime.DeleteNamespaceTransferSourceAsync(operation, deadline.Token);
                             Assert.AreEqual(prepared.Plan, deleted.Plan);
                             Assert.AreEqual(prepared.JournalClaim, deleted.JournalClaim);
@@ -452,7 +486,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                                 Assert.AreEqual(nextRole.RoleSid.Value, retiredSource.Intent.RoleSid);
                                 Assert.IsNotNull(retiredSource.Intent.TransferEntry.RecoveredSourceParent);
                                 Assert.AreEqual(nextRole.RoleSid.Value, retiredSource.Intent.TransferEntry.RecoveredSourceParent.Context.Protection.RoleSid);
-                                AssertOriginalTransferSourceProjection(retiredSource, originalOfficialSource!, member.LocalObject);
+                                AssertOriginalTransferSourceProjection(retiredSource, sourceAtRetirement!, member.LocalObject);
                                 Assert.IsFalse(File.Exists(sourcePath));
                                 Assert.HasCount(2, await reopenedCatalog.ReadNamespaceDispatchFencedRootsAsync(deadline.Token));
                                 Assert.AreEqual(retiredSource, await nextRuntime.RetireNamespaceTransferSourceAsync(operation, deadline.Token));

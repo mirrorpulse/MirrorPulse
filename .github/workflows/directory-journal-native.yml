@@ -46,8 +46,8 @@ jobs:
           - runner: windows-11-arm
             architecture: Arm64
     runs-on: ${{ matrix.runner }}
-    # Retain the directory envelope and add the 17-minute fresh-user file recovery envelope.
-    timeout-minutes: 53
+    # Retain the directory envelope and add the 18-minute fresh-user file recovery envelope.
+    timeout-minutes: 54
     steps:
       - name: Check out the exact selected source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
