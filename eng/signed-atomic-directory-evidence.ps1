@@ -35,11 +35,12 @@ function Confirm-SignedDirectoryTransferReport {
     }
     [xml]$report = Get-Content -LiteralPath $ReportPath -Raw
     $rows = @($report.TestRun.Results.UnitTestResult)
-    if ($rows.Count -ne 2 -or @($rows | Where-Object outcome -CNE 'Passed').Count) { throw 'Both signed cross-instance directory cases must pass.' }
     $expected = @{
         NativeSignedLocalDirectoryTransferResumesAcrossTwoSingleRootInstances = 'SignedDirectoryTransfer: packageSha256=' + $PackageSha256 + '; distinctSingleRootInstances=True; sourceMembers=3; atomicSourceReceipt=True; interruptedNativeRetirement=True; reopenedRoots=True; targetBytesVerified=True; acknowledgementAcrossRoles=True.'
+        NativeSignedLocalDirectoryTransferSettlesNativeDeleteBeforeRoleRotation = 'SignedDirectoryTransfer: packageSha256=' + $PackageSha256 + '; originalNativeRetirementSettled=True; originalStartRetained=True; bothRootsFenced=True.'
         NativeSignedLocalDirectoryTransferToWebDavRejectsUnsupportedReverseBeforeMutation = 'SignedCrossPackageDirectoryTransfer: localSha256=' + $PackageSha256 + '; webDavSha256=' + $WebDavPackageSha256 + '; targetBytesVerified=True; reverseRejectedBeforeAdmission=True; reverseSourcePreserved=True.'
     }
+    if ($rows.Count -ne $expected.Count -or @($rows | Where-Object outcome -CNE 'Passed').Count) { throw 'All signed cross-instance directory cases must pass.' }
     foreach ($row in $rows) {
         $name = [string]$row.testName
         $facts = @(([string]$row.Output.StdOut -split '\r?\n') | Where-Object { $_ -cmatch '^Signed(?:CrossPackage)?DirectoryTransfer: ' })

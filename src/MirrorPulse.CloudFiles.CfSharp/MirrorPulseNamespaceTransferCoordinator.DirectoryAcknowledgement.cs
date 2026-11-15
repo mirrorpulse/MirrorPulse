@@ -87,13 +87,7 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
         var plan = await catalog.ReadNamespaceDirectoryTransferAsync(original.TransferId, token).ConfigureAwait(false)
             ?? throw new InvalidDataException("The started directory transfer lost its original admission.");
         var topology = await catalog.ReadAdapterTopologyAsync(token).ConfigureAwait(false);
-        foreach (var route in new[] { plan.SourceRoute, plan.TargetRoute })
-        {
-            var root = router.GetRegistration(route.InstanceId, route.RootKey);
-            if (root != topology.Roots.SingleOrDefault(candidate => candidate.RootId == route.RootId) ||
-                MirrorPulseTransferRoute.Capture(topology.Instances.Single(instance => instance.InstanceId == route.InstanceId), root, route.ProtocolVersion) != route)
-                throw new InvalidOperationException("The started directory transfer lost its original route.");
-        }
+        RequireRetainedDirectoryTransferRoutes(plan, topology);
         var journal = JournalFeed ?? throw new InvalidOperationException("Directory acknowledgement requires the Host's running journal.");
         var retired = await catalog.ReadNamespaceDirectoryTransferRetirementsAsync(original.TransferId, token).ConfigureAwait(false);
         MirrorPulseDirectoryTransferAcknowledgement completed = null!;

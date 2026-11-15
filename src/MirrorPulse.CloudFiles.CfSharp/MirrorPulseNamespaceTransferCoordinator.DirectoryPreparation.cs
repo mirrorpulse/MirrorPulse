@@ -171,6 +171,17 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
         return (original, destination);
     }
 
+    private void RequireRetainedDirectoryTransferRoutes(MirrorPulseDirectoryTransferAdmission plan, MirrorPulseAdapterTopology topology)
+    {
+        foreach (var route in new[] { plan.SourceRoute, plan.TargetRoute })
+        {
+            var root = router.GetRegistration(route.InstanceId, route.RootKey);
+            if (root != topology.Roots.SingleOrDefault(candidate => candidate.RootId == route.RootId) ||
+                MirrorPulseTransferRoute.Capture(topology.Instances.Single(instance => instance.InstanceId == route.InstanceId), root, route.ProtocolVersion) != route)
+                throw new InvalidOperationException("The started directory transfer lost its original route.");
+        }
+    }
+
     private static void RequireDirectoryTransferCommand(MirrorPulseDirectoryTransferAdmission admission,
         Guid sourceMember, Guid targetParent, string name)
     {

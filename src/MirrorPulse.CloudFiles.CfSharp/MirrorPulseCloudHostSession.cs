@@ -1526,13 +1526,21 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         [SupportedOSPlatform("windows10.0.26100")]
         private async ValueTask<bool> BootstrapNamespaceAsync(IMirrorPulseInstanceScheduler instances, CancellationToken token)
         {
-            // Already accepted original ACKs are metadata settlement under the normal
-            // owner, before role rotation. Completion grants no root admission; startup
-            // still requires the complete fresh current-role/native audit below.
+            // Observed native retirements and started ACKs can settle before the new
+            // role rotates inherited protection. Startup still audits each root
+            // before granting normal admission.
             if (transfers is not null && _transferJournal is not null)
             {
                 var coordinator = TransferCoordinator();
-                foreach (Guid operation in await catalog!.ReadStartedDirectoryTransferAcknowledgementsAsync(token).ConfigureAwait(false))
+                foreach (Guid operation in await catalog!.ReadStartedDirectoryTransferRetirementsAsync(token).ConfigureAwait(false))
+                {
+                    try { _ = await coordinator.SettleStartedDirectoryRetirementAsync(operation, token).ConfigureAwait(false); }
+                    catch (Exception error) when (error is IOException or InvalidOperationException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+                    {
+                        // Both roots remain fenced by the original transfer.
+                    }
+                }
+                foreach (Guid operation in await catalog.ReadStartedDirectoryTransferAcknowledgementsAsync(token).ConfigureAwait(false))
                 {
                     try { _ = await coordinator.ReplayStartedDirectoryAcknowledgementAsync(operation, token).ConfigureAwait(false); }
                     catch (Exception error) when (error is IOException or InvalidOperationException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
