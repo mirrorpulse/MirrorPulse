@@ -30,6 +30,11 @@ public sealed class TestResultGateTests
     [DataRow("deferredP079", "Failed", false, false, false)]
     [DataRow("deferredP079", "Passed", true, false, false)]
     [DataRow("deferredP079", "Passed", false, true, false)]
+    [DataRow("signedPreparedDirectoryCopy", "Passed", false, false, true)]
+    [DataRow("signedPreparedDirectoryCopy", "NotExecuted", false, false, false)]
+    [DataRow("signedPreparedDirectoryCopy", "Failed", false, false, false)]
+    [DataRow("signedPreparedDirectoryCopy", "Passed", true, false, false)]
+    [DataRow("signedPreparedDirectoryCopy", "Passed", false, true, false)]
     public async Task DedicatedGateRejectsSkippedOrMissingRequiredResults(string suite, string outcome, bool omitLast, bool repeatFirst, bool succeeds)
     {
         string repository = SftpProtocolFixture.FindRepositoryRoot();

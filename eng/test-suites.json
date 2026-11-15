@@ -1,6 +1,10 @@
 {
   "schemaVersion": 1,
   "requiredCases": {
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeHostTransferAuditsBothRootsBeforeResumingOriginalFileCopy": [
+      "NativeHostTransferAuditsBothRootsBeforeResumingOriginalFileCopy (False)",
+      "NativeHostTransferAuditsBothRootsBeforeResumingOriginalFileCopy (True)"
+    ],
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseAtomicDirectoryJournalTests.NativeAtomicDirectoryPumpRecoversAroundPublicFeedAcknowledgementAndRetainsTheLaterDelete": [
       "NativeAtomicDirectoryPumpRecoversAroundPublicFeedAcknowledgementAndRetainsTheLaterDelete (False,False)",
       "NativeAtomicDirectoryPumpRecoversAroundPublicFeedAcknowledgementAndRetainsTheLaterDelete (True,False)",
@@ -96,6 +100,9 @@
     ]
   },
   "allowSkipped": [
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeSignedLocalDirectoryTransferResumesAfterCopyPreparationAcrossHostRoles",
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeSignedLocalDirectoryTransferResumesBeforeCopyDispatchAcrossHostRoles",
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeSignedLocalDirectoryTransferReplaysDurableCopyAcrossHostRoles",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeSignedLocalDirectoryTransferStartsOriginalCopyAfterHostRoleChange",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeSignedLocalDirectoryTransferResumesAfterAcceptedCopyAcrossHostRoles",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeSignedLocalDirectoryTransferRetainsFencesForUnreceiptedCopyAcrossHostRoles",
