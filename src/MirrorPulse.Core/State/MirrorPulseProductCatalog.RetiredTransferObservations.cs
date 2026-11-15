@@ -38,12 +38,7 @@ public sealed partial class MirrorPulseProductCatalog
             await using (var query = _connection.CreateCommand())
             {
                 query.Transaction = transaction;
-                query.CommandText = """
-                    SELECT operation_id FROM namespace_member_retirements INDEXED BY namespace_transfer_source_items
-                    WHERE json_extract(CAST(payload AS TEXT),'$.StartedItemId')=$item
-                        AND json_type(CAST(payload AS TEXT),'$.Intent.TransferEntry') IS NOT NULL
-                    ORDER BY operation_id LIMIT 2;
-                    """;
+                query.CommandText = RetiredTransferSourceIdsSql;
                 query.Parameters.AddWithValue("$item", itemId.ToString("D"));
                 await using var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
                 while (await reader.ReadAsync(token).ConfigureAwait(false)) ids.Add(ParseNamespaceMemberId(reader.GetString(0)));

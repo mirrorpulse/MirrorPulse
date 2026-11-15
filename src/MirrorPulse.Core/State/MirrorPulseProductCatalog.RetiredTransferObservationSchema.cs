@@ -58,20 +58,31 @@ public sealed partial class MirrorPulseProductCatalog
         transaction.Commit();
     }
 
+    private const string RetiredTransferSourceIdsSql = """
+        SELECT operation_id FROM namespace_member_retirements INDEXED BY namespace_transfer_source_items
+        WHERE json_extract(CAST(payload AS TEXT),'$.StartedItemId')=$item
+            AND json_type(CAST(payload AS TEXT),'$.Intent.TransferEntry') IS NOT NULL
+        ORDER BY operation_id LIMIT 2;
+        """;
+
     private async Task RequireSoleRetiredTransferSourceAsync(Guid itemId, Guid retirementId,
         SqliteTransaction transaction, CancellationToken token)
     {
         await using var query = _connection.CreateCommand(); query.Transaction = transaction;
-        query.CommandText = """
-            SELECT operation_id FROM namespace_member_retirements INDEXED BY namespace_transfer_source_items
-            WHERE json_extract(CAST(payload AS TEXT),'$.StartedItemId')=$item
-                AND json_type(CAST(payload AS TEXT),'$.Intent.TransferEntry') IS NOT NULL
-            ORDER BY operation_id LIMIT 2;
-            """;
+        query.CommandText = RetiredTransferSourceIdsSql;
         query.Parameters.AddWithValue("$item", itemId.ToString("D"));
         await using var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
         if (!await reader.ReadAsync(token).ConfigureAwait(false) || reader.GetString(0) != retirementId.ToString("D") ||
             await reader.ReadAsync(token).ConfigureAwait(false))
             throw new InvalidOperationException("An ambiguous or reused public item requires explicit generation reconciliation.");
+    }
+
+    private async Task<bool> HasRetiredFileTransferSourceAsync(Guid itemId, SqliteTransaction transaction, CancellationToken token)
+    {
+        await using var query = _connection.CreateCommand();
+        query.Transaction = transaction;
+        query.CommandText = RetiredTransferSourceIdsSql;
+        query.Parameters.AddWithValue("$item", itemId.ToString("D"));
+        return await query.ExecuteScalarAsync(token).ConfigureAwait(false) is not null;
     }
 }

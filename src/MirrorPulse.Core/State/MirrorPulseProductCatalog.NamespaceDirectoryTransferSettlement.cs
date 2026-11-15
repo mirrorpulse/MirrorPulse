@@ -162,30 +162,37 @@ public sealed partial class MirrorPulseProductCatalog
         {
             ThrowIfDisposed();
             using var transaction = BeginNamespaceRecoveryReadSnapshot();
-            Guid? transferId;
-            await using (var sql = _connection.CreateCommand())
-            {
-                sql.Transaction = transaction;
-                sql.CommandText = """
-                    SELECT transfer_id FROM namespace_directory_transfer_retirements
-                    WHERE json_extract(CAST(payload AS TEXT),'$.Projection.ItemId')=$item LIMIT 2;
-                    """;
-                sql.Parameters.AddWithValue("$item", itemId.ToString("D"));
-                await using var reader = await sql.ExecuteReaderAsync(token).ConfigureAwait(false);
-                transferId = await reader.ReadAsync(token).ConfigureAwait(false) ? ParseNamespaceMemberId(reader.GetString(0)) : null;
-                if (await reader.ReadAsync(token).ConfigureAwait(false))
-                    throw new InvalidDataException("The original public item has competing directory transfer retirements.");
-            }
-            if (transferId is not { } id) { transaction.Commit(); return null; }
-            var (plan, _) = await ReadDirectoryTransferBirthEvidenceAsync(id, transaction, token).ConfigureAwait(false);
-            var rows = await ReadDirectoryTransferRetirementsCoreAsync(id, transaction, token).ConfigureAwait(false);
-            var row = rows.SingleOrDefault(value => value.Projection.ItemId == itemId)
-                ?? throw new InvalidDataException("The original directory retirement item no longer matches its index.");
-            var completion = await ReadDirectoryTransferAcknowledgementCoreAsync(id, transaction, token).ConfigureAwait(false);
+            var source = await ReadRetiredDirectoryTransferSourceCoreAsync(itemId, transaction, token).ConfigureAwait(false);
             transaction.Commit();
-            return new(plan, row, completion?.AcknowledgedAt);
+            return source;
         }
         finally { _gate.Release(); }
+    }
+
+    private async Task<MirrorPulseRetiredDirectoryTransferSource?> ReadRetiredDirectoryTransferSourceCoreAsync(Guid itemId,
+        SqliteTransaction transaction, CancellationToken token)
+    {
+        Guid id;
+        await using (var sql = _connection.CreateCommand())
+        {
+            sql.Transaction = transaction;
+            sql.CommandText = """
+                SELECT transfer_id FROM namespace_directory_transfer_retirements
+                WHERE json_extract(CAST(payload AS TEXT),'$.Projection.ItemId')=$item LIMIT 2;
+                """;
+            sql.Parameters.AddWithValue("$item", itemId.ToString("D"));
+            await using var reader = await sql.ExecuteReaderAsync(token).ConfigureAwait(false);
+            if (!await reader.ReadAsync(token).ConfigureAwait(false)) return null;
+            id = ParseNamespaceMemberId(reader.GetString(0));
+            if (await reader.ReadAsync(token).ConfigureAwait(false))
+                throw new InvalidDataException("The original public item has competing directory transfer retirements.");
+        }
+        var (plan, _) = await ReadDirectoryTransferBirthEvidenceAsync(id, transaction, token).ConfigureAwait(false);
+        var rows = await ReadDirectoryTransferRetirementsCoreAsync(id, transaction, token).ConfigureAwait(false);
+        var row = rows.SingleOrDefault(value => value.Projection.ItemId == itemId)
+            ?? throw new InvalidDataException("The original directory retirement item no longer matches its index.");
+        var completion = await ReadDirectoryTransferAcknowledgementCoreAsync(id, transaction, token).ConfigureAwait(false);
+        return new(plan, row, completion?.AcknowledgedAt);
     }
 
     internal async Task<IReadOnlyList<Guid>> ReadStartedDirectoryTransferAcknowledgementsAsync(CancellationToken token)

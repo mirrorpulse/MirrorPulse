@@ -50,6 +50,14 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     public Task NativeSignedLocalDirectoryTransferRecoversObservedTargetBeforeRegistrationAcrossHostRoles() =>
         VerifySignedDirectoryTransferAsync(null, publicationCut: MirrorPulseTransferPublicationCheckpoint.AfterObservation);
 
+    [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles"), TestCategory("SignedDirectoryTransferUnobservedTarget")]
+    public Task NativeSignedLocalDirectoryTransferKeepsUnobservedTargetFencedAcrossHostRoles() =>
+        VerifySignedDirectoryTransferAsync(null, publicationCut: MirrorPulseTransferPublicationCheckpoint.AfterCreation);
+
+    [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles"), TestCategory("SignedDirectoryTransfer")]
+    public Task NativeSignedLocalDirectoryTransferPublishesSuccessorsAtReusedBackendIds() =>
+        VerifySignedDirectoryTransferAsync(null, verifySameBackendSuccessor: true);
+
     [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles"), TestCategory("SignedDirectoryTransfer")]
     public Task NativeSignedLocalDirectoryTransferToWebDavRejectsUnsupportedReverseBeforeMutation()
     {
@@ -59,9 +67,11 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     }
 
     private async Task VerifySignedDirectoryTransferAsync(string? webDavPackage,
-        MirrorPulseTransferSourceRetirementCheckpoint? restartCut = null, MirrorPulseTransferPublicationCheckpoint? publicationCut = null)
+        MirrorPulseTransferSourceRetirementCheckpoint? restartCut = null, MirrorPulseTransferPublicationCheckpoint? publicationCut = null,
+        bool verifySameBackendSuccessor = false)
     {
         bool interruptDuringPublication = publicationCut is not null;
+        bool interruptBeforeObservation = publicationCut == MirrorPulseTransferPublicationCheckpoint.AfterCreation;
         bool interruptBeforeRegistration = publicationCut == MirrorPulseTransferPublicationCheckpoint.AfterObservation;
         bool restartDuringTransfer = restartCut is not null || interruptDuringPublication;
         bool interruptBeforeNativeDelete = restartCut == MirrorPulseTransferSourceRetirementCheckpoint.BeforeNativeDeletion;
@@ -95,11 +105,47 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         var registry = new CfSharpMirrorPulseCloudRootRegistry();
         bool registered = false;
         bool succeeded = false;
+        var retainedSuccessors = new List<MirrorPulseRemoteIdentityGeneration>();
         try
         {
             registry.Register(new(paths.SyncRootPath, "0.1.0", Guid.NewGuid(), [1, 2, 3]));
             registered = true;
             await File.WriteAllTextAsync(Path.Combine(directory, ".mp-permission-fixture"), string.Empty, token);
+            await ExerciseAsync();
+            if (verifySameBackendSuccessor)
+            {
+                Assert.HasCount(3, retainedSuccessors);
+                await using var reopened = await MirrorPulseProductCatalog.OpenAsync(paths, token);
+                foreach (var selected in retainedSuccessors)
+                    Assert.AreEqual(selected, await reopened.ReadRemoteIdentityGenerationAsync(selected.RootId, selected.BaseItemId, token));
+                await using var packageSource = File.OpenRead(package);
+                string digest = Convert.ToHexString(await SHA256.HashDataAsync(packageSource, token));
+                TestContext.WriteLine($"SignedDirectoryTransfer: packageSha256={digest}; reusedBackendIds=3; generationsRetained=3; oldCallbacksRejected=True; replacementSourceBytesVerified=True; originalTargetBytesVerified=True; completedTransferReplayPreservedSuccessors=True.");
+            }
+            succeeded = true;
+        }
+        finally
+        {
+            try
+            {
+                if (registered) await RemoveKnownRegisteredFixturePlaceholdersForCleanupAsync(directory, paths, owner,
+                    ["Docs", "Docs/tree", "Docs/tree/deep", "Archive", "Archive/copied", "Archive/copied/deep"],
+                    ["Docs/" + original, "Archive/" + transferred]);
+            }
+            catch (Exception error) when (!succeeded && error is IOException or UnauthorizedAccessException)
+            {
+                TestContext.WriteLine("The disposed fixture also reported a cleanup failure.");
+            }
+            finally { if (registered) registry.Unregister(paths.SyncRootPath); }
+            try { DeleteFixture(directory); }
+            catch (Exception error) when (!succeeded && error is IOException or UnauthorizedAccessException)
+            {
+                TestContext.WriteLine("The disposed fixture also reported a final cleanup failure.");
+            }
+        }
+
+        async Task ExerciseAsync()
+        {
             await using var catalog = await MirrorPulseProductCatalog.OpenAsync(paths, token);
             string rid = RuntimeInformation.ProcessArchitecture == Architecture.Arm64 ? "win-arm64" : "win-x64";
             var installed = await catalog.InstallSignedAdapterAsync(package, package + ".signature.json",
@@ -130,7 +176,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             var sourceRoot = topology.Roots.Single(root => root.Label == "Docs");
             var targetRoot = topology.Roots.Single(root => root.Label == "Archive");
             Assert.AreNotEqual(sourceRoot.InstanceId, targetRoot.InstanceId);
-            var router = new MirrorPulseRootRouter(paths.SyncRootPath, topology.Roots);
+            var identityResolver = verifySameBackendSuccessor ? new MirrorPulseRemoteIdentityResolver(catalog) : null;
+            var router = new MirrorPulseRootRouter(paths.SyncRootPath, topology.Roots, identityResolver: identityResolver);
             await using var worker = new AdapterInstanceProcessSupervisor(catalog, new WindowsCredentialManagerStore());
             await worker.StartAsync(topology);
             while (!worker.IsConnected(sourceRoot.InstanceId) || !worker.IsConnected(targetRoot.InstanceId))
@@ -149,6 +196,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             bool interrupt = true;
             bool interruptAcknowledgement = webDav is null && !restartDuringTransfer;
             CloudLocalChangeFeed? journal = null;
+            MirrorPulseCfSharpStateSession? initialState = null;
             const string interruption = "Fixture interruption around the first original native retirement.";
             var interruptedCheckpoint = restartCut ?? MirrorPulseTransferSourceRetirementCheckpoint.AfterNativeDeletion;
             const string acknowledgementInterruption = "Fixture interruption after the original SDK acknowledgement.";
@@ -156,6 +204,9 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 worker.IsConnected, scheduler: scheduler, namespaceExecution: execution, namespaceActor: actor, namespaceWork: work,
                 initializeNamespaceOnStart: true, transfers: transfers)
             {
+                StateStoreDecorator = interruptBeforeObservation
+                    ? CaptureInitialState
+                    : null,
                 TransferJournalReady = feed => journal = feed,
                 TransferPublicationCheckpoint = (checkpoint, _) =>
                 {
@@ -233,7 +284,23 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 {
                     var birth = await catalog.ReadNamespaceDirectoryTransferBirthAsync(operationId, ordinal, token);
                     Assert.IsNotNull(birth);
-                    if (interruptBeforeRegistration)
+                    if (interruptBeforeObservation)
+                    {
+                        var start = await catalog.ReadNamespaceBirthStartAsync(birth.Birth.OperationId, token);
+                        Assert.IsNotNull(start);
+                        Assert.IsNull(await catalog.ReadNamespaceBirthObservationAsync(birth.Birth.OperationId, token));
+                        Assert.IsNull(await catalog.ReadNamespaceMemberAsync(birth.Birth.OperationId, token));
+                        Assert.IsTrue(Directory.Exists(Path.Combine(paths.SyncRootPath, "Archive", "copied")));
+                        await using var sdk = await initialState!.OpenStore.BeginTransactionAsync(token);
+                        var persisted = await sdk.Items.GetByItemIdAsync(birth.Plan.ItemId, token);
+                        Assert.IsNotNull(persisted);
+                        Assert.AreEqual(birth.Plan.RemoteId, persisted.RemoteId);
+                        Assert.AreEqual(birth.Plan.RemoteRevision, persisted.RemoteRevision);
+                        Assert.IsTrue(persisted.UpdatedAt >= start.StartedAt);
+                        Assert.IsNull(persisted.LocalFileId, "CfSharp preview.12 publishes the directory identity without a public local file ID.");
+                        await sdk.RollbackAsync(token);
+                    }
+                    else if (interruptBeforeRegistration)
                     {
                         var observed = await catalog.ReadNamespaceBirthObservationAsync(birth.Birth.OperationId, token);
                         Assert.IsNotNull(observed);
@@ -288,6 +355,12 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     Assert.IsNotNull(originalAck);
                     Assert.IsNull(originalAck.AcknowledgedAt);
                     originalAcknowledgementStart = originalAck.StartedAt;
+                    if (identityResolver is not null)
+                    {
+                        Assert.IsNull(await identityResolver.ResolveForPollAsync(sourceRoot, "tree", plan.Members[0].SourceRevision, token));
+                        await Assert.ThrowsExactlyAsync<InvalidOperationException>(async () =>
+                            await identityResolver.ResolveAsync(sourceRoot, "tree", plan.Members[0].SourceRevision, token));
+                    }
                     var remaining = await ReadTransferOriginalJournalIdsAsync(journal!, token);
                     Assert.IsTrue(originalNotifications.All(id => !remaining.Contains(id)));
                 }
@@ -319,7 +392,10 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 Assert.HasCount(2, newRuntime.NamespaceStartupResults);
                 if (restartDuringTransfer)
                 {
-                    Assert.IsTrue(newRuntime.NamespaceStartupResults.All(root => !root.Admitted && root.OperationId == operationId));
+                    Guid? pendingBirth = interruptBeforeObservation ? originalTargets.Single().Birth.OperationId : null;
+                    Assert.IsTrue(newRuntime.NamespaceStartupResults.All(root => !root.Admitted &&
+                        (root.OperationId == operationId ||
+                         pendingBirth is { } unobserved && root.RootId == targetRoot.RootId && root.OperationId == unobserved)));
                     var started = await catalog.ReadNamespaceDirectoryTransferRetirementsAsync(operationId, token);
                     Assert.HasCount(noNativeStartsBeforeRestart ? 0 : 1, started);
                     if (firstRetirement is not null)
@@ -349,6 +425,22 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     }
                 }
                 else Assert.IsTrue(newRuntime.NamespaceStartupResults.All(root => root.Admitted && root.RecoveryCode is null));
+                if (interruptBeforeObservation)
+                {
+                    var failure = await Assert.ThrowsExactlyAsync<InvalidOperationException>(
+                        async () => await newRuntime.ResumeDirectoryNamespaceTransferAsync(operationId, token));
+                    StringAssert.Contains(failure.Message, "requires every original registered target member");
+                    var birth = originalTargets.Single();
+                    Assert.AreEqual(birth, await catalog.ReadNamespaceDirectoryTransferBirthAsync(operationId, birth.Ordinal, token));
+                    Assert.IsNull(await catalog.ReadNamespaceBirthObservationAsync(birth.Birth.OperationId, token));
+                    Assert.IsNull(await catalog.ReadNamespaceMemberAsync(birth.Birth.OperationId, token));
+                    Assert.IsNull(await catalog.ReadNamespaceDirectoryTransferSourceDeletionAsync(operationId, token));
+                    Assert.IsTrue((await catalog.ReadNamespaceTransferStatusAsync(operationId, token))!.RootsFenced);
+                    Assert.IsFalse(newWork.IsAdmitted(sourceRoot.RootId) || newWork.IsAdmitted(targetRoot.RootId));
+                    CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(Path.Combine(sourceBackend, original), token));
+                    TestContext.WriteLine("UnobservedDirectoryTarget: nativeTargetExists=True; publicSdkLocalFileIdMissing=True; originalBirthRetained=True; sourceDeletionStarted=False; bothRootsFenced=True.");
+                    return;
+                }
                 if (interruptBeforeNativeDelete)
                 {
                     Assert.IsNotNull(reopenedJournal);
@@ -417,13 +509,65 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 }
                 Assert.IsTrue((await catalog.ReadNamespaceTransferStatusAsync(operationId, token))!.JournalAcknowledged);
                 await AssertCompletedTransferAsync(newRuntime, newWork);
+                if (identityResolver is not null)
+                    await AssertSameBackendSuccessorAsync(identityResolver, newProvider, newRuntime);
             }
             else
             {
                 Assert.IsTrue(await runtime.ResumeDirectoryNamespaceTransferAsync(operationId, token));
                 await AssertCompletedTransferAsync(runtime, work);
             }
-            succeeded = true;
+
+            ICloudStateStoreFactory CaptureInitialState(ICloudStateStoreFactory state)
+            {
+                initialState = (MirrorPulseCfSharpStateSession)state;
+                return state;
+            }
+
+            async Task AssertSameBackendSuccessorAsync(MirrorPulseRemoteIdentityResolver resolver, MirrorPulseDemandProvider restartedProvider,
+                IMirrorPulseCloudRuntime restartedRuntime)
+            {
+                var originalRetirements = await catalog.ReadNamespaceDirectoryTransferRetirementsAsync(operationId, token);
+                string[] backendPaths = ["tree", "tree/deep", original];
+                byte[] replacement = [2, 3, 5, 7, 11, 13, 17];
+                Directory.CreateDirectory(Path.Combine(sourceBackend, "tree", "deep"));
+                await File.WriteAllBytesAsync(Path.Combine(sourceBackend, original), replacement, token);
+                CloudPlaceholderIdentity parentIdentity = rootIdentity;
+                string parentPath = "Docs";
+                foreach (string backendPath in backendPaths)
+                {
+                    string projectedPath = "Docs/" + backendPath;
+                    var retirement = originalRetirements.Single(row => row.Projection.RelativePath.Replace('\\', '/') == projectedPath);
+                    var originalProjection = retirement.Projection;
+                    var baseIdentity = router.CreateFileIdentity(sourceRoot.InstanceId, sourceRoot.UniquenessKey, backendPath);
+                    Assert.AreEqual(baseIdentity.RemoteId, originalProjection.RemoteId);
+                    string? revision = await worker.StatAsync(new(sourceRoot.InstanceId, backendPath, sourceRoot.UniquenessKey), token);
+                    Assert.IsNotNull(revision);
+                    await restartedProvider.FetchChildrenAsync(parentPath, parentIdentity.Encode(), null, token);
+                    var successor = await restartedRuntime.InspectNamespaceMemberAsync(projectedPath, backendPath != original, token);
+                    var identity = await catalog.ReadNamespaceMemberIdentityAsync(successor.MemberId, token);
+                    Assert.AreNotEqual(originalProjection.ItemId, identity.ItemId);
+                    Assert.AreNotEqual(originalProjection.RemoteId, identity.RemoteId);
+                    await Assert.ThrowsExactlyAsync<InvalidDataException>(async () =>
+                        await resolver.RequireCurrentAsync(sourceRoot, new CloudPlaceholderIdentity(originalProjection.ItemId,
+                            originalProjection.RemoteId, originalProjection.RemoteRevision), token));
+                    parentIdentity = await resolver.ReadCurrentAsync(sourceRoot, backendPath, revision, token);
+                    Assert.AreEqual(identity.ItemId, parentIdentity.ItemId);
+                    Assert.AreEqual(identity.RemoteId, parentIdentity.RemoteId);
+                    var selected = await catalog.ReadRemoteIdentityGenerationAsync(sourceRoot.RootId, baseIdentity.ItemId, token);
+                    Assert.IsNotNull(selected);
+                    Assert.AreEqual(operationId, selected.TransferOperationId);
+                    Assert.AreEqual(retirement.EffectId, selected.RetirementOperationId);
+                    Assert.AreEqual(retirement.NameEpoch, selected.RetiredNameEpoch);
+                    Assert.AreEqual(parentIdentity.ItemId, selected.ItemId);
+                    retainedSuccessors.Add(selected);
+                    parentPath = projectedPath;
+                }
+                CollectionAssert.AreEqual(replacement, await File.ReadAllBytesAsync(Path.Combine(paths.SyncRootPath, "Docs", original), token));
+                CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(Path.Combine(paths.SyncRootPath, "Archive", transferred), token));
+                Assert.IsTrue(await restartedRuntime.ResumeDirectoryNamespaceTransferAsync(operationId, token));
+                CollectionAssert.AreEqual(replacement, await File.ReadAllBytesAsync(Path.Combine(sourceBackend, original), token));
+            }
 
             async Task AssertCompletedTransferAsync(IMirrorPulseCloudRuntime current, MirrorPulseNamespaceWorkAdmission currentWork)
             {
@@ -467,6 +611,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(Path.Combine(paths.SyncRootPath, "Archive", transferred), token));
                 Assert.IsTrue(await current.ResumeDirectoryNamespaceTransferAsync(operationId, token));
                 Assert.AreEqual(completed, await catalog.ReadNamespaceTransferStatusAsync(operationId, token));
+                if (verifySameBackendSuccessor) return;
                 await using var packageSource = File.OpenRead(package);
                 string digest = Convert.ToHexString(await SHA256.HashDataAsync(packageSource, token));
                 if (interruptBeforeRegistration)
@@ -523,25 +668,6 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     string webDavDigest = Convert.ToHexString(await SHA256.HashDataAsync(webDavPackageSource, token));
                     TestContext.WriteLine($"SignedCrossPackageDirectoryTransfer: localSha256={digest}; webDavSha256={webDavDigest}; targetBytesVerified=True; reverseRejectedBeforeAdmission=True; reverseSourcePreserved=True.");
                 }
-            }
-        }
-        finally
-        {
-            try
-            {
-                if (registered) await RemoveKnownRegisteredFixturePlaceholdersForCleanupAsync(directory, paths, owner,
-                    ["Docs", "Docs/tree", "Docs/tree/deep", "Archive", "Archive/copied", "Archive/copied/deep"],
-                    ["Docs/" + original, "Archive/" + transferred]);
-            }
-            catch (Exception error) when (!succeeded && error is IOException or UnauthorizedAccessException)
-            {
-                TestContext.WriteLine("The disposed fixture also reported a cleanup failure.");
-            }
-            finally { if (registered) registry.Unregister(paths.SyncRootPath); }
-            try { DeleteFixture(directory); }
-            catch (Exception error) when (!succeeded && error is IOException or UnauthorizedAccessException)
-            {
-                TestContext.WriteLine("The disposed fixture also reported a final cleanup failure.");
             }
         }
     }

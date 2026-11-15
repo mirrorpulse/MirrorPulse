@@ -7,7 +7,9 @@ namespace MirrorPulse.Core.Tests;
 public sealed partial class MirrorPulseNamespaceBirthCatalogTests
 {
     [TestMethod]
-    public async Task RemoteIdentityGenerationSurvivesOwnersWithoutChangingOriginalRetirementOrAcknowledgement()
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task RemoteIdentityGenerationSurvivesOwnersWithoutChangingOriginalRetirementOrAcknowledgement(bool migrateFrom115)
     {
         using var fixture = new Fixture(); MirrorPulseRemoteIdentityGeneration selected; MirrorPulseNamespaceTransferCopy copy; string original;
         await using (var first = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths))
@@ -21,6 +23,26 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             Assert.AreEqual(original, await ReadTransferRetirementBytesAsync(fixture.Paths));
             Assert.IsEmpty(await first.ReadNamespaceDispatchFencedRootsAsync());
         }
+        if (migrateFrom115)
+        {
+            await ExecuteSqlAsync(fixture.Paths, """
+                ALTER TABLE remote_identity_generations RENAME TO fixture_identity_generations;
+                ALTER TABLE remote_identity_generation_history RENAME TO fixture_identity_generation_history;
+                CREATE TABLE remote_identity_generation_history(
+                    generation TEXT PRIMARY KEY,root_id TEXT NOT NULL,base_item_id TEXT NOT NULL,item_id TEXT NOT NULL UNIQUE,
+                    retirement_id TEXT NOT NULL UNIQUE REFERENCES namespace_member_retirements(operation_id),
+                    payload BLOB NOT NULL CHECK(length(payload)<=131072),fingerprint BLOB NOT NULL CHECK(length(fingerprint)=32));
+                CREATE TABLE remote_identity_generations(root_id TEXT NOT NULL,base_item_id TEXT NOT NULL,
+                    generation TEXT NOT NULL UNIQUE REFERENCES remote_identity_generation_history(generation),PRIMARY KEY(root_id,base_item_id));
+                INSERT INTO remote_identity_generation_history(generation,root_id,base_item_id,item_id,retirement_id,payload,fingerprint)
+                SELECT generation,root_id,base_item_id,item_id,retirement_id,payload,fingerprint FROM fixture_identity_generation_history;
+                INSERT INTO remote_identity_generations(root_id,base_item_id,generation)
+                SELECT root_id,base_item_id,generation FROM fixture_identity_generations;
+                DROP TABLE fixture_identity_generations;
+                DROP TABLE fixture_identity_generation_history;
+                PRAGMA user_version=115;
+                """);
+        }
         await using var second = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
         Assert.AreEqual(selected, await second.ReadRemoteIdentityGenerationAsync(selected.RootId, selected.BaseItemId));
         Assert.AreEqual(original, await ReadTransferRetirementBytesAsync(fixture.Paths));
@@ -28,6 +50,8 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         await using var connection = Connection(fixture.Paths); await connection.OpenAsync();
         await using var count = connection.CreateCommand(); count.CommandText = "SELECT count(*) FROM remote_identity_generation_history;";
         Assert.AreEqual(1L, await count.ExecuteScalarAsync());
+        count.CommandText = "PRAGMA user_version;";
+        Assert.AreEqual(MirrorPulseProductCatalog.CurrentSchemaVersion, await count.ExecuteScalarAsync());
         Assert.IsFalse(File.Exists(fixture.Paths.CfSharpStateDatabasePath)); Assert.IsFalse(Directory.Exists(fixture.Paths.SyncRootPath));
     }
 

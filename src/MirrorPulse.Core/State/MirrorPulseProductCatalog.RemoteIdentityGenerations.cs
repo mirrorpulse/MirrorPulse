@@ -22,7 +22,7 @@ public sealed partial class MirrorPulseProductCatalog
         await _gate.WaitAsync(token).ConfigureAwait(false);
         try
         {
-            ThrowIfDisposed(); using var transaction = _connection.BeginTransaction(deferred: true);
+            ThrowIfDisposed(); using var transaction = BeginNamespaceRecoveryReadSnapshot();
             var result = await ReadRemoteIdentityGenerationCoreAsync(rootId, baseItemId, transaction, token).ConfigureAwait(false);
             if (result is not null) await RequireRemoteIdentityGenerationRetirementAsync(result, transaction, token).ConfigureAwait(false);
             transaction.Commit(); return result;
@@ -41,6 +41,7 @@ public sealed partial class MirrorPulseProductCatalog
         try
         {
             ThrowIfDisposed(); using var transaction = _connection.BeginTransaction();
+            using var validation = BeginNamespaceRecoveryValidationReadPhase(transaction);
             var current = await ReadRemoteIdentityGenerationCoreAsync(selection.RootId, selection.BaseItemId, transaction, token).ConfigureAwait(false);
             if (current?.Generation == selection.Generation)
             {
@@ -71,16 +72,20 @@ public sealed partial class MirrorPulseProductCatalog
             }
             byte[] payload = JsonSerializer.SerializeToUtf8Bytes(selection, TopologyJsonOptions);
             if (payload.Length > 131_072) throw new ArgumentException("A generation selection must remain bounded.", nameof(selection));
+            validation.Dispose();
             await using var insert = _connection.CreateCommand(); insert.Transaction = transaction;
             insert.CommandText = """
-                INSERT INTO remote_identity_generation_history(generation,root_id,base_item_id,item_id,retirement_id,payload,fingerprint)
-                VALUES($generation,$root,$base,$item,$retirement,$payload,$hash);
+                INSERT INTO remote_identity_generation_history(generation,root_id,base_item_id,item_id,retirement_id,directory_retirement_id,payload,fingerprint)
+                VALUES($generation,$root,$base,$item,$retirement,$directoryRetirement,$payload,$hash);
                 INSERT INTO remote_identity_generations(root_id,base_item_id,generation) VALUES($root,$base,$generation)
                 ON CONFLICT(root_id,base_item_id) DO UPDATE SET generation=excluded.generation;
                 """;
             insert.Parameters.AddWithValue("$generation", selection.Generation.ToString("D"));
             insert.Parameters.AddWithValue("$root", selection.RootId.ToString()); insert.Parameters.AddWithValue("$base", selection.BaseItemId.ToString("D"));
-            insert.Parameters.AddWithValue("$item", selection.ItemId.ToString("D")); insert.Parameters.AddWithValue("$retirement", selection.RetirementOperationId.ToString("D"));
+            insert.Parameters.AddWithValue("$item", selection.ItemId.ToString("D"));
+            string retirementId = selection.RetirementOperationId.ToString("D");
+            insert.Parameters.AddWithValue("$retirement", selection.Version == 4 ? DBNull.Value : retirementId);
+            insert.Parameters.AddWithValue("$directoryRetirement", selection.Version == 4 ? retirementId : DBNull.Value);
             insert.Parameters.AddWithValue("$payload", payload); insert.Parameters.AddWithValue("$hash", SHA256.HashData(payload));
             await insert.ExecuteNonQueryAsync(token).ConfigureAwait(false);
             transaction.Commit(); return selection;
@@ -93,23 +98,26 @@ public sealed partial class MirrorPulseProductCatalog
     {
         await using var query = _connection.CreateCommand(); query.Transaction = transaction;
         query.CommandText = """
-            SELECT c.generation,h.root_id,h.base_item_id,h.item_id,h.retirement_id,h.payload,h.fingerprint
+            SELECT c.generation,h.root_id,h.base_item_id,h.item_id,h.retirement_id,h.directory_retirement_id,h.payload,h.fingerprint
             FROM remote_identity_generations c LEFT JOIN remote_identity_generation_history h ON h.generation=c.generation
             WHERE c.root_id=$root AND c.base_item_id=$base;
             """;
         query.Parameters.AddWithValue("$root", rootId.ToString()); query.Parameters.AddWithValue("$base", baseItemId.ToString("D"));
         await using var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
         if (!await reader.ReadAsync(token).ConfigureAwait(false)) return null;
-        if (reader.IsDBNull(5) || reader.IsDBNull(6)) throw new InvalidDataException("The current generation lost its immutable history.");
-        byte[] payload = (byte[])reader[5], hash = (byte[])reader[6];
+        if (reader.IsDBNull(6) || reader.IsDBNull(7)) throw new InvalidDataException("The current generation lost its immutable history.");
+        byte[] payload = (byte[])reader[6], hash = (byte[])reader[7];
         if (payload.Length > 131_072 || hash.Length != 32 || !CryptographicOperations.FixedTimeEquals(SHA256.HashData(payload), hash))
             throw new InvalidDataException("The retained generation fingerprint is invalid.");
         var result = JsonSerializer.Deserialize<MirrorPulseRemoteIdentityGeneration>(payload, TopologyJsonOptions)
             ?? throw new InvalidDataException("The generation history is missing.");
         ValidateRemoteIdentityGeneration(result);
+        int retirementIndex = result.Version == 4 ? 5 : 4;
+        int otherRetirementIndex = result.Version == 4 ? 4 : 5;
         if (result.RootId != rootId || result.BaseItemId != baseItemId || reader.GetString(0) != result.Generation.ToString("D") ||
             reader.GetString(1) != rootId.ToString() || reader.GetString(2) != baseItemId.ToString("D") ||
-            reader.GetString(3) != result.ItemId.ToString("D") || reader.GetString(4) != result.RetirementOperationId.ToString("D") ||
+            reader.GetString(3) != result.ItemId.ToString("D") || !reader.IsDBNull(otherRetirementIndex) ||
+            reader.IsDBNull(retirementIndex) || reader.GetString(retirementIndex) != result.RetirementOperationId.ToString("D") ||
             !payload.AsSpan().SequenceEqual(JsonSerializer.SerializeToUtf8Bytes(result, TopologyJsonOptions)))
             throw new InvalidDataException("The indexed current generation disagrees with its immutable address.");
         return result;
@@ -118,6 +126,24 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task RequireRemoteIdentityGenerationRetirementAsync(MirrorPulseRemoteIdentityGeneration selection,
         SqliteTransaction transaction, CancellationToken token)
     {
+        var directory = await ReadRetiredDirectoryTransferSourceCoreAsync(selection.PreviousItemId, transaction, token).ConfigureAwait(false);
+        if (selection.Version == 4)
+        {
+            if (directory is null || directory.Retirement.RetiredAt is null ||
+                directory.AcknowledgedAt is not { } directoryAck || selection.SelectedAt < directoryAck ||
+                directory.Retirement.TransferId != selection.TransferOperationId || directory.Retirement.EffectId != selection.RetirementOperationId ||
+                directory.Retirement.NameEpoch != selection.RetiredNameEpoch || directory.Retirement.Projection.RemoteId != selection.PreviousRemoteId ||
+                directory.Admission.SourceRoute.RootId != selection.RootId || directory.Admission.SourceRoute.InstanceId != selection.InstanceId ||
+                directory.Admission.SourceRoute.RootKey != selection.RootKey)
+                throw new InvalidOperationException("A successor requires its exact completed directory transfer retirement and original ACK.");
+            if (await HasRetiredFileTransferSourceAsync(selection.PreviousItemId, transaction, token).ConfigureAwait(false) ||
+                (await ReadRemoteRetirementGenerationsCoreAsync(selection.PreviousItemId, transaction, token).ConfigureAwait(false)).Count != 0 ||
+                (await ReadControlledRetirementGenerationsCoreAsync(selection.PreviousItemId, transaction, token).ConfigureAwait(false)).Count != 0)
+                throw new InvalidOperationException("A directory transfer successor cannot borrow a competing original retirement.");
+            return;
+        }
+        if (directory is not null)
+            throw new InvalidOperationException("The original directory transfer retirement requires its own generation evidence.");
         if (selection.Version == 3)
         {
             await RequireExplicitRemoteIdentityRetirementAsync(selection, transaction, token).ConfigureAwait(false);
@@ -147,7 +173,7 @@ public sealed partial class MirrorPulseProductCatalog
 
     private static void ValidateRemoteIdentityGeneration(MirrorPulseRemoteIdentityGeneration selection)
     {
-        if (!(selection.Version == 1 && selection.TransferOperationId != Guid.Empty ||
+        if (!(selection.Version is 1 or 4 && selection.TransferOperationId != Guid.Empty ||
                 selection.Version is 2 or 3 && selection.TransferOperationId == Guid.Empty) ||
             selection.RootId.Value == Guid.Empty || selection.InstanceId.Value == Guid.Empty ||
             selection.BaseItemId == Guid.Empty || selection.PreviousItemId == Guid.Empty || selection.ItemId == Guid.Empty ||

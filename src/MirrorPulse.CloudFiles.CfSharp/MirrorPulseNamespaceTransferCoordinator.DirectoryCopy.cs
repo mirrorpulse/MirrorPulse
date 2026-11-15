@@ -90,10 +90,8 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
                     bool registeredBeforeRecovery = targetRecovery is not null && target is not null;
                     if (target is null)
                     {
-                        var identity = remote.IsDirectory
-                            ? MirrorPulsePlaceholderIdentity.CreateForRoot(root, remote.RemoteId, remote.Revision).ToCfSharp()
-                            : await router.CreateCurrentFileIdentityAsync(root.InstanceId, root.UniquenessKey, remote.RemoteId, remote.Revision, stop)
-                                .ConfigureAwait(false);
+                        var identity = await router.CreateCurrentFileIdentityAsync(root.InstanceId, root.UniquenessKey, remote.RemoteId, remote.Revision, stop)
+                            .ConfigureAwait(false);
                         _ = identity.Encode();
                         Guid birthId = Guid.NewGuid();
                         DateTimeOffset time = DateTimeOffset.UtcNow;
