@@ -83,3 +83,28 @@ function Confirm-SignedDirectoryCopyRecoveryReport {
         $expected.Remove($name)
     }
 }
+
+function Confirm-SignedPreparedDirectoryCopyReport {
+    param([Parameter(Mandatory)][string]$ReportPath, [Parameter(Mandatory)][string]$PackageSha256)
+    if ($PackageSha256 -cnotmatch '^[A-F0-9]{64}$') { throw 'Require the SHA-256 of the original signed Local package.' }
+    [xml]$report = Get-Content -LiteralPath $ReportPath -Raw
+    $rows = @($report.TestRun.Results.UnitTestResult)
+    $prefix = "SignedPreparedDirectoryCopy: packageSha256=$PackageSha256; checkpoint="
+    $completion = '; originalCopyEffects=3; currentAudits=2; sourceIntactBeforeRecovery=True; targetBytesVerified=True; acknowledgementAcrossRoles=True.'
+    $expected = @{
+        NativeSignedLocalDirectoryTransferResumesAfterCopyPreparationAcrossHostRoles = $prefix + 'AfterPreparation; initialHostStart=False; initialBackendTarget=False' + $completion
+        NativeSignedLocalDirectoryTransferResumesBeforeCopyDispatchAcrossHostRoles = $prefix + 'BeforeDispatch; initialHostStart=True; initialBackendTarget=False' + $completion
+        NativeSignedLocalDirectoryTransferReplaysDurableCopyAcrossHostRoles = $prefix + 'BeforeAcceptance; initialHostStart=True; initialBackendTarget=True' + $completion
+    }
+    if ($rows.Count -ne $expected.Count -or @($rows | Where-Object outcome -CNE 'Passed').Count) {
+        throw 'All three signed prepared directory copy recovery cases must pass.'
+    }
+    foreach ($row in $rows) {
+        $name = [string]$row.testName
+        $facts = @(([string]$row.Output.StdOut -split '\r?\n') | Where-Object { $_.StartsWith('SignedPreparedDirectoryCopy: ', [StringComparison]::Ordinal) })
+        if (!$expected.ContainsKey($name) -or $facts.Count -ne 1 -or $facts[0] -cne $expected[$name]) {
+            throw 'The prepared directory copy report lost its package or original recovery evidence.'
+        }
+        $expected.Remove($name)
+    }
+}

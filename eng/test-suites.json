@@ -342,6 +342,11 @@
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeLocalTombstoneDeleteRecoversActualSdkReceiptAcrossFreshRoles"
   ],
   "required": {
+    "signedPreparedDirectoryCopy": [
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeSignedLocalDirectoryTransferResumesAfterCopyPreparationAcrossHostRoles",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeSignedLocalDirectoryTransferResumesBeforeCopyDispatchAcrossHostRoles",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeSignedLocalDirectoryTransferReplaysDurableCopyAcrossHostRoles"
+    ],
     "signedDirectoryCopyRecovery": [
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeSignedLocalDirectoryTransferStartsOriginalCopyAfterHostRoleChange",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeSignedLocalDirectoryTransferResumesAfterAcceptedCopyAcrossHostRoles",

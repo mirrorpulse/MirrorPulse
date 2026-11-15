@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$ResultsDirectory,
-    [ValidateSet("managed", "native", "official", "signed", "packaged", "namespace", "cfsharpDelete", "cfsharpRecreation", "deferredP079", "signedAtomicDirectory", "signedDirectoryMove", "signedDirectoryTransfer", "signedDirectoryCopyRecovery")][string]$Suite = "managed",
+    [ValidateSet("managed", "native", "official", "signed", "packaged", "namespace", "cfsharpDelete", "cfsharpRecreation", "deferredP079", "signedAtomicDirectory", "signedDirectoryMove", "signedDirectoryTransfer", "signedDirectoryCopyRecovery", "signedPreparedDirectoryCopy")][string]$Suite = "managed",
     [string]$OutputPath
 )
 

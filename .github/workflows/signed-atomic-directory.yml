@@ -15,6 +15,10 @@ on:
         description: Verify protected directory transfer between two single-root Local instances
         type: boolean
         default: false
+      verify_prepared_directory_copy:
+        description: Verify interruption at the three signed Local copy preparation and dispatch checkpoints
+        type: boolean
+        default: false
       local_preview:
         description: Published Local preview tag to qualify instead of the stable release
         type: string
@@ -134,6 +138,16 @@ jobs:
           if ($packages.Count -ne 1) { throw 'Require the one frozen official Local package.' }
           ./eng/verify-namespace-nonadmin.ps1 -ExpectedArchitecture $env:MP_TEST_ARCHITECTURE `
             -SignedAtomicDirectoryPackage $packages[0].FullName -VerifyDirectoryCopyRecovery
+      - name: Verify prepared directory copy recovery through the installed signed Local Worker
+        if: (success() || failure()) && steps.native-volume.outcome == 'success' && inputs.verify_prepared_directory_copy
+        shell: pwsh
+        env:
+          MP_TEST_ARCHITECTURE: ${{ matrix.architecture }}
+        run: |
+          $packages = @(Get-ChildItem -LiteralPath artifacts/atomic-directory-local -Recurse -Filter '*.mpadapter' -File)
+          if ($packages.Count -ne 1) { throw 'Require the one frozen official Local package.' }
+          ./eng/verify-namespace-nonadmin.ps1 -ExpectedArchitecture $env:MP_TEST_ARCHITECTURE `
+            -SignedAtomicDirectoryPackage $packages[0].FullName -VerifyPreparedDirectoryCopy
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: always() && inputs.verify_atomic_directory
         with:
@@ -157,4 +171,10 @@ jobs:
         with:
           name: signed-directory-copy-recovery-${{ matrix.runner }}-originals
           path: artifacts/test-results/signed-directory-copy-recovery-nonadmin-*/
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always() && inputs.verify_prepared_directory_copy
+        with:
+          name: signed-prepared-directory-copy-${{ matrix.runner }}-originals
+          path: artifacts/test-results/signed-prepared-directory-copy-nonadmin-*/
           if-no-files-found: ignore

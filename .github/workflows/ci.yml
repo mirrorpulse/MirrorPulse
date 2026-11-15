@@ -24,6 +24,10 @@ on:
         description: Run signed Local cross-instance directory transfer acceptance on x64 and ARM64
         type: boolean
         default: false
+      verify_prepared_directory_copy:
+        description: Run focused recovery acceptance with a signed Local package that supports copy preparation
+        type: boolean
+        default: false
       local_atomic_preview:
         description: Published Local preview tag for signed directory acceptance
         type: string
@@ -38,16 +42,17 @@ permissions:
 
 jobs:
   signed-atomic-directory:
-    if: github.event_name == 'workflow_dispatch' && (inputs.directory_acceptance_only || inputs.verify_atomic_directory || inputs.verify_directory_move || inputs.verify_directory_transfer)
+    if: github.event_name == 'workflow_dispatch' && (inputs.directory_acceptance_only || inputs.verify_atomic_directory || inputs.verify_directory_move || inputs.verify_directory_transfer || inputs.verify_prepared_directory_copy)
     uses: ./.github/workflows/signed-atomic-directory.yml
     with:
       local_preview: ${{ inputs.local_atomic_preview }}
-      verify_atomic_directory: ${{ inputs.directory_acceptance_only || inputs.verify_atomic_directory }}
-      verify_directory_move: ${{ inputs.directory_acceptance_only || inputs.verify_directory_move }}
-      verify_directory_transfer: ${{ inputs.directory_acceptance_only || inputs.verify_directory_transfer }}
+      verify_atomic_directory: ${{ (inputs.directory_acceptance_only && !inputs.verify_prepared_directory_copy) || inputs.verify_atomic_directory }}
+      verify_directory_move: ${{ (inputs.directory_acceptance_only && !inputs.verify_prepared_directory_copy) || inputs.verify_directory_move }}
+      verify_directory_transfer: ${{ (inputs.directory_acceptance_only && !inputs.verify_prepared_directory_copy) || inputs.verify_directory_transfer }}
+      verify_prepared_directory_copy: ${{ inputs.verify_prepared_directory_copy }}
 
   official-adapter-candidate:
-    if: github.event_name != 'workflow_dispatch' || !inputs.directory_acceptance_only || inputs.verify_shell
+    if: github.event_name != 'workflow_dispatch' || !(inputs.directory_acceptance_only || inputs.verify_prepared_directory_copy) || inputs.verify_shell
     runs-on: windows-latest
     steps:
       - name: Check out the candidate product source

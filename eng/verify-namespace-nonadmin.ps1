@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param([Parameter(Mandatory)][ValidateSet('X64', 'Arm64')][string]$ExpectedArchitecture,
     [string]$SignedAtomicDirectoryPackage, [switch]$VerifyDirectoryMove, [switch]$VerifyDirectoryTransfer,
-    [string]$SignedDirectoryTransferWebDavPackage, [switch]$VerifyDirectoryCopyRecovery)
+    [string]$SignedDirectoryTransferWebDavPackage, [switch]$VerifyDirectoryCopyRecovery, [switch]$VerifyPreparedDirectoryCopy)
 
 $ErrorActionPreference = 'Stop'
 if (-not $IsWindows -or $env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted') {
@@ -25,18 +25,18 @@ if (-not (Test-Path -LiteralPath (Join-Path $payload $assemblyName) -PathType Le
 }
 $catalog = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'test-suites.json') -Raw | ConvertFrom-Json
 . (Join-Path $PSScriptRoot 'namespace-nonadmin-controller.ps1')
-$directorySuites = @($VerifyDirectoryMove, $VerifyDirectoryTransfer, $VerifyDirectoryCopyRecovery | Where-Object { $_ })
+$directorySuites = @($VerifyDirectoryMove, $VerifyDirectoryTransfer, $VerifyDirectoryCopyRecovery, $VerifyPreparedDirectoryCopy | Where-Object { $_ })
 if ($directorySuites.Count -gt 1) { throw 'Select one focused directory suite per disposable profile.' }
 if ($directorySuites.Count -ne 0 -and -not $SignedAtomicDirectoryPackage) { throw 'Signed directory acceptance requires the frozen Local package.' }
 if ([bool]$VerifyDirectoryTransfer -ne [bool]$SignedDirectoryTransferWebDavPackage) { throw 'Cross-instance directory acceptance requires the frozen WebDAV package.' }
-$suite = if ($VerifyDirectoryCopyRecovery) { 'signedDirectoryCopyRecovery' } elseif ($VerifyDirectoryTransfer) { 'signedDirectoryTransfer' } elseif ($VerifyDirectoryMove) { 'signedDirectoryMove' } elseif ($SignedAtomicDirectoryPackage) { 'signedAtomicDirectory' } else { 'namespace' }
+$suite = if ($VerifyPreparedDirectoryCopy) { 'signedPreparedDirectoryCopy' } elseif ($VerifyDirectoryCopyRecovery) { 'signedDirectoryCopyRecovery' } elseif ($VerifyDirectoryTransfer) { 'signedDirectoryTransfer' } elseif ($VerifyDirectoryMove) { 'signedDirectoryMove' } elseif ($SignedAtomicDirectoryPackage) { 'signedAtomicDirectory' } else { 'namespace' }
 $testNames = @($catalog.required.$suite)
 $childBudgetMilliseconds = if ($SignedAtomicDirectoryPackage) { 300000 } else {
     Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $testNames.Count -TestNames $testNames -Scope S06
 }
 Write-Output ("Ordinary-user catalog: selected={0}; controllerBudgetSeconds={1}; nativeCaseDeadlinesUnchanged=True." -f $testNames.Count, ($childBudgetMilliseconds / 1000))
 $filter = ($testNames | ForEach-Object { 'FullyQualifiedName=' + $_ }) -join '|'
-$evidenceStem = if ($VerifyDirectoryCopyRecovery) { 'signed-directory-copy-recovery-nonadmin-' } elseif ($VerifyDirectoryTransfer) { 'signed-directory-transfer-nonadmin-' } elseif ($VerifyDirectoryMove) { 'signed-directory-move-nonadmin-' } elseif ($SignedAtomicDirectoryPackage) { 'signed-atomic-directory-nonadmin-' } else { 'namespace-nonadmin-' }
+$evidenceStem = if ($VerifyPreparedDirectoryCopy) { 'signed-prepared-directory-copy-nonadmin-' } elseif ($VerifyDirectoryCopyRecovery) { 'signed-directory-copy-recovery-nonadmin-' } elseif ($VerifyDirectoryTransfer) { 'signed-directory-transfer-nonadmin-' } elseif ($VerifyDirectoryMove) { 'signed-directory-move-nonadmin-' } elseif ($SignedAtomicDirectoryPackage) { 'signed-atomic-directory-nonadmin-' } else { 'namespace-nonadmin-' }
 $evidenceDirectory = Join-Path $repository ('artifacts/test-results/' + $evidenceStem + $ExpectedArchitecture.ToLowerInvariant())
 New-Item -ItemType Directory -Path $evidenceDirectory -Force | Out-Null
 $identifier = [guid]::NewGuid().ToString('N')
@@ -195,7 +195,9 @@ try {
             -OutputPath (Join-Path $evidenceDirectory 'test-evidence.json')
         if ($copiedPackage) {
             . (Join-Path $PSScriptRoot 'signed-atomic-directory-evidence.ps1')
-            if ($VerifyDirectoryCopyRecovery) {
+            if ($VerifyPreparedDirectoryCopy) {
+                Confirm-SignedPreparedDirectoryCopyReport -ReportPath (Join-Path $evidenceDirectory 'namespace.trx') -PackageSha256 $packageHash
+            } elseif ($VerifyDirectoryCopyRecovery) {
                 Confirm-SignedDirectoryCopyRecoveryReport -ReportPath (Join-Path $evidenceDirectory 'namespace.trx') -PackageSha256 $packageHash
             } elseif ($VerifyDirectoryTransfer) {
                 Confirm-SignedDirectoryTransferReport -ReportPath (Join-Path $evidenceDirectory 'namespace.trx') `
