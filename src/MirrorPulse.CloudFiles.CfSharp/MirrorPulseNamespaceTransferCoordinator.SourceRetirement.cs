@@ -4,7 +4,13 @@ using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.CloudFiles.CfSharp;
 
-internal enum MirrorPulseTransferSourceRetirementCheckpoint { BeforeNativeDeletion, AfterNativeDeletion, AfterNativeReceipt }
+internal enum MirrorPulseTransferSourceRetirementCheckpoint
+{
+    BeforeNativeDeletion,
+    AfterNativeDeletion,
+    AfterNativeReceipt,
+    BeforeFirstDirectoryNativeRetirement
+}
 
 public sealed partial class MirrorPulseNamespaceTransferCoordinator
 {

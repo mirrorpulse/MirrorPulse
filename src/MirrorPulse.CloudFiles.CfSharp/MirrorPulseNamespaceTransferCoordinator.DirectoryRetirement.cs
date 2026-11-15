@@ -18,6 +18,9 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
             .ToDictionary(row => row.Ordinal);
         if (rows.Count == plan.Members.Count && rows[0].RetiredAt is not null)
             return (IReadOnlyList<MirrorPulseDirectoryTransferRetirement>)rows.Values.OrderByDescending(row => row.Ordinal).ToArray();
+        if (rows.Count == 0 && SourceRetirementCheckpoint is not null)
+            await SourceRetirementCheckpoint(MirrorPulseTransferSourceRetirementCheckpoint.BeforeFirstDirectoryNativeRetirement, stop)
+                .ConfigureAwait(false);
 
         var verified = await catalog.ReadNamespaceDirectoryTransferTargetAsync(operationId, stop).ConfigureAwait(false)
             ?? throw new InvalidDataException("The original verified transfer target is missing.");
@@ -199,10 +202,14 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
         if (native.IsPlaceholder)
         {
             var identity = CloudPlaceholderIdentity.Decode(native.PlaceholderIdentity.Span);
-            // Role recovery can convert the same ordinary file to a placeholder.
-            // Its first SDK local ID can be recorded only when the live placeholder
-            // and official row agree and the existing retirement owns this file.
-            if (retained is { Projection.OfficialLocalFileId: null } && item.Kind == CloudItemKind.File &&
+            // Role recovery can convert the guarded original ordinary file to a
+            // placeholder. Its observed SDK local ID must match the official row.
+            // Before a first native start, this route requires a replacement role
+            // under the accepted Worker deletion.
+            bool recoveredBeforeFirstStart = retained is null &&
+                original.Context.Protection.RoleSid != execution.RoleSid.Value;
+            if ((retained is { Projection.OfficialLocalFileId: null } || recoveredBeforeFirstStart) &&
+                item.Kind == CloudItemKind.File &&
                 native.SyncRootFileId is not null && native.LocalFileId is { } nativeLocalId && row.LocalFileId == nativeLocalId)
                 observedPlaceholderLocalFileId = nativeLocalId;
             bool convertedWithoutRemoteRevision = observedPlaceholderLocalFileId is not null &&

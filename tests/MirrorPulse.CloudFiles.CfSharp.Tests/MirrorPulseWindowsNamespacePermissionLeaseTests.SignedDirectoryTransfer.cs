@@ -19,11 +19,15 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
 
     [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles"), TestCategory("SignedDirectoryTransfer")]
     public Task NativeSignedLocalDirectoryTransferResumesAfterNativeDeleteAcrossHostRoles() =>
-        VerifySignedDirectoryTransferAsync(null, restartBeforeRetirementReceipt: true);
+        VerifySignedDirectoryTransferAsync(null, MirrorPulseTransferSourceRetirementCheckpoint.AfterNativeDeletion);
 
     [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles"), TestCategory("SignedDirectoryTransfer")]
     public Task NativeSignedLocalDirectoryTransferResumesBeforeNativeDeleteAcrossHostRoles() =>
-        VerifySignedDirectoryTransferAsync(null, restartBeforeRetirementReceipt: true, interruptBeforeNativeDelete: true);
+        VerifySignedDirectoryTransferAsync(null, MirrorPulseTransferSourceRetirementCheckpoint.BeforeNativeDeletion);
+
+    [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles"), TestCategory("SignedDirectoryTransfer")]
+    public Task NativeSignedLocalDirectoryTransferResumesAfterWorkerDeleteAcrossHostRoles() =>
+        VerifySignedDirectoryTransferAsync(null, MirrorPulseTransferSourceRetirementCheckpoint.BeforeFirstDirectoryNativeRetirement);
 
     [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles"), TestCategory("SignedDirectoryTransfer")]
     public Task NativeSignedLocalDirectoryTransferToWebDavRejectsUnsupportedReverseBeforeMutation()
@@ -33,9 +37,11 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         return VerifySignedDirectoryTransferAsync(webDavPackage);
     }
 
-    private async Task VerifySignedDirectoryTransferAsync(string? webDavPackage, bool restartBeforeRetirementReceipt = false,
-        bool interruptBeforeNativeDelete = false)
+    private async Task VerifySignedDirectoryTransferAsync(string? webDavPackage,
+        MirrorPulseTransferSourceRetirementCheckpoint? restartCut = null)
     {
+        bool interruptBeforeNativeDelete = restartCut == MirrorPulseTransferSourceRetirementCheckpoint.BeforeNativeDeletion;
+        bool interruptAfterWorkerDelete = restartCut == MirrorPulseTransferSourceRetirementCheckpoint.BeforeFirstDirectoryNativeRetirement;
         string? package = Environment.GetEnvironmentVariable("MP_SIGNED_LOCAL_PACKAGE");
         if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1" || string.IsNullOrWhiteSpace(package))
             Assert.Inconclusive("Requires the disposable native Windows environment and the frozen signed Local package.");
@@ -111,11 +117,10 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             var transfers = new MirrorPulseTransferWorkerServices(transport, transport, transport, transport,
                 worker.GetConnectedProtocolVersion, transport);
             bool interrupt = true;
-            bool interruptAcknowledgement = webDav is null && !restartBeforeRetirementReceipt;
+            bool interruptAcknowledgement = webDav is null && restartCut is null;
             CloudLocalChangeFeed? journal = null;
             const string interruption = "Fixture interruption around the first original native retirement.";
-            var interruptedCheckpoint = interruptBeforeNativeDelete ? MirrorPulseTransferSourceRetirementCheckpoint.BeforeNativeDeletion :
-                MirrorPulseTransferSourceRetirementCheckpoint.AfterNativeDeletion;
+            var interruptedCheckpoint = restartCut ?? MirrorPulseTransferSourceRetirementCheckpoint.AfterNativeDeletion;
             const string acknowledgementInterruption = "Fixture interruption after the original SDK acknowledgement.";
             var factory = new CfSharpMirrorPulseCloudRuntimeFactory(provider, null, transport, transport, router, catalog,
                 worker.IsConnected, scheduler: scheduler, namespaceExecution: execution, namespaceActor: actor, namespaceWork: work,
@@ -191,10 +196,12 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             {
                 DateTimeOffset? originalAcknowledgementStart = null;
                 MirrorPulseDirectoryTransferRetirement? firstRetirement = null;
-                if (restartBeforeRetirementReceipt)
+                if (restartCut is not null)
                 {
-                    firstRetirement = (await catalog.ReadNamespaceDirectoryTransferRetirementsAsync(operationId, token)).Single();
-                    Assert.IsNull(firstRetirement.RetiredAt);
+                    var started = await catalog.ReadNamespaceDirectoryTransferRetirementsAsync(operationId, token);
+                    Assert.HasCount(interruptAfterWorkerDelete ? 0 : 1, started);
+                    firstRetirement = started.SingleOrDefault();
+                    Assert.IsNull(firstRetirement?.RetiredAt);
                     Assert.IsNull(await catalog.ReadNamespaceDirectoryTransferAcknowledgementAsync(operationId, token));
                 }
                 else
@@ -223,16 +230,22 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 await using var newRuntime = newFactory.Create(paths);
                 await newRuntime.StartAsync(token);
                 Assert.HasCount(2, newRuntime.NamespaceStartupResults);
-                if (firstRetirement is not null)
+                if (restartCut is not null)
                 {
                     Assert.IsTrue(newRuntime.NamespaceStartupResults.All(root => !root.Admitted && root.OperationId == operationId));
-                    var settled = (await catalog.ReadNamespaceDirectoryTransferRetirementsAsync(operationId, token)).Single();
-                    Assert.AreEqual(!interruptBeforeNativeDelete, settled.RetiredAt is not null);
-                    Assert.AreEqual(interruptBeforeNativeDelete, File.Exists(Path.Combine(paths.SyncRootPath, "Docs", original)));
-                    Assert.AreEqual(firstRetirement.StartedAt, settled.StartedAt);
-                    Assert.AreEqual(firstRetirement.Projection, settled.Projection);
-                    Assert.AreEqual(firstRetirement.EffectId, settled.EffectId);
-                    Assert.AreEqual(firstRetirement.MemberId, settled.MemberId);
+                    var started = await catalog.ReadNamespaceDirectoryTransferRetirementsAsync(operationId, token);
+                    Assert.HasCount(interruptAfterWorkerDelete ? 0 : 1, started);
+                    if (firstRetirement is not null)
+                    {
+                        var settled = started.Single();
+                        Assert.AreEqual(!interruptBeforeNativeDelete, settled.RetiredAt is not null);
+                        Assert.AreEqual(firstRetirement.StartedAt, settled.StartedAt);
+                        Assert.AreEqual(firstRetirement.Projection, settled.Projection);
+                        Assert.AreEqual(firstRetirement.EffectId, settled.EffectId);
+                        Assert.AreEqual(firstRetirement.MemberId, settled.MemberId);
+                    }
+                    Assert.AreEqual(interruptBeforeNativeDelete || interruptAfterWorkerDelete,
+                        File.Exists(Path.Combine(paths.SyncRootPath, "Docs", original)));
                     Assert.IsNull(await catalog.ReadNamespaceDirectoryTransferAcknowledgementAsync(operationId, token));
                     Assert.IsTrue((await catalog.ReadNamespaceTransferStatusAsync(operationId, token))!.RootsFenced);
                     Assert.IsFalse(newWork.IsAdmitted(sourceRoot.RootId) || newWork.IsAdmitted(targetRoot.RootId));
@@ -242,7 +255,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 var recoveredAck = await catalog.ReadNamespaceDirectoryTransferAcknowledgementAsync(operationId, token);
                 Assert.IsNotNull(recoveredAck?.AcknowledgedAt);
                 if (originalAcknowledgementStart is { } ackStart) Assert.AreEqual(ackStart, recoveredAck.StartedAt);
-                if (firstRetirement is not null)
+                if (restartCut is not null)
                 {
                     var audits = (await catalog.ReadNamespaceInitializationsAsync(cancellationToken: token))
                         .Where(status => status.Intent.DirectoryTransferOperationId == operationId).ToArray();
@@ -252,15 +265,23 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     Assert.IsTrue(audits.All(status => status.Completion?.RoleSid == newExecution.RoleSid.Value));
                     var retirements = await catalog.ReadNamespaceDirectoryTransferRetirementsAsync(operationId, token);
                     Assert.HasCount(3, retirements);
-                    Assert.IsTrue(retirements.Where(row => interruptBeforeNativeDelete || row.Ordinal != firstRetirement.Ordinal)
+                    Assert.IsTrue(retirements.Where(row => interruptBeforeNativeDelete || row.Ordinal != firstRetirement?.Ordinal)
                         .All(row => row.ParentProtection?.Context.Protection.RoleSid == newExecution.RoleSid.Value));
-                    var finishedFirst = retirements.Single(row => row.Ordinal == firstRetirement.Ordinal);
-                    Assert.AreEqual(firstRetirement.Projection, finishedFirst.Projection);
-                    Assert.AreEqual(firstRetirement.StartedAt, finishedFirst.StartedAt);
-                    if (interruptBeforeNativeDelete)
+                    if (interruptAfterWorkerDelete)
                     {
-                        Assert.IsNull(firstRetirement.Projection.OfficialLocalFileId);
-                        Assert.IsNotNull(finishedFirst.RecoveredOfficialLocalFileId);
+                        Assert.IsNotNull(retirements[0].Projection.OfficialLocalFileId);
+                        Assert.IsNull(retirements[0].RecoveredOfficialLocalFileId);
+                    }
+                    if (firstRetirement is not null)
+                    {
+                        var finishedFirst = retirements.Single(row => row.Ordinal == firstRetirement.Ordinal);
+                        Assert.AreEqual(firstRetirement.Projection, finishedFirst.Projection);
+                        Assert.AreEqual(firstRetirement.StartedAt, finishedFirst.StartedAt);
+                        if (interruptBeforeNativeDelete)
+                        {
+                            Assert.IsNull(firstRetirement.Projection.OfficialLocalFileId);
+                            Assert.IsNotNull(finishedFirst.RecoveredOfficialLocalFileId);
+                        }
                     }
                 }
                 Assert.IsTrue((await catalog.ReadNamespaceTransferStatusAsync(operationId, token))!.JournalAcknowledged);
@@ -301,11 +322,15 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 Assert.AreEqual(completed, await catalog.ReadNamespaceTransferStatusAsync(operationId, token));
                 await using var packageSource = File.OpenRead(package);
                 string digest = Convert.ToHexString(await SHA256.HashDataAsync(packageSource, token));
-                if (interruptBeforeNativeDelete)
+                if (interruptAfterWorkerDelete)
+                {
+                    TestContext.WriteLine($"SignedDirectoryTransfer: packageSha256={digest}; originalWorkerDeleteAccepted=True; nativeStartsBeforeRestart=0; bothRootsFenced=True; reopenedRoots=True; targetBytesVerified=True; acknowledgementAcrossRoles=True.");
+                }
+                else if (interruptBeforeNativeDelete)
                 {
                     TestContext.WriteLine($"SignedDirectoryTransfer: packageSha256={digest}; liveOriginalSurvivedRestart=True; originalStartRetained=True; sdkLocalFileIdRecovered=True; bothRootsFenced=True; reopenedRoots=True; targetBytesVerified=True; acknowledgementAcrossRoles=True.");
                 }
-                else if (restartBeforeRetirementReceipt)
+                else if (restartCut is not null)
                 {
                     TestContext.WriteLine($"SignedDirectoryTransfer: packageSha256={digest}; originalNativeRetirementSettled=True; originalStartRetained=True; bothRootsFenced=True; reopenedRoots=True; targetBytesVerified=True; acknowledgementAcrossRoles=True.");
                 }
