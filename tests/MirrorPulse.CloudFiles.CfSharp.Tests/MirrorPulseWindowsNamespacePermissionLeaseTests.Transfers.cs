@@ -45,6 +45,15 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     [TestMethod]
     [DoNotParallelize]
     [TestCategory("NativeCloudFiles")]
+    [DataRow(false)]
+    [DataRow(true)]
+    public Task NativeHostTransferCompletesOriginalClaimAfterBothRootAudits(bool loseReply) =>
+        RunNativeHostTransferAsync(deleteSource: true, retireLocal: true, completeOriginals: true, selectedSameInstance: false,
+            restartBeforeVerification: loseReply);
+
+    [TestMethod]
+    [DoNotParallelize]
+    [TestCategory("NativeCloudFiles")]
     public Task NativeHostTransferDeletesOnlyOriginalRemoteSourceWhileRetainingGuardedLocalBytes() => RunNativeHostTransferAsync(deleteSource: true, selectedSameInstance: false);
 
     [TestMethod]
@@ -362,13 +371,23 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         await using var reopenedWork = new MirrorPulseNamespaceWorkAdmission([sourceRoot.RootId, targetRoot.RootId]);
                         worker.ExpectedNamespaceRole = nextRole.RoleSid;
                         var reopenedTransport = new MirrorPulseNormalUserWorkerTransport(nextRole, worker, worker, worker, worker, worker);
+                        MirrorPulseCfSharpStateSession? recoveredState = null;
                         var reopenedFactory = new CfSharpMirrorPulseCloudRuntimeFactory(
                             provider: new MirrorPulseDemandProvider(router, reopenedTransport, namespaceWork: reopenedWork),
                             router: router, catalog: reopenedCatalog, mayDispatch: _ => true, scheduler: scheduler,
                             namespaceExecution: nextRole, namespaceActor: actor, namespaceWork: reopenedWork, transfers: Services(reopenedTransport),
-                            initializeNamespaceOnStart: true);
+                            initializeNamespaceOnStart: true)
+                        { StateStoreDecorator = owner => { recoveredState = (MirrorPulseCfSharpStateSession)owner; return owner; } };
                         await using var nextRuntime = reopenedFactory.Create(paths);
                         await nextRuntime.StartAsync(deadline.Token);
+                        if (completeOriginals)
+                        {
+                            Assert.IsNotNull(recoveredState);
+                            await using var beforeAcknowledgement = await recoveredState.OpenStore.BeginTransactionAsync(deadline.Token);
+                            foreach (Guid id in prepared.JournalClaim.Members.Select(change => change.OperationId))
+                                Assert.IsNotNull(await beforeAcknowledgement.Operations.GetAsync(id, deadline.Token));
+                            await beforeAcknowledgement.RollbackAsync(deadline.Token);
+                        }
                         worker.BeforeUpload = async token =>
                         {
                             var audits = await reopenedCatalog.ReadFileTransferRecoveryAuditIdsAsync(operation, nextRole.RoleSid.Value, token);
@@ -424,8 +443,39 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                             Assert.AreEqual(deleted, await nextRuntime.DeleteNamespaceTransferSourceAsync(operation, deadline.Token));
                             Assert.AreEqual(1, worker.Deletes);
                             Assert.IsTrue(worker.SourceDeleted);
-                            Assert.IsNull(await reopenedCatalog.ReadNamespaceRetirementAsync(prepared.Plan.DeleteOperationId, deadline.Token));
                             Assert.IsNull(deleted.Acknowledgement);
+                            if (retireLocal)
+                            {
+                                var retiredSource = await nextRuntime.RetireNamespaceTransferSourceAsync(operation, deadline.Token);
+                                Assert.AreEqual(MirrorPulseNamespaceRetirementPhase.Completed, retiredSource.Phase);
+                                Assert.AreEqual(4, retiredSource.Intent.TransferEntry!.Version);
+                                Assert.AreEqual(nextRole.RoleSid.Value, retiredSource.Intent.RoleSid);
+                                Assert.IsNotNull(retiredSource.Intent.TransferEntry.RecoveredSourceParent);
+                                Assert.AreEqual(nextRole.RoleSid.Value, retiredSource.Intent.TransferEntry.RecoveredSourceParent.Context.Protection.RoleSid);
+                                AssertOriginalTransferSourceProjection(retiredSource, originalOfficialSource!, member.LocalObject);
+                                Assert.IsFalse(File.Exists(sourcePath));
+                                Assert.HasCount(2, await reopenedCatalog.ReadNamespaceDispatchFencedRootsAsync(deadline.Token));
+                                Assert.AreEqual(retiredSource, await nextRuntime.RetireNamespaceTransferSourceAsync(operation, deadline.Token));
+                                var completed = await nextRuntime.CompleteNamespaceTransferAsync(operation, deadline.Token);
+                                Assert.IsNotNull(completed.Acknowledgement?.AcknowledgedAt);
+                                Assert.AreEqual(prepared.Plan, completed.Plan);
+                                Assert.AreEqual(prepared.JournalClaim, completed.JournalClaim);
+                                Assert.AreEqual(1, worker.Deletes);
+                                Assert.IsEmpty(await reopenedCatalog.ReadNamespaceDispatchFencedRootsAsync(deadline.Token));
+                                Assert.IsTrue(reopenedWork.IsAdmitted(sourceRoot.RootId));
+                                Assert.IsTrue(reopenedWork.IsAdmitted(targetRoot.RootId));
+                                Assert.IsNotNull(recoveredState);
+                                await using (var afterAcknowledgement = await recoveredState.OpenStore.BeginTransactionAsync(deadline.Token))
+                                {
+                                    foreach (Guid id in prepared.JournalClaim.Members.Select(change => change.OperationId))
+                                        Assert.IsNull(await afterAcknowledgement.Operations.GetAsync(id, deadline.Token));
+                                    await afterAcknowledgement.RollbackAsync(deadline.Token);
+                                }
+                                Assert.AreEqual(completed, await nextRuntime.CompleteNamespaceTransferAsync(operation, deadline.Token));
+                                CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(Path.Combine(paths.SyncRootPath, "Archive", "moved.bin"), deadline.Token));
+                                return;
+                            }
+                            Assert.IsNull(await reopenedCatalog.ReadNamespaceRetirementAsync(prepared.Plan.DeleteOperationId, deadline.Token));
                         }
                         CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(sourcePath, deadline.Token));
                         Assert.HasCount(2, await reopenedCatalog.ReadNamespaceDispatchFencedRootsAsync(deadline.Token));

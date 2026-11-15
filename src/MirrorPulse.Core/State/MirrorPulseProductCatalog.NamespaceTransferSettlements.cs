@@ -115,12 +115,15 @@ public sealed partial class MirrorPulseProductCatalog
         SqliteTransaction transaction, CancellationToken token)
     {
         await RequireNamespaceTransferRoutesAsync([copy.Plan.SourceRoute, copy.Plan.TargetRoute], transaction, token).ConfigureAwait(false);
-        foreach (var parent in new[] { copy.Plan.SourceParent, copy.Plan.TargetParent })
+        var retirement = await ReadNamespaceRetirementCoreAsync(copy.Plan.DeleteOperationId, transaction, token, copy).ConfigureAwait(false)
+            ?? throw new InvalidDataException("Original ACK lost its source retirement.");
+        foreach (var parent in new[] { retirement.Intent.TransferEntry!.RecoveredSourceParent ?? copy.Plan.SourceParent,
+            copy.TargetBirth!.RecoveredParent ?? copy.Plan.TargetParent })
             if (await ReadNamespaceMemberProtectionSnapshotCoreAsync(parent.Context.Member.MemberId, transaction, token).ConfigureAwait(false) != parent)
                 throw new InvalidOperationException("Unfinished transfer settlement requires its exact current parents and execution role.");
         var target = await ReadNamespaceMemberProtectionSnapshotCoreAsync(copy.TargetPublication!.MemberId, transaction, token).ConfigureAwait(false);
         if (target is null || target.Context.Protection.ProtectionId != targetProtectionId ||
-            target.Context.Protection.RoleSid != copy.Plan.Source.Context.Protection.RoleSid ||
+            target.Context.Protection.RoleSid != retirement.Intent.RoleSid ||
             target.Context.Member.LocalObject != copy.TargetPublication.LocalObject || target.Identity.ItemId != copy.TargetPublication.ItemId ||
             target.Identity.RemoteId != copy.TargetBirth!.Plan.RemoteId || target.Context.Location.RelativePath != copy.Plan.TargetRelativePath ||
             target.Context.Location.ParentMemberId != copy.Plan.TargetParent.Context.Member.MemberId)

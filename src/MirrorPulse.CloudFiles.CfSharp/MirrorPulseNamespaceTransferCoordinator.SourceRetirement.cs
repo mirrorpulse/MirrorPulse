@@ -72,7 +72,9 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
         actor.AssertAccess();
         await execution.RunNamespaceOperationAsync(async () =>
         {
-            foreach (var member in new[] { copy.Plan.SourceParent, copy.Plan.TargetParent })
+            var originalSourceParent = retained.Intent.TransferEntry!.RecoveredSourceParent ?? copy.Plan.SourceParent;
+            var originalTargetParent = copy.TargetBirth!.RecoveredParent ?? copy.Plan.TargetParent;
+            foreach (var member in new[] { originalSourceParent, originalTargetParent })
             {
                 RequireLiveRoute(member);
                 if (member.Context.Protection.RoleSid != execution.RoleSid.Value || member.Context.Member.OwnerSid != execution.OwnerSid.Value ||
@@ -80,12 +82,12 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
                     throw new InvalidOperationException("Unfinished source retirement recovery requires current-role original parents.");
             }
             await using var sourceParent = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(
-                fileSystem.GetDirectory(copy.Plan.SourceParent.Context.Location.RelativePath), router, token).ConfigureAwait(false);
+                fileSystem.GetDirectory(originalSourceParent.Context.Location.RelativePath), router, token).ConfigureAwait(false);
             await using var targetParent = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(
-                fileSystem.GetDirectory(copy.Plan.TargetParent.Context.Location.RelativePath), router, token).ConfigureAwait(false);
+                fileSystem.GetDirectory(originalTargetParent.Context.Location.RelativePath), router, token).ConfigureAwait(false);
             var sourceBefore = await sourceParent.InspectAsync(token).ConfigureAwait(false);
             var targetBefore = await targetParent.InspectAsync(token).ConfigureAwait(false);
-            RequireNative(sourceBefore, copy.Plan.SourceParent); RequireNative(targetBefore, copy.Plan.TargetParent);
+            RequireNative(sourceBefore, originalSourceParent); RequireNative(targetBefore, originalTargetParent);
             var target = await catalog.ReadNamespaceMemberProtectionSnapshotAsync(copy.TargetPublication!.MemberId, token).ConfigureAwait(false)
                 ?? throw new InvalidDataException("The original published transfer target disappeared during source retirement recovery.");
             if (target.Context.Protection.ProtectionId != retained.Intent.TransferEntry!.TargetProtectionId)
@@ -121,9 +123,10 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
             RequireOriginalSourceProjection(projection, row, tombstone: true);
             await read.RollbackAsync(token).ConfigureAwait(false);
         }
+        var originalParent = retained.Intent.TransferEntry!.RecoveredSourceParent ?? copy.Plan.SourceParent;
         await using var parent = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(
-            fileSystem.GetDirectory(copy.Plan.SourceParent.Context.Location.RelativePath), router, token).ConfigureAwait(false);
-        var facts = await parent.InspectAsync(token).ConfigureAwait(false); RequireNative(facts, copy.Plan.SourceParent);
+            fileSystem.GetDirectory(originalParent.Context.Location.RelativePath), router, token).ConfigureAwait(false);
+        var facts = await parent.InspectAsync(token).ConfigureAwait(false); RequireNative(facts, originalParent);
         return new(1, copy.Plan.OperationId, copy.Plan.DeleteOperationId, originalItem, copy.Plan.Source.Context.Member.LocalObject,
             true, true, new(facts.LocalObject, facts.OwnerSid, facts.Dacl, facts.ObservedAt), DateTimeOffset.UtcNow);
     }

@@ -28,7 +28,16 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
             if (current.Acknowledgement?.AcknowledgedAt is not null) return current;
             await execution.RunNamespaceOperationAsync(async () =>
             {
-                foreach (var parent in new[] { current.Plan.SourceParent, current.Plan.TargetParent })
+                var retirement = await catalog.ReadNamespaceRetirementAsync(current.Plan.DeleteOperationId, stop).ConfigureAwait(false);
+                if (retirement is not
+                    {
+                        Phase: MirrorPulseNamespaceRetirementPhase.Completed, TransferReceipt: not null,
+                        TransferSourceProjection: not null, TransferSourceNameEpoch: not null
+                    })
+                    throw new InvalidOperationException("Original acknowledgement requires its completed source generation and settled name witness.");
+                var originalSourceParent = retirement.Intent.TransferEntry!.RecoveredSourceParent ?? current.Plan.SourceParent;
+                var originalTargetParent = current.TargetBirth!.RecoveredParent ?? current.Plan.TargetParent;
+                foreach (var parent in new[] { originalSourceParent, originalTargetParent })
                 {
                     RequireLiveRoute(parent);
                     if (parent.Context.Protection.RoleSid != execution.RoleSid.Value || parent.Context.Member.OwnerSid != execution.OwnerSid.Value ||
@@ -38,20 +47,13 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
                 if (protocolVersion(current.Plan.SourceRoute.InstanceId) != 2 ||
                     protocolVersion(current.Plan.TargetRoute.InstanceId) != current.Plan.TargetRoute.ProtocolVersion)
                     throw new InvalidOperationException("The original transfer protocols changed before acknowledgement.");
-                var retirement = await catalog.ReadNamespaceRetirementAsync(current.Plan.DeleteOperationId, stop).ConfigureAwait(false);
-                if (retirement is not
-                    {
-                        Phase: MirrorPulseNamespaceRetirementPhase.Completed, TransferReceipt: not null,
-                        TransferSourceProjection: not null, TransferSourceNameEpoch: not null
-                    })
-                    throw new InvalidOperationException("Original acknowledgement requires its completed source generation and settled name witness.");
                 await using var sourceParent = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(
-                    fileSystem.GetDirectory(current.Plan.SourceParent.Context.Location.RelativePath), router, stop).ConfigureAwait(false);
+                    fileSystem.GetDirectory(originalSourceParent.Context.Location.RelativePath), router, stop).ConfigureAwait(false);
                 await using var targetParent = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(
-                    fileSystem.GetDirectory(current.Plan.TargetParent.Context.Location.RelativePath), router, stop).ConfigureAwait(false);
+                    fileSystem.GetDirectory(originalTargetParent.Context.Location.RelativePath), router, stop).ConfigureAwait(false);
                 var sourceBefore = await sourceParent.InspectAsync(stop).ConfigureAwait(false);
                 var targetBefore = await targetParent.InspectAsync(stop).ConfigureAwait(false);
-                RequireNative(sourceBefore, current.Plan.SourceParent); RequireNative(targetBefore, current.Plan.TargetParent);
+                RequireNative(sourceBefore, originalSourceParent); RequireNative(targetBefore, originalTargetParent);
                 _ = await ReadOriginalSourceRetirementReceiptAsync(current, retirement, stop).ConfigureAwait(false);
                 var target = await catalog.ReadNamespaceMemberProtectionSnapshotAsync(current.TargetPublication!.MemberId, stop).ConfigureAwait(false)
                     ?? throw new InvalidDataException("The original transfer target lost its current membership.");

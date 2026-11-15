@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Data.Sqlite;
 
 namespace MirrorPulse.Core.State;
@@ -7,7 +8,11 @@ namespace MirrorPulse.Core.State;
 /// <summary>Only the original accepted conditional transfer delete may own this source retirement.</summary>
 public sealed record MirrorPulseNamespaceTransferRetirementReference(int Version, Guid OperationId,
     Guid DeleteOperationId, DateTimeOffset SourceDeleteAcceptedAt, Guid TargetProtectionId,
-    MirrorPulseTransferTargetVerification TargetAtStart);
+    MirrorPulseTransferTargetVerification TargetAtStart)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public MirrorPulseNamespaceMemberProtectionSnapshot? RecoveredSourceParent { get; init; }
+}
 
 /// <summary>Actual public SDK tombstone and unchanged parent after deletion of the guarded original source.</summary>
 public sealed record MirrorPulseNamespaceTransferRetirementReceipt(int Version, Guid OperationId,
@@ -31,10 +36,13 @@ public sealed partial class MirrorPulseProductCatalog
             ThrowIfDisposed(); using var transaction = _connection.BeginTransaction();
             var copy = await ReadNamespaceTransferCoreAsync(operationId, transaction, token).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The original transfer is missing.");
-            var reference = new MirrorPulseNamespaceTransferRetirementReference(3, operationId, copy.Plan.DeleteOperationId,
+            var members = copy.TargetBirth?.Recovery is { } recovery
+                ? await ReadFileTransferRecoveryMembersCoreAsync(copy.Plan, recovery, transaction, token).ConfigureAwait(false) : null;
+            var reference = new MirrorPulseNamespaceTransferRetirementReference(members is null ? 3 : 4, operationId, copy.Plan.DeleteOperationId,
                 copy.SourceDeletion?.AcceptedAt ?? throw new InvalidOperationException("Source retirement requires its owned conditional delete acceptance."),
-                targetProtectionId, freshTarget);
-            var source = copy.Plan.Source;
+                targetProtectionId, freshTarget)
+            { RecoveredSourceParent = members?.SourceParent };
+            var source = members?.Source ?? copy.Plan.Source;
             var intent = new MirrorPulseNamespaceRetirementIntent(3, copy.Plan.DeleteOperationId, source.Context.Member.MemberId,
                 copy.Plan.SourceRoute.RootId, source.Context.Member.LocalObject, source.Context.Location.RelativePath, false,
                 source.Context.Member.OwnerSid, source.Context.Protection.RoleSid, preparedAt)
@@ -81,7 +89,7 @@ public sealed partial class MirrorPulseProductCatalog
                     throw new InvalidOperationException("The original pre-deletion SDK projection cannot be replaced or adopted after a legacy start.");
                 transaction.Commit(); return retirement;
             }
-            if (retirement.Intent.TransferEntry!.Version is not (2 or 3))
+            if (retirement.Intent.TransferEntry!.Version is not (2 or 3 or 4))
                 throw new InvalidOperationException("A legacy retirement requires explicit recovery; its original admission cannot be rewritten.");
             if (retirement.Phase != MirrorPulseNamespaceRetirementPhase.Prepared || startedAt < retirement.Intent.PreparedAt)
                 throw new InvalidOperationException("The original local retirement start must follow admission.");
@@ -190,15 +198,24 @@ public sealed partial class MirrorPulseProductCatalog
         ValidateTransferRetirementReference(copy, retirement.Intent);
         if (retirement.TransferSourceProjection is { } projection)
         {
-            if (reference.Version is not (2 or 3) || retirement.StartedAt is not { } startedAt)
+            if (reference.Version is not (2 or 3 or 4) || retirement.StartedAt is not { } startedAt)
                 throw new InvalidDataException("An unstarted retirement cannot claim an original SDK projection.");
             ValidateTransferSourceProjection(copy, retirement, projection, startedAt);
         }
-        else if (reference.Version is 2 or 3 && retirement.StartedAt is not null)
+        else if (reference.Version is 2 or 3 or 4 && retirement.StartedAt is not null)
             throw new InvalidDataException("The original retirement start lost its pre-deletion SDK generation.");
         if (retirement.TransferSourceNameEpoch is { } epoch && (epoch < 2 || retirement.Phase != MirrorPulseNamespaceRetirementPhase.Completed || reference.Version == 1) ||
-            reference.Version == 3 && retirement.Phase == MirrorPulseNamespaceRetirementPhase.Completed && retirement.TransferSourceNameEpoch is null)
+            reference.Version is 3 or 4 && retirement.Phase == MirrorPulseNamespaceRetirementPhase.Completed && retirement.TransferSourceNameEpoch is null)
             throw new InvalidDataException("The source retirement lost its original settled-name generation witness.");
+        if (reference.RecoveredSourceParent is { } parent)
+        {
+            var consistent = transaction ?? throw new InvalidDataException("Recovered retirement requires a consistent historical read.");
+            await RequireRemoteUpdateHistoricalSnapshotAsync(parent, retirement.Intent.PreparedAt, consistent, token).ConfigureAwait(false);
+            var audit = await ReadNamespaceInitializationStatusCoreAsync(copy.TargetBirth!.SourceRecoveryAuditId!.Value, consistent, token)
+                .ConfigureAwait(false);
+            if (audit.Completion is not { } completed || parent.Context.Protection.VerifiedAt > completed.CompletedAt)
+                throw new InvalidDataException("Source retirement lost its original audited source parent proof.");
+        }
         var protection = await ReadNamespaceBirthProtectionCoreAsync(reference.TargetProtectionId, transaction, token).ConfigureAwait(false)
             ?? throw new InvalidDataException("Source retirement lost its original target protection epoch.");
         if (protection.BirthOperationId != copy.TargetBirth!.Birth.OperationId ||
@@ -223,22 +240,28 @@ public sealed partial class MirrorPulseProductCatalog
     private static void ValidateTransferRetirementReference(MirrorPulseNamespaceTransferCopy copy, MirrorPulseNamespaceRetirementIntent intent)
     {
         var reference = intent.TransferEntry!; var source = copy.Plan.Source;
-        if (reference.Version is not (1 or 2 or 3) || reference.OperationId != copy.Plan.OperationId || reference.DeleteOperationId != copy.Plan.DeleteOperationId ||
+        if (reference.Version is not (1 or 2 or 3 or 4) || reference.OperationId != copy.Plan.OperationId || reference.DeleteOperationId != copy.Plan.DeleteOperationId ||
             copy.SourceDeletion?.AcceptedAt is not { } accepted || reference.SourceDeleteAcceptedAt != accepted || copy.TargetPublication is null ||
             copy.TargetBirth is null || source.Identity.ItemId is null || reference.TargetProtectionId == Guid.Empty || reference.TargetAtStart is null ||
             reference.TargetAtStart.RemoteId != copy.TargetVerification!.RemoteId || reference.TargetAtStart.VerifiedAt < accepted ||
             intent.PreparedAt < reference.TargetAtStart.VerifiedAt || intent.OperationId != copy.Plan.DeleteOperationId ||
             intent.MemberId != source.Context.Member.MemberId || intent.RootId != copy.Plan.SourceRoute.RootId ||
             intent.LocalObject != source.Context.Member.LocalObject || intent.RelativePath != source.Context.Location.RelativePath || intent.IsDirectory ||
-            intent.OwnerSid != source.Context.Member.OwnerSid || intent.RoleSid != source.Context.Protection.RoleSid)
+            intent.OwnerSid != source.Context.Member.OwnerSid || intent.RoleSid != (reference.Version == 4 ? copy.TargetBirth.Birth.RoleSid : source.Context.Protection.RoleSid) ||
+            (reference.Version == 4) != (reference.RecoveredSourceParent is not null) ||
+            (reference.Version == 4) != (copy.TargetBirth.Recovery is not null))
             throw new InvalidDataException("Source retirement requires the original accepted conditional transfer and a fresh original target proof.");
+        if (reference.RecoveredSourceParent is { } parent &&
+            (parent.Context.Member != copy.Plan.SourceParent.Context.Member || parent.Context.Location != copy.Plan.SourceParent.Context.Location ||
+             parent.Identity != copy.Plan.SourceParent.Identity || parent.Context.Protection.RoleSid != intent.RoleSid))
+            throw new InvalidDataException("Recovered source retirement requires its unchanged original parent under the audited role.");
         ValidateNamespaceTransferTargetVerification(copy, reference.TargetAtStart);
     }
 
     private static void ValidateTransferRetirementReceipt(MirrorPulseNamespaceTransferCopy copy, MirrorPulseNamespaceRetirement retirement,
         MirrorPulseNamespaceTransferRetirementReceipt receipt)
     {
-        var parent = copy.Plan.SourceParent;
+        var parent = retirement.Intent.TransferEntry!.RecoveredSourceParent ?? copy.Plan.SourceParent;
         if (retirement.StartedAt is null || receipt.Version != 1 || receipt.OperationId != copy.Plan.OperationId ||
             receipt.DeleteOperationId != copy.Plan.DeleteOperationId || receipt.OfficialItemId != copy.Plan.Source.Identity.ItemId ||
             retirement.StartedItemId != receipt.OfficialItemId || receipt.LocalObject != copy.Plan.Source.Context.Member.LocalObject ||
