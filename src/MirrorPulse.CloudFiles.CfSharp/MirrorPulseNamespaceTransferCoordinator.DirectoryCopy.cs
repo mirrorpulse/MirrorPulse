@@ -43,7 +43,8 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
 
     private async ValueTask<IReadOnlyList<MirrorPulseNamespaceProtectedTreeMember>> PublishDirectoryTargetUnderActorAsync(
         Guid operationId, MirrorPulseTransferWorkerServices workers, CancellationToken stop,
-        Func<MirrorPulseDirectoryTransferAdmission, MirrorPulseDirectoryTransferTargetVerification, CancellationToken, Task>? afterPublication = null)
+        Func<MirrorPulseDirectoryTransferAdmission, MirrorPulseDirectoryTransferTargetVerification, CancellationToken, Task>? afterPublication = null,
+        Guid? targetRecovery = null)
     {
         actor.AssertAccess();
         var copy = await catalog.ReadNamespaceDirectoryTransferCopyAsync(operationId, stop).ConfigureAwait(false);
@@ -56,10 +57,12 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
                 new MirrorPulseTransferTargetVerifier(catalog, workers.Stats, workers.Ranges, workers.Directories), workers.Stats);
             _ = await execution.RunNormalUserOperationAsync(() => verifier.ReadCurrentAsync(copy, verified, stop)).ConfigureAwait(false);
             var root = router.GetRegistration(admission.TargetRoute.InstanceId, admission.TargetRoute.RootKey);
-            var publisher = new MirrorPulseNamespaceTransferTargetPublisher(fileSystem, state, catalog, router, actor);
+            var publisher = new MirrorPulseNamespaceTransferTargetPublisher(fileSystem, state, catalog, router, actor, TargetPublicationCheckpoint);
+            var targetParent = targetRecovery is null ? admission.TargetParent :
+                await ReadDirectoryTransferProtectionAsync(admission.TargetParent, stop, execution.RoleSid.Value).ConfigureAwait(false);
             var parents = new Dictionary<Guid, MirrorPulseNamespaceMemberProtectionSnapshot>
             {
-                [admission.SourceParent.Context.Member.MemberId] = admission.TargetParent
+                [admission.SourceParent.Context.Member.MemberId] = targetParent
             };
             var guards = new List<MirrorPulseWindowsNamespacePermissionLease>(admission.Members.Count);
             var published = new List<MirrorPulseNamespaceProtectedTreeMember>(admission.Members.Count);
@@ -71,6 +74,7 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
                     var remote = verified.Members[index];
                     var parent = parents[member.Source.Protection.Context.Location.ParentMemberId!.Value];
                     var target = await catalog.ReadNamespaceDirectoryTransferBirthAsync(operationId, index, stop).ConfigureAwait(false);
+                    bool registeredBeforeRecovery = targetRecovery is not null && target is not null;
                     if (target is null)
                     {
                         var identity = remote.IsDirectory
@@ -92,17 +96,22 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
                         var plan = new MirrorPulseNamespaceBirthPlan(remote.IsDirectory ? 1 : 2, birthId,
                             identity.ItemId, identity.RemoteId, identity.RemoteRevision, time)
                         { Content = remote.Content };
-                        target = await catalog.PrepareNamespaceDirectoryTransferBirthAsync(new(operationId, index, birth, plan), stop)
+                        target = await catalog.PrepareNamespaceDirectoryTransferBirthAsync(new(operationId, index, birth, plan)
+                        { RecoveryInitializationId = targetRecovery }, stop)
                             .ConfigureAwait(false);
                     }
-                    var (registered, _) = await publisher.PublishMemberUnderActorAsync(target.Birth, target.Plan, parent, root,
-                        remote.RemoteId, remote.Revision, stop).ConfigureAwait(false);
-                    var snapshot = await catalog.ReadNamespaceMemberProtectionSnapshotAsync(registered.MemberId, stop).ConfigureAwait(false)
+                    if (!registeredBeforeRecovery)
+                        _ = await publisher.PublishMemberUnderActorAsync(target.Birth, target.Plan, parent, root,
+                            remote.RemoteId, remote.Revision, stop).ConfigureAwait(false);
+                    var snapshot = await catalog.ReadNamespaceMemberProtectionSnapshotAsync(target.Birth.OperationId, stop).ConfigureAwait(false)
                         ?? throw new InvalidDataException("The published directory transfer member lost its protection.");
                     CloudItem item = remote.IsDirectory ? fileSystem.GetDirectory(member.TargetRelativePath) : fileSystem.GetFile(member.TargetRelativePath);
                     var guard = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(item, router, stop).ConfigureAwait(false);
                     guards.Add(guard);
-                    RequireNative(await guard.InspectAsync(stop).ConfigureAwait(false), snapshot);
+                    if (registeredBeforeRecovery)
+                        await RequireDirectoryRetirementTargetAsync(item, target, snapshot, guard, stop).ConfigureAwait(false);
+                    else
+                        RequireNative(await guard.InspectAsync(stop).ConfigureAwait(false), snapshot);
                     published.Add(new(snapshot, member.Source.Depth));
                     if (remote.IsDirectory)
                         parents.Add(member.Source.Protection.Context.Member.MemberId, snapshot);
@@ -121,11 +130,11 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
             {
                 for (int index = guards.Count - 1; index >= 0; index--) await guards[index].DisposeAsync().ConfigureAwait(false);
             }
-        }, stop, publishingTarget: true).ConfigureAwait(false);
+        }, stop, publishingTarget: true, useCurrentProtection: targetRecovery is not null).ConfigureAwait(false);
     }
 
     private async Task<T> WithDirectoryTransferGuardsAsync<T>(MirrorPulseDirectoryTransferAdmission plan,
-        Func<Task<T>> operation, CancellationToken stop, bool publishingTarget = false, bool replayingSourceDeletion = false)
+        Func<Task<T>> operation, CancellationToken stop, bool publishingTarget = false, bool useCurrentProtection = false)
     {
         actor.AssertAccess();
         var topology = await catalog.ReadAdapterTopologyAsync(stop).ConfigureAwait(false);
@@ -137,9 +146,9 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
         await execution.RunNamespaceOperationAsync(async () =>
         {
             string role = execution.RoleSid.Value;
-            var sourceProtection = replayingSourceDeletion
+            var sourceProtection = useCurrentProtection
                 ? await ReadDirectoryTransferProtectionAsync(plan.SourceParent, stop, role).ConfigureAwait(false) : plan.SourceParent;
-            var targetProtection = replayingSourceDeletion
+            var targetProtection = useCurrentProtection
                 ? await ReadDirectoryTransferProtectionAsync(plan.TargetParent, stop, role).ConfigureAwait(false) : plan.TargetParent;
             await using var sourceParent = await OpenTransferDirectoryGuardAsync(sourceProtection, stop).ConfigureAwait(false);
             await using var targetParent = await OpenTransferDirectoryGuardAsync(targetProtection, stop).ConfigureAwait(false);
@@ -161,7 +170,7 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
                 foreach (var member in plan.Members)
                 {
                     var original = member.Source.Protection;
-                    var current = replayingSourceDeletion
+                    var current = useCurrentProtection
                         ? await ReadDirectoryTransferProtectionAsync(original, stop, role).ConfigureAwait(false) : original;
                     if (current.Context.Protection.RoleSid != role || current.Context.Member.OwnerSid != execution.OwnerSid.Value ||
                         await catalog.ReadNamespaceMemberProtectionSnapshotAsync(original.Context.Member.MemberId, stop).ConfigureAwait(false) != current)
@@ -181,7 +190,7 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
                     if (!native.Exists || native.IsTombstone || native.LocalBinding is not { } binding ||
                         new MirrorPulseLocalFileBinding(binding.VolumeSerialNumber, binding.SyncRootFileId, binding.LocalFileId) != original.Context.Member.LocalObject)
                         throw new InvalidDataException("A directory transfer source changed its native binding.");
-                    if (native.IsPlaceholder && replayingSourceDeletion && original.Context.Protection.RoleSid != role)
+                    if (native.IsPlaceholder && useCurrentProtection && original.Context.Protection.RoleSid != role)
                         _ = await CaptureDirectoryRetirementProjectionAsync(member, item, native, null, stop).ConfigureAwait(false);
                     else if (native.IsPlaceholder)
                     {
