@@ -8,7 +8,15 @@ on:
     paths:
       - .github/workflows/directory-journal-native.yml
       - eng/verify-directory-journal-native.ps1
+      - eng/verify-namespace-nonadmin.ps1
+      - eng/namespace-nonadmin-controller.ps1
+      - eng/verify-test-results.ps1
       - eng/test-suites.json
+      - src/MirrorPulse.CloudFiles.CfSharp/MirrorPulseNamespaceTransfer*.cs
+      - src/MirrorPulse.CloudFiles.CfSharp/MirrorPulseCloudHostSession.cs
+      - src/MirrorPulse.Core/State/MirrorPulseProductCatalog.NamespaceTransfer*.cs
+      - src/MirrorPulse.Core/State/MirrorPulseProductCatalog.NamespaceFileTransferRecovery.cs
+      - tests/MirrorPulse.CloudFiles.CfSharp.Tests/MirrorPulseWindowsNamespacePermissionLeaseTests.Transfers.cs
       - src/MirrorPulse.CloudFiles.CfSharp/MirrorPulseJournalUploadPump.Coalescing.cs
       - src/MirrorPulse.CloudFiles.CfSharp/MirrorPulseJournal*DirectoryMove*.cs
       - src/MirrorPulse.CloudFiles.CfSharp/MirrorPulseDirectoryMovePermissionIdentity.cs
@@ -38,8 +46,8 @@ jobs:
           - runner: windows-11-arm
             architecture: Arm64
     runs-on: ${{ matrix.runner }}
-    # The per-step budget retains all fixture deadlines and collection. Allow seven more minutes for setup and export.
-    timeout-minutes: 36
+    # Retain the directory envelope and add the 17-minute fresh-user file recovery envelope.
+    timeout-minutes: 53
     steps:
       - name: Check out the exact selected source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -72,10 +80,28 @@ jobs:
           $minutes = & ./eng/verify-directory-journal-native.ps1 -BudgetOnly
           if ($LASTEXITCODE -ne 0) { throw 'Original directory selection failed.' }
           "timeout_minutes=$minutes" >> $env:GITHUB_OUTPUT
+          . ./eng/namespace-nonadmin-controller.ps1
+          $catalog = Get-Content -LiteralPath eng/test-suites.json -Raw | ConvertFrom-Json
+          $fileNames = @($catalog.required.fileTransferRecovery)
+          $fileMinutes = Get-OrdinaryUserNamespaceStepTimeoutMinutes -TestCount $fileNames.Count -TestNames $fileNames -Scope S06
+          "file_timeout_minutes=$fileMinutes" >> $env:GITHUB_OUTPUT
 
       - name: Verify original directories, later occupants and native regressions
         timeout-minutes: ${{ fromJSON(steps.budget.outputs.timeout_minutes) }}
         run: pwsh ./eng/verify-directory-journal-native.ps1 -ExpectedArchitecture ${{ matrix.architecture }}
+
+      - name: Verify file transfer recovery as a fresh non-administrator user
+        id: file_recovery
+        timeout-minutes: ${{ fromJSON(steps.budget.outputs.file_timeout_minutes) }}
+        run: pwsh ./eng/verify-namespace-nonadmin.ps1 -ExpectedArchitecture ${{ matrix.architecture }} -VerifyFileTransferRecovery
+
+      - name: Preserve original file recovery reports and executing inputs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: file-transfer-recovery-${{ matrix.architecture }}-originals
+          path: artifacts/test-results/file-transfer-recovery-nonadmin-*
+          if-no-files-found: warn
 
       - name: Preserve original reports and executing inputs
         if: always()

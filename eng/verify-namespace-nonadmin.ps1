@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param([Parameter(Mandatory)][ValidateSet('X64', 'Arm64')][string]$ExpectedArchitecture,
     [string]$SignedAtomicDirectoryPackage, [switch]$VerifyDirectoryMove, [switch]$VerifyDirectoryTransfer,
-    [string]$SignedDirectoryTransferWebDavPackage, [switch]$VerifyDirectoryCopyRecovery, [switch]$VerifyPreparedDirectoryCopy)
+    [string]$SignedDirectoryTransferWebDavPackage, [switch]$VerifyDirectoryCopyRecovery, [switch]$VerifyPreparedDirectoryCopy,
+    [switch]$VerifyFileTransferRecovery)
 
 $ErrorActionPreference = 'Stop'
 if (-not $IsWindows -or $env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted') {
@@ -27,16 +28,19 @@ $catalog = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'test-suites.json')
 . (Join-Path $PSScriptRoot 'namespace-nonadmin-controller.ps1')
 $directorySuites = @($VerifyDirectoryMove, $VerifyDirectoryTransfer, $VerifyDirectoryCopyRecovery, $VerifyPreparedDirectoryCopy | Where-Object { $_ })
 if ($directorySuites.Count -gt 1) { throw 'Select one focused directory suite per disposable profile.' }
+if ($VerifyFileTransferRecovery -and ($directorySuites.Count -ne 0 -or $SignedAtomicDirectoryPackage -or $SignedDirectoryTransferWebDavPackage)) {
+    throw 'File recovery reference verification requires its own disposable profile without signed directory inputs.'
+}
 if ($directorySuites.Count -ne 0 -and -not $SignedAtomicDirectoryPackage) { throw 'Signed directory acceptance requires the frozen Local package.' }
 if ([bool]$VerifyDirectoryTransfer -ne [bool]$SignedDirectoryTransferWebDavPackage) { throw 'Cross-instance directory acceptance requires the frozen WebDAV package.' }
-$suite = if ($VerifyPreparedDirectoryCopy) { 'signedPreparedDirectoryCopy' } elseif ($VerifyDirectoryCopyRecovery) { 'signedDirectoryCopyRecovery' } elseif ($VerifyDirectoryTransfer) { 'signedDirectoryTransfer' } elseif ($VerifyDirectoryMove) { 'signedDirectoryMove' } elseif ($SignedAtomicDirectoryPackage) { 'signedAtomicDirectory' } else { 'namespace' }
+$suite = if ($VerifyFileTransferRecovery) { 'fileTransferRecovery' } elseif ($VerifyPreparedDirectoryCopy) { 'signedPreparedDirectoryCopy' } elseif ($VerifyDirectoryCopyRecovery) { 'signedDirectoryCopyRecovery' } elseif ($VerifyDirectoryTransfer) { 'signedDirectoryTransfer' } elseif ($VerifyDirectoryMove) { 'signedDirectoryMove' } elseif ($SignedAtomicDirectoryPackage) { 'signedAtomicDirectory' } else { 'namespace' }
 $testNames = @($catalog.required.$suite)
 $childBudgetMilliseconds = if ($SignedAtomicDirectoryPackage) { 300000 } else {
     Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $testNames.Count -TestNames $testNames -Scope S06
 }
 Write-Output ("Ordinary-user catalog: selected={0}; controllerBudgetSeconds={1}; nativeCaseDeadlinesUnchanged=True." -f $testNames.Count, ($childBudgetMilliseconds / 1000))
 $filter = ($testNames | ForEach-Object { 'FullyQualifiedName=' + $_ }) -join '|'
-$evidenceStem = if ($VerifyPreparedDirectoryCopy) { 'signed-prepared-directory-copy-nonadmin-' } elseif ($VerifyDirectoryCopyRecovery) { 'signed-directory-copy-recovery-nonadmin-' } elseif ($VerifyDirectoryTransfer) { 'signed-directory-transfer-nonadmin-' } elseif ($VerifyDirectoryMove) { 'signed-directory-move-nonadmin-' } elseif ($SignedAtomicDirectoryPackage) { 'signed-atomic-directory-nonadmin-' } else { 'namespace-nonadmin-' }
+$evidenceStem = if ($VerifyFileTransferRecovery) { 'file-transfer-recovery-nonadmin-' } elseif ($VerifyPreparedDirectoryCopy) { 'signed-prepared-directory-copy-nonadmin-' } elseif ($VerifyDirectoryCopyRecovery) { 'signed-directory-copy-recovery-nonadmin-' } elseif ($VerifyDirectoryTransfer) { 'signed-directory-transfer-nonadmin-' } elseif ($VerifyDirectoryMove) { 'signed-directory-move-nonadmin-' } elseif ($SignedAtomicDirectoryPackage) { 'signed-atomic-directory-nonadmin-' } else { 'namespace-nonadmin-' }
 $evidenceDirectory = Join-Path $repository ('artifacts/test-results/' + $evidenceStem + $ExpectedArchitecture.ToLowerInvariant())
 New-Item -ItemType Directory -Path $evidenceDirectory -Force | Out-Null
 $identifier = [guid]::NewGuid().ToString('N')
@@ -283,7 +287,7 @@ if ($null -ne $primaryFailure -or $cleanupFailures.Count -gt 0) {
     throw [AggregateException]::new('Ordinary-user verification failed; original diagnostics and independent cleanup failures were retained.', [Exception[]]$failures)
 }
 if ($success -and $userRemoved -and $profileRemoved -and $workspaceRemoved) {
-    [ordered]@{ schemaVersion=1; sourceSha=$sourceSha; architecture=$ExpectedArchitecture; nonAdministrator=$true;
+    [ordered]@{ schemaVersion=1; sourceSha=$sourceSha; suite=$suite; architecture=$ExpectedArchitecture; nonAdministrator=$true;
         freshUser=$true; expectedUserMatched=$true; profileLoaded=$true; accountRemoved=$true; profileRemoved=$true;
         workspaceRemoved=$true; testAssemblySha256=$assemblyHash;
         signedPackageSha256=$packageHash; signedSignatureSha256=$signatureHash;
