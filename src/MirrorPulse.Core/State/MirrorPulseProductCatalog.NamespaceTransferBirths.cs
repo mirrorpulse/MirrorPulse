@@ -214,6 +214,7 @@ public sealed partial class MirrorPulseProductCatalog
     {
         ValidateNamespaceTransferPlan(copy.Plan);
         if (copy.CopyStartedAt is { } start && start < copy.Plan.PreparedAt || (copy.AcceptedRevision is null) != (copy.CopyAcceptedAt is null) ||
+            copy.CopyUsesWorkerPreparation && copy.Plan.TargetRoute.ProtocolVersion != 2 ||
             copy.CopyAcceptedAt is { } accepted && (copy.CopyStartedAt is null || accepted < copy.CopyStartedAt || InvalidRemoteUpdateText(copy.AcceptedRevision, 4096)) ||
             copy.TargetBirthOperationId is { } birth && (birth == Guid.Empty || new[] { copy.Plan.OperationId, copy.Plan.CopyOperationId, copy.Plan.DeleteOperationId, copy.Plan.PrivateContentId }.Contains(birth)))
             throw new ArgumentException("Transfer progress lost its distinct original effects or chronology.");

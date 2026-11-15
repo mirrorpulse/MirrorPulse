@@ -54,6 +54,9 @@ public sealed record MirrorPulseNamespaceTransferCommandOrigin(int Version, Guid
 public sealed record MirrorPulseNamespaceTransferCopy(MirrorPulseNamespaceTransferPlan Plan,
     DateTimeOffset? CopyStartedAt, string? AcceptedRevision, DateTimeOffset? CopyAcceptedAt)
 {
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public bool CopyUsesWorkerPreparation { get; init; }
+
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public MirrorPulseTransferTargetVerification? TargetVerification { get; init; }
 
@@ -153,9 +156,31 @@ public sealed partial class MirrorPulseProductCatalog
         finally { _gate.Release(); }
     }
 
+    internal async Task SelectNamespaceTransferCopyPreparationAsync(Guid operationId, CancellationToken token)
+    {
+        await _gate.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed(); using var transaction = _connection.BeginTransaction();
+            var copy = await ReadNamespaceTransferCoreAsync(operationId, transaction, token).ConfigureAwait(false)
+                ?? throw new FileNotFoundException("The original transfer is missing.");
+            if (copy.CopyStartedAt is not null || copy.Plan.TargetRoute.ProtocolVersion != 2)
+                throw new InvalidOperationException("Only an unstarted original V2 copy can select preparation.");
+            await RequireCurrentNamespaceTransferAsync(copy.Plan, transaction, token, admitted: true).ConfigureAwait(false);
+            if (!copy.CopyUsesWorkerPreparation)
+                await WriteNamespaceTransferCoreAsync(copy with { CopyUsesWorkerPreparation = true }, transaction, token).ConfigureAwait(false);
+            transaction.Commit();
+        }
+        finally { _gate.Release(); }
+    }
+
     /// <summary>Acquires the only first-dispatch claim. Replaying a retained start never grants another upload.</summary>
-    public async Task<MirrorPulseNamespaceTransferCopy> StartNamespaceTransferCopyAsync(Guid operationId,
-        DateTimeOffset startedAt, CancellationToken token = default)
+    public Task<MirrorPulseNamespaceTransferCopy> StartNamespaceTransferCopyAsync(Guid operationId,
+        DateTimeOffset startedAt, CancellationToken token = default) =>
+        StartNamespaceTransferCopyAsync(operationId, startedAt, preparedByWorker: false, token);
+
+    internal async Task<MirrorPulseNamespaceTransferCopy> StartNamespaceTransferCopyAsync(Guid operationId,
+        DateTimeOffset startedAt, bool preparedByWorker, CancellationToken token)
     {
         await _gate.WaitAsync(token).ConfigureAwait(false);
         try
@@ -168,6 +193,8 @@ public sealed partial class MirrorPulseProductCatalog
             if (startedAt < copy.Plan.PreparedAt || copy.JournalClaim is { } claim && startedAt < claim.CapturedAt)
                 throw new ArgumentException("Copy start must follow its original admission and retained journal reservation.", nameof(startedAt));
             await RequireCurrentNamespaceTransferAsync(copy.Plan, transaction, token, admitted: true).ConfigureAwait(false);
+            if (copy.CopyUsesWorkerPreparation != preparedByWorker)
+                throw new InvalidOperationException("The first copy start must use its retained preparation mode.");
             copy = copy with { CopyStartedAt = startedAt };
             await WriteNamespaceTransferCoreAsync(copy, transaction, token).ConfigureAwait(false);
             transaction.Commit(); return copy;
@@ -175,8 +202,8 @@ public sealed partial class MirrorPulseProductCatalog
         finally { _gate.Release(); }
     }
 
-    /// <remarks>Only the original successful UploadComplete may supply this revision. Stat, matching remote
-    /// bytes, an ambiguous operation or a later session's uncorrelated reply cannot supply an acceptance receipt.</remarks>
+    /// <remarks>Only a successful UploadComplete correlated to the original upload may supply this
+    /// revision, including a replay from the Worker that durably prepared the original request.</remarks>
     public async Task<MirrorPulseNamespaceTransferCopy> RecordNamespaceTransferCopyAcceptedAsync(Guid operationId,
         string acceptedRevision, DateTimeOffset acceptedAt, CancellationToken token = default)
     {

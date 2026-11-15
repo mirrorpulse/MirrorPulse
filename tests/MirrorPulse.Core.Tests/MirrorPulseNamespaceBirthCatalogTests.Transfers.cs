@@ -221,10 +221,89 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         }
         await using var second = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
         using var original = new MemoryStream(TransferBytes, writable: false);
-        await Assert.ThrowsExactlyAsync<MirrorPulseMutationAmbiguousException>(() => new MirrorPulseTransferCopyExecutor(second, uploads).CopyAsync(plan.OperationId, original));
+        uploads.PreparesCopies = true;
+        await Assert.ThrowsExactlyAsync<MirrorPulseMutationAmbiguousException>(() =>
+            new MirrorPulseTransferCopyExecutor(second, uploads) { Mutations = uploads }.CopyAsync(plan.OperationId, original));
         Assert.AreEqual(1, uploads.Calls); Assert.HasCount(2, await second.ReadNamespaceDispatchFencedRootsAsync());
+        Assert.IsEmpty(uploads.Preparations);
         Assert.IsNull((await second.ReadNamespaceTransferAsync(plan.OperationId))!.AcceptedRevision);
         Assert.IsNull(await second.ReadMutationAsync(plan.DeleteOperationId));
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task PreparedFileCopyRecoversOriginalRequestAfterLosingEitherReply(bool loseUploadReply)
+    {
+        using var fixture = new Fixture();
+        var worker = new TransferUploads { PreparesCopies = true };
+        MirrorPulseNamespaceTransferPlan plan;
+        MirrorPulseNamespaceTransferCopy original;
+        await using (var first = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths))
+        {
+            plan = (await PrepareTransferFixtureAsync(first)).Plan;
+            await first.PrepareNamespaceTransferAsync(plan);
+            if (!loseUploadReply) worker.LosePreparationReply = true;
+            worker.OnUpload = async (request, token) =>
+            {
+                var recorded = await first.ReadNamespaceTransferAsync(plan.OperationId, token);
+                Assert.IsNotNull(recorded);
+                Assert.IsNotNull(recorded.CopyStartedAt);
+                Assert.IsTrue(recorded.CopyUsesWorkerPreparation);
+                Assert.AreEqual(MirrorPulseDurableDirectoryCopyMode.Resume, request.DurableCopyMode);
+                Assert.AreEqual(plan.CopyOperationId, request.OperationId);
+                throw new IOException("The original upload reply was lost.");
+            };
+            using var input = new MemoryStream(TransferBytes, writable: false);
+            var executor = new MirrorPulseTransferCopyExecutor(first, worker, new TransferClock(plan.PreparedAt.AddSeconds(1)))
+            { Mutations = worker };
+            await Assert.ThrowsExactlyAsync<IOException>(() => executor.CopyAsync(plan.OperationId, input));
+            original = (await first.ReadNamespaceTransferAsync(plan.OperationId))!;
+            Assert.IsTrue(original.CopyUsesWorkerPreparation);
+            Assert.AreEqual(loseUploadReply, original.CopyStartedAt is not null);
+            Assert.IsNull(original.CopyAcceptedAt);
+            Assert.HasCount(1, worker.Preparations);
+            Assert.AreEqual(loseUploadReply ? 1 : 0, worker.Calls);
+        }
+
+        await using var reopened = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        Assert.AreEqual(original, await reopened.ReadNamespaceTransferAsync(plan.OperationId));
+        using var retained = new MemoryStream(TransferBytes, writable: false);
+        var retry = new MirrorPulseTransferCopyExecutor(reopened, worker, new TransferClock(plan.PreparedAt.AddSeconds(2)))
+        { Mutations = worker };
+        worker.PreparesCopies = false;
+        if (loseUploadReply)
+            await Assert.ThrowsExactlyAsync<MirrorPulseMutationAmbiguousException>(() => retry.CopyAsync(plan.OperationId, retained));
+        else
+            await Assert.ThrowsExactlyAsync<NotSupportedException>(() => retry.CopyAsync(plan.OperationId, retained));
+        Assert.AreEqual(loseUploadReply ? 1 : 0, worker.Calls);
+        Assert.HasCount(1, worker.Preparations);
+        worker.PreparesCopies = true;
+        worker.LosePreparationReply = false;
+        worker.OnUpload = async (request, token) =>
+        {
+            Assert.AreEqual(MirrorPulseDurableDirectoryCopyMode.Resume, request.DurableCopyMode);
+            Assert.AreEqual(plan.CopyOperationId, request.OperationId);
+            Assert.AreEqual(plan.TargetRoute.RootKey, request.RootKey);
+            Assert.IsTrue(request.DestinationMustBeAbsent);
+            Assert.AreEqual(plan.Length, request.Length);
+            string? suppliedHash = request.ExpectedContentSha256;
+            Assert.AreEqual(plan.Sha256, suppliedHash);
+            using var content = new MemoryStream();
+            await request.Content.CopyToAsync(content, token);
+            CollectionAssert.AreEqual(TransferBytes, content.ToArray());
+            return "original-file-copy-revision";
+        };
+        var accepted = await retry.CopyAsync(plan.OperationId, retained);
+        Assert.AreEqual("original-file-copy-revision", accepted.AcceptedRevision);
+        Assert.IsTrue(accepted.CopyUsesWorkerPreparation);
+        if (loseUploadReply) Assert.AreEqual(original.CopyStartedAt, accepted.CopyStartedAt);
+        var preparation = new MirrorPulseWorkerPrepareDirectoryCopyRequest(plan.TargetRoute.InstanceId, plan.TargetRoute.RootKey,
+            "moved.txt", plan.CopyOperationId, null, plan.Length, plan.Sha256);
+        Assert.HasCount(loseUploadReply ? 1 : 2, worker.Preparations);
+        Assert.IsTrue(worker.Preparations.All(request => request == preparation));
+        Assert.HasCount(2, await reopened.ReadNamespaceDispatchFencedRootsAsync());
+        Assert.IsNull(await reopened.ReadMutationAsync(plan.DeleteOperationId));
     }
 
     [TestMethod]
@@ -451,10 +530,22 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         public override DateTimeOffset GetUtcNow() => now;
     }
 
-    private sealed class TransferUploads : IMirrorPulseWorkerUploadTransport
+    private sealed class TransferUploads : IMirrorPulseWorkerUploadTransport, IMirrorPulseWorkerMutationTransport
     {
         internal int Calls;
+        internal bool PreparesCopies;
+        internal bool LosePreparationReply;
+        internal List<MirrorPulseWorkerPrepareDirectoryCopyRequest> Preparations { get; } = [];
         internal Func<MirrorPulseWorkerUploadRequest, CancellationToken, ValueTask<string>> OnUpload = (_, _) => ValueTask.FromResult("accepted");
+        public bool SupportsDurableDirectoryCopy(InstanceId instanceId, string rootKey) => PreparesCopies;
+        public bool SupportsDurableDirectoryCopyPreparation(InstanceId instanceId, string rootKey) => PreparesCopies;
+        public ValueTask PrepareDirectoryCopyAsync(MirrorPulseWorkerPrepareDirectoryCopyRequest request, CancellationToken token)
+        {
+            Preparations.Add(request);
+            return LosePreparationReply ? ValueTask.FromException(new IOException("The preparation reply was lost.")) : ValueTask.CompletedTask;
+        }
+        public ValueTask<string> MoveAsync(MirrorPulseWorkerMoveRequest request, CancellationToken token) => throw new NotSupportedException();
+        public ValueTask<string?> DeleteAsync(MirrorPulseWorkerDeleteRequest request, CancellationToken token) => throw new NotSupportedException();
         public ValueTask<string> UploadAsync(MirrorPulseWorkerUploadRequest request, CancellationToken cancellationToken)
         { Calls++; return OnUpload(request, cancellationToken); }
     }

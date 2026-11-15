@@ -55,12 +55,21 @@ correlated upload revision is saved even if caller cancellation races the reply.
 
 The [pinned Worker V2 specification](https://github.com/MirrorPulse/adapter-template/blob/0c6398635a7680691d4bcff418cbbd6b951ab0a4/spec/worker-v2.md)
 does not promise unconditional exactly-once effects across provider restarts.
-Copy-start without a saved original acceptance remains uncertain. Neither an
-exception, cancellation, missing durable receipt, matching target hash nor a new
-session authorizes another upload. A saved receipt is replayed as historical
-state without dispatching again. Unsupported or rejected invocations also remain
-conservative at this stage; an explicit recovery protocol must retain any proof
-that a mutation could not have started.
+For an ordinary copy, a start without a saved original acceptance remains
+uncertain. An exception, cancellation, missing durable receipt, matching target
+hash or new session cannot authorize another upload. A saved receipt is replayed
+as historical state without dispatching again.
+
+When the connected target supports both durable copy replay and preparation, the
+Host first retains that selection, then asks the Worker to prepare the original
+absent-target upload with the same operation ID, path, length and SHA256. It
+records the copy start only after the Worker confirms its durable intent. A lost
+preparation reply can repeat the same preparation before the start. After the
+start, the copy uses the original Worker resume request and requires a correlated
+upload receipt. Losing the negotiated capability leaves the original copy
+pending. Initial selection cannot change a previously started ordinary copy.
+Both dispatch and replay require current Host root admission and the original
+protected source and parent objects.
 
 Copy acceptance keeps both fences. It proves neither whole-target readback,
 native destination birth, public SDK publication, content confirmation, source

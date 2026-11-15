@@ -110,12 +110,15 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator(CloudFileSys
         }, token).ConfigureAwait(false);
     }
 
-    public async ValueTask<MirrorPulseNamespaceTransferCopy> CopyAsync(Guid operationId,
-        IMirrorPulseWorkerUploadTransport uploads, CancellationToken token)
+    public ValueTask<MirrorPulseNamespaceTransferCopy> CopyAsync(Guid operationId,
+        IMirrorPulseWorkerUploadTransport uploads, CancellationToken token) => CopyAsync(operationId, uploads, null, token);
+
+    internal async ValueTask<MirrorPulseNamespaceTransferCopy> CopyAsync(Guid operationId,
+        IMirrorPulseWorkerUploadTransport uploads, IMirrorPulseWorkerMutationTransport? mutations, CancellationToken token)
     {
         var copy = await ReadAsync(operationId, token).ConfigureAwait(false);
         if (copy.CopyAcceptedAt is not null) return copy;
-        if (copy.CopyStartedAt is not null)
+        if (copy.CopyStartedAt is not null && !copy.CopyUsesWorkerPreparation)
             throw new MirrorPulseMutationAmbiguousException("The original transfer copy has no durable acceptance receipt.");
         return await ExecuteGuardedAsync(copy.Plan, async file =>
         {
@@ -131,7 +134,8 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator(CloudFileSys
                 copy = await catalog.PrepareNamespaceTransferJournalClaimAsync(claim, token).ConfigureAwait(false);
             }
             await source.VerifyAsync(copy.Plan.Length, copy.Plan.Sha256, token).ConfigureAwait(false);
-            return await new MirrorPulseTransferCopyExecutor(catalog, uploads).CopyAsync(operationId, input.Data, token).ConfigureAwait(false);
+            return await new MirrorPulseTransferCopyExecutor(catalog, uploads) { Mutations = mutations }
+                .CopyAsync(operationId, input.Data, token).ConfigureAwait(false);
         }, token).ConfigureAwait(false);
     }
 

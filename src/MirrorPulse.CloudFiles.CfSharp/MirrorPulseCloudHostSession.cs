@@ -668,7 +668,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                 new[] { copy.Plan.SourceRoute.RootId, copy.Plan.TargetRoute.RootId }, token).ConfigureAwait(false);
             return await WithAdmittedInstancesLibraryAsync(new[] { copy.Plan.SourceRoute.InstanceId, copy.Plan.TargetRoute.InstanceId }.Distinct(),
                 (_, stop) => verifyTarget ? TransferCoordinator().VerifyTargetAsync(operationId, transfers.Stats, transfers.Ranges, transfers.Directories, stop) :
-                    TransferCoordinator().CopyAsync(operationId, transfers.Uploads, stop), token).ConfigureAwait(false);
+                    TransferCoordinator().CopyAsync(operationId, transfers.Uploads, transfers.Mutations, stop), token).ConfigureAwait(false);
         }
 
         public async ValueTask<MirrorPulseNamespaceTransferCopy> ReadNamespaceTransferAsync(Guid operationId, CancellationToken token) =>
