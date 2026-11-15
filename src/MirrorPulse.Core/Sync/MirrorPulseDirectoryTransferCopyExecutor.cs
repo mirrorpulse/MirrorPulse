@@ -4,6 +4,8 @@ using MirrorPulse.Core.State;
 
 namespace MirrorPulse.Core.Sync;
 
+internal enum MirrorPulseDirectoryTransferCopyCheckpoint { BeforeAcceptance, AfterAcceptance }
+
 /// <summary>Creates the original directory transfer target in parent-first order.</summary>
 /// <remarks>The Host retains its actor, current native source guards, root leases and ordered instance
 /// admissions. Each file uses the verified private handle through its first conditional upload.
@@ -13,6 +15,7 @@ internal sealed class MirrorPulseDirectoryTransferCopyExecutor(MirrorPulseProduc
     IMirrorPulseWorkerMutationTransport mutations, TimeProvider? timeProvider = null)
 {
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    internal Func<MirrorPulseDirectoryTransferCopyCheckpoint, int, CancellationToken, ValueTask>? Checkpoint { get; init; }
 
     internal async Task<MirrorPulseDirectoryTransferCopy> CopyAsync(Guid transferId, CancellationToken token)
     {
@@ -44,8 +47,12 @@ internal sealed class MirrorPulseDirectoryTransferCopyExecutor(MirrorPulseProduc
                 { RequireConditionalTargetSupport = true }, token).ConfigureAwait(false);
             }
             // Retain a successful correlated reply even when cancellation raced its return.
+            if (Checkpoint is not null)
+                await Checkpoint(MirrorPulseDirectoryTransferCopyCheckpoint.BeforeAcceptance, ordinal, CancellationToken.None).ConfigureAwait(false);
             await catalog.RecordNamespaceDirectoryTransferCopyAcceptedAsync(transferId, ordinal, member.CopyOperationId,
                 revision, _time.GetUtcNow(), CancellationToken.None).ConfigureAwait(false);
+            if (Checkpoint is not null)
+                await Checkpoint(MirrorPulseDirectoryTransferCopyCheckpoint.AfterAcceptance, ordinal, CancellationToken.None).ConfigureAwait(false);
         }
         return await catalog.ReadNamespaceDirectoryTransferCopyAsync(transferId, token).ConfigureAwait(false);
     }

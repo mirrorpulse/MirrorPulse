@@ -58,3 +58,28 @@ function Confirm-SignedDirectoryTransferReport {
         $expected.Remove($name)
     }
 }
+
+function Confirm-SignedDirectoryCopyRecoveryReport {
+    param([Parameter(Mandatory)][string]$ReportPath, [Parameter(Mandatory)][string]$PackageSha256)
+    if ($PackageSha256 -cnotmatch '^[A-F0-9]{64}$') { throw 'Require the SHA-256 of the original signed Local package.' }
+    [xml]$report = Get-Content -LiteralPath $ReportPath -Raw
+    $rows = @($report.TestRun.Results.UnitTestResult)
+    $prefix = 'SignedDirectoryCopyRecovery: packageSha256=' + $PackageSha256 + '; '
+    $resumed = '; copyEffectsRetained=3; onlyUnstartedEffectsDispatched=True; remainderStartedAfterBothRootAudits=True; sourceIntactBeforeRecovery=True; bothRootsFenced=True; reopenedRoots=True; targetBytesVerified=True; acknowledgementAcrossRoles=True.'
+    $expected = @{
+        NativeSignedLocalDirectoryTransferStartsOriginalCopyAfterHostRoleChange = $prefix + 'acceptedBeforeRestart=0' + $resumed
+        NativeSignedLocalDirectoryTransferResumesAfterAcceptedCopyAcrossHostRoles = $prefix + 'acceptedBeforeRestart=1' + $resumed
+        NativeSignedLocalDirectoryTransferRetainsFencesForUnreceiptedCopyAcrossHostRoles = $prefix + 'targetDirectoryExists=True; originalCopyUnreceipted=True; noLaterCopyStarted=True; sourceIntact=True; bothRootsFenced=True.'
+    }
+    if ($rows.Count -ne $expected.Count -or @($rows | Where-Object outcome -CNE 'Passed').Count) {
+        throw 'All signed directory copy recovery cases must pass.'
+    }
+    foreach ($row in $rows) {
+        $name = [string]$row.testName
+        $facts = @(([string]$row.Output.StdOut -split '\r?\n') | Where-Object { $_.StartsWith('SignedDirectoryCopyRecovery: ', [StringComparison]::Ordinal) })
+        if (!$expected.ContainsKey($name) -or $facts.Count -ne 1 -or $facts[0] -cne $expected[$name]) {
+            throw 'The copy recovery report lost its package, original copy order or fence evidence.'
+        }
+        $expected.Remove($name)
+    }
+}

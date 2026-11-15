@@ -7,7 +7,7 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 public sealed partial class MirrorPulseNamespaceTransferCoordinator
 {
     internal ValueTask<MirrorPulseDirectoryTransferCopy> CopyDirectoryAsync(Guid operationId,
-        MirrorPulseTransferWorkerServices workers, CancellationToken token) => actor.RunAsync(async stop =>
+        MirrorPulseTransferWorkerServices workers, CancellationToken token, Guid? targetRecovery = null) => actor.RunAsync(async stop =>
     {
         var copy = await catalog.ReadNamespaceDirectoryTransferCopyAsync(operationId, stop).ConfigureAwait(false);
         if (copy.Steps.All(step => step.AcceptedAt is not null)) return copy;
@@ -17,13 +17,14 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
         return await WithDirectoryTransferGuardsAsync(copy.Admission, async () =>
         {
             await RequireOriginalDirectoryRemoteSourceAsync(copy.Admission, workers, stop).ConfigureAwait(false);
-            return await new MirrorPulseDirectoryTransferCopyExecutor(catalog, inputs, workers.Uploads, mutations)
-                .CopyAsync(operationId, stop).ConfigureAwait(false);
-        }, stop).ConfigureAwait(false);
+            var executor = new MirrorPulseDirectoryTransferCopyExecutor(catalog, inputs, workers.Uploads, mutations)
+            { Checkpoint = workers.DirectoryCopyCheckpoint };
+            return await executor.CopyAsync(operationId, stop).ConfigureAwait(false);
+        }, stop, useCurrentProtection: targetRecovery is not null).ConfigureAwait(false);
     }, token);
 
     internal ValueTask<MirrorPulseDirectoryTransferTargetVerification> VerifyDirectoryTargetAsync(Guid operationId,
-        MirrorPulseTransferWorkerServices workers, CancellationToken token) => actor.RunAsync(async stop =>
+        MirrorPulseTransferWorkerServices workers, CancellationToken token, Guid? targetRecovery = null) => actor.RunAsync(async stop =>
     {
         var saved = await catalog.ReadNamespaceDirectoryTransferTargetAsync(operationId, stop).ConfigureAwait(false);
         if (saved is not null) return saved;
@@ -33,8 +34,8 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
             var verifier = new MirrorPulseDirectoryTransferTargetVerifier(
                 new MirrorPulseTransferTargetVerifier(catalog, workers.Stats, workers.Ranges, workers.Directories), workers.Stats);
             var verified = await verifier.ReadCurrentAsync(copy, null, stop).ConfigureAwait(false);
-            return await catalog.RecordNamespaceDirectoryTransferTargetAsync(verified, stop).ConfigureAwait(false);
-        }, stop).ConfigureAwait(false);
+            return await catalog.RecordNamespaceDirectoryTransferTargetAsync(verified, stop, targetRecovery).ConfigureAwait(false);
+        }, stop, useCurrentProtection: targetRecovery is not null).ConfigureAwait(false);
     }, token);
 
     internal ValueTask<bool> SettleObservedDirectoryTransferBirthAsync(Guid operationId, int ordinal, CancellationToken token) =>

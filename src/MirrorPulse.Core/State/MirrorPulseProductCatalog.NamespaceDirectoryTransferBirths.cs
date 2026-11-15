@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Data.Sqlite;
+using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.Core.State;
@@ -173,9 +174,24 @@ public sealed partial class MirrorPulseProductCatalog
         SqliteTransaction transaction, CancellationToken token)
     {
         // Before the replacement role is installed, current ACL snapshots can be
-        // incoherent. Admit rotation for the registered prefix of the original target.
-        // Its current protection, native inventory and Worker bytes are checked later.
-        var (plan, verification) = await ReadDirectoryTransferBirthEvidenceAsync(transferId, transaction, token).ConfigureAwait(false);
+        // incoherent. Admit rotation for a known remote copy prefix and any registered
+        // native target prefix. Fresh protection, native inventory and Worker bytes
+        // are checked before dispatch or publication.
+        var copy = await ReadDirectoryTransferCopyCoreAsync(transferId, transaction, token).ConfigureAwait(false);
+        if (copy.Steps.Any(step => step.StartedAt is not null && step.AcceptedAt is null))
+            throw new MirrorPulseMutationAmbiguousException("The original directory copy effect needs its correlated Worker receipt.");
+        var plan = copy.Admission;
+        var verification = await ReadDirectoryTransferTargetCoreAsync(copy, transaction, token).ConfigureAwait(false);
+        if (verification is null)
+        {
+            await using var query = _connection.CreateCommand();
+            query.Transaction = transaction;
+            query.CommandText = "SELECT 1 FROM namespace_directory_transfer_target_births WHERE transfer_id=$transfer LIMIT 1;";
+            query.Parameters.AddWithValue("$transfer", transferId.ToString("D"));
+            if (await query.ExecuteScalarAsync(token).ConfigureAwait(false) is not null)
+                throw new InvalidDataException("The target birth lost its original whole-tree verification.");
+            return;
+        }
         var members = new Dictionary<Guid, Guid> { [plan.SourceParent.Context.Member.MemberId] = plan.TargetParent.Context.Member.MemberId };
         Guid targetRoot = Guid.Empty;
         bool missing = false;
@@ -337,11 +353,20 @@ public sealed partial class MirrorPulseProductCatalog
         SqliteTransaction transaction, CancellationToken token)
     {
         if (target.RecoveryInitializationId is not { } initializationId) return;
+        var completed = await RequireDirectoryTransferTargetAuditAsync(initializationId, target.TransferId, target.Birth.RootId,
+            target.Birth.PreparedAt, transaction, token).ConfigureAwait(false);
+        if (completed.RoleSid != target.Birth.RoleSid)
+            throw new InvalidOperationException("A recovered target birth requires its audited target-root role.");
+    }
+
+    private async Task<MirrorPulseNamespaceInitializationCompletion> RequireDirectoryTransferTargetAuditAsync(Guid initializationId,
+        Guid transferId, RootId targetRoot, DateTimeOffset usedAt, SqliteTransaction transaction, CancellationToken token)
+    {
         var status = await ReadNamespaceInitializationStatusCoreAsync(initializationId, transaction, token).ConfigureAwait(false);
-        if (status.Intent.DirectoryTransferOperationId != target.TransferId ||
-            status.Completion is not { } completed || completed.ScopeRoot != target.Birth.RootId ||
-            completed.RoleSid != target.Birth.RoleSid || completed.CompletedAt > target.Birth.PreparedAt)
-            throw new InvalidOperationException("A recovered target birth requires its original completed target-root role audit.");
+        if (status.Intent.DirectoryTransferOperationId != transferId ||
+            status.Completion is not { } completed || completed.ScopeRoot != targetRoot || completed.CompletedAt > usedAt)
+            throw new InvalidOperationException("Directory transfer recovery requires its original completed target-root role audit.");
+        return completed;
     }
 
     private async Task ValidateDirectoryTransferBirthReferenceIndexAsync(MirrorPulseNamespaceBirthIntent birth,

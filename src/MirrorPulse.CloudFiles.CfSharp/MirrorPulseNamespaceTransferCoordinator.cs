@@ -12,7 +12,10 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 public sealed record MirrorPulseTransferWorkerServices(IMirrorPulseWorkerUploadTransport Uploads,
     IMirrorPulseWorkerStatTransport Stats, IMirrorPulseWorkerRangeTransport Ranges,
     IMirrorPulseWorkerDirectoryPageSource Directories, Func<InstanceId, int> ProtocolVersion,
-    IMirrorPulseWorkerMutationTransport? Mutations = null);
+    IMirrorPulseWorkerMutationTransport? Mutations = null)
+{
+    internal Func<MirrorPulseDirectoryTransferCopyCheckpoint, int, CancellationToken, ValueTask>? DirectoryCopyCheckpoint { get; init; }
+}
 
 /// <summary>Executes original file transfer phases through the Host namespace boundary.</summary>
 /// <remarks>The caller retains both root work leases and ordered instance admissions. Target publication

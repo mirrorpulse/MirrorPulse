@@ -31,7 +31,7 @@ public sealed partial class MirrorPulseProductCatalog
     }
 
     internal async Task<MirrorPulseDirectoryTransferTargetVerification> RecordNamespaceDirectoryTransferTargetAsync(
-        MirrorPulseDirectoryTransferTargetVerification original, CancellationToken token)
+        MirrorPulseDirectoryTransferTargetVerification original, CancellationToken token, Guid? targetRecovery = null)
     {
         ArgumentNullException.ThrowIfNull(original);
         if (original.Members is not { Count: >= 1 and <= 65_536 })
@@ -59,7 +59,11 @@ public sealed partial class MirrorPulseProductCatalog
             var plan = copy.Admission;
             await RequireNamespaceTransferRoutesAsync([plan.SourceRoute, plan.TargetRoute], transaction, token,
                 requireSingleRoot: true).ConfigureAwait(false);
-            await RequireCurrentDirectoryTransferTreeAsync(plan, transaction, token).ConfigureAwait(false);
+            var recovery = targetRecovery is { } initializationId
+                ? await RequireDirectoryTransferTargetAuditAsync(initializationId, verified.OperationId, plan.TargetRoute.RootId,
+                    verified.VerifiedAt, transaction, token).ConfigureAwait(false)
+                : null;
+            await RequireCurrentDirectoryTransferTreeAsync(plan, transaction, token, recoveredRole: recovery?.RoleSid).ConfigureAwait(false);
             validation.Dispose();
             await using var sql = _connection.CreateCommand();
             sql.Transaction = transaction;
