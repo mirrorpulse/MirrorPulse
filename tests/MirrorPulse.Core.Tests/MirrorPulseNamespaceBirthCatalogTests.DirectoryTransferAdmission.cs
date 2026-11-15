@@ -40,6 +40,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             interrupted = (await catalog.ReadNamespaceDirectoryTransferCopyAsync(plan.Command.CommandId, default)).Steps[0];
             Assert.AreEqual(afterHostStart, interrupted.StartedAt is not null);
             Assert.AreEqual(afterHostStart, interrupted.Durable);
+            Assert.IsTrue(interrupted.PreparationSelected);
             Assert.IsNull(interrupted.AcceptedAt);
             Assert.HasCount(1, worker.Preparations);
             Assert.AreEqual(0, worker.Creates);
@@ -50,11 +51,33 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         await using var reopened = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
         var retry = new MirrorPulseDirectoryTransferCopyExecutor(reopened, inputs, worker, worker,
             new TransferClock(plan.PreparedAt.AddSeconds(2)));
+        worker.PreparesDurable = false;
+        if (afterHostStart)
+        {
+            worker.Durable = false;
+            await Assert.ThrowsExactlyAsync<MirrorPulseMutationAmbiguousException>(() => retry.CopyAsync(plan.Command.CommandId, default));
+        }
+        else
+        {
+            // A root that still supports legacy durable Start cannot replace a selected preparation.
+            await Assert.ThrowsExactlyAsync<NotSupportedException>(() => retry.CopyAsync(plan.Command.CommandId, default));
+            await Assert.ThrowsExactlyAsync<MirrorPulseMutationAmbiguousException>(() => reopened.StartNamespaceDirectoryTransferCopyAsync(
+                plan, 0, plan.PreparedAt.AddSeconds(2), default, durable: true));
+            worker.Durable = false;
+            await Assert.ThrowsExactlyAsync<NotSupportedException>(() => retry.CopyAsync(plan.Command.CommandId, default));
+        }
+        Assert.HasCount(1, worker.Preparations);
+        Assert.AreEqual(0, worker.Creates);
+        Assert.AreEqual(0, worker.Uploads);
+        Assert.AreEqual(interrupted, (await reopened.ReadNamespaceDirectoryTransferCopyAsync(plan.Command.CommandId, default)).Steps[0]);
+        Assert.HasCount(2, await reopened.ReadNamespaceDispatchFencedRootsAsync());
+        worker.Durable = true;
+        worker.PreparesDurable = true;
         var resumed = await retry.CopyAsync(plan.Command.CommandId, default);
         Assert.HasCount(afterHostStart ? 2 : 3, worker.Preparations);
         Assert.AreEqual(1, worker.Creates);
         Assert.AreEqual(1, worker.Uploads);
-        Assert.IsTrue(resumed.Steps.All(step => step.Durable && step.AcceptedAt is not null));
+        Assert.IsTrue(resumed.Steps.All(step => step.PreparationSelected && step.Durable && step.AcceptedAt is not null));
         if (afterHostStart) Assert.AreEqual(interrupted.StartedAt, resumed.Steps[0].StartedAt);
         Assert.HasCount(2, await reopened.ReadNamespaceDispatchFencedRootsAsync());
     }
@@ -99,13 +122,18 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             Assert.IsNull(await catalog.ReadMutationAsync(plan.Members[1].DeleteOperationId));
         }
 
+        if (durable)
+            await ExecuteSqlAsync(fixture.Paths, """
+                DROP TABLE namespace_directory_transfer_copy_preparations;
+                PRAGMA user_version=117;
+                """);
         await using var reopened = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
         var retry = new MirrorPulseDirectoryTransferCopyExecutor(reopened, inputs, worker, worker,
             new TransferClock(plan.PreparedAt.AddSeconds(2)));
         if (durable)
         {
             var started = await reopened.ReadNamespaceDirectoryTransferCopyAsync(plan.Command.CommandId, default);
-            Assert.IsTrue(started.Steps.All(step => step.Durable));
+            Assert.IsTrue(started.Steps.All(step => step.Durable && !step.PreparationSelected));
             Assert.IsNull(started.Steps[1].AcceptedAt);
             worker.Durable = false;
             await Assert.ThrowsExactlyAsync<MirrorPulseMutationAmbiguousException>(() => retry.CopyAsync(plan.Command.CommandId, default));

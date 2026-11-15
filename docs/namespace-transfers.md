@@ -71,6 +71,12 @@ pending. Initial selection cannot change a previously started ordinary copy.
 Both dispatch and replay require current Host root admission and the original
 protected source and parent objects.
 
+For a directory transfer the choice is retained per original member before
+requesting preparation, including the first directory. Before its first
+dispatch, a reconnect that supports only ordinary copy or legacy durable start
+leaves that selected member pending. The next member can start only after the
+preceding member's correlated copy acceptance.
+
 Copy acceptance keeps both fences. It proves neither whole-target readback,
 native destination birth, public SDK publication, content confirmation, source
 retirement nor journal acknowledgement. There is deliberately no generic

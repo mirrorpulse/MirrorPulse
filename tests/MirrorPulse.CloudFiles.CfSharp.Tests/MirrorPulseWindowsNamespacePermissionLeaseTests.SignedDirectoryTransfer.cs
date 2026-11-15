@@ -333,6 +333,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 if (preparedCopy)
                 {
                     Assert.AreEqual(firstCopyStarted, originalCopy.Steps[0].Durable);
+                    Assert.IsTrue(originalCopy.Steps[0].PreparationSelected);
                     if (firstCopyPublished)
                     {
                         originalCopiedRevision = await worker.StatAsync(new(targetRoot.InstanceId, "copied", targetRoot.UniquenessKey), token);
@@ -572,7 +573,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         {
                             CollectionAssert.AreEqual(Enumerable.Range(startedPrefix, plan.Members.Count - startedPrefix).ToArray(),
                                 preparedCopyOrdinals.ToArray());
-                            Assert.IsTrue(copy.Steps.All(step => step.Durable && step.AcceptedAt >= step.StartedAt && step.AcceptedRevision is not null));
+                            Assert.IsTrue(copy.Steps.All(step => step.PreparationSelected && step.Durable &&
+                                step.AcceptedAt >= step.StartedAt && step.AcceptedRevision is not null));
                             Assert.IsTrue(copy.Steps.All(step => step.AcceptedAt >= latestAudit));
                             if (firstCopyStarted) Assert.AreEqual(originalCopy.Steps[0].StartedAt, copy.Steps[0].StartedAt);
                             if (originalCopiedRevision is not null) Assert.AreEqual(originalCopiedRevision, copy.Steps[0].AcceptedRevision);

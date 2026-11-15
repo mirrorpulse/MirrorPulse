@@ -42,7 +42,7 @@ public sealed record MirrorPulseInstanceRuntimeState(
 /// </summary>
 public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
 {
-    public const long CurrentSchemaVersion = 117;
+    public const long CurrentSchemaVersion = 118;
     private readonly FileStream _owner;
     private readonly SqliteConnection _connection;
     internal string WorkerStateRootPath { get; }

@@ -44,6 +44,8 @@ internal sealed class MirrorPulseDirectoryTransferCopyExecutor(MirrorPulseProduc
                 throw new NotSupportedException("The directory copy requires the negotiated original target parent.");
             bool prepare = step.StartedAt is null && connectedDurable &&
                 mutations.SupportsDurableDirectoryCopyPreparation(route.InstanceId, route.RootKey);
+            if (step.StartedAt is null && step.PreparationSelected && !prepare)
+                throw new NotSupportedException("The original directory copy requires its selected preparation capability.");
             var mode = step.StartedAt is not null || prepare ? MirrorPulseDurableDirectoryCopyMode.Resume :
                 connectedDurable ? MirrorPulseDurableDirectoryCopyMode.Start : MirrorPulseDurableDirectoryCopyMode.Ordinary;
             string path = member.TargetRelativePath[(route.DirectoryName.Length + 1)..];
@@ -79,12 +81,14 @@ internal sealed class MirrorPulseDirectoryTransferCopyExecutor(MirrorPulseProduc
                 if (step.StartedAt is not null) return;
                 if (prepare)
                 {
+                    if (!step.PreparationSelected)
+                        await catalog.SelectNamespaceDirectoryTransferCopyPreparationAsync(plan, ordinal, _time.GetUtcNow(), token).ConfigureAwait(false);
                     await mutations.PrepareDirectoryCopyAsync(new(route.InstanceId, route.RootKey, path,
                         step.EffectId, parentCopy, member.Content?.Length, member.Content?.Sha256), token).ConfigureAwait(false);
                     if (Checkpoint is not null)
                         await Checkpoint(MirrorPulseDirectoryTransferCopyCheckpoint.AfterPreparation, ordinal, token).ConfigureAwait(false);
                 }
-                await catalog.StartNamespaceDirectoryTransferCopyAsync(plan, ordinal, _time.GetUtcNow(), token, durable: connectedDurable)
+                await catalog.StartNamespaceDirectoryTransferCopyAsync(plan, ordinal, _time.GetUtcNow(), token, durable: connectedDurable, prepared: prepare)
                     .ConfigureAwait(false);
                 if (Checkpoint is not null)
                     await Checkpoint(MirrorPulseDirectoryTransferCopyCheckpoint.BeforeDispatch, ordinal, token).ConfigureAwait(false);
