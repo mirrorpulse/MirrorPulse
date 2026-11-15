@@ -200,18 +200,18 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator(CloudFileSys
     {
         var copy = await ReadAsync(operationId, token).ConfigureAwait(false);
         if (copy.TargetPublication is not null) return copy;
-        return await actor.RunAsync(stop => PublishTargetUnderActorAsync(operationId, settleRegistered: false, stop), token).ConfigureAwait(false);
+        return await actor.RunAsync(stop => PublishTargetUnderActorAsync(operationId, settleObserved: false, stop), token).ConfigureAwait(false);
     }
 
-    internal async ValueTask SettleRegisteredFileTransferTargetAsync(Guid operationId, CancellationToken token) =>
-        _ = await actor.RunAsync(stop => PublishTargetUnderActorAsync(operationId, settleRegistered: true, stop), token).ConfigureAwait(false);
+    internal async ValueTask SettleObservedFileTransferTargetAsync(Guid operationId, CancellationToken token) =>
+        _ = await actor.RunAsync(stop => PublishTargetUnderActorAsync(operationId, settleObserved: true, stop), token).ConfigureAwait(false);
 
-    private async ValueTask<MirrorPulseNamespaceTransferCopy> PublishTargetUnderActorAsync(Guid operationId, bool settleRegistered, CancellationToken token)
+    private async ValueTask<MirrorPulseNamespaceTransferCopy> PublishTargetUnderActorAsync(Guid operationId, bool settleObserved, CancellationToken token)
     {
         var copy = await catalog.ValidateNamespaceTransferTargetPublicationAsync(operationId, token).ConfigureAwait(false);
         if (copy.TargetPublication is not null) return copy;
         // Startup settlement is limited to local evidence. It does not need a live Worker or dispatch a remote effect.
-        if (!settleRegistered && (protocolVersion(copy.Plan.SourceRoute.InstanceId) != copy.Plan.SourceRoute.ProtocolVersion ||
+        if (!settleObserved && (protocolVersion(copy.Plan.SourceRoute.InstanceId) != copy.Plan.SourceRoute.ProtocolVersion ||
             protocolVersion(copy.Plan.TargetRoute.InstanceId) != copy.Plan.TargetRoute.ProtocolVersion))
             throw new InvalidOperationException("The negotiated transfer protocol changed before target publication.");
         var target = copy.TargetBirth!;
@@ -226,10 +226,10 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator(CloudFileSys
                 if (projection.RemoteRevision != copy.Plan.SourceRemoteRevision)
                     throw new InvalidDataException("The original transfer source projection changed before target publication.");
                 var publisher = new MirrorPulseNamespaceTransferTargetPublisher(fileSystem, state, catalog, router, actor, TargetPublicationCheckpoint);
-                return settleRegistered
-                    ? await publisher.SettleRegisteredFileUnderActorAsync(copy, parent, token).ConfigureAwait(false)
+                return settleObserved
+                    ? await publisher.SettleObservedFileUnderActorAsync(copy, parent, token).ConfigureAwait(false)
                     : await publisher.PublishUnderActorAsync(copy, token).ConfigureAwait(false);
-            }, token, allowOwnedTargetBirth: true, retainedPublicationRole: settleRegistered ? target.Birth.RoleSid : null).ConfigureAwait(false);
+            }, token, allowOwnedTargetBirth: true, retainedPublicationRole: settleObserved ? target.Birth.RoleSid : null).ConfigureAwait(false);
     }
 
     private async Task<MirrorPulseNamespaceTransferCopy> ExecuteGuardedAsync(MirrorPulseNamespaceTransferPlan plan,

@@ -13,6 +13,8 @@ on:
       - eng/verify-test-results.ps1
       - eng/test-suites.json
       - src/MirrorPulse.CloudFiles.CfSharp/MirrorPulseNamespaceTransfer*.cs
+      - src/MirrorPulse.CloudFiles.CfSharp/MirrorPulseNamespaceBirthProtectionVerifier.cs
+      - src/MirrorPulse.CloudFiles.CfSharp/MirrorPulseNamespaceMemberRegistrar.cs
       - src/MirrorPulse.CloudFiles.CfSharp/MirrorPulseCloudHostSession.cs
       - src/MirrorPulse.Core/State/MirrorPulseProductCatalog.NamespaceTransfer*.cs
       - src/MirrorPulse.Core/State/MirrorPulseProductCatalog.NamespaceFileTransferRecovery.cs

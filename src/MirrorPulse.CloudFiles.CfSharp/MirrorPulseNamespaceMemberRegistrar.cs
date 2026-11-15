@@ -21,14 +21,15 @@ public static class MirrorPulseNamespaceMemberRegistrar
         MirrorPulseRootRouter router, MirrorPulseNamespaceActor namespaceActor, CancellationToken cancellationToken = default) =>
         RegisterCoreAsync(catalog, member, item, parent, router, namespaceActor, null, cancellationToken);
 
-    internal static Task<MirrorPulseNamespaceMemberRegistration> RegisterObservedDirectoryTransferAsync(MirrorPulseProductCatalog catalog,
-        MirrorPulseDirectoryTransferTargetBirth target, MirrorPulseNamespaceMemberRegistration member, CloudItem item,
+    internal static Task<MirrorPulseNamespaceMemberRegistration> RegisterObservedTransferAsync(MirrorPulseProductCatalog catalog,
+        MirrorPulseNamespaceBirthIntent birth, MirrorPulseNamespaceBirthPlan plan, MirrorPulseNamespaceMemberRegistration member, CloudItem item,
         CloudDirectory parent, MirrorPulseRootRouter router, MirrorPulseNamespaceActor actor, CancellationToken token) =>
-        RegisterCoreAsync(catalog, member, item, parent, router, actor, target, token);
+        RegisterCoreAsync(catalog, member, item, parent, router, actor, (birth, plan), token);
 
     private static async Task<MirrorPulseNamespaceMemberRegistration> RegisterCoreAsync(MirrorPulseProductCatalog catalog,
         MirrorPulseNamespaceMemberRegistration member, CloudItem item, CloudDirectory? parent,
-        MirrorPulseRootRouter router, MirrorPulseNamespaceActor namespaceActor, MirrorPulseDirectoryTransferTargetBirth? transfer,
+        MirrorPulseRootRouter router, MirrorPulseNamespaceActor namespaceActor,
+        (MirrorPulseNamespaceBirthIntent Birth, MirrorPulseNamespaceBirthPlan Plan)? transfer,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(catalog);
@@ -44,12 +45,13 @@ public static class MirrorPulseNamespaceMemberRegistrar
         var proof = await MirrorPulseNamespaceProtectionProofReader.ReadMemberAsync(catalog, member, cancellationToken).ConfigureAwait(false);
         if (replay is null && proof.ProtectionId != member.ProtectionId)
             throw new InvalidOperationException("New native registration requires the latest retained protection epoch.");
-        if (transfer is not null && (transfer.Birth.Origin != MirrorPulseNamespaceBirthOrigin.TransferTarget ||
-            transfer.Birth.TransferEntry?.Version != 2 || transfer.Birth.OperationId != member.MemberId ||
+        if (transfer is { } target && (target.Birth.Origin != MirrorPulseNamespaceBirthOrigin.TransferTarget ||
+            target.Birth.TransferEntry?.Version is not (1 or 2) || target.Birth.OperationId != member.MemberId ||
             member.Origin != MirrorPulseNamespaceMemberOrigin.ProtectedBirth || member.OriginId != member.MemberId ||
-            member.ParentMemberId is null || member.RootId != transfer.Birth.RootId || member.RelativePath != transfer.Birth.RelativePath ||
-            proof.Observation is not { IsInSync: true } observation || observation.ItemId != transfer.Plan.ItemId))
-            throw new InvalidDataException("Startup registration requires the exact observed directory transfer birth.");
+            member.ParentMemberId is null || member.RootId != target.Birth.RootId || member.RelativePath != target.Birth.RelativePath ||
+            proof.Observation is not { IsInSync: true } observation || observation.ItemId != target.Plan.ItemId ||
+            observation.RemoteId != target.Plan.RemoteId || observation.RemoteRevision != target.Plan.RemoteRevision))
+            throw new InvalidDataException("Startup registration requires the exact observed transfer birth.");
         RequireCaller(proof, requireRole: transfer is null);
         if (member.ParentMemberId is { } parentId)
         {

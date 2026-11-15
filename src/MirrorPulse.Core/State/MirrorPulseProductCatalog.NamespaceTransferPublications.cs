@@ -10,7 +10,7 @@ public sealed record MirrorPulseNamespaceTransferTargetPublication(int Version, 
 
 public sealed partial class MirrorPulseProductCatalog
 {
-    internal async Task<IReadOnlyList<Guid>> ReadRegisteredUnpublishedFileTransfersAsync(CancellationToken token)
+    internal async Task<IReadOnlyList<Guid>> ReadObservedUnpublishedFileTransfersAsync(CancellationToken token)
     {
         await _gate.WaitAsync(token).ConfigureAwait(false);
         try
@@ -23,7 +23,7 @@ public sealed partial class MirrorPulseProductCatalog
                 SELECT DISTINCT f.operation_id FROM namespace_transfer_roots f
                 JOIN namespace_transfers t ON t.operation_id=f.operation_id
                 JOIN namespace_transfer_target_births b ON b.transfer_id=t.operation_id
-                JOIN namespace_members m ON m.member_id=b.birth_id
+                JOIN namespace_birth_observations o ON o.operation_id=b.birth_id
                 WHERE json_extract(CAST(t.payload AS TEXT),'$.TargetPublication') IS NULL
                 ORDER BY f.operation_id LIMIT 2049;
                 """;

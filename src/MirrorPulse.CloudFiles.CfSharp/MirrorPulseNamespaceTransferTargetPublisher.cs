@@ -10,7 +10,7 @@ internal enum MirrorPulseTransferPublicationCheckpoint { AfterStart, AfterCreati
 
 /// <summary>Publishes the original verified remote target as a separate protected online placeholder.</summary>
 /// <remarks>The caller holds the original instance admissions, shared actor and source guards.
-/// Startup can settle a registered target from its original protection before role rotation.
+/// Startup can settle an observed target from its original protection before role rotation.
 /// Source bytes and both durable fences remain retained.</remarks>
 [SupportedOSPlatform("windows10.0.26100")]
 internal sealed class MirrorPulseNamespaceTransferTargetPublisher(CloudFileSystem fileSystem, MirrorPulseCfSharpStateSession state,
@@ -29,12 +29,14 @@ internal sealed class MirrorPulseNamespaceTransferTargetPublisher(CloudFileSyste
         return await RecordFilePublicationAsync(copy, member, protection.ProtectionId).ConfigureAwait(false);
     }
 
-    internal async Task<MirrorPulseNamespaceTransferCopy> SettleRegisteredFileUnderActorAsync(MirrorPulseNamespaceTransferCopy copy,
+    internal async Task<MirrorPulseNamespaceTransferCopy> SettleObservedFileUnderActorAsync(MirrorPulseNamespaceTransferCopy copy,
         MirrorPulseNamespaceMemberProtectionSnapshot parentSnapshot, CancellationToken token)
     {
         actor.AssertAccess();
         var target = copy.TargetBirth!;
         var (birth, plan) = (target.Birth, target.Plan);
+        if (await catalog.ReadNamespaceMemberAsync(birth.OperationId, token).ConfigureAwait(false) is null)
+            await RegisterObservedTransferMemberAsync(birth, plan, parentSnapshot, token).ConfigureAwait(false);
         var current = await catalog.ReadNamespaceMemberProtectionSnapshotAsync(birth.OperationId, token).ConfigureAwait(false)
             ?? throw new InvalidDataException("Startup publication requires the original registered target.");
         var member = current.Context.Member;
@@ -177,15 +179,22 @@ internal sealed class MirrorPulseNamespaceTransferTargetPublisher(CloudFileSyste
     internal async Task<bool> SettleObservedDirectoryTransferMemberAsync(MirrorPulseDirectoryTransferTargetBirth target, CancellationToken token)
     {
         actor.AssertAccess();
-        var (birth, plan) = (target.Birth, target.Plan);
+        var birth = target.Birth;
         if (await catalog.ReadNamespaceMemberAsync(birth.OperationId, token).ConfigureAwait(false) is not null)
             return false;
-        var observed = await catalog.ReadNamespaceBirthObservationAsync(birth.OperationId, token).ConfigureAwait(false)
-            ?? throw new InvalidDataException("The pending target lost its original native observation.");
         var parentMember = await catalog.ReadNamespaceMemberByBindingAsync(birth.ParentLocalObject, token).ConfigureAwait(false)
             ?? throw new InvalidDataException("The pending target lost its registered direct parent.");
         var parentSnapshot = await catalog.ReadNamespaceMemberProtectionSnapshotAsync(parentMember.MemberId, token).ConfigureAwait(false)
             ?? throw new InvalidDataException("The pending target lost its verified parent.");
+        await RegisterObservedTransferMemberAsync(birth, target.Plan, parentSnapshot, token).ConfigureAwait(false);
+        return true;
+    }
+
+    private async Task RegisterObservedTransferMemberAsync(MirrorPulseNamespaceBirthIntent birth, MirrorPulseNamespaceBirthPlan plan,
+        MirrorPulseNamespaceMemberProtectionSnapshot parentSnapshot, CancellationToken token)
+    {
+        var observed = await catalog.ReadNamespaceBirthObservationAsync(birth.OperationId, token).ConfigureAwait(false)
+            ?? throw new InvalidDataException("The pending target lost its original native observation.");
         var parent = fileSystem.GetDirectory(parentSnapshot.Context.Location.RelativePath);
         CloudItem item = birth.IsDirectory ? fileSystem.GetDirectory(birth.RelativePath) : fileSystem.GetFile(birth.RelativePath);
         await using var parentLease = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(parent, router, token).ConfigureAwait(false);
@@ -202,18 +211,17 @@ internal sealed class MirrorPulseNamespaceTransferTargetPublisher(CloudFileSyste
             !await HasProjectionAsync(birth, plan, item, token).ConfigureAwait(false))
             throw new InvalidDataException("Startup registration requires the original observed placeholder and official projection.");
         var latest = await catalog.ReadLatestNamespaceBirthProtectionAsync(birth.OperationId, token).ConfigureAwait(false);
-        var protection = await MirrorPulseNamespaceBirthProtectionVerifier.SettleObservedDirectoryTransferAsync(
-            catalog, latest?.ProtectionId ?? Guid.NewGuid(), target, item, parent, router, token).ConfigureAwait(false);
+        var protection = await MirrorPulseNamespaceBirthProtectionVerifier.SettleObservedTransferAsync(
+            catalog, latest?.ProtectionId ?? Guid.NewGuid(), birth, plan, item, parent, router, token).ConfigureAwait(false);
         var position = parentSnapshot.Context.Location.CurrentPositionOperationId;
         var member = new MirrorPulseNamespaceMemberRegistration(position is null ? 1 : 2, birth.OperationId,
-            parentMember.MemberId, MirrorPulseNamespaceMemberOrigin.ProtectedBirth, birth.OperationId, protection.ProtectionId,
+            parentSnapshot.Context.Member.MemberId, MirrorPulseNamespaceMemberOrigin.ProtectedBirth, birth.OperationId, protection.ProtectionId,
             birth.RootId, birth.RelativePath, observed.LocalObject, birth.IsDirectory, observed.OwnerSid, DateTimeOffset.UtcNow)
         { FirstParentPositionOperationId = position };
         MirrorPulseNamespaceBirthProtectionVerifier.RequireUnchangedParent(before,
             await parentLease.InspectAsync(token).ConfigureAwait(false));
-        _ = await MirrorPulseNamespaceMemberRegistrar.RegisterObservedDirectoryTransferAsync(catalog, target, member, item, parent,
+        _ = await MirrorPulseNamespaceMemberRegistrar.RegisterObservedTransferAsync(catalog, birth, plan, member, item, parent,
             router, actor, token).ConfigureAwait(false);
-        return true;
     }
 
     private async Task<bool> HasProjectionAsync(MirrorPulseNamespaceBirthIntent birth, MirrorPulseNamespaceBirthPlan plan,

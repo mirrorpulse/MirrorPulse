@@ -74,7 +74,14 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     [DataRow(true)]
     public Task NativeHostTransferPublishesOnlyUnchangedRegisteredTargetAfterRoleHandoff(bool targetEdited) =>
         RunNativeHostTransferAsync(deleteSource: true, retireLocal: true, completeOriginals: true, selectedSameInstance: false,
-            editTargetBeforePublicationHandoff: targetEdited);
+            targetPublicationHandoff: MirrorPulseTransferPublicationCheckpoint.AfterRegistration, editTargetBeforePublicationHandoff: targetEdited);
+
+    [TestMethod]
+    [DoNotParallelize]
+    [TestCategory("NativeCloudFiles")]
+    public Task NativeHostTransferPublishesObservedTargetAfterRoleHandoff() =>
+        RunNativeHostTransferAsync(deleteSource: true, retireLocal: true, completeOriginals: true, selectedSameInstance: false,
+            targetPublicationHandoff: MirrorPulseTransferPublicationCheckpoint.AfterObservation);
 
     [TestMethod]
     [DoNotParallelize]
@@ -125,7 +132,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     private async Task RunNativeHostTransferAsync(bool deleteSource, bool retireLocal = false, string? retirementFault = null,
         bool completeOriginals = false, bool? selectedSameInstance = null, bool? restartBeforeVerification = null,
         bool recreateAcceptedSource = false, bool? acceptDeleteBeforePublishedHandoff = null, bool retireBeforePublishedHandoff = false,
-        bool loseAcknowledgementReturn = false, bool? editTargetBeforePublicationHandoff = null)
+        bool loseAcknowledgementReturn = false, MirrorPulseTransferPublicationCheckpoint? targetPublicationHandoff = null,
+        bool editTargetBeforePublicationHandoff = false)
     {
         if (!OperatingSystem.IsWindows() || Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
             Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
@@ -590,21 +598,21 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     Assert.AreEqual(MirrorPulseNamespaceBirthOrigin.TransferTarget, verified.TargetBirth.Birth.Origin);
                     Assert.IsNull(await catalog.ReadNamespaceBirthStartAsync(verified.TargetBirth.Birth.OperationId, deadline.Token));
                     Assert.AreEqual(verified, await runtime.PrepareNamespaceTransferTargetBirthAsync(operation, deadline.Token));
-                    if (editTargetBeforePublicationHandoff is { } targetEdited)
+                    if (targetPublicationHandoff is { } publicationCheckpoint)
                     {
-                        publicationCut = MirrorPulseTransferPublicationCheckpoint.AfterRegistration;
+                        publicationCut = publicationCheckpoint;
                         await Assert.ThrowsExactlyAsync<IOException>(async () => await runtime.PublishNamespaceTransferTargetAsync(operation, deadline.Token));
                         Assert.AreEqual(1, publicationFaults);
                         Guid birthId = verified.TargetBirth.Birth.OperationId;
                         var observation = await catalog.ReadNamespaceBirthObservationAsync(birthId, deadline.Token);
                         var registered = await catalog.ReadNamespaceMemberAsync(birthId, deadline.Token);
                         Assert.IsNotNull(observation);
-                        Assert.IsNotNull(registered);
+                        Assert.AreEqual(publicationCheckpoint == MirrorPulseTransferPublicationCheckpoint.AfterRegistration, registered is not null);
                         Assert.IsNull((await runtime.ReadNamespaceTransferAsync(operation, deadline.Token)).TargetPublication);
                         Assert.HasCount(2, await catalog.ReadNamespaceDispatchFencedRootsAsync(deadline.Token));
                         string publicationTargetPath = Path.Combine(paths.SyncRootPath, "Archive", "moved.bin");
                         byte[] editedTarget = [9, 8, 7, 6];
-                        if (targetEdited) await File.WriteAllBytesAsync(publicationTargetPath, editedTarget, deadline.Token);
+                        if (editTargetBeforePublicationHandoff) await File.WriteAllBytesAsync(publicationTargetPath, editedTarget, deadline.Token);
                         await runtime.DisposeAsync();
                         await catalog.DisposeAsync();
 
@@ -622,11 +630,12 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         var retainedAfterHandoff = await nextPublisher.ReadNamespaceTransferAsync(operation, deadline.Token);
                         Assert.AreEqual(verified.TargetBirth, retainedAfterHandoff.TargetBirth);
                         Assert.AreEqual(observation, await reopenedCatalog.ReadNamespaceBirthObservationAsync(birthId, deadline.Token));
-                        Assert.AreEqual(registered, await reopenedCatalog.ReadNamespaceMemberAsync(birthId, deadline.Token));
+                        var registeredAfterHandoff = await reopenedCatalog.ReadNamespaceMemberAsync(birthId, deadline.Token);
+                        if (registered is not null) Assert.AreEqual(registered, registeredAfterHandoff);
                         Assert.AreEqual(1, worker.Uploads);
                         Assert.AreEqual(0, worker.Deletes);
                         Assert.HasCount(2, await reopenedCatalog.ReadNamespaceDispatchFencedRootsAsync(deadline.Token));
-                        if (targetEdited)
+                        if (editTargetBeforePublicationHandoff)
                         {
                             Assert.IsNull(retainedAfterHandoff.TargetPublication);
                             await Assert.ThrowsExactlyAsync<InvalidOperationException>(async () =>
@@ -639,7 +648,9 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         var published = await nextPublisher.PublishNamespaceTransferTargetAsync(operation, deadline.Token);
                         Assert.AreEqual(retainedAfterHandoff, published);
                         Assert.IsNotNull(published.TargetPublication);
-                        Assert.AreEqual(registered.MemberId, published.TargetPublication.MemberId);
+                        Assert.IsNotNull(registeredAfterHandoff);
+                        Assert.AreEqual(birthId, registeredAfterHandoff.MemberId);
+                        Assert.AreEqual(registeredAfterHandoff.MemberId, published.TargetPublication.MemberId);
                         Assert.AreEqual(observation.LocalObject, published.TargetPublication.LocalObject);
                         await nextPublisher.RetireNamespaceTransferSourceAsync(operation, deadline.Token);
                         var completed = await nextPublisher.CompleteNamespaceTransferAsync(operation, deadline.Token);

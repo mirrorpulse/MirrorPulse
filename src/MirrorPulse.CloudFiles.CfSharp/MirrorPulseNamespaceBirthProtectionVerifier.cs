@@ -19,14 +19,15 @@ public static partial class MirrorPulseNamespaceBirthProtectionVerifier
         MirrorPulseRootRouter router, CancellationToken cancellationToken = default) =>
         RecordCoreAsync(catalog, protectionId, birthOperationId, item, parent, router, null, cancellationToken);
 
-    internal static Task<MirrorPulseNamespaceBirthProtection> SettleObservedDirectoryTransferAsync(MirrorPulseProductCatalog catalog,
-        Guid protectionId, MirrorPulseDirectoryTransferTargetBirth target, CloudItem item, CloudDirectory parent,
+    internal static Task<MirrorPulseNamespaceBirthProtection> SettleObservedTransferAsync(MirrorPulseProductCatalog catalog,
+        Guid protectionId, MirrorPulseNamespaceBirthIntent birth, MirrorPulseNamespaceBirthPlan plan, CloudItem item, CloudDirectory parent,
         MirrorPulseRootRouter router, CancellationToken token) =>
-        RecordCoreAsync(catalog, protectionId, target.Birth.OperationId, item, parent, router, target, token);
+        RecordCoreAsync(catalog, protectionId, birth.OperationId, item, parent, router, (birth, plan), token);
 
     private static async Task<MirrorPulseNamespaceBirthProtection> RecordCoreAsync(MirrorPulseProductCatalog catalog,
         Guid protectionId, Guid birthOperationId, CloudItem item, CloudDirectory parent,
-        MirrorPulseRootRouter router, MirrorPulseDirectoryTransferTargetBirth? transfer, CancellationToken cancellationToken)
+        MirrorPulseRootRouter router, (MirrorPulseNamespaceBirthIntent Birth, MirrorPulseNamespaceBirthPlan Plan)? transfer,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(catalog);
         ArgumentNullException.ThrowIfNull(item);
@@ -39,9 +40,10 @@ public static partial class MirrorPulseNamespaceBirthProtectionVerifier
             ?? throw new FileNotFoundException("The original native birth observation is missing.");
         var retainedParent = await ReadRetainedParentAsync(catalog, birth, cancellationToken).ConfigureAwait(false);
         using WindowsIdentity caller = WindowsIdentity.GetCurrent();
-        if (transfer is not null && (transfer.Birth != birth || birth.Origin != MirrorPulseNamespaceBirthOrigin.TransferTarget ||
-            birth.TransferEntry?.Version != 2 || !original.IsInSync || original.ItemId != transfer.Plan.ItemId))
-            throw new InvalidDataException("Startup protection settlement requires the exact observed directory transfer birth.");
+        if (transfer is { } target && (target.Birth != birth || birth.Origin != MirrorPulseNamespaceBirthOrigin.TransferTarget ||
+            birth.TransferEntry?.Version is not (1 or 2) || !original.IsInSync || original.ItemId != target.Plan.ItemId ||
+            original.RemoteId != target.Plan.RemoteId || original.RemoteRevision != target.Plan.RemoteRevision))
+            throw new InvalidDataException("Startup protection settlement requires the exact observed transfer birth.");
         if (caller.User?.Value != original.OwnerSid ||
             (transfer is null && !new WindowsPrincipal(caller).IsInRole(new SecurityIdentifier(retainedParent.RoleSid))))
             throw new UnauthorizedAccessException("The current namespace role and original owner are required for protection verification.");

@@ -1651,9 +1651,9 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             if (transfers is not null && _transferJournal is not null)
             {
                 var coordinator = TransferCoordinator();
-                foreach (Guid operation in await catalog!.ReadRegisteredUnpublishedFileTransfersAsync(token).ConfigureAwait(false))
+                foreach (Guid operation in await catalog!.ReadObservedUnpublishedFileTransfersAsync(token).ConfigureAwait(false))
                 {
-                    try { await coordinator.SettleRegisteredFileTransferTargetAsync(operation, token).ConfigureAwait(false); }
+                    try { await coordinator.SettleObservedFileTransferTargetAsync(operation, token).ConfigureAwait(false); }
                     catch (Exception error) when (error is InvalidDataException or IOException or InvalidOperationException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
                     {
                         // Both roots remain fenced by the original transfer.
