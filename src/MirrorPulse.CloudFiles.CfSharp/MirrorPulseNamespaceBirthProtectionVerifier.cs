@@ -14,9 +14,19 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 [SupportedOSPlatform("windows10.0.26100")]
 public static partial class MirrorPulseNamespaceBirthProtectionVerifier
 {
-    public static async Task<MirrorPulseNamespaceBirthProtection> RecordAsync(MirrorPulseProductCatalog catalog,
+    public static Task<MirrorPulseNamespaceBirthProtection> RecordAsync(MirrorPulseProductCatalog catalog,
         Guid protectionId, Guid birthOperationId, CloudItem item, CloudDirectory parent,
-        MirrorPulseRootRouter router, CancellationToken cancellationToken = default)
+        MirrorPulseRootRouter router, CancellationToken cancellationToken = default) =>
+        RecordCoreAsync(catalog, protectionId, birthOperationId, item, parent, router, null, cancellationToken);
+
+    internal static Task<MirrorPulseNamespaceBirthProtection> SettleObservedDirectoryTransferAsync(MirrorPulseProductCatalog catalog,
+        Guid protectionId, MirrorPulseDirectoryTransferTargetBirth target, CloudItem item, CloudDirectory parent,
+        MirrorPulseRootRouter router, CancellationToken token) =>
+        RecordCoreAsync(catalog, protectionId, target.Birth.OperationId, item, parent, router, target, token);
+
+    private static async Task<MirrorPulseNamespaceBirthProtection> RecordCoreAsync(MirrorPulseProductCatalog catalog,
+        Guid protectionId, Guid birthOperationId, CloudItem item, CloudDirectory parent,
+        MirrorPulseRootRouter router, MirrorPulseDirectoryTransferTargetBirth? transfer, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(catalog);
         ArgumentNullException.ThrowIfNull(item);
@@ -29,8 +39,11 @@ public static partial class MirrorPulseNamespaceBirthProtectionVerifier
             ?? throw new FileNotFoundException("The original native birth observation is missing.");
         var retainedParent = await ReadRetainedParentAsync(catalog, birth, cancellationToken).ConfigureAwait(false);
         using WindowsIdentity caller = WindowsIdentity.GetCurrent();
+        if (transfer is not null && (transfer.Birth != birth || birth.Origin != MirrorPulseNamespaceBirthOrigin.TransferTarget ||
+            birth.TransferEntry?.Version != 2 || !original.IsInSync || original.ItemId != transfer.Plan.ItemId))
+            throw new InvalidDataException("Startup protection settlement requires the exact observed directory transfer birth.");
         if (caller.User?.Value != original.OwnerSid ||
-            !new WindowsPrincipal(caller).IsInRole(new SecurityIdentifier(retainedParent.RoleSid)))
+            (transfer is null && !new WindowsPrincipal(caller).IsInRole(new SecurityIdentifier(retainedParent.RoleSid))))
             throw new UnauthorizedAccessException("The current namespace role and original owner are required for protection verification.");
         await using var parentLease = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(parent, router, cancellationToken).ConfigureAwait(false);
         var before = await InspectRetainedParentAsync(birth, parent, retainedParent, parentLease, cancellationToken).ConfigureAwait(false);
@@ -44,6 +57,7 @@ public static partial class MirrorPulseNamespaceBirthProtectionVerifier
             facts.RootId != birth.RootId || facts.RelativePath != birth.RelativePath || facts.IsDirectory != birth.IsDirectory ||
             (snapshot.Kind == CloudItemKind.Directory) != birth.IsDirectory || facts.LinkCount != 1 ||
             snapshot.ItemId != original.ItemId || snapshot.RemoteId != original.RemoteId ||
+            (transfer is not null && snapshot.SynchronizationState != CloudSynchronizationState.InSync) ||
             !MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(expectedDacl, facts.Dacl))
             throw new InvalidDataException("The actual born object does not retain its original identity and inherited protection.");
         RequireUnchangedParent(before, await parentLease.InspectAsync(cancellationToken).ConfigureAwait(false));

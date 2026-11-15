@@ -120,6 +120,34 @@ public sealed partial class MirrorPulseProductCatalog
         finally { _gate.Release(); }
     }
 
+    internal async Task<IReadOnlyList<(Guid TransferId, int Ordinal)>> ReadObservedUnregisteredDirectoryTransferBirthsAsync(CancellationToken token)
+    {
+        await _gate.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            using var transaction = BeginNamespaceRecoveryReadSnapshot();
+            await RequireDirectoryTransferFenceIndexAsync(transaction, token).ConfigureAwait(false);
+            await using var query = _connection.CreateCommand();
+            query.Transaction = transaction;
+            query.CommandText = """
+                SELECT b.transfer_id,b.ordinal FROM namespace_directory_transfer_target_births b
+                JOIN namespace_birth_observations o ON o.operation_id=b.birth_id
+                WHERE EXISTS(SELECT 1 FROM namespace_directory_transfer_fences f WHERE f.transfer_id=b.transfer_id)
+                AND NOT EXISTS(SELECT 1 FROM namespace_members m WHERE m.member_id=b.birth_id)
+                ORDER BY b.transfer_id,b.ordinal LIMIT 2049;
+                """;
+            var pending = new List<(Guid, int)>();
+            await using (var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false))
+                while (await reader.ReadAsync(token).ConfigureAwait(false))
+                    pending.Add((ParseNamespaceMemberId(reader.GetString(0)), reader.GetInt32(1)));
+            if (pending.Count > 2048) throw new InvalidDataException("Pending directory transfer births exceed the root bound.");
+            transaction.Commit();
+            return pending.AsReadOnly();
+        }
+        finally { _gate.Release(); }
+    }
+
     internal async Task<MirrorPulseDirectoryTransferTargetBirth?> ReadNamespaceDirectoryTransferBirthAsync(
         Guid transferId, int ordinal, CancellationToken token)
     {

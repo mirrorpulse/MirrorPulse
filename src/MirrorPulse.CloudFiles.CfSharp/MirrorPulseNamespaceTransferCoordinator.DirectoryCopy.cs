@@ -37,6 +37,19 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
         }, stop).ConfigureAwait(false);
     }, token);
 
+    internal ValueTask<bool> SettleObservedDirectoryTransferBirthAsync(Guid operationId, int ordinal, CancellationToken token) =>
+        actor.RunAsync(async stop => await execution.RunNormalUserOperationAsync(async () =>
+        {
+            var admission = await catalog.ReadNamespaceDirectoryTransferAsync(operationId, stop).ConfigureAwait(false)
+                ?? throw new InvalidDataException("The pending target birth lost its original transfer.");
+            var topology = await catalog.ReadAdapterTopologyAsync(stop).ConfigureAwait(false);
+            RequireRetainedDirectoryTransferRoutes(admission, topology);
+            var target = await catalog.ReadNamespaceDirectoryTransferBirthAsync(operationId, ordinal, stop).ConfigureAwait(false)
+                ?? throw new InvalidDataException("The pending target birth lost its original reservation.");
+            return await new MirrorPulseNamespaceTransferTargetPublisher(fileSystem, state, catalog, router, actor)
+                .SettleObservedDirectoryTransferMemberAsync(target, stop).ConfigureAwait(false);
+        }).ConfigureAwait(false), token);
+
     internal ValueTask<IReadOnlyList<MirrorPulseNamespaceProtectedTreeMember>> PublishDirectoryTargetAsync(Guid operationId,
         MirrorPulseTransferWorkerServices workers, CancellationToken token) =>
         actor.RunAsync(stop => PublishDirectoryTargetUnderActorAsync(operationId, workers, stop), token);

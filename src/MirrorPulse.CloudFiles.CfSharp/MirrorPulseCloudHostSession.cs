@@ -1544,13 +1544,21 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         [SupportedOSPlatform("windows10.0.26100")]
         private async ValueTask<bool> BootstrapNamespaceAsync(IMirrorPulseInstanceScheduler instances, CancellationToken token)
         {
-            // Observed native retirements and started ACKs can settle before the new
+            // Observed target births, native retirements and started ACKs can settle before the new
             // role rotates inherited protection. Startup still audits each root
             // before granting normal admission.
             if (transfers is not null && _transferJournal is not null)
             {
                 var coordinator = TransferCoordinator();
-                foreach (Guid operation in await catalog!.ReadStartedDirectoryTransferRetirementsAsync(token).ConfigureAwait(false))
+                foreach (var (operation, ordinal) in await catalog!.ReadObservedUnregisteredDirectoryTransferBirthsAsync(token).ConfigureAwait(false))
+                {
+                    try { _ = await coordinator.SettleObservedDirectoryTransferBirthAsync(operation, ordinal, token).ConfigureAwait(false); }
+                    catch (Exception error) when (error is InvalidDataException or IOException or InvalidOperationException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+                    {
+                        // Both roots remain fenced by the original transfer.
+                    }
+                }
+                foreach (Guid operation in await catalog.ReadStartedDirectoryTransferRetirementsAsync(token).ConfigureAwait(false))
                 {
                     try { _ = await coordinator.SettleStartedDirectoryRetirementAsync(operation, token).ConfigureAwait(false); }
                     catch (Exception error) when (error is IOException or InvalidOperationException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)

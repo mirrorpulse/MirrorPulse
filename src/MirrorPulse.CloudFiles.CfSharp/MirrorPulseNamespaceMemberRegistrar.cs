@@ -16,9 +16,20 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 [SupportedOSPlatform("windows10.0.26100")]
 public static class MirrorPulseNamespaceMemberRegistrar
 {
-    public static async Task<MirrorPulseNamespaceMemberRegistration> RegisterAsync(MirrorPulseProductCatalog catalog,
+    public static Task<MirrorPulseNamespaceMemberRegistration> RegisterAsync(MirrorPulseProductCatalog catalog,
         MirrorPulseNamespaceMemberRegistration member, CloudItem item, CloudDirectory? parent,
-        MirrorPulseRootRouter router, MirrorPulseNamespaceActor namespaceActor, CancellationToken cancellationToken = default)
+        MirrorPulseRootRouter router, MirrorPulseNamespaceActor namespaceActor, CancellationToken cancellationToken = default) =>
+        RegisterCoreAsync(catalog, member, item, parent, router, namespaceActor, null, cancellationToken);
+
+    internal static Task<MirrorPulseNamespaceMemberRegistration> RegisterObservedDirectoryTransferAsync(MirrorPulseProductCatalog catalog,
+        MirrorPulseDirectoryTransferTargetBirth target, MirrorPulseNamespaceMemberRegistration member, CloudItem item,
+        CloudDirectory parent, MirrorPulseRootRouter router, MirrorPulseNamespaceActor actor, CancellationToken token) =>
+        RegisterCoreAsync(catalog, member, item, parent, router, actor, target, token);
+
+    private static async Task<MirrorPulseNamespaceMemberRegistration> RegisterCoreAsync(MirrorPulseProductCatalog catalog,
+        MirrorPulseNamespaceMemberRegistration member, CloudItem item, CloudDirectory? parent,
+        MirrorPulseRootRouter router, MirrorPulseNamespaceActor namespaceActor, MirrorPulseDirectoryTransferTargetBirth? transfer,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(catalog);
         ArgumentNullException.ThrowIfNull(member);
@@ -33,7 +44,13 @@ public static class MirrorPulseNamespaceMemberRegistrar
         var proof = await MirrorPulseNamespaceProtectionProofReader.ReadMemberAsync(catalog, member, cancellationToken).ConfigureAwait(false);
         if (replay is null && proof.ProtectionId != member.ProtectionId)
             throw new InvalidOperationException("New native registration requires the latest retained protection epoch.");
-        RequireCaller(proof);
+        if (transfer is not null && (transfer.Birth.Origin != MirrorPulseNamespaceBirthOrigin.TransferTarget ||
+            transfer.Birth.TransferEntry?.Version != 2 || transfer.Birth.OperationId != member.MemberId ||
+            member.Origin != MirrorPulseNamespaceMemberOrigin.ProtectedBirth || member.OriginId != member.MemberId ||
+            member.ParentMemberId is null || member.RootId != transfer.Birth.RootId || member.RelativePath != transfer.Birth.RelativePath ||
+            proof.Observation is not { IsInSync: true } observation || observation.ItemId != transfer.Plan.ItemId))
+            throw new InvalidDataException("Startup registration requires the exact observed directory transfer birth.");
+        RequireCaller(proof, requireRole: transfer is null);
         if (member.ParentMemberId is { } parentId)
         {
             if (parent is null || item.Parent is null || !string.Equals(item.Parent.FullPath, parent.FullPath, StringComparison.OrdinalIgnoreCase))
@@ -41,7 +58,7 @@ public static class MirrorPulseNamespaceMemberRegistrar
             var parentMember = await catalog.ReadNamespaceMemberAsync(parentId, cancellationToken).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The direct parent has no retained member provenance.");
             var parentProof = await MirrorPulseNamespaceProtectionProofReader.ReadMemberAsync(catalog, parentMember, cancellationToken).ConfigureAwait(false);
-            RequireCaller(parentProof);
+            RequireCaller(parentProof, requireRole: transfer is null);
             if (!parentProof.IsDirectory || parentProof.RoleSid != proof.RoleSid)
                 throw new InvalidDataException("The direct parent requires the same current namespace role.");
             await using var parentLease = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(parent, router, cancellationToken).ConfigureAwait(false);
@@ -64,10 +81,10 @@ public static class MirrorPulseNamespaceMemberRegistrar
         return await catalog.RegisterNamespaceMemberAsync(member, cancellationToken).ConfigureAwait(false);
     }
 
-    private static void RequireCaller(MirrorPulseNamespaceProtectionProof proof)
+    private static void RequireCaller(MirrorPulseNamespaceProtectionProof proof, bool requireRole = true)
     {
         using WindowsIdentity caller = WindowsIdentity.GetCurrent();
-        if (caller.User?.Value != proof.OwnerSid || !new WindowsPrincipal(caller).IsInRole(new SecurityIdentifier(proof.RoleSid)))
+        if (caller.User?.Value != proof.OwnerSid || requireRole && !new WindowsPrincipal(caller).IsInRole(new SecurityIdentifier(proof.RoleSid)))
             throw new UnauthorizedAccessException("Native member registration requires the original owner and current namespace role.");
     }
 
