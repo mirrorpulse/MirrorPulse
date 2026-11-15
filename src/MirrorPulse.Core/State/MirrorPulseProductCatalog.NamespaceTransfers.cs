@@ -67,6 +67,19 @@ public sealed record MirrorPulseNamespaceTransferCopy(MirrorPulseNamespaceTransf
     public MirrorPulseNamespaceTransferTargetBirth? TargetBirth { get; init; }
 
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public MirrorPulseFileTransferTargetActivation? TargetActivation { get; init; }
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    internal MirrorPulseFileTransferRecovery? TargetRecovery => TargetActivation?.Recovery ?? TargetBirth?.Recovery;
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    internal MirrorPulseNamespaceMemberProtectionSnapshot ActiveTargetParent =>
+        TargetActivation?.TargetParent ?? TargetBirth?.RecoveredParent ?? Plan.TargetParent;
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    internal string? TargetRoleSid => TargetActivation?.Recovery.RoleSid ?? TargetBirth?.Birth.RoleSid;
+
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public MirrorPulseNamespaceTransferTargetPublication? TargetPublication { get; init; }
 
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]

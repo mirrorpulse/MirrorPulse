@@ -98,7 +98,7 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
         await execution.RunNamespaceOperationAsync(async () =>
         {
             var originalSourceParent = RetainedRetirementSourceParent(copy, retained);
-            var originalTargetParent = retained.Intent.TransferEntry!.RecoveredTargetParent ?? copy.TargetBirth!.RecoveredParent ?? copy.Plan.TargetParent;
+            var originalTargetParent = retained.Intent.TransferEntry!.RecoveredTargetParent ?? copy.ActiveTargetParent;
             MirrorPulseNamespaceMemberProtectionSnapshot? selectedTarget = null;
             if (targetAudit is { } audit)
                 (originalTargetParent, selectedTarget) = await catalog.ReadFileTransferRetirementTargetAsync(copy.Plan.OperationId,

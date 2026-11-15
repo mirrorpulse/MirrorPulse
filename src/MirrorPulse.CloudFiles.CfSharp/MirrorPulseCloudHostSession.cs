@@ -597,7 +597,20 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             await using var admission = namespaceWork is null ? null : await namespaceWork.EnterPendingOperationAsync(
                 new[] { copy.Plan.SourceRoute.RootId, copy.Plan.TargetRoute.RootId }, token).ConfigureAwait(false);
             return await WithAdmittedInstancesLibraryAsync(new[] { copy.Plan.SourceRoute.InstanceId, copy.Plan.TargetRoute.InstanceId }.Distinct(),
-                (_, stop) => TransferCoordinator().PublishTargetAsync(operationId, stop), token).ConfigureAwait(false);
+                async (instances, stop) =>
+                {
+                    var current = await ReadNamespaceTransferAsync(operationId, stop).ConfigureAwait(false);
+                    if (current.TargetPublication is not null) return current;
+                    var target = current.TargetBirth ?? throw new InvalidOperationException("The transfer target has no selected birth.");
+                    MirrorPulseFileTransferRecovery? activation = null;
+                    if (current.TargetRoleSid != _namespaceExecution!.RoleSid.Value)
+                    {
+                        if (await catalog!.ReadNamespaceBirthStartAsync(target.Birth.OperationId, stop).ConfigureAwait(false) is not null)
+                            throw new InvalidOperationException("A started transfer target must recover its original native result.");
+                        activation = await RequireFileTransferRoleAuditsAsync(current.Plan, instances, stop).ConfigureAwait(false);
+                    }
+                    return await TransferCoordinator().PublishTargetAsync(operationId, activation, stop).ConfigureAwait(false);
+                }, token).ConfigureAwait(false);
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
@@ -729,7 +742,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                     throw new InvalidOperationException("Source deletion requires its original published target.");
                 if (copy.SourceDeletion is { AcceptedAt: null })
                     throw new MirrorPulseMutationAmbiguousException("The original source deletion has no durable acceptance receipt.");
-                if (copy.TargetBirth.Birth.RoleSid == role) return null;
+                if (copy.TargetRoleSid == role) return null;
             }
             else if (plan.Source.Context.Protection.RoleSid == role && plan.SourceParent.Context.Protection.RoleSid == role &&
                 plan.TargetParent.Context.Protection.RoleSid == role)
@@ -739,11 +752,19 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             if (namespaceWork is null || !afterPublication && copy.TargetBirthOperationId is not null)
                 throw new InvalidOperationException("File transfer role recovery requires its fenced original transfer at a recoverable stage.");
 
+            return await RequireFileTransferRoleAuditsAsync(plan, instanceAdmission, token).ConfigureAwait(false);
+        }
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        private async ValueTask<MirrorPulseFileTransferRecovery> RequireFileTransferRoleAuditsAsync(MirrorPulseNamespaceTransferPlan plan,
+            IMirrorPulseInstanceScheduler instanceAdmission, CancellationToken token)
+        {
+            if (namespaceWork is null) throw new InvalidOperationException("File transfer role recovery requires its two fenced roots.");
             var ids = await RecoverFileTransferRootAuditsAsync(plan.OperationId, [plan.SourceRoute.RootId, plan.TargetRoute.RootId],
                 instanceAdmission, token).ConfigureAwait(false);
             if (!ids.TryGetValue(plan.SourceRoute.RootId, out Guid sourceAudit) || !ids.TryGetValue(plan.TargetRoute.RootId, out Guid targetAudit))
                 throw new InvalidDataException("File transfer recovery requires both original root audits.");
-            return new(sourceAudit, targetAudit, role);
+            return new(sourceAudit, targetAudit, _namespaceExecution!.RoleSid.Value);
         }
 
         [SupportedOSPlatform("windows10.0.26100")]

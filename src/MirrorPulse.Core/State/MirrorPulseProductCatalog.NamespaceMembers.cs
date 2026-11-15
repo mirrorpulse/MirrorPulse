@@ -73,7 +73,7 @@ public sealed partial class MirrorPulseProductCatalog
                         if (copy.TargetBirth?.Birth != birth)
                             throw new InvalidOperationException("A target registration requires its exact original transfer.");
                         await RequireCurrentNamespaceTransferAsync(copy.Plan, transaction, cancellationToken, admitted: true,
-                            targetBirth: copy.TargetBirth).ConfigureAwait(false);
+                            targetCopy: copy).ConfigureAwait(false);
                     }
                     allowedTransfer = transfer.OperationId;
                 }

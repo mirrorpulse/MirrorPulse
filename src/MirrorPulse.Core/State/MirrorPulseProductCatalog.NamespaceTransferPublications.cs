@@ -39,8 +39,11 @@ public sealed partial class MirrorPulseProductCatalog
     }
 
     /// <summary>Validates the exact original target continuation without admitting unrelated work in either root.</summary>
-    public async Task<MirrorPulseNamespaceTransferCopy> ValidateNamespaceTransferTargetPublicationAsync(Guid operationId,
-        CancellationToken token = default)
+    public Task<MirrorPulseNamespaceTransferCopy> ValidateNamespaceTransferTargetPublicationAsync(Guid operationId,
+        CancellationToken token = default) => ValidateNamespaceTransferTargetPublicationAsync(operationId, null, token);
+
+    internal async Task<MirrorPulseNamespaceTransferCopy> ValidateNamespaceTransferTargetPublicationAsync(Guid operationId,
+        MirrorPulseFileTransferRecovery? activation, CancellationToken token)
     {
         await _gate.WaitAsync(token).ConfigureAwait(false);
         try
@@ -50,7 +53,8 @@ public sealed partial class MirrorPulseProductCatalog
                 ?? throw new FileNotFoundException("The original transfer is missing.");
             if (copy.TargetBirth is null) throw new InvalidOperationException("The transfer target has no original birth and public identity plan.");
             if (copy.TargetPublication is null)
-                await RequireCurrentNamespaceTransferAsync(copy.Plan, transaction, token, admitted: true, targetBirth: copy.TargetBirth).ConfigureAwait(false);
+                await RequireCurrentNamespaceTransferAsync(copy.Plan, transaction, token, admitted: true, targetCopy: copy,
+                    recovery: activation, activatingTarget: activation is not null).ConfigureAwait(false);
             transaction.Commit(); return copy;
         }
         finally { _gate.Release(); }
@@ -76,7 +80,7 @@ public sealed partial class MirrorPulseProductCatalog
                 transaction.Commit(); return copy;
             }
             if (copy.TargetBirth is null) throw new InvalidOperationException("The original target birth is missing.");
-            await RequireCurrentNamespaceTransferAsync(copy.Plan, transaction, token, admitted: true, targetBirth: copy.TargetBirth).ConfigureAwait(false);
+            await RequireCurrentNamespaceTransferAsync(copy.Plan, transaction, token, admitted: true, targetCopy: copy).ConfigureAwait(false);
             await ValidateNamespaceTransferPublicationReferencesAsync(copy, publication, transaction, token).ConfigureAwait(false);
             if ((await ReadLatestNamespaceBirthProtectionCoreAsync(publication.BirthOperationId, transaction, token).ConfigureAwait(false))?.ProtectionId != publication.ProtectionId)
                 throw new InvalidOperationException("First publication requires the current target protection epoch.");
@@ -114,7 +118,9 @@ public sealed partial class MirrorPulseProductCatalog
             observation.RemoteId != target.Plan.RemoteId || observation.RemoteRevision != copy.AcceptedRevision ||
             member.Origin != MirrorPulseNamespaceMemberOrigin.ProtectedBirth || member.OriginId != target.Birth.OperationId ||
             protection.BirthOperationId != target.Birth.OperationId ||
-            protection.Verification.LocalObject != publication.LocalObject || protection.RoleSid != target.Birth.RoleSid ||
+            protection.Verification.LocalObject != publication.LocalObject || protection.RoleSid != copy.TargetRoleSid ||
+            copy.TargetActivation is { } activation && (protection.BornParent != activation.TargetParent.BornParent ||
+                protection.ParentPermissionOperationId != (protection.BornParent is null ? activation.TargetParent.PermissionOperationId : Guid.Empty)) ||
             protection.Verification.OwnerSid != member.OwnerSid || member.OwnerSid != copy.Plan.TargetParent.Context.Member.OwnerSid ||
             member.ParentMemberId != copy.Plan.TargetParent.Context.Member.MemberId || member.RootId != target.Birth.RootId ||
             member.RelativePath != target.Birth.RelativePath || member.IsDirectory ||

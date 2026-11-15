@@ -107,14 +107,14 @@ public sealed partial class MirrorPulseProductCatalog
         if (copy.TargetPublication is null || copy.TargetBirth is null || copy.Plan.SourceRemoteRevision is null ||
             copy.Plan.SourceRoute.ProtocolVersion != 2)
             throw new InvalidOperationException("Conditional source deletion requires a published target and the original V2 source revision; a local-only source needs separate reconciliation.");
-        await RequireCurrentNamespaceTransferAsync(copy.Plan, transaction, token, admitted: true, targetBirth: copy.TargetBirth,
+        await RequireCurrentNamespaceTransferAsync(copy.Plan, transaction, token, admitted: true, targetCopy: copy,
             recovery: recovery, publishedAt: recovery is null ? null : copy.TargetPublication.PublishedAt).ConfigureAwait(false);
         var target = await ReadNamespaceMemberProtectionSnapshotCoreAsync(copy.TargetPublication.MemberId, transaction, token).ConfigureAwait(false)
             ?? throw new InvalidDataException("The published target lost its current protected membership.");
         if (target.Context.Member.LocalObject != copy.TargetPublication.LocalObject || target.Context.Member.RootId != copy.Plan.TargetRoute.RootId ||
             target.Context.Member.IsDirectory || target.Context.Location.RelativePath != copy.Plan.TargetRelativePath ||
             target.Context.Location.ParentMemberId != copy.Plan.TargetParent.Context.Member.MemberId ||
-            target.Context.Protection.RoleSid != (recovery?.RoleSid ?? copy.TargetBirth.Birth.RoleSid) ||
+            target.Context.Protection.RoleSid != (recovery?.RoleSid ?? copy.TargetRoleSid) ||
             target.Identity.ItemId != copy.TargetPublication.ItemId || target.Identity.RemoteId != copy.TargetBirth.Plan.RemoteId)
             throw new InvalidOperationException("Source deletion requires the original published target, current role, identity and location.");
         if (recovery is not null)
@@ -150,7 +150,7 @@ public sealed partial class MirrorPulseProductCatalog
             ?? throw new InvalidDataException("Source deletion lost its original target protection evidence.");
         if (copy.TargetBirth is null || protection.BirthOperationId != copy.TargetBirth.Birth.OperationId ||
             protection.Verification.LocalObject != copy.TargetPublication!.LocalObject ||
-            protection.RoleSid != (deletion.PublishedRecovery?.RoleSid ?? copy.TargetBirth.Birth.RoleSid) ||
+            protection.RoleSid != (deletion.PublishedRecovery?.RoleSid ?? copy.TargetRoleSid) ||
             protection.Verification.ObservedAt > deletion.StartedAt)
             throw new InvalidDataException("Source deletion no longer references its original target object and owned protection.");
         if (deletion.PublishedRecovery is { } recovery)

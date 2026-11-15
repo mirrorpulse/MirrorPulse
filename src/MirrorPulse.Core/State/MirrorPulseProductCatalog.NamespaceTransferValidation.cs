@@ -56,20 +56,30 @@ public sealed partial class MirrorPulseProductCatalog
                 throw new ArgumentException("Transfer admission cannot predate its protected objects.", nameof(plan));
     }
 
-    private async Task RequireCurrentNamespaceTransferAsync(MirrorPulseNamespaceTransferPlan plan,
+    private async Task<MirrorPulseFileTransferRecoveryMembers?> RequireCurrentNamespaceTransferAsync(MirrorPulseNamespaceTransferPlan plan,
         SqliteTransaction transaction, CancellationToken token, bool admitted = false,
-        MirrorPulseNamespaceTransferTargetBirth? targetBirth = null, MirrorPulseFileTransferRecovery? recovery = null,
-        DateTimeOffset? publishedAt = null)
+        MirrorPulseNamespaceTransferCopy? targetCopy = null, MirrorPulseFileTransferRecovery? recovery = null,
+        DateTimeOffset? publishedAt = null, bool activatingTarget = false)
     {
-        recovery ??= targetBirth?.Recovery;
+        var targetBirth = targetCopy?.TargetBirth;
+        var selectedRecovery = targetCopy?.TargetRecovery;
+        recovery ??= selectedRecovery;
         if (targetBirth is not null && (!admitted || targetBirth.OperationId != plan.OperationId ||
             await ReadNamespaceTransferTargetBirthRowAsync(plan.OperationId, null, transaction, token).ConfigureAwait(false) != targetBirth))
             throw new InvalidOperationException("A transfer continuation cannot bypass another target birth or its original owner.");
+        MirrorPulseFileTransferRecoveryMembers? members = null;
+        if (activatingTarget)
+        {
+            if (targetCopy is null || targetBirth is null || recovery is null)
+                throw new InvalidOperationException("Target activation requires its selected birth and current root audits.");
+            await RequireUnstartedFileTransferTargetAsync(targetCopy, transaction, token).ConfigureAwait(false);
+        }
         if (recovery is not null)
         {
-            if (!admitted || targetBirth is not null && targetBirth.Recovery != recovery && publishedAt is null)
+            if (!admitted || targetBirth is not null && selectedRecovery != recovery && publishedAt is null && !activatingTarget)
                 throw new InvalidOperationException("Transfer recovery requires its original pending owner and audit receipts.");
-            _ = await ReadFileTransferRecoveryMembersCoreAsync(plan, recovery, transaction, token, publishedAt).ConfigureAwait(false);
+            members = await ReadFileTransferRecoveryMembersCoreAsync(plan, recovery, transaction, token,
+                activatingTarget ? targetBirth!.Birth.PreparedAt : publishedAt).ConfigureAwait(false);
         }
         else
         {
@@ -101,6 +111,7 @@ public sealed partial class MirrorPulseProductCatalog
                 member.RelativePath != plan.TargetRelativePath)
                 throw new InvalidDataException("The occupied transfer destination lost its exact original target birth.");
         }
+        return members;
     }
 
     private async Task RequireNamespaceTransferRoutesAsync(IReadOnlyList<MirrorPulseTransferRoute> routes,

@@ -50,6 +50,7 @@ public sealed partial class MirrorPulseProductCatalog
         foreach (var snapshot in new[] { original.Source, original.SourceParent, original.TargetParent })
             await RequireRemoteUpdateHistoricalSnapshotAsync(snapshot, original.PreparedAt, transaction, token).ConfigureAwait(false);
         copy = copy with { TargetBirth = await ReadNamespaceTransferTargetBirthCoreAsync(copy, transaction, token).ConfigureAwait(false) };
+        await ValidateFileTransferTargetActivationAsync(copy, transaction, token).ConfigureAwait(false);
         if (copy.TargetPublication is { } publication)
         {
             try { await ValidateNamespaceTransferPublicationReferencesAsync(copy, publication, transaction, token).ConfigureAwait(false); }

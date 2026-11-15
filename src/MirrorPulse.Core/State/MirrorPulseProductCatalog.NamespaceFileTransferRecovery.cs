@@ -49,7 +49,7 @@ public sealed partial class MirrorPulseProductCatalog
     }
 
     internal async Task<MirrorPulseFileTransferRecoveryMembers> ReadFileTransferRecoveryMembersAsync(Guid operationId,
-        MirrorPulseFileTransferRecovery recovery, CancellationToken token)
+        MirrorPulseFileTransferRecovery recovery, CancellationToken token, bool activatingTarget = false)
     {
         await _gate.WaitAsync(token).ConfigureAwait(false);
         try
@@ -58,7 +58,9 @@ public sealed partial class MirrorPulseProductCatalog
             using var transaction = BeginNamespaceRecoveryReadSnapshot();
             var copy = await ReadNamespaceTransferCoreAsync(operationId, transaction, token).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The original file transfer is missing.");
-            if (copy.TargetBirth is { } target && target.Recovery != recovery)
+            if (activatingTarget)
+                await RequireUnstartedFileTransferTargetAsync(copy, transaction, token).ConfigureAwait(false);
+            else if (copy.TargetBirth is not null && copy.TargetRecovery != recovery)
                 throw new InvalidOperationException("Target recovery requires its original selected audit receipts.");
             var plan = copy.Plan;
             var fences = await ReadNamespaceRootFencesCoreAsync(true, transaction, token, admittedTransferId: operationId,
@@ -66,7 +68,8 @@ public sealed partial class MirrorPulseProductCatalog
             if (fences.Contains(plan.SourceRoute.RootId) || fences.Contains(plan.TargetRoute.RootId))
                 throw new InvalidOperationException("Another original namespace owner prevents this transfer.");
             await RequireNamespaceTransferRoutesAsync([plan.SourceRoute, plan.TargetRoute], transaction, token).ConfigureAwait(false);
-            var members = await ReadFileTransferRecoveryMembersCoreAsync(plan, recovery, transaction, token).ConfigureAwait(false);
+            var members = await ReadFileTransferRecoveryMembersCoreAsync(plan, recovery, transaction, token,
+                activatingTarget ? copy.TargetBirth!.Birth.PreparedAt : null).ConfigureAwait(false);
             transaction.Commit();
             return members;
         }

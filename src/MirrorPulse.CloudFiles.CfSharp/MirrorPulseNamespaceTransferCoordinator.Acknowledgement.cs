@@ -42,7 +42,7 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
                 var reference = retirement.Intent.TransferEntry!;
                 var (originalSourceParent, originalTargetParent) = recovery is null
                     ? (reference.RecoveredSourceParent ?? current.Plan.SourceParent,
-                        reference.RecoveredTargetParent ?? current.TargetBirth!.RecoveredParent ?? current.Plan.TargetParent)
+                        reference.RecoveredTargetParent ?? current.ActiveTargetParent)
                     : await catalog.ReadAuditedFileTransferSettlementParentsAsync(operationId, recovery, stop).ConfigureAwait(false);
                 foreach (var parent in new[] { originalSourceParent, originalTargetParent })
                 {

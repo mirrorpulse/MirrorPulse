@@ -54,23 +54,29 @@ public sealed partial class MirrorPulseProductCatalog
         return copy;
     }
 
-    private async Task RequireFileTransferInitializationAsync(MirrorPulseNamespaceInitializationIntent intent,
+    private async Task<Guid?> RequireFileTransferInitializationAsync(MirrorPulseNamespaceInitializationIntent intent,
         SqliteTransaction transaction, CancellationToken token)
     {
-        if (intent.FileTransferOperationId is not { } transferId) return;
+        if (intent.FileTransferOperationId is not { } transferId) return null;
         var copy = await ReadNamespaceTransferCoreAsync(transferId, transaction, token).ConfigureAwait(false)
             ?? throw new InvalidOperationException("File transfer role recovery requires its original admission.");
         var plan = copy.Plan;
         RootId root = intent.Roots.Single().RootId;
+        Guid? unstartedTarget = null;
+        if (copy.TargetBirth is not null && copy.TargetPublication is null)
+        {
+            await RequireUnstartedFileTransferTargetAsync(copy, transaction, token).ConfigureAwait(false);
+            if (root == plan.TargetRoute.RootId) unstartedTarget = copy.TargetBirthOperationId;
+        }
         if ((root != plan.SourceRoute.RootId && root != plan.TargetRoute.RootId) ||
-            intent.PreparedAt < (copy.TargetPublication?.PublishedAt ?? plan.PreparedAt) ||
-            copy.TargetBirthOperationId is not null && copy.TargetPublication is null ||
+            intent.PreparedAt < (copy.TargetPublication?.PublishedAt ?? copy.TargetBirth?.Birth.PreparedAt ?? plan.PreparedAt) ||
             copy.Acknowledgement?.AcknowledgedAt is not null ||
             copy.SourceDeletion is { AcceptedAt: null } ||
             copy.CopyStartedAt is not null && copy.CopyAcceptedAt is null && !copy.CopyUsesWorkerPreparation)
             throw new InvalidOperationException("File transfer role recovery requires a pending copy or a published target with an unambiguous source effect.");
         await RequireFileTransferInitializationFenceAsync(intent, transaction, token).ConfigureAwait(false);
         await RequireNamespaceTransferRoutesAsync([plan.SourceRoute, plan.TargetRoute], transaction, token).ConfigureAwait(false);
+        return unstartedTarget;
     }
 
     private async Task RequireFileTransferInitializationFenceAsync(MirrorPulseNamespaceInitializationIntent intent,

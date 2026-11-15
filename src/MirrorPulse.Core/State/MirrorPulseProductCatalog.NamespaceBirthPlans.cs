@@ -94,8 +94,15 @@ public sealed partial class MirrorPulseProductCatalog
     }
 
     /// <summary>Persists the start intent after fresh catalog admission, before the Host attempts creation.</summary>
-    public async Task<MirrorPulseNamespaceBirthStartPreparation> RecordNamespaceBirthStartAsync(MirrorPulseNamespaceBirthStart start,
-        CancellationToken cancellationToken = default)
+    public Task<MirrorPulseNamespaceBirthStartPreparation> RecordNamespaceBirthStartAsync(MirrorPulseNamespaceBirthStart start,
+        CancellationToken cancellationToken = default) => RecordNamespaceBirthStartCoreAsync(start, null, cancellationToken);
+
+    internal Task<MirrorPulseNamespaceBirthStartPreparation> RecordReactivatedFileTransferBirthStartAsync(
+        MirrorPulseNamespaceBirthStart start, MirrorPulseFileTransferRecovery recovery, CancellationToken cancellationToken) =>
+        RecordNamespaceBirthStartCoreAsync(start, recovery, cancellationToken);
+
+    private async Task<MirrorPulseNamespaceBirthStartPreparation> RecordNamespaceBirthStartCoreAsync(MirrorPulseNamespaceBirthStart start,
+        MirrorPulseFileTransferRecovery? recovery, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(start);
         ValidateNamespaceBirthStart(start);
@@ -111,13 +118,17 @@ public sealed partial class MirrorPulseProductCatalog
             var retained = await ReadNamespaceBirthStartCoreAsync(start.OperationId, transaction, cancellationToken).ConfigureAwait(false);
             if (retained is not null)
             {
-                if (retained != start) throw new InvalidOperationException("The original birth start intent is immutable.");
+                if (retained != start || recovery is not null)
+                    throw new InvalidOperationException("The original birth start intent is immutable.");
                 transaction.Commit();
                 return new(retained, false);
             }
             var birth = await ReadNamespaceBirthCoreAsync(start.OperationId, transaction, cancellationToken).ConfigureAwait(false)
                 ?? throw new InvalidDataException("The original birth admission is missing.");
-            await ValidateNamespaceBirthCurrentParentAsync(birth, transaction, cancellationToken).ConfigureAwait(false);
+            if (recovery is null)
+                await ValidateNamespaceBirthCurrentParentAsync(birth, transaction, cancellationToken).ConfigureAwait(false);
+            else
+                await RecordFileTransferTargetActivationAsync(birth, start, recovery, transaction, cancellationToken).ConfigureAwait(false);
             await RequireNamespaceBirthReservationAsync(birth, transaction, cancellationToken).ConfigureAwait(false);
             byte[] payload = JsonSerializer.SerializeToUtf8Bytes(start, TopologyJsonOptions);
             await using SqliteCommand insert = _connection.CreateCommand();

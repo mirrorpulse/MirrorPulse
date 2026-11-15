@@ -52,7 +52,7 @@ public sealed partial class MirrorPulseProductCatalog
             ThrowIfDisposed(); using var transaction = _connection.BeginTransaction();
             var copy = await ReadNamespaceTransferCoreAsync(operationId, transaction, token).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The original transfer is missing.");
-            var selectedAudit = recovery ?? copy.TargetBirth?.Recovery;
+            var selectedAudit = recovery ?? copy.TargetRecovery;
             var members = selectedAudit is null ? null : await ReadFileTransferRecoveryMembersCoreAsync(copy.Plan, selectedAudit,
                 transaction, token, recovery is null ? null : copy.TargetPublication!.PublishedAt).ConfigureAwait(false);
             int version = recovery is not null ? 5 : members is null ? 3 : 4;
@@ -290,7 +290,7 @@ public sealed partial class MirrorPulseProductCatalog
         {
             var consistent = transaction ?? throw new InvalidDataException("Recovered retirement requires a consistent historical read.");
             await RequireRemoteUpdateHistoricalSnapshotAsync(parent, retirement.Intent.PreparedAt, consistent, token).ConfigureAwait(false);
-            var audit = await ReadNamespaceInitializationStatusCoreAsync(copy.TargetBirth!.SourceRecoveryAuditId!.Value, consistent, token)
+            var audit = await ReadNamespaceInitializationStatusCoreAsync(copy.TargetRecovery!.SourceAuditId, consistent, token)
                 .ConfigureAwait(false);
             if (audit.Completion is not { } completed || parent.Context.Protection.VerifiedAt > completed.CompletedAt)
                 throw new InvalidDataException("Source retirement lost its original audited source parent proof.");
@@ -341,7 +341,7 @@ public sealed partial class MirrorPulseProductCatalog
     {
         var reference = intent.TransferEntry!; var source = copy.Plan.Source;
         var role = reference.PublishedRecovery?.RoleSid ??
-            (reference.Version == 4 ? copy.TargetBirth?.Birth.RoleSid : source.Context.Protection.RoleSid);
+            (reference.Version == 4 ? copy.TargetRoleSid : source.Context.Protection.RoleSid);
         if (reference.Version is not (1 or 2 or 3 or 4 or 5) || reference.OperationId != copy.Plan.OperationId || reference.DeleteOperationId != copy.Plan.DeleteOperationId ||
             copy.SourceDeletion?.AcceptedAt is not { } accepted || reference.SourceDeleteAcceptedAt != accepted || copy.TargetPublication is null ||
             copy.TargetBirth is null || source.Identity.ItemId is null || reference.TargetProtectionId == Guid.Empty || reference.TargetAtStart is null ||
@@ -353,7 +353,7 @@ public sealed partial class MirrorPulseProductCatalog
             (reference.Version is 4 or 5) != (reference.RecoveredSourceParent is not null) ||
             (reference.Version == 5) != (reference.PublishedRecovery is not null) ||
             (reference.Version == 5) != (reference.RecoveredTargetParent is not null) ||
-            reference.Version != 5 && (reference.Version == 4) != (copy.TargetBirth.Recovery is not null))
+            reference.Version != 5 && (reference.Version == 4) != (copy.TargetRecovery is not null))
             throw new InvalidDataException("Source retirement requires the original accepted conditional transfer and a fresh original target proof.");
         RequireOriginalParent(reference.RecoveredSourceParent, copy.Plan.SourceParent);
         RequireOriginalParent(reference.RecoveredTargetParent, copy.Plan.TargetParent);

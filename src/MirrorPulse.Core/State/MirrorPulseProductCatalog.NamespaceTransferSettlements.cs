@@ -154,7 +154,7 @@ public sealed partial class MirrorPulseProductCatalog
         if (recovery is null)
         {
             foreach (var parent in new[] { retirement.Intent.TransferEntry!.RecoveredSourceParent ?? copy.Plan.SourceParent,
-                retirement.Intent.TransferEntry.RecoveredTargetParent ?? copy.TargetBirth!.RecoveredParent ?? copy.Plan.TargetParent })
+                retirement.Intent.TransferEntry.RecoveredTargetParent ?? copy.ActiveTargetParent })
                 if (await ReadNamespaceMemberProtectionSnapshotCoreAsync(parent.Context.Member.MemberId, transaction, token).ConfigureAwait(false) != parent)
                     throw new InvalidOperationException("Unfinished transfer settlement requires its exact current parents and execution role.");
         }

@@ -196,27 +196,32 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator(CloudFileSys
         }, token, recovery).ConfigureAwait(false);
     }
 
-    public async ValueTask<MirrorPulseNamespaceTransferCopy> PublishTargetAsync(Guid operationId, CancellationToken token)
+    public ValueTask<MirrorPulseNamespaceTransferCopy> PublishTargetAsync(Guid operationId, CancellationToken token) =>
+        PublishTargetAsync(operationId, null, token);
+
+    internal async ValueTask<MirrorPulseNamespaceTransferCopy> PublishTargetAsync(Guid operationId,
+        MirrorPulseFileTransferRecovery? activation, CancellationToken token)
     {
         var copy = await ReadAsync(operationId, token).ConfigureAwait(false);
         if (copy.TargetPublication is not null) return copy;
-        return await actor.RunAsync(stop => PublishTargetUnderActorAsync(operationId, settleObserved: false, stop), token).ConfigureAwait(false);
+        return await actor.RunAsync(stop => PublishTargetUnderActorAsync(operationId, settleObserved: false, activation, stop), token).ConfigureAwait(false);
     }
 
     internal async ValueTask SettleObservedFileTransferTargetAsync(Guid operationId, CancellationToken token) =>
-        _ = await actor.RunAsync(stop => PublishTargetUnderActorAsync(operationId, settleObserved: true, stop), token).ConfigureAwait(false);
+        _ = await actor.RunAsync(stop => PublishTargetUnderActorAsync(operationId, settleObserved: true, null, stop), token).ConfigureAwait(false);
 
-    private async ValueTask<MirrorPulseNamespaceTransferCopy> PublishTargetUnderActorAsync(Guid operationId, bool settleObserved, CancellationToken token)
+    private async ValueTask<MirrorPulseNamespaceTransferCopy> PublishTargetUnderActorAsync(Guid operationId, bool settleObserved,
+        MirrorPulseFileTransferRecovery? activation, CancellationToken token)
     {
-        var copy = await catalog.ValidateNamespaceTransferTargetPublicationAsync(operationId, token).ConfigureAwait(false);
+        var copy = await catalog.ValidateNamespaceTransferTargetPublicationAsync(operationId, activation, token).ConfigureAwait(false);
         if (copy.TargetPublication is not null) return copy;
         // Startup settlement is limited to local evidence. It does not need a live Worker or dispatch a remote effect.
         if (!settleObserved && (protocolVersion(copy.Plan.SourceRoute.InstanceId) != copy.Plan.SourceRoute.ProtocolVersion ||
             protocolVersion(copy.Plan.TargetRoute.InstanceId) != copy.Plan.TargetRoute.ProtocolVersion))
             throw new InvalidOperationException("The negotiated transfer protocol changed before target publication.");
-        var target = copy.TargetBirth!;
-        var members = target.Recovery is { } recovered
-            ? await catalog.ReadFileTransferRecoveryMembersAsync(operationId, recovered, token).ConfigureAwait(false) : null;
+        var recovery = activation ?? copy.TargetRecovery;
+        var members = recovery is null ? null :
+            await catalog.ReadFileTransferRecoveryMembersAsync(operationId, recovery, token, activatingTarget: activation is not null).ConfigureAwait(false);
         var source = members?.Source ?? copy.Plan.Source;
         var parent = members?.TargetParent ?? copy.Plan.TargetParent;
         return await WithGuardsAsync(source, members?.SourceParent ?? copy.Plan.SourceParent, parent,
@@ -228,8 +233,8 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator(CloudFileSys
                 var publisher = new MirrorPulseNamespaceTransferTargetPublisher(fileSystem, state, catalog, router, actor, TargetPublicationCheckpoint);
                 return settleObserved
                     ? await publisher.SettleObservedFileUnderActorAsync(copy, parent, token).ConfigureAwait(false)
-                    : await publisher.PublishUnderActorAsync(copy, token).ConfigureAwait(false);
-            }, token, allowOwnedTargetBirth: true, retainedPublicationRole: settleObserved ? target.Birth.RoleSid : null).ConfigureAwait(false);
+                    : await publisher.PublishUnderActorAsync(copy, parent, activation, token).ConfigureAwait(false);
+            }, token, allowOwnedTargetBirth: true, retainedPublicationRole: settleObserved ? copy.TargetRoleSid : null).ConfigureAwait(false);
     }
 
     private async Task<MirrorPulseNamespaceTransferCopy> ExecuteGuardedAsync(MirrorPulseNamespaceTransferPlan plan,

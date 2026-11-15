@@ -35,7 +35,7 @@ public sealed partial class NamespaceNonAdminControllerTests
     [DataRow("foreign")]
     [DataRow("duplicate")]
     public Task ControllerRetainsEveryRecoveredFileTransferRowAndItsOriginalDeadline(string selection) =>
-        RunAsync("file-transfer-" + selection, 175);
+        RunAsync("file-transfer-" + selection, 176);
 
     [TestMethod]
     [DataRow("selected")]
@@ -106,6 +106,7 @@ public sealed partial class NamespaceNonAdminControllerTests
                     'NativeHostTransferRetiresAndAcknowledgesOriginalAfterPublishedTargetRoleHandoff',
                     'NativeHostTransferPublishesOnlyUnchangedRegisteredTargetAfterRoleHandoff',
                     'NativeHostTransferPublishesObservedTargetAfterRoleHandoff',
+                    'NativeHostTransferReactivatesOnlyUnstartedSelectedTargetAfterRoleHandoff',
                     'NativeHostTransferAcknowledgesOriginalAfterSettledSourceRoleHandoff',
                     'NativeHostTransferResumesInterruptedSourceRetirementAcrossRoles',
                     'NativeHostTransferCompletesRecreatedAcceptedSourceAfterBothRootAudits'
@@ -131,8 +132,8 @@ public sealed partial class NamespaceNonAdminControllerTests
                     $actual=Get-Content -LiteralPath (Join-Path (Split-Path $Policy -Parent) 'test-suites.json') -Raw|ConvertFrom-Json
                     $names=@($actual.required.namespace)
                     $prior=@($names|Where-Object {$_ -cnotin $fileTransferRecovery})
-                    if($Count -ne 175 -or $names.Count -ne 175 -or $prior.Count -ne 165){throw 'Retain all prior methods and exactly ten recovered file transfer methods.'}
-                    $rowsPerMethod=@(2,2,1,2,2,2,1,2,3,1)
+                    if($Count -ne 176 -or $names.Count -ne 176 -or $prior.Count -ne 165){throw 'Retain all prior methods and exactly eleven recovered file transfer methods.'}
+                    $rowsPerMethod=@(2,2,1,2,2,2,1,2,2,3,1)
                     for($index=0;$index -lt $fileTransferRecovery.Count;$index++){
                         $name=$fileTransferRecovery[$index]
                         foreach($selection in @(@{names=$actual.required.namespace},@{names=$actual.required.native},@{names=$actual.allowSkipped})){
@@ -151,7 +152,7 @@ public sealed partial class NamespaceNonAdminControllerTests
                         $before=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $prior.Count -TestNames $prior -Scope $scope
                         if($Scenario -ceq 'file-transfer-selected'){
                             $now=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $Count -TestNames $names -Scope $scope
-                            if($now -ne $before+18*45000){throw 'Retain all earlier deadlines and add eighteen actual 45-second recovery rows.'}
+                            if($now -ne $before+20*45000){throw 'Retain all earlier deadlines and add twenty actual 45-second recovery rows.'}
                         }else{
                             $invalid=switch($Scenario){
                                 'file-transfer-missing' {@($names|Where-Object {$_ -cne $fileTransferRecovery[0]})}
@@ -889,7 +890,7 @@ public sealed partial class NamespaceNonAdminControllerTests
                         if (-not $rejected) { throw 'An invalid or unbounded selection was accepted.' }
                     } else {
                         $unsealedExecutionBudget=4*90000
-                        $fileTransferRecoveryBudget=18*45000
+                        $fileTransferRecoveryBudget=20*45000
                         $originalCatalogCount=$Count-2-$fileTransferRecovery.Count
                         $maximum=if ($Scenario -eq 'budget-catalog') {4755000+4*60000+10*60000+2*60000+65000+29*65000+65000+65000+65000+65000+65000+90000+65000+13*65000+6*65000+4*60000+10*95000+$unsealedExecutionBudget+$fileTransferRecoveryBudget} else {1800000}
                         if ($rejected -or $budget -lt 600000 -or $budget -gt $maximum) { throw 'The whole-suite envelope is missing or unbounded.' }

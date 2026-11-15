@@ -42,7 +42,7 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
             }
             var members = recovery is not null
                 ? await catalog.ReadPublishedFileTransferRecoveryMembersAsync(operationId, recovery, stop).ConfigureAwait(false)
-                : current.TargetBirth!.Recovery is { } birthRecovery
+                : current.TargetRecovery is { } birthRecovery
                     ? await catalog.ReadFileTransferRecoveryMembersAsync(operationId, birthRecovery, stop).ConfigureAwait(false) : null;
             var originalSource = members?.Source ?? current.Plan.Source;
             return await WithGuardsAsync(originalSource, members?.SourceParent ?? current.Plan.SourceParent, members?.TargetParent ?? current.Plan.TargetParent,
