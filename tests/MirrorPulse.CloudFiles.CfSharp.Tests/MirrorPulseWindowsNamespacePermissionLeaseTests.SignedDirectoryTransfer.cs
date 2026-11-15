@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Security.Principal;
 using CfSharp;
+using MirrorPulse.Core.CloudFiles;
 using MirrorPulse.Core.Configuration;
 using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.Host;
@@ -30,6 +31,10 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         VerifySignedDirectoryTransferAsync(null, MirrorPulseTransferSourceRetirementCheckpoint.BeforeFirstDirectoryNativeRetirement);
 
     [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles"), TestCategory("SignedDirectoryTransfer")]
+    public Task NativeSignedLocalDirectoryTransferResumesBeforeWorkerReceiptAcrossHostRoles() =>
+        VerifySignedDirectoryTransferAsync(null, MirrorPulseTransferSourceRetirementCheckpoint.AfterDirectoryWorkerDeletionBeforeReceipt);
+
+    [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles"), TestCategory("SignedDirectoryTransfer")]
     public Task NativeSignedLocalDirectoryTransferToWebDavRejectsUnsupportedReverseBeforeMutation()
     {
         string? webDavPackage = Environment.GetEnvironmentVariable("MP_SIGNED_WEBDAV_PACKAGE");
@@ -42,6 +47,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     {
         bool interruptBeforeNativeDelete = restartCut == MirrorPulseTransferSourceRetirementCheckpoint.BeforeNativeDeletion;
         bool interruptAfterWorkerDelete = restartCut == MirrorPulseTransferSourceRetirementCheckpoint.BeforeFirstDirectoryNativeRetirement;
+        bool interruptBeforeWorkerReceipt = restartCut == MirrorPulseTransferSourceRetirementCheckpoint.AfterDirectoryWorkerDeletionBeforeReceipt;
+        bool noNativeStartsBeforeRestart = interruptAfterWorkerDelete || interruptBeforeWorkerReceipt;
         string? package = Environment.GetEnvironmentVariable("MP_SIGNED_LOCAL_PACKAGE");
         if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1" || string.IsNullOrWhiteSpace(package))
             Assert.Inconclusive("Requires the disposable native Windows environment and the frozen signed Local package.");
@@ -187,8 +194,19 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             var stopped = await Assert.ThrowsExactlyAsync<IOException>(async () => await runtime.ResumeDirectoryNamespaceTransferAsync(operationId, token));
             Assert.AreEqual(interruption, stopped.Message);
             var deletion = await catalog.ReadNamespaceDirectoryTransferSourceDeletionAsync(operationId, token);
-            Assert.IsNotNull(deletion?.Receipt);
+            Assert.IsNotNull(deletion);
+            Assert.IsNotNull(deletion.Request);
+            Assert.AreEqual(!interruptBeforeWorkerReceipt, deletion.Receipt is not null);
+            Assert.AreEqual(!interruptBeforeWorkerReceipt, deletion.AcceptedAt is not null);
             Assert.IsFalse(Directory.Exists(Path.Combine(sourceBackend, "tree")));
+            var originalWorkerReceipt = deletion.Receipt;
+            if (interruptBeforeWorkerReceipt)
+            {
+                // The Worker has already committed. Observe its exact durable
+                // receipt independently of the interrupted Host catalog.
+                originalWorkerReceipt = await ((IMirrorPulseDirectoryTransferDeletionTransport)worker)
+                    .DeleteDirectoryTransferSourceAsync(deletion.Request, token);
+            }
             byte[] targetBytes = webDav is null ? await File.ReadAllBytesAsync(Path.Combine(targetBackend, transferred), token) : webDav.Files[transferred];
             CollectionAssert.AreEqual(bytes, targetBytes);
             Assert.IsTrue((await catalog.ReadNamespaceTransferStatusAsync(operationId, token))!.RootsFenced);
@@ -199,7 +217,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 if (restartCut is not null)
                 {
                     var started = await catalog.ReadNamespaceDirectoryTransferRetirementsAsync(operationId, token);
-                    Assert.HasCount(interruptAfterWorkerDelete ? 0 : 1, started);
+                    Assert.HasCount(noNativeStartsBeforeRestart ? 0 : 1, started);
                     firstRetirement = started.SingleOrDefault();
                     Assert.IsNull(firstRetirement?.RetiredAt);
                     Assert.IsNull(await catalog.ReadNamespaceDirectoryTransferAcknowledgementAsync(operationId, token));
@@ -234,7 +252,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 {
                     Assert.IsTrue(newRuntime.NamespaceStartupResults.All(root => !root.Admitted && root.OperationId == operationId));
                     var started = await catalog.ReadNamespaceDirectoryTransferRetirementsAsync(operationId, token);
-                    Assert.HasCount(interruptAfterWorkerDelete ? 0 : 1, started);
+                    Assert.HasCount(noNativeStartsBeforeRestart ? 0 : 1, started);
                     if (firstRetirement is not null)
                     {
                         var settled = started.Single();
@@ -244,7 +262,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         Assert.AreEqual(firstRetirement.EffectId, settled.EffectId);
                         Assert.AreEqual(firstRetirement.MemberId, settled.MemberId);
                     }
-                    Assert.AreEqual(interruptBeforeNativeDelete || interruptAfterWorkerDelete,
+                    Assert.AreEqual(interruptBeforeNativeDelete || noNativeStartsBeforeRestart,
                         File.Exists(Path.Combine(paths.SyncRootPath, "Docs", original)));
                     Assert.IsNull(await catalog.ReadNamespaceDirectoryTransferAcknowledgementAsync(operationId, token));
                     Assert.IsTrue((await catalog.ReadNamespaceTransferStatusAsync(operationId, token))!.RootsFenced);
@@ -298,10 +316,12 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             {
                 var replayed = await catalog.ReadNamespaceDirectoryTransferSourceDeletionAsync(operationId, token);
                 Assert.IsNotNull(replayed?.Receipt);
-                Assert.AreEqual(deletion.Receipt.ReceiptId, replayed.Receipt.ReceiptId);
-                Assert.AreEqual(deletion.Receipt.RequestFingerprint, replayed.Receipt.RequestFingerprint);
-                Assert.AreEqual(deletion.AcceptedAt, replayed.AcceptedAt);
-                CollectionAssert.AreEqual(deletion.Receipt.DeletedOriginals.ToArray(), replayed.Receipt.DeletedOriginals.ToArray());
+                Assert.AreEqual(deletion.StartedAt, replayed.StartedAt);
+                Assert.AreEqual(deletion.Request.RequestFingerprint, replayed.Receipt.RequestFingerprint);
+                Assert.IsNotNull(originalWorkerReceipt);
+                Assert.AreEqual(originalWorkerReceipt.ReceiptId, replayed.Receipt.ReceiptId);
+                if (deletion.AcceptedAt is not null) Assert.AreEqual(deletion.AcceptedAt, replayed.AcceptedAt);
+                CollectionAssert.AreEqual(originalWorkerReceipt.DeletedOriginals.ToArray(), replayed.Receipt.DeletedOriginals.ToArray());
                 var completed = await catalog.ReadNamespaceTransferStatusAsync(operationId, token);
                 Assert.IsNotNull(completed);
                 Assert.IsTrue(completed.Completed && completed.IsDirectory);
@@ -322,7 +342,11 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 Assert.AreEqual(completed, await catalog.ReadNamespaceTransferStatusAsync(operationId, token));
                 await using var packageSource = File.OpenRead(package);
                 string digest = Convert.ToHexString(await SHA256.HashDataAsync(packageSource, token));
-                if (interruptAfterWorkerDelete)
+                if (interruptBeforeWorkerReceipt)
+                {
+                    TestContext.WriteLine($"SignedDirectoryTransfer: packageSha256={digest}; workerResultBeforeHostReceipt=True; exactWorkerReceiptReplayed=True; nativeStartsBeforeRestart=0; bothRootsFenced=True; reopenedRoots=True; targetBytesVerified=True; acknowledgementAcrossRoles=True.");
+                }
+                else if (interruptAfterWorkerDelete)
                 {
                     TestContext.WriteLine($"SignedDirectoryTransfer: packageSha256={digest}; originalWorkerDeleteAccepted=True; nativeStartsBeforeRestart=0; bothRootsFenced=True; reopenedRoots=True; targetBytesVerified=True; acknowledgementAcrossRoles=True.");
                 }

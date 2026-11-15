@@ -125,7 +125,7 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
     }
 
     private async Task<T> WithDirectoryTransferGuardsAsync<T>(MirrorPulseDirectoryTransferAdmission plan,
-        Func<Task<T>> operation, CancellationToken stop, bool publishingTarget = false)
+        Func<Task<T>> operation, CancellationToken stop, bool publishingTarget = false, bool replayingSourceDeletion = false)
     {
         actor.AssertAccess();
         var topology = await catalog.ReadAdapterTopologyAsync(stop).ConfigureAwait(false);
@@ -136,34 +136,42 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
         T result = default!;
         await execution.RunNamespaceOperationAsync(async () =>
         {
-            await using var sourceParent = await OpenTransferDirectoryGuardAsync(plan.SourceParent, stop).ConfigureAwait(false);
-            await using var targetParent = await OpenTransferDirectoryGuardAsync(plan.TargetParent, stop).ConfigureAwait(false);
+            string role = execution.RoleSid.Value;
+            var sourceProtection = replayingSourceDeletion
+                ? await ReadDirectoryTransferProtectionAsync(plan.SourceParent, stop, role).ConfigureAwait(false) : plan.SourceParent;
+            var targetProtection = replayingSourceDeletion
+                ? await ReadDirectoryTransferProtectionAsync(plan.TargetParent, stop, role).ConfigureAwait(false) : plan.TargetParent;
+            await using var sourceParent = await OpenTransferDirectoryGuardAsync(sourceProtection, stop).ConfigureAwait(false);
+            await using var targetParent = await OpenTransferDirectoryGuardAsync(targetProtection, stop).ConfigureAwait(false);
             var sourceBefore = await sourceParent.InspectAsync(stop).ConfigureAwait(false);
             var targetBefore = await targetParent.InspectAsync(stop).ConfigureAwait(false);
-            RequireNative(sourceBefore, plan.SourceParent);
-            RequireNative(targetBefore, plan.TargetParent);
-            if (await catalog.ReadNamespaceMemberProtectionSnapshotAsync(plan.SourceParent.Context.Member.MemberId, stop).ConfigureAwait(false) != plan.SourceParent ||
-                await catalog.ReadNamespaceMemberProtectionSnapshotAsync(plan.TargetParent.Context.Member.MemberId, stop).ConfigureAwait(false) != plan.TargetParent)
+            RequireNative(sourceBefore, sourceProtection);
+            RequireNative(targetBefore, targetProtection);
+            if (await catalog.ReadNamespaceMemberProtectionSnapshotAsync(plan.SourceParent.Context.Member.MemberId, stop).ConfigureAwait(false) != sourceProtection ||
+                await catalog.ReadNamespaceMemberProtectionSnapshotAsync(plan.TargetParent.Context.Member.MemberId, stop).ConfigureAwait(false) != targetProtection)
                 throw new InvalidOperationException("Directory transfer requires its current original parent protections.");
             var destination = fileSystem.GetDirectory(plan.Members[0].TargetRelativePath);
             if (!publishingTarget && (await destination.InspectAsync(stop).ConfigureAwait(false)).Exists)
                 throw new IOException("An existing native object occupies the directory transfer target.");
             var guards = new List<MirrorPulseWindowsNamespacePermissionLease>(plan.Members.Count);
+            var guardedTree = new List<MirrorPulseNamespaceProtectedTreeMember>(plan.Members.Count);
             var data = new List<(MirrorPulseTransferSourceDataLease Lease, MirrorPulseNamespaceImportContent Content)>();
             try
             {
                 foreach (var member in plan.Members)
                 {
                     var original = member.Source.Protection;
-                    if (original.Context.Protection.RoleSid != execution.RoleSid.Value ||
-                        original.Context.Member.OwnerSid != execution.OwnerSid.Value ||
-                        await catalog.ReadNamespaceMemberProtectionSnapshotAsync(original.Context.Member.MemberId, stop).ConfigureAwait(false) != original)
+                    var current = replayingSourceDeletion
+                        ? await ReadDirectoryTransferProtectionAsync(original, stop, role).ConfigureAwait(false) : original;
+                    if (current.Context.Protection.RoleSid != role || current.Context.Member.OwnerSid != execution.OwnerSid.Value ||
+                        await catalog.ReadNamespaceMemberProtectionSnapshotAsync(original.Context.Member.MemberId, stop).ConfigureAwait(false) != current)
                         throw new InvalidOperationException("A directory transfer source member changed its protection or location.");
                     string path = original.Context.Location.RelativePath;
                     CloudItem item = original.Context.Member.IsDirectory ? fileSystem.GetDirectory(path) : fileSystem.GetFile(path);
                     var guard = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(item, router, stop).ConfigureAwait(false);
                     guards.Add(guard);
-                    RequireNative(await guard.InspectAsync(stop).ConfigureAwait(false), original);
+                    RequireNative(await guard.InspectAsync(stop).ConfigureAwait(false), current);
+                    guardedTree.Add(new(current, member.Source.Depth));
                     var projection = await MirrorPulseNamespaceMemberLocator.ResolveAsync(catalog, state.OpenStore,
                         original.Context.Member.MemberId, actor, stop).ConfigureAwait(false);
                     RequireSourceProjection(original, projection);
@@ -173,7 +181,9 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
                     if (!native.Exists || native.IsTombstone || native.LocalBinding is not { } binding ||
                         new MirrorPulseLocalFileBinding(binding.VolumeSerialNumber, binding.SyncRootFileId, binding.LocalFileId) != original.Context.Member.LocalObject)
                         throw new InvalidDataException("A directory transfer source changed its native binding.");
-                    if (native.IsPlaceholder)
+                    if (native.IsPlaceholder && replayingSourceDeletion && original.Context.Protection.RoleSid != role)
+                        _ = await CaptureDirectoryRetirementProjectionAsync(member, item, native, null, stop).ConfigureAwait(false);
+                    else if (native.IsPlaceholder)
                     {
                         var identity = CloudPlaceholderIdentity.Decode(native.PlaceholderIdentity.Span);
                         if (identity.ItemId != projection.ItemId || identity.RemoteId != projection.RemoteId ||
@@ -190,14 +200,14 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
                     else if (!native.IsPlaceholder || native.Kind != CloudItemKind.Directory)
                         throw new InvalidDataException("A directory transfer requires its original directory placeholders.");
                 }
-                await RequireExactTransferDirectoryInventoryAsync(plan.Members.Select(member => member.Source).ToArray(), stop).ConfigureAwait(false);
+                await RequireExactTransferDirectoryInventoryAsync(guardedTree, stop).ConfigureAwait(false);
                 result = publishingTarget
                     ? await operation().ConfigureAwait(false)
                     : await execution.RunNormalUserOperationAsync(operation).ConfigureAwait(false);
                 foreach (var (lease, content) in data)
                     await lease.VerifyAsync(content.Length, content.Sha256, stop).ConfigureAwait(false);
                 for (int index = 0; index < plan.Members.Count; index++)
-                    RequireNative(await guards[index].InspectAsync(stop).ConfigureAwait(false), plan.Members[index].Source.Protection);
+                    RequireNative(await guards[index].InspectAsync(stop).ConfigureAwait(false), guardedTree[index].Protection);
                 MirrorPulseNamespaceBirthProtectionVerifier.RequireUnchangedParent(sourceBefore, await sourceParent.InspectAsync(stop).ConfigureAwait(false));
                 MirrorPulseNamespaceBirthProtectionVerifier.RequireUnchangedParent(targetBefore, await targetParent.InspectAsync(stop).ConfigureAwait(false));
                 if (!publishingTarget && (await destination.InspectAsync(stop).ConfigureAwait(false)).Exists)

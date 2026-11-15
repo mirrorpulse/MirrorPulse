@@ -255,10 +255,10 @@ public sealed partial class MirrorPulseProductCatalog
             ?? throw new InvalidOperationException("Directory transfer role recovery requires its original admission.");
         RootId root = intent.Roots.Single().RootId;
         if (root != plan.SourceRoute.RootId && root != plan.TargetRoute.RootId ||
-            await ReadDirectoryTransferSourceDeletionCoreAsync(transferId, transaction, token).ConfigureAwait(false) is not { AcceptedAt: { } accepted } ||
-            intent.PreparedAt < accepted ||
+            await ReadDirectoryTransferSourceDeletionCoreAsync(transferId, transaction, token).ConfigureAwait(false) is not { } deletion ||
+            intent.PreparedAt < deletion.StartedAt ||
             (await ReadDirectoryTransferAcknowledgementCoreAsync(transferId, transaction, token).ConfigureAwait(false))?.AcknowledgedAt is not null)
-            throw new InvalidOperationException("Directory transfer role recovery requires an original fenced root and accepted source deletion.");
+            throw new InvalidOperationException("Directory transfer role recovery requires an original fenced root and started source deletion.");
         await RequireDirectoryTransferInitializationFenceAsync(intent, transaction, token).ConfigureAwait(false);
         await RequireNamespaceTransferRoutesAsync([plan.SourceRoute, plan.TargetRoute], transaction, token, requireSingleRoot: true)
             .ConfigureAwait(false);
