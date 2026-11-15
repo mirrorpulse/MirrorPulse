@@ -124,6 +124,53 @@ function Assert-TransferRootsReady {
     }
 }
 
+function Wait-TransferWorkersConnected {
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
+    do {
+        $status = (Invoke-TransferCli @('--json', '--no-start', 'status')).data
+        $connected = @($status.instances | Where-Object { $_.instanceId -cin $script:transferRoutes.instanceId -and $_.workerConnected -eq $true })
+        if ($connected.Count -eq 2) { return }
+        Start-Sleep -Milliseconds 100
+    } while ([DateTimeOffset]::UtcNow -lt $deadline)
+    throw 'Both actual signed transfer Workers must connect.'
+}
+
+function Get-TransferWorkerBindings {
+    param([Parameter(Mandatory)][object[]]$Installations)
+    $bindings = [Collections.Generic.List[object]]::new()
+    foreach ($process in Get-Process) {
+        try {
+            $executable = $process.MainModule.FileName
+            if ([string]::IsNullOrWhiteSpace($executable)) { continue }
+            $owners = @($Installations | Where-Object { $executable.StartsWith(([IO.Path]::GetFullPath($_.installationDirectory).TrimEnd('\') + '\'), [StringComparison]::OrdinalIgnoreCase) })
+            if ($owners.Count -eq 0) { continue }
+            if ($owners.Count -ne 1) { throw 'The actual Worker executable has ambiguous installation ownership.' }
+            $modules = @($process.Modules | Where-Object ModuleName -ieq 'coreclr.dll')
+            if ($modules.Count -ne 1 -or $modules[0].FileName -ine (Join-Path ([IO.Path]::GetDirectoryName($executable)) 'coreclr.dll')) {
+                throw 'The actual signed Worker did not load its private payload runtime.'
+            }
+            $bindings.Add([ordered]@{processId=$process.Id;installId=$owners[0].installId;adapterId=$owners[0].adapterId})
+        } catch [ComponentModel.Win32Exception] { } catch [InvalidOperationException] { }
+        finally { $process.Dispose() }
+    }
+    if ($bindings.Count -ne 2 -or @($bindings.installId | Select-Object -Unique).Count -ne $Installations.Count) {
+        throw 'The active Host must run two actual Workers from the exact signed installations.'
+    }
+    return $bindings.ToArray()
+}
+
+function Read-PreparedTransferObservation {
+    param([string]$OperationId, [string]$SourceRoot, [string]$TargetRoot, [string]$SourceLocal,
+        [string]$SourceRemote, [string]$TargetLocal, [string]$TargetRemote)
+    [ordered]@{
+        status=(Invoke-TransferCli @('--json', '--no-start', 'namespace', 'transfer', 'status', $OperationId)).data
+        sourcePending=@((Invoke-TransferCli @('--json', '--no-start', 'namespace', 'transfer', 'list', $SourceRoot)).data.entries)
+        targetPending=@((Invoke-TransferCli @('--json', '--no-start', 'namespace', 'transfer', 'list', $TargetRoot)).data.entries)
+        sourceLocalSha256=(Read-TransferHash $SourceLocal);sourceRemoteSha256=(Read-TransferHash $SourceRemote)
+        targetLocalMissing=!(Test-Path -LiteralPath $TargetLocal);targetRemoteMissing=!(Test-Path -LiteralPath $TargetRemote)
+    }
+}
+
 function Write-TransferOriginal {
     param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][object]$Value)
     $Value | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $originals ($Name + '.json')) -Encoding utf8
@@ -239,36 +286,10 @@ try {
         ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $fixture '.mp-cli-transfer-fixture.json') -Encoding utf8
     Invoke-TransferCli @('--json', 'host', 'restart') | Out-Null; Wait-TransferHostStopped
     Invoke-TransferCli @('--json', 'host', 'start') | Out-Null
-    $deadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
-    do {
-        $status = (Invoke-TransferCli @('--json', '--no-start', 'status')).data
-        $connected = @($status.instances | Where-Object { $_.instanceId -in @($sourceInstance.data.createdInstanceId, $targetInstance.data.createdInstanceId) -and $_.workerConnected -eq $true })
-        if ($connected.Count -eq 2) { break }
-        Start-Sleep -Milliseconds 100
-    } while ([DateTimeOffset]::UtcNow -lt $deadline)
-    if ($connected.Count -ne 2) { throw 'Both actual signed Local Workers must connect.' }
+    Wait-TransferWorkersConnected
     Assert-TransferRootsReady
-    $workerIds = [Collections.Generic.List[int]]::new()
-    $workerBindings = [Collections.Generic.List[object]]::new()
     $fixtureInstallations = @($topology.installations)
-    foreach ($process in Get-Process) {
-        try {
-            $executable = $process.MainModule.FileName
-            if ([string]::IsNullOrWhiteSpace($executable)) { continue }
-            $owners = @($fixtureInstallations | Where-Object { $executable.StartsWith(([IO.Path]::GetFullPath($_.installationDirectory).TrimEnd('\') + '\'), [StringComparison]::OrdinalIgnoreCase) })
-            if ($owners.Count -eq 0) { continue }
-            if ($owners.Count -ne 1) { throw 'The actual Worker executable has ambiguous installation ownership.' }
-            $modules = @($process.Modules | Where-Object ModuleName -ieq 'coreclr.dll')
-            if ($modules.Count -ne 1 -or $modules[0].FileName -ine (Join-Path ([IO.Path]::GetDirectoryName($executable)) 'coreclr.dll')) {
-                throw 'The actual signed Worker did not load its private payload runtime.'
-            }
-            $workerIds.Add($process.Id)
-            $workerBindings.Add([ordered]@{processId=$process.Id;installId=$owners[0].installId;adapterId=$owners[0].adapterId})
-        } catch [ComponentModel.Win32Exception] { } catch [InvalidOperationException] { }
-        finally { $process.Dispose() }
-    }
-    if ($workerIds.Count -ne 2) { throw 'Exactly two actual signed Worker processes must run from the verified installation.' }
-    if ($crossPackage -and @($workerBindings.installId | Select-Object -Unique).Count -ne 2) { throw 'Both signed packages must run their own actual Worker.' }
+    $workerBindings = @(Get-TransferWorkerBindings -Installations $fixtureInstallations)
     $beforeRestart = (Invoke-TransferCli @('--json', '--no-start', 'host', 'status')).data.processId
     $phase = 'InitialRemoteRefresh'
     Invoke-TransferCli @('--json', '--no-start', 'sync', 'refresh') | Out-Null
@@ -289,9 +310,40 @@ try {
         $phase = 'TransferCommands.' + $direction + '.InspectAndMove'
         $member = (Invoke-TransferCli @('--json', '--no-start', 'namespace', 'member', 'inspect', ($source.directoryName + '/' + $sourceName))).data
         $parent = (Invoke-TransferCli @('--json', '--no-start', 'namespace', 'member', 'inspect', $target.directoryName, '--directory')).data
-        $moved = (Invoke-TransferCli @('--json', '--no-start', 'namespace', 'transfer', 'move', $operations[$index], $member.memberId, $parent.memberId, $targetName)).data
         $targetLocal = Join-Path $sync ($target.directoryName + '/' + $targetName)
         $targetRemote = Join-Path $fixture ('source/' + $targetSide + '/' + $targetName)
+        $preparedRestart = $null
+        if ($forward) {
+            $phase = 'TransferCommands.Forward.Prepare'
+            $prepared = (Invoke-TransferCli @('--json', '--no-start', 'namespace', 'transfer', 'prepare',
+                $operations[$index], $member.memberId, $parent.memberId, $targetName)).data
+            $observationArguments = @{
+                OperationId=$operations[$index];SourceRoot=$source.rootId;TargetRoot=$target.rootId;SourceLocal=$sourceLocal
+                SourceRemote=$sourceRemote;TargetLocal=$targetLocal;TargetRemote=$targetRemote
+            }
+            $preparedRestart = [ordered]@{
+                preparedBy=$beforeRestart;command=$prepared
+                beforeRestart=(Read-PreparedTransferObservation @observationArguments)
+            }
+            Assert-CliPreparedTransferObservation -Observation $preparedRestart.beforeRestart -Prepared $prepared -SourceSha256 $sourceHash
+            Write-TransferOriginal -Name 'prepared-before-restart' -Value $preparedRestart
+            $phase = 'TransferCommands.Forward.RestartBeforeFirstCopy'
+            Invoke-TransferCli @('--json', 'host', 'restart') | Out-Null; Wait-TransferHostStopped
+            Invoke-TransferCli @('--json', 'host', 'start') | Out-Null
+            Wait-TransferWorkersConnected
+            $preparedRestart.resumedBy = (Invoke-TransferCli @('--json', '--no-start', 'host', 'status')).data.processId
+            $preparedRestart.resumeWorkers = @(Get-TransferWorkerBindings -Installations $fixtureInstallations)
+            $preparedRestart.afterRestart = Read-PreparedTransferObservation @observationArguments
+            Write-TransferOriginal -Name 'prepared-after-restart' -Value $preparedRestart
+            Assert-CliPreparedTransferObservation -Observation $preparedRestart.afterRestart -Prepared $prepared -SourceSha256 $sourceHash
+            if ($preparedRestart.resumedBy -eq $preparedRestart.preparedBy -or @($preparedRestart.resumeWorkers.processId | Where-Object { $_ -in $workerBindings.processId }).Count) {
+                throw 'First copy requires a new Host and two newly started signed Workers.'
+            }
+            $phase = 'TransferCommands.Forward.ResumeFirstCopy'
+            $moved = (Invoke-TransferCli @('--json', '--no-start', 'namespace', 'transfer', 'resume', $operations[$index])).data
+        } else {
+            $moved = (Invoke-TransferCli @('--json', '--no-start', 'namespace', 'transfer', 'move', $operations[$index], $member.memberId, $parent.memberId, $targetName)).data
+        }
         $phase = 'TransferCommands.' + $direction + '.TargetRemoteRead'
         Wait-TransferHash $targetRemote $sourceHash
         $phase = 'TransferCommands.' + $direction + '.TargetLocalRead'
@@ -301,6 +353,7 @@ try {
         $case = [ordered]@{scope=$scope;direction=$direction;operationId=$operations[$index];status=$moved;sourceItemId=$member.nativeItemId;targetItemId=$published.nativeItemId
             sourceSha256=$sourceHash;targetLocalSha256=(Read-TransferHash $targetLocal);targetRemoteSha256=(Read-TransferHash $targetRemote)
             sourceLocalMissing=(-not (Test-Path -LiteralPath $sourceLocal));sourceRemoteMissing=(-not (Test-Path -LiteralPath $sourceRemote));freshRootsAfterMove=$true}
+        if ($null -ne $preparedRestart) { $case.preparedRestart = $preparedRestart }
         Write-TransferOriginal -Name ('move-' + $direction) -Value $case
         $phase = 'TransferCommands.' + $direction + '.LaterTargetUpload'
         $laterBytes = [Text.Encoding]::UTF8.GetBytes('later target edit ' + $direction)
@@ -378,15 +431,16 @@ try {
     $audit = Invoke-TransferProbe -Mode audit
     Write-TransferOriginal -Name 'stopped-host-receipts' -Value ([ordered]@{sourceSha=$sourceSha;runId=$env:GITHUB_RUN_ID;schemaVersion=$schemaVersion;audit=$audit})
     $report = [ordered]@{schemaVersion=$schemaVersion;sourceSha=$sourceSha;runId=$env:GITHUB_RUN_ID;runtime=$Runtime
-        signedInstallation=$true;packageSha256=$installed[0].packageSha256;workerProcessIds=$workerIds.ToArray();privateWorkerRuntime=$true
+        signedInstallation=$true;packageSha256=$installed[0].packageSha256;localInstallId=$installId
+        workerProcessIds=@($workerBindings.processId);privateWorkerRuntime=$true
         roots=$script:transferRoutes;cases=$cases.ToArray();audit=$audit;hostProcessBeforeRestart=$beforeRestart;hostProcessAfterRestart=$afterRestart}
     if ($crossPackage) {
         $report.packages = @($fixtureInstallations | ForEach-Object { [ordered]@{installId=$_.installId;adapterId=$_.adapterId;packageSha256=$_.packageSha256;isSigned=$_.isSigned} })
-        $report.workerBindings = $workerBindings.ToArray()
+        $report.workerBindings = $workerBindings
         $report.webDavServer = Get-Content -Raw -LiteralPath (Join-Path $fixture 'webdav-server.json') | ConvertFrom-Json
     }
     if ($null -ne $directoryCase) { $report.directory = $directoryCase }
-    Assert-CliTransferObservations -Evidence ([pscustomobject]$report) -BeforeCleanup -RequireSingleRoot -RequireDirectory:$VerifyDirectoryTransfer
+    Assert-CliTransferObservations -Evidence ([pscustomobject]$report) -BeforeCleanup -RequireSingleRoot -RequirePreparedRestart -RequireDirectory:$VerifyDirectoryTransfer
     Write-TransferOriginal -Name 'completed-execution' -Value $report
 } catch {
     $primaryFailure = $_
@@ -493,6 +547,6 @@ try {
         foreach ($name in $savedEnvironment.Keys) { [Environment]::SetEnvironmentVariable($name, $savedEnvironment[$name], 'Process') }
     }
 }
-Assert-CliTransferObservations -Evidence ([pscustomobject]$report) -RequireSingleRoot -RequireDirectory:$VerifyDirectoryTransfer
+Assert-CliTransferObservations -Evidence ([pscustomobject]$report) -RequireSingleRoot -RequirePreparedRestart -RequireDirectory:$VerifyDirectoryTransfer
 $report | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $evidenceFile -Encoding utf8
 Write-Output "Verified forward and reverse transfers between real signed single-root instances for $Runtime (schema $schemaVersion)."

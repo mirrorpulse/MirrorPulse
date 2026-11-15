@@ -70,7 +70,7 @@ foreach ($job in $expected.Keys) {
                 $crossPackage[0].observations.schemaVersion -ne 3 -or $crossPackage[0].observations.sourceSha -cne $ExpectedSourceSha -or
                 $crossPackage[0].observations.runtime -cne 'win-arm64') { throw 'The signed cross-package transfer execution is repeated or from another source.' }
             . (Join-Path $PSScriptRoot 'cli-transfer-evidence-policy.ps1')
-            Assert-CliTransferObservations $crossPackage[0].observations -RequireSingleRoot
+            Assert-CliTransferObservations $crossPackage[0].observations -RequireSingleRoot -RequirePreparedRestart
         }
     }
     if ($job -eq "official-package-arm64" -and $RequireInstalled) {

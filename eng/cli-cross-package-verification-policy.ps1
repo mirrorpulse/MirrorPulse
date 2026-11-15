@@ -25,7 +25,7 @@ function Invoke-CliCrossPackageVerification {
             $report.runtime -cne $Runtime -or [string]$report.runId -cne $RunId) {
             throw 'The cross-package report belongs to another source, runtime, run or execution shape.'
         }
-        Assert-CliTransferObservations -Evidence $report -RequireSingleRoot
+        Assert-CliTransferObservations -Evidence $report -RequireSingleRoot -RequirePreparedRestart
     } catch {
         $originalFailure = $_
         try {

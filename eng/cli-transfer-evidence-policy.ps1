@@ -1,9 +1,73 @@
+function Assert-CliPreparedTransferObservation {
+    param([object]$Observation, [object]$Prepared, [string]$SourceSha256)
+
+    $expected = $Prepared | ConvertTo-Json -Depth 5 -Compress
+    if ($null -eq $Prepared -or $Prepared.stage -cne 'Prepared' -or !$Prepared.preparedAt -or
+        $Prepared.rootsFenced -isnot [bool] -or -not $Prepared.rootsFenced -or
+        $Prepared.completed -isnot [bool] -or $Prepared.completed -or
+        $Prepared.journalAcknowledged -isnot [bool] -or $Prepared.journalAcknowledged -or
+        ($null -ne $Prepared.isDirectory -and ($Prepared.isDirectory -isnot [bool] -or $Prepared.isDirectory)) -or $null -ne $Prepared.targetMemberId -or
+        @(@('copyStartedAt', 'copyAcceptedAt', 'sourceDeleteStartedAt', 'sourceDeleteAcceptedAt', 'sourceNativeRetiredAt', 'sourceNameSettledAt') |
+            Where-Object { $null -ne $Prepared.$_ }).Count -or
+        ($Observation.status | ConvertTo-Json -Depth 5 -Compress) -cne $expected -or
+        @($Observation.sourcePending).Count -ne 1 -or @($Observation.targetPending).Count -ne 1 -or
+        ($Observation.sourcePending[0] | ConvertTo-Json -Depth 5 -Compress) -cne $expected -or
+        ($Observation.targetPending[0] | ConvertTo-Json -Depth 5 -Compress) -cne $expected -or
+        $Observation.sourceLocalSha256 -ine $SourceSha256 -or $Observation.sourceRemoteSha256 -ine $SourceSha256 -or
+        $Observation.targetLocalMissing -isnot [bool] -or -not $Observation.targetLocalMissing -or
+        $Observation.targetRemoteMissing -isnot [bool] -or -not $Observation.targetRemoteMissing) {
+        throw 'The original prepared transfer must remain fenced on both roots, with intact source bytes and no target or started copy.'
+    }
+}
+
+function Assert-CliPreparedTransferRestart {
+    param([object]$Restart, [object]$Case, [object]$Evidence)
+
+    $prepared = $Restart.command
+    Assert-CliPreparedTransferObservation -Observation $Restart.beforeRestart -Prepared $prepared -SourceSha256 $Case.sourceSha256
+    Assert-CliPreparedTransferObservation -Observation $Restart.afterRestart -Prepared $prepared -SourceSha256 $Case.sourceSha256
+    $status = $Case.status
+    foreach ($field in @('operationId', 'sourceRootId', 'targetRootId', 'sourceInstanceId', 'targetInstanceId',
+        'sourceMemberId', 'sourceRelativePath', 'targetRelativePath', 'preparedAt')) {
+        if ($prepared.$field -cne $status.$field) { throw 'The resumed effect belongs to a different prepared transfer.' }
+    }
+    $prior = [DateTimeOffset]::MinValue; $copy = [DateTimeOffset]::MinValue
+    if (-not [DateTimeOffset]::TryParse([string]$prepared.preparedAt, [ref]$prior) -or
+        -not [DateTimeOffset]::TryParse([string]$status.copyStartedAt, [ref]$copy) -or $copy -lt $prior) {
+        throw 'The retained copy cannot precede the original preparation.'
+    }
+    $workers = @($Restart.resumeWorkers)
+    if (($Restart.preparedBy -isnot [int] -and $Restart.preparedBy -isnot [long]) -or $Restart.preparedBy -le 0 -or
+        $Restart.preparedBy -ne $Evidence.hostProcessBeforeRestart -or
+        ($Restart.resumedBy -isnot [int] -and $Restart.resumedBy -isnot [long]) -or $Restart.resumedBy -le 0 -or
+        $Restart.resumedBy -in @($Restart.preparedBy, $Evidence.hostProcessAfterRestart) -or $workers.Count -ne 2 -or
+        @($workers.processId | Select-Object -Unique).Count -ne 2 -or
+        @($workers | Where-Object { ($_.processId -isnot [int] -and $_.processId -isnot [long]) -or $_.processId -le 0 -or
+            $_.processId -in @($Evidence.workerProcessIds) -or $_.adapterId -cnotin @('com.mirrorpulse.adapter.local', 'com.mirrorpulse.adapter.webdav') }).Count) {
+        throw 'Resumed first copy requires independent Host and signed Worker processes.'
+    }
+    if ($Evidence.schemaVersion -eq 3) {
+        foreach ($package in $Evidence.packages) {
+            if (@($workers | Where-Object { $_.installId -ceq $package.installId -and $_.adapterId -ceq $package.adapterId }).Count -ne 1) {
+                throw 'First copy after restart must use the same two signed package installations.'
+            }
+        }
+    } else {
+        $install = [guid]::Empty
+        if (-not [guid]::TryParseExact([string]$Evidence.localInstallId, 'D', [ref]$install) -or $install -eq [guid]::Empty -or
+            @($workers | Where-Object { $_.adapterId -cne 'com.mirrorpulse.adapter.local' -or $_.installId -cne $Evidence.localInstallId }).Count) {
+            throw 'Both resumed Local Workers must come from the original signed Local installation.'
+        }
+    }
+}
+
 function Assert-CliTransferObservations {
-    param([Parameter(Mandatory)][object]$Evidence, [switch]$BeforeCleanup, [switch]$RequireSingleRoot, [switch]$RequireDirectory)
+    param([Parameter(Mandatory)][object]$Evidence, [switch]$BeforeCleanup, [switch]$RequireSingleRoot,
+        [switch]$RequireDirectory, [switch]$RequirePreparedRestart)
 
     $crossPackage = $Evidence.schemaVersion -eq 3
     $singleRoot = $Evidence.schemaVersion -in @(2, 3)
-    if ($Evidence.schemaVersion -notin @(1, 2, 3) -or ($RequireSingleRoot -and -not $singleRoot) -or
+    if ($Evidence.schemaVersion -notin @(1, 2, 3) -or (($RequireSingleRoot -or $RequirePreparedRestart) -and -not $singleRoot) -or
         $Evidence.sourceSha -cnotmatch '\A[0-9a-f]{40}\z' -or $Evidence.runtime -notin @('win-x64', 'win-arm64') -or
         $Evidence.signedInstallation -isnot [bool] -or -not $Evidence.signedInstallation -or
         $Evidence.packageSha256 -cnotmatch '\A[0-9a-fA-F]{64}\z' -or
@@ -114,6 +178,9 @@ function Assert-CliTransferObservations {
             $status.journalAcknowledged -ne ($retained.originalJournalCount -gt 0) -or
             $retained.acknowledgementKind -cnotin @('OriginalJournal', 'CommandWithoutCapturedNotifications')) {
             throw 'Actual file outcomes and stopped-Host original receipts disagree, or an empty claim falsely reports journal acknowledgement.'
+        }
+        if ($singleRoot -and $key -ceq 'Forward' -and ($RequirePreparedRestart -or $null -ne $case.preparedRestart)) {
+            Assert-CliPreparedTransferRestart -Restart $case.preparedRestart -Case $case -Evidence $Evidence
         }
     }
     if ($Evidence.audit.schemaVersion -ne $Evidence.schemaVersion -or $Evidence.audit.exclusiveCatalogOwner -isnot [bool] -or -not $Evidence.audit.exclusiveCatalogOwner -or

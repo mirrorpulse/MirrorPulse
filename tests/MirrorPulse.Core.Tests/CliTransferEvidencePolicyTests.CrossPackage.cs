@@ -8,7 +8,7 @@ public sealed partial class CliTransferEvidencePolicyTests
     [TestMethod]
     public async Task CrossPackagePolicyRequiresBothActualPackagesAndDirectionsWithoutLosingOriginalReceipts()
     {
-        var result = await ExerciseAsync(CrossPackageEvidence(), requireSingleRoot: true);
+        var result = await ExerciseAsync(CrossPackageEvidence(), requireSingleRoot: true, requirePreparedRestart: true);
         Assert.AreEqual(0, result.ExitCode, result.Output + result.Error);
     }
 
@@ -61,6 +61,7 @@ public sealed partial class CliTransferEvidencePolicyTests
             new { processId = 102, installId = webdav, adapterId = "com.mirrorpulse.adapter.webdav" }
         });
         evidence["webDavServer"] = JsonSerializer.SerializeToNode(new { schemaVersion = 1, stopped = true, fileBacked = true, reads = 2, puts = 2, deletes = 1 });
+        AddPreparedRestart(evidence, local, webdav);
         return evidence;
     }
 }

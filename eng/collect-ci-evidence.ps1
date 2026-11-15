@@ -126,7 +126,7 @@ if ($TransferIntegrationPath) {
     $transfers = Get-Content -LiteralPath $TransferIntegrationPath -Raw | ConvertFrom-Json
     if ($transfers.runtime -cne $Runtime -or $transfers.sourceSha -cne $sourceSha) { throw 'The signed CLI transfer evidence belongs to another source or runtime.' }
     . (Join-Path $PSScriptRoot 'cli-transfer-evidence-policy.ps1')
-    Assert-CliTransferObservations $transfers -RequireSingleRoot -RequireDirectory
+    Assert-CliTransferObservations $transfers -RequireSingleRoot -RequireDirectory -RequirePreparedRestart
     $checks += [ordered]@{name='signed-local-cli-transfers';executed=$true;observations=$transfers}
 }
 if ($CrossPackageTransferIntegrationPath) {
@@ -135,7 +135,7 @@ if ($CrossPackageTransferIntegrationPath) {
         throw 'The signed cross-package transfer evidence belongs to another source or runtime.'
     }
     . (Join-Path $PSScriptRoot 'cli-transfer-evidence-policy.ps1')
-    Assert-CliTransferObservations $transfers -RequireSingleRoot
+    Assert-CliTransferObservations $transfers -RequireSingleRoot -RequirePreparedRestart
     $checks += [ordered]@{name='signed-cross-package-cli-transfers';executed=$true;observations=$transfers}
 }
 if ($InstalledPath) {
