@@ -95,7 +95,7 @@ public sealed partial class MirrorPulseProductCatalog
         if (target.Context.Member.LocalObject != copy.TargetPublication.LocalObject || target.Context.Member.RootId != copy.Plan.TargetRoute.RootId ||
             target.Context.Member.IsDirectory || target.Context.Location.RelativePath != copy.Plan.TargetRelativePath ||
             target.Context.Location.ParentMemberId != copy.Plan.TargetParent.Context.Member.MemberId ||
-            target.Context.Protection.RoleSid != copy.Plan.Source.Context.Protection.RoleSid ||
+            target.Context.Protection.RoleSid != copy.TargetBirth.Birth.RoleSid ||
             target.Identity.ItemId != copy.TargetPublication.ItemId || target.Identity.RemoteId != copy.TargetBirth.Plan.RemoteId)
             throw new InvalidOperationException("Source deletion requires the original published target, current role, identity and location.");
         return target;
@@ -123,7 +123,7 @@ public sealed partial class MirrorPulseProductCatalog
             ?? throw new InvalidDataException("Source deletion lost its original target protection evidence.");
         if (copy.TargetBirth is null || protection.BirthOperationId != copy.TargetBirth.Birth.OperationId ||
             protection.Verification.LocalObject != copy.TargetPublication!.LocalObject ||
-            protection.RoleSid != copy.Plan.Source.Context.Protection.RoleSid || protection.Verification.ObservedAt > deletion.StartedAt)
+            protection.RoleSid != copy.TargetBirth.Birth.RoleSid || protection.Verification.ObservedAt > deletion.StartedAt)
             throw new InvalidDataException("Source deletion no longer references its original target object and owned protection.");
     }
 }

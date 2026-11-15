@@ -294,7 +294,9 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator(CloudFileSys
             var identity = CloudPlaceholderIdentity.Decode(snapshot.PlaceholderIdentity.Span);
             if (identity.ItemId != projection.ItemId || identity.RemoteId != projection.RemoteId ||
                 (identity.RemoteRevision ?? string.Empty) != (projection.RemoteRevision ?? string.Empty))
-                throw new InvalidDataException("The native transfer source disagrees with its official public identity.");
+                throw new InvalidDataException("The native transfer source disagrees with its official public identity: " +
+                    $"itemMatches={identity.ItemId == projection.ItemId}; remoteMatches={identity.RemoteId == projection.RemoteId}; " +
+                    $"nativeRevisionPresent={identity.RemoteRevision is not null}; officialRevisionPresent={projection.RemoteRevision is not null}.");
         }
         return projection;
     }

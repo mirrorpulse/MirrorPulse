@@ -36,10 +36,13 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
                 await RecoverRetiredSourceUnderActorAsync(current, retirement, workers, stop).ConfigureAwait(false);
                 return current;
             }
-            return await WithGuardsAsync(current.Plan.Source, current.Plan.SourceParent, current.Plan.TargetParent,
+            var members = current.TargetBirth!.Recovery is { } recovery
+                ? await catalog.ReadFileTransferRecoveryMembersAsync(operationId, recovery, stop).ConfigureAwait(false) : null;
+            var originalSource = members?.Source ?? current.Plan.Source;
+            return await WithGuardsAsync(originalSource, members?.SourceParent ?? current.Plan.SourceParent, members?.TargetParent ?? current.Plan.TargetParent,
                 current.Plan.TargetRelativePath, async (file, childMetadata) =>
                 {
-                    var source = await ReadSourceProjectionAsync(file, current.Plan.Source, stop).ConfigureAwait(false);
+                    var source = await ReadSourceProjectionAsync(file, originalSource, stop).ConfigureAwait(false);
                     if (source.RemoteRevision != current.Plan.SourceRemoteRevision)
                         throw new InvalidDataException("The original source projection changed before conditional source deletion.");
                     var target = await catalog.ReadNamespaceMemberProtectionSnapshotAsync(current.TargetPublication!.MemberId, stop).ConfigureAwait(false)
@@ -59,7 +62,7 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
                         string sourcePath = current.Plan.Source.Context.Location.RelativePath[(current.Plan.SourceRoute.DirectoryName.Length + 1)..];
                         await RequireRemoteSourceAsync(current, verifier, workers.Stats, sourcePath, stop).ConfigureAwait(false);
                         await RequireCurrentTargetAsync(current, target, targetFile, targetGuard, stop).ConfigureAwait(false);
-                        _ = await ReadSourceProjectionAsync(file, current.Plan.Source, stop).ConfigureAwait(false);
+                        _ = await ReadSourceProjectionAsync(file, originalSource, stop).ConfigureAwait(false);
                         await data.VerifyAsync(current.Plan.Length, current.Plan.Sha256, stop).ConfigureAwait(false);
                         current = await catalog.StartNamespaceTransferSourceDeleteAsync(operationId, freshTarget,
                             target.Context.Protection.ProtectionId, DateTimeOffset.UtcNow, stop).ConfigureAwait(false);
