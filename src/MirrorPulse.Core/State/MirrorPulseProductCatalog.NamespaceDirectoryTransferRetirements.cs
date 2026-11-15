@@ -12,6 +12,13 @@ internal sealed record MirrorPulseDirectoryTransferRetirement(Guid TransferId, i
 {
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public MirrorPulseNamespaceMemberProtectionSnapshot? ParentProtection { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? RecoveredOfficialLocalFileId { get; init; }
+
+    [JsonIgnore]
+    public MirrorPulseNamespaceTransferSourceProjection CurrentProjection => RecoveredOfficialLocalFileId is { } localFileId
+        ? Projection with { OfficialLocalFileId = localFileId } : Projection;
 }
 
 /// <summary>Validated historical retirement of one original directory transfer member.</summary>
@@ -102,7 +109,8 @@ public sealed partial class MirrorPulseProductCatalog
 
     internal async Task<MirrorPulseDirectoryTransferRetirement> StartNamespaceDirectoryTransferRetirementAsync(
         Guid transferId, int ordinal, MirrorPulseNamespaceTransferSourceProjection projection,
-        MirrorPulseDirectoryTransferTargetVerification fresh, DateTimeOffset startedAt, CancellationToken token, string? recoveredRole = null)
+        MirrorPulseDirectoryTransferTargetVerification fresh, DateTimeOffset startedAt, CancellationToken token,
+        string? recoveredRole = null, long? observedPlaceholderLocalFileId = null)
     {
         await _gate.WaitAsync(token).ConfigureAwait(false);
         try
@@ -123,14 +131,22 @@ public sealed partial class MirrorPulseProductCatalog
                 member.Source.Protection.Context.Member.MemberId, projection, startedAt);
             ValidateDirectoryTransferRetirement(plan, accepted, row);
             var original = rows.SingleOrDefault(value => value.Ordinal == ordinal);
-            if (original is not null)
+            if (original is not null && original.CurrentProjection == projection with { CapturedAt = original.Projection.CapturedAt })
             {
-                if (original.Projection != projection with { CapturedAt = original.Projection.CapturedAt })
-                    throw new InvalidOperationException("The original native source projection is immutable.");
                 transaction.Commit();
                 return original;
             }
-            if (ordinal != plan.Members.Count - 1 - rows.Count || rows.Any(value => value.RetiredAt is null))
+            if (original is not null)
+            {
+                if (original.RetiredAt is not null || original.CurrentProjection.OfficialLocalFileId is not null ||
+                    observedPlaceholderLocalFileId is not { } localId ||
+                    original.Projection != projection with { CapturedAt = original.Projection.CapturedAt, OfficialLocalFileId = null } ||
+                    projection.OfficialLocalFileId != localId)
+                    throw new InvalidOperationException("The original native source projection is immutable.");
+                row = original with { RecoveredOfficialLocalFileId = localId };
+                ValidateDirectoryTransferRetirement(plan, accepted, row);
+            }
+            else if (ordinal != plan.Members.Count - 1 - rows.Count || rows.Any(value => value.RetiredAt is null))
                 throw new InvalidOperationException("Directory transfer retires source members in their original leaf-first order.");
             await RequireNamespaceTransferRoutesAsync([plan.SourceRoute, plan.TargetRoute], transaction, token,
                 requireSingleRoot: true).ConfigureAwait(false);
@@ -139,7 +155,7 @@ public sealed partial class MirrorPulseProductCatalog
                 .ConfigureAwait(false);
             _ = await RequireCurrentDirectoryTransferRetirementMemberAsync(plan, ordinal, transaction, recoveredRole, token).ConfigureAwait(false);
             validation.Dispose();
-            await WriteDirectoryTransferRetirementAsync(row, true, transaction, token).ConfigureAwait(false);
+            await WriteDirectoryTransferRetirementAsync(row, original is null, transaction, token).ConfigureAwait(false);
             transaction.Commit();
             return row;
         }
@@ -290,7 +306,8 @@ public sealed partial class MirrorPulseProductCatalog
             projection.CapturedAt < accepted || row.StartedAt < projection.CapturedAt ||
             row.RetiredAt < row.StartedAt ||
             (row.RetiredAt is null) != (row.Parent is null) || (row.RetiredAt is null) != (row.NameEpoch is null) ||
-            row.RetiredAt is null && row.ParentProtection is not null)
+            row.RetiredAt is null && row.ParentProtection is not null ||
+            row.RecoveredOfficialLocalFileId is not null && (original.Context.Member.IsDirectory || projection.OfficialLocalFileId is not null))
             throw new InvalidDataException("Native retirement lost its original SDK projection or chronology.");
         if (row.Parent is { } parent)
         {

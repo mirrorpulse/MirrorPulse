@@ -143,7 +143,7 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
         {
             var row = await read.Items.GetByItemIdAsync(member.Projection.ItemId, token).ConfigureAwait(false);
             var kind = plan.Members[member.Ordinal].Source.Protection.Context.Member.IsDirectory ? CloudItemKind.Directory : CloudItemKind.File;
-            RequireOriginalSourceProjection(member.Projection, row, tombstone: true, kind);
+            RequireOriginalSourceProjection(member.CurrentProjection, row, tombstone: true, kind);
         }
         await read.RollbackAsync(token).ConfigureAwait(false);
     }

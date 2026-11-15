@@ -142,9 +142,10 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
                 Task.FromResult(MirrorPulseTransferSourceDataLease.Open(item.FullPath))).ConfigureAwait(false);
             if (data is not null) await data.VerifyAsync(member.Content!.Length, member.Content.Sha256, token).ConfigureAwait(false);
 
-            var projection = await CaptureDirectoryRetirementProjectionAsync(member, item, native, token).ConfigureAwait(false);
+            var (projection, observedLocalFileId) = await CaptureDirectoryRetirementProjectionAsync(
+                member, item, native, retained, token).ConfigureAwait(false);
             retained = await catalog.StartNamespaceDirectoryTransferRetirementAsync(plan.Command.CommandId, ordinal,
-                projection, fresh, DateTimeOffset.UtcNow, token, role).ConfigureAwait(false);
+                projection, fresh, DateTimeOffset.UtcNow, token, role, observedLocalFileId).ConfigureAwait(false);
             if (SourceRetirementCheckpoint is not null)
                 await SourceRetirementCheckpoint(MirrorPulseTransferSourceRetirementCheckpoint.BeforeNativeDeletion, token).ConfigureAwait(false);
             await guard.DisposeAsync().ConfigureAwait(false);
@@ -170,7 +171,7 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
         await using (var read = await state.OpenStore.BeginTransactionAsync(token).ConfigureAwait(false))
         {
             var row = await read.Items.GetByItemIdAsync(retained.Projection.ItemId, token).ConfigureAwait(false);
-            RequireOriginalSourceProjection(retained.Projection, row, tombstone: true, item.Kind);
+            RequireOriginalSourceProjection(retained.CurrentProjection, row, tombstone: true, item.Kind);
             await read.RollbackAsync(token).ConfigureAwait(false);
         }
         var facts = await parentLease.InspectAsync(token).ConfigureAwait(false);
@@ -179,8 +180,9 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
             new(facts.LocalObject, facts.OwnerSid, facts.Dacl, facts.ObservedAt), DateTimeOffset.UtcNow, token, role).ConfigureAwait(false);
     }
 
-    private async Task<MirrorPulseNamespaceTransferSourceProjection> CaptureDirectoryRetirementProjectionAsync(
-        MirrorPulseDirectoryTransferMember member, CloudItem item, CloudItemSnapshot native, CancellationToken token)
+    private async Task<(MirrorPulseNamespaceTransferSourceProjection Projection, long? ObservedPlaceholderLocalFileId)> CaptureDirectoryRetirementProjectionAsync(
+        MirrorPulseDirectoryTransferMember member, CloudItem item, CloudItemSnapshot native,
+        MirrorPulseDirectoryTransferRetirement? retained, CancellationToken token)
     {
         var original = member.Source.Protection;
         var candidate = await MirrorPulseNamespaceMemberLocator.ResolveAsync(catalog, state.OpenStore,
@@ -193,17 +195,26 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
             candidate.ItemId!.Value, candidate.RemoteId!, candidate.RelativePath!, member.SourceRevision, row.LocalFileId,
             original.Context.Member.LocalObject, DateTimeOffset.UtcNow);
         RequireOriginalSourceProjection(projection, row, tombstone: false, item.Kind);
+        long? observedPlaceholderLocalFileId = null;
         if (native.IsPlaceholder)
         {
             var identity = CloudPlaceholderIdentity.Decode(native.PlaceholderIdentity.Span);
+            // Role recovery can convert the same ordinary file to a placeholder.
+            // Its first SDK local ID can be recorded only when the live placeholder
+            // and official row agree and the existing retirement owns this file.
+            if (retained is { Projection.OfficialLocalFileId: null } && item.Kind == CloudItemKind.File &&
+                native.SyncRootFileId is not null && native.LocalFileId is { } nativeLocalId && row.LocalFileId == nativeLocalId)
+                observedPlaceholderLocalFileId = nativeLocalId;
+            bool convertedWithoutRemoteRevision = observedPlaceholderLocalFileId is not null &&
+                string.IsNullOrEmpty(identity.RemoteRevision);
             if (identity.ItemId != row.ItemId || identity.RemoteId != row.RemoteId ||
-                (identity.RemoteRevision ?? string.Empty) != (row.RemoteRevision ?? string.Empty))
+                (!convertedWithoutRemoteRevision && (identity.RemoteRevision ?? string.Empty) != (row.RemoteRevision ?? string.Empty)))
                 throw new InvalidDataException("The native source disagrees with the original SDK retirement projection.");
         }
         else if (item.Kind == CloudItemKind.Directory)
             throw new InvalidDataException("The original transfer directory is no longer a native placeholder.");
         await read.RollbackAsync(token).ConfigureAwait(false);
-        return projection;
+        return (projection, observedPlaceholderLocalFileId);
     }
 
     private async Task RequireDirectoryRetirementTargetAsync(CloudItem item, MirrorPulseDirectoryTransferTargetBirth birth,
