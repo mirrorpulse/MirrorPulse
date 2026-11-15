@@ -103,6 +103,7 @@
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeSignedLocalDirectoryTransferResumesBeforeNativeDeleteAcrossHostRoles",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeSignedLocalDirectoryTransferResumesBeforeWorkerDispatchAcrossHostRoles",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeSignedLocalDirectoryTransferResumesBeforeWorkerReceiptAcrossHostRoles",
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeSignedLocalDirectoryTransferResumesBeforeWorkerStartAcrossHostRoles",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeProtectedBirthDirectoryMoveRecoversItsOriginalProjectionAcrossRuntimeOwners",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeProductionDirectoryMoveSettlesTheOriginalThroughInstalledLocalWorker",
     "MirrorPulse.Core.Tests.AdapterWorkerV2SessionTests.RealHostNegotiatesAndRecoversADurableContainerMoveAcrossWorkerOwners",
@@ -340,6 +341,7 @@
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeSignedLocalDirectoryTransferResumesBeforeNativeDeleteAcrossHostRoles",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeSignedLocalDirectoryTransferResumesBeforeWorkerDispatchAcrossHostRoles",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeSignedLocalDirectoryTransferResumesBeforeWorkerReceiptAcrossHostRoles",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeSignedLocalDirectoryTransferResumesBeforeWorkerStartAcrossHostRoles",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeSignedLocalDirectoryTransferToWebDavRejectsUnsupportedReverseBeforeMutation"
     ],
     "signedDirectoryMove": [

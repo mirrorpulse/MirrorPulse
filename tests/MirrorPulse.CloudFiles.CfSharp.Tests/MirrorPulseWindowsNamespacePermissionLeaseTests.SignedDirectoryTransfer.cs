@@ -39,6 +39,10 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         VerifySignedDirectoryTransferAsync(null, MirrorPulseTransferSourceRetirementCheckpoint.BeforeDirectoryWorkerDeletion);
 
     [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles"), TestCategory("SignedDirectoryTransfer")]
+    public Task NativeSignedLocalDirectoryTransferResumesBeforeWorkerStartAcrossHostRoles() =>
+        VerifySignedDirectoryTransferAsync(null, MirrorPulseTransferSourceRetirementCheckpoint.BeforeDirectoryWorkerDeletionStart);
+
+    [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles"), TestCategory("SignedDirectoryTransfer")]
     public Task NativeSignedLocalDirectoryTransferToWebDavRejectsUnsupportedReverseBeforeMutation()
     {
         string? webDavPackage = Environment.GetEnvironmentVariable("MP_SIGNED_WEBDAV_PACKAGE");
@@ -53,7 +57,9 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         bool interruptAfterWorkerDelete = restartCut == MirrorPulseTransferSourceRetirementCheckpoint.BeforeFirstDirectoryNativeRetirement;
         bool interruptBeforeWorkerReceipt = restartCut == MirrorPulseTransferSourceRetirementCheckpoint.AfterDirectoryWorkerDeletionBeforeReceipt;
         bool interruptBeforeWorkerDispatch = restartCut == MirrorPulseTransferSourceRetirementCheckpoint.BeforeDirectoryWorkerDeletion;
-        bool noWorkerReceiptBeforeRestart = interruptBeforeWorkerDispatch || interruptBeforeWorkerReceipt;
+        bool interruptBeforeWorkerStart = restartCut == MirrorPulseTransferSourceRetirementCheckpoint.BeforeDirectoryWorkerDeletionStart;
+        bool sourceStillRemote = interruptBeforeWorkerDispatch || interruptBeforeWorkerStart;
+        bool noWorkerReceiptBeforeRestart = sourceStillRemote || interruptBeforeWorkerReceipt;
         bool noNativeStartsBeforeRestart = interruptAfterWorkerDelete || noWorkerReceiptBeforeRestart;
         string? package = Environment.GetEnvironmentVariable("MP_SIGNED_LOCAL_PACKAGE");
         if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1" || string.IsNullOrWhiteSpace(package))
@@ -200,20 +206,34 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             var stopped = await Assert.ThrowsExactlyAsync<IOException>(async () => await runtime.ResumeDirectoryNamespaceTransferAsync(operationId, token));
             Assert.AreEqual(interruption, stopped.Message);
             var deletion = await catalog.ReadNamespaceDirectoryTransferSourceDeletionAsync(operationId, token);
-            Assert.IsNotNull(deletion);
-            Assert.IsNotNull(deletion.Request);
-            Assert.AreEqual(!noWorkerReceiptBeforeRestart, deletion.Receipt is not null);
-            Assert.AreEqual(!noWorkerReceiptBeforeRestart, deletion.AcceptedAt is not null);
-            Assert.AreEqual(interruptBeforeWorkerDispatch, Directory.Exists(Path.Combine(sourceBackend, "tree")));
-            if (interruptBeforeWorkerDispatch)
+            var originalTargets = new List<MirrorPulseDirectoryTransferTargetBirth>();
+            if (interruptBeforeWorkerStart)
+            {
+                Assert.IsNull(deletion);
+                for (int ordinal = 0; ordinal < plan.Members.Count; ordinal++)
+                {
+                    var birth = await catalog.ReadNamespaceDirectoryTransferBirthAsync(operationId, ordinal, token);
+                    Assert.IsNotNull(birth);
+                    Assert.IsNotNull(await catalog.ReadNamespaceMemberProtectionSnapshotAsync(birth.Birth.OperationId, token));
+                    originalTargets.Add(birth);
+                }
+            }
+            else
+            {
+                Assert.IsNotNull(deletion?.Request);
+                Assert.AreEqual(!noWorkerReceiptBeforeRestart, deletion.Receipt is not null);
+                Assert.AreEqual(!noWorkerReceiptBeforeRestart, deletion.AcceptedAt is not null);
+            }
+            Assert.AreEqual(sourceStillRemote, Directory.Exists(Path.Combine(sourceBackend, "tree")));
+            if (sourceStillRemote)
                 CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(Path.Combine(sourceBackend, original), token));
-            var originalWorkerReceipt = deletion.Receipt;
+            var originalWorkerReceipt = deletion?.Receipt;
             if (interruptBeforeWorkerReceipt)
             {
                 // The Worker has already committed. Observe its exact durable
                 // receipt independently of the interrupted Host catalog.
                 originalWorkerReceipt = await ((IMirrorPulseDirectoryTransferDeletionTransport)worker)
-                    .DeleteDirectoryTransferSourceAsync(deletion.Request, token);
+                    .DeleteDirectoryTransferSourceAsync(deletion!.Request!, token);
             }
             byte[] targetBytes = webDav is null ? await File.ReadAllBytesAsync(Path.Combine(targetBackend, transferred), token) : webDav.Files[transferred];
             CollectionAssert.AreEqual(bytes, targetBytes);
@@ -324,12 +344,22 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             {
                 var replayed = await catalog.ReadNamespaceDirectoryTransferSourceDeletionAsync(operationId, token);
                 Assert.IsNotNull(replayed?.Receipt);
-                Assert.AreEqual(deletion.StartedAt, replayed.StartedAt);
-                Assert.AreEqual(deletion.Request.RequestFingerprint, replayed.Receipt.RequestFingerprint);
+                foreach (var birth in originalTargets)
+                {
+                    Assert.AreEqual(birth, await catalog.ReadNamespaceDirectoryTransferBirthAsync(operationId, birth.Ordinal, token));
+                    var identity = await catalog.ReadNamespaceMemberIdentityAsync(birth.Birth.OperationId, token);
+                    Assert.AreEqual(birth.Plan.ItemId, identity.ItemId);
+                    Assert.AreEqual(birth.Plan.RemoteId, identity.RemoteId);
+                }
+                if (deletion is not null)
+                {
+                    Assert.AreEqual(deletion.StartedAt, replayed.StartedAt);
+                    Assert.AreEqual(deletion.Request!.RequestFingerprint, replayed.Receipt.RequestFingerprint);
+                }
                 if (originalWorkerReceipt is not null)
                 {
                     Assert.AreEqual(originalWorkerReceipt.ReceiptId, replayed.Receipt.ReceiptId);
-                    if (deletion.AcceptedAt is not null) Assert.AreEqual(deletion.AcceptedAt, replayed.AcceptedAt);
+                    if (deletion!.AcceptedAt is not null) Assert.AreEqual(deletion.AcceptedAt, replayed.AcceptedAt);
                     CollectionAssert.AreEqual(originalWorkerReceipt.DeletedOriginals.ToArray(), replayed.Receipt.DeletedOriginals.ToArray());
                 }
                 Assert.HasCount(3, replayed.Receipt.DeletedOriginals);
@@ -354,7 +384,11 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 Assert.AreEqual(completed, await catalog.ReadNamespaceTransferStatusAsync(operationId, token));
                 await using var packageSource = File.OpenRead(package);
                 string digest = Convert.ToHexString(await SHA256.HashDataAsync(packageSource, token));
-                if (interruptBeforeWorkerDispatch)
+                if (interruptBeforeWorkerStart)
+                {
+                    TestContext.WriteLine($"SignedDirectoryTransfer: packageSha256={digest}; publishedBirthsRetained=3; sourceIntactBeforeWorkerStart=True; bothRootsFenced=True; reopenedRoots=True; targetBytesVerified=True; acknowledgementAcrossRoles=True.");
+                }
+                else if (interruptBeforeWorkerDispatch)
                 {
                     TestContext.WriteLine($"SignedDirectoryTransfer: packageSha256={digest}; sourceIntactBeforeWorkerDispatch=True; originalWorkerRequestRetained=True; bothRootsFenced=True; reopenedRoots=True; targetBytesVerified=True; acknowledgementAcrossRoles=True.");
                 }

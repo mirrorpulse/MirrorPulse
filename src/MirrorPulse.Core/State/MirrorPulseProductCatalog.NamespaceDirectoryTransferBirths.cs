@@ -135,6 +135,43 @@ public sealed partial class MirrorPulseProductCatalog
         finally { _gate.Release(); }
     }
 
+    private async Task RequireRegisteredDirectoryTransferTargetAsync(Guid transferId, DateTimeOffset preparedAt,
+        SqliteTransaction transaction, CancellationToken token)
+    {
+        // Before the replacement role is installed, current ACL snapshots can be
+        // incoherent. Admit rotation only for the complete original registered target.
+        // Its current protection, native inventory and Worker bytes are checked later.
+        var (plan, verification) = await ReadDirectoryTransferBirthEvidenceAsync(transferId, transaction, token).ConfigureAwait(false);
+        var members = new Dictionary<Guid, Guid> { [plan.SourceParent.Context.Member.MemberId] = plan.TargetParent.Context.Member.MemberId };
+        Guid targetRoot = Guid.Empty;
+        for (int ordinal = 0; ordinal < plan.Members.Count; ordinal++)
+        {
+            var target = await ReadDirectoryTransferBirthRowAsync(transferId, ordinal, null, transaction, token).ConfigureAwait(false)
+                ?? throw new InvalidOperationException("Role recovery before source deletion requires every original registered target birth.");
+            ValidateRetainedDirectoryTransferBirth(plan, verification, target);
+            await ValidateDirectoryTransferBirthArtifactsAsync(target, transaction, token).ConfigureAwait(false);
+            var member = await ReadNamespaceMemberCoreAsync(target.Birth.OperationId, transaction, token).ConfigureAwait(false);
+            var source = plan.Members[ordinal].Source.Protection.Context;
+            if (member is null || member.Origin != MirrorPulseNamespaceMemberOrigin.ProtectedBirth ||
+                member.OriginId != target.Birth.OperationId || member.RootId != plan.TargetRoute.RootId ||
+                member.ParentMemberId != members[source.Location.ParentMemberId!.Value] ||
+                member.RelativePath != target.Birth.RelativePath || member.IsDirectory != target.Birth.IsDirectory ||
+                member.RegisteredAt > preparedAt)
+                throw new InvalidOperationException("Role recovery before source deletion requires every original registered target member.");
+            var proof = await ReadNamespaceMemberProofAsync(member, false, transaction, token).ConfigureAwait(false);
+            var identity = await ReadNamespaceMemberIdentityCoreAsync(member, transaction, token).ConfigureAwait(false);
+            if (proof.RoleSid != target.Birth.RoleSid || identity.ItemId != target.Plan.ItemId || identity.RemoteId != target.Plan.RemoteId)
+                throw new InvalidOperationException("Role recovery before source deletion requires original target protection and identity.");
+            members.Add(source.Member.MemberId, member.MemberId);
+            if (ordinal == 0) targetRoot = member.MemberId;
+        }
+        var tree = await ReadNamespaceMemberTreeCoreAsync(targetRoot, transaction, token).ConfigureAwait(false);
+        var expected = members.Values.ToHashSet();
+        expected.Remove(plan.TargetParent.Context.Member.MemberId);
+        if (!expected.SetEquals(tree.Select(member => member.MemberId)))
+            throw new InvalidOperationException("Role recovery before source deletion requires the exact registered target inventory.");
+    }
+
     private async Task<MirrorPulseNamespaceMemberProtectionSnapshot> ReadDirectoryTransferBirthParentAsync(
         MirrorPulseDirectoryTransferAdmission admission, int ordinal, SqliteTransaction transaction, CancellationToken token)
     {

@@ -134,6 +134,16 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             Assert.AreEqual(file.Birth, await reopened.ReadNamespaceBirthAsync(file.Birth.OperationId));
             Assert.AreEqual(file.Plan, await reopened.ReadNamespaceBirthPlanAsync(file.Birth.OperationId));
             Assert.IsNull(await reopened.ReadNamespaceBirthStartAsync(file.Birth.OperationId));
+            var initialization = new MirrorPulseNamespaceInitializationIntent(4, Guid.NewGuid(),
+                [new(file.Birth.RootId, Guid.NewGuid())], started)
+            {
+                RequestedInventoryKind = MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory,
+                DirectoryTransferOperationId = directory.TransferId
+            };
+            var incomplete = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
+                reopened.PrepareNamespaceInitializationAsync(initialization));
+            StringAssert.Contains(incomplete.Message, "every original registered target member");
+            Assert.IsNull(await reopened.ReadNamespaceInitializationAsync(initialization.OperationId));
             await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => reopened.StartNamespaceDirectoryTransferSourceDeletionAsync(
                 directory.TransferId, fresh, deleteRequest, started, default));
             Assert.IsNull(await reopened.ReadNamespaceDirectoryTransferSourceDeletionAsync(directory.TransferId, default));

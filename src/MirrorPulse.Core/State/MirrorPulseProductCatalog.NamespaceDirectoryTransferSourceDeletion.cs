@@ -91,7 +91,7 @@ public sealed partial class MirrorPulseProductCatalog
 
     internal async Task<MirrorPulseDirectoryTransferSourceDeletion> StartNamespaceDirectoryTransferSourceDeletionAsync(
         Guid operationId, MirrorPulseDirectoryTransferTargetVerification freshTarget,
-        AdapterAtomicDirectoryDeletionRequest? request, DateTimeOffset startedAt, CancellationToken token)
+        AdapterAtomicDirectoryDeletionRequest? request, DateTimeOffset startedAt, CancellationToken token, string? recoveredRole = null)
     {
         await _gate.WaitAsync(token).ConfigureAwait(false);
         try
@@ -113,7 +113,7 @@ public sealed partial class MirrorPulseProductCatalog
             ValidateDirectoryTransferSourceDeletion(plan, originalTarget, start);
             await RequireNamespaceTransferRoutesAsync([plan.SourceRoute, plan.TargetRoute], transaction, token,
                 requireSingleRoot: true).ConfigureAwait(false);
-            await RequireCurrentDirectoryTransferPublicationAsync(plan, originalTarget, transaction, requireUnretiredSource: true, token)
+            await RequireCurrentDirectoryTransferPublicationAsync(plan, originalTarget, transaction, requireUnretiredSource: true, token, recoveredRole)
                 .ConfigureAwait(false);
             validation.Dispose();
             await WriteDirectoryTransferSourceDeletionAsync(start, true, transaction, token).ConfigureAwait(false);

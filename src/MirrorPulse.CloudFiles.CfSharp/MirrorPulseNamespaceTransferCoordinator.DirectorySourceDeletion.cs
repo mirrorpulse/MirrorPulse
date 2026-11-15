@@ -8,41 +8,54 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 public sealed partial class MirrorPulseNamespaceTransferCoordinator
 {
     internal ValueTask<MirrorPulseDirectoryTransferSourceDeletion> DeleteDirectorySourceAsync(Guid operationId,
-        MirrorPulseTransferWorkerServices workers, CancellationToken token) => actor.RunAsync(async stop =>
+        MirrorPulseTransferWorkerServices workers, CancellationToken token, bool recoveredProtection = false) => actor.RunAsync(async stop =>
     {
         var retained = await catalog.ReadNamespaceDirectoryTransferSourceDeletionAsync(operationId, stop).ConfigureAwait(false);
         if (retained?.AcceptedAt is not null) return retained;
-        if (retained is not null)
-            return await ReplayStartedDirectorySourceDeletionAsync(retained, workers, stop).ConfigureAwait(false);
+        if (recoveredProtection || retained is not null)
+            return await WithPublishedDirectoryTransferTargetAsync(operationId, workers,
+                (plan, fresh) => retained is null
+                    ? StartDirectoryWorkerDeletionAsync(plan, fresh, workers, execution.RoleSid.Value, stop)
+                    : CompleteDirectoryWorkerDeletionAsync(retained, RequireDirectoryTransferDeletionTransport(plan, workers), stop),
+                stop).ConfigureAwait(false);
         _ = await PublishDirectoryTargetUnderActorAsync(operationId, workers, stop, async (admission, freshTarget, admitted) =>
         {
-            retained = await execution.RunNormalUserOperationAsync(async () =>
-            {
-                var original = MirrorPulseProductCatalog.CreateDirectoryTransferSourceAdmission(admission);
-                var transport = original is null ? null : RequireDirectoryTransferDeletionTransport(admission, workers);
-                await RequireOriginalDirectoryRemoteSourceAsync(admission, workers, admitted).ConfigureAwait(false);
-                AdapterAtomicDirectoryDeletionRequest? request = null;
-                if (original is not null)
-                {
-                    var workerAdmission = await transport!.AdmitDirectoryTransferSourceAsync(original, admitted).ConfigureAwait(false);
-                    request = MirrorPulseProductCatalog.CreateDirectoryTransferSourceDeleteRequest(original, workerAdmission);
-                }
-                var started = await catalog.StartNamespaceDirectoryTransferSourceDeletionAsync(operationId, freshTarget,
-                    request, DateTimeOffset.UtcNow, admitted).ConfigureAwait(false);
-                return started.AcceptedAt is not null ? started :
-                    await CompleteDirectoryWorkerDeletionAsync(started, transport!, admitted).ConfigureAwait(false);
-            }).ConfigureAwait(false);
+            retained = await execution.RunNormalUserOperationAsync(() =>
+                StartDirectoryWorkerDeletionAsync(admission, freshTarget, workers, null, admitted)).ConfigureAwait(false);
         }).ConfigureAwait(false);
         return retained ?? throw new InvalidDataException("The original directory source deletion lost its retained outcome.");
     }, token);
 
-    private async Task<MirrorPulseDirectoryTransferSourceDeletion> ReplayStartedDirectorySourceDeletionAsync(
-        MirrorPulseDirectoryTransferSourceDeletion retained, MirrorPulseTransferWorkerServices workers, CancellationToken token)
+    private async Task<MirrorPulseDirectoryTransferSourceDeletion> StartDirectoryWorkerDeletionAsync(
+        MirrorPulseDirectoryTransferAdmission admission, MirrorPulseDirectoryTransferTargetVerification freshTarget,
+        MirrorPulseTransferWorkerServices workers, string? recoveredRole, CancellationToken token)
     {
-        var copy = await catalog.ReadNamespaceDirectoryTransferCopyAsync(retained.TransferId, token).ConfigureAwait(false);
-        var verified = await catalog.ReadNamespaceDirectoryTransferTargetAsync(retained.TransferId, token).ConfigureAwait(false)
+        if (SourceRetirementCheckpoint is not null)
+            await SourceRetirementCheckpoint(MirrorPulseTransferSourceRetirementCheckpoint.BeforeDirectoryWorkerDeletionStart, token)
+                .ConfigureAwait(false);
+        var original = MirrorPulseProductCatalog.CreateDirectoryTransferSourceAdmission(admission);
+        var transport = original is null ? null : RequireDirectoryTransferDeletionTransport(admission, workers);
+        await RequireOriginalDirectoryRemoteSourceAsync(admission, workers, token).ConfigureAwait(false);
+        AdapterAtomicDirectoryDeletionRequest? request = null;
+        if (original is not null)
+        {
+            var workerAdmission = await transport!.AdmitDirectoryTransferSourceAsync(original, token).ConfigureAwait(false);
+            request = MirrorPulseProductCatalog.CreateDirectoryTransferSourceDeleteRequest(original, workerAdmission);
+        }
+        var started = await catalog.StartNamespaceDirectoryTransferSourceDeletionAsync(admission.Command.CommandId, freshTarget,
+            request, DateTimeOffset.UtcNow, token, recoveredRole).ConfigureAwait(false);
+        return started.AcceptedAt is not null ? started :
+            await CompleteDirectoryWorkerDeletionAsync(started, transport!, token).ConfigureAwait(false);
+    }
+
+    private async Task<MirrorPulseDirectoryTransferSourceDeletion> WithPublishedDirectoryTransferTargetAsync(
+        Guid operationId, MirrorPulseTransferWorkerServices workers,
+        Func<MirrorPulseDirectoryTransferAdmission, MirrorPulseDirectoryTransferTargetVerification, Task<MirrorPulseDirectoryTransferSourceDeletion>> delete,
+        CancellationToken token)
+    {
+        var copy = await catalog.ReadNamespaceDirectoryTransferCopyAsync(operationId, token).ConfigureAwait(false);
+        var verified = await catalog.ReadNamespaceDirectoryTransferTargetAsync(operationId, token).ConfigureAwait(false)
             ?? throw new InvalidDataException("The original source deletion lost its verified target.");
-        var transport = RequireDirectoryTransferDeletionTransport(copy.Admission, workers);
         return await WithDirectoryTransferGuardsAsync(copy.Admission, async () =>
         {
             var guards = new List<MirrorPulseWindowsNamespacePermissionLease>(copy.Admission.Members.Count);
@@ -51,10 +64,10 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
             {
                 for (int ordinal = 0; ordinal < copy.Admission.Members.Count; ordinal++)
                 {
-                    var target = await catalog.ReadNamespaceDirectoryTransferBirthAsync(retained.TransferId, ordinal, token).ConfigureAwait(false)
-                        ?? throw new InvalidDataException("The started source deletion lost an original target birth.");
+                    var target = await catalog.ReadNamespaceDirectoryTransferBirthAsync(operationId, ordinal, token).ConfigureAwait(false)
+                        ?? throw new InvalidDataException("The source deletion lost an original target birth.");
                     var snapshot = await catalog.ReadNamespaceMemberProtectionSnapshotAsync(target.Birth.OperationId, token).ConfigureAwait(false)
-                        ?? throw new InvalidDataException("The started source deletion lost its published target.");
+                        ?? throw new InvalidDataException("The source deletion lost its published target.");
                     var item = DirectoryTransferItem(target.Birth.RelativePath, target.Birth.IsDirectory);
                     var lease = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(item, router, token).ConfigureAwait(false);
                     guards.Add(lease);
@@ -66,8 +79,8 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
                     new MirrorPulseTransferTargetVerifier(catalog, workers.Stats, workers.Ranges, workers.Directories), workers.Stats);
                 var accepted = await execution.RunNormalUserOperationAsync(async () =>
                 {
-                    _ = await verifier.ReadCurrentAsync(copy, verified, token).ConfigureAwait(false);
-                    return await CompleteDirectoryWorkerDeletionAsync(retained, transport, token).ConfigureAwait(false);
+                    var fresh = await verifier.ReadCurrentAsync(copy, verified, token).ConfigureAwait(false);
+                    return await delete(copy.Admission, fresh).ConfigureAwait(false);
                 }).ConfigureAwait(false);
                 for (int index = 0; index < guards.Count; index++)
                     RequireNative(await guards[index].InspectAsync(CancellationToken.None).ConfigureAwait(false), targetTree[index].Protection);

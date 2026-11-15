@@ -254,12 +254,16 @@ public sealed partial class MirrorPulseProductCatalog
         var plan = await ReadDirectoryTransferAdmissionCoreAsync(transferId, transaction, token).ConfigureAwait(false)
             ?? throw new InvalidOperationException("Directory transfer role recovery requires its original admission.");
         RootId root = intent.Roots.Single().RootId;
-        if (root != plan.SourceRoute.RootId && root != plan.TargetRoute.RootId ||
-            await ReadDirectoryTransferSourceDeletionCoreAsync(transferId, transaction, token).ConfigureAwait(false) is not { } deletion ||
-            intent.PreparedAt < deletion.StartedAt ||
+        if ((root != plan.SourceRoute.RootId && root != plan.TargetRoute.RootId) ||
+            intent.PreparedAt < plan.PreparedAt ||
             (await ReadDirectoryTransferAcknowledgementCoreAsync(transferId, transaction, token).ConfigureAwait(false))?.AcknowledgedAt is not null)
-            throw new InvalidOperationException("Directory transfer role recovery requires an original fenced root and started source deletion.");
+            throw new InvalidOperationException("Directory transfer role recovery requires its original pending transfer root.");
         await RequireDirectoryTransferInitializationFenceAsync(intent, transaction, token).ConfigureAwait(false);
+        var deletion = await ReadDirectoryTransferSourceDeletionCoreAsync(transferId, transaction, token).ConfigureAwait(false);
+        if (deletion is null)
+            await RequireRegisteredDirectoryTransferTargetAsync(transferId, intent.PreparedAt, transaction, token).ConfigureAwait(false);
+        else if (intent.PreparedAt < deletion.StartedAt)
+            throw new InvalidOperationException("Directory transfer role recovery cannot predate its original source deletion start.");
         await RequireNamespaceTransferRoutesAsync([plan.SourceRoute, plan.TargetRoute], transaction, token, requireSingleRoot: true)
             .ConfigureAwait(false);
     }
