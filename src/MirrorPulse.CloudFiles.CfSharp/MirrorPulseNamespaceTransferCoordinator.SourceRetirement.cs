@@ -21,32 +21,36 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
 
     /// <summary>Retires only the guarded original source after its owned conditional remote delete and current whole-target proof.</summary>
     /// <remarks>Private original bytes and both root fences remain. This does not acknowledge the original journal.</remarks>
-    public async ValueTask<MirrorPulseNamespaceRetirement> RetireSourceAsync(Guid operationId,
-        MirrorPulseTransferWorkerServices workers, CancellationToken token)
+    public ValueTask<MirrorPulseNamespaceRetirement> RetireSourceAsync(Guid operationId,
+        MirrorPulseTransferWorkerServices workers, CancellationToken token) =>
+        RetireSourceAsync(operationId, workers, null, token);
+
+    internal async ValueTask<MirrorPulseNamespaceRetirement> RetireSourceAsync(Guid operationId,
+        MirrorPulseTransferWorkerServices workers, MirrorPulseFileTransferRecovery? recovery, CancellationToken token)
     {
         var copy = await ReadAsync(operationId, token).ConfigureAwait(false);
         var retained = await catalog.ReadNamespaceRetirementAsync(copy.Plan.DeleteOperationId, token).ConfigureAwait(false);
         if (retained?.Phase == MirrorPulseNamespaceRetirementPhase.Completed) return retained;
-        _ = await ExecuteSourceDeleteAsync(operationId, workers, retireLocal: true, token).ConfigureAwait(false);
+        _ = await ExecuteSourceDeleteAsync(operationId, workers, retireLocal: true, recovery, token).ConfigureAwait(false);
         return await catalog.ReadNamespaceRetirementAsync(copy.Plan.DeleteOperationId, CancellationToken.None).ConfigureAwait(false)
             ?? throw new InvalidDataException("The original transfer source retirement receipt disappeared.");
     }
 
     private async Task RetireGuardedSourceAsync(MirrorPulseNamespaceTransferCopy copy, MirrorPulseNamespaceRetirement? retained,
-        CloudFile file, MirrorPulseWindowsNamespacePermissionLease childMetadata, MirrorPulseNamespaceMemberProtectionSnapshot target,
+        MirrorPulseNamespaceMemberProtectionSnapshot source, CloudFile file, MirrorPulseWindowsNamespacePermissionLease childMetadata, MirrorPulseNamespaceMemberProtectionSnapshot target,
         CloudFile targetFile, MirrorPulseWindowsNamespacePermissionLease targetGuard, MirrorPulseTransferSourceDataLease data,
-        MirrorPulseTransferTargetVerifier verifier, CancellationToken token)
+        MirrorPulseTransferTargetVerifier verifier, MirrorPulseFileTransferRecovery? recovery, CancellationToken token)
     {
         actor.AssertAccess();
         var proof = await execution.RunNormalUserOperationAsync(() => verifier.ReadCurrentAsync(copy, token)).ConfigureAwait(false);
         await RequireCurrentTargetAsync(copy, target, targetFile, targetGuard, token).ConfigureAwait(false);
         retained ??= await catalog.PrepareNamespaceTransferSourceRetirementAsync(copy.Plan.OperationId, proof,
-            target.Context.Protection.ProtectionId, DateTimeOffset.UtcNow, token).ConfigureAwait(false);
+            target.Context.Protection.ProtectionId, DateTimeOffset.UtcNow, recovery, token).ConfigureAwait(false);
         if (retained.Intent.TransferEntry?.OperationId != copy.Plan.OperationId ||
             retained.Intent.TransferEntry.TargetProtectionId != target.Context.Protection.ProtectionId ||
             retained.Phase != MirrorPulseNamespaceRetirementPhase.Prepared)
             throw new InvalidDataException("The current source retirement no longer owns its original target and pending source.");
-        var projection = await CaptureOriginalSourceProjectionAsync(copy, file, token).ConfigureAwait(false);
+        var projection = await CaptureOriginalSourceProjectionAsync(copy, source, file, token).ConfigureAwait(false);
         await data.VerifyAsync(copy.Plan.Length, copy.Plan.Sha256, token).ConfigureAwait(false);
         retained = await catalog.StartNamespaceTransferSourceRetirementAsync(copy.Plan.OperationId, projection, DateTimeOffset.UtcNow, token).ConfigureAwait(false);
         if (SourceRetirementCheckpoint is not null)
@@ -73,7 +77,7 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
         await execution.RunNamespaceOperationAsync(async () =>
         {
             var originalSourceParent = retained.Intent.TransferEntry!.RecoveredSourceParent ?? copy.Plan.SourceParent;
-            var originalTargetParent = copy.TargetBirth!.RecoveredParent ?? copy.Plan.TargetParent;
+            var originalTargetParent = retained.Intent.TransferEntry.RecoveredTargetParent ?? copy.TargetBirth!.RecoveredParent ?? copy.Plan.TargetParent;
             foreach (var member in new[] { originalSourceParent, originalTargetParent })
             {
                 RequireLiveRoute(member);

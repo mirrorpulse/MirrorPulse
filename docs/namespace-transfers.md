@@ -217,11 +217,13 @@ can be rebuilt from existing originals without changing receipts or the catalog
 version. These changes do not bound the total global integrity or orphan scan or the other
 namespace-owner inventories; those broader backlog limits remain open.
 
-The current remote-source completion requires negotiated V2 conditional source
-deletion and the original non-null revision. Local-only sources, directory
-manifests, legacy protocols and unfinished transfers under a different protection
-role still require separate recovery. These commands do not complete those
-broader transfer requirements.
+File source completion requires negotiated V2 conditional deletion and the
+original non-null revision. After target publication, a new Host can audit both
+fenced roots and resume before local source retirement. It verifies the original
+published member, accepted target bytes and source generation under its current
+protection role. If the original conditional delete was already accepted, the
+Host uses that receipt for retirement. A local-only source, an ambiguous remote
+effect or a role change during native retirement requires separate recovery.
 
 The signed Local fixture exercises two independent single-root instances. Its
 first successful move is component evidence: complete later-source recreation,

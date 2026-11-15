@@ -10,12 +10,16 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
     /// <summary>Deletes only the original accepted remote source while retaining its guarded local bytes and both fences.</summary>
     /// <remarks>This phase does not perform local retirement or acknowledge a journal. A null original revision
     /// belongs to the separate local-only reconciliation path and cannot authorize an unconditional delete.</remarks>
-    public async ValueTask<MirrorPulseNamespaceTransferCopy> DeleteSourceAsync(Guid operationId,
+    public ValueTask<MirrorPulseNamespaceTransferCopy> DeleteSourceAsync(Guid operationId,
         MirrorPulseTransferWorkerServices workers, CancellationToken token) =>
-        await ExecuteSourceDeleteAsync(operationId, workers, retireLocal: false, token).ConfigureAwait(false);
+        DeleteSourceAsync(operationId, workers, null, token);
+
+    internal ValueTask<MirrorPulseNamespaceTransferCopy> DeleteSourceAsync(Guid operationId,
+        MirrorPulseTransferWorkerServices workers, MirrorPulseFileTransferRecovery? recovery, CancellationToken token) =>
+        ExecuteSourceDeleteAsync(operationId, workers, retireLocal: false, recovery, token);
 
     private async ValueTask<MirrorPulseNamespaceTransferCopy> ExecuteSourceDeleteAsync(Guid operationId,
-        MirrorPulseTransferWorkerServices workers, bool retireLocal, CancellationToken token)
+        MirrorPulseTransferWorkerServices workers, bool retireLocal, MirrorPulseFileTransferRecovery? recovery, CancellationToken token)
     {
         var copy = await ReadAsync(operationId, token).ConfigureAwait(false);
         if (copy.SourceDeletion?.AcceptedAt is not null && !retireLocal) return copy;
@@ -25,7 +29,7 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
             var current = await ReadAsync(operationId, stop).ConfigureAwait(false);
             var retirement = retireLocal ? await catalog.ReadNamespaceRetirementAsync(current.Plan.DeleteOperationId, stop).ConfigureAwait(false) : null;
             if (retirement?.Phase == MirrorPulseNamespaceRetirementPhase.Completed) return current;
-            current = await catalog.ValidateNamespaceTransferSourceDeleteAsync(operationId, stop).ConfigureAwait(false);
+            current = await catalog.ValidateNamespaceTransferSourceDeleteAsync(operationId, recovery, stop).ConfigureAwait(false);
             if (current.SourceDeletion?.AcceptedAt is not null && !retireLocal) return current;
             if (current.SourceDeletion is { AcceptedAt: null }) throw new MirrorPulseMutationAmbiguousException("The original source deletion cannot be dispatched again.");
             if (protocolVersion(current.Plan.SourceRoute.InstanceId) != 2 ||
@@ -36,8 +40,10 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
                 await RecoverRetiredSourceUnderActorAsync(current, retirement, workers, stop).ConfigureAwait(false);
                 return current;
             }
-            var members = current.TargetBirth!.Recovery is { } recovery
-                ? await catalog.ReadFileTransferRecoveryMembersAsync(operationId, recovery, stop).ConfigureAwait(false) : null;
+            var members = recovery is not null
+                ? await catalog.ReadPublishedFileTransferRecoveryMembersAsync(operationId, recovery, stop).ConfigureAwait(false)
+                : current.TargetBirth!.Recovery is { } birthRecovery
+                    ? await catalog.ReadFileTransferRecoveryMembersAsync(operationId, birthRecovery, stop).ConfigureAwait(false) : null;
             var originalSource = members?.Source ?? current.Plan.Source;
             return await WithGuardsAsync(originalSource, members?.SourceParent ?? current.Plan.SourceParent, members?.TargetParent ?? current.Plan.TargetParent,
                 current.Plan.TargetRelativePath, async (file, childMetadata) =>
@@ -65,7 +71,7 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
                         _ = await ReadSourceProjectionAsync(file, originalSource, stop).ConfigureAwait(false);
                         await data.VerifyAsync(current.Plan.Length, current.Plan.Sha256, stop).ConfigureAwait(false);
                         current = await catalog.StartNamespaceTransferSourceDeleteAsync(operationId, freshTarget,
-                            target.Context.Protection.ProtectionId, DateTimeOffset.UtcNow, stop).ConfigureAwait(false);
+                            target.Context.Protection.ProtectionId, DateTimeOffset.UtcNow, recovery, stop).ConfigureAwait(false);
                         // Keep this same write-excluding object open through RPC and the durable correlated reply.
                         string? result = await execution.RunNormalUserOperationAsync(async () => await mutations.DeleteAsync(new(
                             current.Plan.SourceRoute.InstanceId, sourcePath, current.Plan.SourceRemoteRevision, false,
@@ -73,8 +79,8 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
                         current = await catalog.RecordNamespaceTransferSourceDeleteAcceptedAsync(operationId, result,
                             DateTimeOffset.UtcNow, CancellationToken.None).ConfigureAwait(false);
                     }
-                    if (retireLocal) await RetireGuardedSourceAsync(current, retirement, file, childMetadata, target,
-                        targetFile, targetGuard, data, verifier, stop).ConfigureAwait(false);
+                    if (retireLocal) await RetireGuardedSourceAsync(current, retirement, originalSource,
+                        file, childMetadata, target, targetFile, targetGuard, data, verifier, recovery, stop).ConfigureAwait(false);
                     return current;
                 }, stop, allowOwnedTargetBirth: true, allowSourceRetirement: retireLocal).ConfigureAwait(false);
         }, token).ConfigureAwait(false);

@@ -63,9 +63,12 @@ public sealed partial class MirrorPulseProductCatalog
         var plan = copy.Plan;
         RootId root = intent.Roots.Single().RootId;
         if ((root != plan.SourceRoute.RootId && root != plan.TargetRoute.RootId) ||
-            intent.PreparedAt < plan.PreparedAt || copy.TargetBirthOperationId is not null ||
+            intent.PreparedAt < (copy.TargetPublication?.PublishedAt ?? plan.PreparedAt) ||
+            copy.TargetBirthOperationId is not null && copy.TargetPublication is null ||
+            copy.Acknowledgement?.AcknowledgedAt is not null ||
+            copy.SourceDeletion is { AcceptedAt: null } ||
             copy.CopyStartedAt is not null && copy.CopyAcceptedAt is null && !copy.CopyUsesWorkerPreparation)
-            throw new InvalidOperationException("File transfer role recovery requires its original pending copy or verification.");
+            throw new InvalidOperationException("File transfer role recovery requires a pending copy or a published target with an unambiguous source effect.");
         await RequireFileTransferInitializationFenceAsync(intent, transaction, token).ConfigureAwait(false);
         await RequireNamespaceTransferRoutesAsync([plan.SourceRoute, plan.TargetRoute], transaction, token).ConfigureAwait(false);
     }

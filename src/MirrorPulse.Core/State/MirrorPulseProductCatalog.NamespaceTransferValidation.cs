@@ -58,7 +58,8 @@ public sealed partial class MirrorPulseProductCatalog
 
     private async Task RequireCurrentNamespaceTransferAsync(MirrorPulseNamespaceTransferPlan plan,
         SqliteTransaction transaction, CancellationToken token, bool admitted = false,
-        MirrorPulseNamespaceTransferTargetBirth? targetBirth = null, MirrorPulseFileTransferRecovery? recovery = null)
+        MirrorPulseNamespaceTransferTargetBirth? targetBirth = null, MirrorPulseFileTransferRecovery? recovery = null,
+        DateTimeOffset? publishedAt = null)
     {
         recovery ??= targetBirth?.Recovery;
         if (targetBirth is not null && (!admitted || targetBirth.OperationId != plan.OperationId ||
@@ -66,9 +67,9 @@ public sealed partial class MirrorPulseProductCatalog
             throw new InvalidOperationException("A transfer continuation cannot bypass another target birth or its original owner.");
         if (recovery is not null)
         {
-            if (!admitted || targetBirth is not null && targetBirth.Recovery != recovery)
+            if (!admitted || targetBirth is not null && targetBirth.Recovery != recovery && publishedAt is null)
                 throw new InvalidOperationException("Transfer recovery requires its original pending owner and audit receipts.");
-            _ = await ReadFileTransferRecoveryMembersCoreAsync(plan, recovery, transaction, token).ConfigureAwait(false);
+            _ = await ReadFileTransferRecoveryMembersCoreAsync(plan, recovery, transaction, token, publishedAt).ConfigureAwait(false);
         }
         else
         {

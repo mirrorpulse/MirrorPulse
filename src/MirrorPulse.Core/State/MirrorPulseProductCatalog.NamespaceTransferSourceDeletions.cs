@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using Microsoft.Data.Sqlite;
 
 namespace MirrorPulse.Core.State;
@@ -6,13 +7,21 @@ namespace MirrorPulse.Core.State;
 /// <remarks>A retained start is ambiguous until accepted. This is neither local retirement nor journal ACK authority.</remarks>
 public sealed record MirrorPulseNamespaceTransferSourceDeletion(int Version, Guid OperationId, Guid DeleteOperationId,
     Guid TargetProtectionId, MirrorPulseTransferTargetVerification TargetAtStart, DateTimeOffset StartedAt,
-    DateTimeOffset? AcceptedAt = null, string? ResultRevision = null);
+    DateTimeOffset? AcceptedAt = null, string? ResultRevision = null)
+{
+    [JsonInclude]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    internal MirrorPulseFileTransferRecovery? PublishedRecovery { get; init; }
+}
 
 public sealed partial class MirrorPulseProductCatalog
 {
     /// <summary>Rechecks live original transfer/target ownership without granting another delete after a retained start.</summary>
-    public async Task<MirrorPulseNamespaceTransferCopy> ValidateNamespaceTransferSourceDeleteAsync(Guid operationId,
-        CancellationToken token = default)
+    public Task<MirrorPulseNamespaceTransferCopy> ValidateNamespaceTransferSourceDeleteAsync(Guid operationId,
+        CancellationToken token = default) => ValidateNamespaceTransferSourceDeleteAsync(operationId, null, token);
+
+    internal async Task<MirrorPulseNamespaceTransferCopy> ValidateNamespaceTransferSourceDeleteAsync(Guid operationId,
+        MirrorPulseFileTransferRecovery? recovery, CancellationToken token)
     {
         await _gate.WaitAsync(token).ConfigureAwait(false);
         try
@@ -21,7 +30,7 @@ public sealed partial class MirrorPulseProductCatalog
             var copy = await ReadNamespaceTransferCoreAsync(operationId, transaction, token).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The original transfer is missing.");
             if (copy.SourceDeletion?.AcceptedAt is null)
-                _ = await RequireCurrentTransferSourceDeletionAsync(copy, transaction, token).ConfigureAwait(false);
+                _ = await RequireCurrentTransferSourceDeletionAsync(copy, transaction, token, recovery).ConfigureAwait(false);
             transaction.Commit(); return copy;
         }
         finally { _gate.Release(); }
@@ -29,9 +38,14 @@ public sealed partial class MirrorPulseProductCatalog
 
     /// <summary>Claims the only first conditional source delete after current native guards and fresh whole-target readback.</summary>
     /// <remarks>The Host must retain its live writer/mapping exclusion across this claim, RPC and acceptance persistence.</remarks>
-    public async Task<MirrorPulseNamespaceTransferCopy> StartNamespaceTransferSourceDeleteAsync(Guid operationId,
+    public Task<MirrorPulseNamespaceTransferCopy> StartNamespaceTransferSourceDeleteAsync(Guid operationId,
         MirrorPulseTransferTargetVerification targetAtStart, Guid targetProtectionId, DateTimeOffset startedAt,
-        CancellationToken token = default)
+        CancellationToken token = default) =>
+        StartNamespaceTransferSourceDeleteAsync(operationId, targetAtStart, targetProtectionId, startedAt, null, token);
+
+    internal async Task<MirrorPulseNamespaceTransferCopy> StartNamespaceTransferSourceDeleteAsync(Guid operationId,
+        MirrorPulseTransferTargetVerification targetAtStart, Guid targetProtectionId, DateTimeOffset startedAt,
+        MirrorPulseFileTransferRecovery? recovery, CancellationToken token)
     {
         ArgumentNullException.ThrowIfNull(targetAtStart);
         await _gate.WaitAsync(token).ConfigureAwait(false);
@@ -42,11 +56,14 @@ public sealed partial class MirrorPulseProductCatalog
                 ?? throw new FileNotFoundException("The original transfer is missing.");
             if (copy.SourceDeletion is not null)
                 throw new InvalidOperationException("The original source delete may already have executed; another dispatch is not authorized.");
-            var target = await RequireCurrentTransferSourceDeletionAsync(copy, transaction, token).ConfigureAwait(false);
+            var target = await RequireCurrentTransferSourceDeletionAsync(copy, transaction, token, recovery).ConfigureAwait(false);
             if (target.Context.Protection.ProtectionId != targetProtectionId)
                 throw new InvalidOperationException("Source deletion requires the current independently verified target protection epoch.");
-            var deletion = new MirrorPulseNamespaceTransferSourceDeletion(1, operationId, copy.Plan.DeleteOperationId,
-                targetProtectionId, targetAtStart, startedAt);
+            var deletion = new MirrorPulseNamespaceTransferSourceDeletion(recovery is null ? 1 : 2, operationId,
+                copy.Plan.DeleteOperationId, targetProtectionId, targetAtStart, startedAt)
+            {
+                PublishedRecovery = recovery
+            };
             ValidateNamespaceTransferSourceDeletion(copy, deletion);
             copy = copy with { SourceDeletion = deletion };
             await WriteNamespaceTransferCoreAsync(copy, transaction, token).ConfigureAwait(false);
@@ -84,27 +101,37 @@ public sealed partial class MirrorPulseProductCatalog
     }
 
     private async Task<MirrorPulseNamespaceMemberProtectionSnapshot> RequireCurrentTransferSourceDeletionAsync(
-        MirrorPulseNamespaceTransferCopy copy, SqliteTransaction transaction, CancellationToken token)
+        MirrorPulseNamespaceTransferCopy copy, SqliteTransaction transaction, CancellationToken token,
+        MirrorPulseFileTransferRecovery? recovery = null)
     {
         if (copy.TargetPublication is null || copy.TargetBirth is null || copy.Plan.SourceRemoteRevision is null ||
             copy.Plan.SourceRoute.ProtocolVersion != 2)
             throw new InvalidOperationException("Conditional source deletion requires a published target and the original V2 source revision; a local-only source needs separate reconciliation.");
-        await RequireCurrentNamespaceTransferAsync(copy.Plan, transaction, token, admitted: true, targetBirth: copy.TargetBirth).ConfigureAwait(false);
+        await RequireCurrentNamespaceTransferAsync(copy.Plan, transaction, token, admitted: true, targetBirth: copy.TargetBirth,
+            recovery: recovery, publishedAt: recovery is null ? null : copy.TargetPublication.PublishedAt).ConfigureAwait(false);
         var target = await ReadNamespaceMemberProtectionSnapshotCoreAsync(copy.TargetPublication.MemberId, transaction, token).ConfigureAwait(false)
             ?? throw new InvalidDataException("The published target lost its current protected membership.");
         if (target.Context.Member.LocalObject != copy.TargetPublication.LocalObject || target.Context.Member.RootId != copy.Plan.TargetRoute.RootId ||
             target.Context.Member.IsDirectory || target.Context.Location.RelativePath != copy.Plan.TargetRelativePath ||
             target.Context.Location.ParentMemberId != copy.Plan.TargetParent.Context.Member.MemberId ||
-            target.Context.Protection.RoleSid != copy.TargetBirth.Birth.RoleSid ||
+            target.Context.Protection.RoleSid != (recovery?.RoleSid ?? copy.TargetBirth.Birth.RoleSid) ||
             target.Identity.ItemId != copy.TargetPublication.ItemId || target.Identity.RemoteId != copy.TargetBirth.Plan.RemoteId)
             throw new InvalidOperationException("Source deletion requires the original published target, current role, identity and location.");
+        if (recovery is not null)
+        {
+            var (_, audit) = await RequireFileTransferAuditsAsync(copy.Plan, recovery, copy.TargetPublication.PublishedAt,
+                transaction, token).ConfigureAwait(false);
+            await RequireCurrentNamespaceMoveLineageAsync(target.Context.Member, audit.RoleSid, audit.CompletedAt,
+                transaction, token).ConfigureAwait(false);
+        }
         return target;
     }
 
     private static void ValidateNamespaceTransferSourceDeletion(MirrorPulseNamespaceTransferCopy copy,
         MirrorPulseNamespaceTransferSourceDeletion deletion)
     {
-        if (deletion.Version != 1 || deletion.OperationId != copy.Plan.OperationId || deletion.DeleteOperationId != copy.Plan.DeleteOperationId ||
+        if (deletion.Version is not (1 or 2) || (deletion.Version == 2) != (deletion.PublishedRecovery is not null) ||
+            deletion.OperationId != copy.Plan.OperationId || deletion.DeleteOperationId != copy.Plan.DeleteOperationId ||
             deletion.TargetProtectionId == Guid.Empty || copy.TargetPublication is null || copy.TargetVerification is null ||
             copy.Plan.SourceRemoteRevision is null || copy.Plan.SourceRoute.ProtocolVersion != 2 || deletion.TargetAtStart is null ||
             deletion.TargetAtStart.RemoteId != copy.TargetVerification.RemoteId ||
@@ -123,7 +150,16 @@ public sealed partial class MirrorPulseProductCatalog
             ?? throw new InvalidDataException("Source deletion lost its original target protection evidence.");
         if (copy.TargetBirth is null || protection.BirthOperationId != copy.TargetBirth.Birth.OperationId ||
             protection.Verification.LocalObject != copy.TargetPublication!.LocalObject ||
-            protection.RoleSid != copy.TargetBirth.Birth.RoleSid || protection.Verification.ObservedAt > deletion.StartedAt)
+            protection.RoleSid != (deletion.PublishedRecovery?.RoleSid ?? copy.TargetBirth.Birth.RoleSid) ||
+            protection.Verification.ObservedAt > deletion.StartedAt)
             throw new InvalidDataException("Source deletion no longer references its original target object and owned protection.");
+        if (deletion.PublishedRecovery is { } recovery)
+        {
+            var (sourceAudit, targetAudit) = await RequireFileTransferAuditsAsync(copy.Plan, recovery,
+                copy.TargetPublication!.PublishedAt, transaction, token).ConfigureAwait(false);
+            if (sourceAudit.CompletedAt > deletion.StartedAt || targetAudit.CompletedAt > deletion.StartedAt ||
+                protection.Verification.ObservedAt > targetAudit.CompletedAt)
+                throw new InvalidDataException("The source delete lost its post-publication protection audits.");
+        }
     }
 }

@@ -6,12 +6,9 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 public sealed partial class MirrorPulseNamespaceTransferCoordinator
 {
     private async Task<MirrorPulseNamespaceTransferSourceProjection> CaptureOriginalSourceProjectionAsync(
-        MirrorPulseNamespaceTransferCopy copy, CloudFile file, CancellationToken token)
+        MirrorPulseNamespaceTransferCopy copy, MirrorPulseNamespaceMemberProtectionSnapshot source, CloudFile file, CancellationToken token)
     {
         actor.AssertAccess();
-        var members = copy.TargetBirth?.Recovery is { } recovery
-            ? await catalog.ReadFileTransferRecoveryMembersAsync(copy.Plan.OperationId, recovery, token).ConfigureAwait(false) : null;
-        var source = members?.Source ?? copy.Plan.Source;
         var candidate = await ReadSourceProjectionAsync(file, source, token).ConfigureAwait(false);
         // InspectAsync uses the official store itself. Never call it while holding a store transaction.
         var native = await file.InspectAsync(token).ConfigureAwait(false); RequireBinding(native, copy.Plan.Source);

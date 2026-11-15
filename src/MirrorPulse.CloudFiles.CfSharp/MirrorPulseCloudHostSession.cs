@@ -611,7 +611,13 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             await using var admission = namespaceWork is null ? null : await namespaceWork.EnterPendingOperationAsync(
                 new[] { copy.Plan.SourceRoute.RootId, copy.Plan.TargetRoute.RootId }, token).ConfigureAwait(false);
             return await WithAdmittedInstancesLibraryAsync(new[] { copy.Plan.SourceRoute.InstanceId, copy.Plan.TargetRoute.InstanceId }.Distinct(),
-                (_, stop) => TransferCoordinator().DeleteSourceAsync(operationId, transfers!, stop), token).ConfigureAwait(false);
+                async (instances, stop) =>
+                {
+                    var current = await ReadNamespaceTransferAsync(operationId, stop).ConfigureAwait(false);
+                    if (current.SourceDeletion?.AcceptedAt is not null) return current;
+                    var recovery = await RecoverFileTransferRoleAsync(current, instances, afterPublication: true, stop).ConfigureAwait(false);
+                    return await TransferCoordinator().DeleteSourceAsync(operationId, transfers!, recovery, stop).ConfigureAwait(false);
+                }, token).ConfigureAwait(false);
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
@@ -625,7 +631,16 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             await using var admission = namespaceWork is null ? null : await namespaceWork.EnterPendingOperationAsync(
                 new[] { copy.Plan.SourceRoute.RootId, copy.Plan.TargetRoute.RootId }, token).ConfigureAwait(false);
             return await WithAdmittedInstancesLibraryAsync(new[] { copy.Plan.SourceRoute.InstanceId, copy.Plan.TargetRoute.InstanceId }.Distinct(),
-                (_, stop) => TransferCoordinator().RetireSourceAsync(operationId, transfers!, stop), token).ConfigureAwait(false);
+                async (instances, stop) =>
+                {
+                    var current = await ReadNamespaceTransferAsync(operationId, stop).ConfigureAwait(false);
+                    var activeRetirement = await catalog.ReadNamespaceRetirementAsync(current.Plan.DeleteOperationId, stop).ConfigureAwait(false);
+                    if (activeRetirement?.Phase == MirrorPulseNamespaceRetirementPhase.Completed) return activeRetirement;
+                    if (activeRetirement is not null && activeRetirement.Intent.RoleSid != _namespaceExecution!.RoleSid.Value)
+                        throw new InvalidOperationException("An interrupted native source retirement requires its original retirement recovery.");
+                    var recovery = await RecoverFileTransferRoleAsync(current, instances, afterPublication: true, stop).ConfigureAwait(false);
+                    return await TransferCoordinator().RetireSourceAsync(operationId, transfers!, recovery, stop).ConfigureAwait(false);
+                }, token).ConfigureAwait(false);
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
@@ -686,18 +701,31 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         }
 
         [SupportedOSPlatform("windows10.0.26100")]
-        private async ValueTask<MirrorPulseFileTransferRecovery?> RecoverFileTransferCopyRoleAsync(MirrorPulseNamespaceTransferCopy copy,
-            IMirrorPulseInstanceScheduler instanceAdmission, CancellationToken token)
+        private ValueTask<MirrorPulseFileTransferRecovery?> RecoverFileTransferCopyRoleAsync(MirrorPulseNamespaceTransferCopy copy,
+            IMirrorPulseInstanceScheduler instanceAdmission, CancellationToken token) =>
+            RecoverFileTransferRoleAsync(copy, instanceAdmission, afterPublication: false, token);
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        private async ValueTask<MirrorPulseFileTransferRecovery?> RecoverFileTransferRoleAsync(MirrorPulseNamespaceTransferCopy copy,
+            IMirrorPulseInstanceScheduler instanceAdmission, bool afterPublication, CancellationToken token)
         {
             var plan = copy.Plan;
             string role = _namespaceExecution!.RoleSid.Value;
-            if (plan.Source.Context.Protection.RoleSid == role && plan.SourceParent.Context.Protection.RoleSid == role &&
+            if (afterPublication)
+            {
+                if (copy.TargetPublication is null || copy.TargetBirth is null)
+                    throw new InvalidOperationException("Source deletion requires its original published target.");
+                if (copy.SourceDeletion is { AcceptedAt: null })
+                    throw new MirrorPulseMutationAmbiguousException("The original source deletion has no durable acceptance receipt.");
+                if (copy.TargetBirth.Birth.RoleSid == role) return null;
+            }
+            else if (plan.Source.Context.Protection.RoleSid == role && plan.SourceParent.Context.Protection.RoleSid == role &&
                 plan.TargetParent.Context.Protection.RoleSid == role)
                 return null;
             if (copy.CopyStartedAt is not null && copy.CopyAcceptedAt is null && !copy.CopyUsesWorkerPreparation)
                 throw new MirrorPulseMutationAmbiguousException("The original transfer copy has no durable acceptance receipt.");
-            if (namespaceWork is null || copy.TargetBirthOperationId is not null)
-                throw new InvalidOperationException("File copy recovery requires the fenced original transfer before target birth.");
+            if (namespaceWork is null || !afterPublication && copy.TargetBirthOperationId is not null)
+                throw new InvalidOperationException("File transfer role recovery requires its fenced original transfer at a recoverable stage.");
 
             var ids = await catalog!.ReadFileTransferRecoveryAuditIdsAsync(plan.OperationId, role, token).ConfigureAwait(false);
             if (ids.Count < 2)

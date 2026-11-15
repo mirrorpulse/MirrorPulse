@@ -118,7 +118,7 @@ public sealed partial class MirrorPulseProductCatalog
         var retirement = await ReadNamespaceRetirementCoreAsync(copy.Plan.DeleteOperationId, transaction, token, copy).ConfigureAwait(false)
             ?? throw new InvalidDataException("Original ACK lost its source retirement.");
         foreach (var parent in new[] { retirement.Intent.TransferEntry!.RecoveredSourceParent ?? copy.Plan.SourceParent,
-            copy.TargetBirth!.RecoveredParent ?? copy.Plan.TargetParent })
+            retirement.Intent.TransferEntry.RecoveredTargetParent ?? copy.TargetBirth!.RecoveredParent ?? copy.Plan.TargetParent })
             if (await ReadNamespaceMemberProtectionSnapshotCoreAsync(parent.Context.Member.MemberId, transaction, token).ConfigureAwait(false) != parent)
                 throw new InvalidOperationException("Unfinished transfer settlement requires its exact current parents and execution role.");
         var target = await ReadNamespaceMemberProtectionSnapshotCoreAsync(copy.TargetPublication!.MemberId, transaction, token).ConfigureAwait(false);

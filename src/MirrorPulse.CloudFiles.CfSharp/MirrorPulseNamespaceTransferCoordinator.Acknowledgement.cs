@@ -36,7 +36,7 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
                     })
                     throw new InvalidOperationException("Original acknowledgement requires its completed source generation and settled name witness.");
                 var originalSourceParent = retirement.Intent.TransferEntry!.RecoveredSourceParent ?? current.Plan.SourceParent;
-                var originalTargetParent = current.TargetBirth!.RecoveredParent ?? current.Plan.TargetParent;
+                var originalTargetParent = retirement.Intent.TransferEntry.RecoveredTargetParent ?? current.TargetBirth!.RecoveredParent ?? current.Plan.TargetParent;
                 foreach (var parent in new[] { originalSourceParent, originalTargetParent })
                 {
                     RequireLiveRoute(parent);

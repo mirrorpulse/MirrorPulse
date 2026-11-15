@@ -74,25 +74,14 @@ public sealed partial class MirrorPulseProductCatalog
     }
 
     private async Task<MirrorPulseFileTransferRecoveryMembers> ReadFileTransferRecoveryMembersCoreAsync(
-        MirrorPulseNamespaceTransferPlan plan, MirrorPulseFileTransferRecovery recovery, SqliteTransaction transaction, CancellationToken token)
+        MirrorPulseNamespaceTransferPlan plan, MirrorPulseFileTransferRecovery recovery, SqliteTransaction transaction, CancellationToken token,
+        DateTimeOffset? publishedAt = null)
     {
-        var sourceAudit = await RequireAuditAsync(recovery.SourceAuditId, plan.SourceRoute.RootId).ConfigureAwait(false);
-        var targetAudit = await RequireAuditAsync(recovery.TargetAuditId, plan.TargetRoute.RootId).ConfigureAwait(false);
-        if (sourceAudit.AnchorMemberId != targetAudit.AnchorMemberId)
-            throw new InvalidOperationException("Both original transfer roots require audits of the same registered anchor.");
+        var (sourceAudit, targetAudit) = await RequireFileTransferAuditsAsync(plan, recovery, publishedAt ?? plan.PreparedAt,
+            transaction, token).ConfigureAwait(false);
         return new(await RequireMemberAsync(plan.Source, sourceAudit).ConfigureAwait(false),
             await RequireMemberAsync(plan.SourceParent, sourceAudit).ConfigureAwait(false),
             await RequireMemberAsync(plan.TargetParent, targetAudit).ConfigureAwait(false));
-
-        async Task<MirrorPulseNamespaceInitializationCompletion> RequireAuditAsync(Guid auditId, RootId rootId)
-        {
-            var status = await ReadNamespaceInitializationStatusCoreAsync(auditId, transaction, token).ConfigureAwait(false);
-            if (status.Intent.FileTransferOperationId != plan.OperationId ||
-                status.Completion is not { } completed || completed.ScopeRoot != rootId ||
-                completed.RoleSid != recovery.RoleSid || completed.CompletedAt < plan.PreparedAt)
-                throw new InvalidOperationException("File transfer recovery requires both original root audits under its current role.");
-            return completed;
-        }
 
         async Task<MirrorPulseNamespaceMemberProtectionSnapshot> RequireMemberAsync(MirrorPulseNamespaceMemberProtectionSnapshot original,
             MirrorPulseNamespaceInitializationCompletion audit)
@@ -106,5 +95,46 @@ public sealed partial class MirrorPulseProductCatalog
                 .ConfigureAwait(false);
             return current;
         }
+    }
+
+    private async Task<(MirrorPulseNamespaceInitializationCompletion Source, MirrorPulseNamespaceInitializationCompletion Target)>
+        RequireFileTransferAuditsAsync(MirrorPulseNamespaceTransferPlan plan, MirrorPulseFileTransferRecovery recovery,
+            DateTimeOffset earliest, SqliteTransaction transaction, CancellationToken token)
+    {
+        var sourceAudit = await RequireAuditAsync(recovery.SourceAuditId, plan.SourceRoute.RootId).ConfigureAwait(false);
+        var targetAudit = await RequireAuditAsync(recovery.TargetAuditId, plan.TargetRoute.RootId).ConfigureAwait(false);
+        if (sourceAudit.AnchorMemberId != targetAudit.AnchorMemberId)
+            throw new InvalidOperationException("Both original transfer roots require audits of the same registered anchor.");
+        return (sourceAudit, targetAudit);
+
+        async Task<MirrorPulseNamespaceInitializationCompletion> RequireAuditAsync(Guid auditId, RootId rootId)
+        {
+            var status = await ReadNamespaceInitializationStatusCoreAsync(auditId, transaction, token).ConfigureAwait(false);
+            if (status.Intent.FileTransferOperationId != plan.OperationId ||
+                status.Completion is not { } completed || completed.ScopeRoot != rootId ||
+                completed.RoleSid != recovery.RoleSid || status.Intent.PreparedAt < earliest || completed.CompletedAt < earliest)
+                throw new InvalidOperationException("File transfer recovery requires both original root audits under its current role.");
+            return completed;
+        }
+
+    }
+
+    internal async Task<MirrorPulseFileTransferRecoveryMembers> ReadPublishedFileTransferRecoveryMembersAsync(Guid operationId,
+        MirrorPulseFileTransferRecovery recovery, CancellationToken token)
+    {
+        await _gate.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            using var transaction = BeginNamespaceRecoveryReadSnapshot();
+            var copy = await ReadNamespaceTransferCoreAsync(operationId, transaction, token).ConfigureAwait(false)
+                ?? throw new FileNotFoundException("The original published file transfer is missing.");
+            await RequireCurrentTransferSourceDeletionAsync(copy, transaction, token, recovery).ConfigureAwait(false);
+            var members = await ReadFileTransferRecoveryMembersCoreAsync(copy.Plan, recovery, transaction, token,
+                copy.TargetPublication!.PublishedAt).ConfigureAwait(false);
+            transaction.Commit();
+            return members;
+        }
+        finally { _gate.Release(); }
     }
 }
