@@ -114,7 +114,8 @@ jobs:
         run: |
           $packages = @(Get-ChildItem -LiteralPath artifacts/official-local -Recurse -Filter '*.mpadapter' -File)
           if ($packages.Count -ne 1) { throw 'The exact frozen signed Local package is required.' }
-          ./eng/verify-cli-transfers.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName -EvidencePath artifacts/evidence/cli-transfers.json
+          pwsh -NoProfile -File ./eng/verify-cli-transfers.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName -EvidencePath artifacts/evidence/cli-transfers.json
+          if ($LASTEXITCODE -ne 0) { throw 'The signed Local file transfer fixture failed.' }
       - name: Verify signed Local and WebDAV file transfers across an actual Host restart
         if: ${{ !cancelled() && steps.prepare.outcome == 'success' }}
         shell: pwsh
@@ -122,7 +123,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          ./eng/verify-cli-cross-package.ps1 -Runtime win-arm64 -ReleaseLockPath artifacts/official-adapter-releases.json -LocalPackageDirectory artifacts/official-local -WebDavPackageDirectory artifacts/official-transfer-webdav -EvidencePath artifacts/evidence/cli-cross-package.json
+          pwsh -NoProfile -File ./eng/verify-cli-cross-package.ps1 -Runtime win-arm64 -ReleaseLockPath artifacts/official-adapter-releases.json -LocalPackageDirectory artifacts/official-local -WebDavPackageDirectory artifacts/official-transfer-webdav -EvidencePath artifacts/evidence/cli-cross-package.json
+          if ($LASTEXITCODE -ne 0) { throw 'The signed Local and WebDAV file transfer fixture failed.' }
       - name: Preserve both signed fixture reports and raw failure observations
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
