@@ -27,12 +27,15 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
             throw new InvalidOperationException("The original directory transfer configuration changed.");
         await execution.RunNamespaceOperationAsync(async () =>
         {
-            await using var sourceParent = await OpenTransferDirectoryGuardAsync(plan.SourceParent, stop).ConfigureAwait(false);
-            await using var targetParent = await OpenTransferDirectoryGuardAsync(plan.TargetParent, stop).ConfigureAwait(false);
+            string role = execution.RoleSid.Value;
+            var sourceProtection = await ReadDirectoryTransferProtectionAsync(plan.SourceParent, stop, role).ConfigureAwait(false);
+            var targetProtection = await ReadDirectoryTransferProtectionAsync(plan.TargetParent, stop, role).ConfigureAwait(false);
+            await using var sourceParent = await OpenTransferDirectoryGuardAsync(sourceProtection, stop).ConfigureAwait(false);
+            await using var targetParent = await OpenTransferDirectoryGuardAsync(targetProtection, stop).ConfigureAwait(false);
             var sourceBefore = await sourceParent.InspectAsync(stop).ConfigureAwait(false);
             var targetBefore = await targetParent.InspectAsync(stop).ConfigureAwait(false);
-            RequireNative(sourceBefore, plan.SourceParent);
-            RequireNative(targetBefore, plan.TargetParent);
+            RequireNative(sourceBefore, sourceProtection);
+            RequireNative(targetBefore, targetProtection);
 
             var targetGuards = new List<(MirrorPulseWindowsNamespacePermissionLease Lease, MirrorPulseNamespaceMemberProtectionSnapshot Snapshot)>();
             var targetTree = new List<MirrorPulseNamespaceProtectedTreeMember>(plan.Members.Count);
@@ -97,14 +100,16 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
 
             // During startup the previous protection epoch is still present. Hold the
             // original parent while verifying the native effect and settling its name.
-            var parent = MirrorPulseProductCatalog.DirectoryTransferSourceParent(plan, started.Ordinal);
+            var parent = await ReadDirectoryTransferProtectionAsync(MirrorPulseProductCatalog.DirectoryTransferSourceParent(plan,
+                started.Ordinal), stop).ConfigureAwait(false);
             if (parent.Context.Member.OwnerSid != execution.OwnerSid.Value)
                 throw new InvalidOperationException("The started directory retirement belongs to a different owner.");
             await using var lease = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(
                 fileSystem.GetDirectory(parent.Context.Location.RelativePath), router, stop).ConfigureAwait(false);
             var before = await lease.InspectAsync(stop).ConfigureAwait(false);
             RequireNative(before, parent);
-            _ = await CompleteDirectorySourceRetirementAsync(item, started, lease, before, stop).ConfigureAwait(false);
+            _ = await CompleteDirectorySourceRetirementAsync(item, started, lease, before, parent.Context.Protection.RoleSid,
+                stop).ConfigureAwait(false);
             return true;
         }).ConfigureAwait(false), token);
 
@@ -114,19 +119,19 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
     {
         var member = plan.Members[ordinal];
         var original = member.Source.Protection;
-        var parent = MirrorPulseProductCatalog.DirectoryTransferSourceParent(plan, ordinal);
+        string role = execution.RoleSid.Value;
+        var current = await ReadDirectoryTransferProtectionAsync(original, token, role).ConfigureAwait(false);
+        var parent = await ReadDirectoryTransferProtectionAsync(MirrorPulseProductCatalog.DirectoryTransferSourceParent(plan, ordinal),
+            token, role).ConfigureAwait(false);
         var item = DirectoryTransferItem(original.Context.Location.RelativePath, original.Context.Member.IsDirectory);
         await using var parentLease = await OpenTransferDirectoryGuardAsync(parent, token).ConfigureAwait(false);
         var before = await parentLease.InspectAsync(token).ConfigureAwait(false);
         RequireNative(before, parent);
-        if (await catalog.ReadNamespaceMemberProtectionSnapshotAsync(original.Context.Member.MemberId, token).ConfigureAwait(false) != original)
-            throw new InvalidOperationException("Native retirement requires the current original local source.");
-
         var native = await item.InspectAsync(token).ConfigureAwait(false);
         if (native.Exists)
         {
             await using var guard = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(item, router, token).ConfigureAwait(false);
-            RequireNative(await guard.InspectAsync(token).ConfigureAwait(false), original);
+            RequireNative(await guard.InspectAsync(token).ConfigureAwait(false), current);
             if (native.IsTombstone || native.Kind != item.Kind || native.LocalBinding is not { } binding ||
                 original.Context.Member.LocalObject != new MirrorPulseLocalFileBinding(binding.VolumeSerialNumber, binding.SyncRootFileId, binding.LocalFileId))
                 throw new InvalidDataException("The native retirement path belongs to another source object.");
@@ -139,7 +144,7 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
 
             var projection = await CaptureDirectoryRetirementProjectionAsync(member, item, native, token).ConfigureAwait(false);
             retained = await catalog.StartNamespaceDirectoryTransferRetirementAsync(plan.Command.CommandId, ordinal,
-                projection, fresh, DateTimeOffset.UtcNow, token).ConfigureAwait(false);
+                projection, fresh, DateTimeOffset.UtcNow, token, role).ConfigureAwait(false);
             if (SourceRetirementCheckpoint is not null)
                 await SourceRetirementCheckpoint(MirrorPulseTransferSourceRetirementCheckpoint.BeforeNativeDeletion, token).ConfigureAwait(false);
             await guard.DisposeAsync().ConfigureAwait(false);
@@ -152,12 +157,12 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
         else if (retained is null)
             throw new InvalidDataException("A missing directory transfer source has no original native retirement start.");
 
-        return await CompleteDirectorySourceRetirementAsync(item, retained, parentLease, before, CancellationToken.None).ConfigureAwait(false);
+        return await CompleteDirectorySourceRetirementAsync(item, retained, parentLease, before, role, CancellationToken.None).ConfigureAwait(false);
     }
 
     private async Task<MirrorPulseDirectoryTransferRetirement> CompleteDirectorySourceRetirementAsync(CloudItem item,
         MirrorPulseDirectoryTransferRetirement retained, MirrorPulseWindowsNamespacePermissionLease parentLease,
-        MirrorPulseNamespacePermissionObject before, CancellationToken token)
+        MirrorPulseNamespacePermissionObject before, string role, CancellationToken token)
     {
         var native = await item.InspectAsync(token).ConfigureAwait(false);
         if (native.Exists || !native.IsTombstone || native.ItemId != retained.Projection.ItemId)
@@ -171,7 +176,7 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
         var facts = await parentLease.InspectAsync(token).ConfigureAwait(false);
         MirrorPulseNamespaceBirthProtectionVerifier.RequireUnchangedParent(before, facts);
         return await catalog.CompleteNamespaceDirectoryTransferRetirementAsync(retained.TransferId, retained.Ordinal,
-            new(facts.LocalObject, facts.OwnerSid, facts.Dacl, facts.ObservedAt), DateTimeOffset.UtcNow, token).ConfigureAwait(false);
+            new(facts.LocalObject, facts.OwnerSid, facts.Dacl, facts.ObservedAt), DateTimeOffset.UtcNow, token, role).ConfigureAwait(false);
     }
 
     private async Task<MirrorPulseNamespaceTransferSourceProjection> CaptureDirectoryRetirementProjectionAsync(
@@ -204,6 +209,8 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
     private async Task RequireDirectoryRetirementTargetAsync(CloudItem item, MirrorPulseDirectoryTransferTargetBirth birth,
         MirrorPulseNamespaceMemberProtectionSnapshot snapshot, MirrorPulseWindowsNamespacePermissionLease guard, CancellationToken token)
     {
+        if (snapshot.Context.Protection.RoleSid != execution.RoleSid.Value)
+            throw new InvalidOperationException("The original transfer target is outside current Host protection.");
         RequireNative(await guard.InspectAsync(token).ConfigureAwait(false), snapshot);
         var identity = new CloudPlaceholderIdentity(birth.Plan.ItemId, birth.Plan.RemoteId, birth.Plan.RemoteRevision);
         var native = await item.InspectAsync(token).ConfigureAwait(false);
@@ -221,4 +228,13 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
 
     private CloudItem DirectoryTransferItem(string path, bool directory) =>
         directory ? fileSystem.GetDirectory(path) : fileSystem.GetFile(path);
+
+    private async Task<MirrorPulseNamespaceMemberProtectionSnapshot> ReadDirectoryTransferProtectionAsync(
+        MirrorPulseNamespaceMemberProtectionSnapshot original, CancellationToken token, string? role = null)
+    {
+        var current = await catalog.ReadNamespaceMemberProtectionSnapshotAsync(original.Context.Member.MemberId, token).ConfigureAwait(false);
+        if (!MirrorPulseProductCatalog.MatchesDirectoryTransferProtection(original, current, role ?? current?.Context.Protection.RoleSid))
+            throw new InvalidOperationException("The original directory transfer member lost its binding, position or protected role.");
+        return current!;
+    }
 }

@@ -25,12 +25,15 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
 
         await execution.RunNamespaceOperationAsync(async () =>
         {
-            await using var sourceParent = await OpenTransferDirectoryGuardAsync(plan.SourceParent, stop).ConfigureAwait(false);
-            await using var targetParent = await OpenTransferDirectoryGuardAsync(plan.TargetParent, stop).ConfigureAwait(false);
+            string role = execution.RoleSid.Value;
+            var sourceProtection = await ReadDirectoryTransferProtectionAsync(plan.SourceParent, stop, role).ConfigureAwait(false);
+            var targetProtection = await ReadDirectoryTransferProtectionAsync(plan.TargetParent, stop, role).ConfigureAwait(false);
+            await using var sourceParent = await OpenTransferDirectoryGuardAsync(sourceProtection, stop).ConfigureAwait(false);
+            await using var targetParent = await OpenTransferDirectoryGuardAsync(targetProtection, stop).ConfigureAwait(false);
             var sourceBefore = await sourceParent.InspectAsync(stop).ConfigureAwait(false);
             var targetBefore = await targetParent.InspectAsync(stop).ConfigureAwait(false);
-            RequireNative(sourceBefore, plan.SourceParent);
-            RequireNative(targetBefore, plan.TargetParent);
+            RequireNative(sourceBefore, sourceProtection);
+            RequireNative(targetBefore, targetProtection);
             await RequireDirectorySourceTombstonesAsync(plan, retired, stop).ConfigureAwait(false);
 
             var targetGuards = new List<MirrorPulseWindowsNamespacePermissionLease>(plan.Members.Count);
@@ -55,7 +58,7 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
                 var verifier = new MirrorPulseDirectoryTransferTargetVerifier(
                     new MirrorPulseTransferTargetVerifier(catalog, workers.Stats, workers.Ranges, workers.Directories), workers.Stats);
                 var fresh = await execution.RunNormalUserOperationAsync(() => verifier.ReadCurrentAsync(copy, verified, stop)).ConfigureAwait(false);
-                retained = await catalog.StartNamespaceDirectoryTransferAcknowledgementAsync(operationId, fresh, DateTimeOffset.UtcNow, stop)
+                retained = await catalog.StartNamespaceDirectoryTransferAcknowledgementAsync(operationId, fresh, DateTimeOffset.UtcNow, stop, role)
                     .ConfigureAwait(false);
                 await InvokeOriginalDirectoryAcknowledgementAsync(journal, plan, stop).ConfigureAwait(false);
                 var durable = CancellationToken.None;
@@ -96,14 +99,16 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
             // The original start contains the protected target proof. Startup only
             // replays that exact SDK acknowledgement under the normal user, before a
             // new Host role changes the inherited native descriptors.
+            var sourceProtection = await ReadDirectoryTransferProtectionAsync(plan.SourceParent, token).ConfigureAwait(false);
+            var targetProtection = await ReadDirectoryTransferProtectionAsync(plan.TargetParent, token).ConfigureAwait(false);
             await using var sourceParent = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(
-                fileSystem.GetDirectory(plan.SourceParent.Context.Location.RelativePath), router, token).ConfigureAwait(false);
+                fileSystem.GetDirectory(sourceProtection.Context.Location.RelativePath), router, token).ConfigureAwait(false);
             await using var targetParent = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(
-                fileSystem.GetDirectory(plan.TargetParent.Context.Location.RelativePath), router, token).ConfigureAwait(false);
+                fileSystem.GetDirectory(targetProtection.Context.Location.RelativePath), router, token).ConfigureAwait(false);
             var sourceBefore = await sourceParent.InspectAsync(token).ConfigureAwait(false);
             var targetBefore = await targetParent.InspectAsync(token).ConfigureAwait(false);
-            RequireNative(sourceBefore, plan.SourceParent);
-            RequireNative(targetBefore, plan.TargetParent);
+            RequireNative(sourceBefore, sourceProtection);
+            RequireNative(targetBefore, targetProtection);
             await RequireDirectorySourceTombstonesAsync(plan, retired, token).ConfigureAwait(false);
             await InvokeOriginalDirectoryAcknowledgementAsync(journal, plan, token).ConfigureAwait(false);
             var durable = CancellationToken.None;

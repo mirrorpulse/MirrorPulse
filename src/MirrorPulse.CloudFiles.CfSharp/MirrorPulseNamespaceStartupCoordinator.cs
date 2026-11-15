@@ -65,6 +65,12 @@ internal sealed class MirrorPulseNamespaceStartupCoordinator(CloudFileSystem fil
                     outcomes[root.RootId] = new(root.RootId, journalMove, false, "PendingNamespaceOperationRecoveryRequired");
                     continue;
                 }
+                if (pending.Intent.DirectoryTransferOperationId is { } transfer)
+                {
+                    var root = pending.Intent.Roots.Single();
+                    outcomes[root.RootId] = new(root.RootId, transfer, false, "PendingNamespaceOperationRecoveryRequired");
+                    continue;
+                }
                 var selected = new MirrorPulseRootRouter(fileSystem.Root.FullPath,
                     pending.Intent.Roots.Select(root => configured[root.RootId]));
                 await using var recovery = await work.BeginRecoveryAsync(pending.Intent.Roots.Select(root => root.RootId), cancellationToken).ConfigureAwait(false);

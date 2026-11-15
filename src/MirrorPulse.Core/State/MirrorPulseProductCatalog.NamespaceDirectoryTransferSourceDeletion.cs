@@ -155,10 +155,11 @@ public sealed partial class MirrorPulseProductCatalog
 
     private async Task RequireCurrentDirectoryTransferPublicationAsync(MirrorPulseDirectoryTransferAdmission plan,
         MirrorPulseDirectoryTransferTargetVerification verified, SqliteTransaction transaction, bool requireUnretiredSource,
-        CancellationToken token)
+        CancellationToken token, string? recoveredRole = null)
     {
-        if (await ReadNamespaceMemberProtectionSnapshotCoreAsync(plan.TargetParent.Context.Member.MemberId, transaction, token)
-                .ConfigureAwait(false) != plan.TargetParent)
+        if (!MatchesDirectoryTransferProtection(plan.TargetParent,
+            await ReadNamespaceMemberProtectionSnapshotCoreAsync(plan.TargetParent.Context.Member.MemberId, transaction, token)
+                .ConfigureAwait(false), recoveredRole))
             throw new InvalidOperationException("The original target parent changed before source retirement.");
         Guid operationId = plan.Command.CommandId;
         var members = new Dictionary<Guid, Guid> { [plan.SourceParent.Context.Member.MemberId] = plan.TargetParent.Context.Member.MemberId };
@@ -178,7 +179,8 @@ public sealed partial class MirrorPulseProductCatalog
                 snapshot.Context.Location.CurrentPositionOperationId is not null ||
                 snapshot.Context.Location.ParentMemberId != members[source.Location.ParentMemberId!.Value] ||
                 snapshot.Context.Location.RelativePath != target.Birth.RelativePath || snapshot.Context.Member.LocalObject != observation.LocalObject ||
-                snapshot.Context.Protection.RoleSid != target.Birth.RoleSid || snapshot.Context.Member.IsDirectory != target.Birth.IsDirectory ||
+                snapshot.Context.Protection.RoleSid != (recoveredRole ?? target.Birth.RoleSid) ||
+                snapshot.Context.Member.IsDirectory != target.Birth.IsDirectory ||
                 snapshot.Identity.ItemId != target.Plan.ItemId || snapshot.Identity.RemoteId != target.Plan.RemoteId)
                 throw new InvalidOperationException("Source deletion requires every original published target and current protection.");
             members.Add(source.Member.MemberId, target.Birth.OperationId);
@@ -189,7 +191,7 @@ public sealed partial class MirrorPulseProductCatalog
         if (inventory.Count != plan.Members.Count || inventory.Any(entry => !targetMembers.Contains(entry.MemberId)))
             throw new InvalidOperationException("The registered directory transfer target inventory changed.");
         if (requireUnretiredSource)
-            await RequireCurrentDirectoryTransferTreeAsync(plan, transaction, token, rootBirth).ConfigureAwait(false);
+            await RequireCurrentDirectoryTransferTreeAsync(plan, transaction, token, rootBirth, recoveredRole).ConfigureAwait(false);
     }
 
     private async Task<MirrorPulseDirectoryTransferSourceDeletion?> ReadDirectoryTransferSourceDeletionCoreAsync(

@@ -488,10 +488,25 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                 _ = await coordinator.CopyDirectoryAsync(operationId, transfers, stop).ConfigureAwait(false);
                 _ = await coordinator.VerifyDirectoryTargetAsync(operationId, transfers, stop).ConfigureAwait(false);
                 _ = await coordinator.DeleteDirectorySourceAsync(operationId, transfers, stop).ConfigureAwait(false);
-                _ = await coordinator.RetireDirectorySourceAsync(operationId, transfers, stop).ConfigureAwait(false);
-                _ = await coordinator.AcknowledgeDirectoryAsync(operationId, transfers, stop).ConfigureAwait(false);
                 var audit = new MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(fileSystem, catalog, router!,
                     _namespaceExecution!, _namespaceActor!, instanceAdmission, _permissions!);
+                if (plan.SourceParent.Context.Protection.RoleSid != _namespaceExecution!.RoleSid.Value ||
+                    plan.TargetParent.Context.Protection.RoleSid != _namespaceExecution.RoleSid.Value)
+                {
+                    var pending = await catalog.ReadPendingNamespaceInitializationsAsync(stop).ConfigureAwait(false);
+                    foreach (var root in roots)
+                    {
+                        var existing = pending.SingleOrDefault(status => status.Intent.DirectoryTransferOperationId == operationId &&
+                            status.Intent.Roots.Single().RootId == root);
+                        await using var restored = await audit.RecoverDirectoryTransferRootAsync(existing?.Intent.OperationId ?? Guid.NewGuid(),
+                            root, operationId, stop).ConfigureAwait(false);
+                        var prior = _scopedAnchorProtection;
+                        _scopedAnchorProtection = restored.TransferAnchor();
+                        if (prior is not null) await prior.DisposeAsync().ConfigureAwait(false);
+                    }
+                }
+                _ = await coordinator.RetireDirectorySourceAsync(operationId, transfers, stop).ConfigureAwait(false);
+                _ = await coordinator.AcknowledgeDirectoryAsync(operationId, transfers, stop).ConfigureAwait(false);
                 foreach (var root in roots)
                 {
                     await using var restored = await audit.RecoverRootAsync(Guid.NewGuid(), root, stop).ConfigureAwait(false);

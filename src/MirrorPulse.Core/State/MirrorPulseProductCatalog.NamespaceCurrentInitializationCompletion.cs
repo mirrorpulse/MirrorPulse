@@ -73,7 +73,9 @@ public sealed partial class MirrorPulseProductCatalog
             {
                 // Initialization alone is allowed; no unfinished move, retirement, replacement,
                 // born recovery or unregistered birth may disappear behind that same root ID.
-                await RequireNamespaceMoveRootUnfencedAsync(root.RootId, null, transaction, cancellationToken).ConfigureAwait(false);
+                await RequireNamespaceMoveRootUnfencedAsync(root.RootId, null, transaction, cancellationToken,
+                    allowedDirectoryTransferRecoveryInitialization: intent.DirectoryTransferOperationId is null ? null : intent.OperationId)
+                    .ConfigureAwait(false);
                 var rootMember = roots.Single(member => member.Context.Member.RootId == root.RootId).Context.Member;
                 if (root.BornRootMemberId is not null)
                 {

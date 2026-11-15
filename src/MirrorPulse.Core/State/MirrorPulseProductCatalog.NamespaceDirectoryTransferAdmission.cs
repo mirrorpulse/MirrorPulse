@@ -223,7 +223,7 @@ public sealed partial class MirrorPulseProductCatalog
     private sealed record DirectoryTransferFence(Guid OperationId, RootId Source, RootId Target);
 
     private async Task RequireDirectoryTransferRootUnfencedAsync(RootId root, Guid? allowedTargetTransfer,
-        SqliteTransaction transaction, CancellationToken token)
+        SqliteTransaction transaction, CancellationToken token, Guid? allowedTransferInitialization = null)
     {
         await RequireDirectoryTransferFenceIndexAsync(transaction, token, root).ConfigureAwait(false);
         await using var query = _connection.CreateCommand();
@@ -242,8 +242,40 @@ public sealed partial class MirrorPulseProductCatalog
             reader.GetString(1) != plan.SourceRoute.RootId.ToString() || reader.GetString(2) != plan.TargetRoute.RootId.ToString() ||
             await reader.ReadAsync(token).ConfigureAwait(false))
             throw new InvalidDataException("The directory transfer root fence disagrees with its original admission.");
-        if (plan.Command.CommandId != allowedTargetTransfer || plan.TargetRoute.RootId != root)
+        if (plan.Command.CommandId != allowedTransferInitialization &&
+            (plan.Command.CommandId != allowedTargetTransfer || plan.TargetRoute.RootId != root))
             throw new InvalidOperationException("An unresolved directory transfer has fenced this managed root.");
+    }
+
+    private async Task RequireDirectoryTransferInitializationAsync(MirrorPulseNamespaceInitializationIntent intent,
+        SqliteTransaction transaction, CancellationToken token)
+    {
+        if (intent.DirectoryTransferOperationId is not { } transferId) return;
+        var plan = await ReadDirectoryTransferAdmissionCoreAsync(transferId, transaction, token).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("Directory transfer role recovery requires its original admission.");
+        RootId root = intent.Roots.Single().RootId;
+        if (root != plan.SourceRoute.RootId && root != plan.TargetRoute.RootId ||
+            await ReadDirectoryTransferSourceDeletionCoreAsync(transferId, transaction, token).ConfigureAwait(false) is not { AcceptedAt: { } accepted } ||
+            intent.PreparedAt < accepted ||
+            (await ReadDirectoryTransferAcknowledgementCoreAsync(transferId, transaction, token).ConfigureAwait(false))?.AcknowledgedAt is not null)
+            throw new InvalidOperationException("Directory transfer role recovery requires an original fenced root and accepted source deletion.");
+        await RequireDirectoryTransferInitializationFenceAsync(intent, transaction, token).ConfigureAwait(false);
+        await RequireNamespaceTransferRoutesAsync([plan.SourceRoute, plan.TargetRoute], transaction, token, requireSingleRoot: true)
+            .ConfigureAwait(false);
+    }
+
+    private async Task RequireDirectoryTransferInitializationFenceAsync(MirrorPulseNamespaceInitializationIntent intent,
+        SqliteTransaction transaction, CancellationToken token)
+    {
+        if (intent.DirectoryTransferOperationId is not { } transferId) return;
+        RootId root = intent.Roots.Single().RootId;
+        await RequireDirectoryTransferFenceIndexAsync(transaction, token, root).ConfigureAwait(false);
+        await using var query = _connection.CreateCommand();
+        query.Transaction = transaction;
+        query.CommandText = "SELECT transfer_id FROM namespace_directory_transfer_fences WHERE root_id=$root;";
+        query.Parameters.AddWithValue("$root", root.ToString());
+        if ((await query.ExecuteScalarAsync(token).ConfigureAwait(false)) as string != transferId.ToString("D"))
+            throw new InvalidOperationException("Directory transfer role recovery lost its original root fence.");
     }
 
     private async Task<IReadOnlyList<DirectoryTransferFence>> ReadDirectoryTransferFencesCoreAsync(
@@ -294,10 +326,11 @@ public sealed partial class MirrorPulseProductCatalog
     }
 
     private async Task RequireCurrentDirectoryTransferTreeAsync(MirrorPulseDirectoryTransferAdmission plan,
-        SqliteTransaction transaction, CancellationToken token, Guid? publishedRoot = null)
+        SqliteTransaction transaction, CancellationToken token, Guid? publishedRoot = null, string? recoveredRole = null)
     {
         foreach (var parent in new[] { plan.SourceParent, plan.TargetParent })
-            if (await ReadNamespaceMemberProtectionSnapshotCoreAsync(parent.Context.Member.MemberId, transaction, token).ConfigureAwait(false) != parent)
+            if (!MatchesDirectoryTransferProtection(parent,
+                await ReadNamespaceMemberProtectionSnapshotCoreAsync(parent.Context.Member.MemberId, transaction, token).ConfigureAwait(false), recoveredRole))
                 throw new InvalidOperationException("A directory transfer parent changed before admission.");
         var tree = await ReadNamespaceMemberTreeCoreAsync(plan.Command.SourceMemberId, transaction, token).ConfigureAwait(false);
         if (tree.Count != plan.Members.Count)
@@ -307,7 +340,8 @@ public sealed partial class MirrorPulseProductCatalog
             var member = plan.Members[index].Source;
             var item = tree[index];
             if (member.Depth != item.Depth || member.Protection.Context.Member.MemberId != item.MemberId ||
-                await ReadNamespaceMemberProtectionSnapshotCoreAsync(item.MemberId, transaction, token).ConfigureAwait(false) != member.Protection)
+                !MatchesDirectoryTransferProtection(member.Protection,
+                    await ReadNamespaceMemberProtectionSnapshotCoreAsync(item.MemberId, transaction, token).ConfigureAwait(false), recoveredRole))
                 throw new InvalidOperationException("A directory transfer member changed before admission.");
         }
         await using var query = _connection.CreateCommand();
@@ -318,6 +352,14 @@ public sealed partial class MirrorPulseProductCatalog
         if (!Equals(await query.ExecuteScalarAsync(token).ConfigureAwait(false), publishedRoot?.ToString("D")))
             throw new InvalidOperationException("The directory transfer destination is occupied or no longer owns its original published name.");
     }
+
+    internal static bool MatchesDirectoryTransferProtection(MirrorPulseNamespaceMemberProtectionSnapshot original,
+        MirrorPulseNamespaceMemberProtectionSnapshot? current, string? recoveredRole) =>
+        current is not null && (recoveredRole is null || current.Context.Protection.RoleSid == recoveredRole) &&
+        (current == original || recoveredRole is not null && recoveredRole != original.Context.Protection.RoleSid &&
+            current.Context.Member == original.Context.Member && current.Context.Location == original.Context.Location &&
+            current.Identity == original.Identity && current.Observation == original.Observation &&
+            current.Context.Protection.VerifiedAt > original.Context.Protection.VerifiedAt);
 
     private static IEnumerable<(Guid Id, bool JournalOriginal)> DirectoryTransferIds(MirrorPulseDirectoryTransferAdmission plan)
     {

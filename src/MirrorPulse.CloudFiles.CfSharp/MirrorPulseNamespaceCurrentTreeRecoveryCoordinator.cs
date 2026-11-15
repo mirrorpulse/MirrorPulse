@@ -20,17 +20,20 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
     internal Action<string>? Progress { get; init; }
 
     public ValueTask<MirrorPulseNamespaceInitializationResult> RecoverAsync(Guid operationId,
-        CancellationToken cancellationToken = default) => RecoverCoreAsync(operationId, null, null, cancellationToken);
+        CancellationToken cancellationToken = default) => RecoverCoreAsync(operationId, null, null, null, cancellationToken);
 
     internal ValueTask<MirrorPulseNamespaceInitializationResult> RecoverRootAsync(Guid operationId, RootId rootId,
-        CancellationToken cancellationToken) => RecoverCoreAsync(operationId, rootId, null, cancellationToken);
+        CancellationToken cancellationToken) => RecoverCoreAsync(operationId, rootId, null, null, cancellationToken);
+
+    internal ValueTask<MirrorPulseNamespaceInitializationResult> RecoverDirectoryTransferRootAsync(Guid operationId, RootId rootId,
+        Guid transferId, CancellationToken cancellationToken) => RecoverCoreAsync(operationId, rootId, null, transferId, cancellationToken);
 
     internal ValueTask<MirrorPulseNamespaceInitializationResult> RecoverJournalDirectoryMoveAsync(Guid operationId,
         MirrorPulseJournalDirectoryMoveRecovery.ProjectionRecovery move, CancellationToken cancellationToken) =>
-        RecoverCoreAsync(operationId, move.Admission.RootId, move, cancellationToken);
+        RecoverCoreAsync(operationId, move.Admission.RootId, move, null, cancellationToken);
 
     private async ValueTask<MirrorPulseNamespaceInitializationResult> RecoverCoreAsync(Guid operationId, RootId? selectedRoot,
-        MirrorPulseJournalDirectoryMoveRecovery.ProjectionRecovery? move, CancellationToken cancellationToken)
+        MirrorPulseJournalDirectoryMoveRecovery.ProjectionRecovery? move, Guid? transferId, CancellationToken cancellationToken)
     {
         if (operationId == Guid.Empty) throw new ArgumentException("An initialization operation ID is required.", nameof(operationId));
         var retained = await catalog.ReadNamespaceInitializationAsync(operationId, cancellationToken).ConfigureAwait(false);
@@ -39,6 +42,8 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
         if (retained is not null && (selectedRoot is { } selected ? retained.Version is not (4 or 5) || retained.Roots.Count != 1 ||
             retained.Roots[0].RootId != selected : retained.Version is 4 or 5))
             throw new InvalidOperationException("The retained initializer requires its explicit complete or selected-root recovery route.");
+        if (retained is not null && retained.DirectoryTransferOperationId != transferId)
+            throw new InvalidOperationException("Current recovery requires its exact directory transfer purpose.");
         if (retained?.JournalDirectoryMoveOperationId is { } original)
         {
             if (move is not null && move.Admission.JournalOperationId != original ||
@@ -64,7 +69,8 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
                 operationId, roots, DateTimeOffset.UtcNow)
             {
                 RequestedInventoryKind = MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory,
-                JournalDirectoryMoveOperationId = move is { IsAcknowledged: false } ? move.Admission.JournalOperationId : null
+                JournalDirectoryMoveOperationId = move is { IsAcknowledged: false } ? move.Admission.JournalOperationId : null,
+                DirectoryTransferOperationId = transferId
             }, cancellationToken).ConfigureAwait(false);
         }
         if (!retained.Roots.Select(root => root.RootId).ToHashSet().SetEquals(registrations.Select(root => root.RootId)))

@@ -35,6 +35,10 @@ public sealed record MirrorPulseNamespaceInitializationIntent(int Version, Guid 
     /// <summary>The original journal directory Move whose selected root needs a new role before projection.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Guid? JournalDirectoryMoveOperationId { get; init; }
+
+    /// <summary>The original directory transfer whose fenced root needs a fresh role audit.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? DirectoryTransferOperationId { get; init; }
 }
 
 public enum MirrorPulseNamespaceInitializationInventoryKind { OriginalInventory, CurrentInventory }
@@ -83,6 +87,7 @@ public sealed partial class MirrorPulseProductCatalog
             if (await ReadInitializationJournalDirectoryMoveCoreAsync(intent, transaction, cancellationToken).ConfigureAwait(false) is
                 { Mutation.State: MirrorPulseMutationState.Acknowledged })
                 throw new InvalidOperationException("A new directory Move initializer requires its unfinished original Move.");
+            await RequireDirectoryTransferInitializationAsync(intent, transaction, cancellationToken).ConfigureAwait(false);
             foreach (var root in intent.Roots.Where(root => root.BornRootMemberId is not null))
                 await RequireNamespaceInitializationBornRootAsync(root, intent.PreparedAt, transaction, cancellationToken).ConfigureAwait(false);
             validation.Dispose();
@@ -200,6 +205,7 @@ public sealed partial class MirrorPulseProductCatalog
             throw new InvalidDataException("Initialization lost or changed a root reservation.");
         await reader.DisposeAsync().ConfigureAwait(false);
         _ = await ReadInitializationJournalDirectoryMoveCoreAsync(intent, transaction, token).ConfigureAwait(false);
+        await RequireDirectoryTransferInitializationFenceAsync(intent, transaction, token).ConfigureAwait(false);
     }
 
     private async Task RequireNamespaceInitializationTerminalAsync(MirrorPulseNamespaceInitializationIntent intent,
@@ -219,7 +225,8 @@ public sealed partial class MirrorPulseProductCatalog
     private static bool SameNamespaceInitialization(MirrorPulseNamespaceInitializationIntent left, MirrorPulseNamespaceInitializationIntent right) =>
         left.Version == right.Version && left.OperationId == right.OperationId && left.PreparedAt == right.PreparedAt &&
         left.RequestedInventoryKind == right.RequestedInventoryKind && left.RootLabelCancellation == right.RootLabelCancellation &&
-        left.JournalDirectoryMoveOperationId == right.JournalDirectoryMoveOperationId && left.Roots.SequenceEqual(right.Roots);
+        left.JournalDirectoryMoveOperationId == right.JournalDirectoryMoveOperationId &&
+        left.DirectoryTransferOperationId == right.DirectoryTransferOperationId && left.Roots.SequenceEqual(right.Roots);
 
     private static void ValidateNamespaceInitialization(MirrorPulseNamespaceInitializationIntent intent)
     {
@@ -235,6 +242,8 @@ public sealed partial class MirrorPulseProductCatalog
             intent.Roots.Where(root => root.BornRootMemberId is null).Select(root => root.ManifestId).Distinct().Count() != intent.Roots.Count(root => root.BornRootMemberId is null) ||
             intent.Roots.Where(root => root.BornRootMemberId is not null).Select(root => root.BornRootMemberId).Distinct().Count() != intent.Roots.Count(root => root.BornRootMemberId is not null) ||
             intent.JournalDirectoryMoveOperationId is { } move && (intent.Version != 4 || move == Guid.Empty || move == intent.OperationId) ||
+            intent.DirectoryTransferOperationId is { } transfer && (intent.Version != 4 || transfer == Guid.Empty ||
+                transfer == intent.OperationId || intent.JournalDirectoryMoveOperationId is not null) ||
             !HasValidRootLabelCancellationInitializationPurpose(intent))
             throw new ArgumentException("Initialization requires distinct stable roots and explicit retained capture or born-root provenance.", nameof(intent));
     }

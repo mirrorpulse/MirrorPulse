@@ -229,7 +229,7 @@ public sealed partial class MirrorPulseProductCatalog
     }
 
     internal async Task<MirrorPulseDirectoryTransferAcknowledgement> StartNamespaceDirectoryTransferAcknowledgementAsync(Guid transferId,
-        MirrorPulseDirectoryTransferTargetVerification fresh, DateTimeOffset startedAt, CancellationToken token)
+        MirrorPulseDirectoryTransferTargetVerification fresh, DateTimeOffset startedAt, CancellationToken token, string? recoveredRole = null)
     {
         await _gate.WaitAsync(token).ConfigureAwait(false);
         try
@@ -248,7 +248,7 @@ public sealed partial class MirrorPulseProductCatalog
             ValidateDirectoryTransferAcknowledgement(plan, verified, rows, result);
             await RequireNamespaceTransferRoutesAsync([plan.SourceRoute, plan.TargetRoute], transaction, token, requireSingleRoot: true)
                 .ConfigureAwait(false);
-            await RequireCurrentDirectoryTransferPublicationAsync(plan, verified, transaction, requireUnretiredSource: false, token)
+            await RequireCurrentDirectoryTransferPublicationAsync(plan, verified, transaction, requireUnretiredSource: false, token, recoveredRole)
                 .ConfigureAwait(false);
             await RequireDirectoryTransferSettledSourceNamesAsync(plan, rows, transaction, token).ConfigureAwait(false);
             validation.Dispose();

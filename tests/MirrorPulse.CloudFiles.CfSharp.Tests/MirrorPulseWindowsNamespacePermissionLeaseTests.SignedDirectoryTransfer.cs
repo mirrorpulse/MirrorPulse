@@ -18,7 +18,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     public Task NativeSignedLocalDirectoryTransferResumesAcrossTwoSingleRootInstances() => VerifySignedDirectoryTransferAsync(null);
 
     [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles"), TestCategory("SignedDirectoryTransfer")]
-    public Task NativeSignedLocalDirectoryTransferSettlesNativeDeleteBeforeRoleRotation() =>
+    public Task NativeSignedLocalDirectoryTransferResumesAfterNativeDeleteAcrossHostRoles() =>
         VerifySignedDirectoryTransferAsync(null, restartBeforeRetirementReceipt: true);
 
     [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles"), TestCategory("SignedDirectoryTransfer")]
@@ -228,17 +228,26 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     Assert.IsNull(await catalog.ReadNamespaceDirectoryTransferAcknowledgementAsync(operationId, token));
                     Assert.IsTrue((await catalog.ReadNamespaceTransferStatusAsync(operationId, token))!.RootsFenced);
                     Assert.IsFalse(newWork.IsAdmitted(sourceRoot.RootId) || newWork.IsAdmitted(targetRoot.RootId));
-                    await using var packageSource = File.OpenRead(package);
-                    string digest = Convert.ToHexString(await SHA256.HashDataAsync(packageSource, token));
-                    TestContext.WriteLine($"SignedDirectoryTransfer: packageSha256={digest}; originalNativeRetirementSettled=True; originalStartRetained=True; bothRootsFenced=True.");
-                    succeeded = true;
-                    return;
                 }
-                Assert.IsTrue(newRuntime.NamespaceStartupResults.All(root => root.Admitted && root.RecoveryCode is null));
+                else Assert.IsTrue(newRuntime.NamespaceStartupResults.All(root => root.Admitted && root.RecoveryCode is null));
                 Assert.IsTrue(await newRuntime.ResumeDirectoryNamespaceTransferAsync(operationId, token));
                 var recoveredAck = await catalog.ReadNamespaceDirectoryTransferAcknowledgementAsync(operationId, token);
                 Assert.IsNotNull(recoveredAck?.AcknowledgedAt);
                 if (originalAcknowledgementStart is { } ackStart) Assert.AreEqual(ackStart, recoveredAck.StartedAt);
+                if (firstRetirement is not null)
+                {
+                    var audits = (await catalog.ReadNamespaceInitializationsAsync(cancellationToken: token))
+                        .Where(status => status.Intent.DirectoryTransferOperationId == operationId).ToArray();
+                    Assert.HasCount(2, audits);
+                    CollectionAssert.AreEquivalent(new[] { sourceRoot.RootId, targetRoot.RootId },
+                        audits.Select(status => status.Completion!.ScopeRoot!.Value).ToArray());
+                    Assert.IsTrue(audits.All(status => status.Completion?.RoleSid == newExecution.RoleSid.Value));
+                    var retirements = await catalog.ReadNamespaceDirectoryTransferRetirementsAsync(operationId, token);
+                    Assert.HasCount(3, retirements);
+                    Assert.IsTrue(retirements.Where(row => row.Ordinal != firstRetirement.Ordinal)
+                        .All(row => row.ParentProtection?.Context.Protection.RoleSid == newExecution.RoleSid.Value));
+                    Assert.AreEqual(firstRetirement.Projection, retirements.Single(row => row.Ordinal == firstRetirement.Ordinal).Projection);
+                }
                 Assert.IsTrue((await catalog.ReadNamespaceTransferStatusAsync(operationId, token))!.JournalAcknowledged);
                 await AssertCompletedTransferAsync(newRuntime, newWork);
             }
@@ -277,7 +286,11 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 Assert.AreEqual(completed, await catalog.ReadNamespaceTransferStatusAsync(operationId, token));
                 await using var packageSource = File.OpenRead(package);
                 string digest = Convert.ToHexString(await SHA256.HashDataAsync(packageSource, token));
-                if (webDav is null)
+                if (restartBeforeRetirementReceipt)
+                {
+                    TestContext.WriteLine($"SignedDirectoryTransfer: packageSha256={digest}; originalNativeRetirementSettled=True; originalStartRetained=True; bothRootsFenced=True; reopenedRoots=True; targetBytesVerified=True; acknowledgementAcrossRoles=True.");
+                }
+                else if (webDav is null)
                 {
                     TestContext.WriteLine($"SignedDirectoryTransfer: packageSha256={digest}; distinctSingleRootInstances=True; sourceMembers=3; atomicSourceReceipt=True; interruptedNativeRetirement=True; reopenedRoots=True; targetBytesVerified=True; acknowledgementAcrossRoles=True.");
                 }

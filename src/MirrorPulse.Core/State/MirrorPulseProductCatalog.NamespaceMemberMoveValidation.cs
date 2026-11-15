@@ -166,13 +166,17 @@ public sealed partial class MirrorPulseProductCatalog
 
     private async Task RequireNamespaceMoveRootUnfencedAsync(RootId rootId, Guid? allowedMove,
         SqliteTransaction transaction, CancellationToken token, Guid? allowedRetirement = null, Guid? allowedBatch = null, Guid? allowedReplacement = null,
-        Guid? allowedBornRecoveryInitialization = null, Guid? allowedRemoteUpdate = null, Guid? allowedTransfer = null, Guid? allowedRootRename = null)
+        Guid? allowedBornRecoveryInitialization = null, Guid? allowedRemoteUpdate = null, Guid? allowedTransfer = null, Guid? allowedRootRename = null,
+        Guid? allowedDirectoryTransferRecoveryInitialization = null)
     {
-        Guid? allowedJournalDirectoryMove = allowedBornRecoveryInitialization is { } initialization
-            ? (await ReadNamespaceInitializationStatusCoreAsync(initialization, transaction, token).ConfigureAwait(false)).Intent.JournalDirectoryMoveOperationId
+        var recovery = allowedBornRecoveryInitialization is { } initialization
+            ? (await ReadNamespaceInitializationStatusCoreAsync(initialization, transaction, token).ConfigureAwait(false)).Intent
             : null;
+        var transferRecovery = allowedDirectoryTransferRecoveryInitialization is { } transferInitialization
+            ? (await ReadNamespaceInitializationStatusCoreAsync(transferInitialization, transaction, token).ConfigureAwait(false)).Intent
+            : recovery;
         if ((await ReadPendingJournalDirectoryMovesCoreAsync(transaction, token, rootId).ConfigureAwait(false))
-            .Any(owner => owner.OperationId != allowedJournalDirectoryMove))
+            .Any(owner => owner.OperationId != recovery?.JournalDirectoryMoveOperationId))
             throw new InvalidOperationException("An unfinished journal directory Move has fenced this managed root.");
         if (await ReadPendingKeepRemoteFileStartForRootCoreAsync(rootId, transaction, token).ConfigureAwait(false) is not null)
             throw new InvalidOperationException("An unfinished KeepRemote file application has fenced this managed root.");
@@ -182,7 +186,9 @@ public sealed partial class MirrorPulseProductCatalog
             if ((transfer.Plan.SourceRoute.RootId == rootId || transfer.Plan.TargetRoute.RootId == rootId) &&
                 !(transfer.Plan.OperationId == allowedTransfer && transfer.Plan.TargetRoute.RootId == rootId))
                 throw new InvalidOperationException("An unresolved persistent transfer has fenced this managed root.");
-        await RequireDirectoryTransferRootUnfencedAsync(rootId, allowedTransfer, transaction, token).ConfigureAwait(false);
+        await RequireDirectoryTransferRootUnfencedAsync(rootId, allowedTransfer, transaction, token,
+            transferRecovery?.Roots.Any(candidate => candidate.RootId == rootId) == true ? transferRecovery.DirectoryTransferOperationId : null)
+            .ConfigureAwait(false);
         await foreach (var update in ReadPendingRemoteUpdatesCoreAsync(transaction, token).ConfigureAwait(false))
             if (update.Plan.Child.Context.Member.RootId == rootId && update.Plan.OperationId != allowedRemoteUpdate)
                 throw new InvalidOperationException("An unresolved original remote update has fenced this managed root.");

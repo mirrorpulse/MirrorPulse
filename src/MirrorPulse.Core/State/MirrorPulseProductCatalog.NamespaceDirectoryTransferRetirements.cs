@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Data.Sqlite;
 using MirrorPulse.Core.Sync;
 
@@ -7,7 +8,11 @@ namespace MirrorPulse.Core.State;
 
 internal sealed record MirrorPulseDirectoryTransferRetirement(Guid TransferId, int Ordinal, Guid EffectId,
     Guid MemberId, MirrorPulseNamespaceTransferSourceProjection Projection, DateTimeOffset StartedAt,
-    MirrorPulseNamespacePermissionVerification? Parent = null, DateTimeOffset? RetiredAt = null, long? NameEpoch = null);
+    MirrorPulseNamespacePermissionVerification? Parent = null, DateTimeOffset? RetiredAt = null, long? NameEpoch = null)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public MirrorPulseNamespaceMemberProtectionSnapshot? ParentProtection { get; init; }
+}
 
 /// <summary>Validated historical retirement of one original directory transfer member.</summary>
 public sealed record MirrorPulseNamespaceDirectoryTransferRetiredMember(Guid TransferId, Guid EffectId,
@@ -97,7 +102,7 @@ public sealed partial class MirrorPulseProductCatalog
 
     internal async Task<MirrorPulseDirectoryTransferRetirement> StartNamespaceDirectoryTransferRetirementAsync(
         Guid transferId, int ordinal, MirrorPulseNamespaceTransferSourceProjection projection,
-        MirrorPulseDirectoryTransferTargetVerification fresh, DateTimeOffset startedAt, CancellationToken token)
+        MirrorPulseDirectoryTransferTargetVerification fresh, DateTimeOffset startedAt, CancellationToken token, string? recoveredRole = null)
     {
         await _gate.WaitAsync(token).ConfigureAwait(false);
         try
@@ -129,9 +134,10 @@ public sealed partial class MirrorPulseProductCatalog
                 throw new InvalidOperationException("Directory transfer retires source members in their original leaf-first order.");
             await RequireNamespaceTransferRoutesAsync([plan.SourceRoute, plan.TargetRoute], transaction, token,
                 requireSingleRoot: true).ConfigureAwait(false);
-            await RequireCurrentDirectoryTransferPublicationAsync(plan, verified, transaction, requireUnretiredSource: rows.Count == 0, token)
+            await RequireCurrentDirectoryTransferPublicationAsync(plan, verified, transaction, requireUnretiredSource: rows.Count == 0,
+                token, recoveredRole)
                 .ConfigureAwait(false);
-            await RequireCurrentDirectoryTransferRetirementMemberAsync(plan, ordinal, transaction, token).ConfigureAwait(false);
+            _ = await RequireCurrentDirectoryTransferRetirementMemberAsync(plan, ordinal, transaction, recoveredRole, token).ConfigureAwait(false);
             validation.Dispose();
             await WriteDirectoryTransferRetirementAsync(row, true, transaction, token).ConfigureAwait(false);
             transaction.Commit();
@@ -141,7 +147,8 @@ public sealed partial class MirrorPulseProductCatalog
     }
 
     internal async Task<MirrorPulseDirectoryTransferRetirement> CompleteNamespaceDirectoryTransferRetirementAsync(
-        Guid transferId, int ordinal, MirrorPulseNamespacePermissionVerification parent, DateTimeOffset retiredAt, CancellationToken token)
+        Guid transferId, int ordinal, MirrorPulseNamespacePermissionVerification parent, DateTimeOffset retiredAt, CancellationToken token,
+        string? recoveredRole = null)
     {
         await _gate.WaitAsync(token).ConfigureAwait(false);
         try
@@ -156,10 +163,17 @@ public sealed partial class MirrorPulseProductCatalog
             if (row.RetiredAt is not null) { transaction.Commit(); return row; }
             var deletion = await ReadDirectoryTransferSourceDeletionCoreAsync(transferId, transaction, token).ConfigureAwait(false)
                 ?? throw new InvalidDataException("Native retirement lost the accepted original source deletion.");
-            var source = await RequireCurrentDirectoryTransferRetirementMemberAsync(plan, ordinal, transaction, token).ConfigureAwait(false);
+            var (source, currentParent) = await RequireCurrentDirectoryTransferRetirementMemberAsync(plan, ordinal, transaction,
+                recoveredRole, token).ConfigureAwait(false);
             Guid parentId = source.Context.Location.ParentMemberId!.Value;
             long epoch = await ReadNamespaceNameEpochCoreAsync(parentId, source.Context.Location.RelativePath, transaction, token).ConfigureAwait(false);
-            var completed = row with { Parent = parent, RetiredAt = retiredAt, NameEpoch = checked(epoch + 1) };
+            var completed = row with
+            {
+                Parent = parent,
+                RetiredAt = retiredAt,
+                NameEpoch = checked(epoch + 1),
+                ParentProtection = currentParent == DirectoryTransferSourceParent(plan, ordinal) ? null : currentParent
+            };
             ValidateDirectoryTransferRetirement(plan, deletion.AcceptedAt!.Value, completed);
             validation.Dispose();
             await using var sql = _connection.CreateCommand();
@@ -176,17 +190,20 @@ public sealed partial class MirrorPulseProductCatalog
         finally { _gate.Release(); }
     }
 
-    private async Task<MirrorPulseNamespaceMemberProtectionSnapshot> RequireCurrentDirectoryTransferRetirementMemberAsync(
-        MirrorPulseDirectoryTransferAdmission plan, int ordinal, SqliteTransaction transaction, CancellationToken token)
+    private async Task<(MirrorPulseNamespaceMemberProtectionSnapshot Source, MirrorPulseNamespaceMemberProtectionSnapshot Parent)>
+        RequireCurrentDirectoryTransferRetirementMemberAsync(MirrorPulseDirectoryTransferAdmission plan, int ordinal,
+            SqliteTransaction transaction, string? recoveredRole, CancellationToken token)
     {
         var original = plan.Members[ordinal].Source.Protection;
         var parent = DirectoryTransferSourceParent(plan, ordinal);
-        if (await ReadNamespaceMemberProtectionSnapshotCoreAsync(original.Context.Member.MemberId, transaction, token).ConfigureAwait(false) != original ||
-            await ReadNamespaceMemberProtectionSnapshotCoreAsync(parent.Context.Member.MemberId, transaction, token).ConfigureAwait(false) != parent)
+        var current = await ReadNamespaceMemberProtectionSnapshotCoreAsync(original.Context.Member.MemberId, transaction, token).ConfigureAwait(false);
+        var currentParent = await ReadNamespaceMemberProtectionSnapshotCoreAsync(parent.Context.Member.MemberId, transaction, token).ConfigureAwait(false);
+        if (!MatchesDirectoryTransferProtection(original, current, recoveredRole) ||
+            !MatchesDirectoryTransferProtection(parent, currentParent, recoveredRole))
             throw new InvalidOperationException("The original local retirement member or direct parent changed.");
         await RequireNamespaceMemberNameAsync(original.Context.Member, transaction, token).ConfigureAwait(false);
         await RequireNoRegisteredDescendantsAsync(original.Context.Member.MemberId, transaction, token).ConfigureAwait(false);
-        return original;
+        return (current!, currentParent!);
     }
 
     internal static MirrorPulseNamespaceMemberProtectionSnapshot DirectoryTransferSourceParent(MirrorPulseDirectoryTransferAdmission plan, int ordinal) =>
@@ -250,6 +267,10 @@ public sealed partial class MirrorPulseProductCatalog
                 throw new InvalidDataException("The original native retirement order or index changed.");
             rows.Add(row);
         }
+        await reader.DisposeAsync().ConfigureAwait(false);
+        foreach (var row in rows)
+            if (row.ParentProtection is { } protection)
+                await RequireRemoteUpdateHistoricalSnapshotAsync(protection, row.Parent!.ObservedAt, transaction, token).ConfigureAwait(false);
         return rows.AsReadOnly();
     }
 
@@ -268,14 +289,18 @@ public sealed partial class MirrorPulseProductCatalog
             projection.LocalObject != original.Context.Member.LocalObject ||
             projection.CapturedAt < accepted || row.StartedAt < projection.CapturedAt ||
             row.RetiredAt < row.StartedAt ||
-            (row.RetiredAt is null) != (row.Parent is null) || (row.RetiredAt is null) != (row.NameEpoch is null))
+            (row.RetiredAt is null) != (row.Parent is null) || (row.RetiredAt is null) != (row.NameEpoch is null) ||
+            row.RetiredAt is null && row.ParentProtection is not null)
             throw new InvalidDataException("Native retirement lost its original SDK projection or chronology.");
         if (row.Parent is { } parent)
         {
             var originalParent = DirectoryTransferSourceParent(plan, row.Ordinal);
+            var protection = row.ParentProtection ?? originalParent;
             if (row.NameEpoch is < 2 || parent.ObservedAt < row.StartedAt || parent.ObservedAt > row.RetiredAt ||
                 parent.LocalObject != originalParent.Context.Member.LocalObject || parent.OwnerSid != originalParent.Context.Member.OwnerSid ||
-                !MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(originalParent.ExpectedDacl, parent.Dacl))
+                !MatchesDirectoryTransferProtection(originalParent, protection, protection.Context.Protection.RoleSid) ||
+                parent.ObservedAt < protection.Context.Protection.VerifiedAt ||
+                !MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(protection.ExpectedDacl, parent.Dacl))
                 throw new InvalidDataException("Native retirement lost its original direct parent and settled name.");
         }
     }
