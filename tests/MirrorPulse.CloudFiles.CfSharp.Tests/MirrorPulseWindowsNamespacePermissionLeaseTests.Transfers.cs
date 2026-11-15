@@ -70,6 +70,15 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     [TestMethod]
     [DoNotParallelize]
     [TestCategory("NativeCloudFiles")]
+    [DataRow(false)]
+    [DataRow(true)]
+    public Task NativeHostTransferAcknowledgesOriginalAfterSettledSourceRoleHandoff(bool loseAcknowledgementReturn) =>
+        RunNativeHostTransferAsync(deleteSource: true, retireLocal: true, completeOriginals: true, selectedSameInstance: false,
+            acceptDeleteBeforePublishedHandoff: false, retireBeforePublishedHandoff: true, loseAcknowledgementReturn: loseAcknowledgementReturn);
+
+    [TestMethod]
+    [DoNotParallelize]
+    [TestCategory("NativeCloudFiles")]
     public Task NativeHostTransferDeletesOnlyOriginalRemoteSourceWhileRetainingGuardedLocalBytes() => RunNativeHostTransferAsync(deleteSource: true, selectedSameInstance: false);
 
     [TestMethod]
@@ -95,7 +104,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
 
     private async Task RunNativeHostTransferAsync(bool deleteSource, bool retireLocal = false, string? retirementFault = null,
         bool completeOriginals = false, bool? selectedSameInstance = null, bool? restartBeforeVerification = null,
-        bool recreateAcceptedSource = false, bool? acceptDeleteBeforePublishedHandoff = null)
+        bool recreateAcceptedSource = false, bool? acceptDeleteBeforePublishedHandoff = null, bool retireBeforePublishedHandoff = false,
+        bool loseAcknowledgementReturn = false)
     {
         if (!OperatingSystem.IsWindows() || Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
             Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
@@ -230,6 +240,13 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 MirrorPulseTransferPublicationCheckpoint? publicationCut = null; int publicationFaults = 0;
                 var projectionFault = new MirrorPulseTransferProjectionCommitFault(role.RoleSid);
                 var acknowledgementFault = new TransferNativeAcknowledgementFault(paths);
+                ValueTask AcknowledgementCheckpoint(MirrorPulseTransferAcknowledgementCheckpoint checkpoint, CancellationToken token)
+                {
+                    if (!loseAcknowledgementReturn) return acknowledgementFault.CheckpointAsync(checkpoint, token);
+                    return checkpoint == MirrorPulseTransferAcknowledgementCheckpoint.AfterSdkAcknowledgement
+                        ? ValueTask.FromException(new IOException("Synthetic interruption after the original SDK ACK returned."))
+                        : ValueTask.CompletedTask;
+                }
                 int retirementFaults = 0, nativeDeleteCalls = 0; bool sqlFaultArmed = false;
                 async ValueTask RetirementCheckpoint(MirrorPulseTransferSourceRetirementCheckpoint checkpoint, CancellationToken stop)
                 {
@@ -272,7 +289,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     TransferJournalReady = ObserveJournal,
                     TransferJournalSourceReady = source => currentJournalSource = source,
                     TransferSourceRetirementCheckpoint = retireLocal ? RetirementCheckpoint : null,
-                    TransferAcknowledgementCheckpoint = completeOriginals ? acknowledgementFault.CheckpointAsync : null,
+                    TransferAcknowledgementCheckpoint = completeOriginals ? AcknowledgementCheckpoint : null,
                     TransferPublicationCheckpoint = (checkpoint, _) =>
                     {
                         if (checkpoint != publicationCut) return ValueTask.CompletedTask;
@@ -639,7 +656,25 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                             Assert.IsNotEmpty(originalClaim.Members);
                             Assert.IsNull(verified.SourceDeletion);
                             Assert.IsNull(verified.Acknowledgement);
-                            if (acceptDeleteBeforeHandoff)
+                            MirrorPulseNamespaceRetirement? originalRetirement = null;
+                            if (retireBeforePublishedHandoff)
+                            {
+                                originalRetirement = await publishing.RetireNamespaceTransferSourceAsync(operation, deadline.Token);
+                                Assert.AreEqual(MirrorPulseNamespaceRetirementPhase.Completed, originalRetirement.Phase);
+                                Assert.AreEqual(1, worker.Deletes);
+                                Assert.IsFalse(File.Exists(sourcePath));
+                                verified = await publishing.ReadNamespaceTransferAsync(operation, deadline.Token);
+                                Assert.IsNull(verified.Acknowledgement);
+                                if (loseAcknowledgementReturn)
+                                {
+                                    await Assert.ThrowsExactlyAsync<IOException>(async () =>
+                                        await publishing.CompleteNamespaceTransferAsync(operation, deadline.Token));
+                                    verified = await publishing.ReadNamespaceTransferAsync(operation, deadline.Token);
+                                    Assert.IsNotNull(verified.Acknowledgement);
+                                    Assert.IsNull(verified.Acknowledgement.AcknowledgedAt);
+                                }
+                            }
+                            else if (acceptDeleteBeforeHandoff)
                             {
                                 verified = await publishing.DeleteNamespaceTransferSourceAsync(operation, deadline.Token);
                                 Assert.IsNotNull(verified.SourceDeletion?.AcceptedAt);
@@ -669,16 +704,22 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                             await using (var originalOperations = await reopenedState.OpenStore.BeginTransactionAsync(deadline.Token))
                             {
                                 foreach (var change in originalClaim.Members)
-                                    Assert.IsNotNull(await originalOperations.Operations.GetAsync(change.OperationId, deadline.Token));
+                                    Assert.AreEqual(!loseAcknowledgementReturn,
+                                        await originalOperations.Operations.GetAsync(change.OperationId, deadline.Token) is not null);
                                 await originalOperations.RollbackAsync(deadline.Token);
                             }
 
                             var lateRetirement = await afterPublication.RetireNamespaceTransferSourceAsync(operation, deadline.Token);
                             Assert.AreEqual(MirrorPulseNamespaceRetirementPhase.Completed, lateRetirement.Phase);
-                            Assert.AreEqual(5, lateRetirement.Intent.TransferEntry!.Version);
-                            Assert.AreEqual(nextRole.RoleSid.Value, lateRetirement.Intent.RoleSid);
-                            Assert.IsNotNull(lateRetirement.Intent.TransferEntry.RecoveredSourceParent);
-                            Assert.IsNotNull(lateRetirement.Intent.TransferEntry.RecoveredTargetParent);
+                            if (originalRetirement is not null)
+                                Assert.AreEqual(originalRetirement, lateRetirement);
+                            else
+                            {
+                                Assert.AreEqual(5, lateRetirement.Intent.TransferEntry!.Version);
+                                Assert.AreEqual(nextRole.RoleSid.Value, lateRetirement.Intent.RoleSid);
+                                Assert.IsNotNull(lateRetirement.Intent.TransferEntry.RecoveredSourceParent);
+                                Assert.IsNotNull(lateRetirement.Intent.TransferEntry.RecoveredTargetParent);
+                            }
                             Assert.AreEqual(1, worker.Uploads);
                             Assert.AreEqual(1, worker.Deletes);
                             Assert.IsFalse(File.Exists(sourcePath));
@@ -688,11 +729,17 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                             Assert.AreEqual(verified.TargetBirth, completed.TargetBirth);
                             Assert.AreEqual(verified.TargetPublication, completed.TargetPublication);
                             Assert.AreEqual(originalClaim, completed.JournalClaim);
-                            if (acceptDeleteBeforeHandoff)
+                            if (acceptDeleteBeforeHandoff || originalRetirement is not null)
                                 Assert.AreEqual(verified.SourceDeletion, completed.SourceDeletion);
                             else
                                 Assert.AreEqual(2, completed.SourceDeletion!.Version);
-                            Assert.IsNotNull(completed.Acknowledgement?.AcknowledgedAt);
+                            var completedAcknowledgement = completed.Acknowledgement;
+                            Assert.IsNotNull(completedAcknowledgement);
+                            Assert.IsNotNull(completedAcknowledgement.AcknowledgedAt);
+                            if (loseAcknowledgementReturn)
+                                Assert.AreEqual(verified.Acknowledgement, completedAcknowledgement with { AcknowledgedAt = null });
+                            else if (originalRetirement is not null)
+                                Assert.AreEqual(2, completedAcknowledgement.Version);
                             Assert.IsEmpty(await reopenedCatalog.ReadNamespaceDispatchFencedRootsAsync(deadline.Token));
                             Assert.IsTrue(reopenedWork.IsAdmitted(sourceRoot.RootId));
                             Assert.IsTrue(reopenedWork.IsAdmitted(targetRoot.RootId));

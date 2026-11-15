@@ -79,22 +79,23 @@ public sealed partial class MirrorPulseProductCatalog
     {
         var (sourceAudit, targetAudit) = await RequireFileTransferAuditsAsync(plan, recovery, publishedAt ?? plan.PreparedAt,
             transaction, token).ConfigureAwait(false);
-        return new(await RequireMemberAsync(plan.Source, sourceAudit).ConfigureAwait(false),
-            await RequireMemberAsync(plan.SourceParent, sourceAudit).ConfigureAwait(false),
-            await RequireMemberAsync(plan.TargetParent, targetAudit).ConfigureAwait(false));
+        return new(await RequireAuditedFileTransferMemberAsync(plan.Source, sourceAudit, transaction, token).ConfigureAwait(false),
+            await RequireAuditedFileTransferMemberAsync(plan.SourceParent, sourceAudit, transaction, token).ConfigureAwait(false),
+            await RequireAuditedFileTransferMemberAsync(plan.TargetParent, targetAudit, transaction, token).ConfigureAwait(false));
+    }
 
-        async Task<MirrorPulseNamespaceMemberProtectionSnapshot> RequireMemberAsync(MirrorPulseNamespaceMemberProtectionSnapshot original,
-            MirrorPulseNamespaceInitializationCompletion audit)
-        {
-            var current = await ReadNamespaceMemberProtectionSnapshotCoreAsync(original.Context.Member.MemberId, transaction, token).ConfigureAwait(false);
-            if (current is null || current.Context.Member != original.Context.Member || current.Context.Location != original.Context.Location ||
-                current.Identity != original.Identity || current.Context.Protection.RoleSid != audit.RoleSid ||
-                current.Context.Protection.VerifiedAt > audit.CompletedAt)
-                throw new InvalidOperationException("The current audit must retain each original transfer member, position and public identity.");
-            await RequireCurrentNamespaceMoveLineageAsync(current.Context.Member, audit.RoleSid, audit.CompletedAt, transaction, token)
-                .ConfigureAwait(false);
-            return current;
-        }
+    private async Task<MirrorPulseNamespaceMemberProtectionSnapshot> RequireAuditedFileTransferMemberAsync(
+        MirrorPulseNamespaceMemberProtectionSnapshot original, MirrorPulseNamespaceInitializationCompletion audit,
+        SqliteTransaction transaction, CancellationToken token)
+    {
+        var current = await ReadNamespaceMemberProtectionSnapshotCoreAsync(original.Context.Member.MemberId, transaction, token).ConfigureAwait(false);
+        if (current is null || current.Context.Member != original.Context.Member || current.Context.Location != original.Context.Location ||
+            current.Identity != original.Identity || current.Context.Protection.RoleSid != audit.RoleSid ||
+            current.Context.Protection.VerifiedAt > audit.CompletedAt)
+            throw new InvalidOperationException("The current audit must retain each original transfer member, position and public identity.");
+        await RequireCurrentNamespaceMoveLineageAsync(current.Context.Member, audit.RoleSid, audit.CompletedAt, transaction, token)
+            .ConfigureAwait(false);
+        return current;
     }
 
     private async Task<(MirrorPulseNamespaceInitializationCompletion Source, MirrorPulseNamespaceInitializationCompletion Target)>

@@ -658,7 +658,13 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             return await WithAdmittedInstancesLibraryAsync(new[] { copy.Plan.SourceRoute.InstanceId, copy.Plan.TargetRoute.InstanceId }.Distinct(),
                 async (instances, stop) =>
                 {
-                    var completed = await TransferCoordinator().AcknowledgeAsync(operationId, transfers!, stop).ConfigureAwait(false);
+                    var current = await ReadNamespaceTransferAsync(operationId, stop).ConfigureAwait(false);
+                    var retirement = await catalog!.ReadNamespaceRetirementAsync(current.Plan.DeleteOperationId, stop).ConfigureAwait(false);
+                    if (retirement?.Phase != MirrorPulseNamespaceRetirementPhase.Completed)
+                        throw new InvalidOperationException("File transfer acknowledgement requires the original completed source retirement.");
+                    var roleRecovery = retirement.Intent.RoleSid != _namespaceExecution!.RoleSid.Value && current.Acknowledgement?.AcknowledgedAt is null
+                        ? await RecoverFileTransferRoleAsync(current, instances, afterPublication: true, stop).ConfigureAwait(false) : null;
+                    var completed = await TransferCoordinator().AcknowledgeAsync(operationId, transfers!, roleRecovery, stop).ConfigureAwait(false);
                     // A later ordinary create/truncate write can leave the same protected
                     // target as a local file. Its completed copy/ACK is historical evidence,
                     // not current namespace admission. Restore the current registered graph

@@ -14,8 +14,12 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
     /// <summary>Settles the immutable original claim through the Host's running public feed.</summary>
     /// <remarks>The caller retains both root admissions and ordered instance gates. A retry reuses
     /// its first durable invocation, including after the SDK committed but the Host receipt was lost.</remarks>
-    public async ValueTask<MirrorPulseNamespaceTransferCopy> AcknowledgeAsync(Guid operationId,
-        MirrorPulseTransferWorkerServices workers, CancellationToken token)
+    public ValueTask<MirrorPulseNamespaceTransferCopy> AcknowledgeAsync(Guid operationId,
+        MirrorPulseTransferWorkerServices workers, CancellationToken token) =>
+        AcknowledgeAsync(operationId, workers, null, token);
+
+    internal async ValueTask<MirrorPulseNamespaceTransferCopy> AcknowledgeAsync(Guid operationId,
+        MirrorPulseTransferWorkerServices workers, MirrorPulseFileTransferRecovery? recovery, CancellationToken token)
     {
         var copy = await ReadAsync(operationId, token).ConfigureAwait(false);
         if (copy.Acknowledgement?.AcknowledgedAt is not null) return copy;
@@ -35,8 +39,11 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
                         TransferSourceProjection: not null, TransferSourceNameEpoch: not null
                     })
                     throw new InvalidOperationException("Original acknowledgement requires its completed source generation and settled name witness.");
-                var originalSourceParent = retirement.Intent.TransferEntry!.RecoveredSourceParent ?? current.Plan.SourceParent;
-                var originalTargetParent = retirement.Intent.TransferEntry.RecoveredTargetParent ?? current.TargetBirth!.RecoveredParent ?? current.Plan.TargetParent;
+                var reference = retirement.Intent.TransferEntry!;
+                var (originalSourceParent, originalTargetParent) = recovery is null
+                    ? (reference.RecoveredSourceParent ?? current.Plan.SourceParent,
+                        reference.RecoveredTargetParent ?? current.TargetBirth!.RecoveredParent ?? current.Plan.TargetParent)
+                    : await catalog.ReadAuditedFileTransferSettlementParentsAsync(operationId, recovery, stop).ConfigureAwait(false);
                 foreach (var parent in new[] { originalSourceParent, originalTargetParent })
                 {
                     RequireLiveRoute(parent);
@@ -54,7 +61,7 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
                 var sourceBefore = await sourceParent.InspectAsync(stop).ConfigureAwait(false);
                 var targetBefore = await targetParent.InspectAsync(stop).ConfigureAwait(false);
                 RequireNative(sourceBefore, originalSourceParent); RequireNative(targetBefore, originalTargetParent);
-                _ = await ReadOriginalSourceRetirementReceiptAsync(current, retirement, stop).ConfigureAwait(false);
+                _ = await RequireOriginalSourceTombstoneAsync(current, retirement, stop).ConfigureAwait(false);
                 var target = await catalog.ReadNamespaceMemberProtectionSnapshotAsync(current.TargetPublication!.MemberId, stop).ConfigureAwait(false)
                     ?? throw new InvalidDataException("The original transfer target lost its current membership.");
                 var targetFile = fileSystem.GetFile(current.Plan.TargetRelativePath);
@@ -68,7 +75,7 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
                     var proof = await execution.RunNormalUserOperationAsync(() => new MirrorPulseTransferTargetVerifier(catalog,
                         workers.Stats, workers.Ranges, workers.Directories).ReadCurrentAsync(current, stop)).ConfigureAwait(false);
                     current = await catalog.StartNamespaceTransferAcknowledgementAsync(operationId, proof,
-                        target.Context.Protection.ProtectionId, DateTimeOffset.UtcNow, stop).ConfigureAwait(false);
+                        target.Context.Protection.ProtectionId, DateTimeOffset.UtcNow, recovery, stop).ConfigureAwait(false);
                 }
                 // A prior accepted invocation owns only these GUIDs. Replaying it must not demand
                 // unchanged historical target contents or replace later user edits with old bytes.
@@ -85,7 +92,7 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
                 MirrorPulseNamespaceBirthProtectionVerifier.RequireUnchangedParent(targetBefore,
                     await targetParent.InspectAsync(CancellationToken.None).ConfigureAwait(false));
                 current = await catalog.CompleteNamespaceTransferAcknowledgementAsync(originalStart,
-                    DateTimeOffset.UtcNow, CancellationToken.None).ConfigureAwait(false);
+                    DateTimeOffset.UtcNow, target.Context.Protection.ProtectionId, recovery, CancellationToken.None).ConfigureAwait(false);
             }).ConfigureAwait(false);
             return current;
         }, token).ConfigureAwait(false);

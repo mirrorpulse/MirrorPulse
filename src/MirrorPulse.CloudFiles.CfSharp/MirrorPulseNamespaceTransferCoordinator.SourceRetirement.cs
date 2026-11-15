@@ -116,6 +116,18 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
     private async Task<MirrorPulseNamespaceTransferRetirementReceipt> ReadOriginalSourceRetirementReceiptAsync(
         MirrorPulseNamespaceTransferCopy copy, MirrorPulseNamespaceRetirement retained, CancellationToken token)
     {
+        var originalItem = await RequireOriginalSourceTombstoneAsync(copy, retained, token).ConfigureAwait(false);
+        var originalParent = retained.Intent.TransferEntry!.RecoveredSourceParent ?? copy.Plan.SourceParent;
+        await using var parent = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(
+            fileSystem.GetDirectory(originalParent.Context.Location.RelativePath), router, token).ConfigureAwait(false);
+        var facts = await parent.InspectAsync(token).ConfigureAwait(false); RequireNative(facts, originalParent);
+        return new(1, copy.Plan.OperationId, copy.Plan.DeleteOperationId, originalItem, copy.Plan.Source.Context.Member.LocalObject,
+            true, true, new(facts.LocalObject, facts.OwnerSid, facts.Dacl, facts.ObservedAt), DateTimeOffset.UtcNow);
+    }
+
+    private async Task<Guid> RequireOriginalSourceTombstoneAsync(
+        MirrorPulseNamespaceTransferCopy copy, MirrorPulseNamespaceRetirement retained, CancellationToken token)
+    {
         var native = await fileSystem.GetFile(copy.Plan.Source.Context.Location.RelativePath).InspectAsync(token).ConfigureAwait(false);
         if (retained.StartedAt is null || retained.StartedItemId is not { } originalItem || native.Exists || !native.IsTombstone || native.ItemId != originalItem)
             throw new InvalidDataException("The original started source deletion has no owned public SDK tombstone; preserve private bytes and fences for explicit recovery.");
@@ -127,11 +139,6 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
             RequireOriginalSourceProjection(projection, row, tombstone: true);
             await read.RollbackAsync(token).ConfigureAwait(false);
         }
-        var originalParent = retained.Intent.TransferEntry!.RecoveredSourceParent ?? copy.Plan.SourceParent;
-        await using var parent = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(
-            fileSystem.GetDirectory(originalParent.Context.Location.RelativePath), router, token).ConfigureAwait(false);
-        var facts = await parent.InspectAsync(token).ConfigureAwait(false); RequireNative(facts, originalParent);
-        return new(1, copy.Plan.OperationId, copy.Plan.DeleteOperationId, originalItem, copy.Plan.Source.Context.Member.LocalObject,
-            true, true, new(facts.LocalObject, facts.OwnerSid, facts.Dacl, facts.ObservedAt), DateTimeOffset.UtcNow);
+        return originalItem;
     }
 }

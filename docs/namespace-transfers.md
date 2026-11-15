@@ -241,10 +241,12 @@ settles only the explicit command and reports `journalAcknowledged: false`.
 
 The first acknowledgement invocation is durable before calling the SDK. Only
 the actual successful return permits the atomic product completion receipt and
-removal of exactly both owned root fences. A crash after the SDK commits replays
-the same invocation, even when the rows are already absent. Queue absence alone
-cannot replace a receipt. Once accepted, retry does not reread old Worker target
-content or overwrite later user edits. Private source bytes remain retained.
+removal of exactly both owned root fences. After source retirement, a new Host
+audits both fenced roots and checks the retained source tombstone and published
+target. If the SDK had already accepted the first invocation, the Host replays
+that invocation using the original journal IDs. It reuses the first target proof
+and preserves later user edits. Queue absence alone cannot replace a receipt.
+Private source bytes remain retained.
 
 The Host keeps both roots closed until fresh current membership and native
 inventory audits pass. A historical completed result does not reopen a root in a
