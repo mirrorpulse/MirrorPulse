@@ -10,7 +10,8 @@ internal enum MirrorPulseTransferSourceRetirementCheckpoint
     AfterNativeDeletion,
     AfterNativeReceipt,
     BeforeFirstDirectoryNativeRetirement,
-    AfterDirectoryWorkerDeletionBeforeReceipt
+    AfterDirectoryWorkerDeletionBeforeReceipt,
+    BeforeDirectoryWorkerDeletion
 }
 
 public sealed partial class MirrorPulseNamespaceTransferCoordinator

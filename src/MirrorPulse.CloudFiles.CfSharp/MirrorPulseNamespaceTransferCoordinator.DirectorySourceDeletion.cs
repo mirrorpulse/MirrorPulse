@@ -85,6 +85,9 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
         MirrorPulseDirectoryTransferSourceDeletion retained, IMirrorPulseDirectoryTransferDeletionTransport transport, CancellationToken token)
     {
         var request = retained.Request ?? throw new InvalidDataException("The started source deletion lost its original Worker request.");
+        if (SourceRetirementCheckpoint is not null)
+            await SourceRetirementCheckpoint(MirrorPulseTransferSourceRetirementCheckpoint.BeforeDirectoryWorkerDeletion, token)
+                .ConfigureAwait(false);
         var receipt = await transport.DeleteDirectoryTransferSourceAsync(request, token).ConfigureAwait(false);
         if (SourceRetirementCheckpoint is not null)
             await SourceRetirementCheckpoint(MirrorPulseTransferSourceRetirementCheckpoint.AfterDirectoryWorkerDeletionBeforeReceipt,
