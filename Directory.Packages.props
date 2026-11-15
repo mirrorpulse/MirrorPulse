@@ -4,7 +4,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageVersion Include="MSTest" Version="4.0.2" />
+    <PackageVersion Include="MSTest" Version="4.5.3" />
     <PackageVersion Include="CfSharp" Version="0.1.0-preview.3" />
     <PackageVersion Include="CfSharp.Storage.Sqlite" Version="0.1.0-preview.3" />
     <PackageVersion Include="FluentFTP" Version="54.2.1" />
