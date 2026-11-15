@@ -309,6 +309,19 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             Assert.AreEqual(plan, verified.Plan);
             Assert.AreEqual(plan.Sha256, verified.TargetVerification?.Sha256);
             Assert.IsNull(verified.SourceDeletion);
+            var birth = TransferBirth(verified) with
+            {
+                Version = 2,
+                SourceRecoveryAuditId = source.OperationId,
+                TargetRecoveryAuditId = target.OperationId,
+                RecoveredParent = proved.TargetParent
+            };
+            await Assert.ThrowsExactlyAsync<ArgumentException>(() =>
+                catalog.PrepareNamespaceTransferTargetBirthAsync(birth with { SourceRecoveryAuditId = target.OperationId }));
+            Assert.IsNull((await catalog.ReadNamespaceTransferAsync(plan.OperationId))!.TargetBirth);
+            var admitted = await catalog.PrepareNamespaceTransferTargetBirthAsync(birth);
+            Assert.AreEqual(birth, admitted.TargetBirth);
+            Assert.AreEqual(admitted, await catalog.ReadNamespaceTransferAsync(plan.OperationId));
         }
         if (ordinaryStart)
             Assert.AreEqual(pending, await catalog.ReadNamespaceTransferAsync(plan.OperationId));

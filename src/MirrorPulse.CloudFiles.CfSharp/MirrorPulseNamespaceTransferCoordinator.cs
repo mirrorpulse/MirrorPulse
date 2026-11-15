@@ -157,7 +157,11 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator(CloudFileSys
     }
 
     /// <summary>Selects the separate target birth and SDK identity before any native creation.</summary>
-    public async ValueTask<MirrorPulseNamespaceTransferCopy> PrepareTargetBirthAsync(Guid operationId, CancellationToken token)
+    public ValueTask<MirrorPulseNamespaceTransferCopy> PrepareTargetBirthAsync(Guid operationId, CancellationToken token) =>
+        PrepareTargetBirthAsync(operationId, null, token);
+
+    internal async ValueTask<MirrorPulseNamespaceTransferCopy> PrepareTargetBirthAsync(Guid operationId,
+        MirrorPulseFileTransferRecovery? recovery, CancellationToken token)
     {
         var copy = await ReadAsync(operationId, token).ConfigureAwait(false);
         if (copy.TargetBirth is not null) return copy;
@@ -168,7 +172,9 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator(CloudFileSys
             // Another request may have selected the immutable birth while waiting for the shared actor.
             var current = await ReadAsync(operationId, token).ConfigureAwait(false);
             if (current.TargetBirth is not null) return current;
-            var verification = current.TargetVerification!; var parent = current.Plan.TargetParent;
+            var verification = current.TargetVerification!;
+            var parent = recovery is null ? current.Plan.TargetParent :
+                (await catalog.ReadFileTransferRecoveryMembersAsync(operationId, recovery, token).ConfigureAwait(false)).TargetParent;
             var identity = await router.CreateCurrentFileIdentityAsync(current.Plan.TargetRoute.InstanceId, current.Plan.TargetRoute.RootKey,
                 verification.RemoteId, current.AcceptedRevision, token).ConfigureAwait(false);
             _ = identity.Encode();
@@ -181,8 +187,13 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator(CloudFileSys
             { BornParent = parent.BornParent, TransferEntry = MirrorPulseNamespaceTransferBirthReference.Create(current) };
             var plan = new MirrorPulseNamespaceBirthPlan(2, birthId, identity.ItemId, identity.RemoteId, identity.RemoteRevision, preparedAt)
             { Content = new(current.Plan.Length, current.Plan.Sha256) };
-            return await catalog.PrepareNamespaceTransferTargetBirthAsync(new(1, operationId, birth, plan), token).ConfigureAwait(false);
-        }, token).ConfigureAwait(false);
+            return await catalog.PrepareNamespaceTransferTargetBirthAsync(new(recovery is null ? 1 : 2, operationId, birth, plan)
+            {
+                SourceRecoveryAuditId = recovery?.SourceAuditId,
+                TargetRecoveryAuditId = recovery?.TargetAuditId,
+                RecoveredParent = recovery is null ? null : parent
+            }, token).ConfigureAwait(false);
+        }, token, recovery).ConfigureAwait(false);
     }
 
     public async ValueTask<MirrorPulseNamespaceTransferCopy> PublishTargetAsync(Guid operationId, CancellationToken token)
@@ -196,10 +207,13 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator(CloudFileSys
             if (protocolVersion(current.Plan.SourceRoute.InstanceId) != current.Plan.SourceRoute.ProtocolVersion ||
                 protocolVersion(current.Plan.TargetRoute.InstanceId) != current.Plan.TargetRoute.ProtocolVersion)
                 throw new InvalidOperationException("The negotiated transfer protocol changed before target publication.");
-            return await WithGuardsAsync(current.Plan.Source, current.Plan.SourceParent, current.Plan.TargetParent,
+            var members = current.TargetBirth!.Recovery is { } recovered
+                ? await catalog.ReadFileTransferRecoveryMembersAsync(operationId, recovered, stop).ConfigureAwait(false) : null;
+            var source = members?.Source ?? current.Plan.Source;
+            return await WithGuardsAsync(source, members?.SourceParent ?? current.Plan.SourceParent, members?.TargetParent ?? current.Plan.TargetParent,
                 current.Plan.TargetRelativePath, async (file, metadata) =>
                 {
-                    var projection = await ReadSourceProjectionAsync(file, current.Plan.Source, stop).ConfigureAwait(false);
+                    var projection = await ReadSourceProjectionAsync(file, source, stop).ConfigureAwait(false);
                     if (projection.RemoteRevision != current.Plan.SourceRemoteRevision)
                         throw new InvalidDataException("The original transfer source projection changed before target publication.");
                     return await new MirrorPulseNamespaceTransferTargetPublisher(fileSystem, state, catalog, router, actor, TargetPublicationCheckpoint)

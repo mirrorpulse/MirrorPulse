@@ -78,6 +78,12 @@ anchor, and the original member identities and positions. Native leases and
 the original private content proof still govern dispatch. Both transfer fences
 remain until the original settlement completes.
 
+A target birth prepared after those audits retains both receipt IDs and the
+audited current parent snapshot. Creation, native registration and first
+publication check those original receipts against the live role and original
+source and target scopes. The publication retains its distinct public identity
+and online-only availability while transfer settlement is pending.
+
 For a directory transfer the choice is retained per original member before
 requesting preparation, including the first directory. Before its first
 dispatch, a reconnect that supports only ordinary copy or legacy durable start

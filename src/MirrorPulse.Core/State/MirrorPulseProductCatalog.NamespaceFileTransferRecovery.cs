@@ -58,10 +58,11 @@ public sealed partial class MirrorPulseProductCatalog
             using var transaction = BeginNamespaceRecoveryReadSnapshot();
             var copy = await ReadNamespaceTransferCoreAsync(operationId, transaction, token).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The original file transfer is missing.");
-            if (copy.TargetBirthOperationId is not null)
-                throw new InvalidOperationException("Copy recovery precedes the original target birth.");
+            if (copy.TargetBirth is { } target && target.Recovery != recovery)
+                throw new InvalidOperationException("Target recovery requires its original selected audit receipts.");
             var plan = copy.Plan;
-            var fences = await ReadNamespaceRootFencesCoreAsync(true, transaction, token, admittedTransferId: operationId).ConfigureAwait(false);
+            var fences = await ReadNamespaceRootFencesCoreAsync(true, transaction, token, admittedTransferId: operationId,
+                admittedTransferBirthId: copy.TargetBirthOperationId).ConfigureAwait(false);
             if (fences.Contains(plan.SourceRoute.RootId) || fences.Contains(plan.TargetRoute.RootId))
                 throw new InvalidOperationException("Another original namespace owner prevents this transfer.");
             await RequireNamespaceTransferRoutesAsync([plan.SourceRoute, plan.TargetRoute], transaction, token).ConfigureAwait(false);

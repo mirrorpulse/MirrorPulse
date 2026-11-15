@@ -578,7 +578,13 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             await using var admission = namespaceWork is null ? null : await namespaceWork.EnterPendingOperationAsync(
                 new[] { copy.Plan.SourceRoute.RootId, copy.Plan.TargetRoute.RootId }, token).ConfigureAwait(false);
             return await WithAdmittedInstancesLibraryAsync(new[] { copy.Plan.SourceRoute.InstanceId, copy.Plan.TargetRoute.InstanceId }.Distinct(),
-                (_, stop) => TransferCoordinator().PrepareTargetBirthAsync(operationId, stop), token).ConfigureAwait(false);
+                async (instanceAdmission, stop) =>
+                {
+                    var current = await ReadNamespaceTransferAsync(operationId, stop).ConfigureAwait(false);
+                    if (current.TargetBirth is not null) return current;
+                    var recovery = await RecoverFileTransferCopyRoleAsync(current, instanceAdmission, stop).ConfigureAwait(false);
+                    return await TransferCoordinator().PrepareTargetBirthAsync(operationId, recovery, stop).ConfigureAwait(false);
+                }, token).ConfigureAwait(false);
         }
 
         [SupportedOSPlatform("windows10.0.26100")]

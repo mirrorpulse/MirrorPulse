@@ -28,7 +28,21 @@ public sealed record MirrorPulseNamespaceTransferBirthReference(int Version, Gui
 /// <remarks>The Host validates the opaque identity through its public SDK adapter. This catalog fact
 /// is not a native binding, protection observation, content confirmation or source-delete authority.</remarks>
 public sealed record MirrorPulseNamespaceTransferTargetBirth(int Version, Guid OperationId,
-    MirrorPulseNamespaceBirthIntent Birth, MirrorPulseNamespaceBirthPlan Plan);
+    MirrorPulseNamespaceBirthIntent Birth, MirrorPulseNamespaceBirthPlan Plan)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? SourceRecoveryAuditId { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? TargetRecoveryAuditId { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public MirrorPulseNamespaceMemberProtectionSnapshot? RecoveredParent { get; init; }
+
+    [JsonIgnore]
+    internal MirrorPulseFileTransferRecovery? Recovery => SourceRecoveryAuditId is { } source && TargetRecoveryAuditId is { } target
+        ? new(source, target, Birth.RoleSid) : null;
+}
 
 public sealed partial class MirrorPulseProductCatalog
 {
@@ -44,12 +58,16 @@ public sealed partial class MirrorPulseProductCatalog
             var copy = await ReadNamespaceTransferCoreAsync(target.OperationId, transaction, token).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The original transfer is missing.");
             ValidateNamespaceTransferTargetBirth(copy, target);
+            await ValidateFileTransferBirthRecoveryAsync(copy, target, transaction, token).ConfigureAwait(false);
             if (copy.TargetBirth is { } retained)
             {
                 if (retained != target) throw new InvalidOperationException("The first transfer target birth and identity are immutable.");
                 transaction.Commit(); return copy;
             }
-            await RequireCurrentNamespaceTransferAsync(copy.Plan, transaction, token, admitted: true).ConfigureAwait(false);
+            await RequireCurrentNamespaceTransferAsync(copy.Plan, transaction, token, admitted: true, recovery: target.Recovery).ConfigureAwait(false);
+            if (target.RecoveredParent is { } recovered &&
+                await ReadNamespaceMemberProtectionSnapshotCoreAsync(recovered.Context.Member.MemberId, transaction, token).ConfigureAwait(false) != recovered)
+                throw new InvalidOperationException("Target birth requires its exact audited current parent.");
             await RequireNamespaceTransferIdAvailableAsync(target.Birth.OperationId, transaction, token).ConfigureAwait(false);
             await ValidateNamespaceBirthCurrentParentAsync(target.Birth, transaction, token).ConfigureAwait(false);
             await RequireNamespaceMoveRootUnfencedAsync(target.Birth.RootId, null, transaction, token,
@@ -90,8 +108,15 @@ public sealed partial class MirrorPulseProductCatalog
     private static void ValidateNamespaceTransferTargetBirth(MirrorPulseNamespaceTransferCopy copy, MirrorPulseNamespaceTransferTargetBirth target)
     {
         ArgumentNullException.ThrowIfNull(target.Birth); ArgumentNullException.ThrowIfNull(target.Plan);
-        var parent = copy.Plan.TargetParent;
-        if (target.Version != 1 || target.OperationId != copy.Plan.OperationId || copy.TargetVerification is null ||
+        var original = copy.Plan.TargetParent;
+        var parent = target.RecoveredParent ?? original;
+        if (target.Version is not (1 or 2) || (target.Version == 2) != (target.RecoveredParent is not null) ||
+            (target.Version == 2) != (target.SourceRecoveryAuditId is not null && target.TargetRecoveryAuditId is not null) ||
+            target.Version == 1 && (target.SourceRecoveryAuditId is not null || target.TargetRecoveryAuditId is not null) ||
+            target.SourceRecoveryAuditId == Guid.Empty || target.TargetRecoveryAuditId == Guid.Empty ||
+            target.SourceRecoveryAuditId is not null && target.SourceRecoveryAuditId == target.TargetRecoveryAuditId ||
+            parent.Context.Member != original.Context.Member || parent.Context.Location != original.Context.Location || parent.Identity != original.Identity ||
+            target.OperationId != copy.Plan.OperationId || copy.TargetVerification is null ||
             copy.CopyAcceptedAt is null || copy.CopyStartedAt is null || target.Birth.TransferEntry != MirrorPulseNamespaceTransferBirthReference.Create(copy))
             throw new ArgumentException("A target birth requires its original accepted and whole-verified transfer.", nameof(target));
         ValidateNamespaceTransferTargetVerification(copy, copy.TargetVerification);
@@ -154,6 +179,7 @@ public sealed partial class MirrorPulseProductCatalog
         if (await ReadNamespaceBirthRowAsync(target.Birth.OperationId, transaction, token).ConfigureAwait(false) != target.Birth ||
             await ReadNamespaceBirthPlanRowAsync(target.Birth.OperationId, transaction, token).ConfigureAwait(false) != target.Plan)
             throw new InvalidDataException("The original target birth lost its exact admission or public identity plan.");
+        await ValidateFileTransferBirthRecoveryAsync(copy, target, transaction, token).ConfigureAwait(false);
         return target;
     }
 
@@ -168,7 +194,7 @@ public sealed partial class MirrorPulseProductCatalog
         if (!await reader.ReadAsync(token).ConfigureAwait(false)) return null;
         var target = ReadNamespaceMovePayload<MirrorPulseNamespaceTransferTargetBirth>((byte[])reader[3], (byte[])reader[4], 262_144, value =>
         {
-            if (value.Version != 1 || value.OperationId == Guid.Empty || value.Birth is null || value.Plan is null)
+            if (value.Version is not (1 or 2) || value.OperationId == Guid.Empty || value.Birth is null || value.Plan is null)
                 throw new ArgumentException("The transfer target owner is incomplete.");
             ValidateNamespaceBirth(value.Birth); ValidateNamespaceBirthPlan(value.Plan); ValidateNamespaceBirthPlanReference(value.Plan, value.Birth);
         });
@@ -208,6 +234,28 @@ public sealed partial class MirrorPulseProductCatalog
             throw new InvalidDataException("The target birth no longer has its original transfer pointer.");
         try { ValidateNamespaceTransferTargetBirth(copy, target); }
         catch (Exception error) when (error is ArgumentException or InvalidOperationException) { throw new InvalidDataException("The target birth transfer receipt changed.", error); }
+        await reader.DisposeAsync().ConfigureAwait(false);
+        if (target.Recovery is not null)
+        {
+            using var owned = transaction is null ? BeginNamespaceRecoveryReadSnapshot() : null;
+            await ValidateFileTransferBirthRecoveryAsync(copy, target, transaction ?? owned!, token).ConfigureAwait(false);
+            owned?.Commit();
+        }
+    }
+
+    private async Task ValidateFileTransferBirthRecoveryAsync(MirrorPulseNamespaceTransferCopy copy,
+        MirrorPulseNamespaceTransferTargetBirth target, SqliteTransaction transaction, CancellationToken token)
+    {
+        if (target.Recovery is not { } recovery) return;
+        await RequireRemoteUpdateHistoricalSnapshotAsync(target.RecoveredParent!, target.Birth.PreparedAt, transaction, token).ConfigureAwait(false);
+        foreach (var (auditId, root) in new[] { (recovery.SourceAuditId, copy.Plan.SourceRoute.RootId), (recovery.TargetAuditId, copy.Plan.TargetRoute.RootId) })
+        {
+            var status = await ReadNamespaceInitializationStatusCoreAsync(auditId, transaction, token).ConfigureAwait(false);
+            if (status.Intent.FileTransferOperationId != copy.Plan.OperationId || status.Completion is not { } audit ||
+                audit.ScopeRoot != root || audit.RoleSid != target.Birth.RoleSid || audit.CompletedAt > target.Birth.PreparedAt ||
+                target.RecoveredParent!.Context.Protection.VerifiedAt > audit.CompletedAt && root == copy.Plan.TargetRoute.RootId)
+                throw new InvalidOperationException("The target birth requires both original completed root audits and its audited parent.");
+        }
     }
 
     private static void ValidateNamespaceTransferCopyProgress(MirrorPulseNamespaceTransferCopy copy)

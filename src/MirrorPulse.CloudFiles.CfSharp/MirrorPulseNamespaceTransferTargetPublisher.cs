@@ -22,7 +22,7 @@ internal sealed class MirrorPulseNamespaceTransferTargetPublisher(CloudFileSyste
         copy = await catalog.ValidateNamespaceTransferTargetPublicationAsync(copy.Plan.OperationId, token).ConfigureAwait(false);
         if (copy.TargetPublication is not null) return copy;
         var target = copy.TargetBirth!;
-        var (member, protection) = await PublishMemberUnderActorAsync(target.Birth, target.Plan, copy.Plan.TargetParent,
+        var (member, protection) = await PublishMemberUnderActorAsync(target.Birth, target.Plan, target.RecoveredParent ?? copy.Plan.TargetParent,
             router.GetRegistration(copy.Plan.TargetRoute.InstanceId, copy.Plan.TargetRoute.RootKey),
             copy.TargetVerification!.RemoteId, copy.AcceptedRevision!, token).ConfigureAwait(false);
         return await catalog.RecordNamespaceTransferTargetPublicationAsync(new(1, copy.Plan.OperationId, target.Birth.OperationId,
