@@ -58,17 +58,25 @@ public sealed partial class MirrorPulseProductCatalog
 
     private async Task RequireCurrentNamespaceTransferAsync(MirrorPulseNamespaceTransferPlan plan,
         SqliteTransaction transaction, CancellationToken token, bool admitted = false,
-        MirrorPulseNamespaceTransferTargetBirth? targetBirth = null)
+        MirrorPulseNamespaceTransferTargetBirth? targetBirth = null, MirrorPulseFileTransferRecovery? recovery = null)
     {
         if (targetBirth is not null && (!admitted || targetBirth.OperationId != plan.OperationId ||
             await ReadNamespaceTransferTargetBirthRowAsync(plan.OperationId, null, transaction, token).ConfigureAwait(false) != targetBirth))
             throw new InvalidOperationException("A transfer continuation cannot bypass another target birth or its original owner.");
-        foreach (var snapshot in new[] { plan.Source, plan.SourceParent, plan.TargetParent })
+        if (recovery is not null)
         {
-            if (await ReadNamespaceMemberProtectionSnapshotCoreAsync(snapshot.Context.Member.MemberId, transaction, token).ConfigureAwait(false) != snapshot)
-                throw new InvalidOperationException("Transfer execution requires the exact current members, protection, positions and public identities.");
-            await RequireCurrentNamespaceMoveLineageAsync(snapshot.Context.Member, snapshot.Context.Protection.RoleSid,
-                plan.PreparedAt, transaction, token).ConfigureAwait(false);
+            if (!admitted || targetBirth is not null) throw new InvalidOperationException("Copy recovery requires its original pending transfer.");
+            _ = await ReadFileTransferRecoveryMembersCoreAsync(plan, recovery, transaction, token).ConfigureAwait(false);
+        }
+        else
+        {
+            foreach (var snapshot in new[] { plan.Source, plan.SourceParent, plan.TargetParent })
+            {
+                if (await ReadNamespaceMemberProtectionSnapshotCoreAsync(snapshot.Context.Member.MemberId, transaction, token).ConfigureAwait(false) != snapshot)
+                    throw new InvalidOperationException("Transfer execution requires the exact current members, protection, positions and public identities.");
+                await RequireCurrentNamespaceMoveLineageAsync(snapshot.Context.Member, snapshot.Context.Protection.RoleSid,
+                    plan.PreparedAt, transaction, token).ConfigureAwait(false);
+            }
         }
         var roots = await ReadNamespaceRootFencesCoreAsync(true, transaction, token,
             admittedTransferId: admitted ? plan.OperationId : null,

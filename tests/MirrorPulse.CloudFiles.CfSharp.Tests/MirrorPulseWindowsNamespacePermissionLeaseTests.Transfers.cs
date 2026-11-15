@@ -23,6 +23,14 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     [TestMethod]
     [DoNotParallelize]
     [TestCategory("NativeCloudFiles")]
+    [DataRow(false)]
+    [DataRow(true)]
+    public Task NativeHostTransferAuditsBothRootsBeforeResumingOriginalFileCopy(bool loseReply) =>
+        RunNativeHostTransferAsync(deleteSource: false, selectedSameInstance: false, restartBeforeVerification: loseReply);
+
+    [TestMethod]
+    [DoNotParallelize]
+    [TestCategory("NativeCloudFiles")]
     public Task NativeHostTransferDeletesOnlyOriginalRemoteSourceWhileRetainingGuardedLocalBytes() => RunNativeHostTransferAsync(deleteSource: true, selectedSameInstance: false);
 
     [TestMethod]
@@ -47,7 +55,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         RunNativeHostTransferAsync(deleteSource: true, retireLocal: true, completeOriginals: true, selectedSameInstance: false);
 
     private async Task RunNativeHostTransferAsync(bool deleteSource, bool retireLocal = false, string? retirementFault = null,
-        bool completeOriginals = false, bool? selectedSameInstance = null)
+        bool completeOriginals = false, bool? selectedSameInstance = null, bool? restartBeforeVerification = null)
     {
         if (!OperatingSystem.IsWindows() || Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
             Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
@@ -104,7 +112,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         baseline.RelativePath, MirrorPulseNamespacePermissionChangeKind.Protect, role.RoleSid.Value, baseline.OriginalDacl,
                         MirrorPulseNamespacePermissionPolicy.CreateProtectedDacl(role, baseline.IsDirectory), DateTimeOffset.UtcNow)));
                 }
-                if (completeOriginals)
+                if (completeOriginals || restartBeforeVerification is not null)
                 {
                     // Current-tree recovery requires the same sealed before-write captures
                     // as a real Host. Keep the original anchor evidence and capture each
@@ -308,6 +316,55 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         Assert.IsNull(unchanged.CopyStartedAt); Assert.AreEqual(prepared.JournalClaim, unchanged.JournalClaim);
                     }
                     await File.WriteAllBytesAsync(sourcePath, bytes, deadline.Token);
+                    if (restartBeforeVerification is { } loseReply)
+                    {
+                        if (loseReply)
+                        {
+                            worker.SupportsPreparedCopies = true;
+                            worker.LoseCopyReply = true;
+                            await Assert.ThrowsExactlyAsync<IOException>(async () => await runtime.CopyNamespaceTransferAsync(operation, deadline.Token));
+                        }
+                        var originalCopy = await runtime.ReadNamespaceTransferAsync(operation, deadline.Token);
+                        Assert.IsNull(originalCopy.CopyAcceptedAt);
+                        Assert.AreEqual(loseReply, originalCopy.CopyUsesWorkerPreparation);
+                        Assert.AreEqual(loseReply, originalCopy.CopyStartedAt is not null);
+                        await runtime.DisposeAsync();
+                        await catalog.DisposeAsync();
+
+                        await using var reopenedCatalog = await MirrorPulseProductCatalog.OpenAsync(paths, deadline.Token);
+                        await using var reopenedWork = new MirrorPulseNamespaceWorkAdmission([sourceRoot.RootId, targetRoot.RootId]);
+                        worker.ExpectedNamespaceRole = nextRole.RoleSid;
+                        var reopenedTransport = new MirrorPulseNormalUserWorkerTransport(nextRole, worker, worker, worker, worker, worker);
+                        var reopenedFactory = new CfSharpMirrorPulseCloudRuntimeFactory(
+                            provider: new MirrorPulseDemandProvider(router, reopenedTransport, namespaceWork: reopenedWork),
+                            router: router, catalog: reopenedCatalog, mayDispatch: _ => true, scheduler: scheduler,
+                            namespaceExecution: nextRole, namespaceActor: actor, namespaceWork: reopenedWork, transfers: Services(reopenedTransport),
+                            initializeNamespaceOnStart: true);
+                        await using var nextRuntime = reopenedFactory.Create(paths);
+                        await nextRuntime.StartAsync(deadline.Token);
+                        worker.BeforeUpload = async token =>
+                        {
+                            var audits = await reopenedCatalog.ReadFileTransferRecoveryAuditIdsAsync(operation, nextRole.RoleSid.Value, token);
+                            CollectionAssert.AreEquivalent(new[] { sourceRoot.RootId, targetRoot.RootId }, audits.Keys.ToArray());
+                        };
+                        var recovered = await nextRuntime.CopyNamespaceTransferAsync(operation, deadline.Token);
+                        Assert.AreEqual(prepared.Plan, recovered.Plan);
+                        Assert.AreEqual(prepared.JournalClaim, recovered.JournalClaim);
+                        Assert.AreEqual("target-v1", recovered.AcceptedRevision);
+                        if (loseReply) Assert.AreEqual(originalCopy.CopyStartedAt, recovered.CopyStartedAt);
+                        verified = await nextRuntime.VerifyNamespaceTransferTargetAsync(operation, deadline.Token);
+                        Assert.AreEqual(prepared.Plan.Sha256, verified.TargetVerification?.Sha256);
+                        Assert.AreEqual(loseReply ? 2 : 1, worker.Uploads);
+                        Assert.AreEqual(loseReply ? 1 : 0, worker.PreparedCopyPublications);
+                        Assert.AreEqual(0, worker.Deletes);
+                        Assert.IsNull(verified.SourceDeletion);
+                        Assert.IsFalse(File.Exists(Path.Combine(paths.SyncRootPath, "Archive", "moved.bin")));
+                        CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(sourcePath, deadline.Token));
+                        Assert.HasCount(2, await reopenedCatalog.ReadNamespaceDispatchFencedRootsAsync(deadline.Token));
+                        Assert.IsFalse(reopenedWork.IsAdmitted(sourceRoot.RootId));
+                        Assert.IsFalse(reopenedWork.IsAdmitted(targetRoot.RootId));
+                        return;
+                    }
                     var accepted = await runtime.CopyNamespaceTransferAsync(operation, deadline.Token);
                     NoteTransferStage("CopyReturned");
                     Assert.AreEqual("target-v1", accepted.AcceptedRevision);
@@ -748,17 +805,22 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         internal bool LoseDeleteReply;
         internal Action? DeleteInspection;
         internal CloudPlaceholderIdentity? HydrationIdentity;
+        internal bool SupportsPreparedCopies;
+        internal bool LoseCopyReply;
+        internal int PreparedCopyPublications;
+        internal SecurityIdentifier? ExpectedNamespaceRole;
+        internal Func<CancellationToken, Task>? BeforeUpload;
         private bool IsSource(InstanceId instance, string? root, string path) => Plan is { } plan &&
             instance == plan.SourceRoute.InstanceId && root == plan.SourceRoute.RootKey && path == "original.bin";
         private void AssertNormalUser()
         {
             using var identity = WindowsIdentity.GetCurrent();
-            Assert.AreEqual(owner, identity.User); Assert.IsFalse(identity.Groups?.Contains(role.RoleSid) ?? false);
+            Assert.AreEqual(owner, identity.User); Assert.IsFalse(identity.Groups?.Contains(ExpectedNamespaceRole ?? role.RoleSid) ?? false);
         }
         private void RequireNormalUser(InstanceId instance, string? root, string path)
         {
             using var identity = WindowsIdentity.GetCurrent();
-            Assert.AreEqual(owner, identity.User); Assert.IsFalse(identity.Groups?.Contains(role.RoleSid) ?? false);
+            Assert.AreEqual(owner, identity.User); Assert.IsFalse(identity.Groups?.Contains(ExpectedNamespaceRole ?? role.RoleSid) ?? false);
             Assert.AreEqual(target.InstanceId, instance); Assert.AreEqual(target.UniquenessKey, root); Assert.AreEqual("moved.bin", path);
         }
         public async ValueTask<string> UploadAsync(MirrorPulseWorkerUploadRequest request, CancellationToken token)
@@ -766,8 +828,30 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             RequireNormalUser(request.InstanceId, request.RootKey, request.NormalizedPath); Uploads++;
             Assert.IsNotNull(Plan); Assert.AreEqual(Plan.CopyOperationId, request.OperationId);
             Assert.IsTrue(request.RequireConditionalTargetSupport && request.DestinationMustBeAbsent); Assert.IsNull(request.ExpectedRevision);
+            if (BeforeUpload is not null) await BeforeUpload(token);
             using var content = new MemoryStream(); await request.Content.CopyToAsync(content, token);
-            CollectionAssert.AreEqual(bytes, content.ToArray()); return "target-v1";
+            CollectionAssert.AreEqual(bytes, content.ToArray());
+            if (SupportsPreparedCopies)
+            {
+                Assert.AreEqual(MirrorPulseDurableDirectoryCopyMode.Resume, request.DurableCopyMode);
+                if (PreparedCopyPublications == 0) PreparedCopyPublications++;
+                if (LoseCopyReply)
+                {
+                    LoseCopyReply = false;
+                    throw new IOException("The original prepared copy reply was lost.");
+                }
+            }
+            return "target-v1";
+        }
+        public bool SupportsDurableDirectoryCopy(InstanceId instanceId, string rootKey) =>
+            SupportsPreparedCopies && instanceId == target.InstanceId && rootKey == target.UniquenessKey;
+        public bool SupportsDurableDirectoryCopyPreparation(InstanceId instanceId, string rootKey) =>
+            SupportsDurableDirectoryCopy(instanceId, rootKey);
+        public ValueTask PrepareDirectoryCopyAsync(MirrorPulseWorkerPrepareDirectoryCopyRequest request, CancellationToken token)
+        {
+            RequireNormalUser(request.InstanceId, request.RootKey, request.NormalizedPath);
+            Assert.AreEqual(Plan!.CopyOperationId, request.OperationId);
+            return ValueTask.CompletedTask;
         }
         public ValueTask<string?> StatAsync(MirrorPulseWorkerStatRequest request, CancellationToken token)
         {

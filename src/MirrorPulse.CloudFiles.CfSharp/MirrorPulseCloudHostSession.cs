@@ -667,8 +667,54 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             await using var admission = namespaceWork is null ? null : await namespaceWork.EnterPendingOperationAsync(
                 new[] { copy.Plan.SourceRoute.RootId, copy.Plan.TargetRoute.RootId }, token).ConfigureAwait(false);
             return await WithAdmittedInstancesLibraryAsync(new[] { copy.Plan.SourceRoute.InstanceId, copy.Plan.TargetRoute.InstanceId }.Distinct(),
-                (_, stop) => verifyTarget ? TransferCoordinator().VerifyTargetAsync(operationId, transfers.Stats, transfers.Ranges, transfers.Directories, stop) :
-                    TransferCoordinator().CopyAsync(operationId, transfers.Uploads, transfers.Mutations, stop), token).ConfigureAwait(false);
+                async (instanceAdmission, stop) =>
+                {
+                    var current = await ReadNamespaceTransferAsync(operationId, stop).ConfigureAwait(false);
+                    if (verifyTarget ? current.TargetVerification is not null : current.CopyAcceptedAt is not null) return current;
+                    var recovery = await RecoverFileTransferCopyRoleAsync(current, instanceAdmission, stop).ConfigureAwait(false);
+                    var coordinator = TransferCoordinator();
+                    return verifyTarget
+                        ? await coordinator.VerifyTargetAsync(operationId, transfers.Stats, transfers.Ranges, transfers.Directories, recovery, stop).ConfigureAwait(false)
+                        : await coordinator.CopyAsync(operationId, transfers.Uploads, transfers.Mutations, stop, recovery).ConfigureAwait(false);
+                }, token).ConfigureAwait(false);
+        }
+
+        [SupportedOSPlatform("windows10.0.26100")]
+        private async ValueTask<MirrorPulseFileTransferRecovery?> RecoverFileTransferCopyRoleAsync(MirrorPulseNamespaceTransferCopy copy,
+            IMirrorPulseInstanceScheduler instanceAdmission, CancellationToken token)
+        {
+            var plan = copy.Plan;
+            string role = _namespaceExecution!.RoleSid.Value;
+            if (plan.Source.Context.Protection.RoleSid == role && plan.SourceParent.Context.Protection.RoleSid == role &&
+                plan.TargetParent.Context.Protection.RoleSid == role)
+                return null;
+            if (copy.CopyStartedAt is not null && copy.CopyAcceptedAt is null && !copy.CopyUsesWorkerPreparation)
+                throw new MirrorPulseMutationAmbiguousException("The original transfer copy has no durable acceptance receipt.");
+            if (namespaceWork is null || copy.TargetBirthOperationId is not null)
+                throw new InvalidOperationException("File copy recovery requires the fenced original transfer before target birth.");
+
+            var ids = await catalog!.ReadFileTransferRecoveryAuditIdsAsync(plan.OperationId, role, token).ConfigureAwait(false);
+            if (ids.Count < 2)
+            {
+                var pending = await catalog.ReadPendingNamespaceInitializationsAsync(token).ConfigureAwait(false);
+                var audit = new MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(fileSystem, catalog, router!,
+                    _namespaceExecution, _namespaceActor!, instanceAdmission, _permissions!);
+                foreach (var root in new[] { plan.SourceRoute.RootId, plan.TargetRoute.RootId })
+                {
+                    if (ids.ContainsKey(root)) continue;
+                    var retained = pending.SingleOrDefault(status => status.Intent.FileTransferOperationId == plan.OperationId &&
+                        status.Intent.Roots.Single().RootId == root);
+                    await using var restored = await audit.RecoverFileTransferRootAsync(retained?.Intent.OperationId ?? Guid.NewGuid(),
+                        root, plan.OperationId, token).ConfigureAwait(false);
+                    ids.Add(root, restored.Completion.OperationId);
+                    var prior = _scopedAnchorProtection;
+                    _scopedAnchorProtection = restored.TransferAnchor();
+                    if (prior is not null) await prior.DisposeAsync().ConfigureAwait(false);
+                }
+            }
+            if (!ids.TryGetValue(plan.SourceRoute.RootId, out Guid sourceAudit) || !ids.TryGetValue(plan.TargetRoute.RootId, out Guid targetAudit))
+                throw new InvalidDataException("File transfer recovery requires both original root audits.");
+            return new(sourceAudit, targetAudit, role);
         }
 
         public async ValueTask<MirrorPulseNamespaceTransferCopy> ReadNamespaceTransferAsync(Guid operationId, CancellationToken token) =>

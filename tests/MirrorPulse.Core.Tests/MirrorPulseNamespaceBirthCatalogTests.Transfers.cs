@@ -270,8 +270,48 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
                 Assert.AreEqual(intent.Roots.Single().RootId, completion.ScopeRoot);
                 Assert.AreEqual(plan.OperationId, (await catalog.ReadNamespaceInitializationStatusAsync(intent.OperationId)).Intent.FileTransferOperationId);
             }
+            string role = plan.Source.Context.Protection.RoleSid;
+            var ids = await catalog.ReadFileTransferRecoveryAuditIdsAsync(plan.OperationId, role, default);
+            Assert.HasCount(2, ids);
+            Assert.AreEqual(source.OperationId, ids[plan.SourceRoute.RootId]);
+            Assert.AreEqual(target.OperationId, ids[plan.TargetRoute.RootId]);
+            var recovery = new MirrorPulseFileTransferRecovery(source.OperationId, target.OperationId, role);
+            await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => catalog.ReadFileTransferRecoveryMembersAsync(plan.OperationId,
+                recovery with { TargetAuditId = source.OperationId }, default));
+            var proved = await catalog.ReadFileTransferRecoveryMembersAsync(plan.OperationId, recovery, default);
+            Assert.AreEqual(plan.Source.Context.Member, proved.Source.Context.Member);
+            Assert.AreEqual(plan.TargetParent.Context.Member, proved.TargetParent.Context.Member);
+            Assert.AreEqual(pending, await catalog.ReadNamespaceTransferAsync(plan.OperationId));
+
+            var worker = new TransferUploads
+            {
+                PreparesCopies = true,
+                OnUpload = (request, _) =>
+                {
+                    Assert.AreEqual(plan.CopyOperationId, request.OperationId);
+                    Assert.AreEqual(MirrorPulseDurableDirectoryCopyMode.Resume, request.DurableCopyMode);
+                    return ValueTask.FromResult("accepted-target-v1");
+                }
+            };
+            using var bytes = new MemoryStream(TransferBytes, writable: false);
+            var restart = new MirrorPulseTransferCopyExecutor(catalog, worker, new TransferClock(plan.PreparedAt.AddSeconds(4)))
+            { Mutations = worker, Recovery = recovery with { RoleSid = "S-1-5-18" } };
+            await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => restart.CopyAsync(plan.OperationId, bytes));
+            Assert.AreEqual(0, worker.Calls);
+            var accepted = await new MirrorPulseTransferCopyExecutor(catalog, worker, new TransferClock(plan.PreparedAt.AddSeconds(4)))
+            { Mutations = worker, Recovery = recovery }.CopyAsync(plan.OperationId, bytes);
+            Assert.AreEqual(pending!.CopyStartedAt, accepted.CopyStartedAt);
+            Assert.IsEmpty(worker.Preparations);
+
+            var backend = new TransferTarget(TransferBytes) { Plan = plan };
+            var verified = await new MirrorPulseTransferTargetVerifier(catalog, backend, backend, backend, new TransferClock(plan.PreparedAt.AddSeconds(5)))
+            { Recovery = recovery }.VerifyAsync(plan.OperationId);
+            Assert.AreEqual(plan, verified.Plan);
+            Assert.AreEqual(plan.Sha256, verified.TargetVerification?.Sha256);
+            Assert.IsNull(verified.SourceDeletion);
         }
-        Assert.AreEqual(pending, await catalog.ReadNamespaceTransferAsync(plan.OperationId));
+        if (ordinaryStart)
+            Assert.AreEqual(pending, await catalog.ReadNamespaceTransferAsync(plan.OperationId));
         Assert.IsEmpty(await catalog.ReadPendingNamespaceInitializationsAsync());
         CollectionAssert.AreEquivalent(new[] { plan.SourceRoute.RootId, plan.TargetRoute.RootId },
             (await catalog.ReadNamespaceDispatchFencedRootsAsync()).ToArray());

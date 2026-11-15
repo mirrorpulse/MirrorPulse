@@ -12,6 +12,7 @@ public sealed class MirrorPulseTransferCopyExecutor(MirrorPulseProductCatalog ca
     private readonly IMirrorPulseWorkerUploadTransport _uploads = uploads ?? throw new ArgumentNullException(nameof(uploads));
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
     internal IMirrorPulseWorkerMutationTransport? Mutations { get; init; }
+    internal MirrorPulseFileTransferRecovery? Recovery { get; init; }
 
     /// <remarks>The Host must hold its actor, both ordered instance admissions and the stable private read handle.
     /// The stream must remain immutable throughout hashing and upload. This method retains no filesystem path,
@@ -29,6 +30,8 @@ public sealed class MirrorPulseTransferCopyExecutor(MirrorPulseProductCatalog ca
         bool canReplay = Mutations?.SupportsDurableDirectoryCopy(target.InstanceId, target.RootKey) == true;
         if (started && (!copy.CopyUsesWorkerPreparation || !canReplay))
             throw new MirrorPulseMutationAmbiguousException("The original target copy needs its owned acceptance receipt before recovery.");
+        if (started && Recovery is { } recovery)
+            _ = await _catalog.ReadFileTransferRecoveryMembersAsync(operationId, recovery, token).ConfigureAwait(false);
         bool canPrepare = !started && canReplay && Mutations!.SupportsDurableDirectoryCopyPreparation(target.InstanceId, target.RootKey);
         if (!started && copy.CopyUsesWorkerPreparation && !canPrepare)
             throw new NotSupportedException("The original target must reconnect with its selected preparation capability.");
@@ -45,11 +48,11 @@ public sealed class MirrorPulseTransferCopyExecutor(MirrorPulseProductCatalog ca
             if (canPrepare)
             {
                 if (!copy.CopyUsesWorkerPreparation)
-                    await _catalog.SelectNamespaceTransferCopyPreparationAsync(operationId, token).ConfigureAwait(false);
+                    await _catalog.SelectNamespaceTransferCopyPreparationAsync(operationId, token, Recovery).ConfigureAwait(false);
                 await Mutations!.PrepareDirectoryCopyAsync(new(target.InstanceId, target.RootKey, targetPath,
                     plan.CopyOperationId, null, plan.Length, plan.Sha256), token).ConfigureAwait(false);
             }
-            copy = await _catalog.StartNamespaceTransferCopyAsync(operationId, _time.GetUtcNow(), canPrepare, token).ConfigureAwait(false);
+            copy = await _catalog.StartNamespaceTransferCopyAsync(operationId, _time.GetUtcNow(), canPrepare, token, Recovery).ConfigureAwait(false);
         }
         string revision = await _uploads.UploadAsync(new(target.InstanceId, targetPath, null, privateContent,
             plan.Length, plan.CopyOperationId, plan.Sha256, target.RootKey, DestinationMustBeAbsent: true)

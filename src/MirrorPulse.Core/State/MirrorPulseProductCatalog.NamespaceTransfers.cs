@@ -156,7 +156,7 @@ public sealed partial class MirrorPulseProductCatalog
         finally { _gate.Release(); }
     }
 
-    internal async Task SelectNamespaceTransferCopyPreparationAsync(Guid operationId, CancellationToken token)
+    internal async Task SelectNamespaceTransferCopyPreparationAsync(Guid operationId, CancellationToken token, MirrorPulseFileTransferRecovery? recovery = null)
     {
         await _gate.WaitAsync(token).ConfigureAwait(false);
         try
@@ -166,7 +166,7 @@ public sealed partial class MirrorPulseProductCatalog
                 ?? throw new FileNotFoundException("The original transfer is missing.");
             if (copy.CopyStartedAt is not null || copy.Plan.TargetRoute.ProtocolVersion != 2)
                 throw new InvalidOperationException("Only an unstarted original V2 copy can select preparation.");
-            await RequireCurrentNamespaceTransferAsync(copy.Plan, transaction, token, admitted: true).ConfigureAwait(false);
+            await RequireCurrentNamespaceTransferAsync(copy.Plan, transaction, token, admitted: true, recovery: recovery).ConfigureAwait(false);
             if (!copy.CopyUsesWorkerPreparation)
                 await WriteNamespaceTransferCoreAsync(copy with { CopyUsesWorkerPreparation = true }, transaction, token).ConfigureAwait(false);
             transaction.Commit();
@@ -180,7 +180,7 @@ public sealed partial class MirrorPulseProductCatalog
         StartNamespaceTransferCopyAsync(operationId, startedAt, preparedByWorker: false, token);
 
     internal async Task<MirrorPulseNamespaceTransferCopy> StartNamespaceTransferCopyAsync(Guid operationId,
-        DateTimeOffset startedAt, bool preparedByWorker, CancellationToken token)
+        DateTimeOffset startedAt, bool preparedByWorker, CancellationToken token, MirrorPulseFileTransferRecovery? recovery = null)
     {
         await _gate.WaitAsync(token).ConfigureAwait(false);
         try
@@ -192,7 +192,7 @@ public sealed partial class MirrorPulseProductCatalog
                 throw new InvalidOperationException("The original copy may already have executed; another invocation is not authorized.");
             if (startedAt < copy.Plan.PreparedAt || copy.JournalClaim is { } claim && startedAt < claim.CapturedAt)
                 throw new ArgumentException("Copy start must follow its original admission and retained journal reservation.", nameof(startedAt));
-            await RequireCurrentNamespaceTransferAsync(copy.Plan, transaction, token, admitted: true).ConfigureAwait(false);
+            await RequireCurrentNamespaceTransferAsync(copy.Plan, transaction, token, admitted: true, recovery: recovery).ConfigureAwait(false);
             if (copy.CopyUsesWorkerPreparation != preparedByWorker)
                 throw new InvalidOperationException("The first copy start must use its retained preparation mode.");
             copy = copy with { CopyStartedAt = startedAt };

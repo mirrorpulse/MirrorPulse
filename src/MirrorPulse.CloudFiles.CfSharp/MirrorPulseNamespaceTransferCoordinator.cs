@@ -114,7 +114,8 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator(CloudFileSys
         IMirrorPulseWorkerUploadTransport uploads, CancellationToken token) => CopyAsync(operationId, uploads, null, token);
 
     internal async ValueTask<MirrorPulseNamespaceTransferCopy> CopyAsync(Guid operationId,
-        IMirrorPulseWorkerUploadTransport uploads, IMirrorPulseWorkerMutationTransport? mutations, CancellationToken token)
+        IMirrorPulseWorkerUploadTransport uploads, IMirrorPulseWorkerMutationTransport? mutations, CancellationToken token,
+        MirrorPulseFileTransferRecovery? recovery = null)
     {
         var copy = await ReadAsync(operationId, token).ConfigureAwait(false);
         if (copy.CopyAcceptedAt is not null) return copy;
@@ -127,27 +128,32 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator(CloudFileSys
             await using var input = await inputs.OpenLeaseAsync(copy.Plan, token).ConfigureAwait(false);
             if (copy.JournalClaim is null)
             {
-                if (copy.Plan.CommandOrigin is null)
+                if (copy.Plan.CommandOrigin is null || recovery is not null)
                     throw new InvalidOperationException("A legacy transfer cannot acquire retrospective journal ownership.");
                 var journal = JournalFeed ?? throw new InvalidOperationException("The Host's running original journal is unavailable.");
                 var claim = await new MirrorPulseTransferJournalCapture(journal).CaptureAsync(copy.Plan, token).ConfigureAwait(false);
                 copy = await catalog.PrepareNamespaceTransferJournalClaimAsync(claim, token).ConfigureAwait(false);
             }
             await source.VerifyAsync(copy.Plan.Length, copy.Plan.Sha256, token).ConfigureAwait(false);
-            return await new MirrorPulseTransferCopyExecutor(catalog, uploads) { Mutations = mutations }
+            return await new MirrorPulseTransferCopyExecutor(catalog, uploads) { Mutations = mutations, Recovery = recovery }
                 .CopyAsync(operationId, input.Data, token).ConfigureAwait(false);
-        }, token).ConfigureAwait(false);
+        }, token, recovery).ConfigureAwait(false);
     }
 
-    public async ValueTask<MirrorPulseNamespaceTransferCopy> VerifyTargetAsync(Guid operationId, IMirrorPulseWorkerStatTransport stats,
-        IMirrorPulseWorkerRangeTransport ranges, IMirrorPulseWorkerDirectoryPageSource directories, CancellationToken token)
+    public ValueTask<MirrorPulseNamespaceTransferCopy> VerifyTargetAsync(Guid operationId, IMirrorPulseWorkerStatTransport stats,
+        IMirrorPulseWorkerRangeTransport ranges, IMirrorPulseWorkerDirectoryPageSource directories, CancellationToken token) =>
+        VerifyTargetAsync(operationId, stats, ranges, directories, null, token);
+
+    internal async ValueTask<MirrorPulseNamespaceTransferCopy> VerifyTargetAsync(Guid operationId, IMirrorPulseWorkerStatTransport stats,
+        IMirrorPulseWorkerRangeTransport ranges, IMirrorPulseWorkerDirectoryPageSource directories,
+        MirrorPulseFileTransferRecovery? recovery, CancellationToken token)
     {
         var copy = await ReadAsync(operationId, token).ConfigureAwait(false);
         if (copy.TargetVerification is not null) return copy;
         if (copy.CopyAcceptedAt is null)
             throw new MirrorPulseMutationAmbiguousException("A target readback cannot provide a lost original copy receipt.");
-        return await ExecuteGuardedAsync(copy.Plan, _ => new MirrorPulseTransferTargetVerifier(catalog, stats, ranges, directories)
-            .VerifyAsync(operationId, token), token).ConfigureAwait(false);
+        return await ExecuteGuardedAsync(copy.Plan, _ => new MirrorPulseTransferTargetVerifier(catalog, stats, ranges, directories) { Recovery = recovery }
+            .VerifyAsync(operationId, token), token, recovery).ConfigureAwait(false);
     }
 
     /// <summary>Selects the separate target birth and SDK identity before any native creation.</summary>
@@ -203,18 +209,23 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator(CloudFileSys
     }
 
     private async Task<MirrorPulseNamespaceTransferCopy> ExecuteGuardedAsync(MirrorPulseNamespaceTransferPlan plan,
-        Func<CloudFile, Task<MirrorPulseNamespaceTransferCopy>> operation, CancellationToken token) =>
-        await actor.RunAsync(async stop => await WithGuardsAsync(plan.Source, plan.SourceParent, plan.TargetParent,
-            plan.TargetRelativePath, async (file, metadata) =>
+        Func<CloudFile, Task<MirrorPulseNamespaceTransferCopy>> operation, CancellationToken token, MirrorPulseFileTransferRecovery? recovery = null) =>
+        await actor.RunAsync(async stop =>
+        {
+            var members = recovery is null ? null : await catalog.ReadFileTransferRecoveryMembersAsync(plan.OperationId, recovery, stop).ConfigureAwait(false);
+            var source = members?.Source ?? plan.Source;
+            return await WithGuardsAsync(source, members?.SourceParent ?? plan.SourceParent, members?.TargetParent ?? plan.TargetParent,
+                plan.TargetRelativePath, async (file, metadata) =>
             {
                 if (protocolVersion(plan.SourceRoute.InstanceId) != plan.SourceRoute.ProtocolVersion ||
                     protocolVersion(plan.TargetRoute.InstanceId) != plan.TargetRoute.ProtocolVersion)
                     throw new InvalidOperationException("The negotiated transfer protocol changed.");
-                var projection = await ReadSourceProjectionAsync(file, plan.Source, stop).ConfigureAwait(false);
+                var projection = await ReadSourceProjectionAsync(file, source, stop).ConfigureAwait(false);
                 if (projection.RemoteRevision != plan.SourceRemoteRevision)
                     throw new InvalidDataException("The original source projection changed after transfer admission.");
                 return await execution.RunNormalUserOperationAsync(() => operation(file)).ConfigureAwait(false);
-            }, stop).ConfigureAwait(false), token).ConfigureAwait(false);
+            }, stop).ConfigureAwait(false);
+        }, token).ConfigureAwait(false);
 
     private async Task<T> WithGuardsAsync<T>(MirrorPulseNamespaceMemberProtectionSnapshot source,
         MirrorPulseNamespaceMemberProtectionSnapshot sourceParent, MirrorPulseNamespaceMemberProtectionSnapshot targetParent,

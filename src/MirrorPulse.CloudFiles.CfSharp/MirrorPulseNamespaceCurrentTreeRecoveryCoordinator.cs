@@ -28,22 +28,26 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
     internal ValueTask<MirrorPulseNamespaceInitializationResult> RecoverDirectoryTransferRootAsync(Guid operationId, RootId rootId,
         Guid transferId, CancellationToken cancellationToken) => RecoverCoreAsync(operationId, rootId, null, transferId, cancellationToken);
 
+    internal ValueTask<MirrorPulseNamespaceInitializationResult> RecoverFileTransferRootAsync(Guid operationId, RootId rootId,
+        Guid transferId, CancellationToken cancellationToken) => RecoverCoreAsync(operationId, rootId, null, null, cancellationToken, transferId);
+
     internal ValueTask<MirrorPulseNamespaceInitializationResult> RecoverJournalDirectoryMoveAsync(Guid operationId,
         MirrorPulseJournalDirectoryMoveRecovery.ProjectionRecovery move, CancellationToken cancellationToken) =>
         RecoverCoreAsync(operationId, move.Admission.RootId, move, null, cancellationToken);
 
     private async ValueTask<MirrorPulseNamespaceInitializationResult> RecoverCoreAsync(Guid operationId, RootId? selectedRoot,
-        MirrorPulseJournalDirectoryMoveRecovery.ProjectionRecovery? move, Guid? transferId, CancellationToken cancellationToken)
+        MirrorPulseJournalDirectoryMoveRecovery.ProjectionRecovery? move, Guid? transferId, CancellationToken cancellationToken,
+        Guid? fileTransferId = null)
     {
         if (operationId == Guid.Empty) throw new ArgumentException("An initialization operation ID is required.", nameof(operationId));
         var retained = await catalog.ReadNamespaceInitializationAsync(operationId, cancellationToken).ConfigureAwait(false);
         if (retained?.RequestedInventoryKind is { } requested && requested != MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory)
             throw new InvalidOperationException("The pending initializer requires original-inventory recovery.");
-        if (retained is not null && (selectedRoot is { } selected ? retained.Version is not (4 or 5) || retained.Roots.Count != 1 ||
-            retained.Roots[0].RootId != selected : retained.Version is 4 or 5))
+        if (retained is not null && (selectedRoot is { } selected ? !retained.IsScoped || retained.Roots.Count != 1 ||
+            retained.Roots[0].RootId != selected : retained.IsScoped))
             throw new InvalidOperationException("The retained initializer requires its explicit complete or selected-root recovery route.");
-        if (retained is not null && retained.DirectoryTransferOperationId != transferId)
-            throw new InvalidOperationException("Current recovery requires its exact directory transfer purpose.");
+        if (retained is not null && (retained.DirectoryTransferOperationId != transferId || retained.FileTransferOperationId != fileTransferId))
+            throw new InvalidOperationException("Current recovery requires its exact transfer purpose.");
         if (retained?.JournalDirectoryMoveOperationId is { } original)
         {
             if (move is not null && move.Admission.JournalOperationId != original ||
@@ -65,12 +69,14 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
         if (retained is null)
         {
             var roots = await MirrorPulseNamespaceCurrentRootSelector.SelectAsync(fileSystem, catalog, registrations, cancellationToken).ConfigureAwait(false);
-            retained = await catalog.PrepareNamespaceInitializationAsync(new(selectedRoot is not null ? 4 : roots.Count == 0 ? 3 : roots.Any(root => root.BornRootMemberId is not null) ? 2 : 1,
+            retained = await catalog.PrepareNamespaceInitializationAsync(new(fileTransferId is not null ? 6 :
+                selectedRoot is not null ? 4 : roots.Count == 0 ? 3 : roots.Any(root => root.BornRootMemberId is not null) ? 2 : 1,
                 operationId, roots, DateTimeOffset.UtcNow)
             {
                 RequestedInventoryKind = MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory,
                 JournalDirectoryMoveOperationId = move is { IsAcknowledged: false } ? move.Admission.JournalOperationId : null,
-                DirectoryTransferOperationId = transferId
+                DirectoryTransferOperationId = transferId,
+                FileTransferOperationId = fileTransferId
             }, cancellationToken).ConfigureAwait(false);
         }
         if (!retained.Roots.Select(root => root.RootId).ToHashSet().SetEquals(registrations.Select(root => root.RootId)))

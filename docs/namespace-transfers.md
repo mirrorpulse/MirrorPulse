@@ -71,6 +71,13 @@ pending. Initial selection cannot change a previously started ordinary copy.
 Both dispatch and replay require current Host root admission and the original
 protected source and parent objects.
 
+Before target birth, a replacement Host role completes a current-tree audit
+for each original transfer root. The transfer can continue copying and
+verifying only while both receipts match the live role, the same registered
+anchor, and the original member identities and positions. Native leases and
+the original private content proof still govern dispatch. Both transfer fences
+remain until the original settlement completes.
+
 For a directory transfer the choice is retained per original member before
 requesting preparation, including the first directory. Before its first
 dispatch, a reconnect that supports only ordinary copy or legacy durable start

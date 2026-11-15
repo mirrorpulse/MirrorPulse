@@ -55,7 +55,7 @@ public sealed record MirrorPulseNamespaceInitializationCompletion(Guid Operation
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public MirrorPulseNamespaceInitializationInventoryKind InventoryKind { get; init; }
 
-    /// <summary>The selected root for versions 4 and 5; null denotes the complete-inventory contract.</summary>
+    /// <summary>The selected root for a scoped audit; null denotes the complete-inventory contract.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public RootId? ScopeRoot { get; init; }
 }

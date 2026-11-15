@@ -16,6 +16,7 @@ public sealed class MirrorPulseTransferTargetVerifier(MirrorPulseProductCatalog 
     private readonly IMirrorPulseWorkerRangeTransport _ranges = ranges ?? throw new ArgumentNullException(nameof(ranges));
     private readonly IMirrorPulseWorkerDirectoryPageSource _directories = directories ?? throw new ArgumentNullException(nameof(directories));
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    internal MirrorPulseFileTransferRecovery? Recovery { get; init; }
 
     public async Task<MirrorPulseNamespaceTransferCopy> VerifyAsync(Guid operationId, CancellationToken token = default)
     {
@@ -24,9 +25,9 @@ public sealed class MirrorPulseTransferTargetVerifier(MirrorPulseProductCatalog 
         if (copy.TargetVerification is not null) return copy;
         if (copy.CopyAcceptedAt is null || copy.AcceptedRevision is null)
             throw new MirrorPulseMutationAmbiguousException("Target readback cannot recover a missing original upload receipt.");
-        copy = await _catalog.ValidateNamespaceTransferTargetReadAsync(operationId, token).ConfigureAwait(false);
+        copy = await _catalog.ValidateNamespaceTransferTargetReadAsync(operationId, Recovery, token).ConfigureAwait(false);
         var verification = await ReadCurrentAsync(copy, token).ConfigureAwait(false);
-        return await _catalog.RecordNamespaceTransferTargetVerificationAsync(verification, token).ConfigureAwait(false);
+        return await _catalog.RecordNamespaceTransferTargetVerificationAsync(verification, Recovery, token).ConfigureAwait(false);
     }
 
     /// <summary>Reads current whole bytes and metadata at the original receipt, without substituting historical verification.</summary>
