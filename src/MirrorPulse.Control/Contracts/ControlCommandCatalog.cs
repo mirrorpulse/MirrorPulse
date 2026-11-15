@@ -38,6 +38,7 @@ public static class MirrorPulseControlCommands
     public const string NamespaceRemoteUpdateRecover = "namespace.remote.recoverUpdate";
     public const string NamespaceTransferStatus = "namespace.transfer.status";
     public const string NamespaceTransfers = "namespace.transfer.list";
+    public const string NamespaceTransferPrepare = "namespace.transfer.prepare";
     public const string NamespaceTransferMove = "namespace.transfer.move";
     public const string NamespaceTransferResume = "namespace.transfer.resume";
     public const string NamespaceMemberPrepareRetirement = "namespace.member.prepareRetire";
@@ -108,6 +109,7 @@ public static class MirrorPulseControlCommands
         new(NamespaceRemoteUpdateRecover, "namespace", true, false),
         new(NamespaceTransferStatus, "namespace", false, false),
         new(NamespaceTransfers, "namespace", false, false),
+        new(NamespaceTransferPrepare, "namespace", true, false),
         new(NamespaceTransferMove, "namespace", true, false),
         new(NamespaceTransferResume, "namespace", true, false),
         new(NamespaceMemberPrepareRetirement, "namespace", true, false),

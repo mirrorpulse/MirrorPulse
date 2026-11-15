@@ -279,11 +279,13 @@ public sealed partial class MirrorPulseCliHostOperations : IMirrorPulseCliHostOp
                     human = $"Member move committed · {move.OperationId:D} · {move.RelativePath}" +
                         (move.RequiresSubtreeReconciliation ? " · subtree reconciliation pending" : string.Empty);
                     break;
-                case ("namespace", "transfer") when command.Path.Count > 2 && command.Path[2].Equals("move", StringComparison.OrdinalIgnoreCase):
-                    var transferMove = MirrorPulseTransferCliArguments.ParseMove(command.Arguments);
-                    var movedTransfer = await _client.MoveNamespaceTransferAsync(transferMove.OperationId, transferMove.SourceMemberId,
-                        transferMove.TargetParentMemberId, transferMove.TargetName, cancellationToken).ConfigureAwait(false);
-                    result = movedTransfer; human = MirrorPulseTransferCliArguments.Format(movedTransfer);
+                case ("namespace", "transfer") when command.Path.Count > 2 &&
+                    (command.Path[2].Equals("prepare", StringComparison.OrdinalIgnoreCase) || command.Path[2].Equals("move", StringComparison.OrdinalIgnoreCase)):
+                    var (transferId, transferSource, transferParent, transferName) = MirrorPulseTransferCliArguments.ParsePlacement(command.Arguments);
+                    var placement = await (command.Path[2].Equals("prepare", StringComparison.OrdinalIgnoreCase)
+                        ? _client.PrepareNamespaceTransferAsync(transferId, transferSource, transferParent, transferName, cancellationToken)
+                        : _client.MoveNamespaceTransferAsync(transferId, transferSource, transferParent, transferName, cancellationToken)).ConfigureAwait(false);
+                    result = placement; human = MirrorPulseTransferCliArguments.Format(placement);
                     break;
                 case ("namespace", "transfer") when command.Path.Count > 2 && command.Path[2].Equals("resume", StringComparison.OrdinalIgnoreCase):
                     var resumedTransfer = await _client.ResumeNamespaceTransferAsync(MirrorPulseTransferCliArguments.ParseId(command.Arguments, "operation"),

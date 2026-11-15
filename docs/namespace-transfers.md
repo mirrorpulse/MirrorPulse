@@ -179,8 +179,12 @@ they perform no Worker call and cannot refresh native authority.
 ## Controlled move and recovery
 
 `mp namespace transfer move OPERATION_ID SOURCE_MEMBER_ID TARGET_PARENT_ID NAME`
-starts one retained file or directory transfer. Choose a unique operation ID and preserve it
-for `mp namespace transfer resume OPERATION_ID`. Status and list remain read-only.
+starts one retained file or directory transfer. To separate admission from execution, use
+`mp namespace transfer prepare OPERATION_ID SOURCE_MEMBER_ID TARGET_PARENT_ID NAME`.
+Preparation retains the original transfer and fences both roots before the first copy is dispatched.
+Use `mp namespace transfer resume OPERATION_ID` to execute the retained plan, including after a
+Host restart. Keep the original operation ID; starting a different operation does not release the
+fences. Status and list remain read-only.
 The CLI sends typed requests over the versioned Control pipe; only the Host opens
 the product catalog or the official CfSharp SQLite store. The Host drives copy,
 whole-target verification, protected destination publication, conditional source

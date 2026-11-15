@@ -125,7 +125,10 @@ starts one Host-owned file or directory transfer between distinct managed roots.
 delivery baseline uses distinct single-root Adapter instances; transfer between
 multiple roots of the same instance is deferred for later review. Different
 packages/backends remain subject to their declared and negotiated capabilities.
-Use a unique operation ID and retain it for `mp namespace transfer resume OPERATION_ID`.
+To reserve both roots and save the transfer before any copy, use
+`mp namespace transfer prepare OPERATION_ID SOURCE_MEMBER_ID TARGET_PARENT_ID NAME`.
+Use a unique operation ID and retain it for `mp namespace transfer resume OPERATION_ID`,
+which continues the retained plan even if the Host has restarted.
 `namespace transfer status OPERATION_ID` and `namespace transfer list ROOT_ID`
 read retained progress. Completion requires accepted copy and whole-target
 verification, protected target publication, original conditional source deletion,

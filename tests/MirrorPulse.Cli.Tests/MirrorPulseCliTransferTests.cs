@@ -14,34 +14,54 @@ public sealed class MirrorPulseCliTransferTests
     private static readonly string[] JsonOptions = ["--json"];
 
     [TestMethod]
+    [DataRow("prepare")]
     [DataRow("move")]
     [DataRow("resume")]
     public async Task TransferCommandsKeepTheirOriginalIdentityAcrossTheTypedPipeAndRejectMalformedRequests(string verb)
     {
-        var value = Status("Completed") with { RootsFenced = false, JournalAcknowledged = true, Completed = true };
-        Guid parent = Guid.NewGuid(); int calls = 0; var dispatcher = new MirrorPulseControlDispatcher();
-        dispatcher.Register<NamespaceTransferMoveArguments, MirrorPulseControlTransferStatus>(MirrorPulseControlCommands.NamespaceTransferMove, (arguments, _) =>
+        bool prepare = verb == "prepare";
+        bool placement = verb != "resume";
+        string commandName = verb switch
         {
-            Assert.AreEqual(value.OperationId, arguments.OperationId); Assert.AreEqual(value.SourceMemberId, arguments.SourceMemberId);
-            Assert.AreEqual(parent, arguments.TargetParentMemberId); Assert.AreEqual("moved.bin", arguments.TargetName);
+            "prepare" => MirrorPulseControlCommands.NamespaceTransferPrepare,
+            "move" => MirrorPulseControlCommands.NamespaceTransferMove,
+            _ => MirrorPulseControlCommands.NamespaceTransferResume
+        };
+        var value = prepare ? Status("Prepared") with { CopyStartedAt = null }
+            : Status("Completed") with { RootsFenced = false, JournalAcknowledged = true, Completed = true };
+        Guid parent = Guid.NewGuid(); int calls = 0; var dispatcher = new MirrorPulseControlDispatcher();
+        ValueTask<MirrorPulseControlTransferStatus> AssertPlacement(Guid operationId, Guid sourceMemberId, Guid targetParentMemberId, string targetName)
+        {
+            Assert.AreEqual(value.OperationId, operationId); Assert.AreEqual(value.SourceMemberId, sourceMemberId);
+            Assert.AreEqual(parent, targetParentMemberId); Assert.AreEqual("moved.bin", targetName);
             calls++; return ValueTask.FromResult(value);
-        });
-        dispatcher.Register<NamespaceTransferResumeArguments, MirrorPulseControlTransferStatus>(MirrorPulseControlCommands.NamespaceTransferResume, (arguments, _) =>
-        { Assert.AreEqual(value.OperationId, arguments.OperationId); calls++; return ValueTask.FromResult(value); });
+        }
+        if (prepare)
+            dispatcher.Register<NamespaceTransferPrepareArguments, MirrorPulseControlTransferStatus>(commandName, (arguments, _) =>
+                AssertPlacement(arguments.OperationId, arguments.SourceMemberId, arguments.TargetParentMemberId, arguments.TargetName));
+        else if (placement)
+            dispatcher.Register<NamespaceTransferMoveArguments, MirrorPulseControlTransferStatus>(commandName, (arguments, _) =>
+                AssertPlacement(arguments.OperationId, arguments.SourceMemberId, arguments.TargetParentMemberId, arguments.TargetName));
+        else
+            dispatcher.Register<NamespaceTransferResumeArguments, MirrorPulseControlTransferStatus>(commandName, (arguments, _) =>
+            { Assert.AreEqual(value.OperationId, arguments.OperationId); calls++; return ValueTask.FromResult(value); });
         string pipe = "MirrorPulse-transfer-command-" + Guid.NewGuid().ToString("N");
         using var shutdown = new CancellationTokenSource(); Task serve = new MirrorPulseControlPipeServer(dispatcher.DispatchAsync, pipe).ServeAsync(shutdown.Token);
         var client = new MirrorPulseControlClient(new MirrorPulseControlClientOptions { PipeName = pipe });
         await using var operations = new MirrorPulseCliHostOperations(new MirrorPulseHostStartupOptions(), client);
-        string[] arguments = verb == "move" ? [value.OperationId.ToString("D"), value.SourceMemberId.ToString("D"), parent.ToString("D"), "moved.bin"] : [value.OperationId.ToString("D")];
+        string[] arguments = placement ? [value.OperationId.ToString("D"), value.SourceMemberId.ToString("D"), parent.ToString("D"), "moved.bin"] : [value.OperationId.ToString("D")];
         try
         {
             using var output = new StringWriter(); using var error = new StringWriter();
             Assert.AreEqual(0, await RunAsync(operations, true, verb, arguments, output, error));
             using var document = JsonDocument.Parse(output.ToString()); var status = document.RootElement.GetProperty("data");
-            Assert.IsTrue(status.GetProperty("completed").GetBoolean()); Assert.IsTrue(status.GetProperty("journalAcknowledged").GetBoolean());
-            Assert.IsFalse(status.GetProperty("rootsFenced").GetBoolean()); Assert.AreEqual(value.OperationId, status.GetProperty("operationId").GetGuid());
+            Assert.AreEqual(!prepare, status.GetProperty("completed").GetBoolean()); Assert.AreEqual(!prepare, status.GetProperty("journalAcknowledged").GetBoolean());
+            Assert.AreEqual(prepare, status.GetProperty("rootsFenced").GetBoolean()); Assert.AreEqual(value.OperationId, status.GetProperty("operationId").GetGuid());
+            Assert.AreEqual(value.Stage, status.GetProperty("stage").GetString());
+            if (prepare)
+                Assert.IsTrue(!status.TryGetProperty("copyStartedAt", out var copyStarted) || copyStarted.ValueKind == JsonValueKind.Null);
             List<string[]> invalid = [[], ["invalid"], [Guid.Empty.ToString("D")], [.. arguments, "extra"]];
-            if (verb == "move")
+            if (placement)
             {
                 invalid.Add([arguments[0], "invalid", arguments[2], arguments[3]]);
                 invalid.Add([arguments[0], arguments[1], Guid.Empty.ToString("D"), arguments[3]]);
@@ -55,8 +75,7 @@ public sealed class MirrorPulseCliTransferTests
                 Assert.AreEqual(string.Empty, rejectedOutput.ToString());
             }
             Assert.AreEqual(1, calls);
-            Assert.IsTrue(MirrorPulseControlCommands.Catalog.Single(item => item.Name == (verb == "move" ?
-                MirrorPulseControlCommands.NamespaceTransferMove : MirrorPulseControlCommands.NamespaceTransferResume)).Mutating);
+            Assert.IsTrue(MirrorPulseControlCommands.Catalog.Single(item => item.Name == commandName).Mutating);
         }
         finally { shutdown.Cancel(); await serve; }
     }

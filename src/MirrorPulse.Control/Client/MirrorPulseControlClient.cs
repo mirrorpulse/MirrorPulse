@@ -424,6 +424,11 @@ public sealed class MirrorPulseControlClient
         SendAsync<NamespaceTransfersArguments, MirrorPulseControlTransfers>(
             MirrorPulseControlCommands.NamespaceTransfers, new(rootId), cancellationToken);
 
+    public Task<MirrorPulseControlTransferStatus> PrepareNamespaceTransferAsync(Guid operationId, Guid sourceMemberId,
+        Guid targetParentMemberId, string targetName, CancellationToken cancellationToken = default) =>
+        SendAsync<NamespaceTransferPrepareArguments, MirrorPulseControlTransferStatus>(MirrorPulseControlCommands.NamespaceTransferPrepare,
+            new(operationId, sourceMemberId, targetParentMemberId, targetName), cancellationToken);
+
     public Task<MirrorPulseControlTransferStatus> MoveNamespaceTransferAsync(Guid operationId, Guid sourceMemberId,
         Guid targetParentMemberId, string targetName, CancellationToken cancellationToken = default) =>
         SendAsync<NamespaceTransferMoveArguments, MirrorPulseControlTransferStatus>(MirrorPulseControlCommands.NamespaceTransferMove,

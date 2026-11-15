@@ -11,28 +11,24 @@ public sealed partial class MirrorPulseHostApplication
 {
     private void RegisterTransferQueries(MirrorPulseControlDispatcher dispatcher)
     {
+        dispatcher.Register<NamespaceTransferPrepareArguments, MirrorPulseControlTransferStatus>(
+            MirrorPulseControlCommands.NamespaceTransferPrepare, async (arguments, token) =>
+            {
+                await PrepareNamespaceTransferAsync(arguments.OperationId, arguments.SourceMemberId,
+                    arguments.TargetParentMemberId, arguments.TargetName, token).ConfigureAwait(false);
+                return await ReadNamespaceTransferStatusAsync(arguments.OperationId, token).ConfigureAwait(false);
+            });
         dispatcher.Register<NamespaceTransferMoveArguments, MirrorPulseControlTransferStatus>(
             MirrorPulseControlCommands.NamespaceTransferMove, async (arguments, token) =>
             {
-                if (arguments.OperationId == Guid.Empty || arguments.SourceMemberId == Guid.Empty || arguments.TargetParentMemberId == Guid.Empty)
-                    throw new ArgumentException("Transfer operation, source member and target parent IDs are required.");
-                await MirrorPulseTransferAdmissionRetry.RunAsync(stop =>
-                    RunTransferPhaseAsync(arguments.OperationId, MirrorPulseTransferCommandPhase.Prepare, async () =>
-                    {
-                        if (await _session.PrepareDirectoryNamespaceTransferAsync(arguments.OperationId, arguments.SourceMemberId,
-                            arguments.TargetParentMemberId, arguments.TargetName, stop).ConfigureAwait(false)) return true;
-                        _ = await _session.PrepareNamespaceTransferAsync(arguments.OperationId, arguments.SourceMemberId,
-                            arguments.TargetParentMemberId, arguments.TargetName, stop).ConfigureAwait(false);
-                        return true;
-                    }), token).ConfigureAwait(false);
+                await PrepareNamespaceTransferAsync(arguments.OperationId, arguments.SourceMemberId,
+                    arguments.TargetParentMemberId, arguments.TargetName, token).ConfigureAwait(false);
                 return await ResumeNamespaceTransferAsync(arguments.OperationId, token).ConfigureAwait(false);
             });
         dispatcher.Register<NamespaceTransferResumeArguments, MirrorPulseControlTransferStatus>(
             MirrorPulseControlCommands.NamespaceTransferResume, (arguments, token) => ResumeNamespaceTransferAsync(arguments.OperationId, token));
         dispatcher.Register<NamespaceTransferStatusArguments, MirrorPulseControlTransferStatus>(
-            MirrorPulseControlCommands.NamespaceTransferStatus, async (arguments, token) =>
-                ToControlTransferStatus(await _catalog.ReadNamespaceTransferStatusAsync(arguments.OperationId, token).ConfigureAwait(false)
-                    ?? throw new FileNotFoundException("The original transfer is not registered.")));
+            MirrorPulseControlCommands.NamespaceTransferStatus, (arguments, token) => ReadNamespaceTransferStatusAsync(arguments.OperationId, token));
         dispatcher.Register<NamespaceTransfersArguments, MirrorPulseControlTransfers>(
             MirrorPulseControlCommands.NamespaceTransfers, async (arguments, token) =>
             {
@@ -40,6 +36,26 @@ public sealed partial class MirrorPulseHostApplication
                 return new(values.Select(ToControlTransferStatus).ToArray());
             });
     }
+
+    private async ValueTask PrepareNamespaceTransferAsync(Guid operationId, Guid sourceMemberId, Guid targetParentMemberId,
+        string targetName, CancellationToken token)
+    {
+        if (operationId == Guid.Empty || sourceMemberId == Guid.Empty || targetParentMemberId == Guid.Empty)
+            throw new ArgumentException("Transfer operation, source member and target parent IDs are required.");
+        await MirrorPulseTransferAdmissionRetry.RunAsync(stop =>
+            RunTransferPhaseAsync(operationId, MirrorPulseTransferCommandPhase.Prepare, async () =>
+            {
+                if (await _session.PrepareDirectoryNamespaceTransferAsync(operationId, sourceMemberId,
+                    targetParentMemberId, targetName, stop).ConfigureAwait(false)) return true;
+                _ = await _session.PrepareNamespaceTransferAsync(operationId, sourceMemberId, targetParentMemberId,
+                    targetName, stop).ConfigureAwait(false);
+                return true;
+            }), token).ConfigureAwait(false);
+    }
+
+    private async ValueTask<MirrorPulseControlTransferStatus> ReadNamespaceTransferStatusAsync(Guid operationId, CancellationToken token) =>
+        ToControlTransferStatus(await _catalog.ReadNamespaceTransferStatusAsync(operationId, token).ConfigureAwait(false)
+            ?? throw new FileNotFoundException("The original transfer is not registered."));
 
     private async ValueTask<MirrorPulseControlTransferStatus> ResumeNamespaceTransferAsync(Guid operationId, CancellationToken token)
     {
