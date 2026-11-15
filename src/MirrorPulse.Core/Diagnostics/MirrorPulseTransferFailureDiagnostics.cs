@@ -12,12 +12,50 @@ public enum MirrorPulseTransferCommandPhase
 public enum MirrorPulseTransferFailureBoundary
 {
     Unknown, NamespaceOwner, CurrentProtection, RootRoute, DestinationOccupied, JournalUnavailable, SourceProjection,
-    JournalReconciliation, JournalOwnership, JournalShape, SourceBinding, PrivateSource
+    JournalReconciliation, JournalOwnership, JournalShape, SourceBinding, PrivateSource,
+    RecoveryParentDescriptor, RecoveryMemberDescriptor, RecoveryMemberIdentity, RecoveryMemberBinding
+}
+
+internal enum MirrorPulseTransferMemberRecoveryStep
+{
+    OriginalMember,
+    BornMemberSelection,
+    BornMemberHistory,
+    BornMemberContext,
+    BornMemberGuards,
+    BornMemberAdmission,
+    BornMemberScope,
+    BornMemberReadback,
+    BornMemberCompletion
 }
 
 /// <summary>Observes one failed transfer call using fixed fields while preserving its original exception and progress.</summary>
 public static class MirrorPulseTransferFailureDiagnostics
 {
+    private static readonly object MemberRecoveryStepKey = new();
+
+    internal static void MarkMemberRecoveryStep(Exception error, string? progress)
+    {
+        MirrorPulseTransferMemberRecoveryStep? step = progress switch
+        {
+            "NamespaceOriginalMemberBegin" => MirrorPulseTransferMemberRecoveryStep.OriginalMember,
+            "NamespaceBornMemberBegin" => MirrorPulseTransferMemberRecoveryStep.BornMemberSelection,
+            "NamespaceBornRecoveryHistoryBegin" or "NamespaceBornRecoveryHistoryCompleted" => MirrorPulseTransferMemberRecoveryStep.BornMemberHistory,
+            "NamespaceBornRecoveryContextBegin" or "NamespaceBornRecoveryContextHistoryCompleted" or
+            "NamespaceBornRecoveryContextLineageBegin" or "NamespaceBornRecoveryContextLineageCompleted" or
+            "NamespaceBornRecoveryContextParentBegin" or "NamespaceBornRecoveryContextParentCompleted" or
+            "NamespaceBornRecoveryContextInheritanceBegin" or "NamespaceBornRecoveryContextInheritanceCompleted" => MirrorPulseTransferMemberRecoveryStep.BornMemberContext,
+            "NamespaceBornRecoveryGuardsBegin" => MirrorPulseTransferMemberRecoveryStep.BornMemberGuards,
+            "NamespaceBornRecoveryActionBegin" or "NamespaceBornRecoveryActionCompleted" => MirrorPulseTransferMemberRecoveryStep.BornMemberAdmission,
+            "NamespaceBornRecoveryScopeBegin" or "NamespaceBornRecoveryAdmissionCompleted" or
+            "NamespaceBornRecoveryCallbackBegin" or "NamespaceBornRecoveryFirstInspectionCompleted" => MirrorPulseTransferMemberRecoveryStep.BornMemberScope,
+            "NamespaceBornRecoveryReadbackBegin" => MirrorPulseTransferMemberRecoveryStep.BornMemberReadback,
+            "NamespaceBornRecoveryCommitBegin" => MirrorPulseTransferMemberRecoveryStep.BornMemberCompletion,
+            _ => null
+        };
+        if (step is not null) error.Data[MemberRecoveryStepKey] = step.Value;
+    }
+
     public static async ValueTask<T> RunAsync<T>(Guid operationId, MirrorPulseTransferCommandPhase phase,
         Func<ValueTask<T>> action, Func<LogEntry, ValueTask> observe)
     {
@@ -44,6 +82,8 @@ public static class MirrorPulseTransferFailureDiagnostics
                 if (treeRecoveryStage is MirrorPulseRootLabelCancellationStage.CurrentTreeAnchorRecovery or
                     MirrorPulseRootLabelCancellationStage.CurrentTreeMemberRecovery or MirrorPulseRootLabelCancellationStage.CurrentTreeInitializationAudit)
                     fields.Add(new("transferTreeRecoveryStage", treeRecoveryStage.ToString()));
+                if (original.Data[MemberRecoveryStepKey] is MirrorPulseTransferMemberRecoveryStep memberStep && Enum.IsDefined(memberStep))
+                    fields.Add(new("transferMemberRecoveryStep", memberStep.ToString()));
                 await observe(new(LogLevel.Error, "host", "TransferCommandFailed", DateTimeOffset.UtcNow, fields)).ConfigureAwait(false);
             }
             catch (Exception observationFailure) when (observationFailure is not StackOverflowException and not OutOfMemoryException)
@@ -52,6 +92,7 @@ public static class MirrorPulseTransferFailureDiagnostics
             }
             throw;
         }
+
     }
 
     private static string Kind(Exception error) => error switch
@@ -78,6 +119,17 @@ public static class MirrorPulseTransferFailureDiagnostics
         "The transfer requires the original fully resident source object." => MirrorPulseTransferFailureBoundary.SourceBinding,
         "The transfer requires its complete retained read-only private content handle." or
         "The private content changed or does not match the original transfer." => MirrorPulseTransferFailureBoundary.PrivateSource,
+        "The actual protected parent descriptor changed before born recovery." or
+        "The actual current parent lost its verified descriptor." or
+        "The direct parent requires its own retained protection recovery." => MirrorPulseTransferFailureBoundary.RecoveryParentDescriptor,
+        "Born recovery cannot overwrite an unowned descriptor." or
+        "The current born object does not inherit its actual parent's protection." or
+        "The original object's current descriptor differs from its retained verified protection." => MirrorPulseTransferFailureBoundary.RecoveryMemberDescriptor,
+        "Born recovery lost its retained current public identity." or
+        "A known registered identity requires an actual placeholder." or
+        "The native public identity disagrees with the member's retained current identity." => MirrorPulseTransferFailureBoundary.RecoveryMemberIdentity,
+        "Born recovery lost its actual binding, owner, committed path, kind or single-link constraint." or
+        "The actual registered object lost its binding, owner, current path or type." => MirrorPulseTransferFailureBoundary.RecoveryMemberBinding,
         "The routed transfer root differs from its current catalog registration." or
         "Both original transfer roots and instances must remain enabled and active." or
         "The transfer backend, version or root configuration changed." or

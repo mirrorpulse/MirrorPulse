@@ -86,6 +86,12 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
             () => new MirrorPulseNamespaceAnchorProtectionCoordinator(fileSystem, catalog, router, execution, actor, permissions)
                 .ProtectAsync(cancellationToken)).ConfigureAwait(false);
         bool transferred = false;
+        string? memberProgress = null;
+        void ReportMemberProgress(string stage)
+        {
+            memberProgress = stage;
+            Progress?.Invoke(stage);
+        }
         try
         {
             var anchorMember = await catalog.ReadNamespaceMemberByBindingAsync(anchor.Original.LocalObject, cancellationToken).ConfigureAwait(false)
@@ -95,11 +101,15 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
                 throw new InvalidDataException("Current recovery lost the registered original sync-root anchor.");
             var graph = await catalog.ReadNamespaceMemberTreeAsync(anchorMember.MemberId, cancellationToken).ConfigureAwait(false);
             var originals = new MirrorPulseNamespaceOriginalMemberRecoveryCoordinator(fileSystem, catalog, router, execution, actor, scheduler, permissions);
-            var born = new MirrorPulseNamespaceBornMemberRecoveryCoordinator(fileSystem, catalog, router, execution, actor, scheduler, permissions) { Progress = Progress };
+            var born = new MirrorPulseNamespaceBornMemberRecoveryCoordinator(fileSystem, catalog, router, execution, actor, scheduler, permissions)
+            {
+                Progress = ReportMemberProgress
+            };
             _ = await MirrorPulseRootLabelCancellationFailureDiagnostics.AtStageAsync(MirrorPulseRootLabelCancellationStage.CurrentTreeMemberRecovery, async () =>
             {
                 foreach (var entry in graph.Where(entry => entry.MemberId != anchorMember.MemberId))
                 {
+                    memberProgress = null;
                     cancellationToken.ThrowIfCancellationRequested();
                     var member = await catalog.ReadNamespaceMemberAsync(entry.MemberId, cancellationToken).ConfigureAwait(false)
                         ?? throw new InvalidDataException("A current recovery member lost its original registration.");
@@ -107,7 +117,7 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
                     var moveIdentity = move?.PermissionIdentity(member.MemberId);
                     if (member.Origin == MirrorPulseNamespaceMemberOrigin.CapturedOriginal)
                     {
-                        Progress?.Invoke("NamespaceOriginalMemberBegin");
+                        ReportMemberProgress("NamespaceOriginalMemberBegin");
                         var restored = await originals.RecoverAsync(operationId, member.MemberId, moveIdentity, cancellationToken).ConfigureAwait(false);
                         if (restored.Permission?.Outcome is not (MirrorPulseNamespacePermissionOutcome.Verified or MirrorPulseNamespacePermissionOutcome.AlreadyVerified) ||
                             restored.Receipt is not { Outcome: CloudProtectedLocalOperationOutcome.Completed, Drained: true })
@@ -120,7 +130,7 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
                     }
                     else
                     {
-                        Progress?.Invoke("NamespaceBornMemberBegin");
+                        ReportMemberProgress("NamespaceBornMemberBegin");
                         var selection = await catalog.ReadNamespaceBornMemberRecoverySelectionAsync(operationId, member.MemberId, cancellationToken).ConfigureAwait(false);
                         var child = selection.Lineage[0];
                         var parent = selection.Parent;
@@ -160,6 +170,12 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
                     .CompleteInitializationAsync(operationId, anchorMember.MemberId, anchor, cancellationToken)).ConfigureAwait(false);
             Progress?.Invoke("NamespaceAuditCompleted");
             transferred = true; return new(completion, anchor);
+        }
+        catch (Exception error) when (MirrorPulseRootLabelCancellationFailureDiagnostics.Stage(error) ==
+            MirrorPulseRootLabelCancellationStage.CurrentTreeMemberRecovery)
+        {
+            MirrorPulseTransferFailureDiagnostics.MarkMemberRecoveryStep(error, memberProgress);
+            throw;
         }
         finally { if (!transferred) await anchor.DisposeAsync().ConfigureAwait(false); }
     }

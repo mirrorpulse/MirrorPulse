@@ -132,6 +132,7 @@ public sealed class MirrorPulseTransferFailureDiagnosticsTests
     {
         var original = new InvalidDataException("synthetic-private-source");
         MirrorPulseRootLabelCancellationFailureDiagnostics.MarkStage(original, MirrorPulseRootLabelCancellationStage.CurrentTreeMemberRecovery);
+        MirrorPulseTransferFailureDiagnostics.MarkMemberRecoveryStep(original, "NamespaceBornRecoveryGuardsBegin");
         LogEntry observed = null!;
         var failed = await Assert.ThrowsExactlyAsync<InvalidDataException>(() => MirrorPulseTransferFailureDiagnostics.RunAsync<int>(
             Guid.NewGuid(), MirrorPulseTransferCommandPhase.Copy, () => ValueTask.FromException<int>(original),
@@ -139,6 +140,7 @@ public sealed class MirrorPulseTransferFailureDiagnosticsTests
         Assert.AreSame(original, failed);
         var safe = SafeDiagnosticPolicy.Sanitize(observed);
         Assert.AreEqual("CurrentTreeMemberRecovery", safe.Fields["transferTreeRecoveryStage"]);
+        Assert.AreEqual("BornMemberGuards", safe.Fields["transferMemberRecoveryStep"]);
         Assert.IsFalse(JsonSerializer.Serialize(safe).Contains(original.Message, StringComparison.Ordinal));
     }
 
