@@ -38,7 +38,14 @@ public sealed class AdapterWorkerStatClient
             throw new ArgumentException("The stat request belongs to another instance.", nameof(request));
         }
 
-        JsonElement payload = _channel.RoutePayload(request.RootKey, JsonSerializer.SerializeToElement(new { path = request.NormalizedPath }));
+        var fields = new Dictionary<string, object?> { ["path"] = request.NormalizedPath };
+        if (request.DurableDirectoryCopyOperationId is { } copy)
+        {
+            if (copy == Guid.Empty || _channel.Protocol?.SupportsDurableDirectoryCopy(request.RootKey) != true)
+                throw new NotSupportedException("DurableDirectoryCopyRequiresNegotiatedRoot");
+            fields["durableDirectoryCopyOperationId"] = copy;
+        }
+        JsonElement payload = _channel.RoutePayload(request.RootKey, JsonSerializer.SerializeToElement(fields));
         await _operation.WaitAsync(cancellationToken).ConfigureAwait(false);
         Guid requestId = Guid.NewGuid();
         var completion = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);

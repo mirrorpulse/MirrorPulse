@@ -119,6 +119,9 @@ public sealed class MirrorPulseNormalUserWorkerTransport : IMirrorPulseWorkerRan
     public bool SupportsDurableDirectoryMove(MirrorPulse.Core.Contracts.InstanceId instanceId) =>
         _mutations.SupportsDurableDirectoryMove(instanceId);
 
+    public bool SupportsDurableDirectoryCopy(MirrorPulse.Core.Contracts.InstanceId instanceId, string rootKey) =>
+        _mutations.SupportsDurableDirectoryCopy(instanceId, rootKey);
+
     async ValueTask<AdapterAtomicDirectoryDeletionReceipt> IMirrorPulseAtomicDirectoryDeletionTransport.ExecuteAtomicDirectoryDeletionAsync(
         AdapterDirectoryAdmissionRequest original, CancellationToken token,
         IReadOnlyList<MirrorPulse.Core.Sync.MirrorPulseWorkerChangeCommand>? originals)

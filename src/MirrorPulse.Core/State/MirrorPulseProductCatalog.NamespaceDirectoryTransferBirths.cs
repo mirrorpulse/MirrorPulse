@@ -178,7 +178,7 @@ public sealed partial class MirrorPulseProductCatalog
         // native target prefix. Fresh protection, native inventory and Worker bytes
         // are checked before dispatch or publication.
         var copy = await ReadDirectoryTransferCopyCoreAsync(transferId, transaction, token).ConfigureAwait(false);
-        if (copy.Steps.Any(step => step.StartedAt is not null && step.AcceptedAt is null))
+        if (copy.Steps.Any(step => step.StartedAt is not null && step.AcceptedAt is null && !step.Durable))
             throw new MirrorPulseMutationAmbiguousException("The original directory copy effect needs its correlated Worker receipt.");
         var plan = copy.Admission;
         var verification = await ReadDirectoryTransferTargetCoreAsync(copy, transaction, token).ConfigureAwait(false);

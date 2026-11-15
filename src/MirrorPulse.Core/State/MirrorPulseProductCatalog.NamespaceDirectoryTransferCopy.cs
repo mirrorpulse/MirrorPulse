@@ -6,7 +6,7 @@ using MirrorPulse.Core.Sync;
 namespace MirrorPulse.Core.State;
 
 internal sealed record MirrorPulseDirectoryTransferCopyStep(Guid EffectId, DateTimeOffset? StartedAt,
-    string? AcceptedRevision, DateTimeOffset? AcceptedAt);
+    string? AcceptedRevision, DateTimeOffset? AcceptedAt, bool Durable = false);
 
 internal sealed record MirrorPulseDirectoryTransferCopy(MirrorPulseDirectoryTransferAdmission Admission,
     IReadOnlyList<MirrorPulseDirectoryTransferCopyStep> Steps);
@@ -26,6 +26,38 @@ public sealed partial class MirrorPulseProductCatalog
             CHECK((accepted_at IS NULL AND accepted_revision IS NULL) OR
                   (started_at IS NOT NULL AND accepted_at IS NOT NULL AND accepted_at>=started_at AND accepted_revision IS NOT NULL)))
         """;
+
+    private const string DirectoryTransferDurableCopyTable = """
+        CREATE TABLE namespace_directory_transfer_durable_copies(
+            effect_id TEXT PRIMARY KEY NOT NULL REFERENCES namespace_directory_transfer_copy_steps(effect_id),
+            started_at INTEGER NOT NULL CHECK(started_at>0))
+        """;
+
+    private static async Task EnsureDirectoryTransferDurableCopySchemaAsync(SqliteConnection connection, long version, CancellationToken token)
+    {
+        using var transaction = connection.BeginTransaction();
+        await using var sql = connection.CreateCommand();
+        sql.Transaction = transaction;
+        sql.CommandText = "SELECT sql FROM sqlite_master WHERE type='table' AND name='namespace_directory_transfer_durable_copies';";
+        var existing = await sql.ExecuteScalarAsync(token).ConfigureAwait(false);
+        if (existing is null && version < 117)
+        {
+            sql.CommandText = DirectoryTransferDurableCopyTable;
+            await sql.ExecuteNonQueryAsync(token).ConfigureAwait(false);
+        }
+        else if (existing is not string text ||
+            NormalizeRetiredTransferIndexSql(text) != NormalizeRetiredTransferIndexSql(DirectoryTransferDurableCopyTable))
+            throw new InvalidDataException("The directory transfer durable copy schema is missing or changed.");
+        if (version < 117)
+        {
+            sql.CommandText = "SELECT 1 FROM namespace_directory_transfer_durable_copies LIMIT 1;";
+            if (await sql.ExecuteScalarAsync(token).ConfigureAwait(false) is not null)
+                throw new InvalidDataException("An earlier catalog cannot supply durable copy dispatch choices.");
+            sql.CommandText = "PRAGMA user_version=117;";
+            await sql.ExecuteNonQueryAsync(token).ConfigureAwait(false);
+        }
+        transaction.Commit();
+    }
 
     private async Task InsertDirectoryTransferCopyStepsAsync(MirrorPulseDirectoryTransferAdmission plan,
         SqliteTransaction transaction, CancellationToken token)
@@ -72,8 +104,10 @@ public sealed partial class MirrorPulseProductCatalog
         await using var sql = _connection.CreateCommand();
         sql.Transaction = transaction;
         sql.CommandText = """
-            SELECT ordinal,effect_id,started_at,accepted_revision,accepted_at,effect_fingerprint
-            FROM namespace_directory_transfer_copy_steps WHERE transfer_id=$transfer ORDER BY ordinal;
+            SELECT s.ordinal,s.effect_id,s.started_at,s.accepted_revision,s.accepted_at,s.effect_fingerprint,d.started_at
+            FROM namespace_directory_transfer_copy_steps s
+            LEFT JOIN namespace_directory_transfer_durable_copies d ON d.effect_id=s.effect_id
+            WHERE s.transfer_id=$transfer ORDER BY s.ordinal;
             """;
         sql.Parameters.AddWithValue("$transfer", transferId.ToString("D"));
         var steps = new List<MirrorPulseDirectoryTransferCopyStep>(plan.Members.Count);
@@ -89,11 +123,13 @@ public sealed partial class MirrorPulseProductCatalog
                 var started = ReadDirectoryTransferTime(reader, 2);
                 string? revision = reader.IsDBNull(3) ? null : reader.GetString(3);
                 var accepted = ReadDirectoryTransferTime(reader, 4);
+                var durableStart = ReadDirectoryTransferTime(reader, 6);
                 if ((started is { } start && (previous is null || start < previous.Value)) ||
+                    (durableStart is not null && durableStart != started) ||
                     (accepted is { } acceptance && (started is null || acceptance < started.Value ||
                         InvalidRemoteUpdateText(revision, 4096))) || (accepted is null && revision is not null))
                     throw new InvalidDataException("The directory transfer contains inconsistent original copy receipts.");
-                steps.Add(new(plan.Members[steps.Count].CopyOperationId, started, revision, accepted));
+                steps.Add(new(plan.Members[steps.Count].CopyOperationId, started, revision, accepted, durableStart is not null));
                 previous = accepted;
             }
         }
@@ -116,7 +152,7 @@ public sealed partial class MirrorPulseProductCatalog
 
     /// <summary>Claims an original effect immediately before its first dispatch.</summary>
     internal async Task StartNamespaceDirectoryTransferCopyAsync(MirrorPulseDirectoryTransferAdmission plan,
-        int ordinal, DateTimeOffset startedAt, CancellationToken token)
+        int ordinal, DateTimeOffset startedAt, CancellationToken token, bool durable = false)
     {
         if (startedAt < plan.Originals.CapturedAt)
             throw new ArgumentException("Copy start must follow the original directory transfer admission.", nameof(startedAt));
@@ -150,6 +186,11 @@ public sealed partial class MirrorPulseProductCatalog
             sql.Parameters.AddWithValue("$started", startedAt.UtcTicks);
             if (await sql.ExecuteNonQueryAsync(token).ConfigureAwait(false) != 1)
                 throw new MirrorPulseMutationAmbiguousException("The directory copy effect needs its original acceptance or an earlier member.");
+            if (durable)
+            {
+                sql.CommandText = "INSERT INTO namespace_directory_transfer_durable_copies(effect_id,started_at) VALUES($effect,$started);";
+                await sql.ExecuteNonQueryAsync(token).ConfigureAwait(false);
+            }
             transaction.Commit();
         }
         finally { _gate.Release(); }

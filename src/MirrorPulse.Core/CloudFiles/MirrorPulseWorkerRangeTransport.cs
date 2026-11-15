@@ -37,6 +37,9 @@ public sealed record MirrorPulseWorkerUploadRequest(
     /// <summary>Requires negotiated conditional targets before any upload frame may be sent.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool RequireConditionalTargetSupport { get; init; }
+
+    internal MirrorPulseDurableDirectoryCopyMode DurableCopyMode { get; init; }
+    internal Guid? DurableParentCopyOperationId { get; init; }
 }
 
 public interface IMirrorPulseWorkerUploadTransport
@@ -46,7 +49,10 @@ public interface IMirrorPulseWorkerUploadTransport
         CancellationToken cancellationToken);
 }
 
-public sealed record MirrorPulseWorkerStatRequest(InstanceId InstanceId, string NormalizedPath, string? RootKey = null);
+public sealed record MirrorPulseWorkerStatRequest(InstanceId InstanceId, string NormalizedPath, string? RootKey = null)
+{
+    internal Guid? DurableDirectoryCopyOperationId { get; init; }
+}
 
 public interface IMirrorPulseWorkerStatTransport
 {

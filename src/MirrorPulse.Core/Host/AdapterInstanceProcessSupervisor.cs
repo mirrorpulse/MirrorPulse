@@ -233,6 +233,9 @@ public sealed class AdapterInstanceProcessSupervisor :
     public bool SupportsDurableDirectoryMove(InstanceId instanceId) => IsConnected(instanceId) &&
         _mutations.TryGetValue(instanceId, out var client) && client.SupportsDurableDirectoryMove;
 
+    public bool SupportsDurableDirectoryCopy(InstanceId instanceId, string rootKey) => !_shutdown.IsCancellationRequested &&
+        _ready.TryGetValue(instanceId, out var channel) && channel.Protocol?.SupportsDurableDirectoryCopy(rootKey) == true;
+
     private async ValueTask<Stream> ReadRangeCoreAsync(
         MirrorPulseWorkerReadRangeRequest request,
         CancellationToken cancellationToken)
@@ -631,6 +634,7 @@ public sealed class AdapterInstanceProcessSupervisor :
                             })), cancellationToken).ConfigureAwait(false);
                         break;
                     case "Connected":
+                        protocol.RecordConnectedCapabilities(frame.Payload);
                         await SetPhaseAsync(instance.InstanceId, "Connected", cancellationToken).ConfigureAwait(false);
                         _ready[instance.InstanceId] = channel;
                         break;

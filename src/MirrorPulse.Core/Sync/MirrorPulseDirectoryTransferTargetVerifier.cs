@@ -42,7 +42,7 @@ internal sealed class MirrorPulseDirectoryTransferTargetVerifier(MirrorPulseTran
             MirrorPulseWorkerDirectoryEntry entry;
             if (directory)
             {
-                string current = await stats.StatAsync(new(plan.TargetRoute.InstanceId, path, plan.TargetRoute.RootKey), token).ConfigureAwait(false)
+                string current = await stats.StatAsync(DirectoryStat(copy.Steps[index], path), token).ConfigureAwait(false)
                     ?? throw new IOException("A copied target directory is missing.");
                 if (retained is not null && retained.Revision != current)
                     throw new IOException("A target directory changed after its selected whole-tree verification.");
@@ -68,15 +68,19 @@ internal sealed class MirrorPulseDirectoryTransferTargetVerifier(MirrorPulseTran
             int separator = value.member.RelativePath.LastIndexOf('/');
             return separator < 0 ? "" : value.member.RelativePath[..separator];
         }, StringComparer.Ordinal);
-        foreach (var directory in selected.Where(member => member.IsDirectory))
+        foreach (var (directory, ordinal) in selected.Select((member, ordinal) => (member, ordinal)).Where(entry => entry.member.IsDirectory))
         {
             var children = byParent[directory.RelativePath].Select(value => observed[value.ordinal]).ToArray();
             await files.RequireDirectoryInventoryAsync(plan.TargetRoute, directory.RelativePath, children, token).ConfigureAwait(false);
             var current = await files.ReadDirectoryMetadataAsync(plan.TargetRoute, directory.RelativePath, directory.Revision, token).ConfigureAwait(false);
             if (current.RemoteId != directory.RemoteId ||
-                await stats.StatAsync(new(plan.TargetRoute.InstanceId, directory.RelativePath, plan.TargetRoute.RootKey), token).ConfigureAwait(false) != directory.Revision)
+                await stats.StatAsync(DirectoryStat(copy.Steps[ordinal], directory.RelativePath), token).ConfigureAwait(false) != directory.Revision)
                 throw new IOException("The target directory changed during whole-tree readback.");
         }
         return new(1, plan.Command.CommandId, selected.AsReadOnly(), _time.GetUtcNow());
+
+        MirrorPulseWorkerStatRequest DirectoryStat(MirrorPulseDirectoryTransferCopyStep step, string path) =>
+            new(plan.TargetRoute.InstanceId, path, plan.TargetRoute.RootKey)
+            { DurableDirectoryCopyOperationId = step.Durable ? step.EffectId : null };
     }
 }

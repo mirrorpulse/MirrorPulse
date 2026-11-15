@@ -77,7 +77,10 @@ public sealed class AdapterWorkerMutationClient
         ArgumentNullException.ThrowIfNull(request);
         if (request.InstanceId != _instanceId) throw new InvalidDataException("InstanceMismatch");
         if (_channel.ProtocolVersion != 2) throw new NotSupportedException("CreateDirectoryRequiresProtocolV2");
-        return await SendAsync("CreateDirectory", new { path = request.NormalizedPath, mustBeAbsent = request.MustBeAbsent },
+        var payload = new Dictionary<string, object?> { ["path"] = request.NormalizedPath, ["mustBeAbsent"] = request.MustBeAbsent };
+        AdapterWorkerProtocolSession.AddDurableCopyMode(_channel.Protocol, request.RootKey, request.DurableCopyMode, request.DurableParentCopyOperationId,
+            request.MustBeAbsent, payload);
+        return await SendAsync("CreateDirectory", payload,
             request.OperationId, request.RootKey, null, null, request.MustBeAbsent, cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidDataException("DirectoryRevisionRequired");
     }
@@ -277,6 +280,9 @@ public sealed class AdapterWorkerMutationClient
             }
             else if (code is "OperationUnsupported" or "CreateDirectoryUnsupported" or "CapabilityUnavailable")
                 completion.TrySetException(new NotSupportedException("The Worker rejected an unsupported mutation before execution."));
+            else if (code == "MutationOutcomeAmbiguous" && pending.Request.MessageType == "CreateDirectory" &&
+                pending.Request.Payload.TryGetProperty("durableDirectoryCopy", out _))
+                completion.TrySetException(new Sync.MirrorPulseMutationAmbiguousException("The Worker has no original directory copy evidence."));
             else
             {
                 completion.TrySetException(new AdapterWorkerOperationException(code));

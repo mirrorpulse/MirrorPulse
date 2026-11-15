@@ -164,6 +164,61 @@ public sealed partial class AdapterWorkerV2SessionTests
     }
 
     [TestMethod]
+    public async Task RealHostAndLocalWorkerReplayOriginalCopyReceiptsAcrossSessions()
+    {
+        if (Environment.GetEnvironmentVariable("MP_S06_DURABLE_COPY_FIXTURE") != "1")
+            Assert.Inconclusive("Requires the pre-release Local Worker with durable directory copy.");
+        using var fixture = new AtomicHostFixture();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        CancellationToken token = deadline.Token;
+        var instance = fixture.Topology.Instances.Single().InstanceId;
+        Guid createId = Guid.NewGuid();
+        Guid uploadId = Guid.NewGuid();
+        byte[] bytes = [3, 7, 13, 19];
+        var create = new MirrorPulseWorkerCreateDirectoryRequest(instance, "docs", "copied", createId)
+        { DurableCopyMode = MirrorPulseDurableDirectoryCopyMode.Start };
+        var stat = new MirrorPulseWorkerStatRequest(instance, "copied", "docs")
+        { DurableDirectoryCopyOperationId = createId };
+        string directoryRevision;
+        string fileRevision;
+        await using (var first = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths, token))
+        {
+            await first.SaveAdapterTopologyAsync(fixture.Topology, token);
+            await using var worker = await fixture.StartAsync(first, token);
+            Assert.IsTrue(worker.SupportsDurableDirectoryCopy(instance, "docs"));
+            Assert.IsFalse(worker.SupportsDurableDirectoryCopy(instance, "other"));
+            directoryRevision = await worker.CreateDirectoryAsync(create, token);
+            Assert.AreEqual(directoryRevision, await worker.StatAsync(stat, token));
+            using var input = new MemoryStream(bytes, writable: false);
+            fileRevision = await worker.UploadAsync(Upload(input, MirrorPulseDurableDirectoryCopyMode.Start), token);
+            Assert.IsNotNull(await worker.StatAsync(stat, token));
+        }
+
+        string target = Path.Combine(fixture.Source, "copied");
+        Directory.Move(target, target + ".previous");
+        Directory.CreateDirectory(target);
+        string successor = Path.Combine(target, "payload.bin");
+        await File.WriteAllTextAsync(successor, "later target", token);
+        await using var reopened = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths, token);
+        await using var restarted = await fixture.StartAsync(reopened, token);
+        Assert.AreEqual(directoryRevision, await restarted.CreateDirectoryAsync(create with
+        { DurableCopyMode = MirrorPulseDurableDirectoryCopyMode.Resume }, token));
+        using var retained = new MemoryStream(bytes, writable: false);
+        Assert.AreEqual(fileRevision, await restarted.UploadAsync(Upload(retained, MirrorPulseDurableDirectoryCopyMode.Resume), token));
+        await Assert.ThrowsAsync<IOException>(async () => await restarted.StatAsync(stat, token));
+        await Assert.ThrowsExactlyAsync<MirrorPulseWorkerMutationConflictException>(async () =>
+            await restarted.CreateDirectoryAsync(new(instance, "docs", "copied/child", Guid.NewGuid())
+            { DurableCopyMode = MirrorPulseDurableDirectoryCopyMode.Start, DurableParentCopyOperationId = createId }, token));
+        Assert.IsFalse(Directory.Exists(Path.Combine(target, "child")));
+        Assert.AreEqual("later target", await File.ReadAllTextAsync(successor, token));
+        CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(Path.Combine(target + ".previous", "payload.bin"), token));
+
+        MirrorPulseWorkerUploadRequest Upload(Stream input, MirrorPulseDurableDirectoryCopyMode mode) =>
+            new(instance, "copied/payload.bin", null, input, bytes.Length, uploadId, Convert.ToHexString(SHA256.HashData(bytes)), "docs")
+            { DurableCopyMode = mode, DurableParentCopyOperationId = createId, RequireConditionalTargetSupport = true };
+    }
+
+    [TestMethod]
     public async Task AtomicDirectoryReservationRollsBackAllOwnersBeforeAnyWorkerMutation()
     {
         using var fixture = new AtomicHostFixture();

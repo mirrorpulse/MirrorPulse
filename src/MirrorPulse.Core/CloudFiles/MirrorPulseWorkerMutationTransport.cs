@@ -28,12 +28,19 @@ public sealed record MirrorPulseWorkerMoveRequest(
     internal bool RequireDurableDirectoryMove { get; init; }
 }
 
+internal enum MirrorPulseDurableDirectoryCopyMode { Ordinary, Start, Resume }
+
 public sealed record MirrorPulseWorkerCreateDirectoryRequest(InstanceId InstanceId, string RootKey,
-    string NormalizedPath, Guid OperationId, bool MustBeAbsent = true);
+    string NormalizedPath, Guid OperationId, bool MustBeAbsent = true)
+{
+    internal MirrorPulseDurableDirectoryCopyMode DurableCopyMode { get; init; }
+    internal Guid? DurableParentCopyOperationId { get; init; }
+}
 
 public interface IMirrorPulseWorkerMutationTransport
 {
     bool SupportsDurableDirectoryMove(InstanceId instanceId) => false;
+    bool SupportsDurableDirectoryCopy(InstanceId instanceId, string rootKey) => false;
 
     ValueTask<string> CreateDirectoryAsync(MirrorPulseWorkerCreateDirectoryRequest request,
         CancellationToken cancellationToken) => ValueTask.FromException<string>(new NotSupportedException("CreateDirectoryUnsupported"));
