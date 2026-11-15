@@ -4,6 +4,10 @@ on:
   pull_request:
   workflow_dispatch:
     inputs:
+      file_transfer_acceptance_only:
+        description: Run the signed ARM64 Local and Local/WebDAV CLI file transfers only
+        type: boolean
+        default: false
       directory_acceptance_only:
         description: Run only signed Local directory Delete, Move and cross-instance transfer acceptance
         type: boolean
@@ -42,7 +46,7 @@ permissions:
 
 jobs:
   signed-atomic-directory:
-    if: github.event_name == 'workflow_dispatch' && (inputs.directory_acceptance_only || inputs.verify_atomic_directory || inputs.verify_directory_move || inputs.verify_directory_transfer || inputs.verify_prepared_directory_copy)
+    if: github.event_name == 'workflow_dispatch' && !inputs.file_transfer_acceptance_only && (inputs.directory_acceptance_only || inputs.verify_atomic_directory || inputs.verify_directory_move || inputs.verify_directory_transfer || inputs.verify_prepared_directory_copy)
     uses: ./.github/workflows/signed-atomic-directory.yml
     with:
       local_preview: ${{ inputs.local_atomic_preview }}
@@ -52,7 +56,7 @@ jobs:
       verify_prepared_directory_copy: ${{ inputs.verify_prepared_directory_copy }}
 
   official-adapter-candidate:
-    if: github.event_name != 'workflow_dispatch' || !(inputs.directory_acceptance_only || inputs.verify_prepared_directory_copy) || inputs.verify_shell
+    if: github.event_name != 'workflow_dispatch' || inputs.file_transfer_acceptance_only || !(inputs.directory_acceptance_only || inputs.verify_prepared_directory_copy) || inputs.verify_shell
     runs-on: windows-latest
     steps:
       - name: Check out the candidate product source
@@ -77,7 +81,63 @@ jobs:
             artifacts/sdk-feed
           if-no-files-found: error
 
+  signed-file-transfer:
+    if: github.event_name == 'workflow_dispatch' && inputs.file_transfer_acceptance_only
+    needs: official-adapter-candidate
+    runs-on: windows-11-arm
+    timeout-minutes: 30
+    env:
+      MIRRORPULSE_NATIVE_TEST: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: official-adapter-release-lock
+          path: artifacts
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          global-json-file: global.json
+      - name: Prepare the locked build inputs and official Local package
+        id: prepare
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          ./eng/restore-adapter-sdk.ps1 -RequireCachedPackage
+          dotnet restore MirrorPulse.sln --locked-mode
+          if ($LASTEXITCODE -ne 0) { throw 'Locked restore failed.' }
+          ./eng/prepare-native-ci-volume.ps1
+          ./eng/aggregate-official-adapters.ps1 -ReleaseLockPath artifacts/official-adapter-releases.json -AdapterIds com.mirrorpulse.adapter.local -OutputDirectory artifacts/official-local
+      - name: Verify signed Local file transfers across an actual Host restart
+        shell: pwsh
+        timeout-minutes: 10
+        run: |
+          $packages = @(Get-ChildItem -LiteralPath artifacts/official-local -Recurse -Filter '*.mpadapter' -File)
+          if ($packages.Count -ne 1) { throw 'The exact frozen signed Local package is required.' }
+          ./eng/verify-cli-transfers.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName -EvidencePath artifacts/evidence/cli-transfers.json
+      - name: Verify signed Local and WebDAV file transfers across an actual Host restart
+        if: ${{ !cancelled() && steps.prepare.outcome == 'success' }}
+        shell: pwsh
+        timeout-minutes: 10
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          ./eng/verify-cli-cross-package.ps1 -Runtime win-arm64 -ReleaseLockPath artifacts/official-adapter-releases.json -LocalPackageDirectory artifacts/official-local -WebDavPackageDirectory artifacts/official-transfer-webdav -EvidencePath artifacts/evidence/cli-cross-package.json
+      - name: Preserve both signed fixture reports and raw failure observations
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: signed-file-transfer-arm64-originals
+          path: |
+            artifacts/evidence/cli-transfers.json
+            artifacts/evidence/cli-transfers.originals/**
+            artifacts/evidence/cli-cross-package.json
+            artifacts/evidence/cli-cross-package.originals/**
+            artifacts/official-adapter-releases.json
+          if-no-files-found: warn
+
   build-and-test:
+    if: github.event_name != 'workflow_dispatch' || !inputs.file_transfer_acceptance_only
     needs: official-adapter-candidate
     runs-on: windows-latest
     steps:
@@ -230,6 +290,7 @@ jobs:
           if-no-files-found: error
 
   official-package-arm64:
+    if: github.event_name != 'workflow_dispatch' || !inputs.file_transfer_acceptance_only
     needs: official-adapter-candidate
     runs-on: windows-11-arm
     steps:
@@ -726,6 +787,7 @@ jobs:
           if-no-files-found: error
 
   official-adapters:
+    if: github.event_name != 'workflow_dispatch' || !inputs.file_transfer_acceptance_only
     needs: official-adapter-candidate
     runs-on: windows-latest
     permissions:
