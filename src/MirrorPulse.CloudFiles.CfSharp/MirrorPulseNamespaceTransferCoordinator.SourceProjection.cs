@@ -5,7 +5,7 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 
 public sealed partial class MirrorPulseNamespaceTransferCoordinator
 {
-    private async Task<MirrorPulseNamespaceTransferSourceProjection> CaptureOriginalSourceProjectionAsync(
+    private async Task<(MirrorPulseNamespaceTransferSourceProjection Projection, long? ObservedPlaceholderLocalFileId)> CaptureOriginalSourceProjectionAsync(
         MirrorPulseNamespaceTransferCopy copy, MirrorPulseNamespaceMemberProtectionSnapshot source, CloudFile file, CancellationToken token)
     {
         actor.AssertAccess();
@@ -31,7 +31,9 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
             new(binding.VolumeSerialNumber, binding.SyncRootFileId, binding.LocalFileId), DateTimeOffset.UtcNow);
         RequireOriginalSourceProjection(projection, row, tombstone: false);
         await read.RollbackAsync(token).ConfigureAwait(false);
-        return projection;
+        long? observedPlaceholderLocalFileId = native.IsPlaceholder && native.LocalFileId is { } observed && row.LocalFileId == observed
+            ? observed : null;
+        return (projection, observedPlaceholderLocalFileId);
     }
 
     private static bool MatchesSourceRevision(CloudItemSnapshot native, CloudPlaceholderIdentity identity,

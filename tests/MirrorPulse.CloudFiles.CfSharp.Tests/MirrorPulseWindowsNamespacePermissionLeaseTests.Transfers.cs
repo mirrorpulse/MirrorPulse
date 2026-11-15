@@ -79,6 +79,17 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     [TestMethod]
     [DoNotParallelize]
     [TestCategory("NativeCloudFiles")]
+    [DataRow("before-native")]
+    [DataRow("after-native")]
+    [DataRow("after-receipt")]
+    public Task NativeHostTransferResumesInterruptedSourceRetirementAcrossRoles(string interruption) =>
+        RunNativeHostTransferAsync(deleteSource: true, retireLocal: true, retirementFault: interruption,
+            completeOriginals: true, selectedSameInstance: false, acceptDeleteBeforePublishedHandoff: false,
+            retireBeforePublishedHandoff: true);
+
+    [TestMethod]
+    [DoNotParallelize]
+    [TestCategory("NativeCloudFiles")]
     public Task NativeHostTransferDeletesOnlyOriginalRemoteSourceWhileRetainingGuardedLocalBytes() => RunNativeHostTransferAsync(deleteSource: true, selectedSameInstance: false);
 
     [TestMethod]
@@ -659,10 +670,23 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                             MirrorPulseNamespaceRetirement? originalRetirement = null;
                             if (retireBeforePublishedHandoff)
                             {
-                                originalRetirement = await publishing.RetireNamespaceTransferSourceAsync(operation, deadline.Token);
-                                Assert.AreEqual(MirrorPulseNamespaceRetirementPhase.Completed, originalRetirement.Phase);
+                                if (retirementFault is null)
+                                {
+                                    originalRetirement = await publishing.RetireNamespaceTransferSourceAsync(operation, deadline.Token);
+                                    Assert.AreEqual(MirrorPulseNamespaceRetirementPhase.Completed, originalRetirement.Phase);
+                                }
+                                else
+                                {
+                                    await Assert.ThrowsExactlyAsync<InvalidOperationException>(async () =>
+                                        await publishing.RetireNamespaceTransferSourceAsync(operation, deadline.Token));
+                                    Assert.AreEqual(1, retirementFaults);
+                                    originalRetirement = await catalog.ReadNamespaceRetirementAsync(verified.Plan.DeleteOperationId, deadline.Token);
+                                    Assert.IsNotNull(originalRetirement?.TransferSourceProjection);
+                                    Assert.AreEqual(retirementFault == "after-receipt" ? MirrorPulseNamespaceRetirementPhase.NativeDeleted :
+                                        MirrorPulseNamespaceRetirementPhase.Prepared, originalRetirement.Phase);
+                                }
                                 Assert.AreEqual(1, worker.Deletes);
-                                Assert.IsFalse(File.Exists(sourcePath));
+                                Assert.AreEqual(retirementFault == "before-native", File.Exists(sourcePath));
                                 verified = await publishing.ReadNamespaceTransferAsync(operation, deadline.Token);
                                 Assert.IsNull(verified.Acknowledgement);
                                 if (loseAcknowledgementReturn)
@@ -711,7 +735,30 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
 
                             var lateRetirement = await afterPublication.RetireNamespaceTransferSourceAsync(operation, deadline.Token);
                             Assert.AreEqual(MirrorPulseNamespaceRetirementPhase.Completed, lateRetirement.Phase);
-                            if (originalRetirement is not null)
+                            if (originalRetirement is not null && retirementFault is not null)
+                            {
+                                Assert.AreEqual(originalRetirement.Intent, lateRetirement.Intent);
+                                Assert.AreEqual(originalRetirement.StartedAt, lateRetirement.StartedAt);
+                                Assert.AreEqual(originalRetirement.TransferSourceProjection, lateRetirement.TransferSourceProjection);
+                                if (originalRetirement.TransferReceipt is not null)
+                                    Assert.AreEqual(originalRetirement.TransferReceipt, lateRetirement.TransferReceipt);
+                                if (retirementFault == "before-native")
+                                {
+                                    Assert.AreEqual(nextRole.RoleSid.Value, lateRetirement.TransferContinuation?.Recovery.RoleSid);
+                                    await using var tombstoneRead = await reopenedState.OpenStore.BeginTransactionAsync(deadline.Token);
+                                    var effective = lateRetirement.CurrentTransferSourceProjection!;
+                                    var actual = await tombstoneRead.Items.GetByItemIdAsync(effective.ItemId, deadline.Token);
+                                    Assert.IsNotNull(actual);
+                                    Assert.IsTrue(actual.IsTombstone);
+                                    Assert.AreEqual(effective.OfficialLocalFileId, actual.LocalFileId);
+                                    if (originalRetirement.TransferSourceProjection!.OfficialLocalFileId is null)
+                                        Assert.IsNotNull(lateRetirement.RecoveredTransferOfficialLocalFileId);
+                                    else
+                                        Assert.IsNull(lateRetirement.RecoveredTransferOfficialLocalFileId);
+                                    await tombstoneRead.RollbackAsync(deadline.Token);
+                                }
+                            }
+                            else if (originalRetirement is not null)
                                 Assert.AreEqual(originalRetirement, lateRetirement);
                             else
                             {

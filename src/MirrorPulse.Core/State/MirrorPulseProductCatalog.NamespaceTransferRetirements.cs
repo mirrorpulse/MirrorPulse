@@ -27,6 +27,10 @@ public sealed record MirrorPulseNamespaceTransferRetirementReceipt(int Version, 
     bool NativeMissing, bool OfficialTombstone, MirrorPulseNamespacePermissionVerification Parent,
     DateTimeOffset VerifiedAt);
 
+internal sealed record MirrorPulseNamespaceTransferRetirementContinuation(MirrorPulseFileTransferRecovery Recovery,
+    MirrorPulseNamespaceMemberProtectionSnapshot SourceParent, Guid TargetProtectionId,
+    MirrorPulseTransferTargetVerification TargetProof, DateTimeOffset SelectedAt);
+
 public sealed partial class MirrorPulseProductCatalog
 {
     /// <summary>Reserves the original source name for transfer-owned retirement, retaining both root fences.</summary>
@@ -91,8 +95,13 @@ public sealed partial class MirrorPulseProductCatalog
     }
 
     /// <summary>Retains the original public source item before the first guarded SDK deletion.</summary>
-    public async Task<MirrorPulseNamespaceRetirement> StartNamespaceTransferSourceRetirementAsync(Guid operationId,
-        MirrorPulseNamespaceTransferSourceProjection projection, DateTimeOffset startedAt, CancellationToken token = default)
+    public Task<MirrorPulseNamespaceRetirement> StartNamespaceTransferSourceRetirementAsync(Guid operationId,
+        MirrorPulseNamespaceTransferSourceProjection projection, DateTimeOffset startedAt, CancellationToken token = default) =>
+        StartNamespaceTransferSourceRetirementAsync(operationId, projection, startedAt, null, null, null, null, token);
+
+    internal async Task<MirrorPulseNamespaceRetirement> StartNamespaceTransferSourceRetirementAsync(Guid operationId,
+        MirrorPulseNamespaceTransferSourceProjection projection, DateTimeOffset startedAt, MirrorPulseFileTransferRecovery? recovery,
+        Guid? targetProtectionId, MirrorPulseTransferTargetVerification? targetProof, long? observedPlaceholderLocalFileId, CancellationToken token)
     {
         ArgumentNullException.ThrowIfNull(projection);
         await _gate.WaitAsync(token).ConfigureAwait(false);
@@ -101,24 +110,49 @@ public sealed partial class MirrorPulseProductCatalog
             ThrowIfDisposed(); using var transaction = _connection.BeginTransaction();
             var (copy, retirement) = await ReadTransferRetirementAsync(operationId, transaction, token).ConfigureAwait(false);
             ValidateTransferSourceProjection(copy, retirement, projection, startedAt);
+            var recoveredLocalFileId = retirement.RecoveredTransferOfficialLocalFileId;
             if (retirement.StartedAt is not null)
             {
-                if (retirement.TransferSourceProjection is not { } original || original != (projection with { CapturedAt = original.CapturedAt }))
+                var original = retirement.CurrentTransferSourceProjection;
+                if (original is null)
                     throw new InvalidOperationException("The original pre-deletion SDK projection cannot be replaced or adopted after a legacy start.");
-                transaction.Commit(); return retirement;
+                var observed = projection with { CapturedAt = original.CapturedAt };
+                if (original != observed)
+                {
+                    if (recovery is null || original.OfficialLocalFileId is not null || observedPlaceholderLocalFileId is not { } localId ||
+                        observed.OfficialLocalFileId != localId || original != observed with { OfficialLocalFileId = null })
+                        throw new InvalidOperationException("The original pre-deletion SDK projection cannot be replaced.");
+                    recoveredLocalFileId = localId;
+                }
+                else if (recovery is null || retirement.TransferContinuation?.Recovery == recovery)
+                {
+                    transaction.Commit(); return retirement;
+                }
             }
             if (retirement.Intent.TransferEntry!.Version is not (2 or 3 or 4 or 5))
                 throw new InvalidOperationException("A legacy retirement requires explicit recovery; its original admission cannot be rewritten.");
             if (retirement.Phase != MirrorPulseNamespaceRetirementPhase.Prepared || startedAt < retirement.Intent.PreparedAt)
                 throw new InvalidOperationException("The original local retirement start must follow admission.");
             var target = await RequireCurrentTransferSourceDeletionAsync(copy, transaction, token,
-                retirement.Intent.TransferEntry.PublishedRecovery).ConfigureAwait(false);
-            if (target.Context.Protection.ProtectionId != retirement.Intent.TransferEntry!.TargetProtectionId)
+                recovery ?? retirement.Intent.TransferEntry.PublishedRecovery).ConfigureAwait(false);
+            if (target.Context.Protection.ProtectionId != (targetProtectionId ?? retirement.Intent.TransferEntry!.TargetProtectionId))
                 throw new InvalidOperationException("The target epoch changed after original source retirement admission.");
+            var continuation = retirement.TransferContinuation;
+            if (recovery is not null)
+            {
+                var members = await ReadFileTransferRecoveryMembersCoreAsync(copy.Plan, recovery, transaction, token,
+                    copy.TargetPublication!.PublishedAt).ConfigureAwait(false);
+                continuation = new(recovery, members.SourceParent, target.Context.Protection.ProtectionId,
+                    targetProof ?? throw new ArgumentNullException(nameof(targetProof)), startedAt);
+                await ValidateTransferRetirementContinuationAsync(copy, continuation, retirement.StartedAt ?? startedAt,
+                    transaction, token).ConfigureAwait(false);
+            }
             var started = retirement with
             {
-                StartedAt = startedAt,
-                TransferSourceProjection = projection,
+                StartedAt = retirement.StartedAt ?? startedAt,
+                TransferSourceProjection = retirement.TransferSourceProjection ?? projection,
+                TransferContinuation = continuation,
+                RecoveredTransferOfficialLocalFileId = recoveredLocalFileId,
                 StartedItemId = copy.Plan.Source.Identity.ItemId
                 ?? throw new InvalidDataException("Source retirement requires the original public logical item.")
             };
@@ -207,7 +241,9 @@ public sealed partial class MirrorPulseProductCatalog
     {
         if (retirement.Intent.TransferEntry is not { } reference)
         {
-            if (retirement.TransferReceipt is not null || retirement.TransferSourceProjection is not null || retirement.TransferSourceNameEpoch is not null)
+            if (retirement.TransferReceipt is not null || retirement.TransferSourceProjection is not null ||
+                retirement.TransferSourceNameEpoch is not null || retirement.TransferContinuation is not null ||
+                retirement.RecoveredTransferOfficialLocalFileId is not null)
                 throw new InvalidDataException("A non-transfer retirement borrowed transfer generation evidence.");
             return;
         }
@@ -223,6 +259,16 @@ public sealed partial class MirrorPulseProductCatalog
         }
         else if (reference.Version is 2 or 3 or 4 or 5 && retirement.StartedAt is not null)
             throw new InvalidDataException("The original retirement start lost its pre-deletion SDK generation.");
+        if (retirement.RecoveredTransferOfficialLocalFileId is not null &&
+            (retirement.TransferSourceProjection is not { OfficialLocalFileId: null } || retirement.TransferContinuation is null))
+            throw new InvalidDataException("A recovered SDK file identifier requires its original projection and retirement continuation.");
+        if (retirement.TransferContinuation is { } continuation)
+        {
+            if (retirement.StartedAt is not { } start)
+                throw new InvalidDataException("The source retirement continuation lost its original SDK start.");
+            await ValidateTransferRetirementContinuationAsync(copy, continuation, start,
+                transaction ?? throw new InvalidDataException("The source retirement continuation requires a consistent read."), token).ConfigureAwait(false);
+        }
         if (retirement.TransferSourceNameEpoch is { } epoch && (epoch < 2 || retirement.Phase != MirrorPulseNamespaceRetirementPhase.Completed || reference.Version == 1) ||
             reference.Version is 3 or 4 or 5 && retirement.Phase == MirrorPulseNamespaceRetirementPhase.Completed && retirement.TransferSourceNameEpoch is null)
             throw new InvalidDataException("The source retirement lost its original settled-name generation witness.");
@@ -270,6 +316,27 @@ public sealed partial class MirrorPulseProductCatalog
         }
     }
 
+    private async Task ValidateTransferRetirementContinuationAsync(MirrorPulseNamespaceTransferCopy copy,
+        MirrorPulseNamespaceTransferRetirementContinuation continuation, DateTimeOffset startedAt, SqliteTransaction transaction, CancellationToken token)
+    {
+        var plan = copy.Plan;
+        var (sourceAudit, targetAudit) = await RequireFileTransferAuditsAsync(plan, continuation.Recovery,
+            copy.TargetPublication!.PublishedAt, transaction, token).ConfigureAwait(false);
+        var sourceParent = continuation.SourceParent;
+        var target = await ReadNamespaceBirthProtectionCoreAsync(continuation.TargetProtectionId, transaction, token).ConfigureAwait(false);
+        if (continuation.SelectedAt < startedAt || sourceAudit.CompletedAt > continuation.SelectedAt || targetAudit.CompletedAt > continuation.SelectedAt ||
+            sourceParent.Context.Member != plan.SourceParent.Context.Member || sourceParent.Context.Location != plan.SourceParent.Context.Location ||
+            sourceParent.Identity != plan.SourceParent.Identity || sourceParent.Context.Protection.RoleSid != sourceAudit.RoleSid ||
+            sourceParent.Context.Protection.VerifiedAt > sourceAudit.CompletedAt ||
+            target is null || target.BirthOperationId != copy.TargetBirth!.Birth.OperationId ||
+            target.Verification.LocalObject != copy.TargetPublication.LocalObject || target.RoleSid != targetAudit.RoleSid ||
+            target.Verification.ObservedAt > targetAudit.CompletedAt || continuation.TargetProof.VerifiedAt < targetAudit.CompletedAt ||
+            continuation.TargetProof.VerifiedAt > continuation.SelectedAt || continuation.TargetProof.RemoteId != copy.TargetVerification!.RemoteId)
+            throw new InvalidDataException("The source retirement continuation lost its original audited parent, target or chronology.");
+        await RequireRemoteUpdateHistoricalSnapshotAsync(sourceParent, continuation.SelectedAt, transaction, token).ConfigureAwait(false);
+        ValidateNamespaceTransferTargetVerification(copy, continuation.TargetProof);
+    }
+
     private static void ValidateTransferRetirementReference(MirrorPulseNamespaceTransferCopy copy, MirrorPulseNamespaceRetirementIntent intent)
     {
         var reference = intent.TransferEntry!; var source = copy.Plan.Source;
@@ -303,14 +370,15 @@ public sealed partial class MirrorPulseProductCatalog
     private static void ValidateTransferRetirementReceipt(MirrorPulseNamespaceTransferCopy copy, MirrorPulseNamespaceRetirement retirement,
         MirrorPulseNamespaceTransferRetirementReceipt receipt)
     {
-        var parent = retirement.Intent.TransferEntry!.RecoveredSourceParent ?? copy.Plan.SourceParent;
+        var parent = retirement.TransferContinuation?.SourceParent ?? retirement.Intent.TransferEntry!.RecoveredSourceParent ?? copy.Plan.SourceParent;
         if (retirement.StartedAt is null || receipt.Version != 1 || receipt.OperationId != copy.Plan.OperationId ||
             receipt.DeleteOperationId != copy.Plan.DeleteOperationId || receipt.OfficialItemId != copy.Plan.Source.Identity.ItemId ||
             retirement.StartedItemId != receipt.OfficialItemId || receipt.LocalObject != copy.Plan.Source.Context.Member.LocalObject ||
             !receipt.NativeMissing || !receipt.OfficialTombstone || receipt.Parent is null || receipt.VerifiedAt < retirement.StartedAt ||
             receipt.Parent.LocalObject != parent.Context.Member.LocalObject || receipt.Parent.OwnerSid != parent.Context.Member.OwnerSid ||
             !MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(parent.ExpectedDacl, receipt.Parent.Dacl) ||
-            receipt.Parent.ObservedAt < retirement.StartedAt || receipt.Parent.ObservedAt > receipt.VerifiedAt)
+            receipt.Parent.ObservedAt < (retirement.TransferContinuation?.SelectedAt ?? retirement.StartedAt) ||
+            receipt.Parent.ObservedAt > receipt.VerifiedAt)
             throw new InvalidDataException("Source retirement requires its original guarded SDK deletion, tombstone and unchanged direct parent.");
     }
 

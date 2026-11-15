@@ -201,7 +201,7 @@ internal sealed class MirrorPulseRetiredTransferObservationHandler(CloudFileSyst
     private async Task<MirrorPulseRetiredTransferObservationAcknowledgement?> AcceptNewUnderActorAsync(
         MirrorPulseTransferJournalObservation observation, MirrorPulseRetiredTransferSource source, CancellationToken token)
     {
-        actor.AssertAccess(); var copy = source.Transfer; var original = source.Retirement.TransferSourceProjection!;
+        actor.AssertAccess(); var copy = source.Transfer; var original = source.Retirement.CurrentTransferSourceProjection!;
         var parent = await catalog.ReadNamespaceMemberProtectionSnapshotAsync(copy.Plan.SourceParent.Context.Member.MemberId, token).ConfigureAwait(false);
         if (parent is null || parent.Context.Member.LocalObject != copy.Plan.SourceParent.Context.Member.LocalObject ||
             parent.Context.Member.RootId != copy.Plan.SourceRoute.RootId || parent.Context.Protection.RoleSid != execution.RoleSid.Value ||

@@ -222,8 +222,10 @@ original non-null revision. After target publication, a new Host can audit both
 fenced roots and resume before local source retirement. It verifies the original
 published member, accepted target bytes and source generation under its current
 protection role. If the original conditional delete was already accepted, the
-Host uses that receipt for retirement. A local-only source, an ambiguous remote
-effect or a role change during native retirement requires separate recovery.
+Host uses that receipt for retirement. If native retirement was interrupted,
+the new Host verifies the same live source before continuing or checks the
+original SDK tombstone before settling the name. A local-only source or an
+ambiguous remote effect requires separate recovery.
 
 The signed Local fixture exercises two independent single-root instances. Its
 first successful move is component evidence: complete later-source recreation,

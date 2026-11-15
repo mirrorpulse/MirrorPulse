@@ -40,6 +40,18 @@ public sealed record MirrorPulseNamespaceRetirement(Guid OperationId, MirrorPuls
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public MirrorPulseNamespaceTransferSourceProjection? TransferSourceProjection { get; init; }
 
+    [JsonInclude]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    internal MirrorPulseNamespaceTransferRetirementContinuation? TransferContinuation { get; init; }
+
+    [JsonInclude]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    internal long? RecoveredTransferOfficialLocalFileId { get; init; }
+
+    internal MirrorPulseNamespaceTransferSourceProjection? CurrentTransferSourceProjection =>
+        RecoveredTransferOfficialLocalFileId is { } observed && TransferSourceProjection is { } original
+            ? original with { OfficialLocalFileId = observed } : TransferSourceProjection;
+
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public long? TransferSourceNameEpoch { get; init; }
 

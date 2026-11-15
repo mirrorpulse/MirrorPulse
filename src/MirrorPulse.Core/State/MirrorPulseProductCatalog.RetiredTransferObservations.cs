@@ -71,7 +71,7 @@ public sealed partial class MirrorPulseProductCatalog
         {
             ThrowIfDisposed(); using var transaction = _connection.BeginTransaction();
             var (copy, retirement) = await ReadTransferRetirementAsync(transferOperationId, transaction, token).ConfigureAwait(false);
-            var projection = retirement.TransferSourceProjection
+            var projection = retirement.CurrentTransferSourceProjection
                 ?? throw new InvalidOperationException("A legacy source cannot adopt a generation after deletion.");
             if (retirement.TransferSourceNameEpoch is null)
                 throw new InvalidOperationException("A legacy retirement cannot adopt a name-generation witness after its name was released.");
@@ -171,7 +171,7 @@ public sealed partial class MirrorPulseProductCatalog
     private static void ValidateRetiredTransferObservation(MirrorPulseNamespaceTransferCopy copy, MirrorPulseNamespaceRetirement retirement,
         MirrorPulseRetiredTransferObservationAcknowledgement value)
     {
-        var observation = value.Observation; var projection = retirement.TransferSourceProjection;
+        var observation = value.Observation; var projection = retirement.CurrentTransferSourceProjection;
         if (value.Version != 1 || value.TransferOperationId != copy.Plan.OperationId || value.RetirementOperationId != retirement.OperationId ||
             retirement.Phase != MirrorPulseNamespaceRetirementPhase.Completed || retirement.TransferReceipt is null || projection is null ||
             retirement.TransferSourceNameEpoch is not { } nameEpoch || value.SourceNameEpoch < nameEpoch ||

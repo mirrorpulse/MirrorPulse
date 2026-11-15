@@ -138,7 +138,7 @@ public sealed partial class MirrorPulseProductCatalog
         if (acknowledgement.PublishedRecovery is { } recovery)
         {
             var (sourceAudit, targetAudit) = await RequireFileTransferAuditsAsync(copy.Plan, recovery,
-                acknowledgement.SourceNameSettledAt, transaction, token).ConfigureAwait(false);
+                copy.TargetPublication!.PublishedAt, transaction, token).ConfigureAwait(false);
             if (sourceAudit.CompletedAt > acknowledgement.StartedAt || targetAudit.CompletedAt > acknowledgement.StartedAt ||
                 protection.Verification.ObservedAt > targetAudit.CompletedAt)
                 throw new InvalidDataException("Original ACK lost its audited parent and target lineage.");
@@ -197,15 +197,16 @@ public sealed partial class MirrorPulseProductCatalog
         ReadAuditedFileTransferSettlementParentsAsync(MirrorPulseNamespaceTransferCopy copy, MirrorPulseNamespaceRetirement retirement,
             MirrorPulseFileTransferRecovery recovery, SqliteTransaction transaction, CancellationToken token)
     {
-        if (retirement is not { Phase: MirrorPulseNamespaceRetirementPhase.Completed, CompletedAt: { } settled, TransferReceipt: not null } ||
-            retirement.Intent.TransferEntry?.OperationId != copy.Plan.OperationId || copy.TargetPublication is null)
+        if (retirement is not { Phase: MirrorPulseNamespaceRetirementPhase.Completed, TransferReceipt: not null } ||
+            retirement.Intent.TransferEntry?.OperationId != copy.Plan.OperationId || copy.TargetPublication is not { } publication)
             throw new InvalidOperationException("Settlement recovery requires the original published target and completed source retirement.");
         var plan = copy.Plan;
         var fences = await ReadNamespaceRootFencesCoreAsync(true, transaction, token, admittedTransferId: plan.OperationId,
             admittedTransferBirthId: copy.TargetBirthOperationId).ConfigureAwait(false);
         if (fences.Contains(plan.SourceRoute.RootId) || fences.Contains(plan.TargetRoute.RootId))
             throw new InvalidOperationException("Another original namespace owner prevents transfer settlement.");
-        var (sourceAudit, targetAudit) = await RequireFileTransferAuditsAsync(plan, recovery, settled, transaction, token).ConfigureAwait(false);
+        var (sourceAudit, targetAudit) = await RequireFileTransferAuditsAsync(plan, recovery, publication.PublishedAt,
+            transaction, token).ConfigureAwait(false);
         var target = await ReadNamespaceMemberProtectionSnapshotCoreAsync(copy.TargetPublication.MemberId, transaction, token).ConfigureAwait(false)
             ?? throw new InvalidDataException("Settlement recovery lost the original protected target.");
         await RequireCurrentNamespaceMoveLineageAsync(target.Context.Member, targetAudit.RoleSid, targetAudit.CompletedAt, transaction, token)

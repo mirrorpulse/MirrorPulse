@@ -102,22 +102,25 @@ public sealed partial class MirrorPulseProductCatalog
         RequireFileTransferAuditsAsync(MirrorPulseNamespaceTransferPlan plan, MirrorPulseFileTransferRecovery recovery,
             DateTimeOffset earliest, SqliteTransaction transaction, CancellationToken token)
     {
-        var sourceAudit = await RequireAuditAsync(recovery.SourceAuditId, plan.SourceRoute.RootId).ConfigureAwait(false);
-        var targetAudit = await RequireAuditAsync(recovery.TargetAuditId, plan.TargetRoute.RootId).ConfigureAwait(false);
+        var sourceAudit = await RequireFileTransferAuditAsync(plan.OperationId, recovery.SourceAuditId, plan.SourceRoute.RootId,
+            recovery.RoleSid, earliest, transaction, token).ConfigureAwait(false);
+        var targetAudit = await RequireFileTransferAuditAsync(plan.OperationId, recovery.TargetAuditId, plan.TargetRoute.RootId,
+            recovery.RoleSid, earliest, transaction, token).ConfigureAwait(false);
         if (sourceAudit.AnchorMemberId != targetAudit.AnchorMemberId)
             throw new InvalidOperationException("Both original transfer roots require audits of the same registered anchor.");
         return (sourceAudit, targetAudit);
 
-        async Task<MirrorPulseNamespaceInitializationCompletion> RequireAuditAsync(Guid auditId, RootId rootId)
-        {
-            var status = await ReadNamespaceInitializationStatusCoreAsync(auditId, transaction, token).ConfigureAwait(false);
-            if (status.Intent.FileTransferOperationId != plan.OperationId ||
-                status.Completion is not { } completed || completed.ScopeRoot != rootId ||
-                completed.RoleSid != recovery.RoleSid || status.Intent.PreparedAt < earliest || completed.CompletedAt < earliest)
-                throw new InvalidOperationException("File transfer recovery requires both original root audits under its current role.");
-            return completed;
-        }
+    }
 
+    private async Task<MirrorPulseNamespaceInitializationCompletion> RequireFileTransferAuditAsync(Guid operationId,
+        Guid auditId, RootId rootId, string role, DateTimeOffset earliest, SqliteTransaction transaction, CancellationToken token)
+    {
+        var status = await ReadNamespaceInitializationStatusCoreAsync(auditId, transaction, token).ConfigureAwait(false);
+        if (status.Intent.FileTransferOperationId != operationId ||
+            status.Completion is not { } completed || completed.ScopeRoot != rootId ||
+            completed.RoleSid != role || status.Intent.PreparedAt < earliest || completed.CompletedAt < earliest)
+            throw new InvalidOperationException("File transfer recovery requires its original root audit under the current role.");
+        return completed;
     }
 
     internal async Task<MirrorPulseFileTransferRecoveryMembers> ReadPublishedFileTransferRecoveryMembersAsync(Guid operationId,
@@ -135,6 +138,41 @@ public sealed partial class MirrorPulseProductCatalog
                 copy.TargetPublication!.PublishedAt).ConfigureAwait(false);
             transaction.Commit();
             return members;
+        }
+        finally { _gate.Release(); }
+    }
+
+    internal async Task<(MirrorPulseNamespaceMemberProtectionSnapshot Parent, MirrorPulseNamespaceMemberProtectionSnapshot Target)>
+        ReadFileTransferRetirementTargetAsync(Guid operationId, Guid auditId, string role, CancellationToken token)
+    {
+        await _gate.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            using var transaction = BeginNamespaceRecoveryReadSnapshot();
+            var (copy, retirement) = await ReadTransferRetirementAsync(operationId, transaction, token).ConfigureAwait(false);
+            if (copy.TargetPublication is not { } publication || retirement.StartedAt is null ||
+                retirement.Phase is not (MirrorPulseNamespaceRetirementPhase.Prepared or MirrorPulseNamespaceRetirementPhase.NativeDeleted))
+                throw new InvalidOperationException("Missing-source recovery requires its original pending retirement and published target.");
+            var plan = copy.Plan;
+            var fences = await ReadNamespaceRootFencesCoreAsync(true, transaction, token, admittedTransferId: operationId,
+                admittedTransferBirthId: copy.TargetBirthOperationId).ConfigureAwait(false);
+            if (fences.Contains(plan.SourceRoute.RootId) || fences.Contains(plan.TargetRoute.RootId))
+                throw new InvalidOperationException("Another original namespace owner prevents transfer retirement.");
+            await RequireNamespaceTransferRoutesAsync([plan.SourceRoute, plan.TargetRoute], transaction, token).ConfigureAwait(false);
+            var audit = await RequireFileTransferAuditAsync(operationId, auditId, plan.TargetRoute.RootId, role,
+                publication.PublishedAt, transaction, token).ConfigureAwait(false);
+            var parent = await RequireAuditedFileTransferMemberAsync(plan.TargetParent, audit, transaction, token).ConfigureAwait(false);
+            var target = await ReadNamespaceMemberProtectionSnapshotCoreAsync(publication.MemberId, transaction, token).ConfigureAwait(false)
+                ?? throw new InvalidDataException("Missing-source recovery lost its protected target.");
+            if (target.Context.Member.LocalObject != publication.LocalObject || target.Context.Location.ParentMemberId != parent.Context.Member.MemberId ||
+                target.Context.Member.RootId != plan.TargetRoute.RootId || target.Context.Location.RelativePath != plan.TargetRelativePath ||
+                target.Identity.ItemId != publication.ItemId || target.Identity.RemoteId != copy.TargetBirth!.Plan.RemoteId ||
+                target.Context.Member.IsDirectory)
+                throw new InvalidOperationException("Missing-source recovery requires its original protected target identity and placement.");
+            await RequireCurrentNamespaceMoveLineageAsync(target.Context.Member, role, audit.CompletedAt, transaction, token).ConfigureAwait(false);
+            transaction.Commit();
+            return (parent, target);
         }
         finally { _gate.Release(); }
     }
