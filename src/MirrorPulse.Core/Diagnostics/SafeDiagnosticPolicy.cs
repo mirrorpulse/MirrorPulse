@@ -141,6 +141,7 @@ public static class SafeDiagnosticPolicy
                 "conflictCommandStage" => Enum.TryParse(value, out MirrorPulseConflictCommandStage conflictStage) && Enum.IsDefined(conflictStage) && value == conflictStage.ToString() ? value : null,
                 "conflictCommandBoundary" => Enum.TryParse(value, out MirrorPulseConflictCommandBoundary conflictBoundary) && Enum.IsDefined(conflictBoundary) && value == conflictBoundary.ToString() ? value : null,
                 "transferFailureBoundary" => Enum.TryParse(value, out MirrorPulseTransferFailureBoundary transferBoundary) && Enum.IsDefined(transferBoundary) && value == transferBoundary.ToString() ? value : null,
+                "transferTreeRecoveryStage" => value is "CurrentTreeAnchorRecovery" or "CurrentTreeMemberRecovery" or "CurrentTreeInitializationAudit" ? value : null,
                 "transferFailureKind" => value is "Native" or "Disposed" or "InvalidData" or "InvalidOperation" or "Authorization" or "Cancelled" or "IO" or "Argument" or "Other" ? value : null,
                 "journalReadStage" => Enum.TryParse(value, out MirrorPulseJournalReadStage journalStage) && Enum.IsDefined(journalStage) && value == journalStage.ToString() ? value : null,
                 "journalReadFailureKind" => value is "Native" or "Disposed" or "InvalidData" or "InvalidOperation" or "Authorization" or "Cancelled" or "IO" or "Argument" or "Other" ? value : null,

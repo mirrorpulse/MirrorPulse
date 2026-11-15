@@ -128,14 +128,30 @@ public sealed class MirrorPulseTransferFailureDiagnosticsTests
     }
 
     [TestMethod]
+    public async Task CopyFailureRetainsItsMarkedTreeRecoveryStageWithoutExceptionText()
+    {
+        var original = new InvalidDataException("synthetic-private-source");
+        MirrorPulseRootLabelCancellationFailureDiagnostics.MarkStage(original, MirrorPulseRootLabelCancellationStage.CurrentTreeMemberRecovery);
+        LogEntry observed = null!;
+        var failed = await Assert.ThrowsExactlyAsync<InvalidDataException>(() => MirrorPulseTransferFailureDiagnostics.RunAsync<int>(
+            Guid.NewGuid(), MirrorPulseTransferCommandPhase.Copy, () => ValueTask.FromException<int>(original),
+            entry => { observed = entry; return ValueTask.CompletedTask; }).AsTask());
+        Assert.AreSame(original, failed);
+        var safe = SafeDiagnosticPolicy.Sanitize(observed);
+        Assert.AreEqual("CurrentTreeMemberRecovery", safe.Fields["transferTreeRecoveryStage"]);
+        Assert.IsFalse(JsonSerializer.Serialize(safe).Contains(original.Message, StringComparison.Ordinal));
+    }
+
+    [TestMethod]
     public void TransferDiagnosticPolicyRejectsArbitraryAndNumericPhaseValues()
     {
         var safe = SafeDiagnosticPolicy.Sanitize(new LogEntry(LogLevel.Error, "host", "TransferCommandFailed", DateTimeOffset.UtcNow,
             [new("transferCommandPhase", "0"), new("transferFailureKind", "synthetic-secret"), new("nativeErrorCode", "private-path"),
-                new("exception", "synthetic-private-exception") ]));
+                new("transferTreeRecoveryStage", "synthetic-stage"), new("exception", "synthetic-private-exception") ]));
         Assert.IsFalse(safe.Fields.ContainsKey("transferCommandPhase"));
         Assert.IsFalse(safe.Fields.ContainsKey("transferFailureKind")); Assert.IsFalse(safe.Fields.ContainsKey("nativeErrorCode"));
-        Assert.AreEqual("4", safe.Fields["omittedFieldCount"]);
+        Assert.IsFalse(safe.Fields.ContainsKey("transferTreeRecoveryStage"));
+        Assert.AreEqual("5", safe.Fields["omittedFieldCount"]);
         Assert.IsFalse(JsonSerializer.Serialize(safe).Contains("synthetic-", StringComparison.Ordinal));
     }
 }

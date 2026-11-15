@@ -12,7 +12,7 @@ public enum MirrorPulseTransferCommandPhase
 public enum MirrorPulseTransferFailureBoundary
 {
     Unknown, NamespaceOwner, CurrentProtection, RootRoute, DestinationOccupied, JournalUnavailable, SourceProjection,
-    JournalReconciliation, JournalOwnership, JournalShape
+    JournalReconciliation, JournalOwnership, JournalShape, SourceBinding, PrivateSource
 }
 
 /// <summary>Observes one failed transfer call using fixed fields while preserving its original exception and progress.</summary>
@@ -40,6 +40,10 @@ public static class MirrorPulseTransferFailureDiagnostics
                 };
                 if (original is Win32Exception native)
                     fields.Add(new("nativeErrorCode", native.NativeErrorCode.ToString(CultureInfo.InvariantCulture)));
+                var treeRecoveryStage = MirrorPulseRootLabelCancellationFailureDiagnostics.Stage(original);
+                if (treeRecoveryStage is MirrorPulseRootLabelCancellationStage.CurrentTreeAnchorRecovery or
+                    MirrorPulseRootLabelCancellationStage.CurrentTreeMemberRecovery or MirrorPulseRootLabelCancellationStage.CurrentTreeInitializationAudit)
+                    fields.Add(new("transferTreeRecoveryStage", treeRecoveryStage.ToString()));
                 await observe(new(LogLevel.Error, "host", "TransferCommandFailed", DateTimeOffset.UtcNow, fields)).ConfigureAwait(false);
             }
             catch (Exception observationFailure) when (observationFailure is not StackOverflowException and not OutOfMemoryException)
@@ -69,7 +73,11 @@ public static class MirrorPulseTransferFailureDiagnostics
         "A transfer continuation cannot bypass another target birth or its original owner." => MirrorPulseTransferFailureBoundary.NamespaceOwner,
         "Transfer execution requires unchanged current-role members and positions." or
         "Transfer execution requires the exact current members, protection, positions and public identities." or
+        "A transfer member or direct parent lost its exact native binding and owned protection." or
         "Move execution requires current protection throughout its retained parent lineage." => MirrorPulseTransferFailureBoundary.CurrentProtection,
+        "The transfer requires the original fully resident source object." => MirrorPulseTransferFailureBoundary.SourceBinding,
+        "The transfer requires its complete retained read-only private content handle." or
+        "The private content changed or does not match the original transfer." => MirrorPulseTransferFailureBoundary.PrivateSource,
         "The routed transfer root differs from its current catalog registration." or
         "Both original transfer roots and instances must remain enabled and active." or
         "The transfer backend, version or root configuration changed." or
