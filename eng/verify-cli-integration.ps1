@@ -216,7 +216,7 @@ try {
     } finally { $fixtureUser.Dispose() }
     New-Item -ItemType Directory -Path (Join-Path $sourceRoot "nested") -Force | Out-Null
     [IO.File]::WriteAllBytes((Join-Path $sourceRoot "nested\fixture.txt"), $fixtureBytes)
-    if ($Coalescing -and $CoalescingAction -ceq 'KeepRemote' -and -not $CreateConflict) {
+    if ($Coalescing -and $CoalescingAction -ceq 'KeepRemote' -and -not $CreateConflict -and -not $MoveOnlyConflict) {
         [IO.File]::WriteAllBytes((Join-Path $sourceRoot 'cli-roundtrip.txt'), (Get-CliCoalescingSeedBytes))
     }
     if ($Regression) {

@@ -81,6 +81,14 @@ function Invoke-CliCoalescingContentConflict {
             throw 'The signed KeepRemote fixture requires the same fully resident native placeholder throughout its original local edits.'
         }
     }
+    function Import-CoalescingFile([string]$Phase,[string]$ParentId,[string]$Operation,[byte[]]$Bytes) {
+        $inputPath=Join-Path ([IO.Path]::GetDirectoryName($SourceRoot)) ($Phase+'-input.bin')
+        [IO.File]::WriteAllBytes($inputPath,$Bytes)
+        Invoke-CoalescingCli "prepare-$Phase" @('--json','--developer-mode','namespace','member','prepare-import',
+            $ParentId,'cli-roundtrip.txt',$inputPath,'--operation-id',$Operation)|Out-Null
+        $created=Invoke-CoalescingCli "execute-$Phase" @('--json','--developer-mode','namespace','member','import',$Operation)
+        if($created.operationId -cne $Operation){throw 'The actual public import lost its original operation.'}
+    }
     function Invoke-ControlledFixtureMove([string]$Suffix,[string]$Operation,[string]$From,[string]$Name,$Member,$Parent) {
         Invoke-CoalescingCli "prepare-local-move$Suffix" @('--json','--developer-mode','namespace','member','prepare-move',
             ([string]$Member.memberId),([string]$Parent.memberId),$Name,'--operation-id',$Operation)|Out-Null
@@ -148,7 +156,6 @@ function Invoke-CliCoalescingContentConflict {
     $latest=[Text.Encoding]::UTF8.GetBytes('signed coalescing final local bytes retained by KeepBoth')
     $remote=[Text.Encoding]::UTF8.GetBytes('signed coalescing independently selected remote version')
     $seedHash=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($seed))
-    $backendSeedHash=$seedHash
     if($MoveOnly){
         $seed=[Text.Encoding]::UTF8.GetBytes('signed pure rename accepted local version')
         $seedHash=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($seed))
@@ -157,28 +164,33 @@ function Invoke-CliCoalescingContentConflict {
     if($MoveOnly){$latestHash=$seedHash}
     $remoteHash=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($remote))
     $onlineSeedIdentity=''
-    if($ControlledCreate){
+    if($ControlledCreate -or $MoveOnly){
         if((Test-Path -LiteralPath $local) -or (Test-Path -LiteralPath $source)){
-            throw 'The controlled-Create fixture requires the original absence of both destinations.'
+            throw 'The controlled creation requires the original absence of both destinations.'
         }
-    }elseif($Action -ceq 'KeepRemote'){
-        # The signed Worker exposes this existing remote item through the normal initial discovery.
-        Assert-CoalescingHash $source $backendSeedHash $false
-        Assert-CoalescingHash $local $backendSeedHash $true
-        if($MoveOnly){
-            # A real prior upload supplies the byte and native identity proof used by the Host's unchanged-content classifier.
-            Write-CoalescingEdit $seed
-            Assert-CoalescingHash $source $seedHash $false
-            $deadline=[DateTimeOffset]::UtcNow.AddSeconds(30)
-            do {
-                $seedStatus=& $InvokeCli @('--json','--developer-mode','status')
-                if($seedStatus.kind -ceq 'result' -and $seedStatus.data.pendingUploads -eq 0){break}
-                Start-Sleep -Milliseconds 100
-            }while([DateTimeOffset]::UtcNow -lt $deadline)
-            if($seedStatus.kind -cne 'result' -or $seedStatus.data.pendingUploads -ne 0){
-                throw 'The actual seed upload did not settle before disabling the adapter.'
-            }
+    }
+    if($MoveOnly){
+        # The real first upload establishes the accepted bytes before either rename.
+        $seedParent=Invoke-CoalescingCli 'seed-parent' @('--json','--developer-mode','namespace','member','inspect',
+            ([IO.Path]::GetFileName($MappedRoot)),'--directory')
+        Import-CoalescingFile 'seed' ([string]$seedParent.memberId) ([guid]::NewGuid().ToString('D')) $seed
+    }
+    if(-not $ControlledCreate -and $Action -ceq 'KeepRemote'){
+        Assert-CoalescingHash $source $seedHash $false
+        Assert-CoalescingHash $local $seedHash (-not $MoveOnly)
+    }
+    if($MoveOnly){
+        $deadline=[DateTimeOffset]::UtcNow.AddSeconds(30)
+        do {
+            $seedStatus=& $InvokeCli @('--json','--developer-mode','status')
+            if($seedStatus.kind -ceq 'result' -and $seedStatus.data.pendingUploads -eq 0){break}
+            Start-Sleep -Milliseconds 100
+        }while([DateTimeOffset]::UtcNow -lt $deadline)
+        if($seedStatus.kind -cne 'result' -or $seedStatus.data.pendingUploads -ne 0){
+            throw 'The actual seed upload did not settle before disabling the adapter.'
         }
+    }
+    if(-not $ControlledCreate -and $Action -ceq 'KeepRemote'){
         $onlineSeed=& $InspectOnlineSeed
         $onlineSeed|ConvertTo-Json -Depth 8|Set-Content -LiteralPath (Join-Path $originals 'keep-remote-seed-online.json') -Encoding utf8
         Assert-KeepRemoteResident $onlineSeed ''
@@ -186,7 +198,7 @@ function Invoke-CliCoalescingContentConflict {
             throw 'The uploaded seed must retain an in-sync native placeholder before the two renames.'
         }
         $onlineSeedIdentity=$onlineSeed.nativeIdentitySha256
-    }else{
+    }elseif(-not $ControlledCreate){
         [IO.File]::WriteAllBytes($source,$seed)
         Assert-CoalescingHash $local $seedHash $true
     }
@@ -260,13 +272,10 @@ function Invoke-CliCoalescingContentConflict {
         $importOperation=[guid]::NewGuid().ToString('D')
         if($EmptyCreate){
             $created=Invoke-CoalescingCli 'execute-create' @('--json','--developer-mode','namespace','member','create',([string]$parent.memberId),'cli-roundtrip.txt','--operation-id',$importOperation)
+            if($created.operationId -cne $importOperation){throw 'The actual public creation lost its original operation.'}
         }else{
-            $input=Join-Path ([IO.Path]::GetDirectoryName($SourceRoot)) 'create-input.bin'
-            [IO.File]::WriteAllBytes($input,$seed)
-            Invoke-CoalescingCli 'prepare-create' @('--json','--developer-mode','namespace','member','prepare-import',([string]$parent.memberId),'cli-roundtrip.txt',$input,'--operation-id',$importOperation)|Out-Null
-            $created=Invoke-CoalescingCli 'execute-create' @('--json','--developer-mode','namespace','member','import',$importOperation)
+            Import-CoalescingFile 'create' ([string]$parent.memberId) $importOperation $seed
         }
-        if($created.operationId -cne $importOperation){throw 'The actual public import lost its original operation.'}
         Assert-CoalescingHash $local $seedHash $false
         if(Test-Path -LiteralPath $source){throw 'The disabled controlled Create touched the backend.'}
         Confirm-CoalescingDisabled 'after-create-status'|Out-Null

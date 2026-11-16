@@ -124,7 +124,15 @@ function Read-CliStoppedCoalescingEdit {
 
 function Invoke-CliCoalescingEditFailureObservation {
     param([Parameter(Mandatory)][string]$ProbeAssembly,[Parameter(Mandatory)][string]$FixtureRoot,[Parameter(Mandatory)][string]$EvidencePath,[switch]$MovedFile)
-    $result=Read-CliStoppedCoalescingEdit -ProbeAssembly $ProbeAssembly -FixtureRoot $FixtureRoot -MovedFile:$MovedFile
+    $root=Assert-CliCoalescingEnvironment $FixtureRoot
+    $markerPath=Get-Item -LiteralPath (Join-Path $root '.mp-cli-fixture.json')
+    if($markerPath.PSIsContainer -or $markerPath.Length -gt 4096 -or $markerPath.Attributes.HasFlag([IO.FileAttributes]::ReparsePoint)){
+        throw 'The stopped edit observation requires its original bounded marker.'
+    }
+    $marker=Get-Content -LiteralPath $markerPath.FullName -Raw | ConvertFrom-Json
+    # Before either rename is selected, journal ownership belongs to the original address.
+    $observeMoved=$MovedFile -and $marker.controlledMoveOperationId
+    $result=Read-CliStoppedCoalescingEdit -ProbeAssembly $ProbeAssembly -FixtureRoot $root -MovedFile:$observeMoved
     $directory=Join-Path ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($EvidencePath))) 'coalescing.originals'
     New-Item -ItemType Directory -Path $directory -Force|Out-Null
     $result|ConvertTo-Json -Depth 8|Set-Content -LiteralPath (Join-Path $directory 'failed-edit-state.json') -Encoding utf8
