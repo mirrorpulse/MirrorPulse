@@ -52,7 +52,8 @@ function Confirm-SignedDirectoryTransferReport {
     foreach ($ordinal in @(0, 1)) {
         $name = 'NativeSignedLocalDirectoryTransferResumesSelectedTargetBeforeFirstNativeStartAcrossHostRoles (' + $ordinal + ')'
         $expected[$name] = 'SignedDirectoryTransfer: packageSha256=' + $PackageSha256 + '; selectedTargetOrdinal=' + $ordinal +
-            '; originalBirthRetained=True; bothRootAuditsBeforeStart=True; startWriteRollbackVerified=' + ($ordinal -eq 0) +
+            '; originalBirthRetained=True; disabledRoot=' + @('Source', 'Target')[$ordinal] +
+            '; disabledResumeRejected=True; originalCopyRetained=True; bothRootAuditsBeforeStart=True; startWriteRollbackVerified=' + ($ordinal -eq 0) +
             '; firstStartImmutable=True; targetBytesVerified=True; acknowledgementAcrossRoles=True.'
     }
     if ($rows.Count -ne $expected.Count -or @($rows | Where-Object outcome -CNE 'Passed').Count) { throw 'All signed cross-instance transfer cases must pass.' }

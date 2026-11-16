@@ -574,6 +574,34 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 if (interruptBeforeTargetStart)
                 {
                     var selected = originalTargets[^1];
+                    var disabledRoot = selectedTargetOrdinal == 0 ? sourceRoot : targetRoot;
+                    var copyBeforeDisable = await catalog.ReadNamespaceDirectoryTransferCopyAsync(operationId, token);
+                    var auditsBeforeDisable = (await catalog.ReadNamespaceInitializationsAsync(cancellationToken: token))
+                        .Where(status => status.Intent.DirectoryTransferOperationId == operationId).Select(status => status.Intent.OperationId).ToArray();
+                    var disabled = await catalog.SetInstanceEnabledAsync(disabledRoot.InstanceId, false, token);
+                    Assert.AreEqual(RootRegistrationState.Disabled, disabled.Roots.Single(root => root.RootId == disabledRoot.RootId).State);
+                    Assert.AreEqual(RootRegistrationState.Active, router.FindRegistration(disabledRoot.RootId)!.State,
+                        "A stale active router and live Worker must not override the current catalog's disabled state.");
+                    try
+                    {
+                        await Assert.ThrowsExactlyAsync<InvalidOperationException>(async () =>
+                            await newRuntime.ResumeDirectoryNamespaceTransferAsync(operationId, token));
+                        Assert.IsNull(await catalog.ReadNamespaceBirthStartAsync(selected.Birth.OperationId, token));
+                        Assert.IsNull(await catalog.ReadNamespaceBirthObservationAsync(selected.Birth.OperationId, token));
+                        Assert.IsNull(await catalog.ReadNamespaceDirectoryTransferSourceDeletionAsync(operationId, token));
+                        Assert.IsFalse(Directory.Exists(Path.Combine(paths.SyncRootPath, selected.Birth.RelativePath)));
+                        Assert.IsFalse(newWork.IsAdmitted(sourceRoot.RootId) || newWork.IsAdmitted(targetRoot.RootId));
+                        Assert.HasCount(2, await catalog.ReadNamespaceDispatchFencedRootsAsync(token));
+                        Assert.AreEqual(selected, await catalog.ReadNamespaceDirectoryTransferBirthAsync(operationId, selected.Ordinal, token));
+                        var unchangedCopy = await catalog.ReadNamespaceDirectoryTransferCopyAsync(operationId, token);
+                        CollectionAssert.AreEqual(copyBeforeDisable.Steps.Select(step => (step.EffectId, step.StartedAt, step.AcceptedAt)).ToArray(),
+                            unchangedCopy.Steps.Select(step => (step.EffectId, step.StartedAt, step.AcceptedAt)).ToArray());
+                        CollectionAssert.AreEqual(auditsBeforeDisable, (await catalog.ReadNamespaceInitializationsAsync(cancellationToken: token))
+                            .Where(status => status.Intent.DirectoryTransferOperationId == operationId).Select(status => status.Intent.OperationId).ToArray());
+                        CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(Path.Combine(sourceBackend, original), token));
+                        CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(Path.Combine(targetBackend, transferred), token));
+                    }
+                    finally { _ = await catalog.SetInstanceEnabledAsync(disabledRoot.InstanceId, true, token); }
                     var proposedStart = new MirrorPulseNamespaceBirthStart(1, selected.Birth.OperationId, DateTimeOffset.UtcNow);
                     await Assert.ThrowsExactlyAsync<FileNotFoundException>(() =>
                         catalog.RecordReactivatedDirectoryTransferBirthStartAsync(proposedStart,
@@ -820,7 +848,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 }
                 else if (interruptBeforeTargetStart)
                 {
-                    TestContext.WriteLine($"SignedDirectoryTransfer: packageSha256={digest}; selectedTargetOrdinal={selectedTargetOrdinal}; originalBirthRetained=True; bothRootAuditsBeforeStart=True; startWriteRollbackVerified={selectedTargetOrdinal == 0}; firstStartImmutable=True; targetBytesVerified=True; acknowledgementAcrossRoles=True.");
+                    TestContext.WriteLine($"SignedDirectoryTransfer: packageSha256={digest}; selectedTargetOrdinal={selectedTargetOrdinal}; originalBirthRetained=True; disabledRoot={(selectedTargetOrdinal == 0 ? "Source" : "Target")}; disabledResumeRejected=True; originalCopyRetained=True; bothRootAuditsBeforeStart=True; startWriteRollbackVerified={selectedTargetOrdinal == 0}; firstStartImmutable=True; targetBytesVerified=True; acknowledgementAcrossRoles=True.");
                 }
                 else if (interruptBeforeRegistration)
                 {

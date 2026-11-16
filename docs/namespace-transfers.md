@@ -208,6 +208,9 @@ start. Recovery audits both original roots and commits those audit references wi
 the first start. The original target birth, parent and logical identity remain
 available for replay. The same rule applies to a selected child below an already
 published target directory.
+Disabling either instance keeps the original transfer pending. Its selected
+target and accepted copy remain unchanged, and resumption checks the current
+catalog before starting role recovery even if an older router or Worker is live.
 
 The read-only list for one root uses derived indexes of the original pending
 source and destination routes, plus the retained root reservation. It validates
