@@ -8,6 +8,8 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
     [DataRow(1, "0.1.0-preview.11", "c28895203e20d588aa3d0eb1bb4c0e55c25896fb")]
     [DataRow(1, "0.1.0-preview.12", "cfbc7f83b26b5b6515710a8c490428d2989d8c06")]
     [DataRow(2, "0.1.0-preview.12", "cfbc7f83b26b5b6515710a8c490428d2989d8c06")]
+    [DataRow(1, "0.1.0-preview.13", "825f9ebd90eff9db1686744e602fe4c6d653eeaa")]
+    [DataRow(2, "0.1.0-preview.13", "825f9ebd90eff9db1686744e602fe4c6d653eeaa")]
     public async Task PreservingDeleteRetainsItsOriginalReconciliationModeAndPublicationAcrossOwners(int version, string package, string source)
     {
         using var fixture = new Fixture(); MirrorPulseRemoteDeleteRejectionAdmission original;
@@ -31,6 +33,8 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
     [DataRow(2, "0.1.0-preview.12", "c28895203e20d588aa3d0eb1bb4c0e55c25896fb")]
     [DataRow(2, "0.1.0-preview.11", "cfbc7f83b26b5b6515710a8c490428d2989d8c06")]
     [DataRow(3, "0.1.0-preview.12", "cfbc7f83b26b5b6515710a8c490428d2989d8c06")]
+    [DataRow(2, "0.1.0-preview.13", "cfbc7f83b26b5b6515710a8c490428d2989d8c06")]
+    [DataRow(2, "0.1.0-preview.12", "825f9ebd90eff9db1686744e602fe4c6d653eeaa")]
     public async Task PreservingDeleteCannotBorrowANewReconciliationModeFromAnotherPublication(int version, string package, string source)
     {
         using var fixture = new Fixture(); await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
