@@ -71,7 +71,8 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
                 new MirrorPulseTransferTargetVerifier(catalog, workers.Stats, workers.Ranges, workers.Directories), workers.Stats);
             _ = await execution.RunNormalUserOperationAsync(() => verifier.ReadCurrentAsync(copy, verified, stop)).ConfigureAwait(false);
             var root = router.GetRegistration(admission.TargetRoute.InstanceId, admission.TargetRoute.RootKey);
-            var publisher = new MirrorPulseNamespaceTransferTargetPublisher(fileSystem, state, catalog, router, actor, TargetPublicationCheckpoint);
+            var publisher = new MirrorPulseNamespaceTransferTargetPublisher(fileSystem, state, catalog, router, actor,
+                TargetPublicationCheckpoint, TargetCreationReceiptReady);
             var targetParent = targetRecovery is null ? admission.TargetParent :
                 await ReadDirectoryTransferProtectionAsync(admission.TargetParent, stop, execution.RoleSid.Value).ConfigureAwait(false);
             var parents = new Dictionary<Guid, MirrorPulseNamespaceMemberProtectionSnapshot>

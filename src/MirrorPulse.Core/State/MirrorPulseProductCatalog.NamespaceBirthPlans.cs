@@ -23,6 +23,7 @@ public sealed record MirrorPulseNamespaceImportContent(long Length, string Sha25
 /// Started does not prove that an object exists. Reading or replaying this record never
 /// authorizes a repeated native creation, nor does it prove that a prior attempt did not run.
 /// The Host reconciles the original plan and retains a separate actual birth observation.
+/// Version 2 selects CfSharp's operation-correlated recoverable creation protocol.
 /// </remarks>
 public sealed record MirrorPulseNamespaceBirthStart(int Version, Guid OperationId, DateTimeOffset StartedAt)
 {
@@ -311,7 +312,7 @@ public sealed partial class MirrorPulseProductCatalog
 
     private static void ValidateNamespaceBirthStart(MirrorPulseNamespaceBirthStart start)
     {
-        if (start.Version != 1 || start.OperationId == Guid.Empty || start.StartedAt == default)
+        if (start.Version is not (1 or 2) || start.OperationId == Guid.Empty || start.StartedAt == default)
             throw new ArgumentException("The birth start intent is incomplete or unsupported.", nameof(start));
         if (start.DirectoryTransferActivation is { } activation)
         {

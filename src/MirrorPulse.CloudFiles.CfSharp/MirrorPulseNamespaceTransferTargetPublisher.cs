@@ -13,9 +13,10 @@ internal enum MirrorPulseTransferPublicationCheckpoint { AfterStart, AfterCreati
 /// Startup can settle an observed target from its original protection before role rotation.
 /// Source bytes and both durable fences remain retained.</remarks>
 [SupportedOSPlatform("windows10.0.26100")]
-internal sealed class MirrorPulseNamespaceTransferTargetPublisher(CloudFileSystem fileSystem, MirrorPulseCfSharpStateSession state,
+internal sealed partial class MirrorPulseNamespaceTransferTargetPublisher(CloudFileSystem fileSystem, MirrorPulseCfSharpStateSession state,
     MirrorPulseProductCatalog catalog, MirrorPulseRootRouter router, MirrorPulseNamespaceActor actor,
-    Func<MirrorPulseTransferPublicationCheckpoint, CancellationToken, ValueTask>? checkpoint = null)
+    Func<MirrorPulseTransferPublicationCheckpoint, CancellationToken, ValueTask>? checkpoint = null,
+    Action<CloudPlaceholderCreationReceipt>? creationReceiptReady = null)
 {
     internal async Task<MirrorPulseNamespaceTransferCopy> PublishUnderActorAsync(MirrorPulseNamespaceTransferCopy copy,
         MirrorPulseNamespaceMemberProtectionSnapshot parent, MirrorPulseFileTransferRecovery? activation, CancellationToken token)
@@ -35,6 +36,7 @@ internal sealed class MirrorPulseNamespaceTransferTargetPublisher(CloudFileSyste
         actor.AssertAccess();
         var target = copy.TargetBirth!;
         var (birth, plan) = (target.Birth, target.Plan);
+        await RecoverOriginalCreationObservationAsync(birth, plan, token).ConfigureAwait(false);
         if (await catalog.ReadNamespaceMemberAsync(birth.OperationId, token).ConfigureAwait(false) is null)
             await RegisterObservedTransferMemberAsync(birth, plan, parentSnapshot, token).ConfigureAwait(false);
         var current = await catalog.ReadNamespaceMemberProtectionSnapshotAsync(birth.OperationId, token).ConfigureAwait(false)
@@ -84,12 +86,7 @@ internal sealed class MirrorPulseNamespaceTransferTargetPublisher(CloudFileSyste
         if (!MirrorPulsePlaceholderIdentity.IdentifiesBackendObject(root, backendId, identity) || identity.RemoteRevision != revision ||
             (plan.Content is null) != birth.IsDirectory)
             throw new InvalidDataException("Target publication cannot change its original scoped public identity.");
-        string name = birth.RelativePath[(birth.RelativePath.LastIndexOf('/') + 1)..];
-        CloudPlaceholderSpec specification = birth.IsDirectory
-            ? CloudDirectoryPlaceholderSpec.CreateBuilder(name, identity).WithInSyncState(true)
-                .WithCollisionBehavior(CloudPlaceholderCollisionBehavior.Fail).WithPopulationState(CloudDirectoryPopulationState.Complete).Build()
-            : CloudFilePlaceholderSpec.CreateBuilder(name, identity, plan.Content!.Length).WithInSyncState(true)
-                .WithCollisionBehavior(CloudPlaceholderCollisionBehavior.Fail).WithInitialAvailability(CloudAvailabilityTarget.OnlineOnly).Build();
+        CloudPlaceholderSpec specification = OriginalCreationSpecification(birth, plan);
         await using var guard = await MirrorPulseWindowsNamespacePermissionLease.OpenAsync(parent, router, token).ConfigureAwait(false);
         var before = await MirrorPulseNamespaceBirthProtectionVerifier.InspectRetainedParentAsync(birth, parent, proof, guard, token).ConfigureAwait(false);
         var start = await catalog.ReadNamespaceBirthStartAsync(birth.OperationId, token).ConfigureAwait(false);
@@ -100,7 +97,7 @@ internal sealed class MirrorPulseNamespaceTransferTargetPublisher(CloudFileSyste
             if ((await item.InspectAsync(token).ConfigureAwait(false)).Exists) throw new IOException("The native transfer target is occupied.");
             _ = await MirrorPulseNamespaceBirthIdentityProjection.PrepareAsync(catalog, state.OpenStore, birth.OperationId, item, token).ConfigureAwait(false);
             MirrorPulseNamespaceBirthProtectionVerifier.RequireUnchangedParent(before, await guard.InspectAsync(token).ConfigureAwait(false));
-            var intent = new MirrorPulseNamespaceBirthStart(1, birth.OperationId, DateTimeOffset.UtcNow);
+            var intent = new MirrorPulseNamespaceBirthStart(2, birth.OperationId, DateTimeOffset.UtcNow);
             var prepared = directoryActivation is not null
                 ? await catalog.RecordReactivatedDirectoryTransferBirthStartAsync(intent, directoryActivation, token).ConfigureAwait(false)
                 : activation is not null
@@ -108,25 +105,23 @@ internal sealed class MirrorPulseNamespaceTransferTargetPublisher(CloudFileSyste
                     : await catalog.RecordNamespaceBirthStartAsync(intent, token).ConfigureAwait(false);
             if (!prepared.NewlyRecorded) throw new InvalidOperationException("A retained birth start cannot authorize another native creation.");
             await CheckpointAsync(MirrorPulseTransferPublicationCheckpoint.AfterStart, token).ConfigureAwait(false);
-            CloudPlaceholderBatchResult created;
-            try { created = await parent.CreatePlaceholdersAsync([specification], cancellationToken: CancellationToken.None).ConfigureAwait(false); }
-            catch (CloudPlaceholderPersistenceException failure)
-            {
-                // A known native result can retain its first complete binding even when the SDK store fails.
-                // It is never a publication receipt; recovery must still repair the actual SDK projection.
-                RequireCreated(failure.AppliedResult, specification);
-                await MirrorPulseNamespaceBirthObserver.RecordAsync(catalog, birth.OperationId, item, router, CancellationToken.None).ConfigureAwait(false);
-                throw;
-            }
-            created.ThrowIfAnyFailed(); RequireCreated(created, specification);
+            var results = await parent.CreateRecoverablePlaceholdersAsync([new(birth.OperationId, specification)],
+                cancellationToken: CancellationToken.None).ConfigureAwait(false);
+            if (results.Count != 1 || results[0].OperationId != birth.OperationId ||
+                results[0].Status != CloudPlaceholderCreationRecoveryStatus.Created || results[0].Receipt is null)
+                throw new InvalidOperationException($"The original transfer target creation has no committed public receipt: {(results.Count == 1 ? results[0].Status.ToString() : "InvalidBatch")}.",
+                    results.Count == 1 ? results[0].Error : null);
+            creationReceiptReady?.Invoke(results[0].Receipt!);
             await CheckpointAsync(MirrorPulseTransferPublicationCheckpoint.AfterCreation, CancellationToken.None).ConfigureAwait(false);
-            observed = await MirrorPulseNamespaceBirthObserver.RecordAsync(catalog, birth.OperationId, item, router, CancellationToken.None).ConfigureAwait(false);
+            observed = await MirrorPulseNamespaceBirthObserver.RecordRecoveredCreationAsync(catalog, birth.OperationId, item, router,
+                results[0].Receipt!, CancellationToken.None).ConfigureAwait(false);
             await CheckpointAsync(MirrorPulseTransferPublicationCheckpoint.AfterObservation, CancellationToken.None).ConfigureAwait(false);
         }
         else
         {
             if (observed is null)
-                throw new InvalidOperationException("A started target birth without its first native binding requires explicit outcome recovery; creation cannot repeat.");
+                observed = await RecoverOriginalCreationObservationAsync(birth, plan, token).ConfigureAwait(false)
+                    ?? throw new InvalidOperationException("A started target birth without its first native binding requires explicit outcome recovery; creation cannot repeat.");
             _ = await MirrorPulseNamespaceBirthObserver.RecordAsync(catalog, birth.OperationId, item, router, token).ConfigureAwait(false);
             await using var childGuard = await MirrorPulseWindowsNamespacePermissionLease.OpenAsync(item, router, token).ConfigureAwait(false);
             var childBefore = await childGuard.InspectAsync(token).ConfigureAwait(false);
@@ -194,6 +189,7 @@ internal sealed class MirrorPulseNamespaceTransferTargetPublisher(CloudFileSyste
             ?? throw new InvalidDataException("The pending target lost its registered direct parent.");
         var parentSnapshot = await catalog.ReadNamespaceMemberProtectionSnapshotAsync(parentMember.MemberId, token).ConfigureAwait(false)
             ?? throw new InvalidDataException("The pending target lost its verified parent.");
+        await RecoverOriginalCreationObservationAsync(birth, target.Plan, token).ConfigureAwait(false);
         await RegisterObservedTransferMemberAsync(birth, target.Plan, parentSnapshot, token).ConfigureAwait(false);
         return true;
     }

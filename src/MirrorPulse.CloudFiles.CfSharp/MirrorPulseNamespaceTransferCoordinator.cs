@@ -29,6 +29,7 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator(CloudFileSys
     Func<InstanceId, int> protocolVersion)
 {
     internal Func<MirrorPulseTransferPublicationCheckpoint, CancellationToken, ValueTask>? TargetPublicationCheckpoint { get; init; }
+    internal Action<CloudPlaceholderCreationReceipt>? TargetCreationReceiptReady { get; init; }
     internal CloudLocalChangeFeed? JournalFeed { get; init; }
 
     /// <summary>Materializes a cold source before taking the instance gates needed by its hydration provider.</summary>
@@ -237,7 +238,8 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator(CloudFileSys
                 var projection = await ReadSourceProjectionAsync(file, source, token).ConfigureAwait(false);
                 if (projection.RemoteRevision != copy.Plan.SourceRemoteRevision)
                     throw new InvalidDataException("The original transfer source projection changed before target publication.");
-                var publisher = new MirrorPulseNamespaceTransferTargetPublisher(fileSystem, state, catalog, router, actor, TargetPublicationCheckpoint);
+                var publisher = new MirrorPulseNamespaceTransferTargetPublisher(fileSystem, state, catalog, router, actor,
+                    TargetPublicationCheckpoint, TargetCreationReceiptReady);
                 return settleObserved
                     ? await publisher.SettleObservedFileUnderActorAsync(copy, parent, token).ConfigureAwait(false)
                     : await publisher.PublishUnderActorAsync(copy, parent, activation, token).ConfigureAwait(false);

@@ -58,9 +58,12 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         VerifySignedDirectoryTransferAsync(null, publicationCut: MirrorPulseTransferPublicationCheckpoint.BeforeStart,
             selectedTargetOrdinal: selectedOrdinal);
 
-    [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles"), TestCategory("SignedDirectoryTransferUnobservedTarget")]
-    public Task NativeSignedLocalDirectoryTransferKeepsUnobservedTargetFencedAcrossHostRoles() =>
-        VerifySignedDirectoryTransferAsync(null, publicationCut: MirrorPulseTransferPublicationCheckpoint.AfterCreation);
+    [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles"), TestCategory("SignedDirectoryTransfer")]
+    [DataRow(0)]
+    [DataRow(2)]
+    public Task NativeSignedLocalDirectoryTransferRecoversOriginalCreationBeforeFirstObservationAcrossHostRoles(int selectedOrdinal) =>
+        VerifySignedDirectoryTransferAsync(null, publicationCut: MirrorPulseTransferPublicationCheckpoint.AfterCreation,
+            selectedTargetOrdinal: selectedOrdinal);
 
     [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles"), TestCategory("SignedDirectoryTransfer")]
     public Task NativeSignedLocalDirectoryTransferPublishesSuccessorsAtReusedBackendIds() =>
@@ -221,8 +224,10 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 await Task.Delay(25, token);
             Assert.IsTrue(worker.SupportsAtomicDirectoryDeletion(sourceRoot.InstanceId));
             Assert.AreEqual(2, worker.GetConnectedProtocolVersion(targetRoot.InstanceId));
+            bool durableCopyNegotiated = worker.SupportsDurableDirectoryCopy(targetRoot.InstanceId, targetRoot.UniquenessKey);
+            bool preparedCopyNegotiated = worker.SupportsDurableDirectoryCopyPreparation(targetRoot.InstanceId, targetRoot.UniquenessKey);
             if (preparedCopy)
-                Assert.IsTrue(worker.SupportsDurableDirectoryCopyPreparation(targetRoot.InstanceId, targetRoot.UniquenessKey),
+                Assert.IsTrue(durableCopyNegotiated && preparedCopyNegotiated,
                     "The signed target Worker must negotiate preparation for its actual root.");
 
             await using var execution = new MirrorPulseNamespaceExecutionSession();
@@ -246,6 +251,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             bool interruptAcknowledgement = webDav is null && !restartDuringTransfer;
             CloudLocalChangeFeed? journal = null;
             MirrorPulseCfSharpStateSession? initialState = null;
+            var callerCreationReceipts = new Dictionary<Guid, CloudPlaceholderCreationReceipt>();
             var interruptedCheckpoint = restartCut ?? MirrorPulseTransferSourceRetirementCheckpoint.AfterNativeDeletion;
             const string acknowledgementInterruption = "Fixture interruption after the original SDK acknowledgement.";
             var factory = new CfSharpMirrorPulseCloudRuntimeFactory(provider, null, transport, transport, router, catalog,
@@ -256,10 +262,11 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     ? CaptureInitialState
                     : null,
                 TransferJournalReady = feed => journal = feed,
+                TransferCreationReceiptReady = receipt => callerCreationReceipts.Add(receipt.OperationId, receipt),
                 TransferPublicationCheckpoint = (checkpoint, _) =>
                 {
                     if (checkpoint == publicationCut &&
-                        (!interruptBeforeTargetStart || targetPublicationStarts++ == selectedTargetOrdinal))
+                        (!(interruptBeforeTargetStart || interruptBeforeObservation) || targetPublicationStarts++ == selectedTargetOrdinal))
                         throw new IOException(interruption);
                     return ValueTask.CompletedTask;
                 },
@@ -328,6 +335,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             var deletion = await catalog.ReadNamespaceDirectoryTransferSourceDeletionAsync(operationId, token);
             var originalTargets = new List<MirrorPulseDirectoryTransferTargetBirth>();
             MirrorPulseNamespaceBirthObservation? originalTargetObservation = null;
+            MirrorPulseNamespaceBirthStart? originalCreationStart = null;
             MirrorPulseDirectoryTransferCopy? originalCopy = null;
             string? originalCopiedRevision = null;
             if (restartDuringCopy)
@@ -341,21 +349,21 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 Assert.IsFalse(Directory.Exists(Path.Combine(targetBackend, "copied", "deep")));
                 Assert.IsNull(deletion);
                 Assert.IsNull(await catalog.ReadNamespaceDirectoryTransferTargetAsync(operationId, token));
-                if (preparedCopy)
+                Assert.AreEqual(firstCopyStarted && durableCopyNegotiated, originalCopy.Steps[0].Durable);
+                if (preparedCopy || preparedCopyNegotiated && copyCut is not null)
                 {
-                    Assert.AreEqual(firstCopyStarted, originalCopy.Steps[0].Durable);
                     Assert.IsTrue(originalCopy.Steps[0].PreparationSelected);
-                    if (firstCopyPublished)
-                    {
-                        originalCopiedRevision = await worker.StatAsync(new(targetRoot.InstanceId, "copied", targetRoot.UniquenessKey), token);
-                        Assert.IsNotNull(originalCopiedRevision);
-                    }
+                }
+                if (durableCopyNegotiated && firstCopyPublished)
+                {
+                    originalCopiedRevision = await worker.StatAsync(new(targetRoot.InstanceId, "copied", targetRoot.UniquenessKey), token);
+                    Assert.IsNotNull(originalCopiedRevision);
                 }
             }
             else if (interruptBeforeWorkerStart || interruptDuringPublication)
             {
                 Assert.IsNull(deletion);
-                int expectedBirths = interruptBeforeTargetStart ? selectedTargetOrdinal + 1 :
+                int expectedBirths = interruptBeforeTargetStart || interruptBeforeObservation ? selectedTargetOrdinal + 1 :
                     interruptDuringPublication ? 1 : plan.Members.Count;
                 for (int ordinal = 0; ordinal < expectedBirths; ordinal++)
                 {
@@ -369,20 +377,26 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         Assert.IsFalse(Directory.Exists(Path.Combine(paths.SyncRootPath, plan.Members[ordinal].TargetRelativePath)));
                         Assert.IsNull((await catalog.ReadNamespaceTransferStatusAsync(operationId, token))!.PendingTargetBinding);
                     }
-                    else if (interruptBeforeObservation)
+                    else if (interruptBeforeObservation && ordinal == selectedTargetOrdinal)
                     {
                         var start = await catalog.ReadNamespaceBirthStartAsync(birth.Birth.OperationId, token);
                         Assert.IsNotNull(start);
+                        Assert.AreEqual(2, start.Version);
+                        originalCreationStart = start;
                         Assert.IsNull(await catalog.ReadNamespaceBirthObservationAsync(birth.Birth.OperationId, token));
                         Assert.IsNull(await catalog.ReadNamespaceMemberAsync(birth.Birth.OperationId, token));
-                        Assert.IsTrue(Directory.Exists(Path.Combine(paths.SyncRootPath, "Archive", "copied")));
+                        string nativePath = Path.Combine(paths.SyncRootPath, birth.Birth.RelativePath);
+                        Assert.IsTrue(birth.Birth.IsDirectory ? Directory.Exists(nativePath) : File.Exists(nativePath));
+                        Assert.IsTrue(callerCreationReceipts.ContainsKey(birth.Birth.OperationId));
+                        var pendingBinding = (await catalog.ReadNamespaceTransferStatusAsync(operationId, token))!.PendingTargetBinding;
+                        Assert.AreEqual(new MirrorPulseTransferPendingTargetBinding(start.OperationId, start.StartedAt), pendingBinding);
                         await using var sdk = await initialState!.OpenStore.BeginTransactionAsync(token);
                         var persisted = await sdk.Items.GetByItemIdAsync(birth.Plan.ItemId, token);
                         Assert.IsNotNull(persisted);
                         Assert.AreEqual(birth.Plan.RemoteId, persisted.RemoteId);
                         Assert.AreEqual(birth.Plan.RemoteRevision, persisted.RemoteRevision);
                         Assert.IsTrue(persisted.UpdatedAt >= start.StartedAt);
-                        Assert.IsNull(persisted.LocalFileId, "CfSharp preview.12 publishes the directory identity without a public local file ID.");
+                        Assert.IsNull(persisted.LocalFileId, "The recoverable creation receipt retains the full original binding independently of the legacy item row.");
                         await sdk.RollbackAsync(token);
                     }
                     else if (interruptBeforeRegistration)
@@ -524,7 +538,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     }
                 }
                 else Assert.IsTrue(newRuntime.NamespaceStartupResults.All(root => root.Admitted && root.RecoveryCode is null));
-                if (unreceiptedCopy)
+                if (unreceiptedCopy && !durableCopyNegotiated)
                 {
                     var failure = await Assert.ThrowsExactlyAsync<MirrorPulseMutationAmbiguousException>(
                         async () => await newRuntime.ResumeDirectoryNamespaceTransferAsync(operationId, token));
@@ -545,25 +559,26 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 }
                 if (interruptBeforeObservation)
                 {
-                    var failure = await Assert.ThrowsExactlyAsync<InvalidOperationException>(
-                        async () => await newRuntime.ResumeDirectoryNamespaceTransferAsync(operationId, token));
-                    StringAssert.Contains(failure.Message, "requires every original registered target member");
-                    var birth = originalTargets.Single();
+                    var birth = originalTargets[^1];
+                    var receipt = callerCreationReceipts[birth.Birth.OperationId];
                     Assert.AreEqual(birth, await catalog.ReadNamespaceDirectoryTransferBirthAsync(operationId, birth.Ordinal, token));
-                    Assert.IsNull(await catalog.ReadNamespaceBirthObservationAsync(birth.Birth.OperationId, token));
-                    Assert.IsNull(await catalog.ReadNamespaceMemberAsync(birth.Birth.OperationId, token));
+                    var observation = await catalog.ReadNamespaceBirthObservationAsync(birth.Birth.OperationId, token);
+                    Assert.IsNotNull(observation);
+                    Assert.AreEqual(new MirrorPulseLocalFileBinding(receipt.Binding.VolumeSerialNumber,
+                        receipt.Binding.SyncRootFileId, receipt.Binding.LocalFileId), observation.LocalObject);
+                    Assert.AreEqual(birth.Plan.ItemId, observation.ItemId);
+                    Assert.AreEqual(birth.Plan.RemoteId, observation.RemoteId);
+                    Assert.AreEqual(birth.Birth.IsDirectory, observation.IsDirectory);
+                    Assert.AreEqual(originalCreationStart, await catalog.ReadNamespaceBirthStartAsync(birth.Birth.OperationId, token));
+                    Assert.IsNotNull(await catalog.ReadNamespaceMemberAsync(birth.Birth.OperationId, token));
                     Assert.IsNull(await catalog.ReadNamespaceDirectoryTransferSourceDeletionAsync(operationId, token));
-                    var start = await catalog.ReadNamespaceBirthStartAsync(birth.Birth.OperationId, token);
-                    Assert.IsNotNull(start);
                     var status = (await catalog.ReadNamespaceTransferStatusAsync(operationId, token))!;
                     Assert.IsTrue(status.RootsFenced);
-                    Assert.AreEqual(new MirrorPulseTransferPendingTargetBinding(start.OperationId, start.StartedAt), status.PendingTargetBinding);
+                    Assert.IsNull(status.PendingTargetBinding);
                     Assert.AreEqual(status, (await catalog.ReadPendingNamespaceTransferStatusesAsync(sourceRoot.RootId, token)).Single());
                     Assert.AreEqual(status, (await catalog.ReadPendingNamespaceTransferStatusesAsync(targetRoot.RootId, token)).Single());
                     Assert.IsFalse(newWork.IsAdmitted(sourceRoot.RootId) || newWork.IsAdmitted(targetRoot.RootId));
                     CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(Path.Combine(sourceBackend, original), token));
-                    TestContext.WriteLine("UnobservedDirectoryTarget: nativeTargetExists=True; publicSdkLocalFileIdMissing=True; originalBirthRetained=True; sourceDeletionStarted=False; bothRootsFenced=True.");
-                    return;
                 }
                 if (interruptBeforeNativeDelete)
                 {
@@ -655,16 +670,16 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         CollectionAssert.AreEqual(Enumerable.Range(acceptedPrefix, plan.Members.Count - acceptedPrefix).ToArray(),
                             resumedCopyOrdinals.ToArray());
                         Assert.IsTrue(copy.Steps.Skip(startedPrefix).All(step => step.StartedAt >= latestAudit && step.AcceptedAt >= step.StartedAt));
-                        if (preparedCopy)
+                        if (preparedCopy || preparedCopyNegotiated)
                         {
                             CollectionAssert.AreEqual(Enumerable.Range(startedPrefix, plan.Members.Count - startedPrefix).ToArray(),
                                 preparedCopyOrdinals.ToArray());
                             Assert.IsTrue(copy.Steps.All(step => step.PreparationSelected && step.Durable &&
                                 step.AcceptedAt >= step.StartedAt && step.AcceptedRevision is not null));
-                            Assert.IsTrue(copy.Steps.All(step => step.AcceptedAt >= latestAudit));
-                            if (firstCopyStarted) Assert.AreEqual(originalCopy.Steps[0].StartedAt, copy.Steps[0].StartedAt);
-                            if (originalCopiedRevision is not null) Assert.AreEqual(originalCopiedRevision, copy.Steps[0].AcceptedRevision);
+                            Assert.IsTrue(copy.Steps.Skip(acceptedPrefix).All(step => step.AcceptedAt >= latestAudit));
                         }
+                        if (durableCopyNegotiated && firstCopyStarted) Assert.AreEqual(originalCopy.Steps[0].StartedAt, copy.Steps[0].StartedAt);
+                        if (originalCopiedRevision is not null) Assert.AreEqual(originalCopiedRevision, copy.Steps[0].AcceptedRevision);
                         for (int ordinal = 0; ordinal < plan.Members.Count; ordinal++)
                         {
                             var targetBirth = await catalog.ReadNamespaceDirectoryTransferBirthAsync(operationId, ordinal, token);
@@ -842,9 +857,19 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 {
                     TestContext.WriteLine($"SignedPreparedDirectoryCopy: packageSha256={digest}; checkpoint={copyCut}; initialHostStart={firstCopyStarted}; initialBackendTarget={firstCopyPublished}; originalCopyEffects=3; currentAudits=2; sourceIntactBeforeRecovery=True; targetBytesVerified=True; acknowledgementAcrossRoles=True.");
                 }
+                else if (unreceiptedCopy)
+                {
+                    Assert.IsTrue(durableCopyNegotiated);
+                    Assert.IsNotNull(originalCopiedRevision);
+                    TestContext.WriteLine($"SignedDirectoryCopyRecovery: packageSha256={digest}; durableCopyNegotiated=True; originalStartRetained=True; originalReceiptRevisionRetained=True; copyEffectsRetained=3; currentRootAudits=2; sourceIntactBeforeRecovery=True; bothRootsFenced=True; targetBytesVerified=True; acknowledgementAcrossRoles=True.");
+                }
                 else if (restartDuringCopy)
                 {
                     TestContext.WriteLine($"SignedDirectoryCopyRecovery: packageSha256={digest}; acceptedBeforeRestart={originalCopy!.Steps.Count(step => step.AcceptedAt is not null)}; copyEffectsRetained=3; onlyUnstartedEffectsDispatched=True; remainderStartedAfterBothRootAudits=True; sourceIntactBeforeRecovery=True; bothRootsFenced=True; reopenedRoots=True; targetBytesVerified=True; acknowledgementAcrossRoles=True.");
+                }
+                else if (interruptBeforeObservation)
+                {
+                    TestContext.WriteLine($"SignedDirectoryTransfer: packageSha256={digest}; unobservedTargetOrdinal={selectedTargetOrdinal}; originalPublicReceiptRecovered=True; originalBindingRetained=True; originalStartRetained=True; sourceIntactBeforeRecovery=True; targetBytesVerified=True; acknowledgementAcrossRoles=True.");
                 }
                 else if (interruptBeforeTargetStart)
                 {

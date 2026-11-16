@@ -296,6 +296,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
     private readonly MirrorPulseTransferWorkerServices? _transfers;
     internal Func<ICloudStateStoreFactory, ICloudStateStoreFactory>? StateStoreDecorator { get; init; }
     internal Func<MirrorPulseTransferPublicationCheckpoint, CancellationToken, ValueTask>? TransferPublicationCheckpoint { get; init; }
+    internal Action<CloudPlaceholderCreationReceipt>? TransferCreationReceiptReady { get; init; }
     internal Func<MirrorPulseTransferSourceRetirementCheckpoint, CancellationToken, ValueTask>? TransferSourceRetirementCheckpoint { get; init; }
     internal Func<MirrorPulseTransferAcknowledgementCheckpoint, CancellationToken, ValueTask>? TransferAcknowledgementCheckpoint { get; init; }
     internal Action<CloudLocalChangeFeed>? TransferJournalReady { get; init; }
@@ -347,7 +348,8 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             .WithContentProvider(provider)
             .Build(), state, provider, StateStoreDecorator, paths.SyncRootPath, paths.DataRootPath, _uploads, _stats, _mutations, _router, _catalog,
             _mayDispatch, _conflicts, _notifications, _scheduler, _namespaceExecution, _namespaceActor, _namespaceWork, _initializeNamespaceOnStart, _transfers,
-            TransferPublicationCheckpoint, TransferSourceRetirementCheckpoint, TransferAcknowledgementCheckpoint, TransferJournalReady, TransferJournalSourceReady);
+            TransferPublicationCheckpoint, TransferSourceRetirementCheckpoint, TransferAcknowledgementCheckpoint, TransferJournalReady, TransferJournalSourceReady,
+            TransferCreationReceiptReady);
     }
 
     private sealed class CfSharpRuntime(
@@ -375,7 +377,8 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         Func<MirrorPulseTransferSourceRetirementCheckpoint, CancellationToken, ValueTask>? transferSourceRetirementCheckpoint,
         Func<MirrorPulseTransferAcknowledgementCheckpoint, CancellationToken, ValueTask>? transferAcknowledgementCheckpoint,
         Action<CloudLocalChangeFeed>? transferJournalReady,
-        Action<MirrorPulseJournalUploadSource>? transferJournalSourceReady)
+        Action<MirrorPulseJournalUploadSource>? transferJournalSourceReady,
+        Action<CloudPlaceholderCreationReceipt>? transferCreationReceiptReady)
         : IMirrorPulseCloudRuntime
     {
         private MirrorPulseJournalUploadPump? _uploadPump;
@@ -419,6 +422,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                 new MirrorPulseLocalTransferContentStore(new(syncRootPath, dataRootPath)), mayDispatch ?? (_ => false), transfers.ProtocolVersion)
             {
                 TargetPublicationCheckpoint = transferPublicationCheckpoint,
+                TargetCreationReceiptReady = transferCreationReceiptReady,
                 SourceRetirementCheckpoint = transferSourceRetirementCheckpoint,
                 AcknowledgementCheckpoint = transferAcknowledgementCheckpoint,
                 JournalFeed = _transferJournal,
@@ -1672,13 +1676,13 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         [SupportedOSPlatform("windows10.0.26100")]
         private async ValueTask<bool> BootstrapNamespaceAsync(IMirrorPulseInstanceScheduler instances, CancellationToken token)
         {
-            // Observed target births, native retirements and started ACKs can settle before the new
+            // Original creation receipts, observed targets, native retirements and started ACKs can settle before the new
             // role rotates inherited protection. Startup still audits each root
             // before granting normal admission.
             if (transfers is not null && _transferJournal is not null)
             {
                 var coordinator = TransferCoordinator();
-                foreach (Guid operation in await catalog!.ReadObservedUnpublishedFileTransfersAsync(token).ConfigureAwait(false))
+                foreach (Guid operation in await catalog!.ReadStartedUnpublishedFileTransfersAsync(token).ConfigureAwait(false))
                 {
                     try { await coordinator.SettleObservedFileTransferTargetAsync(operation, token).ConfigureAwait(false); }
                     catch (Exception error) when (error is InvalidDataException or IOException or InvalidOperationException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
@@ -1686,7 +1690,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                         // Both roots remain fenced by the original transfer.
                     }
                 }
-                foreach (var (operation, ordinal) in await catalog!.ReadObservedUnregisteredDirectoryTransferBirthsAsync(token).ConfigureAwait(false))
+                foreach (var (operation, ordinal) in await catalog!.ReadStartedUnregisteredDirectoryTransferBirthsAsync(token).ConfigureAwait(false))
                 {
                     try { _ = await coordinator.SettleObservedDirectoryTransferBirthAsync(operation, ordinal, token).ConfigureAwait(false); }
                     catch (Exception error) when (error is InvalidDataException or IOException or InvalidOperationException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)

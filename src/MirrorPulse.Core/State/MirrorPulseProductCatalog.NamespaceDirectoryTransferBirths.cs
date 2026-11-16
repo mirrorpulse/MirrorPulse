@@ -124,7 +124,7 @@ public sealed partial class MirrorPulseProductCatalog
         finally { _gate.Release(); }
     }
 
-    internal async Task<IReadOnlyList<(Guid TransferId, int Ordinal)>> ReadObservedUnregisteredDirectoryTransferBirthsAsync(CancellationToken token)
+    internal async Task<IReadOnlyList<(Guid TransferId, int Ordinal)>> ReadStartedUnregisteredDirectoryTransferBirthsAsync(CancellationToken token)
     {
         await _gate.WaitAsync(token).ConfigureAwait(false);
         try
@@ -136,7 +136,7 @@ public sealed partial class MirrorPulseProductCatalog
             query.Transaction = transaction;
             query.CommandText = """
                 SELECT b.transfer_id,b.ordinal FROM namespace_directory_transfer_target_births b
-                JOIN namespace_birth_observations o ON o.operation_id=b.birth_id
+                JOIN namespace_birth_starts s ON s.operation_id=b.birth_id
                 WHERE EXISTS(SELECT 1 FROM namespace_directory_transfer_fences f WHERE f.transfer_id=b.transfer_id)
                 AND NOT EXISTS(SELECT 1 FROM namespace_members m WHERE m.member_id=b.birth_id)
                 ORDER BY b.transfer_id,b.ordinal LIMIT 2049;

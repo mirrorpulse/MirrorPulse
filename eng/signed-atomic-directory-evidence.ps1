@@ -56,6 +56,12 @@ function Confirm-SignedDirectoryTransferReport {
             '; disabledResumeRejected=True; originalCopyRetained=True; bothRootAuditsBeforeStart=True; startWriteRollbackVerified=' + ($ordinal -eq 0) +
             '; firstStartImmutable=True; targetBytesVerified=True; acknowledgementAcrossRoles=True.'
     }
+    foreach ($ordinal in @(0, 2)) {
+        $name = 'NativeSignedLocalDirectoryTransferRecoversOriginalCreationBeforeFirstObservationAcrossHostRoles (' + $ordinal + ')'
+        $expected[$name] = 'SignedDirectoryTransfer: packageSha256=' + $PackageSha256 + '; unobservedTargetOrdinal=' + $ordinal +
+            '; originalPublicReceiptRecovered=True; originalBindingRetained=True; originalStartRetained=True;' +
+            ' sourceIntactBeforeRecovery=True; targetBytesVerified=True; acknowledgementAcrossRoles=True.'
+    }
     if ($rows.Count -ne $expected.Count -or @($rows | Where-Object outcome -CNE 'Passed').Count) { throw 'All signed cross-instance transfer cases must pass.' }
     foreach ($row in $rows) {
         $name = [string]$row.testName
@@ -77,7 +83,10 @@ function Confirm-SignedDirectoryCopyRecoveryReport {
     $expected = @{
         NativeSignedLocalDirectoryTransferStartsOriginalCopyAfterHostRoleChange = $prefix + 'acceptedBeforeRestart=0' + $resumed
         NativeSignedLocalDirectoryTransferResumesAfterAcceptedCopyAcrossHostRoles = $prefix + 'acceptedBeforeRestart=1' + $resumed
-        NativeSignedLocalDirectoryTransferRetainsFencesForUnreceiptedCopyAcrossHostRoles = $prefix + 'targetDirectoryExists=True; originalCopyUnreceipted=True; noLaterCopyStarted=True; sourceIntact=True; bothRootsFenced=True.'
+        NativeSignedLocalDirectoryTransferRetainsFencesForUnreceiptedCopyAcrossHostRoles = @(
+            $prefix + 'targetDirectoryExists=True; originalCopyUnreceipted=True; noLaterCopyStarted=True; sourceIntact=True; bothRootsFenced=True.'
+            $prefix + 'durableCopyNegotiated=True; originalStartRetained=True; originalReceiptRevisionRetained=True; copyEffectsRetained=3; currentRootAudits=2; sourceIntactBeforeRecovery=True; bothRootsFenced=True; targetBytesVerified=True; acknowledgementAcrossRoles=True.'
+        )
     }
     if ($rows.Count -ne $expected.Count -or @($rows | Where-Object outcome -CNE 'Passed').Count) {
         throw 'All signed directory copy recovery cases must pass.'
@@ -85,7 +94,7 @@ function Confirm-SignedDirectoryCopyRecoveryReport {
     foreach ($row in $rows) {
         $name = [string]$row.testName
         $facts = @(([string]$row.Output.StdOut -split '\r?\n') | Where-Object { $_.StartsWith('SignedDirectoryCopyRecovery: ', [StringComparison]::Ordinal) })
-        if (!$expected.ContainsKey($name) -or $facts.Count -ne 1 -or $facts[0] -cne $expected[$name]) {
+        if (!$expected.ContainsKey($name) -or $facts.Count -ne 1 -or @($expected[$name]) -cnotcontains $facts[0]) {
             throw 'The copy recovery report lost its package, original copy order or fence evidence.'
         }
         $expected.Remove($name)

@@ -13,8 +13,18 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 [SupportedOSPlatform("windows10.0.26100")]
 public static class MirrorPulseNamespaceBirthObserver
 {
-    public static async Task<MirrorPulseNamespaceBirthObservation> RecordAsync(MirrorPulseProductCatalog catalog,
-        Guid operationId, CloudItem item, MirrorPulseRootRouter router, CancellationToken cancellationToken = default)
+    public static Task<MirrorPulseNamespaceBirthObservation> RecordAsync(MirrorPulseProductCatalog catalog,
+        Guid operationId, CloudItem item, MirrorPulseRootRouter router, CancellationToken cancellationToken = default) =>
+        RecordCoreAsync(catalog, operationId, item, router, null, cancellationToken);
+
+    internal static Task<MirrorPulseNamespaceBirthObservation> RecordRecoveredCreationAsync(MirrorPulseProductCatalog catalog,
+        Guid operationId, CloudItem item, MirrorPulseRootRouter router, CloudPlaceholderCreationReceipt receipt,
+        CancellationToken cancellationToken) => RecordCoreAsync(catalog, operationId, item, router,
+            receipt ?? throw new ArgumentNullException(nameof(receipt)), cancellationToken);
+
+    private static async Task<MirrorPulseNamespaceBirthObservation> RecordCoreAsync(MirrorPulseProductCatalog catalog,
+        Guid operationId, CloudItem item, MirrorPulseRootRouter router, CloudPlaceholderCreationReceipt? receipt,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(catalog);
         ArgumentNullException.ThrowIfNull(item);
@@ -23,15 +33,21 @@ public static class MirrorPulseNamespaceBirthObserver
             ?? throw new FileNotFoundException("The original birth admission is missing.");
         var plan = await catalog.ReadNamespaceBirthPlanAsync(operationId, cancellationToken).ConfigureAwait(false)
             ?? throw new FileNotFoundException("The original birth identity plan is missing.");
-        _ = await catalog.ReadNamespaceBirthStartAsync(operationId, cancellationToken).ConfigureAwait(false)
+        var start = await catalog.ReadNamespaceBirthStartAsync(operationId, cancellationToken).ConfigureAwait(false)
             ?? throw new FileNotFoundException("The original birth start is missing.");
         var expected = new CloudPlaceholderIdentity(plan.ItemId, plan.RemoteId, plan.RemoteRevision);
         byte[] expectedIdentity = expected.Encode();
+        if (receipt is not null && (start.Version != 2 || receipt.OperationId != operationId || receipt.CreateUsn <= 0 ||
+            receipt.RelativePath.Replace('\\', '/') != birth.RelativePath || receipt.Kind != item.Kind ||
+            !receipt.PlaceholderIdentity.Span.SequenceEqual(expectedIdentity)))
+            throw new InvalidDataException("The public creation receipt does not identify the original birth request.");
         await using var lease = await MirrorPulseWindowsNamespacePermissionLease.OpenAsync(item, router, cancellationToken).ConfigureAwait(false);
         var facts = await lease.InspectAsync(cancellationToken).ConfigureAwait(false);
         var snapshot = await item.InspectAsync(cancellationToken).ConfigureAwait(false);
         if (!snapshot.Exists || !snapshot.IsPlaceholder || snapshot.IsTombstone || snapshot.LocalBinding is not { } binding ||
             facts.LocalObject != new MirrorPulseLocalFileBinding(binding.VolumeSerialNumber, binding.SyncRootFileId, binding.LocalFileId) ||
+            receipt is not null && facts.LocalObject != new MirrorPulseLocalFileBinding(
+                receipt.Binding.VolumeSerialNumber, receipt.Binding.SyncRootFileId, receipt.Binding.LocalFileId) ||
             facts.RootId != birth.RootId || facts.RelativePath != birth.RelativePath || facts.IsDirectory != birth.IsDirectory ||
             (snapshot.Kind == CloudItemKind.Directory) != birth.IsDirectory || facts.LinkCount is not { } linkCount ||
             birth.Origin is not (MirrorPulseNamespaceBirthOrigin.RemotePopulation or MirrorPulseNamespaceBirthOrigin.TransferTarget) &&
@@ -54,6 +70,8 @@ public static class MirrorPulseNamespaceBirthObserver
                 throw new InvalidDataException("A later object cannot replace the first birth observation.");
             return retained;
         }
+        if (start.Version == 2 && receipt is null)
+            throw new InvalidOperationException("Recoverable creation requires its original public receipt before a first native observation.");
         return await catalog.RecordNamespaceBirthObservationAsync(observation, cancellationToken).ConfigureAwait(false);
     }
 }

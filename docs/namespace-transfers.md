@@ -212,6 +212,14 @@ Disabling either instance keeps the original transfer pending. Its selected
 target and accepted copy remain unchanged, and resumption checks the current
 catalog before starting role recovery even if an older router or Worker is live.
 
+New transfer targets select the CfSharp preview.13 recoverable creation protocol
+in their version 2 start record. The original birth ID also identifies the SDK
+creation request. On restart, the Host authenticates the original public receipt
+and compares its full native binding on the owned target lease before saving a
+first observation. A missing or pending receipt, a replacement or a different
+root keeps the operation pending. Version 1 starts retain their earlier recovery
+rules and never gain an original binding from a current path alone.
+
 The read-only list for one root uses derived indexes of the original pending
 source and destination routes, plus the retained root reservation. It validates
 the selected transfer's complete original records. Missing state or reservation
