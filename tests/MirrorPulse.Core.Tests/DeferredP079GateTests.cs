@@ -41,7 +41,8 @@ public sealed class DeferredP079GateTests
             # Recovery through a public creation receipt has its own fresh-user suite.
             # It adds native coverage without changing the historical namespace envelope.
             $creationMethods=@('NativeHostTransferRecoversOriginalCreationBeforeFirstObservationAcrossRoles',
-                'NativeHostTransferRetainsUncommittedCreationWithoutAdoptingCurrentPathAcrossRoles')|ForEach-Object {$fileTransferPrefix+$_}
+                'NativeHostTransferRetainsUncommittedCreationWithoutAdoptingCurrentPathAcrossRoles',
+                'NativeHostTransferRejectsIdentityMatchedReplacementOfOriginalCreationAcrossRoles')|ForEach-Object {$fileTransferPrefix+$_}
             foreach($method in $creationMethods){
                 if(@($catalog.required.native|Where-Object {$_ -ceq $method}).Count -ne 1 -or
                    @($catalog.required.fileTransferRecovery|Where-Object {$_ -ceq $method}).Count -ne 1 -or
@@ -56,7 +57,7 @@ public sealed class DeferredP079GateTests
             $priorRecovery=@($creationRecovery|Where-Object {$_ -cnotin $creationMethods})
             $creationBudget=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $creationRecovery.Count -TestNames $creationRecovery -Scope S06
             $priorBudget=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $priorRecovery.Count -TestNames $priorRecovery -Scope S06
-            if($creationBudget -ne $priorBudget+135000){throw 'The three original creation cuts must retain their independent 45-second deadlines.'}
+            if($creationBudget -ne $priorBudget+180000){throw 'The four original creation cuts must retain their independent 45-second deadlines.'}
             $catalog.required.native=@($catalog.required.native|Where-Object {$_ -cnotin $creationMethods})
             # Retain this original transfer selection. Root execution rows have their
             # own exact ninety-second deadlines in NamespaceNonAdminControllerTests.

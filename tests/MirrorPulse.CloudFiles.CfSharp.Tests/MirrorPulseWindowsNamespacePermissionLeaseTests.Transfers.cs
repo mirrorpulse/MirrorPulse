@@ -102,6 +102,13 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     [TestMethod]
     [DoNotParallelize]
     [TestCategory("NativeCloudFiles")]
+    public Task NativeHostTransferRejectsIdentityMatchedReplacementOfOriginalCreationAcrossRoles() =>
+        RunNativeHostTransferAsync(deleteSource: true, retireLocal: true, completeOriginals: true, selectedSameInstance: false,
+            targetPublicationHandoff: MirrorPulseTransferPublicationCheckpoint.AfterCreation, replaceOriginalCreation: true);
+
+    [TestMethod]
+    [DoNotParallelize]
+    [TestCategory("NativeCloudFiles")]
     [DataRow(false)]
     [DataRow(true)]
     public Task NativeHostTransferReactivatesOnlyUnstartedSelectedTargetAfterRoleHandoff(bool startWasRecorded) =>
@@ -172,7 +179,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         bool recreateAcceptedSource = false, bool? acceptDeleteBeforePublishedHandoff = null, bool retireBeforePublishedHandoff = false,
         bool loseAcknowledgementReturn = false, MirrorPulseTransferPublicationCheckpoint? targetPublicationHandoff = null,
         bool editTargetBeforePublicationHandoff = false, bool handoffBeforeTargetBirthStart = false,
-        string? localOnlyBackendScenario = null, bool failCreationStoreCommit = false, bool loseCreationStoreCommitReturn = false)
+        string? localOnlyBackendScenario = null, bool failCreationStoreCommit = false, bool loseCreationStoreCommitReturn = false,
+        bool replaceOriginalCreation = false)
     {
         if (!OperatingSystem.IsWindows() || Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
             Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
@@ -708,6 +716,39 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         await runtime.DisposeAsync();
                         await catalog.DisposeAsync();
 
+                        var retainedTargetBinding = originalCreationBinding;
+                        if (replaceOriginalCreation)
+                        {
+                            Assert.IsNotNull(originalCreationBinding);
+                            var identityPlan = verified.TargetBirth.Plan;
+                            var specification = CloudFilePlaceholderSpec.CreateBuilder("moved.bin",
+                                    new CloudPlaceholderIdentity(identityPlan.ItemId, identityPlan.RemoteId, identityPlan.RemoteRevision),
+                                    identityPlan.Content!.Length)
+                                .WithInSyncState(true).WithCollisionBehavior(CloudPlaceholderCollisionBehavior.Fail)
+                                .WithInitialAvailability(CloudAvailabilityTarget.OnlineOnly).Build();
+                            await role.RunNamespaceOperationAsync(async () =>
+                            {
+                                await using var replacementOwner = new MirrorPulseCloudFileSystemBuilder(paths).WithContentProvider(provider).Build();
+                                await replacementOwner.StartAsync(deadline.Token);
+                                var parent = replacementOwner.GetDirectory("Archive");
+                                var originalRequest = new CloudPlaceholderCreationRequest(birthId, specification);
+                                Assert.AreEqual(CloudPlaceholderCreationRecoveryStatus.Recovered,
+                                    (await parent.RecoverPlaceholderCreationAsync(originalRequest, deadline.Token)).Status);
+                                string originalSibling = Path.Combine(parent.FullPath, "retained-native-original.bin");
+                                File.Move(publicationTargetPath, originalSibling);
+                                Assert.AreEqual(originalCreationBinding, MirrorPulseNativeBindingFixture.Read(paths.SyncRootPath, originalSibling));
+                                var created = await parent.CreatePlaceholdersAsync([specification], cancellationToken: deadline.Token);
+                                created.ThrowIfAnyFailed();
+                                Assert.IsTrue(created.Entries.Single().Progress.HasFlag(CloudPlaceholderCreationProgress.PlaceholderCreated));
+                                retainedTargetBinding = MirrorPulseNativeBindingFixture.Read(paths.SyncRootPath, publicationTargetPath);
+                                Assert.AreNotEqual(originalCreationBinding, retainedTargetBinding);
+                                var replacement = await replacementOwner.GetFile(verified.TargetBirth.Birth.RelativePath).InspectAsync(deadline.Token);
+                                CollectionAssert.AreEqual(specification.Identity.Encode(), replacement.PlaceholderIdentity.ToArray());
+                                Assert.AreEqual(CloudPlaceholderCreationRecoveryStatus.Replaced,
+                                    (await parent.RecoverPlaceholderCreationAsync(originalRequest, deadline.Token)).Status);
+                            });
+                        }
+
                         await using var reopenedCatalog = await MirrorPulseProductCatalog.OpenAsync(paths, deadline.Token);
                         await using var reopenedWork = new MirrorPulseNamespaceWorkAdmission([sourceRoot.RootId, targetRoot.RootId]);
                         worker.ExpectedNamespaceRole = nextRole.RoleSid;
@@ -721,7 +762,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         await nextPublisher.StartAsync(deadline.Token);
                         var retainedAfterHandoff = await nextPublisher.ReadNamespaceTransferAsync(operation, deadline.Token);
                         Assert.AreEqual(verified.TargetBirth, retainedAfterHandoff.TargetBirth);
-                        if (failCreationStoreCommit)
+                        if (failCreationStoreCommit || replaceOriginalCreation)
                         {
                             Assert.IsNull(await reopenedCatalog.ReadNamespaceBirthObservationAsync(birthId, deadline.Token));
                             Assert.IsNull(await reopenedCatalog.ReadNamespaceMemberAsync(birthId, deadline.Token));
@@ -736,14 +777,16 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                             Assert.AreEqual(retainedAfterHandoff, await nextPublisher.ReadNamespaceTransferAsync(operation, deadline.Token));
                             await role.RunNamespaceOperationAsync(() =>
                             {
-                                Assert.AreEqual(originalCreationBinding, MirrorPulseNativeBindingFixture.Read(paths.SyncRootPath,
-                                    Path.Combine(paths.SyncRootPath, "Archive", "moved.bin")));
+                                Assert.AreEqual(retainedTargetBinding, MirrorPulseNativeBindingFixture.Read(paths.SyncRootPath, publicationTargetPath));
+                                if (replaceOriginalCreation)
+                                    Assert.AreEqual(originalCreationBinding, MirrorPulseNativeBindingFixture.Read(paths.SyncRootPath,
+                                        Path.Combine(paths.SyncRootPath, "Archive", "retained-native-original.bin")));
                                 return Task.CompletedTask;
                             });
                             Assert.HasCount(2, await reopenedCatalog.ReadNamespaceDispatchFencedRootsAsync(deadline.Token));
                             Assert.AreEqual(1, worker.Uploads);
                             Assert.AreEqual(0, worker.Deletes);
-                            Assert.AreEqual(1, projectionFault.Failures);
+                            Assert.AreEqual(failCreationStoreCommit ? 1 : 0, projectionFault.Failures);
                             CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(sourcePath, deadline.Token));
                             return;
                         }
