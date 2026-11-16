@@ -135,6 +135,38 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             }
             Assert.IsFalse(work.IsAdmitted(root.RootId));
             Assert.IsNull(await currentCatalog.ReadNamespaceMemberMoveStartAsync(original.Intent.OperationId, deadline.Token));
+            if (!disabled && !caseOnly)
+            {
+                string laterDirectory = Path.Combine(paths.SyncRootPath, target);
+                string laterFile = Path.Combine(laterDirectory, "later.bin");
+                byte[] laterBytes = [23, 29, 31];
+                await currentRole.RunNamespaceOperationAsync(async () =>
+                {
+                    Directory.CreateDirectory(laterDirectory);
+                    await File.WriteAllBytesAsync(laterFile, laterBytes, deadline.Token);
+                });
+                try
+                {
+                    var occupied = await Assert.ThrowsExactlyAsync<IOException>(() =>
+                        runtime.ExecuteManagedRootRenameAsync(original.Intent.OperationId, deadline.Token).AsTask());
+                    StringAssert.EndsWith(occupied.Message, "is occupied.");
+                    Assert.AreEqual(original, await currentCatalog.ReadManagedRootRenameHistoryAsync(original.Intent.OperationId, deadline.Token));
+                    Assert.IsNull(await currentCatalog.ReadNamespaceMemberMoveStartAsync(original.Intent.OperationId, deadline.Token));
+                    Assert.IsFalse(work.IsAdmitted(root.RootId));
+                    CollectionAssert.AreEqual(laterBytes, await File.ReadAllBytesAsync(laterFile, deadline.Token));
+                    CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(
+                        Path.Combine(paths.SyncRootPath, "Docs", "left", "nested", "pending.bin"), deadline.Token));
+                }
+                finally
+                {
+                    await currentRole.RunNamespaceOperationAsync(() =>
+                    {
+                        File.Delete(laterFile);
+                        Directory.Delete(laterDirectory);
+                        return Task.CompletedTask;
+                    });
+                }
+            }
             var first = await runtime.ExecuteManagedRootRenameAsync(original.Intent.OperationId, deadline.Token);
             Assert.AreEqual(MirrorPulseRootRenamePhase.Completed, first.Intent.Phase);
             Assert.AreEqual(original.Intent.OperationId, first.Intent.OperationId);
@@ -142,6 +174,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             Assert.AreEqual(4, first.MemberCount);
             Assert.IsTrue(first.CurrentTreeAudited);
             Assert.AreEqual(!disabled, first.NamespaceReady);
+            if (!disabled && !caseOnly)
+                TestContext.WriteLine("RootLabelLaterDestination: laterBytesPreserved=True; originalBytesPreserved=True; firstNativeStartWithheld=True; originalOperationResumed=True.");
             Assert.AreEqual(!disabled, work.IsAdmitted(root.RootId));
             var intent = (await currentCatalog.ReadNamespaceMemberMoveAsync(original.Intent.OperationId, deadline.Token))!;
             Assert.AreEqual(currentRole.RoleSid.Value, intent.RoleSid);
