@@ -1,6 +1,10 @@
 {
   "schemaVersion": 1,
   "requiredCases": {
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeHostTransferRecoversOriginalCreationBeforeFirstObservationAcrossRoles": [
+      "NativeHostTransferRecoversOriginalCreationBeforeFirstObservationAcrossRoles (False)",
+      "NativeHostTransferRecoversOriginalCreationBeforeFirstObservationAcrossRoles (True)"
+    ],
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeSignedLocalDirectoryTransferRecoversOriginalCreationBeforeFirstObservationAcrossHostRoles": [
       "NativeSignedLocalDirectoryTransferRecoversOriginalCreationBeforeFirstObservationAcrossHostRoles (0)",
       "NativeSignedLocalDirectoryTransferRecoversOriginalCreationBeforeFirstObservationAcrossHostRoles (2)"
@@ -360,6 +364,8 @@
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeHostTransferRetiresAndAcknowledgesOriginalAfterPublishedTargetRoleHandoff",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeHostTransferPublishesOnlyUnchangedRegisteredTargetAfterRoleHandoff",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeHostTransferPublishesObservedTargetAfterRoleHandoff",
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeHostTransferRecoversOriginalCreationBeforeFirstObservationAcrossRoles",
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeHostTransferRetainsUncommittedCreationWithoutAdoptingCurrentPathAcrossRoles",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeHostTransferReactivatesOnlyUnstartedSelectedTargetAfterRoleHandoff",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeHostTransferRetiresLocalOnlySourceAfterVerifyingItsRemoteAbsence",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeHostTransferAcknowledgesOriginalAfterSettledSourceRoleHandoff",
@@ -416,6 +422,8 @@
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeHostTransferRetiresAndAcknowledgesOriginalAfterPublishedTargetRoleHandoff",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeHostTransferPublishesOnlyUnchangedRegisteredTargetAfterRoleHandoff",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeHostTransferPublishesObservedTargetAfterRoleHandoff",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeHostTransferRecoversOriginalCreationBeforeFirstObservationAcrossRoles",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeHostTransferRetainsUncommittedCreationWithoutAdoptingCurrentPathAcrossRoles",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeHostTransferReactivatesOnlyUnstartedSelectedTargetAfterRoleHandoff",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeHostTransferRetiresLocalOnlySourceAfterVerifyingItsRemoteAbsence",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeHostTransferAcknowledgesOriginalAfterSettledSourceRoleHandoff",
@@ -817,6 +825,8 @@
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeHostTransferRetiresAndAcknowledgesOriginalAfterPublishedTargetRoleHandoff",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeHostTransferPublishesOnlyUnchangedRegisteredTargetAfterRoleHandoff",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeHostTransferPublishesObservedTargetAfterRoleHandoff",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeHostTransferRecoversOriginalCreationBeforeFirstObservationAcrossRoles",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeHostTransferRetainsUncommittedCreationWithoutAdoptingCurrentPathAcrossRoles",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeHostTransferReactivatesOnlyUnstartedSelectedTargetAfterRoleHandoff",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeHostTransferRetiresLocalOnlySourceAfterVerifyingItsRemoteAbsence",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeHostTransferAcknowledgesOriginalAfterSettledSourceRoleHandoff",

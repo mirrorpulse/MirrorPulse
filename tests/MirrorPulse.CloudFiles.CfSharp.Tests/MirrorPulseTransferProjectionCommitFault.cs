@@ -8,18 +8,35 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 internal sealed class MirrorPulseTransferProjectionCommitFault(SecurityIdentifier role)
 {
     private Guid _itemId;
+    private string? _targetPath;
+    private bool _commitBeforeFailure;
     private int _failures;
     internal int Failures => Volatile.Read(ref _failures);
+    internal bool CommittedBeforeFailure { get; private set; }
     internal void Arm(Guid itemId) => _itemId = itemId;
+    internal void Arm(Guid itemId, string targetPath, bool commitBeforeFailure)
+    {
+        _itemId = itemId;
+        _targetPath = Path.GetFullPath(targetPath);
+        _commitBeforeFailure = commitBeforeFailure;
+    }
     internal ICloudStateStoreFactory Wrap(ICloudStateStoreFactory inner) => new Factory(inner, this);
 
     private async ValueTask CommitAsync(ICloudStateTransaction transaction, CancellationToken token)
     {
         using var caller = WindowsIdentity.GetCurrent();
         if (_itemId != Guid.Empty && Failures == 0 && new WindowsPrincipal(caller).IsInRole(role) &&
+            (_targetPath is null || File.Exists(_targetPath)) &&
             await transaction.Items.GetByItemIdAsync(_itemId, token).ConfigureAwait(false) is { IsTombstone: false } &&
             Interlocked.CompareExchange(ref _failures, 1, 0) == 0)
+        {
+            if (_commitBeforeFailure)
+            {
+                await transaction.CommitAsync(token).ConfigureAwait(false);
+                CommittedBeforeFailure = true;
+            }
             throw new IOException("Synthetic failure of the first target SDK projection after native creation.");
+        }
         await transaction.CommitAsync(token).ConfigureAwait(false);
     }
 

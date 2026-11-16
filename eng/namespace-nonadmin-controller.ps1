@@ -80,6 +80,8 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
     $fileTransferRecovery.Add($prefix+'NativeHostTransferRetiresAndAcknowledgesOriginalAfterPublishedTargetRoleHandoff', 2)
     $fileTransferRecovery.Add($prefix+'NativeHostTransferPublishesOnlyUnchangedRegisteredTargetAfterRoleHandoff', 2)
     $fileTransferRecovery.Add($prefix+'NativeHostTransferPublishesObservedTargetAfterRoleHandoff', 1)
+    $fileTransferRecovery.Add($prefix+'NativeHostTransferRecoversOriginalCreationBeforeFirstObservationAcrossRoles', 2)
+    $fileTransferRecovery.Add($prefix+'NativeHostTransferRetainsUncommittedCreationWithoutAdoptingCurrentPathAcrossRoles', 1)
     $fileTransferRecovery.Add($prefix+'NativeHostTransferReactivatesOnlyUnstartedSelectedTargetAfterRoleHandoff', 2)
     $fileTransferRecovery.Add($prefix+'NativeHostTransferRetiresLocalOnlySourceAfterVerifyingItsRemoteAbsence', 5)
     $fileTransferRecovery.Add($prefix+'NativeHostTransferAcknowledgesOriginalAfterSettledSourceRoleHandoff', 2)
