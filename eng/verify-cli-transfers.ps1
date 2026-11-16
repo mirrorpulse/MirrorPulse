@@ -97,8 +97,9 @@ function Stop-TransferWebDav {
 }
 
 function Wait-TransferHash {
-    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Expected)
-    $deadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Expected,
+        [TimeSpan]$MaximumWait = [TimeSpan]::FromSeconds(30))
+    $deadline = [DateTimeOffset]::UtcNow + $MaximumWait
     do {
         try {
             if ((Test-Path -LiteralPath $Path -PathType Leaf) -and (Read-TransferHash $Path) -ieq $Expected) { return }

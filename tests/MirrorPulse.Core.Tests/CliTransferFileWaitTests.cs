@@ -39,8 +39,14 @@ public sealed class CliTransferFileWaitTests
                     $script:hashCalls++
                     if($Scenario -eq 'other-io'){throw [IO.IOException]::new('Original unrelated I/O failure.',-2147024865)}
                     if($Scenario -eq 'access-denied'){throw [UnauthorizedAccessException]::new('Original access refusal.')}
-                    if($Scenario -eq 'sharing-released' -and $script:hashCalls -eq 1){[IO.File]::WriteAllText($attempt,'attempted')}
-                    & $script:originalHash -Path $Path
+                    try { & $script:originalHash -Path $Path }
+                    catch [IO.IOException] {
+                        if($Scenario -eq 'sharing-released' -and $script:hashCalls -eq 1 -and
+                            $_.Exception.HResult -in @(-2147024864,-2147024863)){
+                            [IO.File]::WriteAllText($attempt,'sharing refusal observed')
+                        }
+                        throw
+                    }
                 }
                 $writer=$null
                 try {
@@ -57,7 +63,6 @@ public sealed class CliTransferFileWaitTests
                         if([DateTimeOffset]::UtcNow -ge $deadline){throw 'The reader never attempted its actual observation.'}
                         Start-Sleep -Milliseconds 10
                     }
-                    Start-Sleep -Milliseconds 600
                 }finally{$stream.Dispose()}
                 '@ | Set-Content -LiteralPath $writerScript -Encoding utf8
                         $start=[Diagnostics.ProcessStartInfo]::new('pwsh')
@@ -71,7 +76,9 @@ public sealed class CliTransferFileWaitTests
                         }
                     }
                     $phase='OriginalContentObservation';$failure=$null;$succeeded=$false
-                    try{Wait-TransferHash -Path $target -Expected $expected;$succeeded=$true}
+                    $arguments=@{Path=$target;Expected=$expected}
+                    if($Scenario -eq 'wrong-bytes'){$arguments.MaximumWait=[TimeSpan]::FromSeconds(2)}
+                    try{Wait-TransferHash @arguments;$succeeded=$true}
                     catch{$failure=[ordered]@{type=$_.Exception.GetType().FullName;hresult=$_.Exception.HResult.ToString('X8');message=$_.Exception.Message}}
                     if($null -ne $writer){
                         if(-not $writer.WaitForExit(5000) -or $writer.ExitCode -ne 0){throw 'The owned writer did not finish successfully.'}
