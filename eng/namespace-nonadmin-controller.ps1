@@ -1,3 +1,10 @@
+function Get-SignedNamespaceBudgetMilliseconds {
+    param([Parameter(Mandatory)][ValidateRange(1, 32)][int]$ExecutionCount)
+    # Signed directory fixtures retain their individual 75-second deadlines.
+    # The aggregate also covers two data rows selected from a single method.
+    return [Math]::Max(300000, 120000 + $ExecutionCount * 75000)
+}
+
 function Get-OrdinaryUserNamespaceBudgetMilliseconds {
     param([Parameter(Mandatory)][ValidateRange(1, 177)][int]$TestCount, [string[]]$TestNames,
         [ValidateSet('AllRetained', 'S06')][string]$Scope = 'AllRetained')

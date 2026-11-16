@@ -26,6 +26,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $payload $assemblyName) -PathType Le
 }
 $catalog = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'test-suites.json') -Raw | ConvertFrom-Json
 . (Join-Path $PSScriptRoot 'namespace-nonadmin-controller.ps1')
+. (Join-Path $PSScriptRoot 'test-execution-policy.ps1')
 $directorySuites = @($VerifyDirectoryMove, $VerifyDirectoryTransfer, $VerifyDirectoryCopyRecovery, $VerifyPreparedDirectoryCopy | Where-Object { $_ })
 if ($directorySuites.Count -gt 1) { throw 'Select one focused directory suite per disposable profile.' }
 if ($VerifyFileTransferRecovery -and ($directorySuites.Count -ne 0 -or $SignedAtomicDirectoryPackage -or $SignedDirectoryTransferWebDavPackage)) {
@@ -35,7 +36,9 @@ if ($directorySuites.Count -ne 0 -and -not $SignedAtomicDirectoryPackage) { thro
 if ([bool]$VerifyDirectoryTransfer -ne [bool]$SignedDirectoryTransferWebDavPackage) { throw 'Cross-instance directory acceptance requires the frozen WebDAV package.' }
 $suite = if ($VerifyFileTransferRecovery) { 'fileTransferRecovery' } elseif ($VerifyPreparedDirectoryCopy) { 'signedPreparedDirectoryCopy' } elseif ($VerifyDirectoryCopyRecovery) { 'signedDirectoryCopyRecovery' } elseif ($VerifyDirectoryTransfer) { 'signedDirectoryTransfer' } elseif ($VerifyDirectoryMove) { 'signedDirectoryMove' } elseif ($SignedAtomicDirectoryPackage) { 'signedAtomicDirectory' } else { 'namespace' }
 $testNames = @($catalog.required.$suite)
-$childBudgetMilliseconds = if ($SignedAtomicDirectoryPackage) { 300000 } else {
+$childBudgetMilliseconds = if ($SignedAtomicDirectoryPackage) {
+    Get-SignedNamespaceBudgetMilliseconds -ExecutionCount (Get-RequiredTestExecutionCount -Catalog $catalog -Names $testNames)
+} else {
     Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $testNames.Count -TestNames $testNames -Scope S06
 }
 Write-Output ("Ordinary-user catalog: selected={0}; controllerBudgetSeconds={1}; nativeCaseDeadlinesUnchanged=True." -f $testNames.Count, ($childBudgetMilliseconds / 1000))
