@@ -38,6 +38,26 @@ public sealed class DeferredP079GateTests
             }
             $catalog.required.namespace=@($catalog.required.namespace|Where-Object {$_ -cnotin $fileTransferRecovery})
             $catalog.required.native=@($catalog.required.native|Where-Object {$_ -cnotin $fileTransferRecovery})
+            # Recovery through a public creation receipt has its own fresh-user suite.
+            # It adds native coverage without changing the historical namespace envelope.
+            $creationMethods=@('NativeHostTransferRecoversOriginalCreationBeforeFirstObservationAcrossRoles',
+                'NativeHostTransferRetainsUncommittedCreationWithoutAdoptingCurrentPathAcrossRoles')|ForEach-Object {$fileTransferPrefix+$_}
+            foreach($method in $creationMethods){
+                if(@($catalog.required.native|Where-Object {$_ -ceq $method}).Count -ne 1 -or
+                   @($catalog.required.fileTransferRecovery|Where-Object {$_ -ceq $method}).Count -ne 1 -or
+                   @($catalog.required.namespace|Where-Object {$_ -ceq $method}).Count -ne 0 -or
+                   @($catalog.required.deferredP079|Where-Object {$_ -ceq $method}).Count -ne 0){
+                    throw 'Original creation recovery must retain its dedicated native and fresh-user selections.'
+                }
+            }
+            $creation=[string]$creationMethods[0]
+            if(@($catalog.requiredCases.$creation).Count -ne 2){throw 'Both original committed creation cases must remain required.'}
+            $creationRecovery=@($catalog.required.fileTransferRecovery)
+            $priorRecovery=@($creationRecovery|Where-Object {$_ -cnotin $creationMethods})
+            $creationBudget=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $creationRecovery.Count -TestNames $creationRecovery -Scope S06
+            $priorBudget=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $priorRecovery.Count -TestNames $priorRecovery -Scope S06
+            if($creationBudget -ne $priorBudget+135000){throw 'The three original creation cuts must retain their independent 45-second deadlines.'}
+            $catalog.required.native=@($catalog.required.native|Where-Object {$_ -cnotin $creationMethods})
             # Retain this original transfer selection. Root execution rows have their
             # own exact ninety-second deadlines in NamespaceNonAdminControllerTests.
             $unsealedRootExecutions=@(
