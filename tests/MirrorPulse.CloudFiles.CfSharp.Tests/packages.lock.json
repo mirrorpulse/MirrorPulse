@@ -23,8 +23,8 @@
       },
       "CfSharp.Native": {
         "type": "Transitive",
-        "resolved": "0.1.0-preview.12",
-        "contentHash": "O5lBjlyycpLagt0+3ZiBaib/2m8exAJY5YuB8+w/BgNnLxdzZ9+Blv9CL6uLA2zSlKlDGHdpjCPOCXI0DPNb8g=="
+        "resolved": "0.1.0-preview.13",
+        "contentHash": "RNVOp50kKdebLn3EfUA09yXlkLFDFF7dtWbK3pKJDkN791A7sbQt2cK6TriiubH8F2+gdA9PIhgkRXyW7tAbwA=="
       },
       "Microsoft.ApplicationInsights": {
         "type": "Transitive",
@@ -207,8 +207,8 @@
       "mirrorpulse.cloudfiles.cfsharp": {
         "type": "Project",
         "dependencies": {
-          "CfSharp": "[0.1.0-preview.12, )",
-          "CfSharp.Storage.Sqlite": "[0.1.0-preview.12, )",
+          "CfSharp": "[0.1.0-preview.13, )",
+          "CfSharp.Storage.Sqlite": "[0.1.0-preview.13, )",
           "MirrorPulse.Adapter.Sdk": "[0.3.1, 0.3.1]",
           "MirrorPulse.Core": "[1.0.0, )"
         }
@@ -222,20 +222,20 @@
       },
       "CfSharp": {
         "type": "CentralTransitive",
-        "requested": "[0.1.0-preview.12, )",
-        "resolved": "0.1.0-preview.12",
-        "contentHash": "vOE4vHBRGrXa3HA25OpQLzwCmxlq4MwJVOo50e8aiZbhSwCJAQB+iJ9dozj/S7kMvyvBMb22ZYCN6xXK0yNr0g==",
+        "requested": "[0.1.0-preview.13, )",
+        "resolved": "0.1.0-preview.13",
+        "contentHash": "+5BxhbvuMtT+z262/hxJKFExZaMJMy/e+3JY1mA0xQPxYqCl+3/vsgzRhhwDzpdTP0eN3SBm8XWcRFFvaL4c7Q==",
         "dependencies": {
-          "CfSharp.Native": "0.1.0-preview.12"
+          "CfSharp.Native": "0.1.0-preview.13"
         }
       },
       "CfSharp.Storage.Sqlite": {
         "type": "CentralTransitive",
-        "requested": "[0.1.0-preview.12, )",
-        "resolved": "0.1.0-preview.12",
-        "contentHash": "uK98XfSq83gQY1XNXlagTADwSWcBA3knKXajULMfaW+jgMGW6Zldhh3puzj43nPaOdJ6mnZCmQOT+cFPu/0qUQ==",
+        "requested": "[0.1.0-preview.13, )",
+        "resolved": "0.1.0-preview.13",
+        "contentHash": "bfBzO/YNvH990ULXCbqiDs2uygWzeoRg94bg1gjCIaVHRi5XEUnZYzz3T1HHaUO5+enr4IfvhWjlwN421ycXdw==",
         "dependencies": {
-          "CfSharp": "0.1.0-preview.12",
+          "CfSharp": "0.1.0-preview.13",
           "Microsoft.Data.Sqlite": "8.0.31"
         }
       },
