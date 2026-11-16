@@ -203,6 +203,12 @@ Members that exist only locally require proof of remote absence. Native source
 retirement proceeds from children to parents, and the completed journal
 acknowledgement releases both durable root fences.
 
+A selected directory target can cross a Host role change before its first native
+start. Recovery audits both original roots and commits those audit references with
+the first start. The original target birth, parent and logical identity remain
+available for replay. The same rule applies to a selected child below an already
+published target directory.
+
 The read-only list for one root uses derived indexes of the original pending
 source and destination routes, plus the retained root reservation. It validates
 the selected transfer's complete original records. Missing state or reservation

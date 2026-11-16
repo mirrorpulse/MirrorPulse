@@ -1,6 +1,10 @@
 {
   "schemaVersion": 1,
   "requiredCases": {
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeSignedLocalDirectoryTransferResumesSelectedTargetBeforeFirstNativeStartAcrossHostRoles": [
+      "NativeSignedLocalDirectoryTransferResumesSelectedTargetBeforeFirstNativeStartAcrossHostRoles (0)",
+      "NativeSignedLocalDirectoryTransferResumesSelectedTargetBeforeFirstNativeStartAcrossHostRoles (1)"
+    ],
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeHostTransferRetiresLocalOnlySourceAfterVerifyingItsRemoteAbsence": [
       "NativeHostTransferRetiresLocalOnlySourceAfterVerifyingItsRemoteAbsence (\"absent\")",
       "NativeHostTransferRetiresLocalOnlySourceAfterVerifyingItsRemoteAbsence (\"absent-remote-parent\")",
@@ -136,6 +140,7 @@
     ]
   },
   "allowSkipped": [
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeSignedLocalDirectoryTransferResumesSelectedTargetBeforeFirstNativeStartAcrossHostRoles",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeSignedLocalTransfersNestedLocalOnlyFileAcrossTwoSingleRootInstances",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeSignedLocalDirectoryTransferResumesAfterCopyPreparationAcrossHostRoles",
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeSignedLocalDirectoryTransferResumesBeforeCopyDispatchAcrossHostRoles",
@@ -425,6 +430,7 @@
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeSignedLocalDirectoryTransferRetainsFencesForUnreceiptedCopyAcrossHostRoles"
     ],
     "signedDirectoryTransfer": [
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeSignedLocalDirectoryTransferResumesSelectedTargetBeforeFirstNativeStartAcrossHostRoles",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeSignedLocalTransfersNestedLocalOnlyFileAcrossTwoSingleRootInstances",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeSignedLocalDirectoryTransferResumesAcrossTwoSingleRootInstances",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeSignedLocalDirectoryTransferResumesAfterNativeDeleteAcrossHostRoles",

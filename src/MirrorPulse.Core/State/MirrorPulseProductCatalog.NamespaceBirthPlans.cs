@@ -24,7 +24,11 @@ public sealed record MirrorPulseNamespaceImportContent(long Length, string Sha25
 /// authorizes a repeated native creation, nor does it prove that a prior attempt did not run.
 /// The Host reconciles the original plan and retains a separate actual birth observation.
 /// </remarks>
-public sealed record MirrorPulseNamespaceBirthStart(int Version, Guid OperationId, DateTimeOffset StartedAt);
+public sealed record MirrorPulseNamespaceBirthStart(int Version, Guid OperationId, DateTimeOffset StartedAt)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public MirrorPulseDirectoryTransferTargetActivation? DirectoryTransferActivation { get; init; }
+}
 
 /// <summary>Distinguishes the first committed start intent from historical replay.</summary>
 /// <remarks>NewlyRecorded describes catalog work only; the Host still owns native admission and execution.</remarks>
@@ -95,14 +99,19 @@ public sealed partial class MirrorPulseProductCatalog
 
     /// <summary>Persists the start intent after fresh catalog admission, before the Host attempts creation.</summary>
     public Task<MirrorPulseNamespaceBirthStartPreparation> RecordNamespaceBirthStartAsync(MirrorPulseNamespaceBirthStart start,
-        CancellationToken cancellationToken = default) => RecordNamespaceBirthStartCoreAsync(start, null, cancellationToken);
+        CancellationToken cancellationToken = default) => RecordNamespaceBirthStartCoreAsync(start, null, null, cancellationToken);
 
     internal Task<MirrorPulseNamespaceBirthStartPreparation> RecordReactivatedFileTransferBirthStartAsync(
         MirrorPulseNamespaceBirthStart start, MirrorPulseFileTransferRecovery recovery, CancellationToken cancellationToken) =>
-        RecordNamespaceBirthStartCoreAsync(start, recovery, cancellationToken);
+        RecordNamespaceBirthStartCoreAsync(start, recovery, null, cancellationToken);
+
+    internal Task<MirrorPulseNamespaceBirthStartPreparation> RecordReactivatedDirectoryTransferBirthStartAsync(
+        MirrorPulseNamespaceBirthStart start, MirrorPulseDirectoryTransferTargetActivation activation, CancellationToken cancellationToken) =>
+        RecordNamespaceBirthStartCoreAsync(start, null, activation, cancellationToken);
 
     private async Task<MirrorPulseNamespaceBirthStartPreparation> RecordNamespaceBirthStartCoreAsync(MirrorPulseNamespaceBirthStart start,
-        MirrorPulseFileTransferRecovery? recovery, CancellationToken cancellationToken)
+        MirrorPulseFileTransferRecovery? recovery, MirrorPulseDirectoryTransferTargetActivation? directoryActivation,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(start);
         ValidateNamespaceBirthStart(start);
@@ -118,17 +127,26 @@ public sealed partial class MirrorPulseProductCatalog
             var retained = await ReadNamespaceBirthStartCoreAsync(start.OperationId, transaction, cancellationToken).ConfigureAwait(false);
             if (retained is not null)
             {
-                if (retained != start || recovery is not null)
+                if (retained != start || recovery is not null || directoryActivation is not null)
                     throw new InvalidOperationException("The original birth start intent is immutable.");
                 transaction.Commit();
                 return new(retained, false);
             }
+            if (start.DirectoryTransferActivation is not null)
+                throw new ArgumentException("A directory transfer activation requires its original audited start boundary.", nameof(start));
             var birth = await ReadNamespaceBirthCoreAsync(start.OperationId, transaction, cancellationToken).ConfigureAwait(false)
                 ?? throw new InvalidDataException("The original birth admission is missing.");
-            if (recovery is null)
-                await ValidateNamespaceBirthCurrentParentAsync(birth, transaction, cancellationToken).ConfigureAwait(false);
-            else
+            if (recovery is not null)
                 await RecordFileTransferTargetActivationAsync(birth, start, recovery, transaction, cancellationToken).ConfigureAwait(false);
+            else if (directoryActivation is not null)
+            {
+                await ValidateDirectoryTransferActivationStartAsync(birth, start, directoryActivation, transaction, cancellationToken)
+                    .ConfigureAwait(false);
+                start = start with { DirectoryTransferActivation = directoryActivation };
+                ValidateNamespaceBirthStart(start);
+            }
+            else
+                await ValidateNamespaceBirthCurrentParentAsync(birth, transaction, cancellationToken).ConfigureAwait(false);
             await RequireNamespaceBirthReservationAsync(birth, transaction, cancellationToken).ConfigureAwait(false);
             byte[] payload = JsonSerializer.SerializeToUtf8Bytes(start, TopologyJsonOptions);
             await using SqliteCommand insert = _connection.CreateCommand();
@@ -205,6 +223,8 @@ public sealed partial class MirrorPulseProductCatalog
         var plan = await ReadNamespaceBirthPlanCoreAsync(operationId, transaction, token).ConfigureAwait(false)
             ?? throw new InvalidDataException("The birth start intent lost its original plan.");
         if (start.StartedAt < plan.PreparedAt) throw new InvalidDataException("The birth start intent predates its original plan.");
+        if (start.DirectoryTransferActivation is { } activation)
+            await ValidateDirectoryTransferActivationReferenceAsync(start, activation, transaction, token).ConfigureAwait(false);
         return start;
     }
 
@@ -293,5 +313,11 @@ public sealed partial class MirrorPulseProductCatalog
     {
         if (start.Version != 1 || start.OperationId == Guid.Empty || start.StartedAt == default)
             throw new ArgumentException("The birth start intent is incomplete or unsupported.", nameof(start));
+        if (start.DirectoryTransferActivation is { } activation)
+        {
+            if (activation.SourceAuditId == Guid.Empty || activation.TargetAuditId == Guid.Empty || activation.SourceAuditId == activation.TargetAuditId)
+                throw new ArgumentException("A directory transfer start requires both original audits.", nameof(start));
+            ValidatePermissionSid(activation.RoleSid, role: true);
+        }
     }
 }

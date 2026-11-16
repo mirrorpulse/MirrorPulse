@@ -143,10 +143,6 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
                 RequestedInventoryKind = MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory,
                 DirectoryTransferOperationId = directory.TransferId
             };
-            var incomplete = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
-                reopened.PrepareNamespaceInitializationAsync(initialization));
-            StringAssert.Contains(incomplete.Message, "every original registered target member");
-            Assert.IsNull(await reopened.ReadNamespaceInitializationAsync(initialization.OperationId));
             await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => reopened.StartNamespaceDirectoryTransferSourceDeletionAsync(
                 directory.TransferId, fresh, deleteRequest, started, default));
             Assert.IsNull(await reopened.ReadNamespaceDirectoryTransferSourceDeletionAsync(directory.TransferId, default));
@@ -157,6 +153,10 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             Assert.AreEqual(directory.Birth.OperationId, pendingChild.TargetMemberId);
             Assert.AreEqual(new MirrorPulseTransferPendingTargetBinding(start.OperationId, start.StartedAt), pendingChild.PendingTargetBinding);
             await RequirePendingTransferStatusAsync(reopened, pendingChild);
+            var incomplete = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
+                reopened.PrepareNamespaceInitializationAsync(initialization));
+            StringAssert.Contains(incomplete.Message, "every original registered target member");
+            Assert.IsNull(await reopened.ReadNamespaceInitializationAsync(initialization.OperationId));
             var observation = Observation(file.Birth, file.Plan, start) with { IsInSync = true };
             await reopened.RecordNamespaceBirthObservationAsync(observation);
             Assert.IsNull((await reopened.ReadNamespaceTransferStatusAsync(directory.TransferId))!.PendingTargetBinding);

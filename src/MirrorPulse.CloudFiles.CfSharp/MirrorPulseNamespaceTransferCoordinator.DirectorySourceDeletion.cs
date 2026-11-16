@@ -8,7 +8,8 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 public sealed partial class MirrorPulseNamespaceTransferCoordinator
 {
     internal ValueTask<MirrorPulseDirectoryTransferSourceDeletion> DeleteDirectorySourceAsync(Guid operationId,
-        MirrorPulseTransferWorkerServices workers, CancellationToken token, Guid? targetRecovery = null) => actor.RunAsync(async stop =>
+        MirrorPulseTransferWorkerServices workers, CancellationToken token, Guid? targetRecovery = null,
+        MirrorPulseDirectoryTransferTargetActivation? activation = null) => actor.RunAsync(async stop =>
     {
         var retained = await catalog.ReadNamespaceDirectoryTransferSourceDeletionAsync(operationId, stop).ConfigureAwait(false);
         if (retained?.AcceptedAt is not null) return retained;
@@ -19,7 +20,7 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
             retained = await execution.RunNormalUserOperationAsync(() =>
                 StartDirectoryWorkerDeletionAsync(admission, freshTarget, workers,
                     targetRecovery is null ? null : execution.RoleSid.Value, admitted)).ConfigureAwait(false);
-        }, targetRecovery).ConfigureAwait(false);
+        }, targetRecovery, activation).ConfigureAwait(false);
         return retained ?? throw new InvalidDataException("The original directory source deletion lost its retained outcome.");
     }, token);
 

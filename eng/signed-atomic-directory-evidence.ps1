@@ -49,6 +49,12 @@ function Confirm-SignedDirectoryTransferReport {
         NativeSignedLocalDirectoryTransferPublishesSuccessorsAtReusedBackendIds = 'SignedDirectoryTransfer: packageSha256=' + $PackageSha256 + '; reusedBackendIds=3; generationsRetained=3; oldCallbacksRejected=True; replacementSourceBytesVerified=True; originalTargetBytesVerified=True; completedTransferReplayPreservedSuccessors=True.'
         NativeSignedLocalDirectoryTransferToWebDavRejectsUnsupportedReverseBeforeMutation = 'SignedCrossPackageDirectoryTransfer: localSha256=' + $PackageSha256 + '; webDavSha256=' + $WebDavPackageSha256 + '; targetBytesVerified=True; reverseRejectedBeforeAdmission=True; reverseSourcePreserved=True.'
     }
+    foreach ($ordinal in @(0, 1)) {
+        $name = 'NativeSignedLocalDirectoryTransferResumesSelectedTargetBeforeFirstNativeStartAcrossHostRoles (' + $ordinal + ')'
+        $expected[$name] = 'SignedDirectoryTransfer: packageSha256=' + $PackageSha256 + '; selectedTargetOrdinal=' + $ordinal +
+            '; originalBirthRetained=True; bothRootAuditsBeforeStart=True; startWriteRollbackVerified=' + ($ordinal -eq 0) +
+            '; firstStartImmutable=True; targetBytesVerified=True; acknowledgementAcrossRoles=True.'
+    }
     if ($rows.Count -ne $expected.Count -or @($rows | Where-Object outcome -CNE 'Passed').Count) { throw 'All signed cross-instance transfer cases must pass.' }
     foreach ($row in $rows) {
         $name = [string]$row.testName

@@ -58,7 +58,7 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
     private async ValueTask<IReadOnlyList<MirrorPulseNamespaceProtectedTreeMember>> PublishDirectoryTargetUnderActorAsync(
         Guid operationId, MirrorPulseTransferWorkerServices workers, CancellationToken stop,
         Func<MirrorPulseDirectoryTransferAdmission, MirrorPulseDirectoryTransferTargetVerification, CancellationToken, Task>? afterPublication = null,
-        Guid? targetRecovery = null)
+        Guid? targetRecovery = null, MirrorPulseDirectoryTransferTargetActivation? activation = null)
     {
         actor.AssertAccess();
         var copy = await catalog.ReadNamespaceDirectoryTransferCopyAsync(operationId, stop).ConfigureAwait(false);
@@ -88,7 +88,8 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
                     var remote = verified.Members[index];
                     var parent = parents[member.Source.Protection.Context.Location.ParentMemberId!.Value];
                     var target = await catalog.ReadNamespaceDirectoryTransferBirthAsync(operationId, index, stop).ConfigureAwait(false);
-                    bool registeredBeforeRecovery = targetRecovery is not null && target is not null;
+                    bool registeredBeforeRecovery = targetRecovery is not null && target is not null &&
+                        await catalog.ReadNamespaceMemberAsync(target.Birth.OperationId, stop).ConfigureAwait(false) is not null;
                     if (target is null)
                     {
                         var identity = await router.CreateCurrentFileIdentityAsync(root.InstanceId, root.UniquenessKey, remote.RemoteId, remote.Revision, stop)
@@ -114,7 +115,8 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
                     }
                     if (!registeredBeforeRecovery)
                         _ = await publisher.PublishMemberUnderActorAsync(target.Birth, target.Plan, parent, root,
-                            remote.RemoteId, remote.Revision, stop).ConfigureAwait(false);
+                            remote.RemoteId, remote.Revision, stop,
+                            directoryActivation: target.Birth.RoleSid == execution.RoleSid.Value ? null : activation).ConfigureAwait(false);
                     var snapshot = await catalog.ReadNamespaceMemberProtectionSnapshotAsync(target.Birth.OperationId, stop).ConfigureAwait(false)
                         ?? throw new InvalidDataException("The published directory transfer member lost its protection.");
                     CloudItem item = remote.IsDirectory ? fileSystem.GetDirectory(member.TargetRelativePath) : fileSystem.GetFile(member.TargetRelativePath);

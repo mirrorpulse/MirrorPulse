@@ -489,7 +489,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                     _namespaceExecution!, _namespaceActor!, instanceAdmission, _permissions!);
                 bool recoverProtection = plan.SourceParent.Context.Protection.RoleSid != _namespaceExecution!.RoleSid.Value ||
                     plan.TargetParent.Context.Protection.RoleSid != _namespaceExecution.RoleSid.Value;
-                Guid? targetRecovery = null;
+                Guid? sourceRecovery = null, targetRecovery = null;
                 if (recoverProtection)
                 {
                     var pending = await catalog.ReadPendingNamespaceInitializationsAsync(stop).ConfigureAwait(false);
@@ -500,6 +500,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                         await using var restored = await audit.RecoverDirectoryTransferRootAsync(existing?.Intent.OperationId ?? Guid.NewGuid(),
                             root, operationId, stop).ConfigureAwait(false);
                         if (root == plan.TargetRoute.RootId) targetRecovery = restored.Completion.OperationId;
+                        else sourceRecovery = restored.Completion.OperationId;
                         var prior = _scopedAnchorProtection;
                         _scopedAnchorProtection = restored.TransferAnchor();
                         if (prior is not null) await prior.DisposeAsync().ConfigureAwait(false);
@@ -507,7 +508,10 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                 }
                 _ = await coordinator.CopyDirectoryAsync(operationId, transfers, stop, targetRecovery).ConfigureAwait(false);
                 _ = await coordinator.VerifyDirectoryTargetAsync(operationId, transfers, stop, targetRecovery).ConfigureAwait(false);
-                _ = await coordinator.DeleteDirectorySourceAsync(operationId, transfers, stop, targetRecovery).ConfigureAwait(false);
+                var activation = sourceRecovery is { } sourceAudit && targetRecovery is { } targetAudit
+                    ? new MirrorPulseDirectoryTransferTargetActivation(sourceAudit, targetAudit, _namespaceExecution.RoleSid.Value)
+                    : null;
+                _ = await coordinator.DeleteDirectorySourceAsync(operationId, transfers, stop, targetRecovery, activation).ConfigureAwait(false);
                 _ = await coordinator.RetireDirectorySourceAsync(operationId, transfers, stop).ConfigureAwait(false);
                 _ = await coordinator.AcknowledgeDirectoryAsync(operationId, transfers, stop).ConfigureAwait(false);
                 foreach (var root in roots)

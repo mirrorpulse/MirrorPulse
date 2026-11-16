@@ -6,7 +6,7 @@ using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.CloudFiles.CfSharp;
 
-internal enum MirrorPulseTransferPublicationCheckpoint { AfterStart, AfterCreation, AfterObservation, AfterRegistration }
+internal enum MirrorPulseTransferPublicationCheckpoint { AfterStart, AfterCreation, AfterObservation, AfterRegistration, BeforeStart }
 
 /// <summary>Publishes the original verified remote target as a separate protected online placeholder.</summary>
 /// <remarks>The caller holds the original instance admissions, shared actor and source guards.
@@ -73,7 +73,8 @@ internal sealed class MirrorPulseNamespaceTransferTargetPublisher(CloudFileSyste
     internal async Task<(MirrorPulseNamespaceMemberRegistration Member, MirrorPulseNamespaceBirthProtection Protection)>
         PublishMemberUnderActorAsync(MirrorPulseNamespaceBirthIntent birth, MirrorPulseNamespaceBirthPlan plan,
             MirrorPulseNamespaceMemberProtectionSnapshot parentSnapshot, RootRegistration root, string backendId, string revision,
-            CancellationToken token, MirrorPulseFileTransferRecovery? activation = null)
+            CancellationToken token, MirrorPulseFileTransferRecovery? activation = null,
+            MirrorPulseDirectoryTransferTargetActivation? directoryActivation = null)
     {
         actor.AssertAccess();
         var parent = fileSystem.GetDirectory(parentSnapshot.Context.Location.RelativePath);
@@ -95,13 +96,16 @@ internal sealed class MirrorPulseNamespaceTransferTargetPublisher(CloudFileSyste
         var observed = await catalog.ReadNamespaceBirthObservationAsync(birth.OperationId, token).ConfigureAwait(false);
         if (start is null)
         {
+            await CheckpointAsync(MirrorPulseTransferPublicationCheckpoint.BeforeStart, token).ConfigureAwait(false);
             if ((await item.InspectAsync(token).ConfigureAwait(false)).Exists) throw new IOException("The native transfer target is occupied.");
             _ = await MirrorPulseNamespaceBirthIdentityProjection.PrepareAsync(catalog, state.OpenStore, birth.OperationId, item, token).ConfigureAwait(false);
             MirrorPulseNamespaceBirthProtectionVerifier.RequireUnchangedParent(before, await guard.InspectAsync(token).ConfigureAwait(false));
             var intent = new MirrorPulseNamespaceBirthStart(1, birth.OperationId, DateTimeOffset.UtcNow);
-            var prepared = activation is null
-                ? await catalog.RecordNamespaceBirthStartAsync(intent, token).ConfigureAwait(false)
-                : await catalog.RecordReactivatedFileTransferBirthStartAsync(intent, activation, token).ConfigureAwait(false);
+            var prepared = directoryActivation is not null
+                ? await catalog.RecordReactivatedDirectoryTransferBirthStartAsync(intent, directoryActivation, token).ConfigureAwait(false)
+                : activation is not null
+                    ? await catalog.RecordReactivatedFileTransferBirthStartAsync(intent, activation, token).ConfigureAwait(false)
+                    : await catalog.RecordNamespaceBirthStartAsync(intent, token).ConfigureAwait(false);
             if (!prepared.NewlyRecorded) throw new InvalidOperationException("A retained birth start cannot authorize another native creation.");
             await CheckpointAsync(MirrorPulseTransferPublicationCheckpoint.AfterStart, token).ConfigureAwait(false);
             CloudPlaceholderBatchResult created;
