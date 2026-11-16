@@ -27,12 +27,13 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
             bool hasRemoteParent = index == 0 || remoteDirectories.ContainsKey(parent);
             if (member.SourceRevision is not { } revision)
             {
-                if (await workers.Stats.StatAsync(new(route.InstanceId, path, route.RootKey), token).ConfigureAwait(false) is not null)
-                    throw new IOException("The original local-only transfer member is no longer absent remotely.");
-                // Retained remote parent inventories prove absence for their local-only children.
-                // For the subtree root the external parent is not part of that inventory.
+                // An absent parent already excludes its descendants. For a remote parent, the
+                // exact inventory is checked below. The subtree root's external parent is not in that inventory.
                 if (index == 0)
                     await metadata.RequireAbsentEntryAsync(route, path, token).ConfigureAwait(false);
+                else if (hasRemoteParent &&
+                    await workers.Stats.StatAsync(new(route.InstanceId, path, route.RootKey), token).ConfigureAwait(false) is not null)
+                    throw new IOException("The original local-only transfer member is no longer absent remotely.");
                 continue;
             }
             if (!hasRemoteParent ||

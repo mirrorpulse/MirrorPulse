@@ -88,11 +88,16 @@ public sealed class MirrorPulseTransferTargetVerifier(MirrorPulseProductCatalog 
 
     internal async Task RequireAbsentEntryAsync(MirrorPulseTransferRoute route, string path, CancellationToken token)
     {
+        string[] components = path.Split('/');
         string parent = string.Empty;
-        for (int separator = path.IndexOf('/'); ; separator = path.IndexOf('/', separator + 1))
+        for (int index = 0; index < components.Length; index++)
         {
-            bool leaf = separator < 0;
-            string child = leaf ? path : path[..separator];
+            bool leaf = index == components.Length - 1;
+            string child = parent.Length == 0 ? components[index] : parent + "/" + components[index];
+            var request = new MirrorPulseWorkerStatRequest(route.InstanceId, child, route.RootKey);
+            if (leaf && await _stats.StatAsync(request, token).ConfigureAwait(false) is not null)
+                throw new IOException("A remote object occupies the original local-only source name.");
+
             MirrorPulseWorkerDirectoryEntry? directory = null;
             await foreach (var entry in ReadDirectoryEntriesAsync(route, parent, token).ConfigureAwait(false))
             {
@@ -105,8 +110,14 @@ public sealed class MirrorPulseTransferTargetVerifier(MirrorPulseProductCatalog 
                 directory = entry;
             }
             // A complete inventory of the existing parent proves absence even when a
-            // deeper directory has never existed. Each request uses the actual remote casing.
-            if (directory is null) return;
+            // deeper directory has never existed. Confirm at that first missing component
+            // so the Worker can still open its parent to make the observation.
+            if (directory is null)
+            {
+                if (await _stats.StatAsync(request, token).ConfigureAwait(false) is not null)
+                    throw new IOException("The original local-only source path changed during absence verification.");
+                return;
+            }
             parent = directory.RelativePath;
         }
     }

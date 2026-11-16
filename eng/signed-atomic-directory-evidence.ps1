@@ -36,6 +36,7 @@ function Confirm-SignedDirectoryTransferReport {
     [xml]$report = Get-Content -LiteralPath $ReportPath -Raw
     $rows = @($report.TestRun.Results.UnitTestResult)
     $expected = @{
+        NativeSignedLocalTransfersNestedLocalOnlyFileAcrossTwoSingleRootInstances = 'SignedLocalOnlyFileTransfer: packageSha256=' + $PackageSha256 + '; distinctSingleRootInstances=True; originalNotificationsCaptured=True; originalLocalParentRetained=True; remoteSourceEmpty=True; targetBytesVerified=True; sourceAbsenceRetained=True; originalJournalAcknowledged=True.'
         NativeSignedLocalDirectoryTransferResumesAcrossTwoSingleRootInstances = 'SignedDirectoryTransfer: packageSha256=' + $PackageSha256 + '; distinctSingleRootInstances=True; sourceMembers=3; atomicSourceReceipt=True; interruptedNativeRetirement=True; reopenedRoots=True; targetBytesVerified=True; acknowledgementAcrossRoles=True.'
         NativeSignedLocalDirectoryTransferResumesAfterNativeDeleteAcrossHostRoles = 'SignedDirectoryTransfer: packageSha256=' + $PackageSha256 + '; originalNativeRetirementSettled=True; originalStartRetained=True; bothRootsFenced=True; reopenedRoots=True; targetBytesVerified=True; acknowledgementAcrossRoles=True.'
         NativeSignedLocalDirectoryTransferResumesBeforeNativeDeleteAcrossHostRoles = 'SignedDirectoryTransfer: packageSha256=' + $PackageSha256 + '; liveOriginalSurvivedRestart=True; originalStartRetained=True; sdkLocalFileIdRecovered=True; lateDeleteAcknowledged=True; bothRootsFenced=True; reopenedRoots=True; targetBytesVerified=True; acknowledgementAcrossRoles=True.'
@@ -48,10 +49,10 @@ function Confirm-SignedDirectoryTransferReport {
         NativeSignedLocalDirectoryTransferPublishesSuccessorsAtReusedBackendIds = 'SignedDirectoryTransfer: packageSha256=' + $PackageSha256 + '; reusedBackendIds=3; generationsRetained=3; oldCallbacksRejected=True; replacementSourceBytesVerified=True; originalTargetBytesVerified=True; completedTransferReplayPreservedSuccessors=True.'
         NativeSignedLocalDirectoryTransferToWebDavRejectsUnsupportedReverseBeforeMutation = 'SignedCrossPackageDirectoryTransfer: localSha256=' + $PackageSha256 + '; webDavSha256=' + $WebDavPackageSha256 + '; targetBytesVerified=True; reverseRejectedBeforeAdmission=True; reverseSourcePreserved=True.'
     }
-    if ($rows.Count -ne $expected.Count -or @($rows | Where-Object outcome -CNE 'Passed').Count) { throw 'All signed cross-instance directory cases must pass.' }
+    if ($rows.Count -ne $expected.Count -or @($rows | Where-Object outcome -CNE 'Passed').Count) { throw 'All signed cross-instance transfer cases must pass.' }
     foreach ($row in $rows) {
         $name = [string]$row.testName
-        $facts = @(([string]$row.Output.StdOut -split '\r?\n') | Where-Object { $_ -cmatch '^Signed(?:CrossPackage)?DirectoryTransfer: ' })
+        $facts = @(([string]$row.Output.StdOut -split '\r?\n') | Where-Object { $_ -cmatch '^Signed(?:(?:CrossPackage)?Directory|LocalOnlyFile)Transfer: ' })
         if (!$expected.ContainsKey($name) -or $facts.Count -ne 1 -or $facts[0] -cne $expected[$name]) {
             throw 'The transfer report lost the original package, recovery or capability evidence.'
         }

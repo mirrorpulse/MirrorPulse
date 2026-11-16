@@ -131,7 +131,7 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator(CloudFileSys
             await source.VerifyAsync(copy.Plan.Length, copy.Plan.Sha256, token).ConfigureAwait(false);
             if (workers is not null && copy.Plan.SourceRemoteRevision is null)
                 await RequireLocalOnlySourceAbsentAsync(copy, new(catalog, workers.Stats, workers.Ranges, workers.Directories),
-                    workers.Stats, token).ConfigureAwait(false);
+                    token).ConfigureAwait(false);
             await using var input = await inputs.OpenLeaseAsync(copy.Plan, token).ConfigureAwait(false);
             if (copy.JournalClaim is null)
             {

@@ -66,7 +66,7 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
                     if (current.Plan.SourceRemoteRevision is null)
                     {
                         await execution.RunNormalUserOperationAsync(() =>
-                            RequireLocalOnlySourceAbsentAsync(current, verifier, workers.Stats, stop)).ConfigureAwait(false);
+                            RequireLocalOnlySourceAbsentAsync(current, verifier, stop)).ConfigureAwait(false);
                         await RequireCurrentTargetAsync(current, target, targetFile, targetGuard, stop).ConfigureAwait(false);
                         _ = await ReadSourceProjectionAsync(file, originalSource, stop).ConfigureAwait(false);
                         await data.VerifyAsync(current.Plan.Length, current.Plan.Sha256, stop).ConfigureAwait(false);
@@ -114,17 +114,12 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
         }).ConfigureAwait(false);
     }
 
-    private static async Task RequireLocalOnlySourceAbsentAsync(MirrorPulseNamespaceTransferCopy copy, MirrorPulseTransferTargetVerifier verifier,
-        IMirrorPulseWorkerStatTransport stats, CancellationToken token)
+    private static Task RequireLocalOnlySourceAbsentAsync(MirrorPulseNamespaceTransferCopy copy,
+        MirrorPulseTransferTargetVerifier verifier, CancellationToken token)
     {
         var route = copy.Plan.SourceRoute;
         string path = copy.Plan.Source.Context.Location.RelativePath[(route.DirectoryName.Length + 1)..];
-        var request = new MirrorPulseWorkerStatRequest(route.InstanceId, path, route.RootKey);
-        if (await stats.StatAsync(request, token).ConfigureAwait(false) is not null)
-            throw new IOException("A remote object occupies the original local-only source name.");
-        await verifier.RequireAbsentEntryAsync(route, path, token).ConfigureAwait(false);
-        if (await stats.StatAsync(request, token).ConfigureAwait(false) is not null)
-            throw new IOException("The original local-only source name changed during absence verification.");
+        return verifier.RequireAbsentEntryAsync(route, path, token);
     }
 
     private async Task RequireCurrentTargetAsync(MirrorPulseNamespaceTransferCopy copy, MirrorPulseNamespaceMemberProtectionSnapshot target,

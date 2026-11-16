@@ -9,7 +9,7 @@ on:
         type: boolean
         default: false
       directory_acceptance_only:
-        description: Run only signed Local directory Delete, Move and cross-instance transfer acceptance
+        description: Run only signed Local directory Delete, Move, and cross-instance directory and local-only file transfer acceptance
         type: boolean
         default: false
       verify_shell:
@@ -25,7 +25,7 @@ on:
         type: boolean
         default: false
       verify_directory_transfer:
-        description: Run signed Local cross-instance directory transfer acceptance on x64 and ARM64
+        description: Run signed cross-instance directory and local-only file transfer acceptance on x64 and ARM64
         type: boolean
         default: false
       verify_prepared_directory_copy:

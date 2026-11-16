@@ -202,6 +202,8 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
     [DataRow("file-at-ancestor")]
     [DataRow("occupant-on-later-page")]
     [DataRow("duplicate-ancestor")]
+    [DataRow("ancestor-appears-during-check")]
+    [DataRow("leaf-appears-during-check")]
     public async Task LocalOnlySourceAbsenceFollowsExistingDirectoriesAndChecksEveryPage(string scenario)
     {
         using var fixture = new Fixture();
@@ -213,19 +215,26 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         var second = Entry("First/Second", "Directory");
         var payload = Entry("First/Second/Original.bin", "File");
         var pages = new TransferSourcePages(plan.SourceRoute);
+        const string actualLeaf = "First/Second/original.bin";
         switch (scenario)
         {
             case "missing-parent":
                 pages.Add("", first);
                 pages.Add("First", second with { IsDeleted = true });
+                pages.AddStat("First/second");
                 break;
             case "missing-grandparent":
+            case "ancestor-appears-during-check":
                 pages.Add("");
+                pages.AddStat("first", scenario == "ancestor-appears-during-check" ? "new-v1" : null);
                 break;
             case "existing-parents":
+            case "leaf-appears-during-check":
                 pages.Add("", first);
                 pages.Add("First", second);
                 pages.Add("First/Second", payload with { IsDeleted = true });
+                pages.AddStat(actualLeaf);
+                pages.AddStat(actualLeaf, scenario == "leaf-appears-during-check" ? "new-v1" : null);
                 break;
             case "file-at-ancestor":
                 pages.Add("", first);
@@ -236,30 +245,34 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
                 pages.Add("First", second);
                 pages.AddContinued("First/Second");
                 pages.AddContinuation("First/Second", payload);
+                pages.AddStat(actualLeaf);
                 break;
             default:
                 pages.AddContinued("", first);
                 pages.AddContinuation("", first with { RelativePath = "FIRST" });
                 break;
         }
-        var verifier = new MirrorPulseTransferTargetVerifier(catalog, target, target, pages);
-        if (scenario is "file-at-ancestor" or "occupant-on-later-page" or "duplicate-ancestor")
+        var verifier = new MirrorPulseTransferTargetVerifier(catalog, pages, target, pages);
+        if (scenario is "file-at-ancestor" or "occupant-on-later-page" or "duplicate-ancestor" or
+            "ancestor-appears-during-check" or "leaf-appears-during-check")
             await Assert.ThrowsExactlyAsync<IOException>(() => verifier.RequireAbsentEntryAsync(plan.SourceRoute, path, default));
         else
             await verifier.RequireAbsentEntryAsync(plan.SourceRoute, path, default);
-        Assert.IsTrue(pages.AllPagesRead);
+        Assert.IsTrue(pages.AllRequestsRead);
         Assert.AreEqual(0, target.Reads);
 
         static MirrorPulseWorkerDirectoryEntry Entry(string address, string kind) =>
             new(address, "observed-v1", kind, address, kind == "Directory" ? null : 5, null, null, false);
     }
 
-    private sealed class TransferSourcePages(MirrorPulseTransferRoute route) : IMirrorPulseWorkerDirectoryPageSource
+    private sealed class TransferSourcePages(MirrorPulseTransferRoute route) : IMirrorPulseWorkerDirectoryPageSource, IMirrorPulseWorkerStatTransport
     {
         private static readonly byte[] Next = [1];
         private readonly Queue<(string Path, bool Continuation, MirrorPulseWorkerDirectoryPage Page)> _pages = new();
+        private readonly Queue<(string Path, string? Revision)> _stats = new();
 
-        internal bool AllPagesRead => _pages.Count == 0;
+        internal bool AllRequestsRead => _pages.Count == 0 && _stats.Count == 0;
+        internal void AddStat(string path, string? revision = null) => _stats.Enqueue((path, revision));
         internal void Add(string path, params MirrorPulseWorkerDirectoryEntry[] entries) =>
             _pages.Enqueue((path, false, new(entries, ReadOnlyMemory<byte>.Empty, true)));
         internal void AddContinued(string path, params MirrorPulseWorkerDirectoryEntry[] entries) =>
@@ -275,6 +288,15 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             Assert.AreEqual(expected.Path, request.NormalizedPath);
             CollectionAssert.AreEqual(expected.Continuation ? Next : Array.Empty<byte>(), request.ContinuationCursor.ToArray());
             return ValueTask.FromResult(expected.Page);
+        }
+
+        public ValueTask<string?> StatAsync(MirrorPulseWorkerStatRequest request, CancellationToken cancellationToken)
+        {
+            Assert.IsTrue(_stats.TryDequeue(out var expected));
+            Assert.AreEqual(route.InstanceId, request.InstanceId);
+            Assert.AreEqual(route.RootKey, request.RootKey);
+            Assert.AreEqual(expected.Path, request.NormalizedPath);
+            return ValueTask.FromResult(expected.Revision);
         }
     }
 

@@ -1452,9 +1452,11 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         }
         public ValueTask<string?> StatAsync(MirrorPulseWorkerStatRequest request, CancellationToken token)
         {
-            if (IsSourceRoute(request.InstanceId, request.RootKey) && request.NormalizedPath == sourcePath)
+            if (IsSourceRoute(request.InstanceId, request.RootKey))
             {
                 AssertNormalUser();
+                int separator = sourcePath.IndexOf('/');
+                Assert.AreEqual(separator < 0 ? sourcePath : sourcePath[..separator], request.NormalizedPath);
                 return ValueTask.FromResult(SourceDeleted ? null : Plan!.SourceRemoteRevision);
             }
             RequireNormalUser(request.InstanceId, request.RootKey, request.NormalizedPath); return ValueTask.FromResult<string?>("target-v1");

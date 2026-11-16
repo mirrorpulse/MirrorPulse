@@ -12,7 +12,7 @@ on:
         type: boolean
         default: false
       verify_directory_transfer:
-        description: Verify protected directory transfer between two single-root Local instances
+        description: Verify protected directory and local-only file transfers between single-root instances
         type: boolean
         default: false
       verify_prepared_directory_copy:
@@ -117,7 +117,7 @@ jobs:
           $packages = @(Get-ChildItem -LiteralPath artifacts/atomic-directory-local -Recurse -Filter '*.mpadapter' -File)
           if ($packages.Count -ne 1) { throw 'Require the one frozen official Local package.' }
           ./eng/verify-namespace-nonadmin.ps1 -ExpectedArchitecture $env:MP_TEST_ARCHITECTURE -SignedAtomicDirectoryPackage $packages[0].FullName -VerifyDirectoryMove
-      - name: Verify cross-instance directory transfer through installed signed Workers
+      - name: Verify cross-instance directory and local-only file transfers through installed signed Workers
         if: (success() || failure()) && steps.native-volume.outcome == 'success' && inputs.verify_directory_transfer
         shell: pwsh
         env:
