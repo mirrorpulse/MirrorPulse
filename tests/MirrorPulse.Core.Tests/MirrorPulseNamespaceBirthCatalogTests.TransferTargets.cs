@@ -195,6 +195,89 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             verifier.RequireDirectoryInventoryAsync(plan.TargetRoute, "", [], default));
     }
 
+    [TestMethod]
+    [DataRow("missing-parent")]
+    [DataRow("missing-grandparent")]
+    [DataRow("existing-parents")]
+    [DataRow("file-at-ancestor")]
+    [DataRow("occupant-on-later-page")]
+    [DataRow("duplicate-ancestor")]
+    public async Task LocalOnlySourceAbsenceFollowsExistingDirectoriesAndChecksEveryPage(string scenario)
+    {
+        using var fixture = new Fixture();
+        await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        var plan = (await PrepareTransferFixtureAsync(catalog)).Plan;
+        var target = new TransferTarget(TransferBytes) { Plan = plan };
+        const string path = "first/second/original.bin";
+        var first = Entry("First", "Directory");
+        var second = Entry("First/Second", "Directory");
+        var payload = Entry("First/Second/Original.bin", "File");
+        var pages = new TransferSourcePages(plan.SourceRoute);
+        switch (scenario)
+        {
+            case "missing-parent":
+                pages.Add("", first);
+                pages.Add("First", second with { IsDeleted = true });
+                break;
+            case "missing-grandparent":
+                pages.Add("");
+                break;
+            case "existing-parents":
+                pages.Add("", first);
+                pages.Add("First", second);
+                pages.Add("First/Second", payload with { IsDeleted = true });
+                break;
+            case "file-at-ancestor":
+                pages.Add("", first);
+                pages.Add("First", Entry(second.RelativePath, "File"));
+                break;
+            case "occupant-on-later-page":
+                pages.Add("", first);
+                pages.Add("First", second);
+                pages.AddContinued("First/Second");
+                pages.AddContinuation("First/Second", payload);
+                break;
+            default:
+                pages.AddContinued("", first);
+                pages.AddContinuation("", first with { RelativePath = "FIRST" });
+                break;
+        }
+        var verifier = new MirrorPulseTransferTargetVerifier(catalog, target, target, pages);
+        if (scenario is "file-at-ancestor" or "occupant-on-later-page" or "duplicate-ancestor")
+            await Assert.ThrowsExactlyAsync<IOException>(() => verifier.RequireAbsentEntryAsync(plan.SourceRoute, path, default));
+        else
+            await verifier.RequireAbsentEntryAsync(plan.SourceRoute, path, default);
+        Assert.IsTrue(pages.AllPagesRead);
+        Assert.AreEqual(0, target.Reads);
+
+        static MirrorPulseWorkerDirectoryEntry Entry(string address, string kind) =>
+            new(address, "observed-v1", kind, address, kind == "Directory" ? null : 5, null, null, false);
+    }
+
+    private sealed class TransferSourcePages(MirrorPulseTransferRoute route) : IMirrorPulseWorkerDirectoryPageSource
+    {
+        private static readonly byte[] Next = [1];
+        private readonly Queue<(string Path, bool Continuation, MirrorPulseWorkerDirectoryPage Page)> _pages = new();
+
+        internal bool AllPagesRead => _pages.Count == 0;
+        internal void Add(string path, params MirrorPulseWorkerDirectoryEntry[] entries) =>
+            _pages.Enqueue((path, false, new(entries, ReadOnlyMemory<byte>.Empty, true)));
+        internal void AddContinued(string path, params MirrorPulseWorkerDirectoryEntry[] entries) =>
+            _pages.Enqueue((path, false, new(entries, Next, false)));
+        internal void AddContinuation(string path, params MirrorPulseWorkerDirectoryEntry[] entries) =>
+            _pages.Enqueue((path, true, new(entries, ReadOnlyMemory<byte>.Empty, true)));
+
+        public ValueTask<MirrorPulseWorkerDirectoryPage> ReadDirectoryPageAsync(MirrorPulseWorkerDirectoryPageRequest request, CancellationToken cancellationToken)
+        {
+            Assert.IsTrue(_pages.TryDequeue(out var expected));
+            Assert.AreEqual(route.InstanceId, request.InstanceId);
+            Assert.AreEqual(route.RootKey, request.RootKey);
+            Assert.AreEqual(expected.Path, request.NormalizedPath);
+            CollectionAssert.AreEqual(expected.Continuation ? Next : Array.Empty<byte>(), request.ContinuationCursor.ToArray());
+            return ValueTask.FromResult(expected.Page);
+        }
+    }
+
     private static async Task<MirrorPulseNamespaceTransferPlan> PrepareAcceptedTransferTargetAsync(MirrorPulseProductCatalog catalog,
         byte[] bytes, bool sameInstance = false, bool localOnlySource = false, bool captureOriginalJournal = false, bool emptyJournal = false,
         MirrorPulseNamespaceTransferPlan? originalPlan = null)

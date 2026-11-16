@@ -88,11 +88,27 @@ public sealed class MirrorPulseTransferTargetVerifier(MirrorPulseProductCatalog 
 
     internal async Task RequireAbsentEntryAsync(MirrorPulseTransferRoute route, string path, CancellationToken token)
     {
-        int separator = path.LastIndexOf('/');
-        string parent = separator < 0 ? string.Empty : path[..separator];
-        await foreach (var entry in ReadDirectoryEntriesAsync(route, parent, token).ConfigureAwait(false))
-            if (string.Equals(entry.RelativePath, path, StringComparison.OrdinalIgnoreCase) && !entry.IsDeleted)
-                throw new IOException("The original local-only transfer member has a remote occupant.");
+        string parent = string.Empty;
+        for (int separator = path.IndexOf('/'); ; separator = path.IndexOf('/', separator + 1))
+        {
+            bool leaf = separator < 0;
+            string child = leaf ? path : path[..separator];
+            MirrorPulseWorkerDirectoryEntry? directory = null;
+            await foreach (var entry in ReadDirectoryEntriesAsync(route, parent, token).ConfigureAwait(false))
+            {
+                if (entry.IsDeleted || !string.Equals(entry.RelativePath, child, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (leaf)
+                    throw new IOException("The original local-only transfer member has a remote occupant.");
+                if (entry.ItemKind != "Directory" || directory is not null)
+                    throw new IOException("The original local-only transfer member has a conflicting remote ancestor.");
+                directory = entry;
+            }
+            // A complete inventory of the existing parent proves absence even when a
+            // deeper directory has never existed. Each request uses the actual remote casing.
+            if (directory is null) return;
+            parent = directory.RelativePath;
+        }
     }
 
     private async Task<MirrorPulseWorkerDirectoryEntry> ReadMetadataCoreAsync(MirrorPulseTransferRoute route,

@@ -20,10 +20,11 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 Assert.IsNotNull(proof?.Verification);
                 CloudItem item = NativeOriginalMemberItem(fileSystem, original.Baseline);
                 int separator = original.Baseline.RelativePath.LastIndexOf('/');
+                string parentPath = separator < 0 ? string.Empty : original.Baseline.RelativePath[..separator];
                 CloudDirectory? parent = original.Baseline.RootId is null ? null : separator < 0 ? fileSystem.Root :
-                    fileSystem.GetDirectory(original.Baseline.RelativePath[..separator]);
+                    fileSystem.GetDirectory(parentPath);
                 var member = new MirrorPulseNamespaceMemberRegistration(1, Guid.NewGuid(), parent is null ? null :
-                    members.Values.Single(value => value.IsDirectory && value.RelativePath == parent.RelativePath).MemberId,
+                    members.Values.Single(value => value.IsDirectory && value.RelativePath == parentPath).MemberId,
                     MirrorPulseNamespaceMemberOrigin.CapturedOriginal, original.Baseline.EvidenceId, proof.Intent.OperationId,
                     proof.Intent.RootId, proof.Intent.RelativePath, original.Baseline.LocalObject, original.Baseline.IsDirectory,
                     original.Baseline.OwnerSid, DateTimeOffset.UtcNow);

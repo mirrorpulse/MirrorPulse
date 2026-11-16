@@ -19,6 +19,7 @@ on:
       - src/MirrorPulse.Core/State/MirrorPulseProductCatalog.NamespaceTransfer*.cs
       - src/MirrorPulse.Core/State/MirrorPulseProductCatalog.NamespaceFileTransferRecovery.cs
       - src/MirrorPulse.Core/State/MirrorPulseProductCatalog.NamespaceFileTransferTargetActivation.cs
+      - src/MirrorPulse.Core/Sync/MirrorPulseTransferTargetVerifier.cs
       - tests/MirrorPulse.CloudFiles.CfSharp.Tests/MirrorPulseWindowsNamespacePermissionLeaseTests.Transfers.cs
       - src/MirrorPulse.CloudFiles.CfSharp/MirrorPulseJournalUploadPump.Coalescing.cs
       - src/MirrorPulse.CloudFiles.CfSharp/MirrorPulseJournal*DirectoryMove*.cs
@@ -49,8 +50,8 @@ jobs:
           - runner: windows-11-arm
             architecture: Arm64
     runs-on: ${{ matrix.runner }}
-    # Keep 29 minutes for directory verification, 30 for file recovery and 6 for setup and collection.
-    timeout-minutes: 65
+    # Keep 29 minutes for directory verification, 31 for file recovery and 6 for setup and collection.
+    timeout-minutes: 66
     steps:
       - name: Check out the exact selected source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

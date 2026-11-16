@@ -3,6 +3,7 @@
   "requiredCases": {
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeHostTransferRetiresLocalOnlySourceAfterVerifyingItsRemoteAbsence": [
       "NativeHostTransferRetiresLocalOnlySourceAfterVerifyingItsRemoteAbsence (\"absent\")",
+      "NativeHostTransferRetiresLocalOnlySourceAfterVerifyingItsRemoteAbsence (\"absent-remote-parent\")",
       "NativeHostTransferRetiresLocalOnlySourceAfterVerifyingItsRemoteAbsence (\"occupied-before-copy\")",
       "NativeHostTransferRetiresLocalOnlySourceAfterVerifyingItsRemoteAbsence (\"occupied-after-copy\")",
       "NativeHostTransferRetiresLocalOnlySourceAfterVerifyingItsRemoteAbsence (\"occupied-after-retirement-start\")"

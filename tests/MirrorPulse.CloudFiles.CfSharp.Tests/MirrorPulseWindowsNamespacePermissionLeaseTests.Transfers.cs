@@ -97,6 +97,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     [DoNotParallelize]
     [TestCategory("NativeCloudFiles")]
     [DataRow("absent")]
+    [DataRow("absent-remote-parent")]
     [DataRow("occupied-before-copy")]
     [DataRow("occupied-after-copy")]
     [DataRow("occupied-after-retirement-start")]
@@ -163,6 +164,10 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         for (int attempt = selectedSameInstance == true ? 1 : 0; attempt < (selectedSameInstance == false ? 1 : 2); attempt++)
         {
             bool sameInstance = attempt == 1;
+            const string nestedSourceDirectory = "local-only-folder";
+            bool nestedSource = localOnlyBackendScenario == "absent-remote-parent";
+            string sourceWorkerPath = nestedSource ? nestedSourceDirectory + "/original.bin" : "original.bin";
+            string sourceRelativePath = "Docs/" + sourceWorkerPath;
             string directory = Path.Combine(Path.GetTempPath(), "MirrorPulse-native-tests", Guid.NewGuid().ToString("N"));
             var paths = new MirrorPulseStoragePaths(Path.Combine(directory, "sync"), Path.Combine(directory, "data"));
             var registry = new CfSharpMirrorPulseCloudRootRegistry();
@@ -197,11 +202,19 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 await using var fileSystem = new MirrorPulseCloudFileSystemBuilder(paths).WithStateStore(state).WithContentProvider(provider).Build();
                 await role.RunNamespaceOperationAsync(async () => await fileSystem.StartAsync(deadline.Token));
                 Directory.CreateDirectory(fileSystem.GetDirectory("Docs").FullPath); Directory.CreateDirectory(fileSystem.GetDirectory("Archive").FullPath);
-                string sourcePath = fileSystem.GetFile("Docs/original.bin").FullPath;
+                var fixtureItems = new List<CloudItem> { fileSystem.Root, fileSystem.GetDirectory("Docs"), fileSystem.GetDirectory("Archive") };
+                if (nestedSource)
+                {
+                    var nestedDirectory = fileSystem.GetDirectory("Docs/" + nestedSourceDirectory);
+                    Directory.CreateDirectory(nestedDirectory.FullPath);
+                    fixtureItems.Add(nestedDirectory);
+                }
+                var sourceFile = fileSystem.GetFile(sourceRelativePath);
+                fixtureItems.Add(sourceFile);
+                string sourcePath = sourceFile.FullPath;
                 await File.WriteAllBytesAsync(sourcePath, bytes, deadline.Token);
                 var originals = new List<MirrorPulseNamespacePermissionPreparation>();
-                foreach (CloudItem item in new CloudItem[] { fileSystem.Root, fileSystem.GetDirectory("Docs"),
-                    fileSystem.GetDirectory("Archive"), fileSystem.GetFile("Docs/original.bin") })
+                foreach (CloudItem item in fixtureItems)
                 {
                     SetProtectedFixtureUserOwner(item, caller.User!);
                     await using var lease = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(item, router, deadline.Token);
@@ -233,7 +246,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                             captured.AddRange(page.Select(entry => entry.Preparation)); after = page[^1].Sequence;
                         }
                     }
-                    Assert.HasCount(4, captured); originals = captured;
+                    Assert.HasCount(fixtureItems.Count, captured); originals = captured;
                 }
                 await catalog.PrepareNamespacePermissionChangesAsync(originals, deadline.Token);
                 await using (var permissions = new MirrorPulseNamespacePermissionCoordinator(catalog))
@@ -262,7 +275,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 var member = members.Values.Single(item => !item.IsDirectory);
                 var target = members.Values.Single(item => item.RelativePath == "Archive");
                 if (deleteSource)
-                    await PrepareTransferAcceptedSourceAsync(fileSystem.GetFile("Docs/original.bin"), catalog, router, role, actor,
+                    await PrepareTransferAcceptedSourceAsync(sourceFile, catalog, router, role, actor,
                         sourceRoot, bytes, deadline.Token, message => TestContext.WriteLine(message));
                 string acceptedSourceSha256 = Convert.ToHexString(SHA256.HashData(bytes));
                 if (recreateAcceptedSource)
@@ -270,7 +283,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     bytes[0] ^= 0x5A;
                     bytes[^1] ^= 0xA5;
                 }
-                var nativeBefore = await fileSystem.GetFile("Docs/original.bin").InspectAsync(deadline.Token);
+                var nativeBefore = await sourceFile.InspectAsync(deadline.Token);
                 long? originalOfficialFileId = null;
                 CloudItemState? originalOfficialSource = null;
                 if (retireLocal)
@@ -282,7 +295,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     await read.RollbackAsync(deadline.Token);
                 }
                 await fileSystem.DisposeAsync();
-                var worker = new TransferNativeWorker(role, caller.User!, targetRoot, bytes)
+                var worker = new TransferNativeWorker(role, caller.User!, targetRoot, bytes, sourceWorkerPath)
                 { LocalOnlySourceListedRemotely = localOnlyBackendScenario == "occupied-before-copy" };
                 var transport = new MirrorPulseNormalUserWorkerTransport(role, worker, worker, worker, worker, worker);
                 int targetProtocol = 1;
@@ -902,6 +915,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                             Assert.IsEmpty(await catalog.ReadNamespaceDispatchFencedRootsAsync(deadline.Token));
                             Assert.AreEqual(1, worker.Uploads);
                             Assert.AreEqual(1, nativeDeleteCalls);
+                            if (nestedSource)
+                                Assert.IsTrue(Directory.Exists(Path.Combine(paths.SyncRootPath, "Docs", nestedSourceDirectory)));
                             var remaining = await ReadTransferOriginalJournalIdsAsync(journal, deadline.Token);
                             foreach (var change in completed.JournalClaim!.Members)
                                 Assert.IsFalse(remaining.Contains(change.OperationId));
@@ -1242,6 +1257,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 NoteTransferStage("FixtureEnd");
                 registry.Unregister(paths.SyncRootPath);
                 RestoreSourceContextFixtureForCleanup(directory, paths.SyncRootPath, caller.User!);
+                if (nestedSource)
+                    RestoreTransferDirectoryForCleanup(new DirectoryInfo(Path.Combine(paths.SyncRootPath, "Docs", nestedSourceDirectory)), caller.User!);
                 RestoreTransferArchiveForCleanup(paths.SyncRootPath, caller.User!);
                 DeleteFixture(directory);
             }
@@ -1300,7 +1317,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         using var caller = WindowsIdentity.GetCurrent(); await using var role = new MirrorPulseNamespaceExecutionSession();
         byte[] bytes = [5, 7, 11, 13];
         var identity = router.CreateFileIdentity(target.InstanceId, target.UniquenessKey, "target:original", "target-v1");
-        var worker = new TransferNativeWorker(role, caller.User!, target, bytes) { HydrationIdentity = identity };
+        var worker = new TransferNativeWorker(role, caller.User!, target, bytes, "original.bin") { HydrationIdentity = identity };
         var transport = new MirrorPulseNormalUserWorkerTransport(role, worker, worker, worker, worker, worker);
         var provider = new MirrorPulseDemandProvider(router, transport);
         await using var content = await provider.OpenReadAsync("Archive/moved.bin", identity.Encode(), bytes.LongLength, 0, bytes.LongLength);
@@ -1358,20 +1375,22 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         await command.ExecuteNonQueryAsync(token);
     }
 
-    private static void RestoreTransferArchiveForCleanup(string syncRoot, SecurityIdentifier user)
+    private static void RestoreTransferArchiveForCleanup(string syncRoot, SecurityIdentifier user) =>
+        RestoreTransferDirectoryForCleanup(new DirectoryInfo(Path.Combine(syncRoot, "Archive")), user);
+
+    private static void RestoreTransferDirectoryForCleanup(DirectoryInfo directory, SecurityIdentifier user)
     {
         // The preceding source-context helper validates the exact GUID, marker and sync-root path.
-        var archive = new DirectoryInfo(Path.Combine(syncRoot, "Archive"));
-        if (!archive.Exists) return;
-        if (archive.LinkTarget is not null) throw new InvalidOperationException("Transfer fixture cleanup cannot follow a directory link.");
+        if (!directory.Exists) return;
+        if (directory.LinkTarget is not null) throw new InvalidOperationException("Transfer fixture cleanup cannot follow a directory link.");
         var access = new DirectorySecurity(); access.SetAccessRuleProtection(true, false);
         access.AddAccessRule(new FileSystemAccessRule(user, FileSystemRights.FullControl,
             InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
-        archive.SetAccessControl(access);
+        directory.SetAccessControl(access);
     }
 
     private sealed class TransferNativeWorker(MirrorPulseNamespaceExecutionSession role, SecurityIdentifier owner,
-        RootRegistration target, byte[] bytes) : IMirrorPulseWorkerUploadTransport, IMirrorPulseWorkerStatTransport,
+        RootRegistration target, byte[] bytes, string sourcePath) : IMirrorPulseWorkerUploadTransport, IMirrorPulseWorkerStatTransport,
         IMirrorPulseWorkerRangeTransport, IMirrorPulseWorkerDirectoryPageSource, IMirrorPulseWorkerMutationTransport
     {
         internal MirrorPulseNamespaceTransferPlan? Plan;
@@ -1388,8 +1407,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         internal int PreparedCopyPublications;
         internal SecurityIdentifier? ExpectedNamespaceRole;
         internal Func<CancellationToken, Task>? BeforeUpload;
-        private bool IsSource(InstanceId instance, string? root, string path) => Plan is { } plan &&
-            instance == plan.SourceRoute.InstanceId && root == plan.SourceRoute.RootKey && path == "original.bin";
+        private bool IsSourceRoute(InstanceId instance, string? root) => Plan is { } plan &&
+            instance == plan.SourceRoute.InstanceId && root == plan.SourceRoute.RootKey;
         private void AssertNormalUser()
         {
             using var identity = WindowsIdentity.GetCurrent();
@@ -1433,7 +1452,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         }
         public ValueTask<string?> StatAsync(MirrorPulseWorkerStatRequest request, CancellationToken token)
         {
-            if (IsSource(request.InstanceId, request.RootKey, request.NormalizedPath))
+            if (IsSourceRoute(request.InstanceId, request.RootKey) && request.NormalizedPath == sourcePath)
             {
                 AssertNormalUser();
                 return ValueTask.FromResult(SourceDeleted ? null : Plan!.SourceRemoteRevision);
@@ -1459,12 +1478,12 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         }
         public ValueTask<MirrorPulseWorkerDirectoryPage> ReadDirectoryPageAsync(MirrorPulseWorkerDirectoryPageRequest request, CancellationToken token)
         {
-            if (IsSource(request.InstanceId, request.RootKey, "original.bin"))
+            if (IsSourceRoute(request.InstanceId, request.RootKey))
             {
                 AssertNormalUser(); Assert.AreEqual(string.Empty, request.NormalizedPath);
                 if (Plan!.SourceRemoteRevision is null && !LocalOnlySourceListedRemotely)
                     return ValueTask.FromResult(new MirrorPulseWorkerDirectoryPage([], ReadOnlyMemory<byte>.Empty, true));
-                return ValueTask.FromResult(new MirrorPulseWorkerDirectoryPage([new("source:accepted-original", "source-v1", "File", "original.bin", bytes.LongLength, null, null, false)], ReadOnlyMemory<byte>.Empty, true));
+                return ValueTask.FromResult(new MirrorPulseWorkerDirectoryPage([new("source:accepted-original", "source-v1", "File", sourcePath, bytes.LongLength, null, null, false)], ReadOnlyMemory<byte>.Empty, true));
             }
             RequireNormalUser(request.InstanceId, request.RootKey, "moved.bin"); Assert.AreEqual(string.Empty, request.NormalizedPath);
             return ValueTask.FromResult(new MirrorPulseWorkerDirectoryPage([new("target:original", "target-v1", "File", "moved.bin", bytes.LongLength, null, null, false)], ReadOnlyMemory<byte>.Empty, true));
@@ -1473,7 +1492,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         {
             using var identity = WindowsIdentity.GetCurrent(); Assert.AreEqual(owner, identity.User);
             Assert.IsFalse(identity.Groups?.Contains(ExpectedNamespaceRole ?? role.RoleSid) ?? false);
-            Assert.IsTrue(IsSource(request.InstanceId, request.RootKey, request.NormalizedPath));
+            Assert.IsTrue(IsSourceRoute(request.InstanceId, request.RootKey));
+            Assert.AreEqual(sourcePath, request.NormalizedPath);
             Assert.AreEqual(Plan!.DeleteOperationId, request.OperationId); Assert.AreEqual("source-v1", request.ExpectedRevision); Assert.IsFalse(request.IsDirectory);
             Deletes++; DeleteInspection?.Invoke(); SourceDeleted = true;
             if (LoseDeleteReply) throw new IOException("Synthetic response loss after the original conditional source delete.");
