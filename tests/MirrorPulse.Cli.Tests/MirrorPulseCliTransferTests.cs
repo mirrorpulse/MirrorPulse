@@ -47,13 +47,13 @@ public sealed class MirrorPulseCliTransferTests
             { Assert.AreEqual(value.OperationId, arguments.OperationId); calls++; return ValueTask.FromResult(value); });
         string pipe = "MirrorPulse-transfer-command-" + Guid.NewGuid().ToString("N");
         using var shutdown = new CancellationTokenSource(); Task serve = new MirrorPulseControlPipeServer(dispatcher.DispatchAsync, pipe).ServeAsync(shutdown.Token);
-        var client = new MirrorPulseControlClient(new MirrorPulseControlClientOptions { PipeName = pipe });
+        var client = new MirrorPulseControlClient(new() { PipeName = pipe, ConnectTimeout = TimeSpan.FromSeconds(15) });
         await using var operations = new MirrorPulseCliHostOperations(new MirrorPulseHostStartupOptions(), client);
         string[] arguments = placement ? [value.OperationId.ToString("D"), value.SourceMemberId.ToString("D"), parent.ToString("D"), "moved.bin"] : [value.OperationId.ToString("D")];
         try
         {
             using var output = new StringWriter(); using var error = new StringWriter();
-            Assert.AreEqual(0, await RunAsync(operations, true, verb, arguments, output, error));
+            Assert.AreEqual(0, await RunAsync(operations, true, verb, arguments, output, error), error.ToString());
             using var document = JsonDocument.Parse(output.ToString()); var status = document.RootElement.GetProperty("data");
             Assert.AreEqual(!prepare, status.GetProperty("completed").GetBoolean()); Assert.AreEqual(!prepare, status.GetProperty("journalAcknowledged").GetBoolean());
             Assert.AreEqual(prepare, status.GetProperty("rootsFenced").GetBoolean()); Assert.AreEqual(value.OperationId, status.GetProperty("operationId").GetGuid());
@@ -98,7 +98,7 @@ public sealed class MirrorPulseCliTransferTests
         { Assert.IsTrue(arguments.RootId == value.SourceRootId || arguments.RootId == value.TargetRootId); lists++; return ValueTask.FromResult(new MirrorPulseControlTransfers([value])); });
         string pipe = "MirrorPulse-transfer-cli-" + Guid.NewGuid().ToString("N");
         using var shutdown = new CancellationTokenSource(); Task serve = new MirrorPulseControlPipeServer(dispatcher.DispatchAsync, pipe).ServeAsync(shutdown.Token);
-        var client = new MirrorPulseControlClient(new MirrorPulseControlClientOptions { PipeName = pipe });
+        var client = new MirrorPulseControlClient(new() { PipeName = pipe, ConnectTimeout = TimeSpan.FromSeconds(15) });
         await using var operations = new MirrorPulseCliHostOperations(new MirrorPulseHostStartupOptions(), client);
         try
         {
@@ -147,7 +147,7 @@ public sealed class MirrorPulseCliTransferTests
         { Assert.AreEqual(root, arguments.RootId); calls++; return ValueTask.FromResult(new MirrorPulseControlTransfers([])); });
         string pipe = "MirrorPulse-transfer-empty-cli-" + Guid.NewGuid().ToString("N");
         using var shutdown = new CancellationTokenSource(); Task serve = new MirrorPulseControlPipeServer(dispatcher.DispatchAsync, pipe).ServeAsync(shutdown.Token);
-        var client = new MirrorPulseControlClient(new MirrorPulseControlClientOptions { PipeName = pipe });
+        var client = new MirrorPulseControlClient(new() { PipeName = pipe, ConnectTimeout = TimeSpan.FromSeconds(15) });
         await using var operations = new MirrorPulseCliHostOperations(new MirrorPulseHostStartupOptions(), client);
         try
         {

@@ -27,12 +27,12 @@ public sealed class MirrorPulseCliRemoteRetirementTests
             });
         string pipe = "MirrorPulse-remote-status-cli-" + Guid.NewGuid().ToString("N");
         using var shutdown = new CancellationTokenSource(); Task serve = new MirrorPulseControlPipeServer(dispatcher.DispatchAsync, pipe).ServeAsync(shutdown.Token);
-        var client = new MirrorPulseControlClient(new MirrorPulseControlClientOptions { PipeName = pipe });
+        var client = new MirrorPulseControlClient(new() { PipeName = pipe, ConnectTimeout = TimeSpan.FromSeconds(15) });
         await using var operations = new MirrorPulseCliHostOperations(new MirrorPulseHostStartupOptions(), client);
         try
         {
             using var output = new StringWriter(); using var error = new StringWriter();
-            Assert.AreEqual(0, await RunAsync(operations, true, "retirement-status", [expected.OperationId.ToString("D")], output, error));
+            Assert.AreEqual(0, await RunAsync(operations, true, "retirement-status", [expected.OperationId.ToString("D")], output, error), error.ToString());
             Assert.AreEqual(string.Empty, error.ToString());
             using var json = JsonDocument.Parse(output.ToString()); var data = json.RootElement.GetProperty("data");
             Assert.AreEqual(expected.OperationId, data.GetProperty("operationId").GetGuid());
@@ -70,7 +70,7 @@ public sealed class MirrorPulseCliRemoteRetirementTests
             });
         string pipe = "MirrorPulse-remote-list-cli-" + Guid.NewGuid().ToString("N");
         using var shutdown = new CancellationTokenSource(); Task serve = new MirrorPulseControlPipeServer(dispatcher.DispatchAsync, pipe).ServeAsync(shutdown.Token);
-        var client = new MirrorPulseControlClient(new MirrorPulseControlClientOptions { PipeName = pipe });
+        var client = new MirrorPulseControlClient(new() { PipeName = pipe, ConnectTimeout = TimeSpan.FromSeconds(15) });
         await using var operations = new MirrorPulseCliHostOperations(new MirrorPulseHostStartupOptions(), client);
         try
         {

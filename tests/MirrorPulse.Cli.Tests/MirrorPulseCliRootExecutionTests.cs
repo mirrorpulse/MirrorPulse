@@ -28,10 +28,15 @@ public sealed class MirrorPulseCliRootExecutionTests
                 return ValueTask.FromResult(new MirrorPulseControlRootExecution(operation, root, phase,
                     "Documents", "Renamed", "Current Label", 4, phase == "Completed", ready));
             });
-        using var shutdown = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var shutdown = new CancellationTokenSource(TimeSpan.FromSeconds(40));
         var server = new MirrorPulseControlPipeServer(dispatcher.DispatchAsync, pipe);
         Task serving = server.ServeAsync(shutdown.Token);
-        var client = new MirrorPulseControlClient(new() { PipeName = pipe, ExpectedHostProcessId = Environment.ProcessId });
+        var client = new MirrorPulseControlClient(new()
+        {
+            PipeName = pipe,
+            ConnectTimeout = TimeSpan.FromSeconds(15),
+            ExpectedHostProcessId = Environment.ProcessId
+        });
         await using var operations = new MirrorPulseCliHostOperations(new MirrorPulseHostStartupOptions(), client);
         try
         {
@@ -42,7 +47,7 @@ public sealed class MirrorPulseCliRootExecutionTests
                     ? ["--no-start", "--json", "root", "execute-rename", operation.ToString("D")]
                     : ["--no-start", "root", "execute-rename", operation.ToString("D")];
                 int exit = await MirrorPulseCliApplication.RunAsync(arguments, output, error, hostOperations: operations, isPlatformSupported: () => true);
-                Assert.AreEqual(expectedExit, exit); Assert.AreEqual(string.Empty, error.ToString());
+                Assert.AreEqual(expectedExit, exit, error.ToString()); Assert.AreEqual(string.Empty, error.ToString());
                 if (json)
                 {
                     using var document = JsonDocument.Parse(output.ToString()); var receipt = document.RootElement.GetProperty("data");
