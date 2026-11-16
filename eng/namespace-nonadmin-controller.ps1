@@ -1,5 +1,5 @@
 function Get-OrdinaryUserNamespaceBudgetMilliseconds {
-    param([Parameter(Mandatory)][ValidateRange(1, 176)][int]$TestCount, [string[]]$TestNames,
+    param([Parameter(Mandatory)][ValidateRange(1, 177)][int]$TestCount, [string[]]$TestNames,
         [ValidateSet('AllRetained', 'S06')][string]$Scope = 'AllRetained')
     if ($Scope -ceq 'S06' -and -not $PSBoundParameters.ContainsKey('TestNames')) {
         throw 'S06 scope requires its explicit selected test names.'
@@ -74,6 +74,7 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
     $fileTransferRecovery.Add($prefix+'NativeHostTransferPublishesOnlyUnchangedRegisteredTargetAfterRoleHandoff', 2)
     $fileTransferRecovery.Add($prefix+'NativeHostTransferPublishesObservedTargetAfterRoleHandoff', 1)
     $fileTransferRecovery.Add($prefix+'NativeHostTransferReactivatesOnlyUnstartedSelectedTargetAfterRoleHandoff', 2)
+    $fileTransferRecovery.Add($prefix+'NativeHostTransferRetiresLocalOnlySourceAfterVerifyingItsRemoteAbsence', 4)
     $fileTransferRecovery.Add($prefix+'NativeHostTransferAcknowledgesOriginalAfterSettledSourceRoleHandoff', 2)
     $fileTransferRecovery.Add($prefix+'NativeHostTransferResumesInterruptedSourceRetirementAcrossRoles', 3)
     $fileTransferRecovery.Add($prefix+'NativeHostTransferCompletesRecreatedAcceptedSourceAfterBothRootAudits', 1)
@@ -184,7 +185,7 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
 }
 
 function Get-OrdinaryUserNamespaceStepTimeoutMinutes {
-    param([Parameter(Mandatory)][ValidateRange(1, 176)][int]$TestCount, [string[]]$TestNames,
+    param([Parameter(Mandatory)][ValidateRange(1, 177)][int]$TestCount, [string[]]$TestNames,
         [ValidateSet('AllRetained', 'S06')][string]$Scope = 'AllRetained')
     # The workflow must let the existing child budget expire and allow the
     # controller to preserve diagnostics and remove its disposable user/profile.

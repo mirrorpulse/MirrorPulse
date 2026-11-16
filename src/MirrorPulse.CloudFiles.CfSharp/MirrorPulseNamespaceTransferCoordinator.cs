@@ -111,11 +111,15 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator(CloudFileSys
     }
 
     public ValueTask<MirrorPulseNamespaceTransferCopy> CopyAsync(Guid operationId,
-        IMirrorPulseWorkerUploadTransport uploads, CancellationToken token) => CopyAsync(operationId, uploads, null, token);
+        IMirrorPulseWorkerUploadTransport uploads, CancellationToken token) => CopyAsync(operationId, uploads, null, null, null, token);
 
-    internal async ValueTask<MirrorPulseNamespaceTransferCopy> CopyAsync(Guid operationId,
-        IMirrorPulseWorkerUploadTransport uploads, IMirrorPulseWorkerMutationTransport? mutations, CancellationToken token,
-        MirrorPulseFileTransferRecovery? recovery = null)
+    internal ValueTask<MirrorPulseNamespaceTransferCopy> CopyAsync(Guid operationId, MirrorPulseTransferWorkerServices workers,
+        MirrorPulseFileTransferRecovery? recovery, CancellationToken token) =>
+        CopyAsync(operationId, workers.Uploads, workers.Mutations, recovery, workers, token);
+
+    private async ValueTask<MirrorPulseNamespaceTransferCopy> CopyAsync(Guid operationId,
+        IMirrorPulseWorkerUploadTransport uploads, IMirrorPulseWorkerMutationTransport? mutations,
+        MirrorPulseFileTransferRecovery? recovery, MirrorPulseTransferWorkerServices? workers, CancellationToken token)
     {
         var copy = await ReadAsync(operationId, token).ConfigureAwait(false);
         if (copy.CopyAcceptedAt is not null) return copy;
@@ -125,6 +129,9 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator(CloudFileSys
         {
             await using var source = MirrorPulseTransferSourceDataLease.Open(file.FullPath);
             await source.VerifyAsync(copy.Plan.Length, copy.Plan.Sha256, token).ConfigureAwait(false);
+            if (workers is not null && copy.Plan.SourceRemoteRevision is null)
+                await RequireLocalOnlySourceAbsentAsync(copy, new(catalog, workers.Stats, workers.Ranges, workers.Directories),
+                    workers.Stats, token).ConfigureAwait(false);
             await using var input = await inputs.OpenLeaseAsync(copy.Plan, token).ConfigureAwait(false);
             if (copy.JournalClaim is null)
             {

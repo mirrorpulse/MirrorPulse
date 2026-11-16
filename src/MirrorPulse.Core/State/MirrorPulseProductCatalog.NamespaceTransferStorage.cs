@@ -58,6 +58,9 @@ public sealed partial class MirrorPulseProductCatalog
             { throw new InvalidDataException("The transfer lost its original native target publication references.", error); }
         }
         await ValidateNamespaceTransferSourceDeletionReferencesAsync(copy, transaction, token).ConfigureAwait(false);
+        if (copy.SourceAbsence is { } absence)
+            await ValidateTransferSourceDispositionReferencesAsync(copy, absence.TargetProtectionId, absence.ObservedAt,
+                absence.PublishedRecovery, transaction, token).ConfigureAwait(false);
         await ValidateNamespaceTransferJournalIndexesAsync(copy, transaction, token).ConfigureAwait(false);
         await ValidateNamespaceTransferStateAsync(copy, transaction, token).ConfigureAwait(false);
         await ValidateNamespaceTransferAcknowledgementReferencesAsync(copy, transaction, token).ConfigureAwait(false);

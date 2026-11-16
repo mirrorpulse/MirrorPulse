@@ -8,8 +8,7 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 public sealed partial class MirrorPulseNamespaceTransferCoordinator
 {
     /// <summary>Deletes only the original accepted remote source while retaining its guarded local bytes and both fences.</summary>
-    /// <remarks>This phase does not perform local retirement or acknowledge a journal. A null original revision
-    /// belongs to the separate local-only reconciliation path and cannot authorize an unconditional delete.</remarks>
+    /// <remarks>This phase does not perform local retirement or acknowledge a journal. The original remote revision is required.</remarks>
     public ValueTask<MirrorPulseNamespaceTransferCopy> DeleteSourceAsync(Guid operationId,
         MirrorPulseTransferWorkerServices workers, CancellationToken token) =>
         DeleteSourceAsync(operationId, workers, null, token);
@@ -22,6 +21,8 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
         MirrorPulseTransferWorkerServices workers, bool retireLocal, MirrorPulseFileTransferRecovery? recovery, CancellationToken token)
     {
         var copy = await ReadAsync(operationId, token).ConfigureAwait(false);
+        if (!retireLocal && copy.Plan.SourceRemoteRevision is null)
+            throw new InvalidOperationException("Conditional source deletion requires the original remote revision.");
         if (copy.SourceDeletion?.AcceptedAt is not null && !retireLocal) return copy;
         if (copy.SourceDeletion is { AcceptedAt: null }) throw new MirrorPulseMutationAmbiguousException("The original source deletion has no owned acceptance receipt.");
         return await actor.RunAsync(async stop =>
@@ -29,7 +30,7 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
             var current = await ReadAsync(operationId, stop).ConfigureAwait(false);
             var retirement = retireLocal ? await catalog.ReadNamespaceRetirementAsync(current.Plan.DeleteOperationId, stop).ConfigureAwait(false) : null;
             if (retirement?.Phase == MirrorPulseNamespaceRetirementPhase.Completed) return current;
-            current = await catalog.ValidateNamespaceTransferSourceDeleteAsync(operationId, recovery, stop).ConfigureAwait(false);
+            current = await catalog.ValidateNamespaceTransferSourceDispositionAsync(operationId, recovery, allowLocalOnly: retireLocal, stop).ConfigureAwait(false);
             if (current.SourceDeletion?.AcceptedAt is not null && !retireLocal) return current;
             if (current.SourceDeletion is { AcceptedAt: null }) throw new MirrorPulseMutationAmbiguousException("The original source deletion cannot be dispatched again.");
             if (protocolVersion(current.Plan.SourceRoute.InstanceId) != 2 ||
@@ -62,7 +63,18 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
                     await using var originalInput = await execution.RunNormalUserOperationAsync(() => inputs.OpenLeaseAsync(current.Plan, stop)).ConfigureAwait(false);
                     var verifier = new MirrorPulseTransferTargetVerifier(catalog, workers.Stats, workers.Ranges, workers.Directories);
                     var freshTarget = await execution.RunNormalUserOperationAsync(() => verifier.ReadCurrentAsync(current, stop)).ConfigureAwait(false);
-                    if (current.SourceDeletion?.AcceptedAt is null)
+                    if (current.Plan.SourceRemoteRevision is null)
+                    {
+                        await execution.RunNormalUserOperationAsync(() =>
+                            RequireLocalOnlySourceAbsentAsync(current, verifier, workers.Stats, stop)).ConfigureAwait(false);
+                        await RequireCurrentTargetAsync(current, target, targetFile, targetGuard, stop).ConfigureAwait(false);
+                        _ = await ReadSourceProjectionAsync(file, originalSource, stop).ConfigureAwait(false);
+                        await data.VerifyAsync(current.Plan.Length, current.Plan.Sha256, stop).ConfigureAwait(false);
+                        if (current.SourceAbsence is null)
+                            current = await catalog.RecordNamespaceTransferSourceAbsenceAsync(operationId, freshTarget,
+                                target.Context.Protection.ProtectionId, DateTimeOffset.UtcNow, recovery, stop).ConfigureAwait(false);
+                    }
+                    else if (current.SourceDeletion?.AcceptedAt is null)
                     {
                         var mutations = workers.Mutations ?? throw new NotSupportedException("Source deletion requires the Host's normal-user mutation transport.");
                         string sourcePath = current.Plan.Source.Context.Location.RelativePath[(current.Plan.SourceRoute.DirectoryName.Length + 1)..];
@@ -100,6 +112,19 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
                 await stats.StatAsync(new(route.InstanceId, path, route.RootKey), token).ConfigureAwait(false) != copy.Plan.SourceRemoteRevision)
                 throw new IOException("Another remote object or revision occupies the original source path.");
         }).ConfigureAwait(false);
+    }
+
+    private static async Task RequireLocalOnlySourceAbsentAsync(MirrorPulseNamespaceTransferCopy copy, MirrorPulseTransferTargetVerifier verifier,
+        IMirrorPulseWorkerStatTransport stats, CancellationToken token)
+    {
+        var route = copy.Plan.SourceRoute;
+        string path = copy.Plan.Source.Context.Location.RelativePath[(route.DirectoryName.Length + 1)..];
+        var request = new MirrorPulseWorkerStatRequest(route.InstanceId, path, route.RootKey);
+        if (await stats.StatAsync(request, token).ConfigureAwait(false) is not null)
+            throw new IOException("A remote object occupies the original local-only source name.");
+        await verifier.RequireAbsentEntryAsync(route, path, token).ConfigureAwait(false);
+        if (await stats.StatAsync(request, token).ConfigureAwait(false) is not null)
+            throw new IOException("The original local-only source name changed during absence verification.");
     }
 
     private async Task RequireCurrentTargetAsync(MirrorPulseNamespaceTransferCopy copy, MirrorPulseNamespaceMemberProtectionSnapshot target,

@@ -619,6 +619,8 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             RequireImportBoundary();
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
             var copy = await ReadNamespaceTransferAsync(operationId, token).ConfigureAwait(false);
+            if (copy.Plan.SourceRemoteRevision is null)
+                throw new InvalidOperationException("Conditional source deletion requires the original remote revision.");
             if (copy.SourceDeletion?.AcceptedAt is not null) return copy;
             if (copy.SourceDeletion is not null) throw new MirrorPulseMutationAmbiguousException("The original source delete needs its owned correlated acceptance before recovery.");
             await using var admission = namespaceWork is null ? null : await namespaceWork.EnterPendingOperationAsync(
@@ -721,7 +723,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                     var coordinator = TransferCoordinator();
                     return verifyTarget
                         ? await coordinator.VerifyTargetAsync(operationId, transfers.Stats, transfers.Ranges, transfers.Directories, recovery, stop).ConfigureAwait(false)
-                        : await coordinator.CopyAsync(operationId, transfers.Uploads, transfers.Mutations, stop, recovery).ConfigureAwait(false);
+                        : await coordinator.CopyAsync(operationId, transfers, recovery, stop).ConfigureAwait(false);
                 }, token).ConfigureAwait(false);
         }
 

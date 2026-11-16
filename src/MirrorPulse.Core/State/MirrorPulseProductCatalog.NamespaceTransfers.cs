@@ -86,6 +86,12 @@ public sealed record MirrorPulseNamespaceTransferCopy(MirrorPulseNamespaceTransf
     public MirrorPulseNamespaceTransferSourceDeletion? SourceDeletion { get; init; }
 
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public MirrorPulseNamespaceTransferSourceAbsence? SourceAbsence { get; init; }
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    internal DateTimeOffset? SourceDispositionAt => SourceDeletion?.AcceptedAt ?? SourceAbsence?.ObservedAt;
+
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public MirrorPulseNamespaceTransferJournalClaim? JournalClaim { get; init; }
 
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]

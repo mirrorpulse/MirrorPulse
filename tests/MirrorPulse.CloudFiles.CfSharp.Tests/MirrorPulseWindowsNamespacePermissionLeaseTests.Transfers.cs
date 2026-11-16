@@ -96,6 +96,17 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     [TestMethod]
     [DoNotParallelize]
     [TestCategory("NativeCloudFiles")]
+    [DataRow("absent")]
+    [DataRow("occupied-before-copy")]
+    [DataRow("occupied-after-copy")]
+    [DataRow("occupied-after-retirement-start")]
+    public Task NativeHostTransferRetiresLocalOnlySourceAfterVerifyingItsRemoteAbsence(string backendScenario) =>
+        RunNativeHostTransferAsync(deleteSource: false, retireLocal: true, completeOriginals: true, selectedSameInstance: false,
+            retirementFault: backendScenario == "occupied-after-retirement-start" ? "before-native" : null, localOnlyBackendScenario: backendScenario);
+
+    [TestMethod]
+    [DoNotParallelize]
+    [TestCategory("NativeCloudFiles")]
     [DataRow(false)]
     [DataRow(true)]
     public Task NativeHostTransferAcknowledgesOriginalAfterSettledSourceRoleHandoff(bool loseAcknowledgementReturn) =>
@@ -143,7 +154,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         bool completeOriginals = false, bool? selectedSameInstance = null, bool? restartBeforeVerification = null,
         bool recreateAcceptedSource = false, bool? acceptDeleteBeforePublishedHandoff = null, bool retireBeforePublishedHandoff = false,
         bool loseAcknowledgementReturn = false, MirrorPulseTransferPublicationCheckpoint? targetPublicationHandoff = null,
-        bool editTargetBeforePublicationHandoff = false, bool handoffBeforeTargetBirthStart = false)
+        bool editTargetBeforePublicationHandoff = false, bool handoffBeforeTargetBirthStart = false,
+        string? localOnlyBackendScenario = null)
     {
         if (!OperatingSystem.IsWindows() || Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
             Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
@@ -270,7 +282,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     await read.RollbackAsync(deadline.Token);
                 }
                 await fileSystem.DisposeAsync();
-                var worker = new TransferNativeWorker(role, caller.User!, targetRoot, bytes);
+                var worker = new TransferNativeWorker(role, caller.User!, targetRoot, bytes)
+                { LocalOnlySourceListedRemotely = localOnlyBackendScenario == "occupied-before-copy" };
                 var transport = new MirrorPulseNormalUserWorkerTransport(role, worker, worker, worker, worker, worker);
                 int targetProtocol = 1;
                 MirrorPulseTransferWorkerServices Services(MirrorPulseNormalUserWorkerTransport source) =>
@@ -290,7 +303,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 {
                     if (checkpoint == MirrorPulseTransferSourceRetirementCheckpoint.BeforeNativeDeletion)
                     {
-                        Assert.AreEqual(1, worker.Deletes); Assert.IsTrue(worker.SourceDeleted);
+                        Assert.AreEqual(localOnlyBackendScenario is null ? 1 : 0, worker.Deletes);
+                        Assert.AreEqual(localOnlyBackendScenario is null, worker.SourceDeleted);
                         Assert.ThrowsExactly<IOException>(() =>
                         { using var late = new FileStream(sourcePath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete); });
                         if (!sqlFaultArmed && retirementFault is "native-receipt-write" or "name-settlement-write")
@@ -327,7 +341,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     TransferJournalReady = ObserveJournal,
                     TransferJournalSourceReady = source => currentJournalSource = source,
                     TransferSourceRetirementCheckpoint = retireLocal ? RetirementCheckpoint : null,
-                    TransferAcknowledgementCheckpoint = completeOriginals ? AcknowledgementCheckpoint : null,
+                    TransferAcknowledgementCheckpoint = completeOriginals && localOnlyBackendScenario is null ? AcknowledgementCheckpoint : null,
                     TransferPublicationCheckpoint = (checkpoint, _) =>
                     {
                         if (checkpoint != publicationCut) return ValueTask.CompletedTask;
@@ -434,6 +448,18 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         Assert.AreEqual(0, worker.Uploads);
                         var unchanged = (await catalog.ReadNamespaceTransferAsync(operation, deadline.Token))!;
                         Assert.IsNull(unchanged.CopyStartedAt); Assert.AreEqual(prepared.JournalClaim, unchanged.JournalClaim);
+                    }
+                    if (localOnlyBackendScenario == "occupied-before-copy")
+                    {
+                        Assert.IsNull(prepared.Plan.SourceRemoteRevision);
+                        await Assert.ThrowsExactlyAsync<IOException>(async () =>
+                            await runtime.CopyNamespaceTransferAsync(operation, deadline.Token));
+                        Assert.AreEqual(0, worker.Uploads);
+                        Assert.AreEqual(0, worker.Deletes);
+                        Assert.AreEqual(prepared, await runtime.ReadNamespaceTransferAsync(operation, deadline.Token));
+                        Assert.HasCount(2, await catalog.ReadNamespaceDispatchFencedRootsAsync(deadline.Token));
+                        CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(sourcePath, deadline.Token));
+                        return;
                     }
                     if (restartBeforeVerification is { } loseReply)
                     {
@@ -751,7 +777,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     MirrorPulseNamespaceWorkAdmission? recoveryWork = null;
                     try
                     {
-                        if (!sameInstance && !deleteSource)
+                        if (!sameInstance && !deleteSource && localOnlyBackendScenario is null)
                         {
                             projectionFault.Arm(verified.TargetBirth.Plan.ItemId);
                             await Assert.ThrowsExactlyAsync<CloudPlaceholderPersistenceException>(async () =>
@@ -826,6 +852,62 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         string actualDacl = new FileInfo(nativeTarget).GetAccessControl(AccessControlSections.Access).GetSecurityDescriptorSddlForm(AccessControlSections.Access);
                         Assert.IsTrue(MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(protection.ExpectedDacl, actualDacl));
                         Assert.AreEqual(verified, await publishing.PublishNamespaceTransferTargetAsync(operation, deadline.Token));
+                        if (localOnlyBackendScenario is not null)
+                        {
+                            Assert.IsNull(verified.Plan.SourceRemoteRevision);
+                            if (localOnlyBackendScenario == "occupied-after-copy")
+                            {
+                                worker.LocalOnlySourceListedRemotely = true;
+                                await Assert.ThrowsExactlyAsync<IOException>(async () =>
+                                    await publishing.RetireNamespaceTransferSourceAsync(operation, deadline.Token));
+                                Assert.IsNull(await catalog.ReadNamespaceRetirementAsync(verified.Plan.DeleteOperationId, deadline.Token));
+                                Assert.IsNull((await publishing.ReadNamespaceTransferAsync(operation, deadline.Token)).SourceAbsence);
+                                Assert.AreEqual(1, worker.Uploads);
+                                Assert.AreEqual(0, worker.Deletes);
+                                Assert.HasCount(2, await catalog.ReadNamespaceDispatchFencedRootsAsync(deadline.Token));
+                                CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(sourcePath, deadline.Token));
+                                return;
+                            }
+                            if (localOnlyBackendScenario == "occupied-after-retirement-start")
+                            {
+                                await Assert.ThrowsExactlyAsync<InvalidOperationException>(async () =>
+                                    await publishing.RetireNamespaceTransferSourceAsync(operation, deadline.Token));
+                                Assert.AreEqual(1, retirementFaults);
+                                var pending = await catalog.ReadNamespaceRetirementAsync(verified.Plan.DeleteOperationId, deadline.Token);
+                                Assert.IsNotNull(pending?.StartedAt);
+                                var priorAbsence = (await publishing.ReadNamespaceTransferAsync(operation, deadline.Token)).SourceAbsence;
+                                Assert.IsNotNull(priorAbsence);
+                                worker.LocalOnlySourceListedRemotely = true;
+                                await Assert.ThrowsExactlyAsync<IOException>(async () =>
+                                    await publishing.RetireNamespaceTransferSourceAsync(operation, deadline.Token));
+                                Assert.AreEqual(pending, await catalog.ReadNamespaceRetirementAsync(verified.Plan.DeleteOperationId, deadline.Token));
+                                Assert.AreEqual(priorAbsence, (await publishing.ReadNamespaceTransferAsync(operation, deadline.Token)).SourceAbsence);
+                                Assert.HasCount(2, await catalog.ReadNamespaceDispatchFencedRootsAsync(deadline.Token));
+                                Assert.AreEqual(0, nativeDeleteCalls);
+                                Assert.AreEqual(0, worker.Deletes);
+                                CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(sourcePath, deadline.Token));
+                                worker.LocalOnlySourceListedRemotely = false;
+                            }
+                            var localRetirement = await publishing.RetireNamespaceTransferSourceAsync(operation, deadline.Token);
+                            Assert.AreEqual(MirrorPulseNamespaceRetirementPhase.Completed, localRetirement.Phase);
+                            Assert.IsFalse(File.Exists(sourcePath));
+                            Assert.AreEqual(0, worker.Deletes);
+                            var completed = await publishing.CompleteNamespaceTransferAsync(operation, deadline.Token);
+                            Assert.IsNull(completed.SourceDeletion);
+                            Assert.IsNotNull(completed.SourceAbsence);
+                            Assert.AreEqual(completed.SourceAbsence.ObservedAt, localRetirement.Intent.TransferEntry!.SourceAbsenceObservedAt);
+                            Assert.IsNull(localRetirement.Intent.TransferEntry.SourceDeleteAcceptedAt);
+                            Assert.AreEqual(verified.JournalClaim, completed.JournalClaim);
+                            Assert.IsNotNull(completed.Acknowledgement?.AcknowledgedAt);
+                            Assert.IsEmpty(await catalog.ReadNamespaceDispatchFencedRootsAsync(deadline.Token));
+                            Assert.AreEqual(1, worker.Uploads);
+                            Assert.AreEqual(1, nativeDeleteCalls);
+                            var remaining = await ReadTransferOriginalJournalIdsAsync(journal, deadline.Token);
+                            foreach (var change in completed.JournalClaim!.Members)
+                                Assert.IsFalse(remaining.Contains(change.OperationId));
+                            CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(nativeTarget, deadline.Token));
+                            return;
+                        }
                         if (acceptDeleteBeforePublishedHandoff is { } acceptDeleteBeforeHandoff)
                         {
                             var originalClaim = verified.JournalClaim;
@@ -1297,6 +1379,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         internal int Deletes;
         internal int RangeReads;
         internal bool SourceDeleted;
+        internal bool LocalOnlySourceListedRemotely;
         internal bool LoseDeleteReply;
         internal Action? DeleteInspection;
         internal CloudPlaceholderIdentity? HydrationIdentity;
@@ -1353,7 +1436,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             if (IsSource(request.InstanceId, request.RootKey, request.NormalizedPath))
             {
                 AssertNormalUser();
-                return ValueTask.FromResult(SourceDeleted ? null : "source-v1");
+                return ValueTask.FromResult(SourceDeleted ? null : Plan!.SourceRemoteRevision);
             }
             RequireNormalUser(request.InstanceId, request.RootKey, request.NormalizedPath); return ValueTask.FromResult<string?>("target-v1");
         }
@@ -1379,6 +1462,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             if (IsSource(request.InstanceId, request.RootKey, "original.bin"))
             {
                 AssertNormalUser(); Assert.AreEqual(string.Empty, request.NormalizedPath);
+                if (Plan!.SourceRemoteRevision is null && !LocalOnlySourceListedRemotely)
+                    return ValueTask.FromResult(new MirrorPulseWorkerDirectoryPage([], ReadOnlyMemory<byte>.Empty, true));
                 return ValueTask.FromResult(new MirrorPulseWorkerDirectoryPage([new("source:accepted-original", "source-v1", "File", "original.bin", bytes.LongLength, null, null, false)], ReadOnlyMemory<byte>.Empty, true));
             }
             RequireNormalUser(request.InstanceId, request.RootKey, "moved.bin"); Assert.AreEqual(string.Empty, request.NormalizedPath);

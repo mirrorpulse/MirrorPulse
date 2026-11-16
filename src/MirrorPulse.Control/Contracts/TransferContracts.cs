@@ -20,6 +20,9 @@ public sealed record MirrorPulseControlTransferStatus(Guid OperationId, Guid Sou
 {
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool IsDirectory { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DateTimeOffset? SourceAbsenceObservedAt { get; init; }
 }
 
 public sealed record MirrorPulseControlTransfers(IReadOnlyList<MirrorPulseControlTransferStatus> Entries);

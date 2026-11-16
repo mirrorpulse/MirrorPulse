@@ -111,10 +111,10 @@ public sealed partial class MirrorPulseProductCatalog
         if (acknowledgement.Version is not (1 or 2) || (acknowledgement.Version == 2) != (acknowledgement.PublishedRecovery is not null) ||
             acknowledgement.OperationId != copy.Plan.OperationId ||
             copy.Plan.Version != 2 || copy.Plan.CommandOrigin is null || copy.JournalClaim is null ||
-            copy.SourceDeletion?.AcceptedAt is not { } deleted || copy.TargetPublication is null ||
+            copy.SourceDispositionAt is not { } disposed || copy.TargetPublication is null ||
             acknowledgement.TargetProtectionId == Guid.Empty || acknowledgement.TargetAtStart is null ||
             acknowledgement.Kind != (copy.JournalClaim.Members.Count == 0 ? MirrorPulseTransferAcknowledgementKind.CommandWithoutCapturedNotifications :
-                MirrorPulseTransferAcknowledgementKind.OriginalJournal) || acknowledgement.SourceNameSettledAt < deleted ||
+                MirrorPulseTransferAcknowledgementKind.OriginalJournal) || acknowledgement.SourceNameSettledAt < disposed ||
             acknowledgement.TargetAtStart.VerifiedAt < acknowledgement.SourceNameSettledAt ||
             acknowledgement.StartedAt < acknowledgement.TargetAtStart.VerifiedAt ||
             acknowledgement.AcknowledgedAt is { } returned && returned < acknowledgement.StartedAt)

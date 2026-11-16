@@ -12,6 +12,7 @@ public sealed record MirrorPulseNamespaceTransferStatus(Guid OperationId, RootId
     bool RootsFenced, bool JournalAcknowledged, bool Completed)
 {
     public bool IsDirectory { get; init; }
+    public DateTimeOffset? SourceAbsenceObservedAt { get; init; }
 }
 
 public sealed partial class MirrorPulseProductCatalog
@@ -119,6 +120,7 @@ public sealed partial class MirrorPulseProductCatalog
             retirement is not null ? "SourceRetirementPrepared" :
             copy.SourceDeletion?.AcceptedAt is not null ? "SourceDeleteAccepted" :
             copy.SourceDeletion is not null ? "SourceDeleteMayHaveBegun" :
+            copy.SourceAbsence is not null ? "SourceAbsenceVerified" :
             copy.TargetPublication is not null ? "TargetPublished" :
             copy.TargetBirth is not null ? "TargetBirthPrepared" :
             copy.TargetVerification is not null ? "TargetVerified" :
@@ -128,6 +130,7 @@ public sealed partial class MirrorPulseProductCatalog
             plan.TargetRoute.InstanceId, plan.Source.Context.Member.MemberId, copy.TargetPublication?.MemberId,
             plan.Source.Context.Location.RelativePath, plan.TargetRelativePath, stage, plan.PreparedAt,
             copy.CopyStartedAt, copy.CopyAcceptedAt, copy.SourceDeletion?.StartedAt, copy.SourceDeletion?.AcceptedAt,
-            retirement?.NativeDeletedAt, retirement?.CompletedAt, RootsFenced: !completed, JournalAcknowledged: journalAcknowledged, Completed: completed);
+            retirement?.NativeDeletedAt, retirement?.CompletedAt, RootsFenced: !completed, JournalAcknowledged: journalAcknowledged, Completed: completed)
+        { SourceAbsenceObservedAt = copy.SourceAbsence?.ObservedAt };
     }
 }

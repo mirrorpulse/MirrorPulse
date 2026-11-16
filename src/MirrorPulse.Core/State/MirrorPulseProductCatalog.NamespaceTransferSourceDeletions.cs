@@ -18,10 +18,10 @@ public sealed partial class MirrorPulseProductCatalog
 {
     /// <summary>Rechecks live original transfer/target ownership without granting another delete after a retained start.</summary>
     public Task<MirrorPulseNamespaceTransferCopy> ValidateNamespaceTransferSourceDeleteAsync(Guid operationId,
-        CancellationToken token = default) => ValidateNamespaceTransferSourceDeleteAsync(operationId, null, token);
+        CancellationToken token = default) => ValidateNamespaceTransferSourceDispositionAsync(operationId, null, allowLocalOnly: false, token);
 
-    internal async Task<MirrorPulseNamespaceTransferCopy> ValidateNamespaceTransferSourceDeleteAsync(Guid operationId,
-        MirrorPulseFileTransferRecovery? recovery, CancellationToken token)
+    internal async Task<MirrorPulseNamespaceTransferCopy> ValidateNamespaceTransferSourceDispositionAsync(Guid operationId,
+        MirrorPulseFileTransferRecovery? recovery, bool allowLocalOnly, CancellationToken token)
     {
         await _gate.WaitAsync(token).ConfigureAwait(false);
         try
@@ -29,8 +29,10 @@ public sealed partial class MirrorPulseProductCatalog
             ThrowIfDisposed(); using var transaction = BeginNamespaceRecoveryReadSnapshot();
             var copy = await ReadNamespaceTransferCoreAsync(operationId, transaction, token).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The original transfer is missing.");
-            if (copy.SourceDeletion?.AcceptedAt is null)
-                _ = await RequireCurrentTransferSourceDeletionAsync(copy, transaction, token, recovery).ConfigureAwait(false);
+            if (!allowLocalOnly && copy.Plan.SourceRemoteRevision is null)
+                throw new InvalidOperationException("Conditional source deletion requires the original remote revision.");
+            if (copy.SourceDispositionAt is null)
+                _ = await RequireCurrentTransferSourceDispositionAsync(copy, transaction, token, recovery).ConfigureAwait(false);
             transaction.Commit(); return copy;
         }
         finally { _gate.Release(); }
@@ -56,7 +58,9 @@ public sealed partial class MirrorPulseProductCatalog
                 ?? throw new FileNotFoundException("The original transfer is missing.");
             if (copy.SourceDeletion is not null)
                 throw new InvalidOperationException("The original source delete may already have executed; another dispatch is not authorized.");
-            var target = await RequireCurrentTransferSourceDeletionAsync(copy, transaction, token, recovery).ConfigureAwait(false);
+            if (copy.Plan.SourceRemoteRevision is null)
+                throw new InvalidOperationException("Conditional source deletion requires the original remote revision.");
+            var target = await RequireCurrentTransferSourceDispositionAsync(copy, transaction, token, recovery).ConfigureAwait(false);
             if (target.Context.Protection.ProtectionId != targetProtectionId)
                 throw new InvalidOperationException("Source deletion requires the current independently verified target protection epoch.");
             var deletion = new MirrorPulseNamespaceTransferSourceDeletion(recovery is null ? 1 : 2, operationId,
@@ -100,13 +104,13 @@ public sealed partial class MirrorPulseProductCatalog
         finally { _gate.Release(); }
     }
 
-    private async Task<MirrorPulseNamespaceMemberProtectionSnapshot> RequireCurrentTransferSourceDeletionAsync(
+    private async Task<MirrorPulseNamespaceMemberProtectionSnapshot> RequireCurrentTransferSourceDispositionAsync(
         MirrorPulseNamespaceTransferCopy copy, SqliteTransaction transaction, CancellationToken token,
         MirrorPulseFileTransferRecovery? recovery = null)
     {
-        if (copy.TargetPublication is null || copy.TargetBirth is null || copy.Plan.SourceRemoteRevision is null ||
+        if (copy.TargetPublication is null || copy.TargetBirth is null ||
             copy.Plan.SourceRoute.ProtocolVersion != 2)
-            throw new InvalidOperationException("Conditional source deletion requires a published target and the original V2 source revision; a local-only source needs separate reconciliation.");
+            throw new InvalidOperationException("Source disposition requires the original published target and V2 source route.");
         await RequireCurrentNamespaceTransferAsync(copy.Plan, transaction, token, admitted: true, targetCopy: copy,
             recovery: recovery, publishedAt: recovery is null ? null : copy.TargetPublication.PublishedAt).ConfigureAwait(false);
         var target = await ReadNamespaceMemberProtectionSnapshotCoreAsync(copy.TargetPublication.MemberId, transaction, token).ConfigureAwait(false)
@@ -146,20 +150,28 @@ public sealed partial class MirrorPulseProductCatalog
         SqliteTransaction transaction, CancellationToken token)
     {
         if (copy.SourceDeletion is not { } deletion) return;
-        var protection = await ReadNamespaceBirthProtectionCoreAsync(deletion.TargetProtectionId, transaction, token).ConfigureAwait(false)
-            ?? throw new InvalidDataException("Source deletion lost its original target protection evidence.");
+        await ValidateTransferSourceDispositionReferencesAsync(copy, deletion.TargetProtectionId, deletion.StartedAt,
+            deletion.PublishedRecovery, transaction, token).ConfigureAwait(false);
+    }
+
+    private async Task ValidateTransferSourceDispositionReferencesAsync(MirrorPulseNamespaceTransferCopy copy,
+        Guid targetProtectionId, DateTimeOffset observedAt, MirrorPulseFileTransferRecovery? recovery,
+        SqliteTransaction transaction, CancellationToken token)
+    {
+        var protection = await ReadNamespaceBirthProtectionCoreAsync(targetProtectionId, transaction, token).ConfigureAwait(false)
+            ?? throw new InvalidDataException("Source disposition lost its original target protection evidence.");
         if (copy.TargetBirth is null || protection.BirthOperationId != copy.TargetBirth.Birth.OperationId ||
             protection.Verification.LocalObject != copy.TargetPublication!.LocalObject ||
-            protection.RoleSid != (deletion.PublishedRecovery?.RoleSid ?? copy.TargetRoleSid) ||
-            protection.Verification.ObservedAt > deletion.StartedAt)
-            throw new InvalidDataException("Source deletion no longer references its original target object and owned protection.");
-        if (deletion.PublishedRecovery is { } recovery)
+            protection.RoleSid != (recovery?.RoleSid ?? copy.TargetRoleSid) ||
+            protection.Verification.ObservedAt > observedAt)
+            throw new InvalidDataException("Source disposition no longer references its original target object and owned protection.");
+        if (recovery is not null)
         {
             var (sourceAudit, targetAudit) = await RequireFileTransferAuditsAsync(copy.Plan, recovery,
                 copy.TargetPublication!.PublishedAt, transaction, token).ConfigureAwait(false);
-            if (sourceAudit.CompletedAt > deletion.StartedAt || targetAudit.CompletedAt > deletion.StartedAt ||
+            if (sourceAudit.CompletedAt > observedAt || targetAudit.CompletedAt > observedAt ||
                 protection.Verification.ObservedAt > targetAudit.CompletedAt)
-                throw new InvalidDataException("The source delete lost its post-publication protection audits.");
+                throw new InvalidDataException("Source disposition lost its post-publication protection audits.");
         }
     }
 }

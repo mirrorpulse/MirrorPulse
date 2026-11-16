@@ -275,6 +275,7 @@ public sealed partial class MirrorPulseProductCatalog
             throw new ArgumentException("A transfer target activation requires its original birth, both audit receipts and first native start.");
         if (copy.TargetPublication is { } publication) ValidateNamespaceTransferPublicationShape(copy, publication);
         if (copy.SourceDeletion is { } deletion) ValidateNamespaceTransferSourceDeletion(copy, deletion);
+        if (copy.SourceAbsence is { } absence) ValidateNamespaceTransferSourceAbsence(copy, absence);
         if (copy.JournalClaim is { } claim) ValidateNamespaceTransferJournalClaim(copy.Plan, claim);
         if (copy.JournalClaim is { } originalClaim && copy.CopyStartedAt < originalClaim.CapturedAt)
             throw new ArgumentException("The original journal reservation must precede the first copy invocation.");

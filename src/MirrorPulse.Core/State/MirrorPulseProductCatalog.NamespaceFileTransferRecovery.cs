@@ -136,7 +136,7 @@ public sealed partial class MirrorPulseProductCatalog
             using var transaction = BeginNamespaceRecoveryReadSnapshot();
             var copy = await ReadNamespaceTransferCoreAsync(operationId, transaction, token).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The original published file transfer is missing.");
-            await RequireCurrentTransferSourceDeletionAsync(copy, transaction, token, recovery).ConfigureAwait(false);
+            await RequireCurrentTransferSourceDispositionAsync(copy, transaction, token, recovery).ConfigureAwait(false);
             var members = await ReadFileTransferRecoveryMembersCoreAsync(copy.Plan, recovery, transaction, token,
                 copy.TargetPublication!.PublishedAt).ConfigureAwait(false);
             transaction.Commit();

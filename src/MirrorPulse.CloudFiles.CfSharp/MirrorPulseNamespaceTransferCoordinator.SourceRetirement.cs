@@ -19,7 +19,7 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
 {
     internal Func<MirrorPulseTransferSourceRetirementCheckpoint, CancellationToken, ValueTask>? SourceRetirementCheckpoint { get; init; }
 
-    /// <summary>Retires only the guarded original source after its owned conditional remote delete and current whole-target proof.</summary>
+    /// <summary>Retires the guarded original source after conditional deletion or verified backend absence and current whole-target proof.</summary>
     /// <remarks>Private original bytes and both root fences remain. This does not acknowledge the original journal.</remarks>
     public ValueTask<MirrorPulseNamespaceRetirement> RetireSourceAsync(Guid operationId,
         MirrorPulseTransferWorkerServices workers, CancellationToken token) =>
