@@ -82,12 +82,15 @@ public sealed class MirrorPulseCliTransferTests
 
     [TestMethod]
     [DataRow("CopyMayHaveBegun")]
+    [DataRow("TargetBirthPrepared")]
     [DataRow("SourceDeleteMayHaveBegun")]
     [DataRow("SourceNativeRetired")]
     [DataRow("SourceNameSettled")]
     public async Task TransferQueriesCarryBothRootScopesAndUnfinishedSettlementThroughTheVersionedPipe(string stage)
     {
         var value = Status(stage); int reads = 0, lists = 0;
+        if (stage == "TargetBirthPrepared")
+            value = value with { PendingTargetBinding = new(Guid.NewGuid(), value.PreparedAt.AddSeconds(2)) };
         var dispatcher = new MirrorPulseControlDispatcher();
         dispatcher.Register<NamespaceTransferStatusArguments, MirrorPulseControlTransferStatus>(MirrorPulseControlCommands.NamespaceTransferStatus, (arguments, _) =>
         { Assert.AreEqual(value.OperationId, arguments.OperationId); reads++; return ValueTask.FromResult(value); });
@@ -110,10 +113,18 @@ public sealed class MirrorPulseCliTransferTests
                 Assert.IsTrue(status.GetProperty("rootsFenced").GetBoolean()); Assert.IsFalse(status.GetProperty("journalAcknowledged").GetBoolean());
                 Assert.IsFalse(status.GetProperty("completed").GetBoolean());
                 Assert.IsFalse(status.TryGetProperty("privateContentId", out _)); Assert.IsFalse(status.TryGetProperty("dacl", out _));
+                Assert.AreEqual(value.PendingTargetBinding is not null, status.TryGetProperty("pendingTargetBinding", out var pending));
+                if (value.PendingTargetBinding is { } binding)
+                {
+                    Assert.AreEqual(binding.BirthOperationId, pending.GetProperty("birthOperationId").GetGuid());
+                    Assert.AreEqual(binding.StartedAt, pending.GetProperty("startedAt").GetDateTimeOffset());
+                }
                 using var human = new StringWriter();
                 Assert.AreEqual(0, await RunAsync(operations, false, query.Item1, [query.Item2.ToString("D")], human, error));
                 StringAssert.Contains(human.ToString(), stage); StringAssert.Contains(human.ToString(), "completed: False");
                 StringAssert.Contains(human.ToString(), "journal acknowledged: False");
+                if (value.PendingTargetBinding is { } bindingStatus)
+                    StringAssert.Contains(human.ToString(), $"target binding pending: {bindingStatus.BirthOperationId:D}");
                 foreach (string[] invalid in new string[][] { [], ["invalid"], [Guid.Empty.ToString("D")], [query.Item2.ToString("D"), "extra"] })
                 {
                     using var invalidOutput = new StringWriter(); using var invalidError = new StringWriter();

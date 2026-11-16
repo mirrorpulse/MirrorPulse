@@ -100,5 +100,9 @@ public sealed partial class MirrorPulseHostApplication
             value.SourceMemberId, value.TargetMemberId, value.SourceRelativePath, value.TargetRelativePath, value.Stage, value.PreparedAt,
             value.CopyStartedAt, value.CopyAcceptedAt, value.SourceDeleteStartedAt, value.SourceDeleteAcceptedAt, value.SourceNativeRetiredAt,
             value.SourceNameSettledAt, value.RootsFenced, value.JournalAcknowledged, value.Completed)
-        { IsDirectory = value.IsDirectory, SourceAbsenceObservedAt = value.SourceAbsenceObservedAt };
+        {
+            IsDirectory = value.IsDirectory,
+            SourceAbsenceObservedAt = value.SourceAbsenceObservedAt,
+            PendingTargetBinding = value.PendingTargetBinding is { } binding ? new(binding.BirthOperationId, binding.StartedAt) : null
+        };
 }

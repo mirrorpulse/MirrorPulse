@@ -185,6 +185,10 @@ Preparation retains the original transfer and fences both roots before the first
 Use `mp namespace transfer resume OPERATION_ID` to execute the retained plan, including after a
 Host restart. Keep the original operation ID; starting a different operation does not release the
 fences. Status and list remain read-only.
+If a target birth start is durable and its original native binding is still
+unrecorded, status and list report the birth operation and its start time under
+`pendingTargetBinding` in JSON. This can identify a child of a directory already
+registered at the destination. The record indicates which original is pending.
 The CLI sends typed requests over the versioned Control pipe; only the Host opens
 the product catalog or the official CfSharp SQLite store. The Host drives copy,
 whole-target verification, protected destination publication, conditional source

@@ -23,6 +23,11 @@ public sealed record MirrorPulseControlTransferStatus(Guid OperationId, Guid Sou
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public DateTimeOffset? SourceAbsenceObservedAt { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public MirrorPulseControlTransferPendingTargetBinding? PendingTargetBinding { get; init; }
 }
+
+public sealed record MirrorPulseControlTransferPendingTargetBinding(Guid BirthOperationId, DateTimeOffset StartedAt);
 
 public sealed record MirrorPulseControlTransfers(IReadOnlyList<MirrorPulseControlTransferStatus> Entries);

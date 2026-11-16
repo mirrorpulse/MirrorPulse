@@ -105,8 +105,11 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
 
             var start = Start(directory.Plan);
             await catalog.RecordNamespaceBirthStartAsync(start);
+            var pendingRoot = (await catalog.ReadNamespaceTransferStatusAsync(directory.TransferId))!;
+            Assert.AreEqual(new MirrorPulseTransferPendingTargetBinding(start.OperationId, start.StartedAt), pendingRoot.PendingTargetBinding);
             var observation = Observation(directory.Birth, directory.Plan, start) with { IsInSync = true };
             await catalog.RecordNamespaceBirthObservationAsync(observation);
+            Assert.IsNull((await catalog.ReadNamespaceTransferStatusAsync(directory.TransferId))!.PendingTargetBinding);
             var protection = new MirrorPulseNamespaceBirthProtection(1, Guid.NewGuid(), directory.Birth.OperationId, null,
                 directory.Birth.ParentPermissionOperationId, directory.Birth.RoleSid,
                 new(observation.LocalObject, observation.OwnerSid, observation.BirthDacl, observation.ObservedAt.AddSeconds(1)), true, 1);
@@ -150,8 +153,13 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
 
             var start = Start(file.Plan);
             await reopened.RecordNamespaceBirthStartAsync(start);
+            var pendingChild = (await reopened.ReadNamespaceTransferStatusAsync(directory.TransferId))!;
+            Assert.AreEqual(directory.Birth.OperationId, pendingChild.TargetMemberId);
+            Assert.AreEqual(new MirrorPulseTransferPendingTargetBinding(start.OperationId, start.StartedAt), pendingChild.PendingTargetBinding);
+            await RequirePendingTransferStatusAsync(reopened, pendingChild);
             var observation = Observation(file.Birth, file.Plan, start) with { IsInSync = true };
             await reopened.RecordNamespaceBirthObservationAsync(observation);
+            Assert.IsNull((await reopened.ReadNamespaceTransferStatusAsync(directory.TransferId))!.PendingTargetBinding);
             var protection = new MirrorPulseNamespaceBirthProtection(2, Guid.NewGuid(), file.Birth.OperationId, null, Guid.Empty,
                 file.Birth.RoleSid, new(observation.LocalObject, observation.OwnerSid, observation.BirthDacl,
                     observation.ObservedAt.AddSeconds(1)), true, 1)

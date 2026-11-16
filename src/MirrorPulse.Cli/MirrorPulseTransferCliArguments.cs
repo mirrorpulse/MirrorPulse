@@ -24,5 +24,6 @@ internal static class MirrorPulseTransferCliArguments
 
     internal static string Format(MirrorPulseControlTransferStatus value) =>
         $"Transfer {value.Stage} · {value.OperationId:D} · completed: {value.Completed} · " +
-        $"journal acknowledged: {value.JournalAcknowledged} · roots fenced: {value.RootsFenced}";
+        $"journal acknowledged: {value.JournalAcknowledged} · roots fenced: {value.RootsFenced}" +
+        (value.PendingTargetBinding is { } pending ? $" · target binding pending: {pending.BirthOperationId:D}" : string.Empty);
 }

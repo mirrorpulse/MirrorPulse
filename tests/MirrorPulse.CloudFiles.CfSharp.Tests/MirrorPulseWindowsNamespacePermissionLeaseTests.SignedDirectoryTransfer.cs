@@ -532,7 +532,13 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     Assert.IsNull(await catalog.ReadNamespaceBirthObservationAsync(birth.Birth.OperationId, token));
                     Assert.IsNull(await catalog.ReadNamespaceMemberAsync(birth.Birth.OperationId, token));
                     Assert.IsNull(await catalog.ReadNamespaceDirectoryTransferSourceDeletionAsync(operationId, token));
-                    Assert.IsTrue((await catalog.ReadNamespaceTransferStatusAsync(operationId, token))!.RootsFenced);
+                    var start = await catalog.ReadNamespaceBirthStartAsync(birth.Birth.OperationId, token);
+                    Assert.IsNotNull(start);
+                    var status = (await catalog.ReadNamespaceTransferStatusAsync(operationId, token))!;
+                    Assert.IsTrue(status.RootsFenced);
+                    Assert.AreEqual(new MirrorPulseTransferPendingTargetBinding(start.OperationId, start.StartedAt), status.PendingTargetBinding);
+                    Assert.AreEqual(status, (await catalog.ReadPendingNamespaceTransferStatusesAsync(sourceRoot.RootId, token)).Single());
+                    Assert.AreEqual(status, (await catalog.ReadPendingNamespaceTransferStatusesAsync(targetRoot.RootId, token)).Single());
                     Assert.IsFalse(newWork.IsAdmitted(sourceRoot.RootId) || newWork.IsAdmitted(targetRoot.RootId));
                     CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(Path.Combine(sourceBackend, original), token));
                     TestContext.WriteLine("UnobservedDirectoryTarget: nativeTargetExists=True; publicSdkLocalFileIdMissing=True; originalBirthRetained=True; sourceDeletionStarted=False; bothRootsFenced=True.");

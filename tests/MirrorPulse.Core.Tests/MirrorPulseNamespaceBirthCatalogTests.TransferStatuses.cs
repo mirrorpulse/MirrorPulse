@@ -73,6 +73,30 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
     }
 
     [TestMethod]
+    [DataRow("unstarted")]
+    [DataRow("unobserved")]
+    [DataRow("unprotected")]
+    public async Task TransferStatusDistinguishesAStartedTargetFromItsOriginalBinding(string cut)
+    {
+        using var fixture = new Fixture();
+        Guid operationId;
+        MirrorPulseTransferPendingTargetBinding? expected;
+        await using (var first = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths))
+        {
+            var target = await PrepareTransferPublicationFixtureAsync(first, stopAt: cut);
+            operationId = target.Copy.Plan.OperationId;
+            var start = await first.ReadNamespaceBirthStartAsync(target.Copy.TargetBirth!.Birth.OperationId);
+            expected = cut == "unobserved" && start is not null ? new(start.OperationId, start.StartedAt) : null;
+            if (cut == "unobserved") Assert.IsNotNull(expected);
+        }
+        await using var reopened = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        var status = (await reopened.ReadNamespaceTransferStatusAsync(operationId))!;
+        Assert.AreEqual("TargetBirthPrepared", status.Stage);
+        Assert.AreEqual(expected, status.PendingTargetBinding);
+        await RequirePendingTransferStatusAsync(reopened, status);
+    }
+
+    [TestMethod]
     [DataRow("fingerprint")]
     [DataRow("fence")]
     [DataRow("effect")]

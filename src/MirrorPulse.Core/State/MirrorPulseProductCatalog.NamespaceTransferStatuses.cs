@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.Core.State;
 
@@ -13,7 +14,11 @@ public sealed record MirrorPulseNamespaceTransferStatus(Guid OperationId, RootId
 {
     public bool IsDirectory { get; init; }
     public DateTimeOffset? SourceAbsenceObservedAt { get; init; }
+    public MirrorPulseTransferPendingTargetBinding? PendingTargetBinding { get; init; }
 }
+
+/// <summary>A recorded first target start whose original native binding has not been observed.</summary>
+public sealed record MirrorPulseTransferPendingTargetBinding(Guid BirthOperationId, DateTimeOffset StartedAt);
 
 public sealed partial class MirrorPulseProductCatalog
 {
@@ -87,6 +92,9 @@ public sealed partial class MirrorPulseProductCatalog
             if (await ReadNamespaceMemberCoreAsync(birth.Birth.OperationId, transaction, token).ConfigureAwait(false) is { } member)
                 targetMember = member.MemberId;
         }
+        var pendingBinding = !completed && deletion is null && verified is not null
+            ? await ReadPendingDirectoryTransferTargetBindingAsync(admission, verified, transaction, token).ConfigureAwait(false)
+            : null;
         string stage = completed ? journalAcknowledged ? "Completed" : "CompletedCommandWithoutCapturedNotifications" :
             ack is not null ? "OriginalAcknowledgementMayHaveBegun" :
             retiredAt is not null ? "SourceNameSettled" :
@@ -101,7 +109,7 @@ public sealed partial class MirrorPulseProductCatalog
             admission.Members[0].Source.Protection.Context.Location.RelativePath, admission.Members[0].TargetRelativePath,
             stage, admission.PreparedAt, copy.Steps[0].StartedAt, copy.Steps[^1].AcceptedAt, deletion?.StartedAt, deletion?.AcceptedAt,
             retiredAt, retiredAt, !completed, journalAcknowledged, completed)
-        { IsDirectory = true };
+        { IsDirectory = true, PendingTargetBinding = pendingBinding };
     }
 
     private async Task<MirrorPulseNamespaceTransferStatus> ReadTransferStatusCoreAsync(MirrorPulseNamespaceTransferCopy copy,
@@ -112,6 +120,9 @@ public sealed partial class MirrorPulseProductCatalog
             throw new InvalidDataException("The transfer source retirement belongs to a different original operation.");
         bool completed = copy.Acknowledgement?.AcknowledgedAt is not null;
         bool journalAcknowledged = completed && copy.Acknowledgement!.Kind == MirrorPulseTransferAcknowledgementKind.OriginalJournal;
+        var pendingBinding = !completed && copy.TargetPublication is null && copy.TargetBirth is { } selected
+            ? await ReadPendingTransferTargetBindingAsync(selected.Birth.OperationId, transaction, token).ConfigureAwait(false)
+            : null;
         string stage = completed ? journalAcknowledged ? "Completed" : "CompletedCommandWithoutCapturedNotifications" :
             copy.Acknowledgement is not null ? "OriginalAcknowledgementMayHaveBegun" :
             retirement?.CompletedAt is not null ? "SourceNameSettled" :
@@ -131,6 +142,46 @@ public sealed partial class MirrorPulseProductCatalog
             plan.Source.Context.Location.RelativePath, plan.TargetRelativePath, stage, plan.PreparedAt,
             copy.CopyStartedAt, copy.CopyAcceptedAt, copy.SourceDeletion?.StartedAt, copy.SourceDeletion?.AcceptedAt,
             retirement?.NativeDeletedAt, retirement?.CompletedAt, RootsFenced: !completed, JournalAcknowledged: journalAcknowledged, Completed: completed)
-        { SourceAbsenceObservedAt = copy.SourceAbsence?.ObservedAt };
+        { SourceAbsenceObservedAt = copy.SourceAbsence?.ObservedAt, PendingTargetBinding = pendingBinding };
+    }
+
+    private async Task<MirrorPulseTransferPendingTargetBinding?> ReadPendingTransferTargetBindingAsync(Guid birthId,
+        SqliteTransaction transaction, CancellationToken token)
+    {
+        var start = await ReadNamespaceBirthStartCoreAsync(birthId, transaction, token).ConfigureAwait(false);
+        if (start is null || await ReadNamespaceBirthObservationCoreAsync(birthId, transaction, token).ConfigureAwait(false) is not null)
+            return null;
+        return new(birthId, start.StartedAt);
+    }
+
+    private async Task<MirrorPulseTransferPendingTargetBinding?> ReadPendingDirectoryTransferTargetBindingAsync(
+        MirrorPulseDirectoryTransferAdmission admission, MirrorPulseDirectoryTransferTargetVerification verified,
+        SqliteTransaction transaction, CancellationToken token)
+    {
+        var operationId = admission.Command.CommandId;
+        int ordinal;
+        await using (var query = _connection.CreateCommand())
+        {
+            query.Transaction = transaction;
+            query.CommandText = """
+                SELECT b.ordinal FROM namespace_directory_transfer_target_births b
+                JOIN namespace_birth_starts s ON s.operation_id=b.birth_id
+                WHERE b.transfer_id=$transfer
+                  AND NOT EXISTS (SELECT 1 FROM namespace_birth_observations o WHERE o.operation_id=b.birth_id)
+                LIMIT 2;
+                """;
+            query.Parameters.AddWithValue("$transfer", operationId.ToString("D"));
+            await using var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
+            if (!await reader.ReadAsync(token).ConfigureAwait(false)) return null;
+            ordinal = reader.GetInt32(0);
+            if (await reader.ReadAsync(token).ConfigureAwait(false))
+                throw new InvalidDataException("The original directory transfer has competing first target bindings.");
+        }
+        var target = await ReadDirectoryTransferBirthRowAsync(operationId, ordinal, null, transaction, token).ConfigureAwait(false)
+            ?? throw new InvalidDataException("The pending target binding lost its original directory birth.");
+        ValidateRetainedDirectoryTransferBirth(admission, verified, target);
+        await ValidateDirectoryTransferBirthArtifactsAsync(target, transaction, token).ConfigureAwait(false);
+        return await ReadPendingTransferTargetBindingAsync(target.Birth.OperationId, transaction, token).ConfigureAwait(false)
+            ?? throw new InvalidDataException("The pending directory target binding changed within its catalog snapshot.");
     }
 }
