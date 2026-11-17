@@ -3,6 +3,7 @@ using System.Text.Json;
 using CfSharp;
 using CfSharp.Storage.Sqlite;
 using Microsoft.Data.Sqlite;
+using MirrorPulse.Core.Caching;
 using MirrorPulse.Core.Configuration;
 using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.State;
@@ -14,10 +15,19 @@ public sealed record CliFixtureMarker(int SchemaVersion, string InstanceId, stri
 {
     public Guid? ControlledMoveOperationId { get; init; }
     public Guid? IntermediateMoveOperationId { get; init; }
+    public Guid? ControlledReplacementOperationId { get; init; }
 }
 public sealed record CliFixtureReadResult(int SchemaVersion, int WholeFileReads, int RangeReads, long BinaryLength, string BinarySha256);
 public sealed record CliFixtureAuditResult(int SchemaVersion, bool RouteVerified, int EnumeratedMutations,
-    int ReadOnlyFileMutations, int QueuedFileMutations, int AcknowledgedQueuedFileMutations);
+    int ReadOnlyFileMutations, int QueuedFileMutations, int AcknowledgedQueuedFileMutations)
+{
+    public CliFixtureReplacementAudit? ActiveReplacement { get; init; }
+}
+
+public sealed record CliFixtureReplacementAudit(Guid OperationId, Guid MemberId, Guid NativeItemId,
+    string BackupSha256, string ContentSha256, IReadOnlyList<CliFixtureReplacementMutation> AcknowledgedMutations);
+
+public sealed record CliFixtureReplacementMutation(Guid OperationId, string Sha256, long Length);
 public sealed record CliFixtureItemObservation(string Role, bool Exists, bool IsPlaceholder, string PlaceholderState,
     string ContentAvailability, string SynchronizationState, long? Length, long? OnDiskDataSize,
     long? ValidatedDataSize, long? ModifiedDataSize);
@@ -47,7 +57,8 @@ public static partial class CliFixtureProbe
             new FileInfo(markerPath).Length > 4096) return 2;
         CliFixtureMarker marker = JsonSerializer.Deserialize<CliFixtureMarker>(await File.ReadAllTextAsync(markerPath), JsonOptions)
             ?? throw new InvalidDataException("The CLI fixture marker is empty.");
-        if (marker.ControlledMoveOperationId == Guid.Empty || marker.SchemaVersion != 1 && marker.ControlledMoveOperationId is not null ||
+        if (marker.ControlledMoveOperationId == Guid.Empty || marker.ControlledReplacementOperationId == Guid.Empty ||
+            marker.SchemaVersion != 1 && (marker.ControlledMoveOperationId is not null || marker.ControlledReplacementOperationId is not null) ||
             marker.IntermediateMoveOperationId is { } intermediate &&
             (intermediate == Guid.Empty || marker.ControlledMoveOperationId is null || marker.ControlledMoveOperationId == intermediate)) return 2;
         bool anchorCleanup = cleanup && IsAnchorOnlyCleanup(marker);
@@ -179,6 +190,7 @@ public static partial class CliFixtureProbe
         await using (var reader = await query.ExecuteReaderAsync())
             while (await reader.ReadAsync()) ids.Add(Guid.Parse(reader.GetString(0)));
         int readOnly = 0, queued = 0, acknowledged = 0;
+        var replacementMutations = new List<MirrorPulseMutationRecord>();
         foreach (Guid id in ids)
         {
             MirrorPulseMutationRecord record = await catalog.ReadMutationAsync(id)
@@ -194,7 +206,50 @@ public static partial class CliFixtureProbe
                 queued++;
                 if (record.State == MirrorPulseMutationState.Acknowledged) acknowledged++;
             }
+            if (marker.ControlledReplacementOperationId is not null &&
+                string.Equals(relative, "cli-active-replacement.bin", StringComparison.OrdinalIgnoreCase))
+                replacementMutations.Add(record);
         }
-        return new(1, true, ids.Count, readOnly, queued, acknowledged);
+        return new(1, true, ids.Count, readOnly, queued, acknowledged)
+        {
+            ActiveReplacement = marker.ControlledReplacementOperationId is { } replacementId
+                ? await AuditReplacementAsync(paths, catalog, registration, replacementId, replacementMutations) : null,
+        };
+    }
+
+    private static async Task<CliFixtureReplacementAudit> AuditReplacementAsync(MirrorPulseStoragePaths paths,
+        MirrorPulseProductCatalog catalog, RootRegistration root, Guid operationId, List<MirrorPulseMutationRecord> mutations)
+    {
+        var execution = await catalog.ReadNamespaceReplacementExecutionAsync(operationId)
+            ?? throw new InvalidDataException("The active fixture lost its original replacement admission.");
+        var completion = await catalog.ReadNamespaceReplacementCompletionAsync(operationId);
+        if (execution.Intent.RootId != root.RootId ||
+            execution.Intent.Original.Context.Location.RelativePath != root.DirectoryName + "/cli-active-replacement.bin" ||
+            execution.Intent.Original.Identity.ItemId is not { } itemId || execution.Backup is not { } backupReceipt ||
+            execution.ContentCompletion is not { } copied || copied.Content != execution.Intent.Content ||
+            execution.RestorationResult is not { ProductVerified: true, Drained: true } ||
+            completion is not { IsPlaceholder: true, LinkCount: 1 } || completion.MemberId != execution.Intent.MemberId)
+            throw new InvalidDataException("The active replacement lost its original local object or a committed local receipt.");
+
+        await using var backup = await new MirrorPulseLocalReplacementBackupStore(paths).OpenLeaseAsync(operationId, backupReceipt.Content);
+        string backupHash = Convert.ToHexString(await SHA256.HashDataAsync(backup.Data));
+        if (backupHash != backupReceipt.Content.Sha256 || backup.Data.Length != backupReceipt.Content.Length)
+            throw new InvalidDataException("The active replacement's first backup does not match its retained digest and length.");
+
+        var acknowledged = new List<CliFixtureReplacementMutation>();
+        foreach (MirrorPulseMutationRecord mutation in mutations)
+        {
+            if (mutation.State != MirrorPulseMutationState.Acknowledged ||
+                mutation.Intent.Kind != MirrorPulseWorkerChangeKind.ContentUpdate)
+                throw new InvalidDataException("The active replacement left a different or unsettled content mutation.");
+            var proof = await catalog.ReadContentAcceptanceProofAsync(mutation.Intent.OperationId);
+            var receipt = await catalog.ReadContentConfirmationReceiptAsync(mutation.Intent.OperationId);
+            if (proof is null || proof.AcceptedItemId != itemId || proof.Sha256 != mutation.Intent.ContentSha256 ||
+                proof.Length != mutation.Intent.ContentLength || proof.AcceptedRevision != mutation.AcceptedRevision ||
+                receipt is not { MayAcknowledge: true } || receipt.BytesVerified < proof.Length)
+                throw new InvalidDataException("An acknowledged replacement generation lacks its exact original content proof.");
+            acknowledged.Add(new(mutation.Intent.OperationId, proof.Sha256, proof.Length));
+        }
+        return new(operationId, execution.Intent.MemberId, itemId, backupHash, copied.Content.Sha256, acknowledged.AsReadOnly());
     }
 }

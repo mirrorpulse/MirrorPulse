@@ -36,6 +36,7 @@ if ($Coalescing -and ($Regression -or [string]::IsNullOrWhiteSpace($EvidencePath
 }
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 . (Join-Path $PSScriptRoot 'cli-integration-failure-policy.ps1')
+. (Join-Path $PSScriptRoot 'cli-active-replacement.ps1')
 . (Join-Path $PSScriptRoot 'cli-root-label-lifecycle.ps1')
 . (Join-Path $PSScriptRoot 'cli-root-label-evidence-policy.ps1')
 . (Join-Path $PSScriptRoot 'cli-root-label-cancellation.ps1')
@@ -60,6 +61,7 @@ $script:firstNamespaceMember = $null
 $script:firstAnchorMember = $null
 $rootLabelLifecycle = $null
 $rootLabelCancellations = $null
+$activeReplacement = $null
 $coalescingEvidence = $null
 
 function Invoke-CliFixtureProbe {
@@ -105,11 +107,11 @@ function Invoke-CliFixtureProbe {
 }
 
 function Invoke-MirrorPulseCli {
-    param([Parameter(Mandatory = $true)][AllowEmptyString()][string[]]$Arguments)
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string[]]$Arguments, [int]$ExpectedExitCode = 0)
 
     Write-Host "CLI command: $($Arguments -join ' ')"
     $text = (& $script:cliExecutable @Arguments 2>&1 | Out-String).Trim()
-    if ($LASTEXITCODE -ne 0) {
+    if ($LASTEXITCODE -ne $ExpectedExitCode) {
         throw "CLI command failed ($LASTEXITCODE): $($Arguments -join ' ')`n$text"
     }
 
@@ -223,6 +225,7 @@ try {
         $binaryFixture = [byte[]]::new(2 * 1024 * 1024 + 257)
         [Random]::new(4096).NextBytes($binaryFixture)
         [IO.File]::WriteAllBytes((Join-Path $sourceRoot 'nested\fixture.bin'), $binaryFixture)
+        [IO.File]::WriteAllText((Join-Path $sourceRoot 'cli-active-replacement.bin'), 'original bytes to preserve in the private backup')
     }
 
     $cliProject = Join-Path $repositoryRoot "src\MirrorPulse.Cli\MirrorPulse.Cli.csproj"
@@ -546,6 +549,16 @@ try {
                 "Phase=$($instanceStatus.phase); Error=$($instanceStatus.lastErrorCode)."
         }
 
+        $activeReplacement = Invoke-CliActiveReplacement -InvokeCli {
+            param($arguments, $expectedExitCode)
+            Invoke-MirrorPulseCli -Arguments $arguments -ExpectedExitCode $expectedExitCode
+        } -WaitForHost { Wait-MirrorPulseHostReady } -FixtureRoot $runRoot -DirectoryName $rootDirectory `
+            -InstanceId $instanceId -RootId $registeredRoot.rootId -EvidencePath $EvidencePath
+        $markerPath = Join-Path $runRoot '.mp-cli-fixture.json'
+        $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json -AsHashtable
+        $marker.controlledReplacementOperationId = $activeReplacement.operationId
+        $marker | ConvertTo-Json | Set-Content -LiteralPath $markerPath -Encoding utf8
+
         $rootLabelLifecycle = Invoke-CliRootLabelLifecycle -InvokeCli { param($arguments) Invoke-MirrorPulseCli $arguments } `
             -RootId $registeredRoot.rootId -InstanceId $instanceId -DirectoryName $rootDirectory `
             -SyncRoot $syncRoot -SourceRoot $sourceRoot -EvidencePath $EvidencePath
@@ -569,6 +582,21 @@ try {
         if ($afterWriteAudit.routeVerified -ne $true -or $afterWriteAudit.readOnlyFileMutations -ne 0 -or
             $afterWriteAudit.queuedFileMutations -lt 1 -or $afterWriteAudit.acknowledgedQueuedFileMutations -ne $afterWriteAudit.queuedFileMutations) {
             throw 'The retained intent audit did not distinguish repeated reads from the actual queued local write.'
+        }
+        $replacementAudit = $afterWriteAudit.activeReplacement
+        if ($replacementAudit.operationId -cne $activeReplacement.operationId -or
+            $replacementAudit.memberId -cne $activeReplacement.memberId -or
+            $replacementAudit.nativeItemId -cne $activeReplacement.nativeItemId -or
+            $replacementAudit.backupSha256 -cne $activeReplacement.originalSha256 -or
+            $replacementAudit.contentSha256 -cne $activeReplacement.replacementSha256 -or
+            @($replacementAudit.acknowledgedMutations | Where-Object sha256 -ceq $activeReplacement.replacementSha256).Count -ne 1 -or
+            @($replacementAudit.acknowledgedMutations | Where-Object sha256 -ceq $activeReplacement.laterSha256).Count -ne 1 -or
+            @($replacementAudit.acknowledgedMutations).Count -ne 2) {
+            throw 'The stopped Host audit did not verify the first backup and both original acknowledged save generations.'
+        }
+        if ($EvidencePath) {
+            $originals = Join-Path ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($EvidencePath))) 'cli-regression.originals/active-replacement'
+            $replacementAudit | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $originals 'stopped-audit.json') -Encoding utf8
         }
         [IO.File]::WriteAllText($remoteFile, "local-conflict")
         [IO.File]::WriteAllText($roundTrip, "remote-conflict")
@@ -693,5 +721,6 @@ if ($EvidencePath) {
         namespace=[ordered]@{defaultHostIntegrated=$true;audits=@($namespaceAudits.ToArray())}
         rootLabels=$rootLabelLifecycle
         rootCancellations=$rootLabelCancellations
+        activeReplacement=$activeReplacement
     } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $EvidencePath -Encoding utf8
 }
