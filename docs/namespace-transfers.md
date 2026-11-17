@@ -212,7 +212,7 @@ Disabling either instance keeps the original transfer pending. Its selected
 target and accepted copy remain unchanged, and resumption checks the current
 catalog before starting role recovery even if an older router or Worker is live.
 
-New transfer targets select the CfSharp preview.13 recoverable creation protocol
+New transfer targets select the recoverable creation protocol introduced in CfSharp preview.13
 in their version 2 start record. The original birth ID also identifies the SDK
 creation request. On restart, the Host authenticates the original public receipt
 and compares its full native binding on the owned target lease before saving a
@@ -222,8 +222,12 @@ rules and never gain an original binding from a current path alone. An explicit
 file transfer retry under the original admitted role may make the first SDK
 call if the original store reports no preparation, the target remains absent,
 and the guarded parent and unbound logical projection still match the retained
-plan. It reuses the same birth ID and specification. Startup and a different
-execution role cannot use an absent SDK preparation to create the target.
+plan. It reuses the same birth ID and specification. After restart, an explicit
+file transfer retry can acquire a new role for the same request. It checks the
+original SDK store and native target before and after auditing both fenced roots.
+Each audit names the original started birth. The Host retains both audit receipts
+and the verified new parent protection before submitting the unchanged request.
+Startup checks for committed creation receipts without initiating creation.
 
 The read-only list for one root uses derived indexes of the original pending
 source and destination routes, plus the retained root reservation. It validates

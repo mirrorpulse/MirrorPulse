@@ -5,6 +5,52 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 
 internal sealed partial class MirrorPulseNamespaceTransferTargetPublisher
 {
+    internal async Task RequireUnpreparedFileCreationUnderActorAsync(MirrorPulseNamespaceTransferCopy copy,
+        MirrorPulseNamespaceBirthStart start, bool rootsAudited, CancellationToken token)
+    {
+        actor.AssertAccess();
+        if (copy.TargetBirth is not { } target || copy.TargetPublication is not null || target.Birth.IsDirectory ||
+            start.Version != 2 || start.OperationId != target.Birth.OperationId ||
+            await catalog.ReadNamespaceBirthStartAsync(start.OperationId, token).ConfigureAwait(false) != start ||
+            await catalog.ReadNamespaceBirthObservationAsync(start.OperationId, token).ConfigureAwait(false) is not null ||
+            await catalog.ReadNamespaceMemberAsync(start.OperationId, token).ConfigureAwait(false) is not null)
+            throw new InvalidOperationException("Role recovery requires the original started target before its first observation.");
+        var original = copy.Plan.TargetParent;
+        Guid memberId = original.Context.Member.MemberId;
+        if (await catalog.ReadNamespaceMemberAsync(memberId, token).ConfigureAwait(false) != original.Context.Member ||
+            await catalog.ReadNamespaceMemberLocationAsync(memberId, token).ConfigureAwait(false) != original.Context.Location ||
+            await catalog.ReadNamespaceMemberIdentityAsync(memberId, token).ConfigureAwait(false) != original.Identity)
+            throw new InvalidOperationException("Role recovery requires the original target parent and public identity.");
+        var parent = fileSystem.GetDirectory(original.Context.Location.RelativePath);
+        await using var lease = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(parent, router, token).ConfigureAwait(false);
+        // Startup may already have moved the shared anchor to its new role. Check the exact
+        // direct parent before auditing and require coherent current protection afterwards.
+        var before = await lease.InspectAsync(token).ConfigureAwait(false);
+        if (before.LocalObject != target.Birth.ParentLocalObject || before.OwnerSid != original.Context.Member.OwnerSid ||
+            before.RelativePath != original.Context.Location.RelativePath || before.RootId != target.Birth.RootId ||
+            !before.IsDirectory || before.LinkCount != 1)
+            throw new InvalidOperationException("Role recovery requires the original native target parent.");
+        if (rootsAudited)
+        {
+            var snapshot = await catalog.ReadNamespaceMemberProtectionSnapshotAsync(memberId, token).ConfigureAwait(false)
+                ?? throw new InvalidOperationException("Role recovery requires audited native parent protection.");
+            before = await MirrorPulseNamespaceBirthProtectionVerifier.InspectRetainedParentAsync(target.Birth, parent,
+                MirrorPulseNamespaceProtectionProofReader.FromSnapshot(snapshot), lease, token).ConfigureAwait(false);
+        }
+        var item = fileSystem.GetFile(target.Birth.RelativePath);
+        var result = await parent.RecoverPlaceholderCreationAsync(new(start.OperationId, OriginalCreationSpecification(target.Birth, target.Plan)),
+            token).ConfigureAwait(false);
+        if (!IsUnpreparedCreation(result, start.OperationId) || (await item.InspectAsync(token).ConfigureAwait(false)).Exists)
+            throw new InvalidOperationException($"The original transfer target cannot enter role recovery before SDK preparation: {result.Status}.", result.Error);
+        await MirrorPulseNamespaceBirthIdentityProjection.RequireUnboundStartedProjectionAsync(catalog, state.OpenStore,
+            start.OperationId, item, token).ConfigureAwait(false);
+        MirrorPulseNamespaceBirthProtectionVerifier.RequireUnchangedParent(before, await lease.InspectAsync(token).ConfigureAwait(false));
+    }
+
+    private static bool IsUnpreparedCreation(CloudPlaceholderCreationRecoveryResult result, Guid operationId) =>
+        result.OperationId == operationId && result.Status == CloudPlaceholderCreationRecoveryStatus.NotFound &&
+        result.Receipt is null && result.Error is null;
+
     private static CloudPlaceholderSpec OriginalCreationSpecification(MirrorPulseNamespaceBirthIntent birth, MirrorPulseNamespaceBirthPlan plan)
     {
         string name = birth.RelativePath[(birth.RelativePath.LastIndexOf('/') + 1)..];
@@ -32,8 +78,7 @@ internal sealed partial class MirrorPulseNamespaceTransferTargetPublisher
             throw new InvalidDataException("Creation recovery requires the original native parent.");
         var recovered = await parent.RecoverPlaceholderCreationAsync(new(birth.OperationId, OriginalCreationSpecification(birth, plan)), token)
             .ConfigureAwait(false);
-        if (allowUnprepared && recovered.OperationId == birth.OperationId && recovered.Status == CloudPlaceholderCreationRecoveryStatus.NotFound &&
-            recovered.Receipt is null && recovered.Error is null)
+        if (allowUnprepared && IsUnpreparedCreation(recovered, birth.OperationId))
         {
             MirrorPulseNamespaceBirthProtectionVerifier.RequireUnchangedParent(before, await parentLease.InspectAsync(token).ConfigureAwait(false));
             return null;

@@ -69,15 +69,21 @@ public sealed record MirrorPulseNamespaceTransferCopy(MirrorPulseNamespaceTransf
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public MirrorPulseFileTransferTargetActivation? TargetActivation { get; init; }
 
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public MirrorPulseFileTransferTargetActivation? TargetStartRecovery { get; init; }
+
     [System.Text.Json.Serialization.JsonIgnore]
-    internal MirrorPulseFileTransferRecovery? TargetRecovery => TargetActivation?.Recovery ?? TargetBirth?.Recovery;
+    internal MirrorPulseFileTransferTargetActivation? ActiveTargetActivation => TargetStartRecovery ?? TargetActivation;
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    internal MirrorPulseFileTransferRecovery? TargetRecovery => ActiveTargetActivation?.Recovery ?? TargetBirth?.Recovery;
 
     [System.Text.Json.Serialization.JsonIgnore]
     internal MirrorPulseNamespaceMemberProtectionSnapshot ActiveTargetParent =>
-        TargetActivation?.TargetParent ?? TargetBirth?.RecoveredParent ?? Plan.TargetParent;
+        ActiveTargetActivation?.TargetParent ?? TargetBirth?.RecoveredParent ?? Plan.TargetParent;
 
     [System.Text.Json.Serialization.JsonIgnore]
-    internal string? TargetRoleSid => TargetActivation?.Recovery.RoleSid ?? TargetBirth?.Birth.RoleSid;
+    internal string? TargetRoleSid => ActiveTargetActivation?.Recovery.RoleSid ?? TargetBirth?.Birth.RoleSid;
 
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public MirrorPulseNamespaceTransferTargetPublication? TargetPublication { get; init; }

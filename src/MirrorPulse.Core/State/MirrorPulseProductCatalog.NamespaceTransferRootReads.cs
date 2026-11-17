@@ -62,21 +62,30 @@ public sealed partial class MirrorPulseProductCatalog
             ?? throw new InvalidOperationException("File transfer role recovery requires its original admission.");
         var plan = copy.Plan;
         RootId root = intent.Roots.Single().RootId;
-        Guid? unstartedTarget = null;
+        Guid? reservedTarget = null;
+        DateTimeOffset earliest = copy.TargetPublication?.PublishedAt ?? copy.TargetBirth?.Birth.PreparedAt ?? plan.PreparedAt;
         if (copy.TargetBirth is not null && copy.TargetPublication is null)
         {
-            await RequireUnstartedFileTransferTargetAsync(copy, transaction, token).ConfigureAwait(false);
-            if (root == plan.TargetRoute.RootId) unstartedTarget = copy.TargetBirthOperationId;
+            if (intent.FileTransferStartedBirthId is { } startedBirth)
+            {
+                var start = await RequireFileTransferTargetAwaitingCreationAsync(copy, startedBirth, transaction, token).ConfigureAwait(false);
+                earliest = start.StartedAt;
+            }
+            else
+                await RequireUnstartedFileTransferTargetAsync(copy, transaction, token).ConfigureAwait(false);
+            if (root == plan.TargetRoute.RootId) reservedTarget = copy.TargetBirthOperationId;
         }
+        else if (intent.FileTransferStartedBirthId is not null)
+            throw new InvalidOperationException("A started-target audit requires its original unpublished file birth.");
         if ((root != plan.SourceRoute.RootId && root != plan.TargetRoute.RootId) ||
-            intent.PreparedAt < (copy.TargetPublication?.PublishedAt ?? copy.TargetBirth?.Birth.PreparedAt ?? plan.PreparedAt) ||
+            intent.PreparedAt < earliest ||
             copy.Acknowledgement?.AcknowledgedAt is not null ||
             copy.SourceDeletion is { AcceptedAt: null } ||
             copy.CopyStartedAt is not null && copy.CopyAcceptedAt is null && !copy.CopyUsesWorkerPreparation)
             throw new InvalidOperationException("File transfer role recovery requires a pending copy or a published target with an unambiguous source effect.");
         await RequireFileTransferInitializationFenceAsync(intent, transaction, token).ConfigureAwait(false);
         await RequireNamespaceTransferRoutesAsync([plan.SourceRoute, plan.TargetRoute], transaction, token).ConfigureAwait(false);
-        return unstartedTarget;
+        return reservedTarget;
     }
 
     private async Task RequireFileTransferInitializationFenceAsync(MirrorPulseNamespaceInitializationIntent intent,

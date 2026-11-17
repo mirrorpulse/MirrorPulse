@@ -29,7 +29,8 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
         Guid transferId, CancellationToken cancellationToken) => RecoverCoreAsync(operationId, rootId, null, transferId, cancellationToken);
 
     internal ValueTask<MirrorPulseNamespaceInitializationResult> RecoverFileTransferRootAsync(Guid operationId, RootId rootId,
-        Guid transferId, CancellationToken cancellationToken) => RecoverCoreAsync(operationId, rootId, null, null, cancellationToken, transferId);
+        Guid transferId, Guid? startedBirthId, CancellationToken cancellationToken) =>
+        RecoverCoreAsync(operationId, rootId, null, null, cancellationToken, transferId, startedBirthId);
 
     internal ValueTask<MirrorPulseNamespaceInitializationResult> RecoverJournalDirectoryMoveAsync(Guid operationId,
         MirrorPulseJournalDirectoryMoveRecovery.ProjectionRecovery move, CancellationToken cancellationToken) =>
@@ -37,7 +38,7 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
 
     private async ValueTask<MirrorPulseNamespaceInitializationResult> RecoverCoreAsync(Guid operationId, RootId? selectedRoot,
         MirrorPulseJournalDirectoryMoveRecovery.ProjectionRecovery? move, Guid? transferId, CancellationToken cancellationToken,
-        Guid? fileTransferId = null)
+        Guid? fileTransferId = null, Guid? startedBirthId = null)
     {
         if (operationId == Guid.Empty) throw new ArgumentException("An initialization operation ID is required.", nameof(operationId));
         var retained = await catalog.ReadNamespaceInitializationAsync(operationId, cancellationToken).ConfigureAwait(false);
@@ -46,7 +47,8 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
         if (retained is not null && (selectedRoot is { } selected ? !retained.IsScoped || retained.Roots.Count != 1 ||
             retained.Roots[0].RootId != selected : retained.IsScoped))
             throw new InvalidOperationException("The retained initializer requires its explicit complete or selected-root recovery route.");
-        if (retained is not null && (retained.DirectoryTransferOperationId != transferId || retained.FileTransferOperationId != fileTransferId))
+        if (retained is not null && (retained.DirectoryTransferOperationId != transferId || retained.FileTransferOperationId != fileTransferId ||
+            retained.FileTransferStartedBirthId != startedBirthId))
             throw new InvalidOperationException("Current recovery requires its exact transfer purpose.");
         if (retained?.JournalDirectoryMoveOperationId is { } original)
         {
@@ -69,14 +71,15 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
         if (retained is null)
         {
             var roots = await MirrorPulseNamespaceCurrentRootSelector.SelectAsync(fileSystem, catalog, registrations, cancellationToken).ConfigureAwait(false);
-            retained = await catalog.PrepareNamespaceInitializationAsync(new(fileTransferId is not null ? 6 :
+            retained = await catalog.PrepareNamespaceInitializationAsync(new(startedBirthId is not null ? 7 : fileTransferId is not null ? 6 :
                 selectedRoot is not null ? 4 : roots.Count == 0 ? 3 : roots.Any(root => root.BornRootMemberId is not null) ? 2 : 1,
                 operationId, roots, DateTimeOffset.UtcNow)
             {
                 RequestedInventoryKind = MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory,
                 JournalDirectoryMoveOperationId = move is { IsAcknowledged: false } ? move.Admission.JournalOperationId : null,
                 DirectoryTransferOperationId = transferId,
-                FileTransferOperationId = fileTransferId
+                FileTransferOperationId = fileTransferId,
+                FileTransferStartedBirthId = startedBirthId
             }, cancellationToken).ConfigureAwait(false);
         }
         if (!retained.Roots.Select(root => root.RootId).ToHashSet().SetEquals(registrations.Select(root => root.RootId)))

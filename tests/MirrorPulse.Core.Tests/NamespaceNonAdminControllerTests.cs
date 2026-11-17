@@ -109,7 +109,7 @@ public sealed partial class NamespaceNonAdminControllerTests
                     'NativeHostTransferRetiresAndAcknowledgesOriginalAfterPublishedTargetRoleHandoff',
                     'NativeHostTransferPublishesOnlyUnchangedRegisteredTargetAfterRoleHandoff',
                     'NativeHostTransferPublishesObservedTargetAfterRoleHandoff',
-                    'NativeHostTransferReactivatesOnlyUnstartedSelectedTargetAfterRoleHandoff',
+                    'NativeHostTransferReactivatesSelectedTargetBeforeFirstSdkPreparationAcrossRoles',
                     'NativeHostTransferRetiresLocalOnlySourceAfterVerifyingItsRemoteAbsence',
                     'NativeHostTransferAcknowledgesOriginalAfterSettledSourceRoleHandoff',
                     'NativeHostTransferResumesInterruptedSourceRetirementAcrossRoles',

@@ -26,7 +26,7 @@ public sealed class DeferredP079GateTests
                 'NativeHostTransferRetiresAndAcknowledgesOriginalAfterPublishedTargetRoleHandoff',
                 'NativeHostTransferPublishesOnlyUnchangedRegisteredTargetAfterRoleHandoff',
                 'NativeHostTransferPublishesObservedTargetAfterRoleHandoff',
-                'NativeHostTransferReactivatesOnlyUnstartedSelectedTargetAfterRoleHandoff',
+                'NativeHostTransferReactivatesSelectedTargetBeforeFirstSdkPreparationAcrossRoles',
                 'NativeHostTransferRetiresLocalOnlySourceAfterVerifyingItsRemoteAbsence',
                 'NativeHostTransferAcknowledgesOriginalAfterSettledSourceRoleHandoff',
                 'NativeHostTransferResumesInterruptedSourceRetirementAcrossRoles',

@@ -11,7 +11,7 @@ internal sealed record MirrorPulseFileTransferRecoveryMembers(MirrorPulseNamespa
 public sealed partial class MirrorPulseProductCatalog
 {
     internal async Task<Dictionary<RootId, Guid>> ReadFileTransferRecoveryAuditIdsAsync(Guid transferId,
-        string roleSid, CancellationToken token)
+        string roleSid, CancellationToken token, Guid? startedBirthId = null)
     {
         await _gate.WaitAsync(token).ConfigureAwait(false);
         try
@@ -27,10 +27,12 @@ public sealed partial class MirrorPulseProductCatalog
                     JOIN namespace_initialization_completions c ON c.operation_id=i.operation_id
                     WHERE json_extract(CAST(i.payload AS TEXT),'$.FileTransferOperationId')=$transfer
                       AND json_extract(CAST(c.payload AS TEXT),'$.RoleSid')=$role
+                      AND json_extract(CAST(i.payload AS TEXT),'$.FileTransferStartedBirthId') IS $birth
                     LIMIT 3;
                     """;
                 query.Parameters.AddWithValue("$transfer", transferId.ToString("D"));
                 query.Parameters.AddWithValue("$role", roleSid);
+                query.Parameters.AddWithValue("$birth", (object?)startedBirthId?.ToString("D") ?? DBNull.Value);
                 await using var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
                 while (await reader.ReadAsync(token).ConfigureAwait(false)) operations.Add(ParseNamespaceMemberId(reader.GetString(0)));
             }
@@ -38,7 +40,8 @@ public sealed partial class MirrorPulseProductCatalog
             foreach (Guid operation in operations)
             {
                 var status = await ReadNamespaceInitializationStatusCoreAsync(operation, transaction, token).ConfigureAwait(false);
-                if (status.Intent.FileTransferOperationId != transferId || status.Completion?.RoleSid != roleSid ||
+                if (status.Intent.FileTransferOperationId != transferId || status.Intent.FileTransferStartedBirthId != startedBirthId ||
+                    status.Completion?.RoleSid != roleSid ||
                     status.Completion.ScopeRoot is not { } root || !result.TryAdd(root, operation) || result.Count > 2)
                     throw new InvalidDataException("The original file transfer has inconsistent scoped audit receipts.");
             }
@@ -68,8 +71,9 @@ public sealed partial class MirrorPulseProductCatalog
             if (fences.Contains(plan.SourceRoute.RootId) || fences.Contains(plan.TargetRoute.RootId))
                 throw new InvalidOperationException("Another original namespace owner prevents this transfer.");
             await RequireNamespaceTransferRoutesAsync([plan.SourceRoute, plan.TargetRoute], transaction, token).ConfigureAwait(false);
+            var started = !activatingTarget && copy.TargetStartRecovery?.Recovery == recovery ? copy.TargetStartRecovery : null;
             var members = await ReadFileTransferRecoveryMembersCoreAsync(plan, recovery, transaction, token,
-                activatingTarget ? copy.TargetBirth!.Birth.PreparedAt : null).ConfigureAwait(false);
+                activatingTarget ? copy.TargetBirth!.Birth.PreparedAt : started?.StartedAt, started?.BirthOperationId).ConfigureAwait(false);
             transaction.Commit();
             return members;
         }
@@ -78,10 +82,10 @@ public sealed partial class MirrorPulseProductCatalog
 
     private async Task<MirrorPulseFileTransferRecoveryMembers> ReadFileTransferRecoveryMembersCoreAsync(
         MirrorPulseNamespaceTransferPlan plan, MirrorPulseFileTransferRecovery recovery, SqliteTransaction transaction, CancellationToken token,
-        DateTimeOffset? publishedAt = null)
+        DateTimeOffset? publishedAt = null, Guid? startedBirthId = null)
     {
         var (sourceAudit, targetAudit) = await RequireFileTransferAuditsAsync(plan, recovery, publishedAt ?? plan.PreparedAt,
-            transaction, token).ConfigureAwait(false);
+            transaction, token, startedBirthId).ConfigureAwait(false);
         return new(await RequireAuditedFileTransferMemberAsync(plan.Source, sourceAudit, transaction, token).ConfigureAwait(false),
             await RequireAuditedFileTransferMemberAsync(plan.SourceParent, sourceAudit, transaction, token).ConfigureAwait(false),
             await RequireAuditedFileTransferMemberAsync(plan.TargetParent, targetAudit, transaction, token).ConfigureAwait(false));
@@ -103,12 +107,12 @@ public sealed partial class MirrorPulseProductCatalog
 
     private async Task<(MirrorPulseNamespaceInitializationCompletion Source, MirrorPulseNamespaceInitializationCompletion Target)>
         RequireFileTransferAuditsAsync(MirrorPulseNamespaceTransferPlan plan, MirrorPulseFileTransferRecovery recovery,
-            DateTimeOffset earliest, SqliteTransaction transaction, CancellationToken token)
+            DateTimeOffset earliest, SqliteTransaction transaction, CancellationToken token, Guid? startedBirthId = null)
     {
         var sourceAudit = await RequireFileTransferAuditAsync(plan.OperationId, recovery.SourceAuditId, plan.SourceRoute.RootId,
-            recovery.RoleSid, earliest, transaction, token).ConfigureAwait(false);
+            recovery.RoleSid, earliest, transaction, token, startedBirthId).ConfigureAwait(false);
         var targetAudit = await RequireFileTransferAuditAsync(plan.OperationId, recovery.TargetAuditId, plan.TargetRoute.RootId,
-            recovery.RoleSid, earliest, transaction, token).ConfigureAwait(false);
+            recovery.RoleSid, earliest, transaction, token, startedBirthId).ConfigureAwait(false);
         if (sourceAudit.AnchorMemberId != targetAudit.AnchorMemberId)
             throw new InvalidOperationException("Both original transfer roots require audits of the same registered anchor.");
         return (sourceAudit, targetAudit);
@@ -116,10 +120,11 @@ public sealed partial class MirrorPulseProductCatalog
     }
 
     private async Task<MirrorPulseNamespaceInitializationCompletion> RequireFileTransferAuditAsync(Guid operationId,
-        Guid auditId, RootId rootId, string role, DateTimeOffset earliest, SqliteTransaction transaction, CancellationToken token)
+        Guid auditId, RootId rootId, string role, DateTimeOffset earliest, SqliteTransaction transaction, CancellationToken token,
+        Guid? startedBirthId = null)
     {
         var status = await ReadNamespaceInitializationStatusCoreAsync(auditId, transaction, token).ConfigureAwait(false);
-        if (status.Intent.FileTransferOperationId != operationId ||
+        if (status.Intent.FileTransferOperationId != operationId || status.Intent.FileTransferStartedBirthId != startedBirthId ||
             status.Completion is not { } completed || completed.ScopeRoot != rootId ||
             completed.RoleSid != role || status.Intent.PreparedAt < earliest || completed.CompletedAt < earliest)
             throw new InvalidOperationException("File transfer recovery requires its original root audit under the current role.");

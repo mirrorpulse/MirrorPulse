@@ -269,10 +269,8 @@ public sealed partial class MirrorPulseProductCatalog
         if (copy.TargetVerification is { } verification) ValidateNamespaceTransferTargetVerification(copy, verification);
         if (copy.TargetBirthOperationId is not null && copy.TargetVerification is null)
             throw new ArgumentException("A transfer birth cannot precede the original whole-target verification.");
-        if (copy.TargetActivation is { } activation && (activation.Version != 1 || activation.BirthOperationId != copy.TargetBirthOperationId ||
-            activation.BirthOperationId == Guid.Empty || activation.SourceAuditId == Guid.Empty || activation.TargetAuditId == Guid.Empty ||
-            activation.SourceAuditId == activation.TargetAuditId || activation.TargetParent?.Context?.Protection is null || activation.StartedAt == default))
-            throw new ArgumentException("A transfer target activation requires its original birth, both audit receipts and first native start.");
+        ValidateFileTransferTargetActivationShape(copy.TargetBirthOperationId, copy.TargetActivation, version: 1);
+        ValidateFileTransferTargetActivationShape(copy.TargetBirthOperationId, copy.TargetStartRecovery, version: 2);
         if (copy.TargetPublication is { } publication) ValidateNamespaceTransferPublicationShape(copy, publication);
         if (copy.SourceDeletion is { } deletion) ValidateNamespaceTransferSourceDeletion(copy, deletion);
         if (copy.SourceAbsence is { } absence) ValidateNamespaceTransferSourceAbsence(copy, absence);

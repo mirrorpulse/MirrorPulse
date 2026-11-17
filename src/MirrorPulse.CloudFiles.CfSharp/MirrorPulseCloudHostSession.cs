@@ -613,9 +613,15 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                     MirrorPulseFileTransferRecovery? activation = null;
                     if (current.TargetRoleSid != _namespaceExecution!.RoleSid.Value)
                     {
-                        if (await catalog!.ReadNamespaceBirthStartAsync(target.Birth.OperationId, stop).ConfigureAwait(false) is not null)
-                            throw new InvalidOperationException("A started transfer target must recover its original native result.");
-                        activation = await RequireFileTransferRoleAuditsAsync(current.Plan, instances, stop).ConfigureAwait(false);
+                        if (await catalog!.ReadNamespaceBirthStartAsync(target.Birth.OperationId, stop).ConfigureAwait(false) is { } start)
+                        {
+                            var coordinator = TransferCoordinator();
+                            await coordinator.RequireUnpreparedFileTargetAsync(current, start, stop).ConfigureAwait(false);
+                            var recovery = await RequireFileTransferRoleAuditsAsync(current.Plan, instances, stop, start.OperationId).ConfigureAwait(false);
+                            await coordinator.RequireUnpreparedFileTargetAsync(current, start, stop, recovery).ConfigureAwait(false);
+                        }
+                        else
+                            activation = await RequireFileTransferRoleAuditsAsync(current.Plan, instances, stop).ConfigureAwait(false);
                     }
                     return await TransferCoordinator().PublishTargetAsync(operationId, activation, stop).ConfigureAwait(false);
                 }, token).ConfigureAwait(false);
@@ -767,11 +773,11 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
 
         [SupportedOSPlatform("windows10.0.26100")]
         private async ValueTask<MirrorPulseFileTransferRecovery> RequireFileTransferRoleAuditsAsync(MirrorPulseNamespaceTransferPlan plan,
-            IMirrorPulseInstanceScheduler instanceAdmission, CancellationToken token)
+            IMirrorPulseInstanceScheduler instanceAdmission, CancellationToken token, Guid? startedBirthId = null)
         {
             if (namespaceWork is null) throw new InvalidOperationException("File transfer role recovery requires its two fenced roots.");
             var ids = await RecoverFileTransferRootAuditsAsync(plan.OperationId, [plan.SourceRoute.RootId, plan.TargetRoute.RootId],
-                instanceAdmission, token).ConfigureAwait(false);
+                instanceAdmission, token, startedBirthId).ConfigureAwait(false);
             if (!ids.TryGetValue(plan.SourceRoute.RootId, out Guid sourceAudit) || !ids.TryGetValue(plan.TargetRoute.RootId, out Guid targetAudit))
                 throw new InvalidDataException("File transfer recovery requires both original root audits.");
             return new(sourceAudit, targetAudit, _namespaceExecution!.RoleSid.Value);
@@ -779,9 +785,10 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
 
         [SupportedOSPlatform("windows10.0.26100")]
         private async ValueTask<Dictionary<RootId, Guid>> RecoverFileTransferRootAuditsAsync(Guid operationId,
-            IReadOnlyList<RootId> roots, IMirrorPulseInstanceScheduler instanceAdmission, CancellationToken token)
+            IReadOnlyList<RootId> roots, IMirrorPulseInstanceScheduler instanceAdmission, CancellationToken token, Guid? startedBirthId = null)
         {
-            var ids = await catalog!.ReadFileTransferRecoveryAuditIdsAsync(operationId, _namespaceExecution!.RoleSid.Value, token).ConfigureAwait(false);
+            var ids = await catalog!.ReadFileTransferRecoveryAuditIdsAsync(operationId, _namespaceExecution!.RoleSid.Value, token, startedBirthId)
+                .ConfigureAwait(false);
             if (roots.Any(root => !ids.ContainsKey(root)))
             {
                 var pending = await catalog.ReadPendingNamespaceInitializationsAsync(token).ConfigureAwait(false);
@@ -791,9 +798,10 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                 {
                     if (ids.ContainsKey(root)) continue;
                     var retained = pending.SingleOrDefault(status => status.Intent.FileTransferOperationId == operationId &&
+                        status.Intent.FileTransferStartedBirthId == startedBirthId &&
                         status.Intent.Roots.Single().RootId == root);
                     await using var restored = await audit.RecoverFileTransferRootAsync(retained?.Intent.OperationId ?? Guid.NewGuid(),
-                        root, operationId, token).ConfigureAwait(false);
+                        root, operationId, startedBirthId, token).ConfigureAwait(false);
                     ids.Add(root, restored.Completion.OperationId);
                     var prior = _scopedAnchorProtection;
                     _scopedAnchorProtection = restored.TransferAnchor();

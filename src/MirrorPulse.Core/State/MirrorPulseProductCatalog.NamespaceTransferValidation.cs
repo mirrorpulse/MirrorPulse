@@ -59,7 +59,7 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task<MirrorPulseFileTransferRecoveryMembers?> RequireCurrentNamespaceTransferAsync(MirrorPulseNamespaceTransferPlan plan,
         SqliteTransaction transaction, CancellationToken token, bool admitted = false,
         MirrorPulseNamespaceTransferCopy? targetCopy = null, MirrorPulseFileTransferRecovery? recovery = null,
-        DateTimeOffset? publishedAt = null, bool activatingTarget = false)
+        DateTimeOffset? publishedAt = null, bool activatingTarget = false, MirrorPulseNamespaceBirthStart? recoveringStartedTarget = null)
     {
         var targetBirth = targetCopy?.TargetBirth;
         var selectedRecovery = targetCopy?.TargetRecovery;
@@ -68,6 +68,9 @@ public sealed partial class MirrorPulseProductCatalog
             await ReadNamespaceTransferTargetBirthRowAsync(plan.OperationId, null, transaction, token).ConfigureAwait(false) != targetBirth))
             throw new InvalidOperationException("A transfer continuation cannot bypass another target birth or its original owner.");
         MirrorPulseFileTransferRecoveryMembers? members = null;
+        if (recoveringStartedTarget is not null && (activatingTarget || publishedAt is not null || recovery is null ||
+            targetBirth?.Birth.OperationId != recoveringStartedTarget.OperationId))
+            throw new InvalidOperationException("Started target recovery requires its existing start and current root audits.");
         if (activatingTarget)
         {
             if (targetCopy is null || targetBirth is null || recovery is null)
@@ -76,10 +79,14 @@ public sealed partial class MirrorPulseProductCatalog
         }
         if (recovery is not null)
         {
-            if (!admitted || targetBirth is not null && selectedRecovery != recovery && publishedAt is null && !activatingTarget)
+            if (!admitted || targetBirth is not null && selectedRecovery != recovery && publishedAt is null &&
+                !activatingTarget && recoveringStartedTarget is null)
                 throw new InvalidOperationException("Transfer recovery requires its original pending owner and audit receipts.");
+            var retainedRecovery = targetCopy?.TargetStartRecovery?.Recovery == recovery ? targetCopy.TargetStartRecovery : null;
+            DateTimeOffset? earliest = recoveringStartedTarget?.StartedAt ?? retainedRecovery?.StartedAt ?? publishedAt;
             members = await ReadFileTransferRecoveryMembersCoreAsync(plan, recovery, transaction, token,
-                activatingTarget ? targetBirth!.Birth.PreparedAt : publishedAt).ConfigureAwait(false);
+                activatingTarget ? targetBirth!.Birth.PreparedAt : earliest,
+                recoveringStartedTarget?.OperationId ?? retainedRecovery?.BirthOperationId).ConfigureAwait(false);
         }
         else
         {

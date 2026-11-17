@@ -218,6 +218,19 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator(CloudFileSys
     internal async ValueTask SettleObservedFileTransferTargetAsync(Guid operationId, CancellationToken token) =>
         _ = await actor.RunAsync(stop => PublishTargetUnderActorAsync(operationId, settleObserved: true, null, stop), token).ConfigureAwait(false);
 
+    internal async ValueTask RequireUnpreparedFileTargetAsync(MirrorPulseNamespaceTransferCopy copy, MirrorPulseNamespaceBirthStart start,
+        CancellationToken token, MirrorPulseFileTransferRecovery? recovery = null)
+    {
+        _ = await actor.RunAsync(async stop =>
+        {
+            var publisher = new MirrorPulseNamespaceTransferTargetPublisher(fileSystem, state, catalog, router, actor);
+            await publisher.RequireUnpreparedFileCreationUnderActorAsync(copy, start, rootsAudited: recovery is not null, stop).ConfigureAwait(false);
+            if (recovery is not null)
+                await catalog.RecordFileTransferStartedTargetRecoveryAsync(copy.Plan.OperationId, start.OperationId, recovery, stop).ConfigureAwait(false);
+            return true;
+        }, token).ConfigureAwait(false);
+    }
+
     private async ValueTask<MirrorPulseNamespaceTransferCopy> PublishTargetUnderActorAsync(Guid operationId, bool settleObserved,
         MirrorPulseFileTransferRecovery? activation, CancellationToken token)
     {

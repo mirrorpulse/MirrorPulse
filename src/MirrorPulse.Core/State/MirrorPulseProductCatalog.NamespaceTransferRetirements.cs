@@ -58,8 +58,10 @@ public sealed partial class MirrorPulseProductCatalog
             if (copy.SourceDispositionAt is null)
                 throw new InvalidOperationException("Source retirement requires its conditional delete acceptance or original recorded absence.");
             var selectedAudit = recovery ?? copy.TargetRecovery;
+            var startedTarget = recovery is null ? copy.TargetStartRecovery : null;
             var members = selectedAudit is null ? null : await ReadFileTransferRecoveryMembersCoreAsync(copy.Plan, selectedAudit,
-                transaction, token, recovery is null ? null : copy.TargetPublication!.PublishedAt).ConfigureAwait(false);
+                transaction, token, recovery is null ? startedTarget?.StartedAt : copy.TargetPublication!.PublishedAt,
+                startedTarget?.BirthOperationId).ConfigureAwait(false);
             int version = recovery is not null ? 5 : members is null ? 3 : 4;
             var reference = new MirrorPulseNamespaceTransferRetirementReference(version, operationId, copy.Plan.DeleteOperationId,
                 copy.SourceDeletion?.AcceptedAt,

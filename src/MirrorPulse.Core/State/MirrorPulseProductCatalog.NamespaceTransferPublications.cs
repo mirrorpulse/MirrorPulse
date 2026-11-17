@@ -119,8 +119,9 @@ public sealed partial class MirrorPulseProductCatalog
             member.Origin != MirrorPulseNamespaceMemberOrigin.ProtectedBirth || member.OriginId != target.Birth.OperationId ||
             protection.BirthOperationId != target.Birth.OperationId ||
             protection.Verification.LocalObject != publication.LocalObject || protection.RoleSid != copy.TargetRoleSid ||
-            copy.TargetActivation is { } activation && (protection.BornParent != activation.TargetParent.BornParent ||
+            copy.ActiveTargetActivation is { } activation && (protection.BornParent != activation.TargetParent.BornParent ||
                 protection.ParentPermissionOperationId != (protection.BornParent is null ? activation.TargetParent.PermissionOperationId : Guid.Empty)) ||
+            copy.TargetStartRecovery?.AdmittedAt is { } recoveredAt && observation.ObservedAt < recoveredAt ||
             protection.Verification.OwnerSid != member.OwnerSid || member.OwnerSid != copy.Plan.TargetParent.Context.Member.OwnerSid ||
             member.ParentMemberId != copy.Plan.TargetParent.Context.Member.MemberId || member.RootId != target.Birth.RootId ||
             member.RelativePath != target.Birth.RelativePath || member.IsDirectory ||

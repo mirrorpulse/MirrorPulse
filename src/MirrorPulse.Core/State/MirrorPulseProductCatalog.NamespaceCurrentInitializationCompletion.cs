@@ -31,7 +31,7 @@ public sealed partial class MirrorPulseProductCatalog
                 transaction.Commit(); return replay;
             }
             await RequireNamespaceInitializationRootsAsync(intent, transaction, cancellationToken).ConfigureAwait(false);
-            Guid? unstartedFileTarget = await RequireFileTransferInitializationAsync(intent, transaction, cancellationToken).ConfigureAwait(false);
+            Guid? reservedFileTarget = await RequireFileTransferInitializationAsync(intent, transaction, cancellationToken).ConfigureAwait(false);
             Guid? unstartedDirectoryTarget = await ReadDirectoryTransferUnstartedTargetForAuditAsync(intent, transaction, cancellationToken)
                 .ConfigureAwait(false);
             Contracts.RootId? scope = intent.IsScoped ? intent.Roots[0].RootId : null;
@@ -132,11 +132,10 @@ public sealed partial class MirrorPulseProductCatalog
                 }
             }
             var unpublished = new HashSet<Contracts.RootId>();
-            // The selected target name stays reserved by its transfer. Its scoped audit can
-            // complete before the first native start so that start can use the verified role.
+            // The scoped audit can verify the role while the transfer retains the exact reserved target name.
             await AddUnregisteredBirthRootFencesAsync(unpublished, transaction, cancellationToken,
                 admittedTransferId: intent.FileTransferOperationId ?? intent.DirectoryTransferOperationId,
-                admittedTransferBirthId: unstartedFileTarget ?? unstartedDirectoryTarget).ConfigureAwait(false);
+                admittedTransferBirthId: reservedFileTarget ?? unstartedDirectoryTarget).ConfigureAwait(false);
             if (unpublished.Overlaps(intent.Roots.Select(root => root.RootId)))
                 throw new InvalidOperationException("An unresolved unregistered birth prevents current initialization completion.");
             var completed = new MirrorPulseNamespaceInitializationCompletion(operationId, current.AnchorMemberId, role,

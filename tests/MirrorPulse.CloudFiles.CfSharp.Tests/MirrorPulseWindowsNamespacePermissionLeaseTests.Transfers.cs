@@ -118,7 +118,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     [TestCategory("NativeCloudFiles")]
     [DataRow(false)]
     [DataRow(true)]
-    public Task NativeHostTransferReactivatesOnlyUnstartedSelectedTargetAfterRoleHandoff(bool startWasRecorded) =>
+    public Task NativeHostTransferReactivatesSelectedTargetBeforeFirstSdkPreparationAcrossRoles(bool startWasRecorded) =>
         RunNativeHostTransferAsync(deleteSource: true, retireLocal: true, completeOriginals: true, selectedSameInstance: false,
             targetPublicationHandoff: startWasRecorded ? MirrorPulseTransferPublicationCheckpoint.AfterStart : null,
             handoffBeforeTargetBirthStart: !startWasRecorded);
@@ -831,22 +831,43 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         Assert.AreEqual(1, worker.Uploads);
                         Assert.AreEqual(0, worker.Deletes);
                         Assert.HasCount(2, await reopenedCatalog.ReadNamespaceDispatchFencedRootsAsync(deadline.Token));
-                        if (targetPublicationHandoff == MirrorPulseTransferPublicationCheckpoint.AfterStart && !retryBeforeSdkCreationUnderSameRole)
+                        bool recoverStartedTarget = targetPublicationHandoff == MirrorPulseTransferPublicationCheckpoint.AfterStart &&
+                            !retryBeforeSdkCreationUnderSameRole;
+                        if (recoverStartedTarget)
                         {
-                            await Assert.ThrowsExactlyAsync<InvalidOperationException>(async () =>
-                                await nextPublisher.PublishNamespaceTransferTargetAsync(operation, deadline.Token));
-                            var blocked = await nextPublisher.ReadNamespaceTransferAsync(operation, deadline.Token);
-                            Assert.AreEqual(retainedAfterHandoff, blocked);
-                            Assert.IsNull(blocked.TargetActivation);
-                            Assert.IsNull(blocked.TargetPublication);
                             Assert.AreEqual(originalStart, await reopenedCatalog.ReadNamespaceBirthStartAsync(birthId, deadline.Token));
-                            Assert.IsNull(await reopenedCatalog.ReadNamespaceBirthObservationAsync(birthId, deadline.Token));
-                            Assert.HasCount(2, await reopenedCatalog.ReadNamespaceDispatchFencedRootsAsync(deadline.Token));
-                            Assert.AreEqual(1, worker.Uploads);
-                            Assert.AreEqual(0, worker.Deletes);
+                            Assert.IsNull(retainedAfterHandoff.TargetStartRecovery);
+                            Assert.IsNull(observation);
                             Assert.IsFalse(File.Exists(publicationTargetPath));
-                            CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(sourcePath, deadline.Token));
-                            return;
+                            await ExecuteTransferPublicationFixtureSqlAsync(paths, """
+                                CREATE TRIGGER fail_target_recovery BEFORE UPDATE ON namespace_transfers
+                                WHEN json_extract(CAST(NEW.payload AS TEXT),'$.TargetStartRecovery') IS NOT NULL
+                                BEGIN SELECT RAISE(ABORT,'synthetic-target-recovery-gap'); END;
+                                """, deadline.Token);
+                            try
+                            {
+                                try
+                                {
+                                    await nextPublisher.PublishNamespaceTransferTargetAsync(operation, deadline.Token);
+                                    Assert.Fail("Expected the original started-target admission to roll back.");
+                                }
+                                catch (Microsoft.Data.Sqlite.SqliteException error)
+                                {
+                                    StringAssert.Contains(error.Message, "synthetic-target-recovery-gap");
+                                }
+                                Assert.AreEqual(retainedAfterHandoff, await nextPublisher.ReadNamespaceTransferAsync(operation, deadline.Token));
+                                Assert.AreEqual(originalStart, await reopenedCatalog.ReadNamespaceBirthStartAsync(birthId, deadline.Token));
+                                Assert.IsNull(await reopenedCatalog.ReadNamespaceBirthObservationAsync(birthId, deadline.Token));
+                                Assert.IsFalse(File.Exists(publicationTargetPath));
+                                Assert.AreEqual(1, worker.Uploads);
+                                Assert.AreEqual(0, worker.Deletes);
+                                Assert.HasCount(2, await reopenedCatalog.ReadNamespaceDispatchFencedRootsAsync(deadline.Token));
+                                CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(sourcePath, deadline.Token));
+                            }
+                            finally
+                            {
+                                await ExecuteTransferPublicationFixtureSqlAsync(paths, "DROP TRIGGER fail_target_recovery;", CancellationToken.None);
+                            }
                         }
                         if (editTargetBeforePublicationHandoff)
                         {
@@ -894,6 +915,29 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                             Assert.AreEqual(started.StartedAt, activation.StartedAt);
                             observation = await reopenedCatalog.ReadNamespaceBirthObservationAsync(birthId, deadline.Token);
                         }
+                        else if (recoverStartedTarget)
+                        {
+                            Assert.AreEqual(verified.TargetBirth, published.TargetBirth);
+                            Assert.AreEqual(originalStart, await reopenedCatalog.ReadNamespaceBirthStartAsync(birthId, deadline.Token));
+                            Assert.IsNull(published.TargetActivation);
+                            var recovery = published.TargetStartRecovery;
+                            Assert.IsNotNull(recovery);
+                            Assert.AreEqual(originalStart!.StartedAt, recovery.StartedAt);
+                            Assert.IsTrue(recovery.AdmittedAt >= originalStart.StartedAt);
+                            Assert.AreEqual(nextRole.RoleSid.Value, recovery.TargetParent.Context.Protection.RoleSid);
+                            Assert.AreNotEqual(recovery.SourceAuditId, recovery.TargetAuditId);
+                            foreach (var (auditId, rootId) in new[] { (recovery.SourceAuditId, sourceRoot.RootId), (recovery.TargetAuditId, targetRoot.RootId) })
+                            {
+                                var audit = await reopenedCatalog.ReadNamespaceInitializationAsync(auditId, deadline.Token);
+                                Assert.IsNotNull(audit);
+                                Assert.AreEqual(operation, audit.FileTransferOperationId);
+                                Assert.AreEqual(birthId, audit.FileTransferStartedBirthId);
+                                Assert.AreEqual(rootId, audit.Roots.Single().RootId);
+                            }
+                            observation = await reopenedCatalog.ReadNamespaceBirthObservationAsync(birthId, deadline.Token);
+                            Assert.IsNotNull(observation);
+                            Assert.IsTrue(observation.ObservedAt >= recovery.AdmittedAt);
+                        }
                         else
                             Assert.AreEqual(retainedAfterHandoff, published);
                         Assert.AreEqual(birthId, publishedMember.MemberId);
@@ -913,7 +957,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         Assert.IsEmpty(await reopenedCatalog.ReadNamespaceDispatchFencedRootsAsync(deadline.Token));
                         Assert.IsFalse(File.Exists(sourcePath));
                         CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(publicationTargetPath, deadline.Token));
-                        if (handoffBeforeTargetBirthStart)
+                        if (handoffBeforeTargetBirthStart || recoverStartedTarget)
                         {
                             await nextPublisher.DisposeAsync();
                             await reopenedCatalog.DisposeAsync();
