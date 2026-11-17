@@ -134,6 +134,9 @@ public sealed class DeferredP079GateTests
             $residentReplacement=$keepRemotePrefix+'NativeResidentInSyncReplacementRetainsOriginalBytesJournalAndDirtyContentWithoutSourceCalls'
             $names=@($catalog.required.namespace | Where-Object {$_ -cnotin $keepRemote -and $_ -cne $disabledCreation -and $_ -cne $disabledCreationRole -and $_ -cne $disabledMove -and $_ -cne $disabledRetirement -and $_ -cne $disabledReplacement -and $_ -cne $residentReplacement})
             if($names.Count -ne 125 -or @($catalog.required.native|Where-Object {$_ -cnotin $keepRemote -and $_ -cne $disabledCreation -and $_ -cne $disabledCreationRole -and $_ -cne $disabledMove -and $_ -cne $disabledRetirement -and $_ -cne $disabledReplacement -and $_ -cne $residentReplacement}).Count -ne 150 -or @($catalog.required.deferredP079).Count -ne 5){throw 'Required scope names changed.'}
+            # Keep this historical envelope independent of the replacement writer's current owner windows.
+            $writer=$keepRemotePrefix+'NativeReplacementContentWriterRetainsFirstBackupAndDirtyCopyAcrossBothObjectStarts'
+            $names=@($names|ForEach-Object {if($_ -ceq $writer){'Fixture.HistoricalReplacementWriter'}else{$_}})
             if((Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 125 -TestNames $names -Scope S06) -ne 5375000 -or
                (Get-OrdinaryUserNamespaceStepTimeoutMinutes -TestCount 125 -TestNames $names -Scope S06) -ne 95 -or
                (Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount 125 -TestNames $names) -ne 5780000 -or

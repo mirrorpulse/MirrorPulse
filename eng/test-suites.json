@@ -1,6 +1,12 @@
 {
   "schemaVersion": 1,
   "requiredCases": {
+    "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeReplacementContentWriterRetainsFirstBackupAndDirtyCopyAcrossBothObjectStarts": [
+      "NativeReplacementContentWriterRetainsFirstBackupAndDirtyCopyAcrossBothObjectStarts (0)",
+      "NativeReplacementContentWriterRetainsFirstBackupAndDirtyCopyAcrossBothObjectStarts (1)",
+      "NativeReplacementContentWriterRetainsFirstBackupAndDirtyCopyAcrossBothObjectStarts (2)",
+      "NativeReplacementContentWriterRetainsFirstBackupAndDirtyCopyAcrossBothObjectStarts (3)"
+    ],
     "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeHostTransferRecoversOriginalCreationBeforeFirstObservationAcrossRoles": [
       "NativeHostTransferRecoversOriginalCreationBeforeFirstObservationAcrossRoles (False)",
       "NativeHostTransferRecoversOriginalCreationBeforeFirstObservationAcrossRoles (True)"

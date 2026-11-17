@@ -36,12 +36,13 @@ if ($directorySuites.Count -ne 0 -and -not $SignedAtomicDirectoryPackage) { thro
 if ([bool]$VerifyDirectoryTransfer -ne [bool]$SignedDirectoryTransferWebDavPackage) { throw 'Cross-instance directory acceptance requires the frozen WebDAV package.' }
 $suite = if ($VerifyFileTransferRecovery) { 'fileTransferRecovery' } elseif ($VerifyPreparedDirectoryCopy) { 'signedPreparedDirectoryCopy' } elseif ($VerifyDirectoryCopyRecovery) { 'signedDirectoryCopyRecovery' } elseif ($VerifyDirectoryTransfer) { 'signedDirectoryTransfer' } elseif ($VerifyDirectoryMove) { 'signedDirectoryMove' } elseif ($SignedAtomicDirectoryPackage) { 'signedAtomicDirectory' } else { 'namespace' }
 $testNames = @($catalog.required.$suite)
+$requiredExecutions = Get-RequiredTestExecutionCount -Catalog $catalog -Names $testNames
 $childBudgetMilliseconds = if ($SignedAtomicDirectoryPackage) {
-    Get-SignedNamespaceBudgetMilliseconds -ExecutionCount (Get-RequiredTestExecutionCount -Catalog $catalog -Names $testNames)
+    Get-SignedNamespaceBudgetMilliseconds -ExecutionCount $requiredExecutions
 } else {
     Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $testNames.Count -TestNames $testNames -Scope S06
 }
-Write-Output ("Ordinary-user catalog: selected={0}; controllerBudgetSeconds={1}; nativeCaseDeadlinesUnchanged=True." -f $testNames.Count, ($childBudgetMilliseconds / 1000))
+Write-Output ("Ordinary-user catalog: selectedMethods={0}; requiredExecutions={1}; controllerBudgetSeconds={2}." -f $testNames.Count, $requiredExecutions, ($childBudgetMilliseconds / 1000))
 $filter = ($testNames | ForEach-Object { 'FullyQualifiedName=' + $_ }) -join '|'
 $evidenceStem = if ($VerifyFileTransferRecovery) { 'file-transfer-recovery-nonadmin-' } elseif ($VerifyPreparedDirectoryCopy) { 'signed-prepared-directory-copy-nonadmin-' } elseif ($VerifyDirectoryCopyRecovery) { 'signed-directory-copy-recovery-nonadmin-' } elseif ($VerifyDirectoryTransfer) { 'signed-directory-transfer-nonadmin-' } elseif ($VerifyDirectoryMove) { 'signed-directory-move-nonadmin-' } elseif ($SignedAtomicDirectoryPackage) { 'signed-atomic-directory-nonadmin-' } else { 'namespace-nonadmin-' }
 $evidenceDirectory = Join-Path $repository ('artifacts/test-results/' + $evidenceStem + $ExpectedArchitecture.ToLowerInvariant())

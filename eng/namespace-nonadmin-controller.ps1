@@ -34,6 +34,7 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
     $residentReplacement = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeResidentInSyncReplacementRetainsOriginalBytesJournalAndDirtyContentWithoutSourceCalls'
     $journalRescan = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeProductionPumpSettlesOriginalJournalBeforeAnExplicitRescanAcrossOwners'
     $prefix = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.'
+    $replacementWriter = $prefix + 'NativeReplacementContentWriterRetainsFirstBackupAndDirtyCopyAcrossBothObjectStarts'
     $keepRemote = @{
         ($prefix+'NativeKeepRemoteFirstSealRequiresTheOriginalFileAndJournalAndReplaysWithoutWriting') = 3
         ($prefix+'NativeKeepRemoteResidentByteCopyRetainsPlaceholderAndOriginalJournal') = 3
@@ -143,6 +144,8 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
             if ($name -ceq $journalRescan) { $transferDeadlineMilliseconds += 50000 }
             # Two independent 45-second original identity starts retain their full deadlines.
             if ($name -ceq $residentReplacement) { $executions++; $transferDeadlineMilliseconds += 60000 }
+            # Four cases, with a second 45-second window after the first owner settles in case zero.
+            if ($name -ceq $replacementWriter) { $executions += 3; $transferDeadlineMilliseconds += 165000 }
             if ($directoryJournal.ContainsKey($name)) {
                 $rule = $directoryJournal[$name]
                 $executions += $rule.Cases-1

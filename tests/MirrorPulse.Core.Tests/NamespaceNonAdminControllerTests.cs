@@ -77,6 +77,9 @@ public sealed partial class NamespaceNonAdminControllerTests
                 $ErrorActionPreference='Stop'
                 . $Policy
                 $rejectionPrefix='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.'
+                $replacementWriterMethod='NativeReplacementContentWriterRetainsFirstBackupAndDirtyCopyAcrossBothObjectStarts'
+                $replacementWriter=$rejectionPrefix+$replacementWriterMethod
+                $replacementWriterBudgetDelta=5*45000-15000
                 $unsealedExecution=$rejectionPrefix+'NativePublicRuntimeExecutesUnsealedBornRootLabelAcrossDisposedRoles'
                 $capturedUnsealedExecution=$rejectionPrefix+'NativePublicRuntimeExecutesUnsealedCapturedRootLabelAcrossDisposedRoles'
                 $rejections=@(
@@ -115,7 +118,8 @@ public sealed partial class NamespaceNonAdminControllerTests
                 function ReadPreFileTransferNamespaceCatalog([string]$Path) {
                     $value=Get-Content -LiteralPath $Path -Raw|ConvertFrom-Json
                     # Keep the exact earlier selections for their historical budget assertions.
-                    $value.required.namespace=@($value.required.namespace|Where-Object {$_ -cnotin $fileTransferRecovery})
+                    $value.required.namespace=@($value.required.namespace|Where-Object {$_ -cnotin $fileTransferRecovery}|
+                        ForEach-Object {if($_ -ceq $replacementWriter){'Fixture.HistoricalReplacementWriter'}else{$_}})
                     return $value
                 }
                 function ReadPreDirectoryNamespaceCatalog([string]$Path) {
@@ -324,7 +328,7 @@ public sealed partial class NamespaceNonAdminControllerTests
                     $rejected=$false;try{Get-OrdinaryUserNamespaceBudgetMilliseconds @parameters|Out-Null}catch{$rejected=$true}
                     if(-not $rejected){throw 'An incomplete selected catalog cannot claim the added deadline.'}
                     $minutes=& (Join-Path $eng 'verify-keep-remote-native.ps1') -Scope disabled-local-birth -BudgetOnly
-                    if($LASTEXITCODE -ne 0 -or $minutes -ne 16){throw 'The selected native qualification must retain all12actual original deadlines and cleanup.'}
+                    if($LASTEXITCODE -ne 0 -or $minutes -ne 17){throw 'The selected qualification must retain all fifteen cases, the successor owner window and cleanup.'}
                     exit 0
                 }
                 if ($Scenario -ceq 'disabled-host-job-deadline') {
@@ -886,6 +890,15 @@ public sealed partial class NamespaceNonAdminControllerTests
                         if ($Scenario -eq 'budget-catalog') {
                             $catalog=Get-Content -Raw (Join-Path (Split-Path $Policy -Parent) 'test-suites.json') | ConvertFrom-Json
                             $parameters.TestNames=@($catalog.required.namespace)
+                            $rows=@($catalog.requiredCases.$replacementWriter)
+                            $expectedRows=@(0..3|ForEach-Object {"$replacementWriterMethod ($_)"})
+                            if(($rows -join '|') -cne ($expectedRows -join '|')){throw 'Require all four replacement writer cases.'}
+                            $historical=@($parameters.TestNames|ForEach-Object {if($_ -ceq $replacementWriter){'Fixture.HistoricalReplacementWriter'}else{$_}})
+                            foreach($scope in @('AllRetained','S06')){
+                                $prior=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $Count -TestNames $historical -Scope $scope
+                                $current=Get-OrdinaryUserNamespaceBudgetMilliseconds @parameters -Scope $scope
+                                if($current -ne $prior+$replacementWriterBudgetDelta){throw 'Retain all five bounded replacement owner windows.'}
+                            }
                         }
                         $budget=Get-OrdinaryUserNamespaceBudgetMilliseconds @parameters
                         $stepMinutes=Get-OrdinaryUserNamespaceStepTimeoutMinutes @parameters
@@ -897,9 +910,9 @@ public sealed partial class NamespaceNonAdminControllerTests
                         $unsealedExecutionBudget=4*90000
                         $fileTransferRecoveryBudget=25*45000
                         $originalCatalogCount=$Count-2-$fileTransferRecovery.Count
-                        $maximum=if ($Scenario -eq 'budget-catalog') {4755000+4*60000+10*60000+2*60000+65000+29*65000+65000+65000+65000+65000+65000+90000+65000+13*65000+6*65000+4*60000+10*95000+$unsealedExecutionBudget+$fileTransferRecoveryBudget} else {1800000}
+                        $maximum=if ($Scenario -eq 'budget-catalog') {4755000+4*60000+10*60000+2*60000+65000+29*65000+65000+65000+65000+65000+65000+90000+65000+13*65000+6*65000+4*60000+10*95000+$unsealedExecutionBudget+$fileTransferRecoveryBudget+$replacementWriterBudgetDelta} else {1800000}
                         if ($rejected -or $budget -lt 600000 -or $budget -gt $maximum) { throw 'The whole-suite envelope is missing or unbounded.' }
-                        if ($Scenario -eq 'budget-catalog' -and $budget -ne 120000+($originalCatalogCount-10+51)*15000+18*30000+28*15000+6*45000+6*15000+4*45000+5*15000+6*45000+2*45000+2*45000+4*60000+10*60000+15000+2*45000+50000+13*15000+29*50000+50000+50000+50000+50000+50000+75000+50000+19*65000+4*60000+10*95000-5*15000+$unsealedExecutionBudget+$fileTransferRecoveryBudget) {
+                        if ($Scenario -eq 'budget-catalog' -and $budget -ne 120000+($originalCatalogCount-10+51)*15000+18*30000+28*15000+6*45000+6*15000+4*45000+5*15000+6*45000+2*45000+2*45000+4*60000+10*60000+15000+2*45000+50000+13*15000+29*50000+50000+50000+50000+50000+50000+75000+50000+19*65000+4*60000+10*95000-5*15000+$unsealedExecutionBudget+$fileTransferRecoveryBudget+$replacementWriterBudgetDelta) {
                             throw 'The actual catalog lost a same/cross-instance transfer or one of its five retirement cutpoints.'
                         }
                         if ($Count -ge 52 -and $budget -le 600000) { throw 'The growing suite still has the obsolete fixed ten-minute envelope.' }

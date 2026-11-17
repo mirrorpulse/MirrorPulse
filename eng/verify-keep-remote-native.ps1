@@ -66,12 +66,11 @@ if ($Scope -eq 'disabled-local-birth') {
     )
     if (@($selected | Where-Object { $_ -cnotin $catalog.required.native }).Count) { throw 'Local birth requires all eleven exact original runtime boundaries.' }
     $count = Get-RequiredTestExecutionCount -Catalog $catalog -Names $selected
-    if ($count -ne 12) { throw 'Disabled local work qualification requires exactly twelve actual native cases.' }
+    if ($count -ne 15) { throw 'Disabled local work qualification requires exactly fifteen actual native cases.' }
     $boundary = 'DisabledLocalBirth'
     $filter = ($selected | ForEach-Object { 'FullyQualifiedName=' + $_ }) -join '|'
-    # Seven65-second disabled/import fixtures and the original four45-second
-    # content-writer cuts plus the original45-second validation fixture.
-    $fixtureBudgetMilliseconds = 7 * 65000 + 4 * 45000 + 45000 + 2 * 45000 + 65000
+    # The four content-writer cases have five owner windows; case zero changes owners.
+    $fixtureBudgetMilliseconds = 7 * 65000 + 5 * 45000 + 45000 + 2 * 45000 + 65000
 }
 if ($Scope -eq 'received-delete-reconciliation') {
     $fixture = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.'
