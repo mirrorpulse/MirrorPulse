@@ -17,7 +17,8 @@ internal sealed partial class MirrorPulseNamespaceTransferTargetPublisher
     }
 
     private async Task<MirrorPulseNamespaceBirthObservation?> RecoverOriginalCreationObservationAsync(
-        MirrorPulseNamespaceBirthIntent birth, MirrorPulseNamespaceBirthPlan plan, CancellationToken token)
+        MirrorPulseNamespaceBirthIntent birth, MirrorPulseNamespaceBirthPlan plan, CancellationToken token,
+        bool allowUnprepared = false)
     {
         actor.AssertAccess();
         if (await catalog.ReadNamespaceBirthObservationAsync(birth.OperationId, token).ConfigureAwait(false) is { } observed) return observed;
@@ -31,6 +32,12 @@ internal sealed partial class MirrorPulseNamespaceTransferTargetPublisher
             throw new InvalidDataException("Creation recovery requires the original native parent.");
         var recovered = await parent.RecoverPlaceholderCreationAsync(new(birth.OperationId, OriginalCreationSpecification(birth, plan)), token)
             .ConfigureAwait(false);
+        if (allowUnprepared && recovered.OperationId == birth.OperationId && recovered.Status == CloudPlaceholderCreationRecoveryStatus.NotFound &&
+            recovered.Receipt is null && recovered.Error is null)
+        {
+            MirrorPulseNamespaceBirthProtectionVerifier.RequireUnchangedParent(before, await parentLease.InspectAsync(token).ConfigureAwait(false));
+            return null;
+        }
         if (recovered.OperationId != birth.OperationId || recovered.Status != CloudPlaceholderCreationRecoveryStatus.Recovered || recovered.Receipt is null)
             throw new InvalidOperationException($"The original transfer target creation remains pending: {recovered.Status}.", recovered.Error);
         CloudItem item = birth.IsDirectory ? fileSystem.GetDirectory(birth.RelativePath) : fileSystem.GetFile(birth.RelativePath);

@@ -16,11 +16,19 @@ public static class MirrorPulseNamespaceBirthIdentityProjection
         Guid operationId, CloudItem item, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(item);
-        return PrepareCoreAsync(catalog, store, operationId, item.RelativePath, item.Kind, cancellationToken);
+        return PrepareCoreAsync(catalog, store, operationId, item.RelativePath, item.Kind, cancellationToken: cancellationToken);
     }
 
-    internal static async Task<bool> PrepareCoreAsync(MirrorPulseProductCatalog catalog, ICloudStateStore store,
-        Guid operationId, string relativePath, CloudItemKind itemKind, CancellationToken cancellationToken = default)
+    internal static Task RequireUnboundStartedProjectionAsync(MirrorPulseProductCatalog catalog, ICloudStateStore store,
+        Guid operationId, CloudItem item, CancellationToken cancellationToken) =>
+        ValidateOrPrepareAsync(catalog, store, operationId, item.RelativePath, item.Kind, requireUnboundStart: true, cancellationToken);
+
+    internal static Task<bool> PrepareCoreAsync(MirrorPulseProductCatalog catalog, ICloudStateStore store,
+        Guid operationId, string relativePath, CloudItemKind itemKind, CancellationToken cancellationToken = default) =>
+        ValidateOrPrepareAsync(catalog, store, operationId, relativePath, itemKind, requireUnboundStart: false, cancellationToken);
+
+    private static async Task<bool> ValidateOrPrepareAsync(MirrorPulseProductCatalog catalog, ICloudStateStore store,
+        Guid operationId, string relativePath, CloudItemKind itemKind, bool requireUnboundStart, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(catalog);
         ArgumentNullException.ThrowIfNull(store);
@@ -35,6 +43,8 @@ public static class MirrorPulseNamespaceBirthIdentityProjection
         // Product paths use '/', while CfSharp owns the platform-relative representation.
         // Its local conversion validator compares the official row with this actual item.
         var start = await catalog.ReadNamespaceBirthStartAsync(operationId, cancellationToken).ConfigureAwait(false);
+        if (requireUnboundStart && start?.Version != 2)
+            throw new InvalidOperationException("Unprepared creation requires its original version 2 birth start.");
         var identity = new CloudPlaceholderIdentity(plan.ItemId, plan.RemoteId, plan.RemoteRevision);
         _ = identity.Encode();
         await using ICloudStateTransaction transaction = await store.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
@@ -59,6 +69,6 @@ public static class MirrorPulseNamespaceBirthIdentityProjection
 
         bool Matches(CloudItemState row) => row.ItemId == plan.ItemId && row.RemoteId == plan.RemoteId &&
             row.RelativePath == relativePath && row.Kind == kind && row.RemoteRevision == plan.RemoteRevision &&
-            !row.IsTombstone && (start is not null || row.LocalFileId is null);
+            !row.IsTombstone && (row.LocalFileId is null || (start is not null && !requireUnboundStart));
     }
 }

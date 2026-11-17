@@ -109,6 +109,13 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     [TestMethod]
     [DoNotParallelize]
     [TestCategory("NativeCloudFiles")]
+    public Task NativeHostTransferResumesFirstSdkCreationAfterTheProductStartUnderTheSameRole() =>
+        RunNativeHostTransferAsync(deleteSource: true, retireLocal: true, completeOriginals: true, selectedSameInstance: false,
+            targetPublicationHandoff: MirrorPulseTransferPublicationCheckpoint.AfterStart, retryBeforeSdkCreationUnderSameRole: true);
+
+    [TestMethod]
+    [DoNotParallelize]
+    [TestCategory("NativeCloudFiles")]
     [DataRow(false)]
     [DataRow(true)]
     public Task NativeHostTransferReactivatesOnlyUnstartedSelectedTargetAfterRoleHandoff(bool startWasRecorded) =>
@@ -180,7 +187,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         bool loseAcknowledgementReturn = false, MirrorPulseTransferPublicationCheckpoint? targetPublicationHandoff = null,
         bool editTargetBeforePublicationHandoff = false, bool handoffBeforeTargetBirthStart = false,
         string? localOnlyBackendScenario = null, bool failCreationStoreCommit = false, bool loseCreationStoreCommitReturn = false,
-        bool replaceOriginalCreation = false)
+        bool replaceOriginalCreation = false, bool retryBeforeSdkCreationUnderSameRole = false)
     {
         if (!OperatingSystem.IsWindows() || Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
             Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
@@ -713,6 +720,26 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         string publicationTargetPath = Path.Combine(paths.SyncRootPath, "Archive", "moved.bin");
                         byte[] editedTarget = [9, 8, 7, 6];
                         if (editTargetBeforePublicationHandoff) await File.WriteAllBytesAsync(publicationTargetPath, editedTarget, deadline.Token);
+                        if (retryBeforeSdkCreationUnderSameRole)
+                        {
+                            Assert.AreEqual(2, originalStart!.Version);
+                            Assert.IsFalse(File.Exists(publicationTargetPath));
+                            Assert.AreEqual(1, worker.Uploads);
+                            Assert.AreEqual(0, worker.Deletes);
+                            var continued = await runtime.PublishNamespaceTransferTargetAsync(operation, deadline.Token);
+                            Assert.IsNotNull(continued.TargetPublication);
+                            Assert.AreEqual(verified.TargetBirth, continued.TargetBirth);
+                            Assert.AreEqual(originalStart, await catalog.ReadNamespaceBirthStartAsync(birthId, deadline.Token));
+                            observation = await catalog.ReadNamespaceBirthObservationAsync(birthId, deadline.Token);
+                            registered = await catalog.ReadNamespaceMemberAsync(birthId, deadline.Token);
+                            Assert.IsNotNull(observation);
+                            Assert.IsNotNull(registered);
+                            Assert.AreEqual(observation.LocalObject, continued.TargetPublication.LocalObject);
+                            Assert.AreEqual(1, publicationFaults);
+                            Assert.AreEqual(1, worker.Uploads);
+                            Assert.AreEqual(0, worker.Deletes);
+                            Assert.HasCount(2, await catalog.ReadNamespaceDispatchFencedRootsAsync(deadline.Token));
+                        }
                         await runtime.DisposeAsync();
                         await catalog.DisposeAsync();
 
@@ -804,7 +831,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         Assert.AreEqual(1, worker.Uploads);
                         Assert.AreEqual(0, worker.Deletes);
                         Assert.HasCount(2, await reopenedCatalog.ReadNamespaceDispatchFencedRootsAsync(deadline.Token));
-                        if (targetPublicationHandoff == MirrorPulseTransferPublicationCheckpoint.AfterStart)
+                        if (targetPublicationHandoff == MirrorPulseTransferPublicationCheckpoint.AfterStart && !retryBeforeSdkCreationUnderSameRole)
                         {
                             await Assert.ThrowsExactlyAsync<InvalidOperationException>(async () =>
                                 await nextPublisher.PublishNamespaceTransferTargetAsync(operation, deadline.Token));

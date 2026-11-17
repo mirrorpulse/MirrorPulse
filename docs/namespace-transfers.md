@@ -218,7 +218,12 @@ creation request. On restart, the Host authenticates the original public receipt
 and compares its full native binding on the owned target lease before saving a
 first observation. A missing or pending receipt, a replacement or a different
 root keeps the operation pending. Version 1 starts retain their earlier recovery
-rules and never gain an original binding from a current path alone.
+rules and never gain an original binding from a current path alone. An explicit
+file transfer retry under the original admitted role may make the first SDK
+call if the original store reports no preparation, the target remains absent,
+and the guarded parent and unbound logical projection still match the retained
+plan. It reuses the same birth ID and specification. Startup and a different
+execution role cannot use an absent SDK preparation to create the target.
 
 The read-only list for one root uses derived indexes of the original pending
 source and destination routes, plus the retained root reservation. It validates
