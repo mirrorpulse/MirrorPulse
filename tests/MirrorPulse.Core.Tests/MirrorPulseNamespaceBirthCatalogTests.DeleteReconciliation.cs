@@ -10,6 +10,8 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
     [DataRow(2, "0.1.0-preview.12", "cfbc7f83b26b5b6515710a8c490428d2989d8c06")]
     [DataRow(1, "0.1.0-preview.13", "825f9ebd90eff9db1686744e602fe4c6d653eeaa")]
     [DataRow(2, "0.1.0-preview.13", "825f9ebd90eff9db1686744e602fe4c6d653eeaa")]
+    [DataRow(1, "0.1.0-preview.14", "663c3dd0bbc8e6785fb2a9817f5ae0738499cf3f")]
+    [DataRow(2, "0.1.0-preview.14", "663c3dd0bbc8e6785fb2a9817f5ae0738499cf3f")]
     public async Task PreservingDeleteRetainsItsOriginalReconciliationModeAndPublicationAcrossOwners(int version, string package, string source)
     {
         using var fixture = new Fixture(); MirrorPulseRemoteDeleteRejectionAdmission original;
