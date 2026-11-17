@@ -61,6 +61,11 @@ function Confirm-SignedDirectoryTransferReport {
         $expected[$started] = 'SignedDirectoryTransfer: packageSha256=' + $PackageSha256 + '; startedTargetOrdinal=' + $ordinal +
             '; absentBeforeSdk=True; originalStartRetained=True; originalCopyRetained=True; originalBindingVerified=True;' +
             ' sourceIntactBeforeRecovery=True; targetBytesVerified=True; originalAcknowledgementCompleted=True.'
+        $restarted = 'NativeSignedLocalDirectoryTransferRecoversStartedTargetBeforeSdkPreparationAcrossHostRoles (' + $ordinal + ')'
+        $expected[$restarted] = 'SignedDirectoryTransfer: packageSha256=' + $PackageSha256 + '; restartedTargetOrdinal=' + $ordinal +
+            '; absentBeforeSdk=True; bothOriginalRootsAudited=True; startWriteRollbackVerified=' + ($ordinal -eq 0) +
+            '; originalStartRetained=True; originalCopyRetained=True; originalBindingVerified=True; sourceIntactBeforeRecovery=True;' +
+            ' targetBytesVerified=True; acknowledgementAcrossRoles=True.'
         $name = 'NativeSignedLocalDirectoryTransferRecoversOriginalCreationBeforeFirstObservationAcrossHostRoles (' + $ordinal + ')'
         $expected[$name] = 'SignedDirectoryTransfer: packageSha256=' + $PackageSha256 + '; unobservedTargetOrdinal=' + $ordinal +
             '; originalPublicReceiptRecovered=True; originalBindingRetained=True; originalStartRetained=True;' +

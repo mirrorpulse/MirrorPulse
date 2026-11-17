@@ -261,9 +261,10 @@ public sealed partial class MirrorPulseProductCatalog
         await RequireDirectoryTransferInitializationFenceAsync(intent, transaction, token).ConfigureAwait(false);
         var deletion = await ReadDirectoryTransferSourceDeletionCoreAsync(transferId, transaction, token).ConfigureAwait(false);
         if (deletion is null)
-            await RequireRegisteredDirectoryTransferTargetPrefixAsync(transferId, intent.PreparedAt, transaction, token).ConfigureAwait(false);
-        else if (intent.PreparedAt < deletion.StartedAt)
-            throw new InvalidOperationException("Directory transfer role recovery cannot predate its original source deletion start.");
+            await RequireRegisteredDirectoryTransferTargetPrefixAsync(transferId, intent.PreparedAt, transaction, token,
+                intent.DirectoryTransferStartedBirthId).ConfigureAwait(false);
+        else if (intent.PreparedAt < deletion.StartedAt || intent.DirectoryTransferStartedBirthId is not null)
+            throw new InvalidOperationException("Directory transfer role recovery must match the original source deletion stage.");
         await RequireNamespaceTransferRoutesAsync([plan.SourceRoute, plan.TargetRoute], transaction, token, requireSingleRoot: true)
             .ConfigureAwait(false);
     }

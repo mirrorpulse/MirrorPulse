@@ -42,7 +42,7 @@ public sealed record MirrorPulseInstanceRuntimeState(
 /// </summary>
 public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
 {
-    public const long CurrentSchemaVersion = 119;
+    public const long CurrentSchemaVersion = 120;
     private readonly FileStream _owner;
     private readonly SqliteConnection _connection;
     internal string WorkerStateRootPath { get; }
@@ -553,13 +553,7 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
             await EnsureDirectoryTransferSettlementSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
             await UpgradeDirectoryTransferIdentityGenerationSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
             await EnsureDirectoryTransferDurableCopySchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
-            if (currentVersion < 119)
-            {
-                // Older Hosts cannot read the version 7 file-transfer audits or target recovery admission.
-                await using SqliteCommand version = connection.CreateCommand();
-                version.CommandText = "PRAGMA user_version=119;";
-                await version.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-            }
+            await EnsureDirectoryTransferStartRecoverySchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
             openObservation.Mark(MirrorPulseCatalogOpenPhase.RecoverySchemaPrepared);
             openObservation.Mark(MirrorPulseCatalogOpenPhase.Completed);
             return catalog;

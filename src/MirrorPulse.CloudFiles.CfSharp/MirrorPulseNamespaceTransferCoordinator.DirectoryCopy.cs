@@ -51,6 +51,36 @@ public sealed partial class MirrorPulseNamespaceTransferCoordinator
                 .SettleObservedDirectoryTransferMemberAsync(target, stop).ConfigureAwait(false);
         }).ConfigureAwait(false), token);
 
+    internal ValueTask<(int Ordinal, MirrorPulseNamespaceBirthStart Start)?> ReadUnpreparedDirectoryTargetAsync(Guid operationId,
+        CancellationToken token) => actor.RunAsync<(int Ordinal, MirrorPulseNamespaceBirthStart Start)?>(async stop =>
+    {
+        var pending = await catalog.ReadStartedUnregisteredDirectoryTransferBirthsAsync(operationId, stop).ConfigureAwait(false);
+        if (pending.Count == 0) return null;
+        if (pending.Count != 1) throw new InvalidDataException("Directory recovery requires exactly one started and unregistered target.");
+        int ordinal = pending[0].Ordinal;
+        var target = await catalog.ReadNamespaceDirectoryTransferBirthAsync(operationId, ordinal, stop).ConfigureAwait(false)
+            ?? throw new InvalidDataException("The started directory target lost its original reservation.");
+        var start = await catalog.ReadNamespaceBirthStartAsync(target.Birth.OperationId, stop).ConfigureAwait(false)
+            ?? throw new InvalidDataException("The started directory target lost its original start.");
+        await new MirrorPulseNamespaceTransferTargetPublisher(fileSystem, state, catalog, router, actor)
+            .RequireUnpreparedDirectoryTransferMemberUnderActorAsync(target, start, rootsAudited: false, stop).ConfigureAwait(false);
+        return (ordinal, start);
+    }, token);
+
+    internal async ValueTask AdmitUnpreparedDirectoryTargetAsync(Guid operationId, int ordinal, MirrorPulseNamespaceBirthStart start,
+        MirrorPulseDirectoryTransferTargetActivation activation, CancellationToken token)
+    {
+        _ = await actor.RunAsync(async stop =>
+        {
+            var target = await catalog.ReadNamespaceDirectoryTransferBirthAsync(operationId, ordinal, stop).ConfigureAwait(false)
+                ?? throw new InvalidDataException("The audited directory target lost its original reservation.");
+            await new MirrorPulseNamespaceTransferTargetPublisher(fileSystem, state, catalog, router, actor)
+                .RequireUnpreparedDirectoryTransferMemberUnderActorAsync(target, start, rootsAudited: true, stop).ConfigureAwait(false);
+            await catalog.RecordDirectoryTransferStartRecoveryAsync(operationId, start.OperationId, activation, stop).ConfigureAwait(false);
+            return true;
+        }, token).ConfigureAwait(false);
+    }
+
     internal ValueTask<IReadOnlyList<MirrorPulseNamespaceProtectedTreeMember>> PublishDirectoryTargetAsync(Guid operationId,
         MirrorPulseTransferWorkerServices workers, CancellationToken token) =>
         actor.RunAsync(stop => PublishDirectoryTargetUnderActorAsync(operationId, workers, stop), token);

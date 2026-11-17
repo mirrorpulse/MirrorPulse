@@ -32,7 +32,7 @@ public sealed partial class MirrorPulseProductCatalog
             }
             await RequireNamespaceInitializationRootsAsync(intent, transaction, cancellationToken).ConfigureAwait(false);
             Guid? reservedFileTarget = await RequireFileTransferInitializationAsync(intent, transaction, cancellationToken).ConfigureAwait(false);
-            Guid? unstartedDirectoryTarget = await ReadDirectoryTransferUnstartedTargetForAuditAsync(intent, transaction, cancellationToken)
+            Guid? reservedDirectoryTarget = await ReadDirectoryTransferReservedTargetForAuditAsync(intent, transaction, cancellationToken)
                 .ConfigureAwait(false);
             Contracts.RootId? scope = intent.IsScoped ? intent.Roots[0].RootId : null;
             if (intent.RootLabelCancellation is { } purpose)
@@ -135,7 +135,7 @@ public sealed partial class MirrorPulseProductCatalog
             // The scoped audit can verify the role while the transfer retains the exact reserved target name.
             await AddUnregisteredBirthRootFencesAsync(unpublished, transaction, cancellationToken,
                 admittedTransferId: intent.FileTransferOperationId ?? intent.DirectoryTransferOperationId,
-                admittedTransferBirthId: reservedFileTarget ?? unstartedDirectoryTarget).ConfigureAwait(false);
+                admittedTransferBirthId: reservedFileTarget ?? reservedDirectoryTarget).ConfigureAwait(false);
             if (unpublished.Overlaps(intent.Roots.Select(root => root.RootId)))
                 throw new InvalidOperationException("An unresolved unregistered birth prevents current initialization completion.");
             var completed = new MirrorPulseNamespaceInitializationCompletion(operationId, current.AnchorMemberId, role,

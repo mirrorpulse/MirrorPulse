@@ -112,7 +112,7 @@ internal sealed partial class MirrorPulseNamespaceTransferTargetPublisher(CloudF
         else if (start.Version == 2 && observed is null)
         {
             string? retainedRole = birth.TransferEntry is { Version: 2 }
-                ? start.DirectoryTransferActivation?.RoleSid ?? birth.RoleSid : retainedFileRole;
+                ? await catalog.ReadDirectoryTransferCreationRoleAsync(birth.OperationId, token).ConfigureAwait(false) : retainedFileRole;
             observed = await RecoverOriginalCreationObservationAsync(birth, plan, token, allowUnprepared: retainedRole is not null).ConfigureAwait(false);
             if (observed is null)
             {

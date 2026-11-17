@@ -493,21 +493,33 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                     _namespaceExecution!, _namespaceActor!, instanceAdmission, _permissions!);
                 bool recoverProtection = plan.SourceParent.Context.Protection.RoleSid != _namespaceExecution!.RoleSid.Value ||
                     plan.TargetParent.Context.Protection.RoleSid != _namespaceExecution.RoleSid.Value;
+                var unprepared = recoverProtection
+                    ? await coordinator.ReadUnpreparedDirectoryTargetAsync(operationId, stop).ConfigureAwait(false) : null;
                 Guid? sourceRecovery = null, targetRecovery = null;
                 if (recoverProtection)
                 {
-                    var pending = await catalog.ReadPendingNamespaceInitializationsAsync(stop).ConfigureAwait(false);
+                    Guid? startedBirthId = unprepared?.Start.OperationId;
+                    var completed = startedBirthId is { } birthId
+                        ? await catalog.ReadDirectoryTransferStartRecoveryAuditIdsAsync(operationId, birthId, _namespaceExecution.RoleSid.Value, stop)
+                            .ConfigureAwait(false)
+                        : new Dictionary<RootId, Guid>();
+                    var pending = roots.Any(root => !completed.ContainsKey(root))
+                        ? await catalog.ReadPendingNamespaceInitializationsAsync(stop).ConfigureAwait(false) : [];
                     foreach (var root in roots)
                     {
-                        var existing = pending.SingleOrDefault(status => status.Intent.DirectoryTransferOperationId == operationId &&
-                            status.Intent.Roots.Single().RootId == root);
-                        await using var restored = await audit.RecoverDirectoryTransferRootAsync(existing?.Intent.OperationId ?? Guid.NewGuid(),
-                            root, operationId, stop).ConfigureAwait(false);
-                        if (root == plan.TargetRoute.RootId) targetRecovery = restored.Completion.OperationId;
-                        else sourceRecovery = restored.Completion.OperationId;
-                        var prior = _scopedAnchorProtection;
-                        _scopedAnchorProtection = restored.TransferAnchor();
-                        if (prior is not null) await prior.DisposeAsync().ConfigureAwait(false);
+                        if (!completed.TryGetValue(root, out Guid auditId))
+                        {
+                            var existing = pending.SingleOrDefault(status => status.Intent.DirectoryTransferOperationId == operationId &&
+                                status.Intent.DirectoryTransferStartedBirthId == startedBirthId && status.Intent.Roots.Single().RootId == root);
+                            await using var restored = await audit.RecoverDirectoryTransferRootAsync(existing?.Intent.OperationId ?? Guid.NewGuid(),
+                                root, operationId, startedBirthId, stop).ConfigureAwait(false);
+                            auditId = restored.Completion.OperationId;
+                            var prior = _scopedAnchorProtection;
+                            _scopedAnchorProtection = restored.TransferAnchor();
+                            if (prior is not null) await prior.DisposeAsync().ConfigureAwait(false);
+                        }
+                        if (root == plan.TargetRoute.RootId) targetRecovery = auditId;
+                        else sourceRecovery = auditId;
                     }
                 }
                 _ = await coordinator.CopyDirectoryAsync(operationId, transfers, stop, targetRecovery).ConfigureAwait(false);
@@ -515,6 +527,10 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                 var activation = sourceRecovery is { } sourceAudit && targetRecovery is { } targetAudit
                     ? new MirrorPulseDirectoryTransferTargetActivation(sourceAudit, targetAudit, _namespaceExecution.RoleSid.Value)
                     : null;
+                if (unprepared is { } started)
+                    await coordinator.AdmitUnpreparedDirectoryTargetAsync(operationId, started.Ordinal, started.Start,
+                        activation ?? throw new InvalidOperationException("Directory creation recovery requires both original root audits."), stop)
+                        .ConfigureAwait(false);
                 _ = await coordinator.DeleteDirectorySourceAsync(operationId, transfers, stop, targetRecovery, activation).ConfigureAwait(false);
                 _ = await coordinator.RetireDirectorySourceAsync(operationId, transfers, stop).ConfigureAwait(false);
                 _ = await coordinator.AcknowledgeDirectoryAsync(operationId, transfers, stop).ConfigureAwait(false);
@@ -1698,7 +1714,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                         // Both roots remain fenced by the original transfer.
                     }
                 }
-                foreach (var (operation, ordinal) in await catalog!.ReadStartedUnregisteredDirectoryTransferBirthsAsync(token).ConfigureAwait(false))
+                foreach (var (operation, ordinal) in await catalog!.ReadStartedUnregisteredDirectoryTransferBirthsAsync(null, token).ConfigureAwait(false))
                 {
                     try { _ = await coordinator.SettleObservedDirectoryTransferBirthAsync(operation, ordinal, token).ConfigureAwait(false); }
                     catch (Exception error) when (error is InvalidDataException or IOException or InvalidOperationException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)

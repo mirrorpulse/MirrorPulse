@@ -47,7 +47,11 @@ public sealed record MirrorPulseNamespaceInitializationIntent(int Version, Guid 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Guid? FileTransferStartedBirthId { get; init; }
 
-    internal bool IsScoped => Version is 4 or 5 or 6 or 7;
+    /// <summary>The started directory transfer member whose first SDK request still needs preparation.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? DirectoryTransferStartedBirthId { get; init; }
+
+    internal bool IsScoped => Version is 4 or 5 or 6 or 7 or 8;
 }
 
 public enum MirrorPulseNamespaceInitializationInventoryKind { OriginalInventory, CurrentInventory }
@@ -239,12 +243,13 @@ public sealed partial class MirrorPulseProductCatalog
         left.JournalDirectoryMoveOperationId == right.JournalDirectoryMoveOperationId &&
         left.DirectoryTransferOperationId == right.DirectoryTransferOperationId &&
         left.FileTransferOperationId == right.FileTransferOperationId && left.FileTransferStartedBirthId == right.FileTransferStartedBirthId &&
+        left.DirectoryTransferStartedBirthId == right.DirectoryTransferStartedBirthId &&
         left.Roots.SequenceEqual(right.Roots);
 
     private static void ValidateNamespaceInitialization(MirrorPulseNamespaceInitializationIntent intent)
     {
         ArgumentNullException.ThrowIfNull(intent);
-        if (intent.Version is not (1 or 2 or 3 or 4 or 5 or 6 or 7) || intent.OperationId == Guid.Empty || intent.PreparedAt == default || intent.Roots is null ||
+        if (intent.Version is not (1 or 2 or 3 or 4 or 5 or 6 or 7 or 8) || intent.OperationId == Guid.Empty || intent.PreparedAt == default || intent.Roots is null ||
             intent.RequestedInventoryKind is { } requested && !Enum.IsDefined(requested) ||
             (intent.Version == 2 || intent.IsScoped) && intent.RequestedInventoryKind != MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory ||
             intent.IsScoped && intent.Roots.Count != 1 ||
@@ -255,8 +260,12 @@ public sealed partial class MirrorPulseProductCatalog
             intent.Roots.Where(root => root.BornRootMemberId is null).Select(root => root.ManifestId).Distinct().Count() != intent.Roots.Count(root => root.BornRootMemberId is null) ||
             intent.Roots.Where(root => root.BornRootMemberId is not null).Select(root => root.BornRootMemberId).Distinct().Count() != intent.Roots.Count(root => root.BornRootMemberId is not null) ||
             intent.JournalDirectoryMoveOperationId is { } move && (intent.Version != 4 || move == Guid.Empty || move == intent.OperationId) ||
-            intent.DirectoryTransferOperationId is { } transfer && (intent.Version != 4 || transfer == Guid.Empty ||
+            intent.DirectoryTransferOperationId is { } transfer && (intent.Version is not (4 or 8) || transfer == Guid.Empty ||
                 transfer == intent.OperationId || intent.JournalDirectoryMoveOperationId is not null) ||
+            intent.Version == 8 && intent.DirectoryTransferOperationId is null ||
+            (intent.Version == 8) != (intent.DirectoryTransferStartedBirthId is not null) ||
+            intent.DirectoryTransferStartedBirthId is { } directoryBirth && (directoryBirth == Guid.Empty ||
+                directoryBirth == intent.OperationId || directoryBirth == intent.DirectoryTransferOperationId) ||
             (intent.Version is 6 or 7) != (intent.FileTransferOperationId is not null) ||
             intent.FileTransferOperationId is { } fileTransfer && (fileTransfer == Guid.Empty || fileTransfer == intent.OperationId) ||
             (intent.Version == 7) != (intent.FileTransferStartedBirthId is not null) ||

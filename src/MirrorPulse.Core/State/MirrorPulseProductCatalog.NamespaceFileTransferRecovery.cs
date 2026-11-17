@@ -10,8 +10,16 @@ internal sealed record MirrorPulseFileTransferRecoveryMembers(MirrorPulseNamespa
 
 public sealed partial class MirrorPulseProductCatalog
 {
-    internal async Task<Dictionary<RootId, Guid>> ReadFileTransferRecoveryAuditIdsAsync(Guid transferId,
-        string roleSid, CancellationToken token, Guid? startedBirthId = null)
+    internal Task<Dictionary<RootId, Guid>> ReadFileTransferRecoveryAuditIdsAsync(Guid transferId,
+        string roleSid, CancellationToken token, Guid? startedBirthId = null) =>
+        ReadTransferRecoveryAuditIdsAsync(transferId, roleSid, startedBirthId, directoryTransfer: false, token);
+
+    internal Task<Dictionary<RootId, Guid>> ReadDirectoryTransferStartRecoveryAuditIdsAsync(Guid transferId,
+        Guid startedBirthId, string roleSid, CancellationToken token) =>
+        ReadTransferRecoveryAuditIdsAsync(transferId, roleSid, startedBirthId, directoryTransfer: true, token);
+
+    private async Task<Dictionary<RootId, Guid>> ReadTransferRecoveryAuditIdsAsync(Guid transferId, string roleSid,
+        Guid? startedBirthId, bool directoryTransfer, CancellationToken token)
     {
         await _gate.WaitAsync(token).ConfigureAwait(false);
         try
@@ -25,14 +33,16 @@ public sealed partial class MirrorPulseProductCatalog
                 query.CommandText = """
                     SELECT i.operation_id FROM namespace_initialization_intents i
                     JOIN namespace_initialization_completions c ON c.operation_id=i.operation_id
-                    WHERE json_extract(CAST(i.payload AS TEXT),'$.FileTransferOperationId')=$transfer
+                    WHERE json_extract(CAST(i.payload AS TEXT),$transferField)=$transfer
                       AND json_extract(CAST(c.payload AS TEXT),'$.RoleSid')=$role
-                      AND json_extract(CAST(i.payload AS TEXT),'$.FileTransferStartedBirthId') IS $birth
+                      AND json_extract(CAST(i.payload AS TEXT),$birthField) IS $birth
                     LIMIT 3;
                     """;
                 query.Parameters.AddWithValue("$transfer", transferId.ToString("D"));
                 query.Parameters.AddWithValue("$role", roleSid);
                 query.Parameters.AddWithValue("$birth", (object?)startedBirthId?.ToString("D") ?? DBNull.Value);
+                query.Parameters.AddWithValue("$transferField", directoryTransfer ? "$.DirectoryTransferOperationId" : "$.FileTransferOperationId");
+                query.Parameters.AddWithValue("$birthField", directoryTransfer ? "$.DirectoryTransferStartedBirthId" : "$.FileTransferStartedBirthId");
                 await using var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
                 while (await reader.ReadAsync(token).ConfigureAwait(false)) operations.Add(ParseNamespaceMemberId(reader.GetString(0)));
             }
@@ -40,10 +50,13 @@ public sealed partial class MirrorPulseProductCatalog
             foreach (Guid operation in operations)
             {
                 var status = await ReadNamespaceInitializationStatusCoreAsync(operation, transaction, token).ConfigureAwait(false);
-                if (status.Intent.FileTransferOperationId != transferId || status.Intent.FileTransferStartedBirthId != startedBirthId ||
+                var (retainedTransfer, retainedBirth) = directoryTransfer
+                    ? (status.Intent.DirectoryTransferOperationId, status.Intent.DirectoryTransferStartedBirthId)
+                    : (status.Intent.FileTransferOperationId, status.Intent.FileTransferStartedBirthId);
+                if (retainedTransfer != transferId || retainedBirth != startedBirthId ||
                     status.Completion?.RoleSid != roleSid ||
                     status.Completion.ScopeRoot is not { } root || !result.TryAdd(root, operation) || result.Count > 2)
-                    throw new InvalidDataException("The original file transfer has inconsistent scoped audit receipts.");
+                    throw new InvalidDataException("The original transfer has inconsistent scoped audit receipts.");
             }
             transaction.Commit();
             return result;

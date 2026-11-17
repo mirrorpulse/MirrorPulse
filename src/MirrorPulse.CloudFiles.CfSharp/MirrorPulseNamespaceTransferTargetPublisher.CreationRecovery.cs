@@ -9,11 +9,7 @@ internal sealed partial class MirrorPulseNamespaceTransferTargetPublisher
         MirrorPulseNamespaceBirthStart start, bool rootsAudited, CancellationToken token)
     {
         actor.AssertAccess();
-        if (copy.TargetBirth is not { } target || copy.TargetPublication is not null || target.Birth.IsDirectory ||
-            start.Version != 2 || start.OperationId != target.Birth.OperationId ||
-            await catalog.ReadNamespaceBirthStartAsync(start.OperationId, token).ConfigureAwait(false) != start ||
-            await catalog.ReadNamespaceBirthObservationAsync(start.OperationId, token).ConfigureAwait(false) is not null ||
-            await catalog.ReadNamespaceMemberAsync(start.OperationId, token).ConfigureAwait(false) is not null)
+        if (copy.TargetBirth is not { } target || copy.TargetPublication is not null || target.Birth.IsDirectory)
             throw new InvalidOperationException("Role recovery requires the original started target before its first observation.");
         var original = copy.Plan.TargetParent;
         Guid memberId = original.Context.Member.MemberId;
@@ -21,24 +17,49 @@ internal sealed partial class MirrorPulseNamespaceTransferTargetPublisher
             await catalog.ReadNamespaceMemberLocationAsync(memberId, token).ConfigureAwait(false) != original.Context.Location ||
             await catalog.ReadNamespaceMemberIdentityAsync(memberId, token).ConfigureAwait(false) != original.Identity)
             throw new InvalidOperationException("Role recovery requires the original target parent and public identity.");
-        var parent = fileSystem.GetDirectory(original.Context.Location.RelativePath);
+        await RequireUnpreparedCreationUnderActorAsync(target.Birth, target.Plan, start, original.Context.Member, rootsAudited, token)
+            .ConfigureAwait(false);
+    }
+
+    internal async Task RequireUnpreparedDirectoryTransferMemberUnderActorAsync(MirrorPulseDirectoryTransferTargetBirth target,
+        MirrorPulseNamespaceBirthStart start, bool rootsAudited, CancellationToken token)
+    {
+        actor.AssertAccess();
+        var parent = await catalog.ReadNamespaceMemberByBindingAsync(target.Birth.ParentLocalObject, token).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("Directory recovery requires the original registered target parent.");
+        await RequireUnpreparedCreationUnderActorAsync(target.Birth, target.Plan, start, parent, rootsAudited, token).ConfigureAwait(false);
+    }
+
+    private async Task RequireUnpreparedCreationUnderActorAsync(MirrorPulseNamespaceBirthIntent birth, MirrorPulseNamespaceBirthPlan plan,
+        MirrorPulseNamespaceBirthStart start, MirrorPulseNamespaceMemberRegistration originalParent, bool rootsAudited, CancellationToken token)
+    {
+        if (start.Version != 2 || start.OperationId != birth.OperationId ||
+            await catalog.ReadNamespaceBirthStartAsync(start.OperationId, token).ConfigureAwait(false) != start ||
+            await catalog.ReadNamespaceBirthObservationAsync(start.OperationId, token).ConfigureAwait(false) is not null ||
+            await catalog.ReadNamespaceMemberAsync(start.OperationId, token).ConfigureAwait(false) is not null)
+            throw new InvalidOperationException("Role recovery requires the original started target before its first observation.");
+        string parentPath = birth.RelativePath[..birth.RelativePath.LastIndexOf('/')];
+        var location = await catalog.ReadNamespaceMemberLocationAsync(originalParent.MemberId, token).ConfigureAwait(false);
+        if (location.RelativePath != parentPath)
+            throw new InvalidOperationException("Role recovery requires the original target parent at its retained path.");
+        var parent = fileSystem.GetDirectory(parentPath);
         await using var lease = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(parent, router, token).ConfigureAwait(false);
         // Startup may already have moved the shared anchor to its new role. Check the exact
         // direct parent before auditing and require coherent current protection afterwards.
         var before = await lease.InspectAsync(token).ConfigureAwait(false);
-        if (before.LocalObject != target.Birth.ParentLocalObject || before.OwnerSid != original.Context.Member.OwnerSid ||
-            before.RelativePath != original.Context.Location.RelativePath || before.RootId != target.Birth.RootId ||
+        if (before.LocalObject != birth.ParentLocalObject || before.OwnerSid != originalParent.OwnerSid ||
+            before.RelativePath != parentPath || before.RootId != birth.RootId ||
             !before.IsDirectory || before.LinkCount != 1)
             throw new InvalidOperationException("Role recovery requires the original native target parent.");
         if (rootsAudited)
         {
-            var snapshot = await catalog.ReadNamespaceMemberProtectionSnapshotAsync(memberId, token).ConfigureAwait(false)
+            var snapshot = await catalog.ReadNamespaceMemberProtectionSnapshotAsync(originalParent.MemberId, token).ConfigureAwait(false)
                 ?? throw new InvalidOperationException("Role recovery requires audited native parent protection.");
-            before = await MirrorPulseNamespaceBirthProtectionVerifier.InspectRetainedParentAsync(target.Birth, parent,
+            before = await MirrorPulseNamespaceBirthProtectionVerifier.InspectRetainedParentAsync(birth, parent,
                 MirrorPulseNamespaceProtectionProofReader.FromSnapshot(snapshot), lease, token).ConfigureAwait(false);
         }
-        var item = fileSystem.GetFile(target.Birth.RelativePath);
-        var result = await parent.RecoverPlaceholderCreationAsync(new(start.OperationId, OriginalCreationSpecification(target.Birth, target.Plan)),
+        CloudItem item = birth.IsDirectory ? fileSystem.GetDirectory(birth.RelativePath) : fileSystem.GetFile(birth.RelativePath);
+        var result = await parent.RecoverPlaceholderCreationAsync(new(start.OperationId, OriginalCreationSpecification(birth, plan)),
             token).ConfigureAwait(false);
         if (!IsUnpreparedCreation(result, start.OperationId) || (await item.InspectAsync(token).ConfigureAwait(false)).Exists)
             throw new InvalidOperationException($"The original transfer target cannot enter role recovery before SDK preparation: {result.Status}.", result.Error);

@@ -223,10 +223,13 @@ file or directory transfer retry under the original admitted role may make the f
 call if the original store reports no preparation, the target remains absent,
 and the guarded parent and unbound logical projection still match the retained
 plan. It reuses the same birth ID and specification. After restart, an explicit
-file transfer retry can acquire a new role for the same request. It checks the
+file or directory transfer retry can acquire a new role for the same request. It checks the
 original SDK store and native target before and after auditing both fenced roots.
-Each audit names the original started birth. The Host retains both audit receipts
+Each audit names the original started birth, including the exact member of a
+directory transfer. The Host retains both audit receipts
 and the verified new parent protection before submitting the unchanged request.
+A retry under the same role reuses these audits after checking the original SDK
+state and the current transfer routes.
 Startup checks for committed creation receipts without initiating creation.
 
 The read-only list for one root uses derived indexes of the original pending

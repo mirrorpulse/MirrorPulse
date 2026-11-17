@@ -26,7 +26,8 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
         CancellationToken cancellationToken) => RecoverCoreAsync(operationId, rootId, null, null, cancellationToken);
 
     internal ValueTask<MirrorPulseNamespaceInitializationResult> RecoverDirectoryTransferRootAsync(Guid operationId, RootId rootId,
-        Guid transferId, CancellationToken cancellationToken) => RecoverCoreAsync(operationId, rootId, null, transferId, cancellationToken);
+        Guid transferId, Guid? startedBirthId, CancellationToken cancellationToken) =>
+        RecoverCoreAsync(operationId, rootId, null, transferId, cancellationToken, startedBirthId: startedBirthId);
 
     internal ValueTask<MirrorPulseNamespaceInitializationResult> RecoverFileTransferRootAsync(Guid operationId, RootId rootId,
         Guid transferId, Guid? startedBirthId, CancellationToken cancellationToken) =>
@@ -48,7 +49,8 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
             retained.Roots[0].RootId != selected : retained.IsScoped))
             throw new InvalidOperationException("The retained initializer requires its explicit complete or selected-root recovery route.");
         if (retained is not null && (retained.DirectoryTransferOperationId != transferId || retained.FileTransferOperationId != fileTransferId ||
-            retained.FileTransferStartedBirthId != startedBirthId))
+            retained.FileTransferStartedBirthId != (fileTransferId is not null ? startedBirthId : null) ||
+            retained.DirectoryTransferStartedBirthId != (transferId is not null ? startedBirthId : null)))
             throw new InvalidOperationException("Current recovery requires its exact transfer purpose.");
         if (retained?.JournalDirectoryMoveOperationId is { } original)
         {
@@ -71,7 +73,7 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
         if (retained is null)
         {
             var roots = await MirrorPulseNamespaceCurrentRootSelector.SelectAsync(fileSystem, catalog, registrations, cancellationToken).ConfigureAwait(false);
-            retained = await catalog.PrepareNamespaceInitializationAsync(new(startedBirthId is not null ? 7 : fileTransferId is not null ? 6 :
+            retained = await catalog.PrepareNamespaceInitializationAsync(new(startedBirthId is not null ? (transferId is not null ? 8 : 7) : fileTransferId is not null ? 6 :
                 selectedRoot is not null ? 4 : roots.Count == 0 ? 3 : roots.Any(root => root.BornRootMemberId is not null) ? 2 : 1,
                 operationId, roots, DateTimeOffset.UtcNow)
             {
@@ -79,7 +81,8 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
                 JournalDirectoryMoveOperationId = move is { IsAcknowledged: false } ? move.Admission.JournalOperationId : null,
                 DirectoryTransferOperationId = transferId,
                 FileTransferOperationId = fileTransferId,
-                FileTransferStartedBirthId = startedBirthId
+                FileTransferStartedBirthId = fileTransferId is not null ? startedBirthId : null,
+                DirectoryTransferStartedBirthId = transferId is not null ? startedBirthId : null
             }, cancellationToken).ConfigureAwait(false);
         }
         if (!retained.Roots.Select(root => root.RootId).ToHashSet().SetEquals(registrations.Select(root => root.RootId)))
