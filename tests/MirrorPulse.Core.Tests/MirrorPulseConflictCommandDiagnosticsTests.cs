@@ -65,9 +65,10 @@ public sealed class MirrorPulseConflictCommandDiagnosticsTests
     {
         var entry = new LogEntry(LogLevel.Warning, "host", "ConflictCommandFailed", DateTimeOffset.UtcNow,
             [new("conflictCommandStage", value)]);
-        var safe = SafeDiagnosticPolicy.Sanitize(entry);
+        // Allowed diagnostic metadata may contain the same digits as a rejected stage value.
+        var safe = SafeDiagnosticPolicy.Sanitize(entry, Guid.Parse("00000000-0000-0000-0000-000000000999"));
         Assert.IsFalse(safe.Fields.ContainsKey("conflictCommandStage"));
-        Assert.IsFalse(JsonSerializer.Serialize(safe).Contains(value, StringComparison.Ordinal));
+        Assert.IsFalse(JsonSerializer.Serialize(safe).Contains(JsonSerializer.Serialize(value), StringComparison.Ordinal));
     }
 
     [TestMethod]
