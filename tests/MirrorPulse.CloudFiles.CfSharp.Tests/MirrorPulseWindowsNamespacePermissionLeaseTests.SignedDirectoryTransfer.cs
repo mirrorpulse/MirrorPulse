@@ -61,6 +61,13 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles"), TestCategory("SignedDirectoryTransfer")]
     [DataRow(0)]
     [DataRow(2)]
+    public Task NativeSignedLocalDirectoryTransferContinuesOriginalStartBeforeSdkPreparation(int selectedOrdinal) =>
+        VerifySignedDirectoryTransferAsync(null, publicationCut: MirrorPulseTransferPublicationCheckpoint.AfterStart,
+            selectedTargetOrdinal: selectedOrdinal);
+
+    [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles"), TestCategory("SignedDirectoryTransfer")]
+    [DataRow(0)]
+    [DataRow(2)]
     public Task NativeSignedLocalDirectoryTransferRecoversOriginalCreationBeforeFirstObservationAcrossHostRoles(int selectedOrdinal) =>
         VerifySignedDirectoryTransferAsync(null, publicationCut: MirrorPulseTransferPublicationCheckpoint.AfterCreation,
             selectedTargetOrdinal: selectedOrdinal);
@@ -108,6 +115,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     {
         bool interruptDuringPublication = publicationCut is not null;
         bool interruptBeforeTargetStart = publicationCut == MirrorPulseTransferPublicationCheckpoint.BeforeStart;
+        bool interruptBeforeSdkPreparation = publicationCut == MirrorPulseTransferPublicationCheckpoint.AfterStart;
         bool interruptBeforeObservation = publicationCut == MirrorPulseTransferPublicationCheckpoint.AfterCreation;
         bool interruptBeforeRegistration = publicationCut == MirrorPulseTransferPublicationCheckpoint.AfterObservation;
         bool restartDuringCopy = restartBeforeCopy || copyCut is not null;
@@ -246,7 +254,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     return ValueTask.CompletedTask;
                 }
             };
-            bool interrupt = true;
+            bool interrupt = !interruptBeforeSdkPreparation;
             int targetPublicationStarts = 0;
             bool interruptAcknowledgement = webDav is null && !restartDuringTransfer;
             CloudLocalChangeFeed? journal = null;
@@ -266,7 +274,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 TransferPublicationCheckpoint = (checkpoint, _) =>
                 {
                     if (checkpoint == publicationCut &&
-                        (!(interruptBeforeTargetStart || interruptBeforeObservation) || targetPublicationStarts++ == selectedTargetOrdinal))
+                        (!(interruptBeforeTargetStart || interruptBeforeSdkPreparation || interruptBeforeObservation) ||
+                            targetPublicationStarts++ == selectedTargetOrdinal))
                         throw new IOException(interruption);
                     return ValueTask.CompletedTask;
                 },
@@ -363,7 +372,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             else if (interruptBeforeWorkerStart || interruptDuringPublication)
             {
                 Assert.IsNull(deletion);
-                int expectedBirths = interruptBeforeTargetStart || interruptBeforeObservation ? selectedTargetOrdinal + 1 :
+                int expectedBirths = interruptBeforeTargetStart || interruptBeforeSdkPreparation || interruptBeforeObservation ? selectedTargetOrdinal + 1 :
                     interruptDuringPublication ? 1 : plan.Members.Count;
                 for (int ordinal = 0; ordinal < expectedBirths; ordinal++)
                 {
@@ -376,6 +385,19 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         Assert.IsNull(await catalog.ReadNamespaceMemberAsync(birth.Birth.OperationId, token));
                         Assert.IsFalse(Directory.Exists(Path.Combine(paths.SyncRootPath, plan.Members[ordinal].TargetRelativePath)));
                         Assert.IsNull((await catalog.ReadNamespaceTransferStatusAsync(operationId, token))!.PendingTargetBinding);
+                    }
+                    else if (interruptBeforeSdkPreparation && ordinal == selectedTargetOrdinal)
+                    {
+                        originalCreationStart = await catalog.ReadNamespaceBirthStartAsync(birth.Birth.OperationId, token);
+                        Assert.IsNotNull(originalCreationStart);
+                        Assert.AreEqual(2, originalCreationStart.Version);
+                        Assert.IsNull(await catalog.ReadNamespaceBirthObservationAsync(birth.Birth.OperationId, token));
+                        Assert.IsNull(await catalog.ReadNamespaceMemberAsync(birth.Birth.OperationId, token));
+                        Assert.IsFalse(callerCreationReceipts.ContainsKey(birth.Birth.OperationId));
+                        string nativePath = Path.Combine(paths.SyncRootPath, birth.Birth.RelativePath);
+                        Assert.IsFalse(File.Exists(nativePath) || Directory.Exists(nativePath));
+                        Assert.AreEqual(new MirrorPulseTransferPendingTargetBinding(originalCreationStart.OperationId, originalCreationStart.StartedAt),
+                            (await catalog.ReadNamespaceTransferStatusAsync(operationId, token))!.PendingTargetBinding);
                     }
                     else if (interruptBeforeObservation && ordinal == selectedTargetOrdinal)
                     {
@@ -437,6 +459,36 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 CollectionAssert.AreEqual(bytes, targetBytes);
             }
             Assert.IsTrue((await catalog.ReadNamespaceTransferStatusAsync(operationId, token))!.RootsFenced);
+            if (interruptBeforeSdkPreparation)
+            {
+                var retainedCopy = await catalog.ReadNamespaceDirectoryTransferCopyAsync(operationId, token);
+                var selected = originalTargets[^1];
+                Assert.IsTrue(await runtime.ResumeDirectoryNamespaceTransferAsync(operationId, token));
+                Assert.AreEqual(originalCreationStart, await catalog.ReadNamespaceBirthStartAsync(selected.Birth.OperationId, token));
+                await AssertCompletedTransferAsync(runtime, work);
+                var observed = await catalog.ReadNamespaceBirthObservationAsync(selected.Birth.OperationId, token);
+                Assert.IsNotNull(observed);
+                var receipt = callerCreationReceipts[selected.Birth.OperationId];
+                Assert.AreEqual(new MirrorPulseLocalFileBinding(receipt.Binding.VolumeSerialNumber,
+                    receipt.Binding.SyncRootFileId, receipt.Binding.LocalFileId), observed.LocalObject);
+                var settledCopy = await catalog.ReadNamespaceDirectoryTransferCopyAsync(operationId, token);
+                CollectionAssert.AreEqual(retainedCopy.Steps.Select(step => (step.EffectId, step.StartedAt, step.AcceptedAt)).ToArray(),
+                    settledCopy.Steps.Select(step => (step.EffectId, step.StartedAt, step.AcceptedAt)).ToArray());
+                var sourceDeletion = await catalog.ReadNamespaceDirectoryTransferSourceDeletionAsync(operationId, token);
+                Assert.IsNotNull(sourceDeletion?.Receipt);
+                Assert.IsTrue(await runtime.ResumeDirectoryNamespaceTransferAsync(operationId, token));
+                var replayedDeletion = await catalog.ReadNamespaceDirectoryTransferSourceDeletionAsync(operationId, token);
+                Assert.IsNotNull(replayedDeletion?.Receipt);
+                Assert.AreEqual(sourceDeletion.StartedAt, replayedDeletion.StartedAt);
+                Assert.AreEqual(sourceDeletion.AcceptedAt, replayedDeletion.AcceptedAt);
+                Assert.AreEqual(sourceDeletion.Receipt.RequestFingerprint, replayedDeletion.Receipt.RequestFingerprint);
+                Assert.AreEqual(sourceDeletion.Receipt.ReceiptId, replayedDeletion.Receipt.ReceiptId);
+                CollectionAssert.AreEqual(sourceDeletion.Receipt.DeletedOriginals.ToArray(), replayedDeletion.Receipt.DeletedOriginals.ToArray());
+                Assert.IsNotNull((await catalog.ReadNamespaceDirectoryTransferAcknowledgementAsync(operationId, token))?.AcknowledgedAt);
+                string digest = await ReadSignedPackageDigestAsync();
+                TestContext.WriteLine($"SignedDirectoryTransfer: packageSha256={digest}; startedTargetOrdinal={selectedTargetOrdinal}; absentBeforeSdk=True; originalStartRetained=True; originalCopyRetained=True; originalBindingVerified=True; sourceIntactBeforeRecovery=True; targetBytesVerified=True; originalAcknowledgementCompleted=True.");
+                return;
+            }
             if (webDav is null)
             {
                 DateTimeOffset? originalAcknowledgementStart = null;
@@ -851,7 +903,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(Path.Combine(paths.SyncRootPath, "Archive", transferred), token));
                 Assert.IsTrue(await current.ResumeDirectoryNamespaceTransferAsync(operationId, token));
                 Assert.AreEqual(completed, await catalog.ReadNamespaceTransferStatusAsync(operationId, token));
-                if (verifySameBackendSuccessor) return;
+                if (verifySameBackendSuccessor || interruptBeforeSdkPreparation) return;
                 string digest = await ReadSignedPackageDigestAsync();
                 if (preparedCopy)
                 {

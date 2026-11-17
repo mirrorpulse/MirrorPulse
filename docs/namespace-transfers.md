@@ -219,7 +219,7 @@ and compares its full native binding on the owned target lease before saving a
 first observation. A missing or pending receipt, a replacement or a different
 root keeps the operation pending. Version 1 starts retain their earlier recovery
 rules and never gain an original binding from a current path alone. An explicit
-file transfer retry under the original admitted role may make the first SDK
+file or directory transfer retry under the original admitted role may make the first SDK
 call if the original store reports no preparation, the target remains absent,
 and the guarded parent and unbound logical projection still match the retained
 plan. It reuses the same birth ID and specification. After restart, an explicit

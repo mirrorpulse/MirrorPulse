@@ -111,14 +111,16 @@ internal sealed partial class MirrorPulseNamespaceTransferTargetPublisher(CloudF
         }
         else if (start.Version == 2 && observed is null)
         {
-            observed = await RecoverOriginalCreationObservationAsync(birth, plan, token, allowUnprepared: retainedFileRole is not null).ConfigureAwait(false);
+            string? retainedRole = birth.TransferEntry is { Version: 2 }
+                ? start.DirectoryTransferActivation?.RoleSid ?? birth.RoleSid : retainedFileRole;
+            observed = await RecoverOriginalCreationObservationAsync(birth, plan, token, allowUnprepared: retainedRole is not null).ConfigureAwait(false);
             if (observed is null)
             {
-                // The original SDK store has no preparation for this file. Only the role
+                // The original SDK store has no preparation for this member. Only the role
                 // admitted by the retained transfer may invoke the immutable original request.
                 using var caller = WindowsIdentity.GetCurrent();
-                if (retainedFileRole is null || proof.RoleSid != retainedFileRole || caller.User?.Value != proof.OwnerSid ||
-                    !new WindowsPrincipal(caller).IsInRole(new SecurityIdentifier(retainedFileRole)))
+                if (retainedRole is null || proof.RoleSid != retainedRole || caller.User?.Value != proof.OwnerSid ||
+                    !new WindowsPrincipal(caller).IsInRole(new SecurityIdentifier(retainedRole)))
                     throw new InvalidOperationException("The original unprepared SDK creation still requires its admitted role.");
                 if ((await item.InspectAsync(token).ConfigureAwait(false)).Exists)
                     throw new IOException("The native transfer target is occupied.");
