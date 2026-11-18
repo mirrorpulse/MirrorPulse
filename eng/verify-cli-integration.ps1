@@ -604,7 +604,11 @@ try {
         }
         [IO.File]::WriteAllText($remoteFile, "local-conflict")
         [IO.File]::WriteAllText($roundTrip, "remote-conflict")
-        Invoke-MirrorPulseCli @("--json", "--developer-mode", "host", "start") | Out-Null
+        $startupOriginals = if ($EvidencePath) {
+            Join-Path ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($EvidencePath))) 'cli-regression.originals'
+        }
+        Wait-CliRootLabelHostStart -InvokeCli $invokeLabelCli -Phase 'offline-conflict-start' `
+            -PreviousProcessId $rootLabelCancellations.reenabledRestart.currentProcessId -OriginalsDirectory $startupOriginals | Out-Null
         $deadline = [DateTime]::UtcNow.AddSeconds(30)
         do {
             Start-Sleep -Milliseconds 500
