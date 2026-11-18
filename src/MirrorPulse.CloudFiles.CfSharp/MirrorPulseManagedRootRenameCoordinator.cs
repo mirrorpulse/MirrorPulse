@@ -2,6 +2,7 @@ using System.Runtime.Versioning;
 using CfSharp;
 using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.State;
+using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.CloudFiles.CfSharp;
 
@@ -56,7 +57,7 @@ public sealed class MirrorPulseManagedRootRenameCoordinator
         }
         if (await _catalog.ReadPendingRemoteBatchAsync(root.InstanceId, cancellationToken).ConfigureAwait(false) is not null ||
             await _catalog.ReadRetainedRemoteBatchAsync(root.InstanceId, cancellationToken).ConfigureAwait(false) is not null)
-            throw new InvalidOperationException("The original remote batch must converge before preparing a root rename.");
+            throw new MirrorPulseRootLabelPendingRemoteBatchException();
         CloudDirectoryMoveProof proof = await _fileSystem.GetDirectory(root.DirectoryName)
             .PrepareMoveAsync(_fileSystem.Root, target, cancellationToken).ConfigureAwait(false);
         var captured = new MirrorPulseRootRenameProof(proof.RootItemId,

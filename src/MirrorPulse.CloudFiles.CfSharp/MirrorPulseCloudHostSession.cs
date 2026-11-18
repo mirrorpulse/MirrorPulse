@@ -2024,12 +2024,23 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                 MirrorPulseRootRenameHistory prepared = null!;
                 // This captures read-only public proof. First native execution still
                 // requires a separately sealed whole-tree admission under the actor.
-                _ = await MirrorPulseRootLabelFailureDiagnostics.AtPreparationStageAsync(MirrorPulseRootLabelPreparationStage.PublicProof, async () =>
+                try
                 {
-                    await _namespaceExecution.RunNamespaceOperationAsync(async () =>
-                        prepared = await coordinator.PrepareAsync(rootId, label, token).ConfigureAwait(false)).ConfigureAwait(false);
-                    return true;
-                }).ConfigureAwait(false);
+                    _ = await MirrorPulseRootLabelFailureDiagnostics.AtPreparationStageAsync(MirrorPulseRootLabelPreparationStage.PublicProof, async () =>
+                    {
+                        await _namespaceExecution.RunNamespaceOperationAsync(async () =>
+                            prepared = await coordinator.PrepareAsync(rootId, label, token).ConfigureAwait(false)).ConfigureAwait(false);
+                        return true;
+                    }).ConfigureAwait(false);
+                }
+                catch (MirrorPulseRootLabelPendingRemoteBatchException) when (root.State == RootRegistrationState.Active &&
+                    _startupProtection == anchor && router.FindRegistration(rootId) == root && audit.RoleSid == _namespaceExecution.RoleSid.Value)
+                {
+                    // No Label admission or native move occurred. The original batch
+                    // can settle under the fresh, unfenced current-tree observation.
+                    admission.CompleteAfterFreshAudit();
+                    throw;
+                }
                 return prepared;
             }, stop.Token)).ConfigureAwait(false);
         }

@@ -16,6 +16,7 @@ public static class MirrorPulseControlErrorCodes
     public const string HostStartTimeout = "mp.control.hostStartTimeout";
     public const string RequestTimeout = "mp.control.requestTimeout";
     public const string HostBusy = "mp.control.hostBusy";
+    public const string RootLabelPendingRemoteBatch = "mp.control.rootLabelPendingRemoteBatch";
     public const string Unauthorized = "mp.control.unauthorized";
     public const string Forbidden = "mp.control.forbidden";
     public const string OperationNotFound = "mp.control.operationNotFound";

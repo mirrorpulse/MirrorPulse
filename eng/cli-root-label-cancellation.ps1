@@ -86,7 +86,8 @@ function Invoke-CliRootLabelCancellationLifecycle {
             Set-Content -LiteralPath (Join-Path $originals ($Phase + '-bytes.json')) -Encoding utf8 }
     }
     function Prepare-CancellationLabel([string]$Phase, [string]$SourceName, [string]$TargetName) {
-        $prepared = Invoke-CancellationCli ($Phase + '-prepare') @('root', 'prepare-rename', $RootId, $TargetName)
+        $prepared = Invoke-CliRootLabelPreparation -InvokeCli $InvokeCli -RootId $RootId -Label $TargetName `
+            -Phase ($Phase + '-prepare') -OriginalsDirectory $originals
         if ($prepared.rootId -cne $RootId -or $prepared.phase -cne 'Prepared' -or
             $prepared.sourceName -cne $SourceName -or $prepared.targetName -cne $TargetName -or
             [guid]::Parse($prepared.operationId) -eq [guid]::Empty) { throw 'Require the original typed public root Label preparation.' }

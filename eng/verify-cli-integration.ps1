@@ -107,11 +107,11 @@ function Invoke-CliFixtureProbe {
 }
 
 function Invoke-MirrorPulseCli {
-    param([Parameter(Mandatory = $true)][AllowEmptyString()][string[]]$Arguments, [int]$ExpectedExitCode = 0)
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string[]]$Arguments, [int[]]$ExpectedExitCode = @(0))
 
     Write-Host "CLI command: $($Arguments -join ' ')"
     $text = (& $script:cliExecutable @Arguments 2>&1 | Out-String).Trim()
-    if ($LASTEXITCODE -ne $ExpectedExitCode) {
+    if ($LASTEXITCODE -notin $ExpectedExitCode) {
         throw "CLI command failed ($LASTEXITCODE): $($Arguments -join ' ')`n$text"
     }
 
@@ -559,7 +559,11 @@ try {
         $marker.controlledReplacementOperationId = $activeReplacement.operationId
         $marker | ConvertTo-Json | Set-Content -LiteralPath $markerPath -Encoding utf8
 
-        $rootLabelLifecycle = Invoke-CliRootLabelLifecycle -InvokeCli { param($arguments) Invoke-MirrorPulseCli $arguments } `
+        $invokeLabelCli = {
+            param($arguments, [int[]]$exitCodes = @(0))
+            Invoke-MirrorPulseCli -Arguments $arguments -ExpectedExitCode $exitCodes
+        }
+        $rootLabelLifecycle = Invoke-CliRootLabelLifecycle -InvokeCli $invokeLabelCli `
             -RootId $registeredRoot.rootId -InstanceId $instanceId -DirectoryName $rootDirectory `
             -SyncRoot $syncRoot -SourceRoot $sourceRoot -EvidencePath $EvidencePath
         if ($EvidencePath) {
@@ -567,7 +571,7 @@ try {
             Assert-CliRootLabelLifecycleEvidence -Evidence $rootLabelLifecycle -OriginalsDirectory $rootLabelOriginals
         }
 
-        $rootLabelCancellations = Invoke-CliRootLabelCancellationLifecycle -InvokeCli { param($arguments) Invoke-MirrorPulseCli $arguments } `
+        $rootLabelCancellations = Invoke-CliRootLabelCancellationLifecycle -InvokeCli $invokeLabelCli `
             -RootId $registeredRoot.rootId -InstanceId $instanceId -DirectoryName $rootDirectory `
             -SyncRoot $syncRoot -SourceRoot $sourceRoot -EvidencePath $EvidencePath
         if ($EvidencePath) {

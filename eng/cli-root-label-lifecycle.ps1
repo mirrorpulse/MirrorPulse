@@ -1,3 +1,35 @@
+function Invoke-CliRootLabelPreparation {
+    param([Parameter(Mandatory)][scriptblock]$InvokeCli, [Parameter(Mandatory)][string]$RootId,
+        [Parameter(Mandatory)][string]$Label, [Parameter(Mandatory)][string]$Phase,
+        [AllowEmptyString()][string]$OriginalsDirectory)
+
+    $deadline = [DateTime]::UtcNow.AddSeconds(25)
+    $pending = [Collections.Generic.List[object]]::new()
+    try {
+        do {
+            $response = & $InvokeCli @('--json', '--no-start', 'root', 'prepare-rename', $RootId, $Label) @(0, 11)
+            if ($response.kind -ceq 'result') {
+                if ($OriginalsDirectory) {
+                    $response | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $OriginalsDirectory ($Phase + '.json')) -Encoding utf8
+                }
+                return $response.data
+            }
+            if ($response.kind -cne 'error' -or $response.exitCode -ne 11 -or $response.code -cne 'mp.control.rootLabelPendingRemoteBatch') {
+                throw 'Root Label preparation did not return a typed result or an original pending remote batch.'
+            }
+            $pending.Add($response)
+            & $InvokeCli @('--json', '--no-start', 'sync', 'refresh') | Out-Null
+            Start-Sleep -Milliseconds 250
+        } while ([DateTime]::UtcNow -lt $deadline)
+        throw 'The original remote batch did not settle before root Label preparation.'
+    } finally {
+        if ($OriginalsDirectory -and $pending.Count -gt 0) {
+            ConvertTo-Json -InputObject $pending.ToArray() -Depth 12 |
+                Set-Content -LiteralPath (Join-Path $OriginalsDirectory ($Phase + '-remote-batch-pending.json')) -Encoding utf8
+        }
+    }
+}
+
 function Invoke-CliRootLabelLifecycle {
     param([Parameter(Mandatory)][scriptblock]$InvokeCli,
         [Parameter(Mandatory)][string]$RootId, [Parameter(Mandatory)][string]$InstanceId,
@@ -90,7 +122,8 @@ function Invoke-CliRootLabelLifecycle {
             Set-Content -LiteralPath (Join-Path $originals ($Phase + '-bytes.json')) -Encoding utf8 }
     }
     function Execute-RootLabel([string]$Phase, [string]$SourceName, [string]$TargetName, [bool]$Disabled) {
-        $prepared = Invoke-RootLabelCli ($Phase + '-prepare') @('root', 'prepare-rename', $RootId, $TargetName)
+        $prepared = Invoke-CliRootLabelPreparation -InvokeCli $InvokeCli -RootId $RootId -Label $TargetName `
+            -Phase ($Phase + '-prepare') -OriginalsDirectory $originals
         if ($prepared.rootId -cne $RootId -or $prepared.sourceName -cne $SourceName -or
             $prepared.targetName -cne $TargetName -or $prepared.phase -cne 'Prepared' -or
             [guid]::Parse($prepared.operationId) -eq [guid]::Empty) { throw 'The public preparation did not preserve its original root and endpoints.' }

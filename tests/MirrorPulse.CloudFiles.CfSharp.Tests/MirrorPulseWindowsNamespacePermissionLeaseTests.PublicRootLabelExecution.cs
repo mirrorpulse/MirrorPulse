@@ -4,6 +4,7 @@ using MirrorPulse.Core.CloudFiles;
 using MirrorPulse.Core.Configuration;
 using MirrorPulse.Core.Conflicts;
 using MirrorPulse.Core.Contracts;
+using MirrorPulse.Core.Diagnostics;
 using MirrorPulse.Core.State;
 using MirrorPulse.Core.Sync;
 
@@ -109,6 +110,23 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             }
             else
             {
+                if (!caseOnly)
+                {
+                    string batchId = $"{root.InstanceId}/poll-root/{root.RootId}/label-preparation-original";
+                    await currentCatalog.SaveRootPendingRemoteBatchAsync(new(root.InstanceId, batchId, [11], [19])
+                    {
+                        RootId = root.RootId
+                    }, deadline.Token);
+                    var blocked = await Assert.ThrowsExactlyAsync<MirrorPulseRootLabelPendingRemoteBatchException>(() =>
+                        runtime.PrepareManagedRootRenameAsync(root.RootId, target, deadline.Token).AsTask());
+                    Assert.AreEqual(MirrorPulseRootLabelPreparationStage.PublicProof,
+                        MirrorPulseRootLabelFailureDiagnostics.PreparationStage(blocked));
+                    Assert.IsTrue(work.IsAdmitted(root.RootId));
+                    Assert.IsNull(await currentCatalog.ReadManagedRootRenameAsync(root.RootId, deadline.Token));
+                    Assert.AreEqual(batchId, (await currentCatalog.ReadRootPendingRemoteBatchAsync(
+                        root.InstanceId, root.RootId, deadline.Token))!.BatchId);
+                    await currentCatalog.ClearRootPendingRemoteBatchAsync(root.InstanceId, root.RootId, batchId, deadline.Token);
+                }
                 // Active-root preparation drains accepted ordinary work before
                 // it can capture proof or obtain instance/library serialization.
                 using (var held = work.Enter([root.RootId]))

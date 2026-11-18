@@ -927,16 +927,17 @@ public sealed partial class MirrorPulseCliHostOperations : IMirrorPulseCliHostOp
 
 public static class MirrorPulseCliExitCodeMapper
 {
-    public static int From(ControlError error) => error.Category switch
+    public static int From(ControlError error) => error switch
     {
-        MirrorPulse.Core.Contracts.ErrorCategory.Validation => MirrorPulseControlExitCodes.Validation,
-        MirrorPulse.Core.Contracts.ErrorCategory.Authentication => MirrorPulseControlExitCodes.Authentication,
-        MirrorPulse.Core.Contracts.ErrorCategory.Authorization => MirrorPulseControlExitCodes.Authorization,
-        MirrorPulse.Core.Contracts.ErrorCategory.Network => MirrorPulseControlExitCodes.Unavailable,
-        MirrorPulse.Core.Contracts.ErrorCategory.Conflict => MirrorPulseControlExitCodes.Conflict,
-        MirrorPulse.Core.Contracts.ErrorCategory.Unsupported => MirrorPulseControlExitCodes.Unsupported,
-        MirrorPulse.Core.Contracts.ErrorCategory.Storage => MirrorPulseControlExitCodes.Storage,
-        MirrorPulse.Core.Contracts.ErrorCategory.Cancelled => MirrorPulseControlExitCodes.Cancelled,
+        { Code: MirrorPulseControlErrorCodes.RootLabelPendingRemoteBatch } => MirrorPulseControlExitCodes.Pending,
+        { Category: MirrorPulse.Core.Contracts.ErrorCategory.Validation } => MirrorPulseControlExitCodes.Validation,
+        { Category: MirrorPulse.Core.Contracts.ErrorCategory.Authentication } => MirrorPulseControlExitCodes.Authentication,
+        { Category: MirrorPulse.Core.Contracts.ErrorCategory.Authorization } => MirrorPulseControlExitCodes.Authorization,
+        { Category: MirrorPulse.Core.Contracts.ErrorCategory.Network } => MirrorPulseControlExitCodes.Unavailable,
+        { Category: MirrorPulse.Core.Contracts.ErrorCategory.Conflict } => MirrorPulseControlExitCodes.Conflict,
+        { Category: MirrorPulse.Core.Contracts.ErrorCategory.Unsupported } => MirrorPulseControlExitCodes.Unsupported,
+        { Category: MirrorPulse.Core.Contracts.ErrorCategory.Storage } => MirrorPulseControlExitCodes.Storage,
+        { Category: MirrorPulse.Core.Contracts.ErrorCategory.Cancelled } => MirrorPulseControlExitCodes.Cancelled,
         _ when error.Code == MirrorPulseControlErrorCodes.RequestTimeout ||
                 error.Code == MirrorPulseControlErrorCodes.HostStartTimeout =>
             MirrorPulseControlExitCodes.Timeout,
