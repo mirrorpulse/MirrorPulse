@@ -34,7 +34,6 @@ public sealed class MirrorPulseCfSharpStateSession : ICloudStateStoreFactory
         CancellationToken cancellationToken = default)
     {
         ICloudStateStore opened;
-        var assemblyResolution = new MirrorPulseStartupFailureTrace.StoreAssemblyResolution();
         try
         {
             opened = await _inner.OpenAsync(context, cancellationToken).ConfigureAwait(false);
@@ -42,12 +41,7 @@ public sealed class MirrorPulseCfSharpStateSession : ICloudStateStoreFactory
         catch (Exception error)
         {
             MirrorPulseStartupFailureTrace.Record(error, MirrorPulseStartupFailureSite.LibraryStoreOpen);
-            assemblyResolution.RecordFailure(error);
             throw;
-        }
-        finally
-        {
-            assemblyResolution.Dispose();
         }
         if (Interlocked.CompareExchange(ref _store, opened, null) is not null)
         {

@@ -1,7 +1,5 @@
 using System.ComponentModel;
-using System.Reflection;
 using System.Runtime.CompilerServices;
-using System.Runtime.Loader;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -26,9 +24,7 @@ public enum MirrorPulseStartupMissingResource
 public static partial class MirrorPulseStartupFailureTrace
 {
     private sealed record Boundary(MirrorPulseStartupFailureSite Site);
-    private sealed record RuntimeInformationRequester(string? NameSha256, string Context);
     private static readonly ConditionalWeakTable<Exception, Boundary> Boundaries = new();
-    private static readonly ConditionalWeakTable<Exception, RuntimeInformationRequester> RuntimeInformationRequesters = new();
 
     public static void Record(Exception error, MirrorPulseStartupFailureSite site)
     {
@@ -98,16 +94,10 @@ public static partial class MirrorPulseStartupFailureTrace
         return AssemblyNameSha256(identity.Groups["name"].Value);
     }
 
-    /// <summary>Reads the requested public framework version and any matching requester observed during the failed store open.</summary>
-    public static (string? Version, string? RequesterSha256, string? RequesterContext) ReadRuntimeInformationBinding(Exception error)
-    {
-        if (ReadSite(error) != MirrorPulseStartupFailureSite.LibraryStoreOpen ||
-            ReadOriginalException(error) is not FileNotFoundException missing ||
-            ReadRuntimeInformationVersion(missing.FileName) is not { } version)
-            return default;
-        RuntimeInformationRequesters.TryGetValue(missing, out var requester);
-        return (version.ToString(), requester?.NameSha256, requester?.Context);
-    }
+    /// <summary>Reads the requested public framework version from the original exception after store open failed.</summary>
+    public static string? ReadRuntimeInformationBindingVersion(Exception error) =>
+        ReadSite(error) == MirrorPulseStartupFailureSite.LibraryStoreOpen && ReadOriginalException(error) is FileNotFoundException missing
+            ? ReadRuntimeInformationVersion(missing.FileName)?.ToString() : null;
 
     private static string AssemblyNameSha256(string name) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(name.ToUpperInvariant())));
@@ -125,59 +115,6 @@ public static partial class MirrorPulseStartupFailureTrace
     internal static Version? ParseAssemblyVersion(ReadOnlySpan<char> text) =>
         Version.TryParse(text, out var version) && version.Major <= ushort.MaxValue && version.Minor <= ushort.MaxValue &&
             version.Build is >= 0 and <= ushort.MaxValue && version.Revision is >= 0 and <= ushort.MaxValue ? version : null;
-
-    /// <summary>Observes the one known framework bind while the official store opens, leaving resolution to the runtime.</summary>
-    internal sealed class StoreAssemblyResolution : IDisposable
-    {
-        private sealed record Request(Version Version, Assembly? Requester);
-        private readonly object _gate = new();
-        private Request? _request;
-        private bool _ambiguous;
-
-        internal StoreAssemblyResolution() => AppDomain.CurrentDomain.AssemblyResolve += Observe;
-
-        public void Dispose() => AppDomain.CurrentDomain.AssemblyResolve -= Observe;
-
-        private Assembly? Observe(object? _, ResolveEventArgs args)
-        {
-            if (ReadRuntimeInformationVersion(args.Name) is { } version)
-            {
-                lock (_gate)
-                {
-                    if (_request is null) _request = new(version, args.RequestingAssembly);
-                    else if (_request.Version != version || !ReferenceEquals(_request.Requester, args.RequestingAssembly)) _ambiguous = true;
-                }
-            }
-            return null;
-        }
-
-        internal void RecordFailure(Exception error)
-        {
-            if (ReadOriginalException(error) is not FileNotFoundException missing ||
-                ReadRuntimeInformationVersion(missing.FileName) is not { } version)
-                return;
-            Request request;
-            lock (_gate)
-            {
-                if (_ambiguous || _request is null || _request.Version != version) return;
-                request = _request;
-            }
-            try
-            {
-                var requester = request.Requester;
-                var context = requester is null ? null : AssemblyLoadContext.GetLoadContext(requester);
-                string? name = requester?.GetName().Name;
-                string? fingerprint = name is { Length: > 0 and <= 96 } &&
-                    name.All(value => char.IsAsciiLetterOrDigit(value) || value is '.' or '-' or '_') ? AssemblyNameSha256(name) : null;
-                _ = RuntimeInformationRequesters.GetValue(missing, _ => new(fingerprint,
-                    requester is null ? "NoRequester" : context is null ? "Unknown" : context == AssemblyLoadContext.Default ? "Default" : "Custom"));
-            }
-            catch (Exception diagnosticFailure) when (diagnosticFailure is not OutOfMemoryException)
-            {
-                // Preserve the original store-open failure when the loader cannot describe its requester.
-            }
-        }
-    }
 
     /// <summary>Unwraps single-error cleanup chains while keeping multiple independent failures together.</summary>
     public static Exception ReadOriginalException(Exception error)

@@ -100,25 +100,20 @@ public sealed class MirrorPulseStartupFailureTraceTests
     }
 
     [TestMethod, DoNotParallelize]
-    public void StoreBindObserverPreservesTheActualFailedRequestAndItsRequesterContext()
+    public void StoreFailurePreservesTheRequestedFrameworkVersionFromTheOriginalException()
     {
         const string prefix = "System.Runtime.InteropServices.RuntimeInformation, Version=";
         const string suffix = ", Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a";
-        using var observation = new MirrorPulseStartupFailureTrace.StoreAssemblyResolution();
         var original = Assert.ThrowsExactly<FileNotFoundException>(() => Assembly.Load(prefix + "65123.0.0.0" + suffix));
+        Assert.IsNull(MirrorPulseStartupFailureTrace.ReadRuntimeInformationBindingVersion(original));
         MirrorPulseStartupFailureTrace.Record(original, MirrorPulseStartupFailureSite.LibraryStoreOpen);
-        observation.RecordFailure(original);
         var wrapper = new TypeInitializationException("PRIVATE_TYPE_NAME", original);
         Assert.AreSame(original, MirrorPulseStartupFailureTrace.ReadOriginalException(wrapper));
-        var binding = MirrorPulseStartupFailureTrace.ReadRuntimeInformationBinding(wrapper);
-        Assert.AreEqual("65123.0.0.0", binding.Version);
-        Assert.AreEqual(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData("MIRRORPULSE.CORE.TESTS"u8)), binding.RequesterSha256);
-        Assert.AreEqual("Default", binding.RequesterContext);
+        Assert.AreEqual("65123.0.0.0", MirrorPulseStartupFailureTrace.ReadRuntimeInformationBindingVersion(wrapper));
 
-        var otherRequest = new FileNotFoundException("PRIVATE_MESSAGE", prefix + "65124.0.0.0" + suffix);
+        var otherRequest = new FileNotFoundException("PRIVATE_MESSAGE", prefix + "65124.0.0.0, Culture=neutral, PublicKeyToken=null");
         MirrorPulseStartupFailureTrace.Record(otherRequest, MirrorPulseStartupFailureSite.LibraryStoreOpen);
-        observation.RecordFailure(otherRequest);
-        Assert.AreEqual(("65124.0.0.0", (string?)null, (string?)null), MirrorPulseStartupFailureTrace.ReadRuntimeInformationBinding(otherRequest));
+        Assert.IsNull(MirrorPulseStartupFailureTrace.ReadRuntimeInformationBindingVersion(otherRequest));
     }
 
     [TestMethod]

@@ -72,7 +72,7 @@ function Get-InstalledHostStartupDiagnostics {
                                 [string]$entry.Fields.failureAssemblyNameSha256 -cmatch '\A[0-9A-F]{64}\z') {
                                 [string]$entry.Fields.failureAssemblyNameSha256
                             } else { $null }
-                            $bindingVersion=$null; $requester=$null; $requesterContext=$null
+                            $bindingVersion=$null
                             if ($assembly -ceq $runtimeInformation) {
                                 $version=$null
                                 $displayVersion=[string]$entry.Fields.failureRuntimeInformationVersion
@@ -80,20 +80,12 @@ function Get-InstalledHostStartupDiagnostics {
                                     [version]::TryParse($displayVersion,[ref]$version) -and
                                     @($version.Major,$version.Minor,$version.Build,$version.Revision | Where-Object {$_ -gt 65535}).Count -eq 0) {
                                     $bindingVersion=$version.ToString()
-                                    $context=[string]$entry.Fields.failureRuntimeInformationRequesterContext
-                                    if ($context -cin @('Default','Custom','Unknown','NoRequester')) {
-                                        $requesterContext=$context
-                                        if ($context -cne 'NoRequester' -and [string]$entry.Fields.failureRuntimeInformationRequesterSha256 -cmatch '\A[0-9A-F]{64}\z') {
-                                            $requester=[string]$entry.Fields.failureRuntimeInformationRequesterSha256
-                                        }
-                                    }
                                 }
                             }
                             # Never copy arbitrary messages, fields, paths, configuration or credential values.
                             $records.Add([ordered]@{sourceIndex=$index;occurredAt=$at.ToUniversalTime().ToString('O');code=[string]$entry.Code;
                                 failureCategory=$category;hresult=$hresult;failureSite=$site;failureKind=$kind;failureResource=$resource;
-                                failureAssemblyNameSha256=$assembly;failureRuntimeInformationVersion=$bindingVersion;
-                                failureRuntimeInformationRequesterSha256=$requester;failureRuntimeInformationRequesterContext=$requesterContext})
+                                failureAssemblyNameSha256=$assembly;failureRuntimeInformationVersion=$bindingVersion})
                         }
                     }
                 }
