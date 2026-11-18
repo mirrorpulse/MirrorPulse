@@ -133,6 +133,7 @@ public sealed partial class MirrorPulseActiveRemotePollerTests
         Assert.AreEqual("v1", held.Previous["same"].RemoteRevision);
         Assert.AreEqual("v2", held.Candidate["same"].RemoteRevision);
         Assert.AreEqual("v1", (await fixture.Snapshots.LoadAsync(fixture.First))!["same"].RemoteRevision);
+        fixture.Source.Set(fixture.First, "v3", relativePath: "renamed.bin");
         fixture.Roots = [fixture.First, fixture.Second]; fail = false;
         int firstReads = fixture.Source.Calls.Count(call => call == fixture.First.UniquenessKey);
         int applied = fixture.Applied.Count;
@@ -153,6 +154,24 @@ public sealed partial class MirrorPulseActiveRemotePollerTests
         Assert.AreEqual("v2", replayed.Changes.Single().RemoteRevision);
         Assert.AreEqual("v2", (await fixture.Snapshots.LoadAsync(fixture.First))!["same"].RemoteRevision);
         Assert.IsNull(await fixture.Pending.LoadAsync(fixture.First, default));
+        Assert.IsFalse(await poller.PollOnceAsync(fixture.Instance));
+        Assert.AreEqual(fixture.Second.UniquenessKey, fixture.Source.Calls.Last());
+        Assert.IsTrue(await poller.PollOnceAsync(fixture.Instance));
+        var successor = fixture.Applied.Last();
+        var moved = successor.Changes.Single();
+        Assert.AreNotEqual(queued.BatchId, successor.BatchId);
+        Assert.AreNotEqual(queued.Changes.Single().ChangeId, moved.ChangeId);
+        Assert.AreEqual(queued.Changes.Single().ItemId, moved.ItemId);
+        Assert.AreEqual(CloudRemoteChangeKind.Move, moved.Kind);
+        Assert.AreEqual(fixture.First.DirectoryName + "\\file.bin", moved.PreviousRelativePath);
+        Assert.AreEqual(fixture.First.DirectoryName + "\\renamed.bin", moved.RelativePath);
+        Assert.AreEqual("v2", moved.PreviousRemoteRevision);
+        Assert.AreEqual("v3", moved.RemoteRevision);
+        CollectionAssert.AreEqual(replayed.FinalCursor.ToArray(), successor.InitialCursor.ToArray());
+        var current = (await fixture.Snapshots.LoadAsync(fixture.First))!["same"];
+        Assert.AreEqual("v3", current.RemoteRevision);
+        Assert.AreEqual("renamed.bin", current.RelativePath);
+        Assert.AreEqual("v3", (await fixture.Snapshots.LoadAsync(fixture.Second))!["same"].RemoteRevision);
     }
 
     [TestMethod]
@@ -324,9 +343,9 @@ public sealed partial class MirrorPulseActiveRemotePollerTests
     {
         private readonly Dictionary<string, FakeDirectorySource> _sources = new(StringComparer.Ordinal);
         internal List<string> Calls { get; } = [];
-        internal void Set(RootRegistration root, string revision, string remoteId = "same")
+        internal void Set(RootRegistration root, string revision, string remoteId = "same", string relativePath = "file.bin")
         {
-            var source = new FakeDirectorySource(); source.Set(new FakeEntry(remoteId, revision, CloudItemKind.File, "file.bin", 1));
+            var source = new FakeDirectorySource(); source.Set(new FakeEntry(remoteId, revision, CloudItemKind.File, relativePath, 1));
             _sources[root.UniquenessKey] = source;
         }
         public ValueTask<CloudRemoteDirectoryPage> ReadPageAsync(InstanceId instanceId, string path, ReadOnlyMemory<byte> cursor, int size, CancellationToken token) =>
