@@ -60,6 +60,9 @@ public sealed class DeferredP079GateTests
             $priorBudget=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $priorRecovery.Count -TestNames $priorRecovery -Scope S06
             if($creationBudget -ne $priorBudget+225000){throw 'The five original creation cases must retain their independent 45-second deadlines.'}
             $catalog.required.native=@($catalog.required.native|Where-Object {$_ -cnotin $creationMethods})
+            $activeReplacement=$fileTransferPrefix+'NativeActiveReplacementRecoversPreparedOriginalAcrossHostRoles'
+            $catalog.required.namespace=@($catalog.required.namespace|Where-Object {$_ -cne $activeReplacement})
+            $catalog.required.native=@($catalog.required.native|Where-Object {$_ -cne $activeReplacement})
             # Retain this original transfer selection. Root execution rows have their
             # own exact ninety-second deadlines in NamespaceNonAdminControllerTests.
             $unsealedRootExecutions=@(

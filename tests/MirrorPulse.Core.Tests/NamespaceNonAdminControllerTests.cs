@@ -80,6 +80,9 @@ public sealed partial class NamespaceNonAdminControllerTests
                 $replacementWriterMethod='NativeReplacementContentWriterRetainsFirstBackupAndDirtyCopyAcrossBothObjectStarts'
                 $replacementWriter=$rejectionPrefix+$replacementWriterMethod
                 $replacementWriterBudgetDelta=5*45000-15000
+                $activeReplacementMethod='NativeActiveReplacementRecoversPreparedOriginalAcrossHostRoles'
+                $activeReplacement=$rejectionPrefix+$activeReplacementMethod
+                $activeReplacementBudget=2*65000
                 $unsealedExecution=$rejectionPrefix+'NativePublicRuntimeExecutesUnsealedBornRootLabelAcrossDisposedRoles'
                 $capturedUnsealedExecution=$rejectionPrefix+'NativePublicRuntimeExecutesUnsealedCapturedRootLabelAcrossDisposedRoles'
                 $rejections=@(
@@ -115,8 +118,13 @@ public sealed partial class NamespaceNonAdminControllerTests
                     'NativeHostTransferResumesInterruptedSourceRetirementAcrossRoles',
                     'NativeHostTransferCompletesRecreatedAcceptedSourceAfterBothRootAudits'
                 )|ForEach-Object {$rejectionPrefix+$_}
-                function ReadPreFileTransferNamespaceCatalog([string]$Path) {
+                function ReadPreActiveReplacementNamespaceCatalog([string]$Path) {
                     $value=Get-Content -LiteralPath $Path -Raw|ConvertFrom-Json
+                    $value.required.namespace=@($value.required.namespace|Where-Object {$_ -cne $activeReplacement})
+                    return $value
+                }
+                function ReadPreFileTransferNamespaceCatalog([string]$Path) {
+                    $value=ReadPreActiveReplacementNamespaceCatalog $Path
                     # Keep the exact earlier selections for their historical budget assertions.
                     $value.required.namespace=@($value.required.namespace|Where-Object {$_ -cnotin $fileTransferRecovery}|
                         ForEach-Object {if($_ -ceq $replacementWriter){'Fixture.HistoricalReplacementWriter'}else{$_}})
@@ -134,7 +142,7 @@ public sealed partial class NamespaceNonAdminControllerTests
                     return $value
                 }
                 if ($Scenario -like 'file-transfer-*') {
-                    $actual=Get-Content -LiteralPath (Join-Path (Split-Path $Policy -Parent) 'test-suites.json') -Raw|ConvertFrom-Json
+                    $actual=ReadPreActiveReplacementNamespaceCatalog (Join-Path (Split-Path $Policy -Parent) 'test-suites.json')
                     $names=@($actual.required.namespace)
                     $prior=@($names|Where-Object {$_ -cnotin $fileTransferRecovery})
                     if($Count -ne 177 -or $names.Count -ne 177 -or $prior.Count -ne 165){throw 'Retain all prior methods and exactly twelve recovered file transfer methods.'}
@@ -893,11 +901,21 @@ public sealed partial class NamespaceNonAdminControllerTests
                             $rows=@($catalog.requiredCases.$replacementWriter)
                             $expectedRows=@(0..3|ForEach-Object {"$replacementWriterMethod ($_)"})
                             if(($rows -join '|') -cne ($expectedRows -join '|')){throw 'Require all four replacement writer cases.'}
-                            $historical=@($parameters.TestNames|ForEach-Object {if($_ -ceq $replacementWriter){'Fixture.HistoricalReplacementWriter'}else{$_}})
+                            $replacementRows=@($catalog.requiredCases.$activeReplacement)
+                            $expectedReplacementRows=@("$activeReplacementMethod (False)","$activeReplacementMethod (True)")
+                            if(($replacementRows -join '|') -cne ($expectedReplacementRows -join '|')){throw 'Require both active replacement restart cases.'}
+                            foreach($selection in @(@{names=$catalog.required.namespace},@{names=$catalog.required.native},@{names=$catalog.allowSkipped})){
+                                if(@($selection.names|Where-Object {$_ -ceq $activeReplacement}).Count -ne 1){throw 'Require the active replacement restart method exactly once in every applicable selection.'}
+                            }
+                            if($activeReplacement -cin $catalog.required.deferredP079){throw 'Active replacement is part of S06.'}
+                            $priorNames=@($parameters.TestNames|Where-Object {$_ -cne $activeReplacement})
+                            $historical=@($priorNames|ForEach-Object {if($_ -ceq $replacementWriter){'Fixture.HistoricalReplacementWriter'}else{$_}})
                             foreach($scope in @('AllRetained','S06')){
-                                $prior=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $Count -TestNames $historical -Scope $scope
+                                $prior=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount ($Count-1) -TestNames $historical -Scope $scope
+                                $beforeRestart=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount ($Count-1) -TestNames $priorNames -Scope $scope
                                 $current=Get-OrdinaryUserNamespaceBudgetMilliseconds @parameters -Scope $scope
-                                if($current -ne $prior+$replacementWriterBudgetDelta){throw 'Retain all five bounded replacement owner windows.'}
+                                if($beforeRestart -ne $prior+$replacementWriterBudgetDelta){throw 'Retain all five bounded replacement owner windows.'}
+                                if($current -ne $beforeRestart+$activeReplacementBudget){throw 'Both active replacement restart cases retain their 65-second deadlines.'}
                             }
                         }
                         $budget=Get-OrdinaryUserNamespaceBudgetMilliseconds @parameters
@@ -909,10 +927,11 @@ public sealed partial class NamespaceNonAdminControllerTests
                     } else {
                         $unsealedExecutionBudget=4*90000
                         $fileTransferRecoveryBudget=25*45000
-                        $originalCatalogCount=$Count-2-$fileTransferRecovery.Count
-                        $maximum=if ($Scenario -eq 'budget-catalog') {4755000+4*60000+10*60000+2*60000+65000+29*65000+65000+65000+65000+65000+65000+90000+65000+13*65000+6*65000+4*60000+10*95000+$unsealedExecutionBudget+$fileTransferRecoveryBudget+$replacementWriterBudgetDelta} else {1800000}
+                        $originalCatalogCount=$Count-3-$fileTransferRecovery.Count
+                        $expectedCatalogBudget=120000+($originalCatalogCount-10+51)*15000+18*30000+28*15000+6*45000+6*15000+4*45000+5*15000+6*45000+2*45000+2*45000+4*60000+10*60000+15000+2*45000+50000+13*15000+29*50000+50000+50000+50000+50000+50000+75000+50000+19*65000+4*60000+10*95000-5*15000+$unsealedExecutionBudget+$fileTransferRecoveryBudget+$replacementWriterBudgetDelta+$activeReplacementBudget
+                        $maximum=if ($Scenario -eq 'budget-catalog') {$expectedCatalogBudget} else {1800000}
                         if ($rejected -or $budget -lt 600000 -or $budget -gt $maximum) { throw 'The whole-suite envelope is missing or unbounded.' }
-                        if ($Scenario -eq 'budget-catalog' -and $budget -ne 120000+($originalCatalogCount-10+51)*15000+18*30000+28*15000+6*45000+6*15000+4*45000+5*15000+6*45000+2*45000+2*45000+4*60000+10*60000+15000+2*45000+50000+13*15000+29*50000+50000+50000+50000+50000+50000+75000+50000+19*65000+4*60000+10*95000-5*15000+$unsealedExecutionBudget+$fileTransferRecoveryBudget+$replacementWriterBudgetDelta) {
+                        if ($Scenario -eq 'budget-catalog' -and $budget -ne $expectedCatalogBudget) {
                             throw 'The actual catalog lost a same/cross-instance transfer or one of its five retirement cutpoints.'
                         }
                         if ($Count -ge 52 -and $budget -le 600000) { throw 'The growing suite still has the obsolete fixed ten-minute envelope.' }
