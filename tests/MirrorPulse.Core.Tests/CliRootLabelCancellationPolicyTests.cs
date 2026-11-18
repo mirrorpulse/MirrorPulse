@@ -37,6 +37,9 @@ public sealed class CliRootLabelCancellationPolicyTests
     [DataRow("timeout-missing-host")]
     [DataRow("timeout-replaced-host")]
     [DataRow("timeout-host-not-ready")]
+    [DataRow("resolved-execution-timeout")]
+    [DataRow("execution-timeout-missing-observation")]
+    [DataRow("execution-timeout-uncommitted")]
     [DataRow("missing-disabled-startup")]
     [DataRow("disabled-startup-same-host")]
     [DataRow("disabled-startup-not-exited")]
@@ -111,6 +114,20 @@ public sealed class CliRootLabelCancellationPolicyTests
                     ChangeOriginal(directory, "restored-restart-after",
                         node => node["state"] = damage == "timeout-host-not-ready" ? "Starting" : "Running");
                     break;
+                case "resolved-execution-timeout":
+                case "execution-timeout-missing-observation":
+                case "execution-timeout-uncommitted":
+                    await File.WriteAllTextAsync(Path.Combine(directory, "disabled-restore-execution-timeout.json"),
+                        """{"kind":"error","exitCode":3,"code":"mp.control.requestTimeout"}""");
+                    if (damage != "execution-timeout-missing-observation")
+                    {
+                        File.Copy(Path.Combine(directory, "disabled-restore-roots.json"),
+                            Path.Combine(directory, "disabled-restore-execution-observed-roots.json"));
+                        if (damage == "execution-timeout-uncommitted")
+                            ChangeOriginal(directory, "disabled-restore-execution-observed-roots",
+                                node => node[0]!["root"]!["directoryName"] = "Docs After disabled");
+                    }
+                    break;
                 case "missing-disabled-startup": evidence.Remove("disabledStartupRestart"); break;
                 case "disabled-startup-same-host":
                     ChangeOriginal(directory, "disabled-selection-restart-after", node => node["processId"] = 202);
@@ -141,7 +158,7 @@ public sealed class CliRootLabelCancellationPolicyTests
             try { await process.WaitForExitAsync(timeout.Token); }
             catch (OperationCanceledException) { process.Kill(entireProcessTree: true); throw; }
             string actual = await output; string stderr = await error;
-            bool valid = damage is "valid" or "resolved-start-timeout";
+            bool valid = damage is "valid" or "resolved-start-timeout" or "resolved-execution-timeout";
             Assert.AreEqual(valid ? 0 : 1, process.ExitCode, actual + stderr);
             StringAssert.Contains(actual, valid ? "accepted" : "rejected");
         }

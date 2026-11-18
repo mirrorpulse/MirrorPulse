@@ -4,10 +4,13 @@ function Assert-CliRootLabelCancellationEvidence {
     param([Parameter(Mandatory)][object]$Evidence,
         [Parameter(Mandatory)][string]$OriginalsDirectory)
 
-    function Read-CancellationOriginal([string]$Phase) {
+    function Read-CancellationEnvelope([string]$Phase) {
         $file = Get-Item -LiteralPath (Join-Path $OriginalsDirectory ($Phase + '.json')) -ErrorAction Stop
         if ($file.Length -gt 4MB -or $file.Attributes.HasFlag([IO.FileAttributes]::ReparsePoint)) { throw 'Require bounded ordinary cancellation originals.' }
-        $envelope = Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Json
+        Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Json
+    }
+    function Read-CancellationOriginal([string]$Phase) {
+        $envelope = Read-CancellationEnvelope $Phase
         if ($envelope.kind -cne 'result' -or $null -eq $envelope.data) { throw 'Require the original typed public cancellation response.' }
         return $envelope.data
     }
@@ -132,6 +135,19 @@ function Assert-CliRootLabelCancellationEvidence {
             $target = if ($step -ceq 'later') { $Evidence.directoryName + ' After ' + $phase } else { $Evidence.directoryName }
             $preparation = Read-CancellationOriginal ($phase + '-' + $step + '-prepare')
             $execution = Read-CancellationOriginal ($phase + '-' + $step + '-execute')
+            $executionPhase = $phase + '-' + $step + '-execution'
+            $timeoutPath = Join-Path $OriginalsDirectory ($executionPhase + '-timeout.json')
+            $observationPath = Join-Path $OriginalsDirectory ($executionPhase + '-observed-roots.json')
+            if ((Test-Path -LiteralPath $timeoutPath) -or (Test-Path -LiteralPath $observationPath)) {
+                $timeout = Read-CancellationEnvelope ($executionPhase + '-timeout')
+                $observed = @(Read-CancellationOriginal ($executionPhase + '-observed-roots') |
+                    Where-Object { $_.root.rootId -ceq $Evidence.rootId })
+                if ($timeout.kind -cne 'error' -or $timeout.exitCode -ne 3 -or $timeout.code -cne 'mp.control.requestTimeout' -or
+                    $observed.Count -ne 1 -or $null -ne $observed[0].pendingRename -or
+                    $observed[0].root.directoryName -cne $target -or $observed[0].root.label -cne $target) {
+                    throw 'A Label receipt obtained by replay requires the original timeout and observed committed destination.'
+                }
+            }
             Require-CancellationGuid $preparation.operationId
             $operations.Add($preparation.operationId)
             if ($preparation.rootId -cne $Evidence.rootId -or $preparation.phase -cne 'Prepared' -or

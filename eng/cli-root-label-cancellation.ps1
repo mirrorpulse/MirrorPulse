@@ -10,12 +10,15 @@ function Invoke-CliRootLabelCancellationLifecycle {
         Join-Path ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($EvidencePath))) 'cli-regression.originals/root-cancellations'
     } else { $null }
     if ($originals) { New-Item -ItemType Directory -Path $originals -Force | Out-Null }
+    function Save-CancellationOriginal([string]$Phase, [object]$Response) {
+        if ($originals) {
+            $Response | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $originals ($Phase + '.json')) -Encoding utf8
+        }
+    }
     function Invoke-CancellationCli([string]$Phase, [string[]]$Arguments) {
         $response = & $InvokeCli (@('--json', '--developer-mode') + $Arguments)
         if ($response.kind -cne 'result' -or $null -eq $response.data) { throw 'Require a typed public cancellation fixture response.' }
-        if ($originals) {
-            $response | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $originals ($Phase + '.json')) -Encoding utf8
-        }
+        Save-CancellationOriginal $Phase $response
         return $response.data
     }
     function Read-CancellationState([string]$Phase, [string]$Name, [bool]$Disabled, [AllowNull()][string]$PendingOperation) {
@@ -96,7 +99,31 @@ function Invoke-CliRootLabelCancellationLifecycle {
     }
     function Execute-CancellationLabel([string]$Phase, [string]$SourceName, [string]$TargetName, [bool]$Disabled) {
         $prepared = Prepare-CancellationLabel $Phase $SourceName $TargetName
-        $completed = Invoke-CancellationCli ($Phase + '-execute') @('root', 'execute-rename', $prepared.operationId)
+        $arguments = @('--json', '--developer-mode', '--no-start', 'root', 'execute-rename', $prepared.operationId)
+        $response = & $InvokeCli $arguments @(0, 3)
+        if ($response.kind -ceq 'error' -and $response.exitCode -eq 3 -and $response.code -ceq 'mp.control.requestTimeout') {
+            Save-CancellationOriginal ($Phase + '-execution-timeout') $response
+            $budget = [Diagnostics.Stopwatch]::StartNew()
+            do {
+                $observation = & $InvokeCli @('--json', '--no-start', 'root', 'list')
+                $observed = @($observation.data | Where-Object { $_.root.rootId -ceq $RootId })
+                if ($observation.kind -cne 'result' -or $observed.Count -ne 1 -or
+                    ($observed[0].pendingRename -and $observed[0].pendingRename.operationId -cne $prepared.operationId)) {
+                    throw 'The read-only observation lost the original root or found a different pending operation.'
+                }
+                $committed = $null -eq $observed[0].pendingRename -and
+                    $observed[0].root.directoryName -ceq $TargetName -and $observed[0].root.label -ceq $TargetName
+                if ($committed) { break }
+                Start-Sleep -Milliseconds 250
+            } while ($budget.Elapsed -lt [TimeSpan]::FromSeconds(30))
+            if (-not $committed) { throw 'The timed-out Label did not publish its original destination.' }
+            Save-CancellationOriginal ($Phase + '-execution-observed-roots') $observation
+            # The original mutation has committed. Read its receipt through the documented replay.
+            $response = & $InvokeCli $arguments
+        }
+        if ($response.kind -cne 'result' -or $null -eq $response.data) { throw 'Require the original completed Label response.' }
+        Save-CancellationOriginal ($Phase + '-execute') $response
+        $completed = $response.data
         if ($completed.operationId -cne $prepared.operationId -or $completed.rootId -cne $RootId -or
             $completed.sourceName -cne $SourceName -or $completed.targetName -cne $TargetName -or
             $completed.phase -cne 'Completed' -or $completed.currentDirectoryName -cne $TargetName -or
