@@ -40,6 +40,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         MirrorPulseNamespaceMemberRegistration? firstFile = null, firstDirectory = null;
         MirrorPulseNamespaceRetirementBatch? completedBatch = null, preparedBeforeRestart = null;
         MirrorPulseNamespaceRetirement? retainedBeforeRestart = null;
+        string? interruptedDeleteFact = null;
         Guid restartOperationId = Guid.NewGuid();
         Dictionary<Guid, Guid>? batchNativeItems = null;
         string? originalRole = null, birthHistory = null, retirementHistory = null;
@@ -179,19 +180,27 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         var retained = await read.Operations.GetAsync(original.Key, timeout.Token);
                         Assert.IsNotNull(retained); Assert.AreEqual(original.Value, DisabledCreationJournalFact(retained));
                     }
-                    var pending = await read.Operations.ListAsync(64, timeout.Token);
-                    var deletes = pending.Where(row => row.Kind == CloudStateOperationKind.Delete).OrderBy(row => row.Sequence).ToArray();
-                    int interruptedDeletes = owner == 1 && interruption is (MirrorPulseNamespaceRetirementCheckpoint.AfterNativeDeletion or
-                        MirrorPulseNamespaceRetirementCheckpoint.AfterNativeReceipt) ? 1 : 0;
-                    Assert.HasCount(5 + interruptedDeletes, deletes);
-                    if (interruptedDeletes != 0) Assert.AreEqual(1, deletes.Count(row => row.ItemId == retainedBeforeRestart!.StartedItemId));
-                    CollectionAssert.AreEqual(new[] { batchNativeItems![leaf.MemberId], batchNativeItems[nested.MemberId], batchNativeItems[subtree.MemberId] },
-                        deletes.Where(row => batchNativeItems.ContainsValue(row.ItemId!.Value)).Select(row => row.ItemId!.Value).ToArray());
-                    Assert.AreEqual(1, pending.Count(row => row.Kind == CloudStateOperationKind.Delete && row.ItemId == fileItemId));
-                    Assert.AreEqual(1, pending.Count(row => row.Kind == CloudStateOperationKind.Delete && row.ItemId == directoryItemId));
-                    if (owner == 0) originals = pending.ToDictionary(row => row.OperationId, DisabledCreationJournalFact);
                     await read.RollbackAsync(timeout.Token);
                 }
+                var expectedDeletes = batchNativeItems!.Values.Append(fileItemId!.Value).Append(directoryItemId!.Value).ToArray();
+                var pending = await ReadDisabledRetirementJournalAsync(state.Store, expectedDeletes, timeout.Token);
+                var deletes = pending.Where(row => row.Kind == CloudStateOperationKind.Delete).OrderBy(row => row.Sequence).ToArray();
+                if (owner == 1 && interruption is (MirrorPulseNamespaceRetirementCheckpoint.AfterNativeDeletion or
+                    MirrorPulseNamespaceRetirementCheckpoint.AfterNativeReceipt))
+                {
+                    // The native cut can precede observation by the SDK's journal consumer.
+                    // Preserve any visible original now and require exactly one after recovery.
+                    var interruptedDeletes = deletes.Where(row => row.ItemId == retainedBeforeRestart!.StartedItemId).ToArray();
+                    Assert.IsLessThanOrEqualTo(1, interruptedDeletes.Length);
+                    interruptedDeleteFact = interruptedDeletes.Select(DisabledCreationJournalFact).SingleOrDefault();
+                    deletes = deletes.Where(row => row.ItemId != retainedBeforeRestart!.StartedItemId).ToArray();
+                }
+                Assert.HasCount(5, deletes);
+                CollectionAssert.AreEqual(new[] { batchNativeItems[leaf.MemberId], batchNativeItems[nested.MemberId], batchNativeItems[subtree.MemberId] },
+                    deletes.Where(row => batchNativeItems.ContainsValue(row.ItemId!.Value)).Select(row => row.ItemId!.Value).ToArray());
+                Assert.AreEqual(1, pending.Count(row => row.Kind == CloudStateOperationKind.Delete && row.ItemId == fileItemId));
+                Assert.AreEqual(1, pending.Count(row => row.Kind == CloudStateOperationKind.Delete && row.ItemId == directoryItemId));
+                if (owner == 0) originals = pending.ToDictionary(row => row.OperationId, DisabledCreationJournalFact);
                 if (owner == 0)
                 {
                     var pendingTree = await runtime.CreateNamespaceMemberAsync(Guid.NewGuid(), parent.MemberId, "retire-after-restart", true, timeout.Token);
@@ -256,10 +265,11 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                             Assert.AreEqual(retainedBeforeRestart.StartedItemId, receipt.StartedItemId);
                             if (retainedBeforeRestart.NativeDeletedAt is { } committedDeletion)
                                 Assert.AreEqual(committedDeletion, receipt.NativeDeletedAt);
-                            await using var read = await state.Store.BeginTransactionAsync(timeout.Token);
-                            var journal = await read.Operations.ListAsync(64, timeout.Token);
-                            Assert.AreEqual(1, journal.Count(row => row.Kind == CloudStateOperationKind.Delete && row.ItemId == receipt.StartedItemId));
-                            await read.RollbackAsync(timeout.Token);
+                            var journal = await ReadDisabledRetirementJournalAsync(state.Store, [receipt.StartedItemId!.Value], timeout.Token);
+                            var resumedDeletes = journal.Where(row => row.Kind == CloudStateOperationKind.Delete && row.ItemId == receipt.StartedItemId).ToArray();
+                            Assert.HasCount(1, resumedDeletes, "The SDK must retain exactly one Delete for the original native item after batch recovery.");
+                            if (interruptedDeleteFact is not null)
+                                Assert.AreEqual(interruptedDeleteFact, DisabledCreationJournalFact(resumedDeletes[0]));
                         }
                         else Assert.AreEqual(execution.RoleSid.Value, receipt.Intent.RoleSid);
                         Assert.AreEqual(MirrorPulseNamespaceRetirementPhase.Completed, receipt.Phase);
@@ -280,6 +290,21 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         {
             registry.Unregister(paths.SyncRootPath);
             RestoreAutomaticStartupFixtureForCleanup(directory, paths.SyncRootPath, user.User!); DeleteFixture(directory);
+        }
+    }
+
+    private static async Task<IReadOnlyList<CloudOperationJournalEntry>> ReadDisabledRetirementJournalAsync(
+        ICloudStateStore store, IReadOnlyList<Guid> expectedDeletes, CancellationToken token)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (true)
+        {
+            await using var read = await store.BeginTransactionAsync(token);
+            var journal = await read.Operations.ListAsync(64, token);
+            await read.RollbackAsync(token);
+            if (expectedDeletes.All(item => journal.Any(row => row.Kind == CloudStateOperationKind.Delete && row.ItemId == item)) ||
+                DateTime.UtcNow >= deadline) return journal;
+            await Task.Delay(25, token);
         }
     }
 }
