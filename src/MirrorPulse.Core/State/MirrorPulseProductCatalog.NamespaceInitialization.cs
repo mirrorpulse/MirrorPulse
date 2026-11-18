@@ -128,7 +128,8 @@ public sealed partial class MirrorPulseProductCatalog
                 if (batch is not { Phase: MirrorPulseNamespaceRetirementBatchPhase.Prepared, RemoteEntry: null, RemoteConflictCommandId: null } ||
                     batch.RootId != root || batch.PreparedAt > intent.PreparedAt)
                     throw new InvalidOperationException("Retirement initialization requires the original pending controlled batch in its selected root.");
-                await RequireNamespaceMoveRootUnfencedAsync(root, null, transaction, cancellationToken, allowedBatch: retirementBatchId).ConfigureAwait(false);
+                await RequireNamespaceMoveRootUnfencedAsync(root, null, transaction, cancellationToken, allowedBatch: retirementBatchId,
+                    allowedRetirementRecoveryBatch: retirementBatchId).ConfigureAwait(false);
             }
             foreach (var root in intent.Roots.Where(root => root.BornRootMemberId is not null))
                 await RequireNamespaceInitializationBornRootAsync(root, intent.PreparedAt, transaction, cancellationToken).ConfigureAwait(false);

@@ -165,6 +165,26 @@ public sealed partial class MirrorPulseProductCatalog
             throw new InvalidOperationException("The retirement must follow its sealed batch member and object binding.");
     }
 
+    internal async Task<MirrorPulseNamespaceRetirement?> ReadPendingControlledRetirementBatchMemberAsync(Guid operationId, CancellationToken token)
+    {
+        await _gate.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed(); using var transaction = BeginNamespaceRecoveryReadSnapshot();
+            MirrorPulseNamespaceRetirement? result = null;
+            await foreach (var member in ReadPendingNamespaceRetirementsCoreAsync(transaction, token).ConfigureAwait(false))
+            {
+                if (member.Intent.BatchOperationId != operationId) continue;
+                if (result is not null || member.Phase is not (MirrorPulseNamespaceRetirementPhase.Prepared or MirrorPulseNamespaceRetirementPhase.NativeDeleted))
+                    throw new InvalidDataException("Controlled subtree recovery requires at most one unfinished original member.");
+                await RequireNamespaceRetirementBatchEntryAsync(member.Intent, transaction, token).ConfigureAwait(false);
+                result = member;
+            }
+            transaction.Commit(); return result;
+        }
+        finally { _gate.Release(); }
+    }
+
     private static bool RetirementMatchesBatchEntry(MirrorPulseNamespaceRetirementIntent intent,
         MirrorPulseNamespaceRetirementBatch batch, MirrorPulseNamespaceRetirementBatchEntry entry) =>
         intent.BatchOperationId == batch.OperationId && intent.OperationId == batch.MemberOperationId(entry.MemberId) &&

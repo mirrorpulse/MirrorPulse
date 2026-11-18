@@ -52,8 +52,8 @@ jobs:
           - runner: windows-11-arm
             architecture: Arm64
     runs-on: ${{ matrix.runner }}
-    # Keep 31 minutes each for directory verification and file recovery, plus 6 for setup and collection.
-    timeout-minutes: 68
+    # Keep 34 minutes for directory verification, 31 for file recovery and 6 for setup and collection.
+    timeout-minutes: 71
     steps:
       - name: Check out the exact selected source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

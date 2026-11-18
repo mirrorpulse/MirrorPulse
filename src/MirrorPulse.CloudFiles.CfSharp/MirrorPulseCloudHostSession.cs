@@ -299,6 +299,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
     internal Action<CloudPlaceholderCreationReceipt>? TransferCreationReceiptReady { get; init; }
     internal Func<MirrorPulseTransferSourceRetirementCheckpoint, CancellationToken, ValueTask>? TransferSourceRetirementCheckpoint { get; init; }
     internal Func<MirrorPulseTransferAcknowledgementCheckpoint, CancellationToken, ValueTask>? TransferAcknowledgementCheckpoint { get; init; }
+    internal Func<MirrorPulseNamespaceRetirementCheckpoint, ValueTask>? ControlledRetirementCheckpoint { get; init; }
     internal Action<CloudLocalChangeFeed>? TransferJournalReady { get; init; }
     internal Action<MirrorPulseJournalUploadSource>? TransferJournalSourceReady { get; init; }
 
@@ -349,7 +350,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             .Build(), state, provider, StateStoreDecorator, paths.SyncRootPath, paths.DataRootPath, _uploads, _stats, _mutations, _router, _catalog,
             _mayDispatch, _conflicts, _notifications, _scheduler, _namespaceExecution, _namespaceActor, _namespaceWork, _initializeNamespaceOnStart, _transfers,
             TransferPublicationCheckpoint, TransferSourceRetirementCheckpoint, TransferAcknowledgementCheckpoint, TransferJournalReady, TransferJournalSourceReady,
-            TransferCreationReceiptReady);
+            TransferCreationReceiptReady, ControlledRetirementCheckpoint);
     }
 
     private sealed class CfSharpRuntime(
@@ -378,7 +379,8 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         Func<MirrorPulseTransferAcknowledgementCheckpoint, CancellationToken, ValueTask>? transferAcknowledgementCheckpoint,
         Action<CloudLocalChangeFeed>? transferJournalReady,
         Action<MirrorPulseJournalUploadSource>? transferJournalSourceReady,
-        Action<CloudPlaceholderCreationReceipt>? transferCreationReceiptReady)
+        Action<CloudPlaceholderCreationReceipt>? transferCreationReceiptReady,
+        Func<MirrorPulseNamespaceRetirementCheckpoint, ValueTask>? controlledRetirementCheckpoint)
         : IMirrorPulseCloudRuntime
     {
         private MirrorPulseJournalUploadPump? _uploadPump;
@@ -1617,9 +1619,8 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             var batch = await catalog.ReadNamespaceRetirementBatchAsync(operationId, cancellationToken).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The retirement batch is not registered.");
             var registration = router.Registrations.Single(root => root.RootId == batch.RootId);
-            ValueTask<MirrorPulseNamespaceRetirementBatch> ExecuteAsync(CancellationToken token) =>
-                new MirrorPulseNamespaceRetirementCoordinator(fileSystem, catalog, router, _namespaceExecution, _namespaceActor)
-                    .ExecuteBatchAsync(operationId, token);
+            var coordinator = new MirrorPulseNamespaceRetirementCoordinator(fileSystem, catalog, router, _namespaceExecution, _namespaceActor)
+            { Checkpoint = controlledRetirementCheckpoint };
             if (batch.RemoteEntry is null && batch.RemoteConflictCommandId is null &&
                 ((batch.Phase == MirrorPulseNamespaceRetirementBatchPhase.Prepared && NamespaceStartupResults.Any(result =>
                     result.RootId == batch.RootId && result.OperationId == operationId && result.RecoveryCode == "PendingNamespaceOperationRecoveryRequired")) ||
@@ -1647,10 +1648,12 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                     }
                     else
                     {
+                        Guid initialization = retained?.Intent.OperationId ?? Guid.NewGuid();
                         await using var initialized = await new MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(fileSystem, catalog, router,
                             _namespaceExecution, _namespaceActor, instances, _permissions).RecoverRetirementBatchRootAsync(
-                            retained?.Intent.OperationId ?? Guid.NewGuid(), registration.RootId, operationId,
-                            async recoveryToken => current = await ExecuteAsync(recoveryToken).ConfigureAwait(false), token).ConfigureAwait(false);
+                            initialization, registration.RootId, operationId,
+                            async recoveryToken => current = await coordinator.ExecuteBatchAsync(operationId, initialization, recoveryToken).ConfigureAwait(false),
+                            token).ConfigureAwait(false);
                         if (initialized.Completion.RoleSid != _namespaceExecution.RoleSid.Value)
                             throw new InvalidOperationException("Retirement root audit must retain this Host's effective role.");
                     }
@@ -1662,7 +1665,8 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             }
             await using var admission = namespaceWork is null ? null :
                 await namespaceWork.EnterPendingOperationAsync(registration.RootId, cancellationToken).ConfigureAwait(false);
-            return await WithInstanceLibraryAsync(registration.InstanceId, ExecuteAsync, cancellationToken).ConfigureAwait(false);
+            return await WithInstanceLibraryAsync(registration.InstanceId, token => coordinator.ExecuteBatchAsync(operationId, token),
+                cancellationToken).ConfigureAwait(false);
         }
 
         [SupportedOSPlatform("windows10.0.26100")]

@@ -120,8 +120,11 @@ public sealed partial class MirrorPulseProductCatalog
     }
 
     /// <summary>Rechecks the admitted current member and root fence before a native deletion.</summary>
-    public async Task<MirrorPulseNamespaceRetirement> ValidateNamespaceRetirementExecutionAsync(Guid operationId,
-        CancellationToken cancellationToken = default)
+    public Task<MirrorPulseNamespaceRetirement> ValidateNamespaceRetirementExecutionAsync(Guid operationId,
+        CancellationToken cancellationToken = default) => ValidateNamespaceRetirementExecutionAsync(operationId, null, cancellationToken);
+
+    internal async Task<MirrorPulseNamespaceRetirement> ValidateNamespaceRetirementExecutionAsync(Guid operationId,
+        Guid? initializationOperationId, CancellationToken cancellationToken)
     {
         if (operationId == Guid.Empty) throw new ArgumentException("A retirement operation is required.", nameof(operationId));
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -143,6 +146,13 @@ public sealed partial class MirrorPulseProductCatalog
                 member.RootId != retirement.Intent.RootId || member.OwnerSid != retirement.Intent.OwnerSid || member.IsDirectory != retirement.Intent.IsDirectory)
                 throw new InvalidDataException("The retirement no longer identifies its committed protected member.");
             await RequireNamespaceRetirementBatchEntryAsync(retirement.Intent, transaction, cancellationToken).ConfigureAwait(false);
+            if (initializationOperationId is { } initializationId)
+            {
+                var recovery = await ReadNamespaceInitializationStatusCoreAsync(initializationId, transaction, cancellationToken).ConfigureAwait(false);
+                if (recovery.Completion is not null || recovery.Intent.RetirementBatchOperationId is not { } batchId ||
+                    batchId != retirement.Intent.BatchOperationId || recovery.Intent.Roots.Single().RootId != retirement.Intent.RootId)
+                    throw new InvalidOperationException("Retirement role recovery requires the pending initializer for its original batch and root.");
+            }
             await RequireNamespaceMoveRootUnfencedAsync(retirement.Intent.RootId, null, transaction, cancellationToken,
                 operationId, retirement.Intent.BatchOperationId).ConfigureAwait(false);
             await RequireNoRegisteredDescendantsAsync(member.MemberId, transaction, cancellationToken).ConfigureAwait(false);

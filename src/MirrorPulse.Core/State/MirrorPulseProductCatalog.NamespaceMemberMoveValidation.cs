@@ -167,7 +167,7 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task RequireNamespaceMoveRootUnfencedAsync(RootId rootId, Guid? allowedMove,
         SqliteTransaction transaction, CancellationToken token, Guid? allowedRetirement = null, Guid? allowedBatch = null, Guid? allowedReplacement = null,
         Guid? allowedBornRecoveryInitialization = null, Guid? allowedRemoteUpdate = null, Guid? allowedTransfer = null, Guid? allowedRootRename = null,
-        Guid? allowedTransferRecoveryInitialization = null)
+        Guid? allowedTransferRecoveryInitialization = null, Guid? allowedRetirementRecoveryBatch = null)
     {
         var recovery = allowedBornRecoveryInitialization is { } initialization
             ? (await ReadNamespaceInitializationStatusCoreAsync(initialization, transaction, token).ConfigureAwait(false)).Intent
@@ -203,10 +203,22 @@ public sealed partial class MirrorPulseProductCatalog
         if ((await ReadManagedRootRenamesCoreAsync(token, transaction).ConfigureAwait(false))
             .Any(intent => intent.RootId == rootId && intent.IsPending && intent.OperationId != allowedRootRename))
             throw new InvalidOperationException("An unresolved Label change has fenced this managed root.");
+        if (recovery?.RetirementBatchOperationId is { } recoveryBatch && recovery.Roots.Single().RootId == rootId)
+            allowedRetirementRecoveryBatch ??= recoveryBatch;
         await foreach (var retirement in ReadPendingNamespaceRetirementsCoreAsync(transaction, token).ConfigureAwait(false))
+        {
             if (retirement.Intent.RootId == rootId && retirement.OperationId != allowedRetirement &&
                 !(ownsRecoveryRoot && retirement.Intent.TransferEntry is { } entry && entry.OperationId == transferRecovery!.FileTransferOperationId))
+            {
+                if (allowedRetirementRecoveryBatch is not null && retirement.Intent.BatchOperationId == allowedRetirementRecoveryBatch &&
+                    retirement.Phase is MirrorPulseNamespaceRetirementPhase.Prepared or MirrorPulseNamespaceRetirementPhase.NativeDeleted)
+                {
+                    await RequireNamespaceRetirementBatchEntryAsync(retirement.Intent, transaction, token).ConfigureAwait(false);
+                    continue;
+                }
                 throw new InvalidOperationException("An unresolved controlled retirement has fenced this managed root.");
+            }
+        }
         var batch = await ReadPendingNamespaceRetirementBatchCoreAsync(rootId, transaction, token).ConfigureAwait(false);
         if (batch is not null && batch.OperationId != allowedBatch &&
             !(recovery?.RetirementBatchOperationId == batch.OperationId && recovery.Roots.Single().RootId == rootId))

@@ -20,6 +20,7 @@ $selected = @(
     ($fixture + 'NativeProductionDirectoryGroupRecoversAcceptedEffectsBeforeOriginalAckAcrossFreshRoles')
     ($fixture + 'NativeControlledSubtreeRetirementRecoversNativeAndMembershipBoundariesAcrossRestart')
     ($fixture + 'NativeDisabledRootControlledRetirementRetainsOriginalJournalAcrossFreshRolesWithoutDispatch')
+    ($fixture + 'NativeInterruptedControlledSubtreeRetirementUsesOriginalLeafAcrossHostRoles')
     'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseDirectoryJournalTests.NativeFullRescanAcceptsNestedDirectoriesBeforeSettlingTheirOriginalJournal'
     'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseDirectoryJournalTests.NativeOfflineEmptyAndNestedDirectoryJournalResumesAfterRuntimeRestart'
     'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadCompletionTests.NativeFailureRetryAndSuccessUseCfSharpJournalAcrossRestart'
@@ -27,9 +28,9 @@ $selected = @(
 )
 if (@($selected | Where-Object { $_ -cnotin $catalog.required.native }).Count) { throw 'Retain every exact directory and original native regression method.' }
 $count = Get-RequiredTestExecutionCount -Catalog $catalog -Names $selected
-if ($count -ne 22) { throw 'Require the 20 original directory results and both controlled subtree retirement results.' }
-# Preserve the original 20 deadlines and include the active and disabled retirement fixtures.
-$fixtureBudgetMilliseconds = 2 * 90000 + 4 * 60000 + 10 * 95000 + 2 * 45000 + 65000 + 60000 + 45000 + 65000
+if ($count -ne 25) { throw 'Require all 22 original results and the three interrupted subtree retirement cases.' }
+# Keep the original deadlines and add each of the three 65-second restart cases.
+$fixtureBudgetMilliseconds = 2 * 90000 + 4 * 60000 + 10 * 95000 + 2 * 45000 + 65000 + 60000 + 45000 + 4 * 65000
 if ($BudgetOnly) { [int][Math]::Ceiling(($fixtureBudgetMilliseconds + 120000) / 60000.0); exit 0 }
 if (-not $IsWindows) { throw 'Directory native verification requires Windows.' }
 $architecture = [Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString()

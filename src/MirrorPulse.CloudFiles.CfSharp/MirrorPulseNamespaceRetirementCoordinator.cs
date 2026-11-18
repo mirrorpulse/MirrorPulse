@@ -6,7 +6,7 @@ using MirrorPulse.Core.Sync;
 
 namespace MirrorPulse.CloudFiles.CfSharp;
 
-internal enum MirrorPulseNamespaceRetirementCheckpoint { AfterNativeDeletion, AfterNativeReceipt }
+internal enum MirrorPulseNamespaceRetirementCheckpoint { BeforeNativeDeletion, AfterNativeDeletion, AfterNativeReceipt }
 
 /// <summary>Executes one protected leaf deletion and settles its durable member name.</summary>
 /// <remarks>
@@ -62,7 +62,10 @@ public sealed class MirrorPulseNamespaceRetirementCoordinator(CloudFileSystem fi
 
     /// <summary>Deletes a sealed subtree leaf-first and resumes using each original member receipt.</summary>
     public ValueTask<MirrorPulseNamespaceRetirementBatch> ExecuteBatchAsync(Guid operationId,
-        CancellationToken cancellationToken = default) => actor.RunAsync(async token =>
+        CancellationToken cancellationToken = default) => ExecuteBatchAsync(operationId, null, cancellationToken);
+
+    internal ValueTask<MirrorPulseNamespaceRetirementBatch> ExecuteBatchAsync(Guid operationId,
+        Guid? initializationOperationId, CancellationToken cancellationToken) => actor.RunAsync(async token =>
         {
             var batch = await catalog.ReadNamespaceRetirementBatchAsync(operationId, token).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The retirement batch is missing.");
@@ -75,7 +78,7 @@ public sealed class MirrorPulseNamespaceRetirementCoordinator(CloudFileSystem fi
                 token.ThrowIfCancellationRequested();
                 Guid memberOperation = batch.MemberOperationId(entry.MemberId);
                 _ = await PrepareAdmittedAsync(memberOperation, entry.MemberId, token, batch.OperationId).ConfigureAwait(false);
-                _ = await ExecuteAdmittedAsync(memberOperation, token).ConfigureAwait(false);
+                _ = await ExecuteAdmittedAsync(memberOperation, token, initializationOperationId).ConfigureAwait(false);
             }
             return await catalog.CompleteNamespaceRetirementBatchAsync(operationId, CancellationToken.None).ConfigureAwait(false);
         }, cancellationToken);
@@ -83,10 +86,11 @@ public sealed class MirrorPulseNamespaceRetirementCoordinator(CloudFileSystem fi
     public ValueTask<MirrorPulseNamespaceRetirement> ExecuteAsync(Guid operationId,
         CancellationToken cancellationToken = default) => actor.RunAsync(token => ExecuteAdmittedAsync(operationId, token), cancellationToken);
 
-    private async ValueTask<MirrorPulseNamespaceRetirement> ExecuteAdmittedAsync(Guid operationId, CancellationToken token)
+    private async ValueTask<MirrorPulseNamespaceRetirement> ExecuteAdmittedAsync(Guid operationId, CancellationToken token,
+        Guid? initializationOperationId = null)
     {
         actor.AssertAccess();
-        var current = await catalog.ValidateNamespaceRetirementExecutionAsync(operationId, token).ConfigureAwait(false);
+        var current = await catalog.ValidateNamespaceRetirementExecutionAsync(operationId, initializationOperationId, token).ConfigureAwait(false);
         if (current.Intent.RemoteEntry is not null)
             throw new InvalidOperationException("The original SDK batch owns this remote deletion; controlled deletion cannot pre-execute it.");
         if (current.Phase == MirrorPulseNamespaceRetirementPhase.Completed) return current;
@@ -102,22 +106,22 @@ public sealed class MirrorPulseNamespaceRetirementCoordinator(CloudFileSystem fi
             : null;
         if (parentMember is null) throw new InvalidDataException("The retirement parent member is missing.");
         var parentProof = await MirrorPulseNamespaceProtectionProofReader.ReadMemberAsync(catalog, parentMember, token).ConfigureAwait(false);
-        var childProof = await MirrorPulseNamespaceProtectionProofReader.ReadMemberAsync(catalog, member, token).ConfigureAwait(false);
-        if (parentProof.RoleSid != current.Intent.RoleSid || childProof.RoleSid != current.Intent.RoleSid ||
-            childProof.OwnerSid != current.Intent.OwnerSid || childProof.RootId != current.Intent.RootId)
+        bool recovering = initializationOperationId is not null;
+        string role = recovering ? execution.RoleSid.Value : current.Intent.RoleSid;
+        if (parentProof.RoleSid != role)
             throw new InvalidOperationException("The retirement parent protection role is not retained.");
-        await ExecuteUnderNamespaceRoleAsync(current, member, item, parent, parentProof, childProof, token).ConfigureAwait(false);
+        await ExecuteUnderNamespaceRoleAsync(current, member, item, parent, parentProof, role, recovering, token).ConfigureAwait(false);
         return await catalog.ReadNamespaceRetirementAsync(operationId, CancellationToken.None).ConfigureAwait(false)
             ?? throw new InvalidDataException("The retirement receipt disappeared after execution.");
     }
 
     private async Task ExecuteUnderNamespaceRoleAsync(MirrorPulseNamespaceRetirement current,
         MirrorPulseNamespaceMemberRegistration member, CloudItem item, CloudDirectory parent,
-        MirrorPulseNamespaceProtectionProof parentProof, MirrorPulseNamespaceProtectionProof childProof, CancellationToken token)
+        MirrorPulseNamespaceProtectionProof parentProof, string role, bool recovering, CancellationToken token)
     {
         await execution.RunNamespaceOperationAsync(async () =>
         {
-            RequireCaller(current.Intent);
+            RequireCaller(current.Intent.OwnerSid, role);
             await using var parentLease = await MirrorPulseWindowsNamespacePermissionLease.OpenMetadataAsync(parent, router, token).ConfigureAwait(false);
             var parentFacts = await parentLease.InspectAsync(token).ConfigureAwait(false);
             if (parentFacts.LocalObject != parentProof.Verification.LocalObject || parentFacts.OwnerSid != parentProof.OwnerSid ||
@@ -128,6 +132,15 @@ public sealed class MirrorPulseNamespaceRetirementCoordinator(CloudFileSystem fi
                 throw new InvalidDataException("A native-deleted retirement target reappeared before membership settlement.");
             if (!snapshot.Exists && current.Phase == MirrorPulseNamespaceRetirementPhase.Prepared && current.StartedAt is null)
                 throw new InvalidDataException("A missing target without a retained native start cannot be adopted as a deletion.");
+            MirrorPulseNamespaceProtectionProof? childProof = null;
+            if (snapshot.Exists || !recovering)
+            {
+                childProof = await MirrorPulseNamespaceProtectionProofReader.ReadMemberAsync(catalog, member, token).ConfigureAwait(false);
+                if (childProof.RoleSid != role || childProof.OwnerSid != current.Intent.OwnerSid || childProof.RootId != current.Intent.RootId)
+                    throw new InvalidOperationException("The retirement target protection role is not retained.");
+            }
+            else if (current.StartedAt is null || current.StartedItemId is null)
+                throw new InvalidDataException("Recovery cannot adopt a deletion without its original native start identity.");
             if (snapshot.Exists)
             {
                 if (snapshot.LocalBinding is not { } binding ||
@@ -139,12 +152,13 @@ public sealed class MirrorPulseNamespaceRetirementCoordinator(CloudFileSystem fi
                 {
                     var facts = await childLease.InspectAsync(token).ConfigureAwait(false);
                     if (facts.LocalObject != current.Intent.LocalObject || facts.OwnerSid != current.Intent.OwnerSid ||
-                        facts.Dacl != childProof.Verification.Dacl || facts.RootId != current.Intent.RootId || facts.LinkCount != 1)
+                        facts.Dacl != childProof!.Verification.Dacl || facts.RootId != current.Intent.RootId || facts.LinkCount != 1)
                         throw new InvalidDataException("The retirement target lost its original protected descriptor or binding.");
                 }
                 if (current.StartedAt is null)
                     current = await catalog.RecordNamespaceRetirementStartAsync(current.OperationId, DateTimeOffset.UtcNow,
                         snapshot.ItemId, token).ConfigureAwait(false);
+                if (Checkpoint is not null) await Checkpoint(MirrorPulseNamespaceRetirementCheckpoint.BeforeNativeDeletion).ConfigureAwait(false);
                 if (BeforeNativeDeletion is not null) await BeforeNativeDeletion(snapshot, token).ConfigureAwait(false);
                 await item.DeleteAsync(token).ConfigureAwait(false);
                 if (Checkpoint is not null) await Checkpoint(MirrorPulseNamespaceRetirementCheckpoint.AfterNativeDeletion).ConfigureAwait(false);
@@ -163,10 +177,10 @@ public sealed class MirrorPulseNamespaceRetirementCoordinator(CloudFileSystem fi
         }).ConfigureAwait(false);
     }
 
-    private static void RequireCaller(MirrorPulseNamespaceRetirementIntent intent)
+    private static void RequireCaller(string ownerSid, string roleSid)
     {
         using WindowsIdentity caller = WindowsIdentity.GetCurrent();
-        if (caller.User?.Value != intent.OwnerSid || !new WindowsPrincipal(caller).IsInRole(new SecurityIdentifier(intent.RoleSid)))
-            throw new UnauthorizedAccessException("Controlled retirement requires the original owner and protected namespace role.");
+        if (caller.User?.Value != ownerSid || !new WindowsPrincipal(caller).IsInRole(new SecurityIdentifier(roleSid)))
+            throw new UnauthorizedAccessException("Controlled retirement requires the original owner and authorized namespace role.");
     }
 }

@@ -99,6 +99,7 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
             }
         }
         bool pendingRetirementBatch = false;
+        Guid? deletedRetirementMember = null;
         if (retirementBatchId is { } originalBatch)
         {
             var batch = await catalog.ReadNamespaceRetirementBatchAsync(originalBatch, cancellationToken).ConfigureAwait(false);
@@ -108,6 +109,23 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
             pendingRetirementBatch = batch.Phase == MirrorPulseNamespaceRetirementBatchPhase.Prepared;
             if (pendingRetirementBatch && executeBatch is null)
                 throw new InvalidOperationException("Only the original retirement executor may resume the pending batch.");
+            if (pendingRetirementBatch && await catalog.ReadPendingControlledRetirementBatchMemberAsync(originalBatch, cancellationToken).ConfigureAwait(false)
+                is { StartedItemId: { } originalItem } retirement)
+            {
+                CloudItem item = retirement.Intent.IsDirectory ? fileSystem.GetDirectory(retirement.Intent.RelativePath) :
+                    fileSystem.GetFile(retirement.Intent.RelativePath);
+                var snapshot = await item.InspectAsync(cancellationToken).ConfigureAwait(false);
+                if (!snapshot.Exists)
+                {
+                    if (!snapshot.IsTombstone || snapshot.ItemId != originalItem)
+                        throw new InvalidDataException("Only the original started retirement tombstone may be absent during recovery.");
+                    deletedRetirementMember = retirement.Intent.MemberId;
+                }
+                else if (retirement.Phase == MirrorPulseNamespaceRetirementPhase.NativeDeleted || snapshot.IsTombstone ||
+                    snapshot.ItemId != originalItem || snapshot.LocalBinding is not { } binding ||
+                    new MirrorPulseLocalFileBinding(binding.VolumeSerialNumber, binding.SyncRootFileId, binding.LocalFileId) != retirement.Intent.LocalObject)
+                    throw new InvalidDataException("Current recovery found a different native retirement object.");
+            }
         }
         if (retained is null)
         {
@@ -150,6 +168,8 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
             var graph = await catalog.ReadNamespaceMemberTreeAsync(anchorMember.MemberId, cancellationToken).ConfigureAwait(false);
             if (pendingReplacementMember is { } replacementMember && !graph.Any(entry => entry.MemberId == replacementMember))
                 throw new InvalidDataException("The pending replacement file is missing from its original current tree.");
+            if (deletedRetirementMember is { } deletedMember && !graph.Any(entry => entry.MemberId == deletedMember))
+                throw new InvalidDataException("The pending retirement tombstone lost its registered current name.");
             var originals = new MirrorPulseNamespaceOriginalMemberRecoveryCoordinator(fileSystem, catalog, router, execution, actor, scheduler, permissions);
             var born = new MirrorPulseNamespaceBornMemberRecoveryCoordinator(fileSystem, catalog, router, execution, actor, scheduler, permissions)
             {
@@ -157,7 +177,8 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
             };
             _ = await MirrorPulseRootLabelCancellationFailureDiagnostics.AtStageAsync(MirrorPulseRootLabelCancellationStage.CurrentTreeMemberRecovery, async () =>
             {
-                foreach (var entry in graph.Where(entry => entry.MemberId != anchorMember.MemberId && entry.MemberId != pendingReplacementMember))
+                foreach (var entry in graph.Where(entry => entry.MemberId != anchorMember.MemberId && entry.MemberId != pendingReplacementMember &&
+                    entry.MemberId != deletedRetirementMember))
                 {
                     memberProgress = null;
                     cancellationToken.ThrowIfCancellationRequested();

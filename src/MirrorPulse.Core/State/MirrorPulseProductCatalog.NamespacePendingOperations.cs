@@ -45,8 +45,16 @@ public sealed partial class MirrorPulseProductCatalog
                 result.Add(new(move.OperationId, rootId, MirrorPulseNamespacePendingOperationKind.Move));
             await AddPendingUnsealedRootLabelOperationAsync(result, rootId, transaction, cancellationToken).ConfigureAwait(false);
             await foreach (var retirement in ReadPendingNamespaceRetirementsCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
-                if (retirement.Intent.RootId == rootId)
-                    result.Add(new(retirement.Intent.OperationId, rootId, MirrorPulseNamespacePendingOperationKind.Retirement));
+            {
+                if (retirement.Intent.RootId != rootId) continue;
+                if (retirement.Intent.BatchOperationId is not null)
+                {
+                    // Recovery routes to the original sealed owner; the leaf remains individually queryable.
+                    await RequireNamespaceRetirementBatchEntryAsync(retirement.Intent, transaction, cancellationToken).ConfigureAwait(false);
+                    continue;
+                }
+                result.Add(new(retirement.Intent.OperationId, rootId, MirrorPulseNamespacePendingOperationKind.Retirement));
+            }
             await foreach (var batch in ReadPendingNamespaceRetirementBatchesCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
                 if (batch.RootId == rootId)
                     result.Add(new(batch.OperationId, rootId, MirrorPulseNamespacePendingOperationKind.RetirementBatch));

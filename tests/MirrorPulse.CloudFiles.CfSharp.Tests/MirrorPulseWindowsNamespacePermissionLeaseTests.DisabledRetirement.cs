@@ -12,7 +12,17 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
 {
     [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles")]
-    public async Task NativeDisabledRootControlledRetirementRetainsOriginalJournalAcrossFreshRolesWithoutDispatch()
+    public Task NativeDisabledRootControlledRetirementRetainsOriginalJournalAcrossFreshRolesWithoutDispatch() =>
+        VerifyDisabledRootControlledRetirementAcrossFreshRolesAsync(null);
+
+    [TestMethod, DoNotParallelize, TestCategory("NativeCloudFiles")]
+    [DataRow("BeforeNativeDeletion")]
+    [DataRow("AfterNativeDeletion")]
+    [DataRow("AfterNativeReceipt")]
+    public Task NativeInterruptedControlledSubtreeRetirementUsesOriginalLeafAcrossHostRoles(string checkpoint) =>
+        VerifyDisabledRootControlledRetirementAcrossFreshRolesAsync(Enum.Parse<MirrorPulseNamespaceRetirementCheckpoint>(checkpoint));
+
+    private async Task VerifyDisabledRootControlledRetirementAcrossFreshRolesAsync(MirrorPulseNamespaceRetirementCheckpoint? interruption)
     {
         if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
             Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
@@ -29,6 +39,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         Guid subtreeBirth = Guid.NewGuid(), nestedBirth = Guid.NewGuid(), leafBirth = Guid.NewGuid(), batchOperationId = Guid.NewGuid();
         MirrorPulseNamespaceMemberRegistration? firstFile = null, firstDirectory = null;
         MirrorPulseNamespaceRetirementBatch? completedBatch = null, preparedBeforeRestart = null;
+        MirrorPulseNamespaceRetirement? retainedBeforeRestart = null;
         Guid restartOperationId = Guid.NewGuid();
         Dictionary<Guid, Guid>? batchNativeItems = null;
         string? originalRole = null, birthHistory = null, retirementHistory = null;
@@ -55,12 +66,25 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 var worker = new MirrorPulseNormalUserWorkerTransportTests.IdentityProbeWorker(execution);
                 var source = new MirrorPulseNormalUserWorkerTransport(execution, worker, worker, worker, worker, worker);
                 DisabledCreationStoreObserver? state = null;
+                bool interruptRetirement = false;
+                bool countRecoveryDeletes = false;
+                int recoveryNativeDeletes = 0;
                 var factory = new CfSharpMirrorPulseCloudRuntimeFactory(
                     provider: new MirrorPulseDemandProvider(router, source, new MirrorPulseAdapterDirectoryPageSource(source), work),
                     uploads: source, stats: source, mutations: source, mayDispatch: _ => false,
                     router: router, catalog: catalog, namespaceExecution: execution, namespaceActor: actor,
                     scheduler: scheduler, namespaceWork: work, initializeNamespaceOnStart: true)
-                { StateStoreDecorator = inner => state = new(inner) };
+                {
+                    StateStoreDecorator = inner => state = new(inner),
+                    ControlledRetirementCheckpoint = checkpoint =>
+                    {
+                        if (interruptRetirement && checkpoint == interruption)
+                            return ValueTask.FromException(new IOException("Interrupted the original leaf retirement."));
+                        if (countRecoveryDeletes && checkpoint == MirrorPulseNamespaceRetirementCheckpoint.AfterNativeDeletion)
+                            recoveryNativeDeletes++;
+                        return ValueTask.CompletedTask;
+                    }
+                };
                 await using var runtime = factory.Create(paths); await runtime.StartAsync(timeout.Token);
                 var parent = await runtime.InspectNamespaceMemberAsync("Existing", true, timeout.Token);
                 var file = await runtime.CreateNamespaceMemberAsync(fileBirth, parent.MemberId, "delete.txt", false, timeout.Token);
@@ -157,7 +181,10 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     }
                     var pending = await read.Operations.ListAsync(64, timeout.Token);
                     var deletes = pending.Where(row => row.Kind == CloudStateOperationKind.Delete).OrderBy(row => row.Sequence).ToArray();
-                    Assert.HasCount(5, deletes);
+                    int interruptedDeletes = owner == 1 && interruption is (MirrorPulseNamespaceRetirementCheckpoint.AfterNativeDeletion or
+                        MirrorPulseNamespaceRetirementCheckpoint.AfterNativeReceipt) ? 1 : 0;
+                    Assert.HasCount(5 + interruptedDeletes, deletes);
+                    if (interruptedDeletes != 0) Assert.AreEqual(1, deletes.Count(row => row.ItemId == retainedBeforeRestart!.StartedItemId));
                     CollectionAssert.AreEqual(new[] { batchNativeItems![leaf.MemberId], batchNativeItems[nested.MemberId], batchNativeItems[subtree.MemberId] },
                         deletes.Where(row => batchNativeItems.ContainsValue(row.ItemId!.Value)).Select(row => row.ItemId!.Value).ToArray());
                     Assert.AreEqual(1, pending.Count(row => row.Kind == CloudStateOperationKind.Delete && row.ItemId == fileItemId));
@@ -178,7 +205,24 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     preparedBeforeRestart = await runtime.PrepareNamespaceRetirementBatchAsync(restartOperationId, pendingTree.MemberId, timeout.Token);
                     Assert.HasCount(2, preparedBeforeRestart.Entries);
                     Assert.AreEqual(MirrorPulseNamespaceRetirementBatchPhase.Prepared, preparedBeforeRestart.Phase);
-                    Assert.IsNull(await catalog.ReadNamespaceRetirementAsync(preparedBeforeRestart.MemberOperationId(pendingLeaf.MemberId), timeout.Token));
+                    Guid leafOperation = preparedBeforeRestart.MemberOperationId(pendingLeaf.MemberId);
+                    Assert.IsNull(await catalog.ReadNamespaceRetirementAsync(leafOperation, timeout.Token));
+                    if (interruption is not null)
+                    {
+                        var native = await runtime.InspectNamespaceMemberAsync(pendingLeaf.RelativePath, false, timeout.Token);
+                        interruptRetirement = true;
+                        var error = await Assert.ThrowsExactlyAsync<IOException>(() => runtime.ExecuteNamespaceRetirementBatchAsync(
+                            restartOperationId, timeout.Token).AsTask());
+                        Assert.AreEqual("Interrupted the original leaf retirement.", error.Message);
+                        retainedBeforeRestart = await catalog.ReadNamespaceRetirementAsync(leafOperation, timeout.Token);
+                        Assert.IsNotNull(retainedBeforeRestart);
+                        Assert.IsNotNull(retainedBeforeRestart.StartedAt);
+                        Assert.IsNotNull(native.NativeItemId);
+                        Assert.AreEqual(native.NativeItemId, retainedBeforeRestart.StartedItemId);
+                        Assert.AreEqual(execution.RoleSid.Value, retainedBeforeRestart.Intent.RoleSid);
+                        Assert.AreEqual(interruption == MirrorPulseNamespaceRetirementCheckpoint.AfterNativeReceipt
+                            ? MirrorPulseNamespaceRetirementPhase.NativeDeleted : MirrorPulseNamespaceRetirementPhase.Prepared, retainedBeforeRestart.Phase);
+                    }
                 }
                 else
                 {
@@ -189,9 +233,14 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     var retained = await runtime.ReadNamespaceRetirementBatchAsync(restartOperationId, timeout.Token);
                     Assert.AreEqual(JsonSerializer.Serialize(preparedBeforeRestart), JsonSerializer.Serialize(retained));
                     var originalLeaf = retained.Entries.Single(entry => !entry.IsDirectory);
-                    CollectionAssert.AreEqual(new byte[] { 7, 8, 9 },
-                        await File.ReadAllBytesAsync(Path.Combine(paths.SyncRootPath, originalLeaf.RelativePath), timeout.Token));
+                    var originalLeafPath = Path.Combine(paths.SyncRootPath, originalLeaf.RelativePath);
+                    if (interruption is null or MirrorPulseNamespaceRetirementCheckpoint.BeforeNativeDeletion)
+                        CollectionAssert.AreEqual(new byte[] { 7, 8, 9 }, await File.ReadAllBytesAsync(originalLeafPath, timeout.Token));
+                    else Assert.IsFalse(File.Exists(originalLeafPath));
+                    Assert.AreEqual(retainedBeforeRestart, await catalog.ReadNamespaceRetirementAsync(retained.MemberOperationId(originalLeaf.MemberId), timeout.Token));
+                    countRecoveryDeletes = true;
                     var resumed = await runtime.ExecuteNamespaceRetirementBatchAsync(restartOperationId, timeout.Token);
+                    Assert.AreEqual(interruption is null or MirrorPulseNamespaceRetirementCheckpoint.BeforeNativeDeletion ? 2 : 1, recoveryNativeDeletes);
                     Assert.AreEqual(MirrorPulseNamespaceRetirementBatchPhase.Completed, resumed.Phase);
                     CollectionAssert.AreEqual(preparedBeforeRestart.Entries.ToArray(), resumed.Entries.ToArray());
                     Assert.AreEqual(restartOperationId, resumed.OperationId);
@@ -200,10 +249,22 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         var receipt = await catalog.ReadNamespaceRetirementAsync(resumed.MemberOperationId(entry.MemberId), timeout.Token);
                         Assert.IsNotNull(receipt);
                         Assert.AreEqual(entry.LocalObject, receipt.Intent.LocalObject);
-                        Assert.AreEqual(execution.RoleSid.Value, receipt.Intent.RoleSid);
+                        if (retainedBeforeRestart is not null && entry.MemberId == originalLeaf.MemberId)
+                        {
+                            Assert.AreEqual(retainedBeforeRestart.Intent, receipt.Intent);
+                            Assert.AreEqual(retainedBeforeRestart.StartedAt, receipt.StartedAt);
+                            Assert.AreEqual(retainedBeforeRestart.StartedItemId, receipt.StartedItemId);
+                            if (retainedBeforeRestart.NativeDeletedAt is { } committedDeletion)
+                                Assert.AreEqual(committedDeletion, receipt.NativeDeletedAt);
+                            await using var read = await state.Store.BeginTransactionAsync(timeout.Token);
+                            var journal = await read.Operations.ListAsync(64, timeout.Token);
+                            Assert.AreEqual(1, journal.Count(row => row.Kind == CloudStateOperationKind.Delete && row.ItemId == receipt.StartedItemId));
+                            await read.RollbackAsync(timeout.Token);
+                        }
+                        else Assert.AreEqual(execution.RoleSid.Value, receipt.Intent.RoleSid);
                         Assert.AreEqual(MirrorPulseNamespaceRetirementPhase.Completed, receipt.Phase);
                     }
-                    Assert.IsFalse(File.Exists(Path.Combine(paths.SyncRootPath, originalLeaf.RelativePath)));
+                    Assert.IsFalse(File.Exists(originalLeafPath));
                     Assert.IsEmpty(await catalog.ReadNamespacePendingOperationsAsync(root.RootId, timeout.Token));
                     Assert.IsEmpty(await catalog.ReadNamespaceDispatchFencedRootsAsync(timeout.Token));
                 }
@@ -213,7 +274,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             TestContext.WriteLine("DisabledRetirement: fileAndEmptyDirectoryDeleted=True; originalBirthAndJournalFactsRetained=True; " +
                 "protectedSubtreeRetiredLeafFirst=True; originalBatchReceiptsRetained=True; " +
                 "actualDisposedRoles=True; completedReplayDoesNotResurrect=True; preparedBatchRecoveredInNewRole=True; " +
-                "ordinaryAdmissionClosed=True; sourceCalls=0; remoteAcceptance=False.");
+                $"interruption={interruption?.ToString() ?? "BeforeFirstLeaf"}; ordinaryAdmissionClosed=True; sourceCalls=0; remoteAcceptance=False.");
         }
         finally
         {
