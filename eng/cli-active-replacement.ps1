@@ -13,8 +13,8 @@ function Invoke-CliActiveReplacement {
         Join-Path ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($EvidencePath))) 'cli-regression.originals/active-replacement'
     }
     if ($originals) { New-Item -ItemType Directory -Path $originals -Force | Out-Null }
-    function Invoke-ReplacementCli([string]$Phase, [string[]]$Arguments, [int]$ExpectedExitCode = 0) {
-        $response = & $InvokeCli (@('--json', '--no-start') + $Arguments) $ExpectedExitCode
+    function Invoke-ReplacementCli([string]$Phase, [string[]]$Arguments, [int[]]$ExpectedExitCodes = @(0)) {
+        $response = & $InvokeCli (@('--json', '--no-start') + $Arguments) $ExpectedExitCodes
         if ($response.kind -cne 'result') { throw "The replacement command did not return a typed result ($Phase)." }
         if ($originals) {
             $response | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $originals ($Phase + '.json')) -Encoding utf8
@@ -81,7 +81,29 @@ function Invoke-CliActiveReplacement {
     }
 
     $recoverArguments = @('namespace', 'member', 'replace-recover', $operation)
-    $completed = Invoke-ReplacementCli 'completed-by-recovery' $recoverArguments
+    $firstRecovery = & $InvokeCli (@('--json', '--no-start') + $recoverArguments) @(0, 3)
+    if ($firstRecovery.kind -ceq 'result') {
+        if ($originals) {
+            $firstRecovery | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $originals 'completed-by-recovery.json') -Encoding utf8
+        }
+        $completed = $firstRecovery.data
+    } else {
+        if ($originals) {
+            $firstRecovery | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $originals 'recovery-first-response.json') -Encoding utf8
+        }
+        if ($firstRecovery.kind -cne 'error' -or $firstRecovery.exitCode -ne 3 -or $firstRecovery.code -cne 'mp.control.requestTimeout') {
+            throw 'The original replacement recovery returned an unexpected result.'
+        }
+        $observed = Invoke-ReplacementCli 'recovery-after-timeout-status' $statusArguments @(0, 11)
+        $sameHost = Invoke-ReplacementCli 'recovery-after-timeout-host' @('host', 'status')
+        if ($observed.operationId -cne $operation -or $observed.memberId -cne $member.memberId -or
+            $observed.relativePath -cne $relative -or $observed.sha256 -cne $replacementHash -or
+            $observed.started -ne $true -or $observed.actionRecorded -ne $true -or $observed.cancelled -ne $false -or
+            ($observed.requiresRecovery -ne $true -and $observed.completed -ne $true) -or $sameHost.processId -ne $after.processId) {
+            throw 'Replacement timeout recovery lost its original operation, bytes or Host process.'
+        }
+        $completed = Invoke-ReplacementCli 'completed-by-recovery' $recoverArguments
+    }
     $completedStatus = Invoke-ReplacementCli 'completed-status' $statusArguments
     if ($completed.operationId -cne $operation -or $completed.memberId -cne $member.memberId -or
         $completed.relativePath -cne $relative -or $completed.rescanRequested -ne $true -or
