@@ -28,6 +28,7 @@ $selected = @(
     'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseFullRescanPolicyTests.NativeOverflowReconcilesFilesAndKeepsDisabledRootsOffline'
 )
 if (@($selected | Where-Object { $_ -cnotin $catalog.required.native }).Count) { throw 'Retain every exact directory and original native regression method.' }
+if (@($selected | Where-Object { $_ -cnotin $catalog.allowSkipped }).Count) { throw 'Declare each directory fixture that requires the separate native environment.' }
 $count = Get-RequiredTestExecutionCount -Catalog $catalog -Names $selected
 if ($count -ne 26) { throw 'Require the 25 original results and the active-root retirement audit case.' }
 # Keep the original deadlines and include the 65-second active-root audit restart.
