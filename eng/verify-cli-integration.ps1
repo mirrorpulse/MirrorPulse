@@ -59,6 +59,7 @@ $hydrationAudits = [Collections.Generic.List[object]]::new()
 $namespaceAudits = [Collections.Generic.List[object]]::new()
 $script:firstNamespaceMember = $null
 $script:firstAnchorMember = $null
+$startupOriginals = $null
 $rootLabelLifecycle = $null
 $rootLabelCancellations = $null
 $activeReplacement = $null
@@ -611,12 +612,13 @@ try {
             -PreviousProcessId $rootLabelCancellations.reenabledRestart.currentProcessId -OriginalsDirectory $startupOriginals | Out-Null
         $deadline = [DateTime]::UtcNow.AddSeconds(30)
         do {
-            Start-Sleep -Milliseconds 500
-            Invoke-MirrorPulseCli @("--json", "--developer-mode", "sync", "refresh") | Out-Null
             $conflicts = Invoke-MirrorPulseCli @("--json", "--developer-mode", "conflict", "list")
             $conflict = @($conflicts.data.items) |
                 Where-Object { $_.relativePath -like "*cli-roundtrip.txt" } | Select-Object -First 1
-        } while ($null -eq $conflict -and [DateTime]::UtcNow -lt $deadline)
+            if ($null -ne $conflict -or [DateTime]::UtcNow -ge $deadline) { break }
+            Invoke-MirrorPulseCli @("--json", "--developer-mode", "sync", "refresh") | Out-Null
+            Start-Sleep -Milliseconds 500
+        } while ($true)
         if ($null -eq $conflict) { throw "The local/remote race did not create a CLI-visible conflict." }
         $conflictId = $conflict.conflictId
     }
@@ -624,11 +626,23 @@ try {
     # The coalescing oracle deliberately returns with the Host stopped.
     # Restore the running precondition for this shared restart assertion.
     if ($Coalescing) { Invoke-MirrorPulseCli @('--json', '--developer-mode', 'host', 'start') | Out-Null }
+    $beforeFinalRestart = Invoke-MirrorPulseCli @('--json', '--no-start', 'host', 'status')
+    if ($beforeFinalRestart.kind -cne 'result' -or $beforeFinalRestart.data.processId -le 0) {
+        throw 'The original Host process is required before the final restart.'
+    }
     $restart = Invoke-MirrorPulseCli @("--json", "--developer-mode", "host", "restart")
     if ($restart.kind -ne "result") { throw "The CLI Host restart response is invalid." }
     Wait-MirrorPulseHostStopped
-    Invoke-MirrorPulseCli @('--json', '--developer-mode', 'host', 'start') | Out-Null
-    Wait-MirrorPulseHostReady
+    if ($startupOriginals) {
+        $beforeFinalRestart | ConvertTo-Json -Depth 12 |
+            Set-Content -LiteralPath (Join-Path $startupOriginals 'final-restart-before.json') -Encoding utf8
+        $restart | ConvertTo-Json -Depth 12 |
+            Set-Content -LiteralPath (Join-Path $startupOriginals 'final-restart-stop.json') -Encoding utf8
+    }
+    Wait-CliRootLabelHostStart -InvokeCli {
+        param($arguments, $expectedExitCode = @(0))
+        Invoke-MirrorPulseCli -Arguments $arguments -ExpectedExitCode $expectedExitCode
+    } -Phase 'final-restart' -PreviousProcessId $beforeFinalRestart.data.processId -OriginalsDirectory $startupOriginals | Out-Null
     $listed = Invoke-MirrorPulseCli @("--json", "--developer-mode", "instance", "list")
     if (-not (@($listed.data.instances) | Where-Object { $_.instanceId -eq $instanceId })) {
         throw "The instance was not retained across a CLI Host restart."

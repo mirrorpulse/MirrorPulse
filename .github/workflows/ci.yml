@@ -373,7 +373,7 @@ jobs:
 
       - name: Verify ARM64 CLI through signed Local Adapter and Cloud Files
         shell: pwsh
-        timeout-minutes: 10
+        timeout-minutes: 12
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
