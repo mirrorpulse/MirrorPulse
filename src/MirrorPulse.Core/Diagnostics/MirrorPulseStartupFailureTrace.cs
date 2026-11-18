@@ -1,5 +1,8 @@
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.RegularExpressions;
 using MirrorPulse.Core.Configuration;
 
 namespace MirrorPulse.Core.Diagnostics;
@@ -18,7 +21,7 @@ public enum MirrorPulseStartupMissingResource
 }
 
 /// <summary>Retains only the first closed startup call boundary without wrapping or changing the original exception.</summary>
-public static class MirrorPulseStartupFailureTrace
+public static partial class MirrorPulseStartupFailureTrace
 {
     private sealed record Boundary(MirrorPulseStartupFailureSite Site);
     private static readonly ConditionalWeakTable<Exception, Boundary> Boundaries = new();
@@ -74,6 +77,21 @@ public static class MirrorPulseStartupFailureTrace
             _ when version >= 0 => MirrorPulseStartupMissingResource.OtherAssembly,
             _ => MirrorPulseStartupMissingResource.Unclassified
         };
+    }
+
+    [GeneratedRegex(@"\A(?<name>[A-Za-z0-9_.-]{1,96}), Version=[0-9]{1,5}(?:\.[0-9]{1,5}){3}, Culture=(?:neutral|[A-Za-z0-9-]{1,32}), PublicKeyToken=(?:null|[0-9a-fA-F]{16})\z",
+        RegexOptions.CultureInvariant | RegexOptions.NonBacktracking)]
+    private static partial Regex ManagedAssemblyIdentity();
+
+    /// <summary>Correlates a CLR assembly name with the installed package manifest without logging a path or display name.</summary>
+    public static string? ReadMissingAssemblyNameSha256(Exception error)
+    {
+        if (ReadSite(error) != MirrorPulseStartupFailureSite.LibraryStoreOpen ||
+            ReadOriginalException(error) is not FileNotFoundException { FileName: { Length: > 0 and <= 192 } resource })
+            return null;
+        Match identity = ManagedAssemblyIdentity().Match(resource);
+        if (!identity.Success) return null;
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity.Groups["name"].Value.ToUpperInvariant())));
     }
 
     /// <summary>Unwraps single-error cleanup chains while keeping multiple independent failures together.</summary>

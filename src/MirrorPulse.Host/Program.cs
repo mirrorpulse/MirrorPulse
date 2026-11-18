@@ -82,6 +82,7 @@ catch (Exception exception)
                 new("failureSite", MirrorPulseStartupFailureTrace.ReadSite(exception).ToString()),
                 new("failureKind", MirrorPulseStartupFailureTrace.ReadKind(exception)),
                 new("failureResource", MirrorPulseStartupFailureTrace.ReadMissingResource(exception).ToString()),
+                new("failureAssemblyNameSha256", MirrorPulseStartupFailureTrace.ReadMissingAssemblyNameSha256(exception) ?? string.Empty),
                 new("hresult", originalStartupFailure.HResult.ToString("X8", System.Globalization.CultureInfo.InvariantCulture))]));
     }
     catch (Exception logFailure) when (logFailure is not OutOfMemoryException)

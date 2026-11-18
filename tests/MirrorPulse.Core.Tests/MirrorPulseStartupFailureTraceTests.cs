@@ -79,6 +79,26 @@ public sealed class MirrorPulseStartupFailureTraceTests
     }
 
     [TestMethod]
+    [DataRow("CfSharp.Storage.Sqlite, Version=0.1.0.0, Culture=neutral, PublicKeyToken=null", true)]
+    [DataRow("cfsharp.storage.sqlite, Version=1.1.0.0, Culture=neutral, PublicKeyToken=0123456789abcdef", true)]
+    [DataRow("PRIVATE_FOLDER/CfSharp.Storage.Sqlite, Version=0.1.0.0, Culture=neutral, PublicKeyToken=null", false)]
+    [DataRow("CfSharp.Storage.Sqlite, Version=0.1.0.0, Culture=neutral", false)]
+    public void InstalledStoreFailureFingerprintsOnlyAQualifiedManagedAssemblyName(string file, bool accepted)
+    {
+        var failure = new FileNotFoundException("The original failure", file);
+        Assert.IsNull(MirrorPulseStartupFailureTrace.ReadMissingAssemblyNameSha256(failure));
+        MirrorPulseStartupFailureTrace.Record(failure, MirrorPulseStartupFailureSite.LibraryStoreOpen);
+        string? actual = MirrorPulseStartupFailureTrace.ReadMissingAssemblyNameSha256(failure);
+        string? expected = accepted
+            ? Convert.ToHexString(System.Security.Cryptography.SHA256.HashData("CFSHARP.STORAGE.SQLITE"u8))
+            : null;
+        Assert.AreEqual(expected, actual);
+        var safe = SafeDiagnosticPolicy.Sanitize(new LogEntry(LogLevel.Error, "host", "HostStartupFailed", DateTimeOffset.UtcNow,
+            [new("failureAssemblyNameSha256", actual ?? "PRIVATE_VALUE")]));
+        Assert.AreEqual(expected, safe.Fields.TryGetValue("failureAssemblyNameSha256", out string? visible) ? visible : null);
+    }
+
+    [TestMethod]
     public void IndependentFailuresDoNotBorrowAnotherErrorsBoundaryFromAMultipleFailureAggregate()
     {
         var first = new FileNotFoundException("PRIVATE_FIRST"); var second = new IOException("PRIVATE_SECOND");

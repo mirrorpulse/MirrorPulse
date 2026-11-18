@@ -73,8 +73,10 @@ public sealed partial class InstalledStartupDiagnosticsTests
                 $failureSite=if($site){$site}else{'PRIVATE_TEST_SENTINEL'}
                 $failureKind=if($site){'FileNotFound'}else{'PRIVATE_TEST_SENTINEL'}
                 $resource=if($Scenario -eq 'library-store-site'){'StateOwnerLock'}elseif($Scenario -eq 'library-runtime-assembly'){'ComponentModelPrimitivesAssembly'}else{'PRIVATE_TEST_SENTINEL'}
+                $fingerprint=if($Scenario -in @('library-runtime-assembly','library-start-site')){'A1'*32}else{'PRIVATE_TEST_SENTINEL'}
                 [ordered]@{OccurredAt=$since.AddSeconds(5).ToString('O');Level='Error';Category='host';Code=$failureCode;
-                    Fields=@{failureCategory=$failureCategory;hresult=$failureHResult;failureSite=$failureSite;failureKind=$failureKind;failureResource=$resource}}|ConvertTo-Json -Depth 4 -Compress|
+                    Fields=@{failureCategory=$failureCategory;hresult=$failureHResult;failureSite=$failureSite;failureKind=$failureKind;failureResource=$resource;
+                        failureAssemblyNameSha256=$fingerprint}}|ConvertTo-Json -Depth 4 -Compress|
                     Set-Content -LiteralPath (Join-Path $logs 'mirrorpulse.log')
                 try {
                 $result=Get-InstalledHostStartupDiagnostics -DataRoots @($root) -Since $since
@@ -83,6 +85,8 @@ public sealed partial class InstalledStartupDiagnosticsTests
                 if ($result.records.Count -ne 1 -or $result.records[0].code -cne $failureCode -or $result.records[0].hresult -cne $failureHResult) {throw 'The original Host failure was lost.'}
                 $expectedResource=if($Scenario -eq 'library-store-site'){'StateOwnerLock'}elseif($Scenario -eq 'library-runtime-assembly'){'ComponentModelPrimitivesAssembly'}else{$null}
                 if($result.records[0].failureResource -cne $expectedResource) {throw 'The missing resource is not the original approved category.'}
+                $expectedFingerprint=if($Scenario -eq 'library-runtime-assembly'){$fingerprint}else{$null}
+                if($result.records[0].failureAssemblyNameSha256 -cne $expectedFingerprint) {throw 'The assembly fingerprint escaped its approved startup boundary.'}
                 if($site) {
                     if($result.records[0].failureSite -cne $site -or $result.records[0].failureKind -cne 'FileNotFound') {
                         throw 'The original closed startup failure boundary was lost.'

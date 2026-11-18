@@ -66,9 +66,14 @@ function Get-InstalledHostStartupDiagnostics {
                             $site=if ([string]$entry.Fields.failureSite -cin $sites) { [string]$entry.Fields.failureSite } else { $null }
                             $kind=if ([string]$entry.Fields.failureKind -cin $kinds) { [string]$entry.Fields.failureKind } else { $null }
                             $resource=if ([string]$entry.Fields.failureResource -cin $resources) { [string]$entry.Fields.failureResource } else { $null }
+                            $assembly=if ($site -ceq 'LibraryStoreOpen' -and $kind -ceq 'FileNotFound' -and
+                                [string]$entry.Fields.failureAssemblyNameSha256 -cmatch '\A[0-9A-F]{64}\z') {
+                                [string]$entry.Fields.failureAssemblyNameSha256
+                            } else { $null }
                             # Never copy arbitrary messages, fields, paths, configuration or credential values.
                             $records.Add([ordered]@{sourceIndex=$index;occurredAt=$at.ToUniversalTime().ToString('O');code=[string]$entry.Code;
-                                failureCategory=$category;hresult=$hresult;failureSite=$site;failureKind=$kind;failureResource=$resource})
+                                failureCategory=$category;hresult=$hresult;failureSite=$site;failureKind=$kind;failureResource=$resource;
+                                failureAssemblyNameSha256=$assembly})
                         }
                     }
                 }
