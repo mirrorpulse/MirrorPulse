@@ -14,7 +14,7 @@ public enum MirrorPulseStartupFailureSite
 
 public enum MirrorPulseStartupMissingResource
 {
-    Unclassified, StateDatabase, StateWal, StateSharedMemory, StateOwnerLock, CfSharpAssembly, SqliteAssembly, OtherAssembly
+    Unclassified, StateDatabase, StateWal, StateSharedMemory, StateOwnerLock, CfSharpAssembly, SqliteAssembly, OtherAssembly, ComponentModelPrimitivesAssembly
 }
 
 /// <summary>Retains only the first closed startup call boundary without wrapping or changing the original exception.</summary>
@@ -70,6 +70,7 @@ public static class MirrorPulseStartupFailureTrace
             "CfSharp" or "CfSharp.Native" or "CfSharp.Storage.Sqlite" => MirrorPulseStartupMissingResource.CfSharpAssembly,
             "Microsoft.Data.Sqlite" or "SQLitePCLRaw.core" or "SQLitePCLRaw.provider.e_sqlite3" or
                 "SQLitePCLRaw.batteries_v2" or "e_sqlite3" => MirrorPulseStartupMissingResource.SqliteAssembly,
+            "System.ComponentModel.Primitives" => MirrorPulseStartupMissingResource.ComponentModelPrimitivesAssembly,
             _ when version >= 0 => MirrorPulseStartupMissingResource.OtherAssembly,
             _ => MirrorPulseStartupMissingResource.Unclassified
         };

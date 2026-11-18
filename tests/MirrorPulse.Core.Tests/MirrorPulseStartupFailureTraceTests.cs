@@ -61,6 +61,7 @@ public sealed class MirrorPulseStartupFailureTraceTests
     [DataRow("C:\\PRIVATE_DIRECTORY\\cfsharp.db.cfsharp.lock", MirrorPulseStartupMissingResource.StateOwnerLock)]
     [DataRow("CfSharp.Storage.Sqlite, Version=0.1.0.0, Culture=neutral", MirrorPulseStartupMissingResource.CfSharpAssembly)]
     [DataRow("SQLitePCLRaw.core, Version=2.1.12.0, Culture=neutral", MirrorPulseStartupMissingResource.SqliteAssembly)]
+    [DataRow("System.ComponentModel.Primitives, Version=10.0.0.0, Culture=neutral", MirrorPulseStartupMissingResource.ComponentModelPrimitivesAssembly)]
     [DataRow("PRIVATE_ASSEMBLY, Version=2.1.12.0, Culture=neutral", MirrorPulseStartupMissingResource.OtherAssembly)]
     [DataRow("C:\\PRIVATE_DIRECTORY\\private.db", MirrorPulseStartupMissingResource.Unclassified)]
     [DataRow(null, MirrorPulseStartupMissingResource.Unclassified)]

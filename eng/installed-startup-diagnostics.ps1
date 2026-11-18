@@ -14,7 +14,7 @@ function Get-InstalledHostStartupDiagnostics {
         'InitializationAnchorRegistration','InitializationAudit','AnchorGuard','AnchorHistory','AnchorPermissionPreparation','AnchorProtectedPermission',
         'AnchorVerification','AnchorPermissionPolicy','AnchorPermissionCatalog','LibraryStart','LibraryStoreOpen')
     $kinds = @('FileNotFound','DirectoryNotFound','DllNotFound','Native','Other')
-    $resources = @('Unclassified','StateDatabase','StateWal','StateSharedMemory','StateOwnerLock','CfSharpAssembly','SqliteAssembly','OtherAssembly')
+    $resources = @('Unclassified','StateDatabase','StateWal','StateSharedMemory','StateOwnerLock','CfSharpAssembly','SqliteAssembly','OtherAssembly','ComponentModelPrimitivesAssembly')
     $stages = @('LibraryStartBegin','LibraryStartCompleted','LibraryServicesBegin','LibraryServicesCompleted',
         'NamespaceStartupBegin','NamespaceStartupCompleted','NamespaceAnchorBegin','NamespaceAnchorCompleted',
         'NamespaceAnchorEntryGuardBegin','NamespaceAnchorEntryGuardCompleted','NamespaceAnchorDiscoveryBegin','NamespaceAnchorDiscoveryCompleted',
