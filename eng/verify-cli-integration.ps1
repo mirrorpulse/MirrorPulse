@@ -550,16 +550,6 @@ try {
                 "Phase=$($instanceStatus.phase); Error=$($instanceStatus.lastErrorCode)."
         }
 
-        $activeReplacement = Invoke-CliActiveReplacement -InvokeCli {
-            param($arguments, $expectedExitCode)
-            Invoke-MirrorPulseCli -Arguments $arguments -ExpectedExitCode $expectedExitCode
-        } -WaitForHost { Wait-MirrorPulseHostReady } -FixtureRoot $runRoot -DirectoryName $rootDirectory `
-            -InstanceId $instanceId -RootId $registeredRoot.rootId -EvidencePath $EvidencePath
-        $markerPath = Join-Path $runRoot '.mp-cli-fixture.json'
-        $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json -AsHashtable
-        $marker.controlledReplacementOperationId = $activeReplacement.operationId
-        $marker | ConvertTo-Json | Set-Content -LiteralPath $markerPath -Encoding utf8
-
         $invokeLabelCli = {
             param($arguments, [int[]]$exitCodes = @(0))
             Invoke-MirrorPulseCli -Arguments $arguments -ExpectedExitCode $exitCodes
@@ -579,6 +569,15 @@ try {
             $cancellationOriginals = Join-Path ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($EvidencePath))) 'cli-regression.originals/root-cancellations'
             Assert-CliRootLabelCancellationEvidence -Evidence $rootLabelCancellations -OriginalsDirectory $cancellationOriginals
         }
+
+        # Exercise Label transitions against the baseline before creating the two replacement upload generations.
+        $activeReplacement = Invoke-CliActiveReplacement -InvokeCli $invokeLabelCli `
+            -WaitForHost { Wait-MirrorPulseHostReady } -FixtureRoot $runRoot -DirectoryName $rootDirectory `
+            -InstanceId $instanceId -RootId $registeredRoot.rootId -EvidencePath $EvidencePath
+        $markerPath = Join-Path $runRoot '.mp-cli-fixture.json'
+        $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json -AsHashtable
+        $marker.controlledReplacementOperationId = $activeReplacement.operationId
+        $marker | ConvertTo-Json | Set-Content -LiteralPath $markerPath -Encoding utf8
 
         # Both sides change while the Host is stopped. The conflict must survive another restart.
         Invoke-MirrorPulseCli @("--json", "--developer-mode", "host", "stop") | Out-Null
@@ -609,7 +608,7 @@ try {
             Join-Path ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($EvidencePath))) 'cli-regression.originals'
         }
         Wait-CliRootLabelHostStart -InvokeCli $invokeLabelCli -Phase 'offline-conflict-start' `
-            -PreviousProcessId $rootLabelCancellations.reenabledRestart.currentProcessId -OriginalsDirectory $startupOriginals | Out-Null
+            -PreviousProcessId $activeReplacement.recoveryHostProcessId -OriginalsDirectory $startupOriginals | Out-Null
         $deadline = [DateTime]::UtcNow.AddSeconds(30)
         do {
             $conflicts = Invoke-MirrorPulseCli @("--json", "--developer-mode", "conflict", "list")
