@@ -33,6 +33,10 @@ public sealed class CliRootLabelCancellationPolicyTests
     [DataRow("reenabled-exit-string")]
     [DataRow("reenabled-foreign-receipt")]
     [DataRow("missing-reenabled-start")]
+    [DataRow("resolved-start-timeout")]
+    [DataRow("timeout-missing-host")]
+    [DataRow("timeout-replaced-host")]
+    [DataRow("timeout-host-not-ready")]
     [DataRow("missing-disabled-startup")]
     [DataRow("disabled-startup-same-host")]
     [DataRow("disabled-startup-not-exited")]
@@ -92,6 +96,21 @@ public sealed class CliRootLabelCancellationPolicyTests
                 case "reenabled-exit-string": evidence["reenabledRestart"]!["previousProcessExited"] = "True"; break;
                 case "reenabled-foreign-receipt": evidence["reenabledRestart"]!["previousProcessId"] = 909; break;
                 case "missing-reenabled-start": File.Delete(Path.Combine(directory, "restored-restart-start.json")); break;
+                case "resolved-start-timeout":
+                case "timeout-missing-host":
+                case "timeout-replaced-host":
+                case "timeout-host-not-ready":
+                    await File.WriteAllTextAsync(Path.Combine(directory, "restored-restart-start.json"),
+                        """{"kind":"error","exitCode":3,"code":"mp.control.requestTimeout"}""");
+                    if (damage != "timeout-missing-host")
+                    {
+                        int observed = damage == "timeout-replaced-host" ? 606 : 505;
+                        WriteOriginal(directory, "restored-restart-starting",
+                            Node(new { processId = observed, state = "Starting", startupPhase = "CloudFiles" }));
+                    }
+                    ChangeOriginal(directory, "restored-restart-after",
+                        node => node["state"] = damage == "timeout-host-not-ready" ? "Starting" : "Running");
+                    break;
                 case "missing-disabled-startup": evidence.Remove("disabledStartupRestart"); break;
                 case "disabled-startup-same-host":
                     ChangeOriginal(directory, "disabled-selection-restart-after", node => node["processId"] = 202);
@@ -122,8 +141,9 @@ public sealed class CliRootLabelCancellationPolicyTests
             try { await process.WaitForExitAsync(timeout.Token); }
             catch (OperationCanceledException) { process.Kill(entireProcessTree: true); throw; }
             string actual = await output; string stderr = await error;
-            Assert.AreEqual(damage == "valid" ? 0 : 1, process.ExitCode, actual + stderr);
-            StringAssert.Contains(actual, damage == "valid" ? "accepted" : "rejected");
+            bool valid = damage is "valid" or "resolved-start-timeout";
+            Assert.AreEqual(valid ? 0 : 1, process.ExitCode, actual + stderr);
+            StringAssert.Contains(actual, valid ? "accepted" : "rejected");
         }
         finally { Directory.Delete(directory, recursive: true); }
     }

@@ -1,3 +1,5 @@
+. (Join-Path $PSScriptRoot 'cli-root-label-host-start.ps1')
+
 function Invoke-CliRootLabelCancellationLifecycle {
     param([Parameter(Mandatory)][scriptblock]$InvokeCli,
         [Parameter(Mandatory)][string]$RootId, [Parameter(Mandatory)][string]$InstanceId,
@@ -45,8 +47,7 @@ function Invoke-CliRootLabelCancellationLifecycle {
             Invoke-CancellationCli ($Phase + '-stop') @('host', 'stop') | Out-Null
             if (-not $process.WaitForExit(30000)) { throw 'The preparing Host did not fully exit.' }
         } finally { $process.Dispose() }
-        Invoke-CancellationCli ($Phase + '-start') @('host', 'start') | Out-Null
-        $after = Invoke-CancellationCli ($Phase + '-after') @('host', 'status')
+        $after = Wait-CliRootLabelHostStart -InvokeCli $InvokeCli -Phase $Phase -PreviousProcessId $before.processId -OriginalsDirectory $originals
         if ($after.processId -le 0 -or $after.processId -eq $before.processId) { throw 'Cancellation requires an independent new Host process.' }
         return [ordered]@{previousProcessId=$before.processId;currentProcessId=$after.processId;previousProcessExited=$true}
     }

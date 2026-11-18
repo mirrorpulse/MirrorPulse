@@ -1,3 +1,5 @@
+. (Join-Path $PSScriptRoot 'cli-root-label-host-start.ps1')
+
 function Invoke-CliRootLabelPreparation {
     param([Parameter(Mandatory)][scriptblock]$InvokeCli, [Parameter(Mandatory)][string]$RootId,
         [Parameter(Mandatory)][string]$Label, [Parameter(Mandatory)][string]$Phase,
@@ -78,8 +80,7 @@ function Invoke-CliRootLabelLifecycle {
             Invoke-RootLabelCli ($Phase + '-stop') @('host', 'stop') | Out-Null
             if (-not $process.WaitForExit(30000)) { throw 'The original Host process did not fully exit.' }
         } finally { $process.Dispose() }
-        Invoke-RootLabelCli ($Phase + '-start') @('host', 'start') | Out-Null
-        $after = Invoke-RootLabelCli ($Phase + '-after') @('host', 'status')
+        $after = Wait-CliRootLabelHostStart -InvokeCli $InvokeCli -Phase $Phase -PreviousProcessId $before.processId -OriginalsDirectory $originals
         if ($after.processId -le 0 -or $after.processId -eq $before.processId) { throw 'The root fixture did not start an independent new Host process.' }
         return [ordered]@{previousProcessId=$before.processId;currentProcessId=$after.processId;previousProcessExited=$true}
     }

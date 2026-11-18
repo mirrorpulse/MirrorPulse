@@ -1,3 +1,5 @@
+. (Join-Path $PSScriptRoot 'cli-root-label-host-start.ps1')
+
 function Assert-CliRootLabelLifecycleEvidence {
     param([Parameter(Mandatory)][object]$Evidence,
         [Parameter(Mandatory)][string]$OriginalsDirectory)
@@ -60,7 +62,7 @@ function Assert-CliRootLabelLifecycleEvidence {
         $before = Read-RootLabelOriginal ($pair.phase + '-before')
         $after = Read-RootLabelOriginal ($pair.phase + '-after')
         Read-RootLabelOriginal ($pair.phase + '-stop') | Out-Null
-        Read-RootLabelOriginal ($pair.phase + '-start') | Out-Null
+        Assert-CliRootLabelHostStartOriginal -OriginalsDirectory $OriginalsDirectory -Phase $pair.phase -After $after
         if ($pair.record.previousProcessExited -isnot [bool] -or $pair.record.previousProcessExited -ne $true -or $before.processId -le 0 -or $after.processId -le 0 -or
             $before.processId -eq $after.processId -or $pair.record.previousProcessId -ne $before.processId -or
             $pair.record.currentProcessId -ne $after.processId) { throw 'Require the actual original and independently restarted Host process identities.' }

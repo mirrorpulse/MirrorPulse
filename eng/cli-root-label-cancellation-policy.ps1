@@ -1,3 +1,5 @@
+. (Join-Path $PSScriptRoot 'cli-root-label-host-start.ps1')
+
 function Assert-CliRootLabelCancellationEvidence {
     param([Parameter(Mandatory)][object]$Evidence,
         [Parameter(Mandatory)][string]$OriginalsDirectory)
@@ -84,7 +86,7 @@ function Assert-CliRootLabelCancellationEvidence {
     $disabledBefore = Read-CancellationOriginal 'disabled-selection-restart-before'
     $disabledAfter = Read-CancellationOriginal 'disabled-selection-restart-after'
     Read-CancellationOriginal 'disabled-selection-restart-stop' | Out-Null
-    Read-CancellationOriginal 'disabled-selection-restart-start' | Out-Null
+    Assert-CliRootLabelHostStartOriginal -OriginalsDirectory $OriginalsDirectory -Phase 'disabled-selection-restart' -After $disabledAfter
     if ($null -eq $Evidence.disabledStartupRestart -or $disabledBefore.processId -le 0 -or $disabledAfter.processId -le 0 -or
         $disabledBefore.processId -eq $disabledAfter.processId -or
         $Evidence.disabledStartupRestart.previousProcessId -ne $disabledBefore.processId -or
@@ -110,7 +112,7 @@ function Assert-CliRootLabelCancellationEvidence {
         $before = Read-CancellationOriginal ($phase + '-restart-before')
         $after = Read-CancellationOriginal ($phase + '-restart-after')
         Read-CancellationOriginal ($phase + '-restart-stop') | Out-Null
-        Read-CancellationOriginal ($phase + '-restart-start') | Out-Null
+        Assert-CliRootLabelHostStartOriginal -OriginalsDirectory $OriginalsDirectory -Phase ($phase + '-restart') -After $after
         if ($before.processId -le 0 -or $after.processId -le 0 -or $before.processId -eq $after.processId -or
             $row.restart.previousProcessId -ne $before.processId -or $row.restart.currentProcessId -ne $after.processId -or
             $row.restart.previousProcessExited -isnot [bool] -or $row.restart.previousProcessExited -ne $true) { throw 'Require the original preparing process to exit and an independent new Host.' }
@@ -159,7 +161,7 @@ function Assert-CliRootLabelCancellationEvidence {
     $before = Read-CancellationOriginal 'restored-restart-before'
     $after = Read-CancellationOriginal 'restored-restart-after'
     Read-CancellationOriginal 'restored-restart-stop' | Out-Null
-    Read-CancellationOriginal 'restored-restart-start' | Out-Null
+    Assert-CliRootLabelHostStartOriginal -OriginalsDirectory $OriginalsDirectory -Phase 'restored-restart' -After $after
     if ($null -eq $Evidence.reenabledRestart -or $before.processId -le 0 -or $after.processId -le 0 -or
         $before.processId -eq $after.processId -or
         $Evidence.reenabledRestart.previousProcessId -ne $before.processId -or
