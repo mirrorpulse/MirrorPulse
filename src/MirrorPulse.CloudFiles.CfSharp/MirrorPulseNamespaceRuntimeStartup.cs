@@ -1,5 +1,6 @@
 using System.Runtime.Versioning;
 using CfSharp;
+using MirrorPulse.Core.Diagnostics;
 
 namespace MirrorPulse.CloudFiles.CfSharp;
 
@@ -12,11 +13,20 @@ namespace MirrorPulse.CloudFiles.CfSharp;
 [SupportedOSPlatform("windows10.0.26100")]
 internal static class MirrorPulseNamespaceRuntimeStartup
 {
-    internal static Task StartAsync(CloudFileSystem fileSystem, MirrorPulseNamespaceExecutionSession execution,
+    internal static async Task StartAsync(CloudFileSystem fileSystem, MirrorPulseNamespaceExecutionSession execution,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(fileSystem);
         ArgumentNullException.ThrowIfNull(execution);
-        return execution.RunNamespaceOperationAsync(async () => await fileSystem.StartAsync(cancellationToken).ConfigureAwait(false));
+        try
+        {
+            await execution.RunNamespaceOperationAsync(async () => await fileSystem.StartAsync(cancellationToken).ConfigureAwait(false))
+                .ConfigureAwait(false);
+        }
+        catch (Exception error)
+        {
+            MirrorPulseStartupFailureTrace.Record(error, MirrorPulseStartupFailureSite.LibraryStart);
+            throw;
+        }
     }
 }

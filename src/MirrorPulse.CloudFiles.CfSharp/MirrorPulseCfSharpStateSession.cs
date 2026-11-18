@@ -1,5 +1,6 @@
 using CfSharp;
 using MirrorPulse.Core.Configuration;
+using MirrorPulse.Core.Diagnostics;
 
 namespace MirrorPulse.CloudFiles.CfSharp;
 
@@ -32,7 +33,16 @@ public sealed class MirrorPulseCfSharpStateSession : ICloudStateStoreFactory
         CloudStateStoreContext context,
         CancellationToken cancellationToken = default)
     {
-        ICloudStateStore opened = await _inner.OpenAsync(context, cancellationToken).ConfigureAwait(false);
+        ICloudStateStore opened;
+        try
+        {
+            opened = await _inner.OpenAsync(context, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception error)
+        {
+            MirrorPulseStartupFailureTrace.Record(error, MirrorPulseStartupFailureSite.LibraryStoreOpen);
+            throw;
+        }
         if (Interlocked.CompareExchange(ref _store, opened, null) is not null)
         {
             await opened.DisposeAsync().ConfigureAwait(false);

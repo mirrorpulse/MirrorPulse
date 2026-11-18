@@ -11,7 +11,8 @@ function Get-InstalledHostStartupDiagnostics {
         'NamespaceAnchorBindingMismatch','UnclassifiedDiagnostic')
     $categories = @('IO','InvalidData','Authorization','Cancelled','Internal','MutationAmbiguous','WorkerOffline','WorkerDisconnected','WorkerRejected')
     $sites = @('Unknown','InitializationRead','InitializationAdmission','InitializationInventory','InitializationAnchorProtection',
-        'InitializationAnchorRegistration','InitializationAudit','AnchorGuard','AnchorHistory','AnchorPermissionPreparation','AnchorProtectedPermission','AnchorVerification')
+        'InitializationAnchorRegistration','InitializationAudit','AnchorGuard','AnchorHistory','AnchorPermissionPreparation','AnchorProtectedPermission',
+        'AnchorVerification','AnchorPermissionPolicy','AnchorPermissionCatalog','LibraryStart','LibraryStoreOpen')
     $kinds = @('FileNotFound','DirectoryNotFound','DllNotFound','Native','Other')
     $stages = @('LibraryStartBegin','LibraryStartCompleted','LibraryServicesBegin','LibraryServicesCompleted',
         'NamespaceStartupBegin','NamespaceStartupCompleted','NamespaceAnchorBegin','NamespaceAnchorCompleted',

@@ -12,6 +12,8 @@ public sealed partial class InstalledStartupDiagnosticsTests
     [DataRow("linked")]
     [DataRow("anchor-stages")]
     [DataRow("failure-site")]
+    [DataRow("library-start-site")]
+    [DataRow("library-store-site")]
     [DataRow("private-site")]
     public async Task InstalledFailureEvidenceRetainsOnlyOriginalBoundedCloudStartupBoundaries(string scenario)
     {
@@ -57,12 +59,17 @@ public sealed partial class InstalledStartupDiagnosticsTests
                     )|Set-Content -LiteralPath $log
                 } else {(New-Record $since.AddSeconds(1))|ConvertTo-Json -Depth 4 -Compress|Set-Content -LiteralPath $log}
                 # Preserve the original failing Host fact independently of progress volume.
-                $originalIoFailure=$Scenario -in @('anchor-stages','failure-site','private-site')
+                $site= switch ($Scenario) {
+                    'failure-site' {'AnchorProtectedPermission'}
+                    'library-start-site' {'LibraryStart'}
+                    'library-store-site' {'LibraryStoreOpen'}
+                }
+                $originalIoFailure=$null -ne $site -or $Scenario -in @('anchor-stages','private-site')
                 $failureCode=if($originalIoFailure){'HostStartupFailed'}else{'NamespaceAnchorOwnerMismatch'}
                 $failureCategory=if($originalIoFailure){'IO'}else{'InvalidData'}
                 $failureHResult=if($originalIoFailure){'80070002'}else{'80131501'}
-                $failureSite=if($Scenario -eq 'failure-site'){'AnchorProtectedPermission'}else{'PRIVATE_TEST_SENTINEL'}
-                $failureKind=if($Scenario -eq 'failure-site'){'FileNotFound'}else{'PRIVATE_TEST_SENTINEL'}
+                $failureSite=if($site){$site}else{'PRIVATE_TEST_SENTINEL'}
+                $failureKind=if($site){'FileNotFound'}else{'PRIVATE_TEST_SENTINEL'}
                 [ordered]@{OccurredAt=$since.AddSeconds(5).ToString('O');Level='Error';Category='host';Code=$failureCode;
                     Fields=@{failureCategory=$failureCategory;hresult=$failureHResult;failureSite=$failureSite;failureKind=$failureKind}}|ConvertTo-Json -Depth 4 -Compress|
                     Set-Content -LiteralPath (Join-Path $logs 'mirrorpulse.log')
@@ -71,8 +78,8 @@ public sealed partial class InstalledStartupDiagnosticsTests
                 $json=$result|ConvertTo-Json -Depth 6 -Compress
                 if ($json.Contains('PRIVATE_TEST_SENTINEL') -or $json.Contains($root)) {throw 'Private fields or paths escaped.'}
                 if ($result.records.Count -ne 1 -or $result.records[0].code -cne $failureCode -or $result.records[0].hresult -cne $failureHResult) {throw 'The original Host failure was lost.'}
-                if($Scenario -eq 'failure-site') {
-                    if($result.records[0].failureSite -cne 'AnchorProtectedPermission' -or $result.records[0].failureKind -cne 'FileNotFound') {
+                if($site) {
+                    if($result.records[0].failureSite -cne $site -or $result.records[0].failureKind -cne 'FileNotFound') {
                         throw 'The original closed startup failure boundary was lost.'
                     }
                 } elseif($null -ne $result.records[0].failureSite -or $null -ne $result.records[0].failureKind) {

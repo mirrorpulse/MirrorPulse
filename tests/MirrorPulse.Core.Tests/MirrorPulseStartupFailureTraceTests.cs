@@ -10,23 +10,26 @@ namespace MirrorPulse.Core.Tests;
 public sealed class MirrorPulseStartupFailureTraceTests
 {
     [TestMethod]
-    public void ClosestRecordedStartupBoundarySurvivesCleanupWrappersWithoutChangingTheOriginalFailure()
+    [DataRow(MirrorPulseStartupFailureSite.AnchorProtectedPermission, MirrorPulseStartupFailureSite.InitializationAnchorProtection)]
+    [DataRow(MirrorPulseStartupFailureSite.LibraryStoreOpen, MirrorPulseStartupFailureSite.LibraryStart)]
+    public void ClosestRecordedStartupBoundarySurvivesCleanupWrappersWithoutChangingTheOriginalFailure(
+        MirrorPulseStartupFailureSite closest, MirrorPulseStartupFailureSite enclosing)
     {
         var original = new FileNotFoundException("PRIVATE_FAILURE_MESSAGE", "PRIVATE_FILENAME");
         int hresult = original.HResult;
-        MirrorPulseStartupFailureTrace.Record(original, MirrorPulseStartupFailureSite.AnchorProtectedPermission);
+        MirrorPulseStartupFailureTrace.Record(original, closest);
         var wrapper = new IOException("PRIVATE_WRAPPER_MESSAGE", original);
-        MirrorPulseStartupFailureTrace.Record(wrapper, MirrorPulseStartupFailureSite.InitializationAnchorProtection);
+        MirrorPulseStartupFailureTrace.Record(wrapper, enclosing);
         var cleanup = new AggregateException(wrapper);
         Assert.AreSame(original, MirrorPulseStartupFailureTrace.ReadOriginalException(cleanup)); Assert.AreEqual(hresult, original.HResult);
         Assert.AreEqual("PRIVATE_FILENAME", original.FileName);
-        Assert.AreEqual(MirrorPulseStartupFailureSite.AnchorProtectedPermission, MirrorPulseStartupFailureTrace.ReadSite(cleanup));
+        Assert.AreEqual(closest, MirrorPulseStartupFailureTrace.ReadSite(cleanup));
         Assert.AreEqual("FileNotFound", MirrorPulseStartupFailureTrace.ReadKind(cleanup));
         var safe = SafeDiagnosticPolicy.Sanitize(new LogEntry(LogLevel.Error, "host", "HostStartupFailed", DateTimeOffset.UtcNow,
             [new("failureSite", MirrorPulseStartupFailureTrace.ReadSite(cleanup).ToString()),
              new("hresult", MirrorPulseStartupFailureTrace.ReadOriginalException(cleanup).HResult.ToString("X8", CultureInfo.InvariantCulture)),
              new("failureKind", MirrorPulseStartupFailureTrace.ReadKind(cleanup)), new("message", original.Message), new("path", original.FileName!)]));
-        Assert.AreEqual("AnchorProtectedPermission", safe.Fields["failureSite"]); Assert.AreEqual("FileNotFound", safe.Fields["failureKind"]);
+        Assert.AreEqual(closest.ToString(), safe.Fields["failureSite"]); Assert.AreEqual("FileNotFound", safe.Fields["failureKind"]);
         Assert.AreEqual("80070002", safe.Fields["hresult"]);
         Assert.IsFalse(JsonSerializer.Serialize(safe).Contains("PRIVATE", StringComparison.Ordinal));
     }

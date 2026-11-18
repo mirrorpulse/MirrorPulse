@@ -9,6 +9,7 @@ on:
       - .github/workflows/installed-managed-inputs.yml
       - eng/installed-managed-modules.ps1
       - eng/installed-process-images.ps1
+      - eng/installed-startup-diagnostics.ps1
       - eng/verify-msix-cloudfiles.ps1
       - tests/MirrorPulse.Core.Tests/InstalledStartupDiagnosticsTests.ManagedModules.cs
 
