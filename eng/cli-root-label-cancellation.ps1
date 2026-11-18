@@ -138,6 +138,8 @@ function Invoke-CliRootLabelCancellationLifecycle {
     $cases = @(foreach ($phase in @('active', 'disabled')) {
         $disabled = $phase -ceq 'disabled'
         if ($disabled) {
+            Invoke-CancellationCli 'refresh-before-disable' @('--no-start', 'sync', 'refresh') | Out-Null
+            Read-CancellationState 'before-disable' $DirectoryName $false $null
             Invoke-CancellationCli 'disable' @('instance', 'disable', '--instance-id', $InstanceId) | Out-Null
             $disabledStartupRestart = Restart-CancellationHost 'disabled-selection-restart'
         }

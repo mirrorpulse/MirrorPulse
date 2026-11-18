@@ -161,6 +161,9 @@ function Invoke-CliRootLabelLifecycle {
     if ($replay.phase -cne 'Completed' -or $replay.currentDirectoryName -cne $label -or
         $replay.operationId -cne $first.operationId -or $replay.currentTreeAudited -ne $true) { throw 'A new Host did not replay the original completed Label.' }
 
+    # A retained remote poll can only settle while its signed Worker is connected.
+    Invoke-RootLabelCli 'refresh-before-disable' @('--no-start', 'sync', 'refresh') | Out-Null
+    Read-RootLabelState 'before-disable' $label $false | Out-Null
     Invoke-RootLabelCli 'disable' @('instance', 'disable', '--instance-id', $InstanceId) | Out-Null
     $disabledSelectionRestart = Restart-RootLabelHost 'disabled-selection-restart'
     Read-RootLabelState 'disabled' $label $true | Out-Null
