@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Security.Principal;
+using System.Text.Json;
 using CfSharp;
 using Microsoft.Data.Sqlite;
 using MirrorPulse.Core.CloudFiles;
@@ -234,10 +235,28 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             Assert.AreNotEqual(sourceRoot.InstanceId, targetRoot.InstanceId);
             var identityResolver = verifySameBackendSuccessor ? new MirrorPulseRemoteIdentityResolver(catalog) : null;
             var router = new MirrorPulseRootRouter(paths.SyncRootPath, topology.Roots, identityResolver: identityResolver);
-            await using var worker = new AdapterInstanceProcessSupervisor(catalog, new WindowsCredentialManagerStore());
-            await worker.StartAsync(topology);
-            while (!worker.IsConnected(sourceRoot.InstanceId) || !worker.IsConnected(targetRoot.InstanceId))
-                await Task.Delay(25, token);
+            string workerDiagnostics = Path.Combine(directory, "worker-diagnostics");
+            await using var worker = new AdapterInstanceProcessSupervisor(catalog, new WindowsCredentialManagerStore(),
+                diagnosticsDirectory: workerDiagnostics);
+            try
+            {
+                await worker.StartAsync(topology);
+                while (!worker.IsConnected(sourceRoot.InstanceId) || !worker.IsConnected(targetRoot.InstanceId))
+                    await Task.Delay(25, token);
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                TestContext.WriteLine($"SignedDirectoryTransferWorkerStartup: sourceConnected={worker.IsConnected(sourceRoot.InstanceId)}; targetConnected={worker.IsConnected(targetRoot.InstanceId)}.");
+                try
+                {
+                    TestContext.WriteLine(await WorkerFailureTestDiagnostics.ReadAsync(workerDiagnostics));
+                }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException)
+                {
+                    TestContext.WriteLine($"Could not read the original Worker startup diagnostics ({error.GetType().Name}).");
+                }
+                throw;
+            }
             Assert.IsTrue(worker.SupportsAtomicDirectoryDeletion(sourceRoot.InstanceId));
             Assert.AreEqual(2, worker.GetConnectedProtocolVersion(targetRoot.InstanceId));
             bool durableCopyNegotiated = worker.SupportsDurableDirectoryCopy(targetRoot.InstanceId, targetRoot.UniquenessKey);
