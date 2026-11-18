@@ -113,6 +113,14 @@ function Invoke-CliRootLabelLifecycle {
                 $matches[0].isDirectory -ne $entry.isDirectory -or $matches[0].relativePath -cne $expected -or
                 $matches[0].depth -ne $entry.depth) { throw 'Root Label execution changed the original complete member graph.' }
         }
+        if ($originals) {
+            $attributes = @(foreach ($payload in $bytes) {
+                $path = Join-Path (Join-Path $SyncRoot $Name) $payload.name
+                [ordered]@{name=$payload.name;attributes=[uint32][IO.File]::GetAttributes($path)}
+            })
+            [ordered]@{schemaVersion=1;phase=$Phase;files=$attributes} | ConvertTo-Json -Depth 5 |
+                Set-Content -LiteralPath (Join-Path $originals ($Phase + '-residency.json')) -Encoding utf8
+        }
         $observedBytes = @(foreach ($payload in $bytes) {
             $localHash = (Get-FileHash -LiteralPath (Join-Path (Join-Path $SyncRoot $Name) $payload.name)).Hash
             $sourceHash = (Get-FileHash -LiteralPath (Join-Path $SourceRoot $payload.name)).Hash
@@ -164,9 +172,11 @@ function Invoke-CliRootLabelLifecycle {
     # A retained remote poll can only settle while its signed Worker is connected.
     Invoke-RootLabelCli 'refresh-before-disable' @('--no-start', 'sync', 'refresh') | Out-Null
     Read-RootLabelState 'before-disable' $label $false | Out-Null
+    Assert-RootLabelTree 'before-disable' $label
     Invoke-RootLabelCli 'disable' @('instance', 'disable', '--instance-id', $InstanceId) | Out-Null
     $disabledSelectionRestart = Restart-RootLabelHost 'disabled-selection-restart'
     Read-RootLabelState 'disabled' $label $true | Out-Null
+    Assert-RootLabelTree 'disabled-before-rename' $label
     $caseLabel = $label.ToUpperInvariant()
     if ($caseLabel -ceq $label) { throw 'The synthetic case-only Label must have distinct spelling.' }
     $second = Execute-RootLabel 'disabled-case' $label $caseLabel $true
