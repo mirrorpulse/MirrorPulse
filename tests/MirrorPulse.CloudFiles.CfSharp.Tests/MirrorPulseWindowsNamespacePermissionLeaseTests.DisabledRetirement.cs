@@ -26,7 +26,10 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         var registry = new CfSharpMirrorPulseCloudRootRegistry(); using WindowsIdentity user = WindowsIdentity.GetCurrent();
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(65));
         Guid fileBirth = Guid.NewGuid(), directoryBirth = Guid.NewGuid(), fileRetirement = Guid.NewGuid(), directoryRetirement = Guid.NewGuid();
+        Guid subtreeBirth = Guid.NewGuid(), nestedBirth = Guid.NewGuid(), leafBirth = Guid.NewGuid(), batchOperationId = Guid.NewGuid();
         MirrorPulseNamespaceMemberRegistration? firstFile = null, firstDirectory = null;
+        MirrorPulseNamespaceRetirementBatch? completedBatch = null;
+        Dictionary<Guid, Guid>? batchNativeItems = null;
         string? originalRole = null, birthHistory = null, retirementHistory = null;
         Guid? fileItemId = null, directoryItemId = null;
         Dictionary<Guid, string>? originals = null;
@@ -61,6 +64,9 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 var parent = await runtime.InspectNamespaceMemberAsync("Existing", true, timeout.Token);
                 var file = await runtime.CreateNamespaceMemberAsync(fileBirth, parent.MemberId, "delete.txt", false, timeout.Token);
                 var folder = await runtime.CreateNamespaceMemberAsync(directoryBirth, parent.MemberId, "delete-folder", true, timeout.Token);
+                var subtree = await runtime.CreateNamespaceMemberAsync(subtreeBirth, parent.MemberId, "delete-tree", true, timeout.Token);
+                var nested = await runtime.CreateNamespaceMemberAsync(nestedBirth, subtree.MemberId, "nested", true, timeout.Token);
+                var leaf = await runtime.CreateNamespaceMemberAsync(leafBirth, nested.MemberId, "leaf.bin", false, timeout.Token);
                 Assert.IsNotNull(state);
                 if (owner == 0)
                 {
@@ -68,6 +74,13 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     fileItemId = (await runtime.InspectNamespaceMemberAsync("Existing/delete.txt", false, timeout.Token)).NativeItemId;
                     directoryItemId = (await runtime.InspectNamespaceMemberAsync("Existing/delete-folder", true, timeout.Token)).NativeItemId;
                     Assert.IsNotNull(fileItemId); Assert.IsNotNull(directoryItemId);
+                    batchNativeItems = new();
+                    foreach (var member in new[] { subtree, nested, leaf })
+                    {
+                        var observed = await runtime.InspectNamespaceMemberAsync(member.RelativePath, member.IsDirectory, timeout.Token);
+                        Assert.IsNotNull(observed.NativeItemId);
+                        batchNativeItems.Add(member.MemberId, observed.NativeItemId.Value);
+                    }
                     byte[] bytes = "explicit offline deletion retains its original pending local history"u8.ToArray();
                     await using (var writer = new FileStream(Path.Combine(paths.SyncRootPath, "Existing", "delete.txt"), FileMode.Open, FileAccess.Write, FileShare.Read))
                     {
@@ -96,6 +109,36 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 else Assert.AreEqual(retirementHistory, completed);
                 await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => runtime.PrepareNamespaceMemberRetirementAsync(
                     fileRetirement, folder.MemberId, timeout.Token).AsTask());
+                var preparedBatch = await runtime.PrepareNamespaceRetirementBatchAsync(batchOperationId, subtree.MemberId, timeout.Token);
+                Assert.HasCount(3, preparedBatch.Entries);
+                Assert.AreEqual(owner == 0 ? MirrorPulseNamespaceRetirementBatchPhase.Prepared : MirrorPulseNamespaceRetirementBatchPhase.Completed,
+                    preparedBatch.Phase);
+                Assert.IsFalse(work.IsAdmitted(root.RootId));
+                if (owner == 0)
+                {
+                    CollectionAssert.Contains((await catalog.ReadNamespaceDispatchFencedRootsAsync(timeout.Token)).ToArray(), root.RootId);
+                    Assert.IsTrue(File.Exists(Path.Combine(paths.SyncRootPath, leaf.RelativePath)));
+                    await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => runtime.PrepareNamespaceRetirementBatchAsync(
+                        Guid.NewGuid(), nested.MemberId, timeout.Token).AsTask());
+                }
+                var retiredBatch = await runtime.ExecuteNamespaceRetirementBatchAsync(batchOperationId, timeout.Token);
+                Assert.AreEqual(MirrorPulseNamespaceRetirementBatchPhase.Completed, retiredBatch.Phase);
+                Assert.AreEqual(batchOperationId, retiredBatch.OperationId);
+                Assert.AreEqual(subtree.MemberId, retiredBatch.MemberId);
+                CollectionAssert.AreEqual(preparedBatch.Entries.ToArray(), retiredBatch.Entries.ToArray());
+                if (owner == 0) completedBatch = retiredBatch;
+                else Assert.AreEqual(JsonSerializer.Serialize(completedBatch), JsonSerializer.Serialize(retiredBatch));
+                foreach (var member in new[] { leaf, nested, subtree })
+                {
+                    var receipt = await catalog.ReadNamespaceRetirementAsync(retiredBatch.MemberOperationId(member.MemberId), timeout.Token);
+                    Assert.IsNotNull(receipt);
+                    Assert.AreEqual(batchOperationId, receipt.Intent.BatchOperationId);
+                    Assert.AreEqual(batchNativeItems![member.MemberId], receipt.StartedItemId);
+                    Assert.AreEqual(MirrorPulseNamespaceRetirementPhase.Completed, receipt.Phase);
+                }
+                await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => runtime.PrepareNamespaceRetirementBatchAsync(
+                    batchOperationId, folder.MemberId, timeout.Token).AsTask());
+                Assert.IsFalse(Directory.Exists(Path.Combine(paths.SyncRootPath, subtree.RelativePath)));
                 Assert.IsFalse(File.Exists(Path.Combine(paths.SyncRootPath, "Existing", "delete.txt")));
                 Assert.IsFalse(Directory.Exists(Path.Combine(paths.SyncRootPath, "Existing", "delete-folder")));
                 Assert.IsFalse(work.IsAdmitted(root.RootId)); Assert.IsFalse(work.TryEnter([root.RootId], out var ordinary)); Assert.IsNull(ordinary);
@@ -109,7 +152,10 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         Assert.IsNotNull(retained); Assert.AreEqual(original.Value, DisabledCreationJournalFact(retained));
                     }
                     var pending = await read.Operations.ListAsync(64, timeout.Token);
-                    Assert.AreEqual(2, pending.Count(row => row.Kind == CloudStateOperationKind.Delete));
+                    var deletes = pending.Where(row => row.Kind == CloudStateOperationKind.Delete).OrderBy(row => row.Sequence).ToArray();
+                    Assert.HasCount(5, deletes);
+                    CollectionAssert.AreEqual(new[] { batchNativeItems![leaf.MemberId], batchNativeItems[nested.MemberId], batchNativeItems[subtree.MemberId] },
+                        deletes.Where(row => batchNativeItems.ContainsValue(row.ItemId!.Value)).Select(row => row.ItemId!.Value).ToArray());
                     Assert.AreEqual(1, pending.Count(row => row.Kind == CloudStateOperationKind.Delete && row.ItemId == fileItemId));
                     Assert.AreEqual(1, pending.Count(row => row.Kind == CloudStateOperationKind.Delete && row.ItemId == directoryItemId));
                     if (owner == 0) originals = pending.ToDictionary(row => row.OperationId, DisabledCreationJournalFact);
@@ -118,6 +164,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 Assert.IsEmpty(worker.Calls);
             }
             TestContext.WriteLine("DisabledRetirement: fileAndEmptyDirectoryDeleted=True; originalBirthAndJournalFactsRetained=True; " +
+                "protectedSubtreeRetiredLeafFirst=True; originalBatchReceiptsRetained=True; " +
                 "actualDisposedRoles=True; completedReplayDoesNotResurrect=True; ordinaryAdmissionClosed=True; sourceCalls=0; remoteAcceptance=False.");
         }
         finally

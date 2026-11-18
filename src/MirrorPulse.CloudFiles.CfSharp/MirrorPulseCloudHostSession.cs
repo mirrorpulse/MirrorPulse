@@ -1587,7 +1587,17 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             var member = await catalog.ReadNamespaceMemberAsync(memberId, cancellationToken).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The retirement member is not registered.");
             var registration = router.Registrations.Single(root => root.RootId == member.RootId);
-            using var admission = namespaceWork?.Enter([registration.RootId]);
+            using var admission = registration.State == RootRegistrationState.Disabled ? null : namespaceWork?.Enter([registration.RootId]);
+            await using var disabledAdmission = registration.State == RootRegistrationState.Disabled
+                ? await EnterDisabledLocalOperationAsync(registration, async token =>
+                {
+                    var original = await catalog.ReadNamespaceRetirementBatchAsync(operationId, token).ConfigureAwait(false);
+                    if (original is not null && (original.Version != 1 || original.RootId != registration.RootId ||
+                        original.MemberId != memberId || original.RemoteEntry is not null || original.RemoteConflictCommandId is not null))
+                        throw new InvalidOperationException("The operation ID does not own this controlled subtree retirement in the disabled root.");
+                    return original is not null;
+                }, cancellationToken).ConfigureAwait(false)
+                : null;
             return await WithInstanceLibraryAsync(registration.InstanceId, token =>
                 new MirrorPulseNamespaceRetirementCoordinator(fileSystem, catalog, router, _namespaceExecution, _namespaceActor)
                     .PrepareBatchAsync(operationId, memberId, token), cancellationToken).ConfigureAwait(false);
