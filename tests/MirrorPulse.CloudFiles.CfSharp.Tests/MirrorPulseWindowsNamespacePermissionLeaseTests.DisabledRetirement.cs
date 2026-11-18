@@ -28,7 +28,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         Guid fileBirth = Guid.NewGuid(), directoryBirth = Guid.NewGuid(), fileRetirement = Guid.NewGuid(), directoryRetirement = Guid.NewGuid();
         Guid subtreeBirth = Guid.NewGuid(), nestedBirth = Guid.NewGuid(), leafBirth = Guid.NewGuid(), batchOperationId = Guid.NewGuid();
         MirrorPulseNamespaceMemberRegistration? firstFile = null, firstDirectory = null;
-        MirrorPulseNamespaceRetirementBatch? completedBatch = null;
+        MirrorPulseNamespaceRetirementBatch? completedBatch = null, preparedBeforeRestart = null;
+        Guid restartOperationId = Guid.NewGuid();
         Dictionary<Guid, Guid>? batchNativeItems = null;
         string? originalRole = null, birthHistory = null, retirementHistory = null;
         Guid? fileItemId = null, directoryItemId = null;
@@ -142,8 +143,11 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 Assert.IsFalse(File.Exists(Path.Combine(paths.SyncRootPath, "Existing", "delete.txt")));
                 Assert.IsFalse(Directory.Exists(Path.Combine(paths.SyncRootPath, "Existing", "delete-folder")));
                 Assert.IsFalse(work.IsAdmitted(root.RootId)); Assert.IsFalse(work.TryEnter([root.RootId], out var ordinary)); Assert.IsNull(ordinary);
-                Assert.IsEmpty(await catalog.ReadNamespacePendingOperationsAsync(root.RootId, timeout.Token));
-                Assert.IsEmpty(await catalog.ReadNamespaceDispatchFencedRootsAsync(timeout.Token));
+                if (owner == 0)
+                {
+                    Assert.IsEmpty(await catalog.ReadNamespacePendingOperationsAsync(root.RootId, timeout.Token));
+                    Assert.IsEmpty(await catalog.ReadNamespaceDispatchFencedRootsAsync(timeout.Token));
+                }
                 await using (var read = await state.Store.BeginTransactionAsync(timeout.Token))
                 {
                     foreach (var original in originals!)
@@ -161,11 +165,55 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     if (owner == 0) originals = pending.ToDictionary(row => row.OperationId, DisabledCreationJournalFact);
                     await read.RollbackAsync(timeout.Token);
                 }
+                if (owner == 0)
+                {
+                    var pendingTree = await runtime.CreateNamespaceMemberAsync(Guid.NewGuid(), parent.MemberId, "retire-after-restart", true, timeout.Token);
+                    var pendingLeaf = await runtime.CreateNamespaceMemberAsync(Guid.NewGuid(), pendingTree.MemberId, "original.bin", false, timeout.Token);
+                    await using (var writer = new FileStream(Path.Combine(paths.SyncRootPath, pendingLeaf.RelativePath),
+                        FileMode.Open, FileAccess.Write, FileShare.Read))
+                    {
+                        await writer.WriteAsync(new byte[] { 7, 8, 9 }, timeout.Token);
+                        writer.Flush(true);
+                    }
+                    preparedBeforeRestart = await runtime.PrepareNamespaceRetirementBatchAsync(restartOperationId, pendingTree.MemberId, timeout.Token);
+                    Assert.HasCount(2, preparedBeforeRestart.Entries);
+                    Assert.AreEqual(MirrorPulseNamespaceRetirementBatchPhase.Prepared, preparedBeforeRestart.Phase);
+                    Assert.IsNull(await catalog.ReadNamespaceRetirementAsync(preparedBeforeRestart.MemberOperationId(pendingLeaf.MemberId), timeout.Token));
+                }
+                else
+                {
+                    Assert.IsNotNull(preparedBeforeRestart);
+                    var startup = runtime.NamespaceStartupResults.Single(result => result.RootId == root.RootId);
+                    Assert.IsFalse(startup.Admitted);
+                    Assert.AreEqual(restartOperationId, startup.OperationId);
+                    var retained = await runtime.ReadNamespaceRetirementBatchAsync(restartOperationId, timeout.Token);
+                    Assert.AreEqual(JsonSerializer.Serialize(preparedBeforeRestart), JsonSerializer.Serialize(retained));
+                    var originalLeaf = retained.Entries.Single(entry => !entry.IsDirectory);
+                    CollectionAssert.AreEqual(new byte[] { 7, 8, 9 },
+                        await File.ReadAllBytesAsync(Path.Combine(paths.SyncRootPath, originalLeaf.RelativePath), timeout.Token));
+                    var resumed = await runtime.ExecuteNamespaceRetirementBatchAsync(restartOperationId, timeout.Token);
+                    Assert.AreEqual(MirrorPulseNamespaceRetirementBatchPhase.Completed, resumed.Phase);
+                    CollectionAssert.AreEqual(preparedBeforeRestart.Entries.ToArray(), resumed.Entries.ToArray());
+                    Assert.AreEqual(restartOperationId, resumed.OperationId);
+                    foreach (var entry in preparedBeforeRestart.Entries)
+                    {
+                        var receipt = await catalog.ReadNamespaceRetirementAsync(resumed.MemberOperationId(entry.MemberId), timeout.Token);
+                        Assert.IsNotNull(receipt);
+                        Assert.AreEqual(entry.LocalObject, receipt.Intent.LocalObject);
+                        Assert.AreEqual(execution.RoleSid.Value, receipt.Intent.RoleSid);
+                        Assert.AreEqual(MirrorPulseNamespaceRetirementPhase.Completed, receipt.Phase);
+                    }
+                    Assert.IsFalse(File.Exists(Path.Combine(paths.SyncRootPath, originalLeaf.RelativePath)));
+                    Assert.IsEmpty(await catalog.ReadNamespacePendingOperationsAsync(root.RootId, timeout.Token));
+                    Assert.IsEmpty(await catalog.ReadNamespaceDispatchFencedRootsAsync(timeout.Token));
+                }
+                Assert.IsFalse(work.IsAdmitted(root.RootId));
                 Assert.IsEmpty(worker.Calls);
             }
             TestContext.WriteLine("DisabledRetirement: fileAndEmptyDirectoryDeleted=True; originalBirthAndJournalFactsRetained=True; " +
                 "protectedSubtreeRetiredLeafFirst=True; originalBatchReceiptsRetained=True; " +
-                "actualDisposedRoles=True; completedReplayDoesNotResurrect=True; ordinaryAdmissionClosed=True; sourceCalls=0; remoteAcceptance=False.");
+                "actualDisposedRoles=True; completedReplayDoesNotResurrect=True; preparedBatchRecoveredInNewRole=True; " +
+                "ordinaryAdmissionClosed=True; sourceCalls=0; remoteAcceptance=False.");
         }
         finally
         {

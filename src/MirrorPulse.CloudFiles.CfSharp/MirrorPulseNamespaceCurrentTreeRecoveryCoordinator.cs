@@ -38,6 +38,10 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
         RecoverCoreAsync(operationId, rootId, null, null, cancellationToken, replacementId: replacementId,
             executeReplacement: executeReplacement);
 
+    internal ValueTask<MirrorPulseNamespaceInitializationResult> RecoverRetirementBatchRootAsync(Guid operationId, RootId rootId,
+        Guid retirementBatchId, Func<CancellationToken, ValueTask>? executeBatch, CancellationToken cancellationToken) =>
+        RecoverCoreAsync(operationId, rootId, null, null, cancellationToken, retirementBatchId: retirementBatchId, executeBatch: executeBatch);
+
     internal ValueTask<MirrorPulseNamespaceInitializationResult> RecoverJournalDirectoryMoveAsync(Guid operationId,
         MirrorPulseJournalDirectoryMoveRecovery.ProjectionRecovery move, CancellationToken cancellationToken) =>
         RecoverCoreAsync(operationId, move.Admission.RootId, move, null, cancellationToken);
@@ -45,7 +49,8 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
     private async ValueTask<MirrorPulseNamespaceInitializationResult> RecoverCoreAsync(Guid operationId, RootId? selectedRoot,
         MirrorPulseJournalDirectoryMoveRecovery.ProjectionRecovery? move, Guid? transferId, CancellationToken cancellationToken,
         Guid? fileTransferId = null, Guid? startedBirthId = null, Guid? replacementId = null,
-        Func<CancellationToken, ValueTask>? executeReplacement = null)
+        Func<CancellationToken, ValueTask>? executeReplacement = null, Guid? retirementBatchId = null,
+        Func<CancellationToken, ValueTask>? executeBatch = null)
     {
         if (operationId == Guid.Empty) throw new ArgumentException("An initialization operation ID is required.", nameof(operationId));
         var retained = await catalog.ReadNamespaceInitializationAsync(operationId, cancellationToken).ConfigureAwait(false);
@@ -60,6 +65,8 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
             throw new InvalidOperationException("Current recovery requires its exact transfer purpose.");
         if (retained is not null && retained.ReplacementOperationId != replacementId)
             throw new InvalidOperationException("Current recovery requires its exact replacement purpose.");
+        if (retained is not null && retained.RetirementBatchOperationId != retirementBatchId)
+            throw new InvalidOperationException("Current recovery requires its exact retirement batch purpose.");
         if (retained?.JournalDirectoryMoveOperationId is { } original)
         {
             if (move is not null && move.Admission.JournalOperationId != original ||
@@ -91,10 +98,21 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
                 pendingReplacementMember = replacement.Intent.MemberId;
             }
         }
+        bool pendingRetirementBatch = false;
+        if (retirementBatchId is { } originalBatch)
+        {
+            var batch = await catalog.ReadNamespaceRetirementBatchAsync(originalBatch, cancellationToken).ConfigureAwait(false);
+            if (batch is null || batch.RootId != selectedRoot || batch.RemoteEntry is not null || batch.RemoteConflictCommandId is not null ||
+                batch.Phase is not (MirrorPulseNamespaceRetirementBatchPhase.Prepared or MirrorPulseNamespaceRetirementBatchPhase.Completed))
+                throw new InvalidOperationException("Current recovery requires the original controlled batch in its selected root.");
+            pendingRetirementBatch = batch.Phase == MirrorPulseNamespaceRetirementBatchPhase.Prepared;
+            if (pendingRetirementBatch && executeBatch is null)
+                throw new InvalidOperationException("Only the original retirement executor may resume the pending batch.");
+        }
         if (retained is null)
         {
             var roots = await MirrorPulseNamespaceCurrentRootSelector.SelectAsync(fileSystem, catalog, registrations, cancellationToken).ConfigureAwait(false);
-            retained = await catalog.PrepareNamespaceInitializationAsync(new(replacementId is not null ? 9 :
+            retained = await catalog.PrepareNamespaceInitializationAsync(new(retirementBatchId is not null ? 10 : replacementId is not null ? 9 :
                 startedBirthId is not null ? (transferId is not null ? 8 : 7) : fileTransferId is not null ? 6 :
                 selectedRoot is not null ? 4 : roots.Count == 0 ? 3 : roots.Any(root => root.BornRootMemberId is not null) ? 2 : 1,
                 operationId, roots, DateTimeOffset.UtcNow)
@@ -105,7 +123,8 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
                 FileTransferOperationId = fileTransferId,
                 FileTransferStartedBirthId = fileTransferId is not null ? startedBirthId : null,
                 DirectoryTransferStartedBirthId = transferId is not null ? startedBirthId : null,
-                ReplacementOperationId = replacementId
+                ReplacementOperationId = replacementId,
+                RetirementBatchOperationId = retirementBatchId
             }, cancellationToken).ConfigureAwait(false);
         }
         if (!retained.Roots.Select(root => root.RootId).ToHashSet().SetEquals(registrations.Select(root => root.RootId)))
@@ -197,6 +216,8 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
             if (move is not null) await move.AcknowledgeAsync(cancellationToken).ConfigureAwait(false);
             if (pendingReplacementMember is not null)
                 await executeReplacement!(cancellationToken).ConfigureAwait(false);
+            if (pendingRetirementBatch)
+                await executeBatch!(cancellationToken).ConfigureAwait(false);
             Progress?.Invoke("NamespaceAuditBegin");
             var completion = await MirrorPulseRootLabelCancellationFailureDiagnostics.AtStageAsync(MirrorPulseRootLabelCancellationStage.CurrentTreeInitializationAudit,
                 () => new MirrorPulseNamespaceCurrentTreeAuditCoordinator(fileSystem, catalog, router, execution, actor, permissions)

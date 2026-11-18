@@ -1617,11 +1617,52 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             var batch = await catalog.ReadNamespaceRetirementBatchAsync(operationId, cancellationToken).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The retirement batch is not registered.");
             var registration = router.Registrations.Single(root => root.RootId == batch.RootId);
+            ValueTask<MirrorPulseNamespaceRetirementBatch> ExecuteAsync(CancellationToken token) =>
+                new MirrorPulseNamespaceRetirementCoordinator(fileSystem, catalog, router, _namespaceExecution, _namespaceActor)
+                    .ExecuteBatchAsync(operationId, token);
+            if (batch.RemoteEntry is null && batch.RemoteConflictCommandId is null &&
+                ((batch.Phase == MirrorPulseNamespaceRetirementBatchPhase.Prepared && NamespaceStartupResults.Any(result =>
+                    result.RootId == batch.RootId && result.OperationId == operationId && result.RecoveryCode == "PendingNamespaceOperationRecoveryRequired")) ||
+                    (await catalog.ReadPendingNamespaceInitializationsAsync(cancellationToken).ConfigureAwait(false))
+                        .Any(initialization => initialization.Intent.RetirementBatchOperationId == operationId)))
+            {
+                if (namespaceWork is null || _permissions is null || _startupProtection is null)
+                    throw new NotSupportedException("Retirement restart requires the protected Host namespace boundary.");
+                using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _admissionShutdown.Token);
+                await using var recovery = await namespaceWork.WaitForRecoveryAsync([registration.RootId], stop.Token).ConfigureAwait(false);
+                return await WithAdmittedInstanceLibraryAsync(registration.InstanceId, async (instances, token) =>
+                {
+                    var anchor = RequireCurrentStartupAnchor();
+                    var retained = (await catalog.ReadPendingNamespaceInitializationsAsync(token).ConfigureAwait(false))
+                        .SingleOrDefault(initialization => initialization.Intent.RetirementBatchOperationId == operationId);
+                    var current = await catalog.ReadNamespaceRetirementBatchAsync(operationId, token).ConfigureAwait(false)
+                        ?? throw new InvalidDataException("The original retirement batch disappeared during recovery.");
+                    if (retained is null && current.Phase == MirrorPulseNamespaceRetirementBatchPhase.Completed)
+                    {
+                        var member = await catalog.ReadNamespaceMemberByBindingAsync(anchor.Original.LocalObject, token).ConfigureAwait(false)
+                            ?? throw new InvalidDataException("Retirement recovery lost the original sync-root anchor.");
+                        var audit = await new MirrorPulseNamespaceCurrentTreeAuditCoordinator(fileSystem, catalog, router,
+                            _namespaceExecution, _namespaceActor, _permissions).AuditRootAsync(member.MemberId, anchor, registration.RootId, token).ConfigureAwait(false);
+                        if (audit.Inventory.FencedRoots.Count != 0) return current;
+                    }
+                    else
+                    {
+                        await using var initialized = await new MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(fileSystem, catalog, router,
+                            _namespaceExecution, _namespaceActor, instances, _permissions).RecoverRetirementBatchRootAsync(
+                            retained?.Intent.OperationId ?? Guid.NewGuid(), registration.RootId, operationId,
+                            async recoveryToken => current = await ExecuteAsync(recoveryToken).ConfigureAwait(false), token).ConfigureAwait(false);
+                        if (initialized.Completion.RoleSid != _namespaceExecution.RoleSid.Value)
+                            throw new InvalidOperationException("Retirement root audit must retain this Host's effective role.");
+                    }
+                    if (_startupProtection != anchor || router.FindRegistration(registration.RootId) != registration)
+                        throw new InvalidOperationException("Retirement readmission requires its original current Host and root route.");
+                    if (registration.State == RootRegistrationState.Active) recovery.CompleteAfterFreshAudit();
+                    return current;
+                }, stop.Token).ConfigureAwait(false);
+            }
             await using var admission = namespaceWork is null ? null :
                 await namespaceWork.EnterPendingOperationAsync(registration.RootId, cancellationToken).ConfigureAwait(false);
-            return await WithInstanceLibraryAsync(registration.InstanceId, token =>
-                new MirrorPulseNamespaceRetirementCoordinator(fileSystem, catalog, router, _namespaceExecution, _namespaceActor)
-                    .ExecuteBatchAsync(operationId, token), cancellationToken).ConfigureAwait(false);
+            return await WithInstanceLibraryAsync(registration.InstanceId, ExecuteAsync, cancellationToken).ConfigureAwait(false);
         }
 
         [SupportedOSPlatform("windows10.0.26100")]

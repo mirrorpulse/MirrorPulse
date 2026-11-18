@@ -62,6 +62,10 @@ public sealed partial class MirrorPulseProductCatalog
             if (intent.ReplacementOperationId is { } replacementId &&
                 await ReadReplacementCompletionCoreAsync(replacementId, transaction, cancellationToken).ConfigureAwait(false) is null)
                 throw new InvalidOperationException("A replacement initializer cannot complete before its exact original local replacement.");
+            if (intent.RetirementBatchOperationId is { } retirementId &&
+                await ReadNamespaceRetirementBatchCoreAsync(retirementId, transaction, cancellationToken).ConfigureAwait(false) is not
+                { Phase: MirrorPulseNamespaceRetirementBatchPhase.Completed, RemoteEntry: null, RemoteConflictCommandId: null })
+                throw new InvalidOperationException("A retirement initializer cannot complete before its exact original controlled batch.");
             var current = await ReadNamespaceCurrentTreeSnapshotCoreAsync(auditedInventory.AnchorMemberId, transaction, cancellationToken, scope).ConfigureAwait(false);
             if (!SameNamespaceReplacementPayload(current, auditedInventory) || observedAt < intent.PreparedAt ||
                 current.Members.Any(member => observedAt < member.Context.Protection.VerifiedAt))

@@ -55,7 +55,11 @@ public sealed record MirrorPulseNamespaceInitializationIntent(int Version, Guid 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Guid? ReplacementOperationId { get; init; }
 
-    internal bool IsScoped => Version is 4 or 5 or 6 or 7 or 8 or 9;
+    /// <summary>The original controlled subtree retirement whose root needs current role recovery.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? RetirementBatchOperationId { get; init; }
+
+    internal bool IsScoped => Version is 4 or 5 or 6 or 7 or 8 or 9 or 10;
 }
 
 public enum MirrorPulseNamespaceInitializationInventoryKind { OriginalInventory, CurrentInventory }
@@ -116,6 +120,15 @@ public sealed partial class MirrorPulseProductCatalog
                     throw new InvalidOperationException("Replacement recovery requires its retained start and first action.");
                 await RequireNamespaceMoveRootUnfencedAsync(replacement.RootId, null, transaction, cancellationToken,
                     allowedReplacement: replacementId).ConfigureAwait(false);
+            }
+            if (intent.RetirementBatchOperationId is { } retirementBatchId)
+            {
+                var root = intent.Roots[0].RootId;
+                var batch = await ReadNamespaceRetirementBatchCoreAsync(retirementBatchId, transaction, cancellationToken).ConfigureAwait(false);
+                if (batch is not { Phase: MirrorPulseNamespaceRetirementBatchPhase.Prepared, RemoteEntry: null, RemoteConflictCommandId: null } ||
+                    batch.RootId != root || batch.PreparedAt > intent.PreparedAt)
+                    throw new InvalidOperationException("Retirement initialization requires the original pending controlled batch in its selected root.");
+                await RequireNamespaceMoveRootUnfencedAsync(root, null, transaction, cancellationToken, allowedBatch: retirementBatchId).ConfigureAwait(false);
             }
             foreach (var root in intent.Roots.Where(root => root.BornRootMemberId is not null))
                 await RequireNamespaceInitializationBornRootAsync(root, intent.PreparedAt, transaction, cancellationToken).ConfigureAwait(false);
@@ -259,13 +272,13 @@ public sealed partial class MirrorPulseProductCatalog
         left.DirectoryTransferOperationId == right.DirectoryTransferOperationId &&
         left.FileTransferOperationId == right.FileTransferOperationId && left.FileTransferStartedBirthId == right.FileTransferStartedBirthId &&
         left.DirectoryTransferStartedBirthId == right.DirectoryTransferStartedBirthId &&
-        left.ReplacementOperationId == right.ReplacementOperationId &&
+        left.ReplacementOperationId == right.ReplacementOperationId && left.RetirementBatchOperationId == right.RetirementBatchOperationId &&
         left.Roots.SequenceEqual(right.Roots);
 
     private static void ValidateNamespaceInitialization(MirrorPulseNamespaceInitializationIntent intent)
     {
         ArgumentNullException.ThrowIfNull(intent);
-        if (intent.Version is not (1 or 2 or 3 or 4 or 5 or 6 or 7 or 8 or 9) || intent.OperationId == Guid.Empty || intent.PreparedAt == default || intent.Roots is null ||
+        if (intent.Version is not (1 or 2 or 3 or 4 or 5 or 6 or 7 or 8 or 9 or 10) || intent.OperationId == Guid.Empty || intent.PreparedAt == default || intent.Roots is null ||
             intent.RequestedInventoryKind is { } requested && !Enum.IsDefined(requested) ||
             (intent.Version == 2 || intent.IsScoped) && intent.RequestedInventoryKind != MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory ||
             intent.IsScoped && intent.Roots.Count != 1 ||
@@ -289,6 +302,8 @@ public sealed partial class MirrorPulseProductCatalog
                 startedBirth == intent.OperationId || startedBirth == intent.FileTransferOperationId) ||
             (intent.Version == 9) != (intent.ReplacementOperationId is not null) ||
             intent.ReplacementOperationId is { } replacement && (replacement == Guid.Empty || replacement == intent.OperationId) ||
+            (intent.Version == 10) != (intent.RetirementBatchOperationId is not null) ||
+            intent.RetirementBatchOperationId is { } retirement && (retirement == Guid.Empty || retirement == intent.OperationId) ||
             !HasValidRootLabelCancellationInitializationPurpose(intent))
             throw new ArgumentException("Initialization requires distinct stable roots and explicit retained capture or born-root provenance.", nameof(intent));
     }

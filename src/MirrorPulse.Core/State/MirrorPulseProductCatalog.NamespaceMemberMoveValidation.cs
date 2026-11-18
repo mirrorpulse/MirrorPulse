@@ -208,7 +208,8 @@ public sealed partial class MirrorPulseProductCatalog
                 !(ownsRecoveryRoot && retirement.Intent.TransferEntry is { } entry && entry.OperationId == transferRecovery!.FileTransferOperationId))
                 throw new InvalidOperationException("An unresolved controlled retirement has fenced this managed root.");
         var batch = await ReadPendingNamespaceRetirementBatchCoreAsync(rootId, transaction, token).ConfigureAwait(false);
-        if (batch is not null && batch.OperationId != allowedBatch)
+        if (batch is not null && batch.OperationId != allowedBatch &&
+            !(recovery?.RetirementBatchOperationId == batch.OperationId && recovery.Roots.Single().RootId == rootId))
             throw new InvalidOperationException("An unresolved controlled subtree retirement has fenced this managed root.");
         var replacement = await ReadPendingNamespaceReplacementCoreAsync(rootId, transaction, token).ConfigureAwait(false);
         if (replacement is not null && replacement.OperationId != allowedReplacement &&
