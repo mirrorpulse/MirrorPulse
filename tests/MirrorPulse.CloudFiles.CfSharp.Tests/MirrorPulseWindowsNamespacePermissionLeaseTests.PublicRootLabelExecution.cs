@@ -208,7 +208,22 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             // A later Label changes today's name. Retrying an earlier completed
             // command must return its original receipt without reverting it.
             var later = await runtime.PrepareManagedRootRenameAsync(root.RootId, "FinalLabel", deadline.Token);
-            _ = await runtime.ExecuteManagedRootRenameAsync(later.Intent.OperationId, deadline.Token);
+            using var request = CancellationTokenSource.CreateLinkedTokenSource(deadline.Token);
+            var laterResult = await MirrorPulseRootLabelExecutionFailureDiagnostics.RunWithProgressAsync(later.Intent.OperationId,
+                () => runtime.ExecuteManagedRootRenameAsync(later.Intent.OperationId, request.Token), entry =>
+                {
+                    if (entry.Message == "RootLabelExecutionProgress" &&
+                        entry.Fields.Any(field => field.Name == "rootLabelExecutionStage" && field.Value == nameof(MirrorPulseRootLabelExecutionStage.OriginalExecution)) &&
+                        entry.Fields.Any(field => field.Name == "executionProgressPhase" && field.Value == "Completed"))
+                        request.Cancel();
+                    return ValueTask.CompletedTask;
+                });
+            Assert.IsTrue(request.IsCancellationRequested);
+            Assert.IsFalse(deadline.IsCancellationRequested);
+            Assert.AreEqual(later.Intent.OperationId, laterResult.Intent.OperationId);
+            Assert.AreEqual(MirrorPulseRootRenamePhase.Completed, laterResult.Intent.Phase);
+            Assert.IsTrue(laterResult.CurrentTreeAudited);
+            Assert.AreEqual(!disabled, laterResult.NamespaceReady);
             var replay = await runtime.ExecuteManagedRootRenameAsync(original.Intent.OperationId, deadline.Token);
             Assert.AreEqual(first.Intent, replay.Intent);
             Assert.AreEqual("FinalLabel", replay.CurrentDirectoryName);

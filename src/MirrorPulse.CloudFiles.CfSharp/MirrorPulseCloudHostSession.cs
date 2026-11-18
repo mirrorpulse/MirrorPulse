@@ -2083,22 +2083,25 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                     }
                     _ = await MirrorPulseRootLabelExecutionFailureDiagnostics.AtStageAsync(MirrorPulseRootLabelExecutionStage.SubtreePreparation, () => moves.PrepareRootLabelAsync(operationId, token)).ConfigureAwait(false);
                     _ = await MirrorPulseRootLabelExecutionFailureDiagnostics.AtStageAsync(MirrorPulseRootLabelExecutionStage.OriginalExecution, () => moves.ExecuteRootLabelAsync(operationId, token)).ConfigureAwait(false);
-                    var completed = await catalog.ReadManagedRootRenameHistoryAsync(operationId, token).ConfigureAwait(false)
+                    // The original native move has settled. Finish its current-role audit
+                    // even if the Control request expires. Host shutdown still cancels the audit.
+                    CancellationToken durable = _admissionShutdown.Token;
+                    var completed = await catalog.ReadManagedRootRenameHistoryAsync(operationId, durable).ConfigureAwait(false)
                         ?? throw new InvalidDataException("Root execution lost its original Label receipt.");
-                    var subtree = await catalog.ReadNamespaceDirectoryMoveCompletionAsync(operationId, token).ConfigureAwait(false)
+                    var subtree = await catalog.ReadNamespaceDirectoryMoveCompletionAsync(operationId, durable).ConfigureAwait(false)
                         ?? throw new InvalidDataException("Root execution lost its original complete subtree receipt.");
                     if (completed.Intent.Phase != MirrorPulseRootRenamePhase.Completed || _startupProtection != anchor)
                         throw new InvalidOperationException("Root execution requires atomic Label settlement and this Host's current guard.");
-                    var member = await catalog.ReadNamespaceMemberByBindingAsync(anchor.Original.LocalObject, token).ConfigureAwait(false)
+                    var member = await catalog.ReadNamespaceMemberByBindingAsync(anchor.Original.LocalObject, durable).ConfigureAwait(false)
                         ?? throw new InvalidDataException("Root execution lost its current registered sync-root anchor.");
-                    var initialization = (await catalog.ReadPendingNamespaceInitializationsAsync(token).ConfigureAwait(false))
+                    var initialization = (await catalog.ReadPendingNamespaceInitializationsAsync(durable).ConfigureAwait(false))
                         .SingleOrDefault(pending => pending.Intent.RootLabelCancellation?.RootLabelOperationId == operationId);
                     var auditAnchor = anchor;
                     if (initialization is not null && !recoveredPreparation)
                     {
                         await using var restored = await new MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(fileSystem, catalog, router,
                             _namespaceExecution, _namespaceActor, instances, _permissions)
-                            .RecoverRootAsync(initialization.Intent.OperationId, root.RootId, token).ConfigureAwait(false);
+                            .RecoverRootAsync(initialization.Intent.OperationId, root.RootId, durable).ConfigureAwait(false);
                         auditAnchor = restored.TransferAnchor();
                         var prior = _scopedAnchorProtection;
                         _scopedAnchorProtection = auditAnchor;
@@ -2123,7 +2126,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                                     throw new InvalidOperationException("An unresolved operation still owns the executed root.");
                                 currentName = current.DirectoryName;
                                 if (current.State == RootRegistrationState.Active) drained.CompleteAfterFreshAudit();
-                            }, token).ConfigureAwait(false);
+                            }, durable).ConfigureAwait(false);
                         return true;
                     }).ConfigureAwait(false);
                     // Notification acceptance belongs to the ordinary pump after this
