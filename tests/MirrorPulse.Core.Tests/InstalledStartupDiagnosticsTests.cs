@@ -15,6 +15,9 @@ public sealed partial class InstalledStartupDiagnosticsTests
     [DataRow("library-start-site")]
     [DataRow("library-store-site")]
     [DataRow("library-runtime-assembly")]
+    [DataRow("library-runtime-information")]
+    [DataRow("library-runtime-information-unobserved")]
+    [DataRow("library-runtime-information-invalid")]
     [DataRow("private-site")]
     public async Task InstalledFailureEvidenceRetainsOnlyOriginalBoundedCloudStartupBoundaries(string scenario)
     {
@@ -65,6 +68,9 @@ public sealed partial class InstalledStartupDiagnosticsTests
                     'library-start-site' {'LibraryStart'}
                     'library-store-site' {'LibraryStoreOpen'}
                     'library-runtime-assembly' {'LibraryStoreOpen'}
+                    'library-runtime-information' {'LibraryStoreOpen'}
+                    'library-runtime-information-unobserved' {'LibraryStoreOpen'}
+                    'library-runtime-information-invalid' {'LibraryStoreOpen'}
                 }
                 $originalIoFailure=$null -ne $site -or $Scenario -in @('anchor-stages','private-site')
                 $failureCode=if($originalIoFailure){'HostStartupFailed'}else{'NamespaceAnchorOwnerMismatch'}
@@ -73,10 +79,16 @@ public sealed partial class InstalledStartupDiagnosticsTests
                 $failureSite=if($site){$site}else{'PRIVATE_TEST_SENTINEL'}
                 $failureKind=if($site){'FileNotFound'}else{'PRIVATE_TEST_SENTINEL'}
                 $resource=if($Scenario -eq 'library-store-site'){'StateOwnerLock'}elseif($Scenario -eq 'library-runtime-assembly'){'ComponentModelPrimitivesAssembly'}else{'PRIVATE_TEST_SENTINEL'}
-                $fingerprint=if($Scenario -in @('library-runtime-assembly','library-start-site')){'A1'*32}else{'PRIVATE_TEST_SENTINEL'}
+                $runtimeInformation=$Scenario.StartsWith('library-runtime-information',[StringComparison]::Ordinal)
+                $fingerprint=if($runtimeInformation){'89DA182ED000DDBCD743EBAC7ADF6A5F2B8FFC3E77B77C8DD40409B432E86512'}
+                    elseif($Scenario -in @('library-runtime-assembly','library-start-site')){'A1'*32}else{'PRIVATE_TEST_SENTINEL'}
+                $version=if($Scenario -eq 'library-runtime-information-invalid'){'99999.0.0.0'}else{'6.0.0.0'}
+                $requesterHash=if($Scenario -eq 'library-runtime-information-unobserved'){'PRIVATE_TEST_SENTINEL'}else{'B2'*32}
+                $context=if($Scenario -eq 'library-runtime-information-unobserved'){'PRIVATE_TEST_SENTINEL'}else{'Default'}
                 [ordered]@{OccurredAt=$since.AddSeconds(5).ToString('O');Level='Error';Category='host';Code=$failureCode;
                     Fields=@{failureCategory=$failureCategory;hresult=$failureHResult;failureSite=$failureSite;failureKind=$failureKind;failureResource=$resource;
-                        failureAssemblyNameSha256=$fingerprint}}|ConvertTo-Json -Depth 4 -Compress|
+                        failureAssemblyNameSha256=$fingerprint;failureRuntimeInformationVersion=$version;
+                        failureRuntimeInformationRequesterSha256=$requesterHash;failureRuntimeInformationRequesterContext=$context}}|ConvertTo-Json -Depth 4 -Compress|
                     Set-Content -LiteralPath (Join-Path $logs 'mirrorpulse.log')
                 try {
                 $result=Get-InstalledHostStartupDiagnostics -DataRoots @($root) -Since $since
@@ -85,8 +97,14 @@ public sealed partial class InstalledStartupDiagnosticsTests
                 if ($result.records.Count -ne 1 -or $result.records[0].code -cne $failureCode -or $result.records[0].hresult -cne $failureHResult) {throw 'The original Host failure was lost.'}
                 $expectedResource=if($Scenario -eq 'library-store-site'){'StateOwnerLock'}elseif($Scenario -eq 'library-runtime-assembly'){'ComponentModelPrimitivesAssembly'}else{$null}
                 if($result.records[0].failureResource -cne $expectedResource) {throw 'The missing resource is not the original approved category.'}
-                $expectedFingerprint=if($Scenario -eq 'library-runtime-assembly'){$fingerprint}else{$null}
+                $expectedFingerprint=if($runtimeInformation -or $Scenario -eq 'library-runtime-assembly'){$fingerprint}else{$null}
                 if($result.records[0].failureAssemblyNameSha256 -cne $expectedFingerprint) {throw 'The assembly fingerprint escaped its approved startup boundary.'}
+                $expectedVersion=if($Scenario -in @('library-runtime-information','library-runtime-information-unobserved')){$version}else{$null}
+                $expectedRequester=if($Scenario -eq 'library-runtime-information'){$requesterHash}else{$null}
+                $expectedContext=if($Scenario -eq 'library-runtime-information'){$context}else{$null}
+                if($result.records[0].failureRuntimeInformationVersion -cne $expectedVersion -or
+                    $result.records[0].failureRuntimeInformationRequesterSha256 -cne $expectedRequester -or
+                    $result.records[0].failureRuntimeInformationRequesterContext -cne $expectedContext) {throw 'The known assembly bind escaped its approved startup boundary.'}
                 if($site) {
                     if($result.records[0].failureSite -cne $site -or $result.records[0].failureKind -cne 'FileNotFound') {
                         throw 'The original closed startup failure boundary was lost.'

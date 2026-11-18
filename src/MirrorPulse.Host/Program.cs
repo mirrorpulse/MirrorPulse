@@ -65,6 +65,7 @@ catch (Exception exception)
     {
         using var log = new LocalRollingLogWriter(Path.Combine(paths.DataRootPath, "logs"));
         Exception originalStartupFailure = MirrorPulseStartupFailureTrace.ReadOriginalException(exception);
+        var assemblyBinding = MirrorPulseStartupFailureTrace.ReadRuntimeInformationBinding(exception);
         string code = exception.Message switch
         {
             "The actual Shell root policy does not match content synchronization." => "ShellRootPolicyMismatch",
@@ -83,6 +84,9 @@ catch (Exception exception)
                 new("failureKind", MirrorPulseStartupFailureTrace.ReadKind(exception)),
                 new("failureResource", MirrorPulseStartupFailureTrace.ReadMissingResource(exception).ToString()),
                 new("failureAssemblyNameSha256", MirrorPulseStartupFailureTrace.ReadMissingAssemblyNameSha256(exception) ?? string.Empty),
+                new("failureRuntimeInformationVersion", assemblyBinding.Version ?? string.Empty),
+                new("failureRuntimeInformationRequesterSha256", assemblyBinding.RequesterSha256 ?? string.Empty),
+                new("failureRuntimeInformationRequesterContext", assemblyBinding.RequesterContext ?? string.Empty),
                 new("hresult", originalStartupFailure.HResult.ToString("X8", System.Globalization.CultureInfo.InvariantCulture))]));
     }
     catch (Exception logFailure) when (logFailure is not OutOfMemoryException)
