@@ -42,7 +42,7 @@ public sealed record MirrorPulseInstanceRuntimeState(
 /// </summary>
 public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
 {
-    public const long CurrentSchemaVersion = 120;
+    public const long CurrentSchemaVersion = 121;
     private readonly FileStream _owner;
     private readonly SqliteConnection _connection;
     internal string WorkerStateRootPath { get; }
@@ -554,6 +554,12 @@ public sealed partial class MirrorPulseProductCatalog : IAsyncDisposable
             await UpgradeDirectoryTransferIdentityGenerationSchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
             await EnsureDirectoryTransferDurableCopySchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
             await EnsureDirectoryTransferStartRecoverySchemaAsync(connection, currentVersion, cancellationToken).ConfigureAwait(false);
+            if (currentVersion < 121)
+            {
+                await using var replacementRecoveryVersion = connection.CreateCommand();
+                replacementRecoveryVersion.CommandText = "PRAGMA user_version=121;";
+                await replacementRecoveryVersion.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            }
             openObservation.Mark(MirrorPulseCatalogOpenPhase.RecoverySchemaPrepared);
             openObservation.Mark(MirrorPulseCatalogOpenPhase.Completed);
             return catalog;

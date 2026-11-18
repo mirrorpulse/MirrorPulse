@@ -1,4 +1,5 @@
 using System.Security.AccessControl;
+using System.Security.Principal;
 
 namespace MirrorPulse.Core.State;
 
@@ -24,5 +25,26 @@ public static class MirrorPulseNamespacePermissionDescriptor
         if (requestedDacl == observedDacl) return true;
         descriptor.SetFlags(descriptor.ControlFlags | ControlFlags.DiscretionaryAclAutoInherited);
         return descriptor.GetSddlForm(AccessControlSections.Access) == observedDacl;
+    }
+
+    internal static bool MatchesInheritedRoleRotation(string retainedDacl, string observedDacl, string previousRole, string currentRole)
+    {
+        var retained = new RawSecurityDescriptor(retainedDacl);
+        if (retained.ControlFlags.HasFlag(ControlFlags.DiscretionaryAclProtected) || retained.DiscretionaryAcl is not { Count: > 0 } acl)
+            return false;
+        var previous = new SecurityIdentifier(previousRole);
+        var current = new SecurityIdentifier(currentRole);
+        bool rotated = false;
+        foreach (GenericAce entry in acl)
+        {
+            // A parent rotation can replace its inherited role. It cannot authorize
+            // newly added, weakened, reordered or explicit entries on the child.
+            if (entry is not KnownAce ace || !ace.IsInherited)
+                return false;
+            if (ace.SecurityIdentifier != previous) continue;
+            ace.SecurityIdentifier = current;
+            rotated = true;
+        }
+        return rotated && MatchesNativeReadback(retained.GetSddlForm(AccessControlSections.Access), observedDacl);
     }
 }

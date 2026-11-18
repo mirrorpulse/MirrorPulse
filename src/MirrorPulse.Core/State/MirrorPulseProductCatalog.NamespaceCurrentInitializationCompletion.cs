@@ -59,6 +59,9 @@ public sealed partial class MirrorPulseProductCatalog
             }
             if (auditedInventory.ScopeRoot != scope)
                 throw new InvalidDataException("The audited inventory does not match its explicit complete or selected-root admission.");
+            if (intent.ReplacementOperationId is { } replacementId &&
+                await ReadReplacementCompletionCoreAsync(replacementId, transaction, cancellationToken).ConfigureAwait(false) is null)
+                throw new InvalidOperationException("A replacement initializer cannot complete before its exact original local replacement.");
             var current = await ReadNamespaceCurrentTreeSnapshotCoreAsync(auditedInventory.AnchorMemberId, transaction, cancellationToken, scope).ConfigureAwait(false);
             if (!SameNamespaceReplacementPayload(current, auditedInventory) || observedAt < intent.PreparedAt ||
                 current.Members.Any(member => observedAt < member.Context.Protection.VerifiedAt))

@@ -33,13 +33,19 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
         Guid transferId, Guid? startedBirthId, CancellationToken cancellationToken) =>
         RecoverCoreAsync(operationId, rootId, null, null, cancellationToken, transferId, startedBirthId);
 
+    internal ValueTask<MirrorPulseNamespaceInitializationResult> RecoverReplacementRootAsync(Guid operationId, RootId rootId,
+        Guid replacementId, Func<CancellationToken, ValueTask>? executeReplacement, CancellationToken cancellationToken) =>
+        RecoverCoreAsync(operationId, rootId, null, null, cancellationToken, replacementId: replacementId,
+            executeReplacement: executeReplacement);
+
     internal ValueTask<MirrorPulseNamespaceInitializationResult> RecoverJournalDirectoryMoveAsync(Guid operationId,
         MirrorPulseJournalDirectoryMoveRecovery.ProjectionRecovery move, CancellationToken cancellationToken) =>
         RecoverCoreAsync(operationId, move.Admission.RootId, move, null, cancellationToken);
 
     private async ValueTask<MirrorPulseNamespaceInitializationResult> RecoverCoreAsync(Guid operationId, RootId? selectedRoot,
         MirrorPulseJournalDirectoryMoveRecovery.ProjectionRecovery? move, Guid? transferId, CancellationToken cancellationToken,
-        Guid? fileTransferId = null, Guid? startedBirthId = null)
+        Guid? fileTransferId = null, Guid? startedBirthId = null, Guid? replacementId = null,
+        Func<CancellationToken, ValueTask>? executeReplacement = null)
     {
         if (operationId == Guid.Empty) throw new ArgumentException("An initialization operation ID is required.", nameof(operationId));
         var retained = await catalog.ReadNamespaceInitializationAsync(operationId, cancellationToken).ConfigureAwait(false);
@@ -52,6 +58,8 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
             retained.FileTransferStartedBirthId != (fileTransferId is not null ? startedBirthId : null) ||
             retained.DirectoryTransferStartedBirthId != (transferId is not null ? startedBirthId : null)))
             throw new InvalidOperationException("Current recovery requires its exact transfer purpose.");
+        if (retained is not null && retained.ReplacementOperationId != replacementId)
+            throw new InvalidOperationException("Current recovery requires its exact replacement purpose.");
         if (retained?.JournalDirectoryMoveOperationId is { } original)
         {
             if (move is not null && move.Admission.JournalOperationId != original ||
@@ -70,10 +78,24 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
             .OrderBy(root => root.RootId.Value).ToArray();
         if (selectedRoot is not null && registrations.Length != 1)
             throw new InvalidOperationException("The selected recovery root is not configured.");
+        Guid? pendingReplacementMember = null;
+        if (replacementId is { } originalReplacement)
+        {
+            var replacement = await catalog.ReadNamespaceReplacementExecutionAsync(originalReplacement, cancellationToken).ConfigureAwait(false);
+            if (replacement is null || replacement.Intent.RootId != selectedRoot || replacement.Cancellation is not null)
+                throw new InvalidOperationException("Current recovery requires the original replacement in its selected root.");
+            if (await catalog.ReadNamespaceReplacementCompletionAsync(originalReplacement, cancellationToken).ConfigureAwait(false) is null)
+            {
+                if (executeReplacement is null)
+                    throw new InvalidOperationException("Only the original replacement executor may resume the pending file.");
+                pendingReplacementMember = replacement.Intent.MemberId;
+            }
+        }
         if (retained is null)
         {
             var roots = await MirrorPulseNamespaceCurrentRootSelector.SelectAsync(fileSystem, catalog, registrations, cancellationToken).ConfigureAwait(false);
-            retained = await catalog.PrepareNamespaceInitializationAsync(new(startedBirthId is not null ? (transferId is not null ? 8 : 7) : fileTransferId is not null ? 6 :
+            retained = await catalog.PrepareNamespaceInitializationAsync(new(replacementId is not null ? 9 :
+                startedBirthId is not null ? (transferId is not null ? 8 : 7) : fileTransferId is not null ? 6 :
                 selectedRoot is not null ? 4 : roots.Count == 0 ? 3 : roots.Any(root => root.BornRootMemberId is not null) ? 2 : 1,
                 operationId, roots, DateTimeOffset.UtcNow)
             {
@@ -82,7 +104,8 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
                 DirectoryTransferOperationId = transferId,
                 FileTransferOperationId = fileTransferId,
                 FileTransferStartedBirthId = fileTransferId is not null ? startedBirthId : null,
-                DirectoryTransferStartedBirthId = transferId is not null ? startedBirthId : null
+                DirectoryTransferStartedBirthId = transferId is not null ? startedBirthId : null,
+                ReplacementOperationId = replacementId
             }, cancellationToken).ConfigureAwait(false);
         }
         if (!retained.Roots.Select(root => root.RootId).ToHashSet().SetEquals(registrations.Select(root => root.RootId)))
@@ -106,6 +129,8 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
                 anchorMember.Origin != MirrorPulseNamespaceMemberOrigin.CapturedOriginal || anchorMember.OriginId != anchor.Original.EvidenceId)
                 throw new InvalidDataException("Current recovery lost the registered original sync-root anchor.");
             var graph = await catalog.ReadNamespaceMemberTreeAsync(anchorMember.MemberId, cancellationToken).ConfigureAwait(false);
+            if (pendingReplacementMember is { } replacementMember && !graph.Any(entry => entry.MemberId == replacementMember))
+                throw new InvalidDataException("The pending replacement file is missing from its original current tree.");
             var originals = new MirrorPulseNamespaceOriginalMemberRecoveryCoordinator(fileSystem, catalog, router, execution, actor, scheduler, permissions);
             var born = new MirrorPulseNamespaceBornMemberRecoveryCoordinator(fileSystem, catalog, router, execution, actor, scheduler, permissions)
             {
@@ -113,7 +138,7 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
             };
             _ = await MirrorPulseRootLabelCancellationFailureDiagnostics.AtStageAsync(MirrorPulseRootLabelCancellationStage.CurrentTreeMemberRecovery, async () =>
             {
-                foreach (var entry in graph.Where(entry => entry.MemberId != anchorMember.MemberId))
+                foreach (var entry in graph.Where(entry => entry.MemberId != anchorMember.MemberId && entry.MemberId != pendingReplacementMember))
                 {
                     memberProgress = null;
                     cancellationToken.ThrowIfCancellationRequested();
@@ -170,6 +195,8 @@ public sealed class MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(CloudFile
                 return true;
             }).ConfigureAwait(false);
             if (move is not null) await move.AcknowledgeAsync(cancellationToken).ConfigureAwait(false);
+            if (pendingReplacementMember is not null)
+                await executeReplacement!(cancellationToken).ConfigureAwait(false);
             Progress?.Invoke("NamespaceAuditBegin");
             var completion = await MirrorPulseRootLabelCancellationFailureDiagnostics.AtStageAsync(MirrorPulseRootLabelCancellationStage.CurrentTreeInitializationAudit,
                 () => new MirrorPulseNamespaceCurrentTreeAuditCoordinator(fileSystem, catalog, router, execution, actor, permissions)

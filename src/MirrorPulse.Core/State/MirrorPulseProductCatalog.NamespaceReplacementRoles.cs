@@ -178,8 +178,12 @@ public sealed partial class MirrorPulseProductCatalog
             action.Action.PreparedAt < previous.PreparedAt || action.Parent.Context.Member.MemberId != intent.Original.Context.Location.ParentMemberId ||
             action.Parent.Context.Member.RootId != intent.RootId || action.Action.PreparedAt < action.Parent.Context.Verification.ObservedAt ||
             !known.TryGetValue(action.ExpectedPermissionActionId, out var expected) ||
-            !(MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(expected.RoleOnlyDacl, action.ExpectedOwnedDacl) ||
-                MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(expected.RestoreDacl, action.ExpectedOwnedDacl)))
+            (action.Version == 1
+                ? !MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(expected.RoleOnlyDacl, action.ExpectedOwnedDacl) &&
+                  !MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(expected.RestoreDacl, action.ExpectedOwnedDacl)
+                : action.Parent.Context.Protection.RoleSid != action.Action.RoleSid ||
+                  !MirrorPulseNamespacePermissionDescriptor.MatchesInheritedRoleRotation(expected.RestoreDacl, action.ExpectedOwnedDacl,
+                      expected.RoleSid, action.Action.RoleSid)))
             throw new InvalidOperationException("Role recovery requires its original object, complete predecessor chain, current protected parent and previously owned permissions.");
     }
 
@@ -200,7 +204,7 @@ public sealed partial class MirrorPulseProductCatalog
         ArgumentNullException.ThrowIfNull(action.Parent.Context); ArgumentNullException.ThrowIfNull(action.Parent.Context.Member);
         ArgumentNullException.ThrowIfNull(action.Parent.Context.Verification); ArgumentNullException.ThrowIfNull(action.Parent.Context.Location);
         ArgumentNullException.ThrowIfNull(action.Parent.Context.Protection); ValidateReplacementAction(action.Action); ValidatePermissionDacl(action.ExpectedOwnedDacl);
-        if (action.Version != 1 || action.OperationId == Guid.Empty || action.RecoveryId == Guid.Empty || action.FirstActionId == Guid.Empty || action.ExpectedPermissionActionId == Guid.Empty ||
+        if (action.Version is not (1 or 2) || action.OperationId == Guid.Empty || action.RecoveryId == Guid.Empty || action.FirstActionId == Guid.Empty || action.ExpectedPermissionActionId == Guid.Empty ||
             action.OperationId == action.RecoveryId || action.PreviousRecoveryId == Guid.Empty || action.PreviousRecoveryId == action.RecoveryId ||
             !action.Parent.Context.Member.IsDirectory || NamespaceReplacementPayload(action).Length > 262_144)
             throw new ArgumentException("Role recovery requires distinct stable IDs, a coherent directory parent and bounded first-action evidence.", nameof(action));

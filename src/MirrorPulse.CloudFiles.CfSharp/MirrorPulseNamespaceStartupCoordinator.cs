@@ -71,6 +71,13 @@ internal sealed class MirrorPulseNamespaceStartupCoordinator(CloudFileSystem fil
                     outcomes[root.RootId] = new(root.RootId, transfer, false, "PendingNamespaceOperationRecoveryRequired");
                     continue;
                 }
+                if (pending.Intent.ReplacementOperationId is { } replacement &&
+                    await catalog.ReadNamespaceReplacementCompletionAsync(replacement, cancellationToken).ConfigureAwait(false) is null)
+                {
+                    var root = pending.Intent.Roots.Single();
+                    outcomes[root.RootId] = new(root.RootId, replacement, false, "PendingNamespaceOperationRecoveryRequired");
+                    continue;
+                }
                 var selected = new MirrorPulseRootRouter(fileSystem.Root.FullPath,
                     pending.Intent.Roots.Select(root => configured[root.RootId]));
                 await using var recovery = await work.BeginRecoveryAsync(pending.Intent.Roots.Select(root => root.RootId), cancellationToken).ConfigureAwait(false);
@@ -83,7 +90,10 @@ internal sealed class MirrorPulseNamespaceStartupCoordinator(CloudFileSystem fil
                     else
                     {
                         var coordinator = new MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(fileSystem, catalog, selected, execution, actor, scheduler, permissions) { Progress = progress };
-                        result = pending.Intent.IsScoped
+                        result = pending.Intent.ReplacementOperationId is { } replacementId
+                            ? await coordinator.RecoverReplacementRootAsync(pending.Intent.OperationId, pending.Intent.Roots[0].RootId,
+                                replacementId, null, cancellationToken).ConfigureAwait(false)
+                            : pending.Intent.IsScoped
                             ? await coordinator.RecoverRootAsync(pending.Intent.OperationId, pending.Intent.Roots[0].RootId, cancellationToken).ConfigureAwait(false)
                             : await coordinator.RecoverAsync(pending.Intent.OperationId, cancellationToken).ConfigureAwait(false);
                     }

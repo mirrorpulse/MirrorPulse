@@ -45,6 +45,10 @@ public sealed partial class MirrorPulseProductCatalog
             ?? throw new FileNotFoundException("The recovery member is not registered.");
         if (member.RootId is not { } root || !admission.Intent.Roots.Any(candidate => candidate.RootId == root))
             throw new InvalidOperationException("The pending initialization does not own this member's root.");
+        if (admission.Intent.ReplacementOperationId is { } replacementId &&
+            await ReadPendingNamespaceReplacementCoreAsync(root, transaction, cancellationToken).ConfigureAwait(false) is { } replacement &&
+            (replacement.OperationId != replacementId || replacement.MemberId == memberId))
+            throw new InvalidOperationException("An unfinished replacement retains exclusive recovery of its original file.");
         var result = new List<MirrorPulseNamespaceMemberRecoveryContext>(); var visited = new HashSet<Guid>();
         while (true)
         {

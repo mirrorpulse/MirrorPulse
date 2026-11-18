@@ -1375,16 +1375,65 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         {
             RequireImportBoundary();
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _initializationClosing) != 0, this);
-            var intent = await catalog!.ReadNamespaceReplacementAsync(operationId, cancellationToken).ConfigureAwait(false)
+            var facts = await catalog!.ReadNamespaceReplacementExecutionAsync(operationId, cancellationToken).ConfigureAwait(false)
                 ?? throw new FileNotFoundException("The replacement admission is not registered.");
-            await using var admission = namespaceWork is null ? null :
-                await namespaceWork.EnterPendingOperationAsync(intent.RootId, cancellationToken).ConfigureAwait(false);
+            var root = router!.Registrations.Single(candidate => candidate.RootId == facts.Intent.RootId);
+            var pending = (await catalog.ReadPendingNamespaceInitializationsAsync(cancellationToken).ConfigureAwait(false))
+                .SingleOrDefault(initialization => initialization.Intent.ReplacementOperationId == operationId);
             var paths = new MirrorPulseStoragePaths(syncRootPath, dataRootPath);
             var inputs = new MirrorPulseLocalImportStagingStore(paths);
-            var root = router!.Registrations.Single(candidate => candidate.RootId == intent.RootId);
-            var result = await WithAdmittedInstanceLibraryAsync(root.InstanceId, (instances, token) =>
-                new MirrorPulseNamespaceReplacementExecutor(fileSystem, catalog!, router, _namespaceExecution!,
-                    _namespaceActor!, instances, inputs, new(paths)).ExecuteAsync(operationId, token), cancellationToken).ConfigureAwait(false);
+            ValueTask<MirrorPulseNamespaceReplacementCompletion> ExecuteAsync(IMirrorPulseInstanceScheduler instances, CancellationToken token) =>
+                new MirrorPulseNamespaceReplacementExecutor(fileSystem, catalog, router, _namespaceExecution!,
+                    _namespaceActor!, instances, inputs, new(paths)).ExecuteAsync(operationId, token);
+
+            var currentAction = facts.RoleActions.Count == 0 ? facts.Action : facts.RoleActions[^1].Action;
+            bool recoverRoot = pending is not null || currentAction is not null && currentAction.RoleSid != _namespaceExecution!.RoleSid.Value &&
+                await catalog.ReadNamespaceReplacementCompletionAsync(operationId, cancellationToken).ConfigureAwait(false) is null;
+            MirrorPulseNamespaceReplacementCompletion result;
+            if (recoverRoot)
+            {
+                if (namespaceWork is null || _permissions is null || _startupProtection is null)
+                    throw new NotSupportedException("Replacement restart requires the protected Host namespace boundary.");
+                using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _admissionShutdown.Token);
+                await using var recovery = await namespaceWork.WaitForRecoveryAsync([root.RootId], stop.Token).ConfigureAwait(false);
+                result = await WithAdmittedInstanceLibraryAsync(root.InstanceId, async (instances, token) =>
+                {
+                    var anchor = RequireCurrentStartupAnchor();
+                    var retained = (await catalog.ReadPendingNamespaceInitializationsAsync(token).ConfigureAwait(false))
+                        .SingleOrDefault(initialization => initialization.Intent.ReplacementOperationId == operationId);
+                    var completed = await catalog.ReadNamespaceReplacementCompletionAsync(operationId, token).ConfigureAwait(false);
+                    if (retained is null && completed is not null)
+                    {
+                        // A concurrent retry finished before this queued recovery took ownership.
+                        // Freshly audit the current root before returning its original result.
+                        var member = await catalog.ReadNamespaceMemberByBindingAsync(anchor.Original.LocalObject, token).ConfigureAwait(false)
+                            ?? throw new InvalidDataException("Replacement lost its retained sync-root anchor.");
+                        var audit = await new MirrorPulseNamespaceCurrentTreeAuditCoordinator(fileSystem, catalog, router, _namespaceExecution!,
+                            _namespaceActor!, _permissions).AuditRootAsync(member.MemberId, anchor, root.RootId, token).ConfigureAwait(false);
+                        if (audit.Inventory.FencedRoots.Count != 0)
+                            return completed;
+                    }
+                    else
+                    {
+                        await using var initialized = await new MirrorPulseNamespaceCurrentTreeRecoveryCoordinator(fileSystem, catalog, router,
+                            _namespaceExecution!, _namespaceActor!, instances, _permissions).RecoverReplacementRootAsync(
+                            retained?.Intent.OperationId ?? Guid.NewGuid(), root.RootId, operationId,
+                            async recoveryToken => completed = await ExecuteAsync(instances, recoveryToken).ConfigureAwait(false), token).ConfigureAwait(false);
+                        if (initialized.Completion.RoleSid != _namespaceExecution!.RoleSid.Value)
+                            throw new InvalidOperationException("Replacement root audit must retain this Host's effective role.");
+                    }
+                    if (_startupProtection != anchor || router.FindRegistration(root.RootId) != root)
+                        throw new InvalidOperationException("Replacement readmission requires its original current Host and root route.");
+                    if (root.State == RootRegistrationState.Active) recovery.CompleteAfterFreshAudit();
+                    return completed ?? throw new InvalidDataException("Replacement current-tree recovery lost its completed original operation.");
+                }, stop.Token).ConfigureAwait(false);
+            }
+            else
+            {
+                await using var admission = namespaceWork is null ? null :
+                    await namespaceWork.EnterPendingOperationAsync(root.RootId, cancellationToken).ConfigureAwait(false);
+                result = await WithAdmittedInstanceLibraryAsync(root.InstanceId, ExecuteAsync, cancellationToken).ConfigureAwait(false);
+            }
             await _namespaceExecution!.RunNormalUserOperationAsync(() => { inputs.RemoveCompleted(operationId); return Task.CompletedTask; }).ConfigureAwait(false);
             return result;
         }

@@ -51,7 +51,11 @@ public sealed record MirrorPulseNamespaceInitializationIntent(int Version, Guid 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Guid? DirectoryTransferStartedBirthId { get; init; }
 
-    internal bool IsScoped => Version is 4 or 5 or 6 or 7 or 8;
+    /// <summary>The original controlled replacement that must settle before its current tree can be audited.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? ReplacementOperationId { get; init; }
+
+    internal bool IsScoped => Version is 4 or 5 or 6 or 7 or 8 or 9;
 }
 
 public enum MirrorPulseNamespaceInitializationInventoryKind { OriginalInventory, CurrentInventory }
@@ -102,6 +106,17 @@ public sealed partial class MirrorPulseProductCatalog
                 throw new InvalidOperationException("A new directory Move initializer requires its unfinished original Move.");
             await RequireDirectoryTransferInitializationAsync(intent, transaction, cancellationToken).ConfigureAwait(false);
             await RequireFileTransferInitializationAsync(intent, transaction, cancellationToken).ConfigureAwait(false);
+            if (intent.ReplacementOperationId is { } replacementId)
+            {
+                var replacement = await ReadPendingNamespaceReplacementCoreAsync(intent.Roots[0].RootId, transaction, cancellationToken).ConfigureAwait(false);
+                if (replacement?.OperationId != replacementId || replacement.PreparedAt > intent.PreparedAt)
+                    throw new InvalidOperationException("The recovery initializer requires the original pending replacement in its selected root.");
+                var execution = await ReadNamespaceReplacementExecutionCoreAsync(replacementId, transaction, cancellationToken).ConfigureAwait(false);
+                if (execution is not { Start: not null, Action: not null, Cancellation: null })
+                    throw new InvalidOperationException("Replacement recovery requires its retained start and first action.");
+                await RequireNamespaceMoveRootUnfencedAsync(replacement.RootId, null, transaction, cancellationToken,
+                    allowedReplacement: replacementId).ConfigureAwait(false);
+            }
             foreach (var root in intent.Roots.Where(root => root.BornRootMemberId is not null))
                 await RequireNamespaceInitializationBornRootAsync(root, intent.PreparedAt, transaction, cancellationToken).ConfigureAwait(false);
             validation.Dispose();
@@ -244,12 +259,13 @@ public sealed partial class MirrorPulseProductCatalog
         left.DirectoryTransferOperationId == right.DirectoryTransferOperationId &&
         left.FileTransferOperationId == right.FileTransferOperationId && left.FileTransferStartedBirthId == right.FileTransferStartedBirthId &&
         left.DirectoryTransferStartedBirthId == right.DirectoryTransferStartedBirthId &&
+        left.ReplacementOperationId == right.ReplacementOperationId &&
         left.Roots.SequenceEqual(right.Roots);
 
     private static void ValidateNamespaceInitialization(MirrorPulseNamespaceInitializationIntent intent)
     {
         ArgumentNullException.ThrowIfNull(intent);
-        if (intent.Version is not (1 or 2 or 3 or 4 or 5 or 6 or 7 or 8) || intent.OperationId == Guid.Empty || intent.PreparedAt == default || intent.Roots is null ||
+        if (intent.Version is not (1 or 2 or 3 or 4 or 5 or 6 or 7 or 8 or 9) || intent.OperationId == Guid.Empty || intent.PreparedAt == default || intent.Roots is null ||
             intent.RequestedInventoryKind is { } requested && !Enum.IsDefined(requested) ||
             (intent.Version == 2 || intent.IsScoped) && intent.RequestedInventoryKind != MirrorPulseNamespaceInitializationInventoryKind.CurrentInventory ||
             intent.IsScoped && intent.Roots.Count != 1 ||
@@ -271,6 +287,8 @@ public sealed partial class MirrorPulseProductCatalog
             (intent.Version == 7) != (intent.FileTransferStartedBirthId is not null) ||
             intent.FileTransferStartedBirthId is { } startedBirth && (startedBirth == Guid.Empty ||
                 startedBirth == intent.OperationId || startedBirth == intent.FileTransferOperationId) ||
+            (intent.Version == 9) != (intent.ReplacementOperationId is not null) ||
+            intent.ReplacementOperationId is { } replacement && (replacement == Guid.Empty || replacement == intent.OperationId) ||
             !HasValidRootLabelCancellationInitializationPurpose(intent))
             throw new ArgumentException("Initialization requires distinct stable roots and explicit retained capture or born-root provenance.", nameof(intent));
     }

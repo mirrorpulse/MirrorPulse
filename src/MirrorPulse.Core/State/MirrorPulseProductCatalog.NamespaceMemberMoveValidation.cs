@@ -211,7 +211,8 @@ public sealed partial class MirrorPulseProductCatalog
         if (batch is not null && batch.OperationId != allowedBatch)
             throw new InvalidOperationException("An unresolved controlled subtree retirement has fenced this managed root.");
         var replacement = await ReadPendingNamespaceReplacementCoreAsync(rootId, transaction, token).ConfigureAwait(false);
-        if (replacement is not null && replacement.OperationId != allowedReplacement)
+        if (replacement is not null && replacement.OperationId != allowedReplacement &&
+            !(recovery?.ReplacementOperationId == replacement.OperationId && recovery.Roots.Single().RootId == rootId))
             throw new InvalidOperationException("An unresolved controlled replacement has fenced this managed root.");
     }
 }

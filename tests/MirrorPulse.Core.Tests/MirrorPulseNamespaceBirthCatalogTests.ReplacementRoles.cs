@@ -6,6 +6,24 @@ namespace MirrorPulse.Core.Tests;
 public sealed partial class MirrorPulseNamespaceBirthCatalogTests
 {
     [TestMethod]
+    public void InheritedReplacementHandoffAcceptsOnlyTheExactParentRoleRotation()
+    {
+        const string previous = "S-1-5-5-10-20";
+        const string current = "S-1-5-5-30-40";
+        string retained = $"D:AI(A;ID;FA;;;{previous})(A;ID;0x12019f;;;BU)";
+        string rotated = $"D:AI(A;ID;FA;;;{current})(A;ID;0x12019f;;;BU)";
+        Assert.IsTrue(MirrorPulseNamespacePermissionDescriptor.MatchesInheritedRoleRotation(retained, rotated, previous, current));
+        Assert.IsFalse(MirrorPulseNamespacePermissionDescriptor.MatchesInheritedRoleRotation(retained,
+            rotated + "(A;ID;FA;;;WD)", previous, current));
+        Assert.IsFalse(MirrorPulseNamespacePermissionDescriptor.MatchesInheritedRoleRotation(retained,
+            rotated.Replace("0x12019f", "FA", StringComparison.Ordinal), previous, current));
+        Assert.IsFalse(MirrorPulseNamespacePermissionDescriptor.MatchesInheritedRoleRotation(retained,
+            rotated.Replace("(A;ID;FA", "(A;;FA", StringComparison.Ordinal), previous, current));
+        Assert.IsFalse(MirrorPulseNamespacePermissionDescriptor.MatchesInheritedRoleRotation(
+            retained.Replace("D:AI", "D:PAI", StringComparison.Ordinal), rotated, previous, current));
+    }
+
+    [TestMethod]
     [DataRow(false)]
     [DataRow(true)]
     public async Task ReplacementRoleChainKeepsFirstExecutionFactsAcrossOwnersAndInterruptedHandoffs(bool copied)

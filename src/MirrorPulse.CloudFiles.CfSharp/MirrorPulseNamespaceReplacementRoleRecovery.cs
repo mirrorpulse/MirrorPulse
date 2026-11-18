@@ -33,7 +33,9 @@ public sealed class MirrorPulseNamespaceReplacementRoleRecovery(MirrorPulseProdu
             identity is null || identity.ItemId != facts.Intent.Original.Identity.ItemId || identity.RemoteId != facts.Intent.Original.Identity.RemoteId)
             throw new InvalidOperationException("Role recovery requires the original owner, path and public identity.");
         var role = facts.RoleActions.Count == 0 ? null : facts.RoleActions[^1];
-        if (role?.Action.RoleSid == execution.RoleSid.Value && facts.RoleHandoff is { } historical) return historical;
+        if (role?.Action.RoleSid == execution.RoleSid.Value &&
+            facts.RoleHandoff is { } historical && historical.RecoveryId == role.RecoveryId)
+            return historical;
         var parentProof = await MirrorPulseNamespaceReplacementContentWriter.ReadCurrentParentAsync(catalog, facts.Intent, cancellationToken).ConfigureAwait(false);
         if (parent.RelativePath.Replace('\\', '/') != parentProof.Context.Location.RelativePath)
             throw new InvalidDataException("Role recovery lost its current committed parent.");
@@ -50,15 +52,20 @@ public sealed class MirrorPulseNamespaceReplacementRoleRecovery(MirrorPulseProdu
             if (observed.LocalObject != first.LocalObject || observed.OwnerSid != first.OwnerSid || observed.IsDirectory || observed.LinkCount != 1)
                 throw new InvalidDataException("Role recovery cannot adopt another object or owner at the original path.");
             MirrorPulseNamespaceReplacementAction? known = null;
-            foreach (var candidate in facts.RoleActions.Select(value => value.Action).Prepend(first))
+            var chain = facts.RoleActions.Select(value => value.Action).Prepend(first).ToArray();
+            foreach (var candidate in chain)
                 if (MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(candidate.RoleOnlyDacl, observed.Dacl) ||
                     MirrorPulseNamespacePermissionDescriptor.MatchesNativeReadback(candidate.RestoreDacl, observed.Dacl)) known = candidate;
+            bool inherited = known is null;
+            if (inherited && parentProof.Context.Protection.RoleSid == execution.RoleSid.Value)
+                known = Array.FindLast(chain, candidate => MirrorPulseNamespacePermissionDescriptor.MatchesInheritedRoleRotation(
+                    candidate.RestoreDacl, observed.Dacl, candidate.RoleSid, execution.RoleSid.Value));
             if (known is null) throw new InvalidDataException("Role recovery requires permissions owned by its complete retained action chain.");
             Guid id = Guid.NewGuid();
             var currentAction = new MirrorPulseNamespaceReplacementAction(1, operationId, id, first.LocalObject, first.OwnerSid,
                 execution.RoleSid.Value, MirrorPulseNamespacePermissionPolicy.CreateOrdinaryFileBirthDacl(execution),
                 MirrorPulseNamespacePermissionPolicy.CreateProtectedDacl(execution, isDirectory: false), DateTimeOffset.UtcNow);
-            role = await catalog.PrepareNamespaceReplacementRoleActionAsync(new(1, operationId, id, role?.RecoveryId,
+            role = await catalog.PrepareNamespaceReplacementRoleActionAsync(new(inherited ? 2 : 1, operationId, id, role?.RecoveryId,
                 first.ActionId, known.ActionId, currentAction, parentProof, observed.Dacl), cancellationToken).ConfigureAwait(false);
         }
         if (role is null || role.Action.OwnerSid != execution.OwnerSid.Value || role.Action.RoleSid != execution.RoleSid.Value ||

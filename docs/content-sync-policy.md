@@ -246,6 +246,15 @@ Historical preparation replay returns original facts without reopening a removed
 source file. Host and CLI use the same executor through the Control contract;
 completed input reclamation runs only after its private lease closes.
 
+When a replacement spans Host lifetimes, the original operation owns a
+selected-root recovery initializer. It restores the other registered members
+and the actual parent to the current role while the replacement retains
+exclusive ownership of its file. The original executor then settles that file
+using its retained handoff, backup and write receipts. The root stays closed
+until a fresh audit covers the entire current tree, including the replaced
+file. A disabled root stays closed after that audit. If local completion is
+already durable, recovery can finish the audit without recopying the input.
+
 When the Host supplies its namespace execution session, CfSharp startup runs
 under that retained local identity. The production boundary is also exercised
 by the required external-consumer population and hydration acceptance case.

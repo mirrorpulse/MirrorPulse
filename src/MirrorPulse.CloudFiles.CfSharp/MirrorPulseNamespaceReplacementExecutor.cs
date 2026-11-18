@@ -64,8 +64,9 @@ public sealed class MirrorPulseNamespaceReplacementExecutor(CloudFileSystem file
             identity.ItemId != facts.Intent.Original.Identity.ItemId || identity.RemoteId != facts.Intent.Original.Identity.RemoteId)
             throw new InvalidDataException("The original public replacement identity is inconsistent.");
         var first = facts.Action ?? throw new InvalidOperationException("The first replacement action is missing.");
-        var current = facts.RoleActions.Count == 0 ? first : facts.RoleActions[^1].Action;
-        if (current.RoleSid != execution.RoleSid.Value)
+        var latest = facts.RoleActions.Count == 0 ? null : facts.RoleActions[^1];
+        var current = latest?.Action ?? first;
+        if (current.RoleSid != execution.RoleSid.Value || latest is not null && facts.RoleHandoff?.RecoveryId != latest.RecoveryId)
         {
             await new MirrorPulseNamespaceReplacementRoleRecovery(catalog, router, execution, actor)
                 .RecoverAsync(operationId, file, parent, token).ConfigureAwait(false);
