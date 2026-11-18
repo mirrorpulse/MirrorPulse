@@ -66,7 +66,9 @@ public sealed class DeferredP079GateTests
             $retirement=$fileTransferPrefix+'NativeInterruptedControlledSubtreeRetirementUsesOriginalLeafAcrossHostRoles'
             if(@($catalog.required.native|Where-Object {$_ -ceq $retirement}).Count -ne 1 -or
                @($catalog.requiredCases.$retirement).Count -ne 3){throw 'Require all three native retirement recovery boundaries.'}
-            $catalog.required.native=@($catalog.required.native|Where-Object {$_ -cne $retirement})
+            $retirementAudit=$fileTransferPrefix+'NativeActiveSubtreeRetirementResumesItsAuditBeforeReopeningTheRoot'
+            if(@($catalog.required.native|Where-Object {$_ -ceq $retirementAudit}).Count -ne 1){throw 'Require the original active-root retirement audit restart.'}
+            $catalog.required.native=@($catalog.required.native|Where-Object {$_ -cnotin @($retirement,$retirementAudit)})
             # Retain this original transfer selection. Root execution rows have their
             # own exact ninety-second deadlines in NamespaceNonAdminControllerTests.
             $unsealedRootExecutions=@(

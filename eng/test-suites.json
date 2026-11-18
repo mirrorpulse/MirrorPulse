@@ -694,6 +694,7 @@
     ],
     "native": [
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeInterruptedControlledSubtreeRetirementUsesOriginalLeafAcrossHostRoles",
+      "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeActiveSubtreeRetirementResumesItsAuditBeforeReopeningTheRoot",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeProtectedBirthDirectoryMoveRecoversItsOriginalProjectionAcrossRuntimeOwners",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeControlledNonemptyDirectoryMoveCharacterizesItsOriginalJournalAcrossRuntimeOwners",
       "MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeRootLabelPreparationSealsOnlyItsOriginalProtectedSubtreeAcrossOwners",
