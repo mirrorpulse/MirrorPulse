@@ -45,6 +45,13 @@ if ($Profile -ceq 'preview13-reference') {
     if (-not $ValidateOnly -and ($env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted')) {
         throw 'Only a disposable GitHub-hosted checkout may apply the reference inputs.'
     }
+    if (-not $ValidateOnly) {
+        & git -C $workspace cat-file -e "$adoption^" 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            & git -C $workspace fetch --no-tags --depth=2 origin $adoption
+            if ($LASTEXITCODE -ne 0) { throw 'Could not fetch the pinned CfSharp adoption commit and its parent.' }
+        }
+    }
     $patch = [IO.Path]::GetTempFileName()
     try {
         & git -C $workspace diff "--output=$patch" --binary "$adoption^" $adoption -- $files
