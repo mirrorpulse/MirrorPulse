@@ -81,6 +81,7 @@ catch (Exception exception)
             [new("failureCategory", SafeDiagnosticPolicy.ClassifyFailure(originalStartupFailure)),
                 new("failureSite", MirrorPulseStartupFailureTrace.ReadSite(exception).ToString()),
                 new("failureKind", MirrorPulseStartupFailureTrace.ReadKind(exception)),
+                new("failureResource", MirrorPulseStartupFailureTrace.ReadMissingResource(exception).ToString()),
                 new("hresult", originalStartupFailure.HResult.ToString("X8", System.Globalization.CultureInfo.InvariantCulture))]));
     }
     catch (Exception logFailure) when (logFailure is not OutOfMemoryException)

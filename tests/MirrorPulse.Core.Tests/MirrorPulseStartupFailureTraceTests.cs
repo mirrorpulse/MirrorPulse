@@ -55,6 +55,29 @@ public sealed class MirrorPulseStartupFailureTraceTests
     }
 
     [TestMethod]
+    [DataRow("C:\\PRIVATE_DIRECTORY\\cfsharp.db", MirrorPulseStartupMissingResource.StateDatabase)]
+    [DataRow("C:\\PRIVATE_DIRECTORY\\cfsharp.db-wal", MirrorPulseStartupMissingResource.StateWal)]
+    [DataRow("C:\\PRIVATE_DIRECTORY\\cfsharp.db-shm", MirrorPulseStartupMissingResource.StateSharedMemory)]
+    [DataRow("C:\\PRIVATE_DIRECTORY\\cfsharp.db.cfsharp.lock", MirrorPulseStartupMissingResource.StateOwnerLock)]
+    [DataRow("CfSharp.Storage.Sqlite, Version=0.1.0.0, Culture=neutral", MirrorPulseStartupMissingResource.CfSharpAssembly)]
+    [DataRow("SQLitePCLRaw.core, Version=2.1.12.0, Culture=neutral", MirrorPulseStartupMissingResource.SqliteAssembly)]
+    [DataRow("PRIVATE_ASSEMBLY, Version=2.1.12.0, Culture=neutral", MirrorPulseStartupMissingResource.OtherAssembly)]
+    [DataRow("C:\\PRIVATE_DIRECTORY\\private.db", MirrorPulseStartupMissingResource.Unclassified)]
+    [DataRow(null, MirrorPulseStartupMissingResource.Unclassified)]
+    public void StoreFailuresRetainOnlyAnApprovedResourceCategory(string? filename, MirrorPulseStartupMissingResource expected)
+    {
+        var original = new FileNotFoundException("PRIVATE_MESSAGE", filename);
+        Assert.AreEqual(MirrorPulseStartupMissingResource.Unclassified, MirrorPulseStartupFailureTrace.ReadMissingResource(original));
+        MirrorPulseStartupFailureTrace.Record(original, MirrorPulseStartupFailureSite.LibraryStoreOpen);
+        var classified = MirrorPulseStartupFailureTrace.ReadMissingResource(new IOException("PRIVATE_WRAPPER", original));
+        Assert.AreEqual(expected, classified);
+        var safe = SafeDiagnosticPolicy.Sanitize(new LogEntry(LogLevel.Error, "host", "HostStartupFailed", DateTimeOffset.UtcNow,
+            [new("failureResource", classified.ToString()), new("path", filename ?? "PRIVATE_NAME")]));
+        Assert.AreEqual(expected.ToString(), safe.Fields["failureResource"]);
+        Assert.IsFalse(JsonSerializer.Serialize(safe).Contains("PRIVATE", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
     public void IndependentFailuresDoNotBorrowAnotherErrorsBoundaryFromAMultipleFailureAggregate()
     {
         var first = new FileNotFoundException("PRIVATE_FIRST"); var second = new IOException("PRIVATE_SECOND");

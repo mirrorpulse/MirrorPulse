@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
+using MirrorPulse.Core.Configuration;
 
 namespace MirrorPulse.Core.Diagnostics;
 
@@ -9,6 +10,11 @@ public enum MirrorPulseStartupFailureSite
     InitializationAnchorRegistration, InitializationAudit, AnchorGuard, AnchorHistory, AnchorPermissionPreparation,
     AnchorProtectedPermission, AnchorVerification, AnchorPermissionPolicy, AnchorPermissionCatalog,
     LibraryStart, LibraryStoreOpen
+}
+
+public enum MirrorPulseStartupMissingResource
+{
+    Unclassified, StateDatabase, StateWal, StateSharedMemory, StateOwnerLock, CfSharpAssembly, SqliteAssembly, OtherAssembly
 }
 
 /// <summary>Retains only the first closed startup call boundary without wrapping or changing the original exception.</summary>
@@ -40,6 +46,32 @@ public static class MirrorPulseStartupFailureTrace
             DllNotFoundException => "DllNotFound",
             Win32Exception => "Native",
             _ => "Other"
+        };
+    }
+
+    public static MirrorPulseStartupMissingResource ReadMissingResource(Exception error)
+    {
+        ArgumentNullException.ThrowIfNull(error);
+        if (ReadSite(error) != MirrorPulseStartupFailureSite.LibraryStoreOpen ||
+            ReadOriginalException(error) is not FileNotFoundException { FileName: { Length: > 0 and <= 32768 } resource })
+            return MirrorPulseStartupMissingResource.Unclassified;
+
+        string name = Path.GetFileName(resource);
+        string database = MirrorPulseStoragePaths.CfSharpDatabaseFileName;
+        if (name.Equals(database, StringComparison.OrdinalIgnoreCase)) return MirrorPulseStartupMissingResource.StateDatabase;
+        if (name.Equals(database + "-wal", StringComparison.OrdinalIgnoreCase)) return MirrorPulseStartupMissingResource.StateWal;
+        if (name.Equals(database + "-shm", StringComparison.OrdinalIgnoreCase)) return MirrorPulseStartupMissingResource.StateSharedMemory;
+        if (name.Equals(database + ".cfsharp.lock", StringComparison.OrdinalIgnoreCase)) return MirrorPulseStartupMissingResource.StateOwnerLock;
+        int version = name.IndexOf(", Version=", StringComparison.OrdinalIgnoreCase);
+        string assembly = version < 0 ? name : name[..version].TrimEnd();
+        if (assembly.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)) assembly = assembly[..^4];
+        return assembly switch
+        {
+            "CfSharp" or "CfSharp.Native" or "CfSharp.Storage.Sqlite" => MirrorPulseStartupMissingResource.CfSharpAssembly,
+            "Microsoft.Data.Sqlite" or "SQLitePCLRaw.core" or "SQLitePCLRaw.provider.e_sqlite3" or
+                "SQLitePCLRaw.batteries_v2" or "e_sqlite3" => MirrorPulseStartupMissingResource.SqliteAssembly,
+            _ when version >= 0 => MirrorPulseStartupMissingResource.OtherAssembly,
+            _ => MirrorPulseStartupMissingResource.Unclassified
         };
     }
 

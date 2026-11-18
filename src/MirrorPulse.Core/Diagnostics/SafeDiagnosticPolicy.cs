@@ -164,6 +164,8 @@ public static class SafeDiagnosticPolicy
                 "remoteFailureBoundary" => Enum.TryParse(value, out MirrorPulseRemoteFailureBoundary boundary) && Enum.IsDefined(boundary) && value == boundary.ToString() ? value : null,
                 "remotePollStage" => Enum.TryParse(value, out MirrorPulseRemotePollStage pollStage) && Enum.IsDefined(pollStage) && value == pollStage.ToString() ? value : null,
                 "failureKind" => value is "FileNotFound" or "DirectoryNotFound" or "DllNotFound" or "Native" or "Other" ? value : null,
+                "failureResource" => Enum.TryParse(value, out MirrorPulseStartupMissingResource resource) &&
+                    Enum.IsDefined(resource) && value == resource.ToString() ? value : null,
                 "contentObservation" => value is "Unavailable" or "NoAcceptedProof" or "ContentChanged" or "IdentityChanged" or "Selected" ? value : null,
                 "cloudRequestKind" => value is "FetchData" or "FetchPlaceholders" or "ValidateData" or "Dehydrate" or "Delete" or "Rename" or "CompletionNotification" or "Other" ? value : null,
                 "providerReadStage" => value is "Routing" or "WorkAdmission" or "IdentityValidation" or "StreamCreation" or "RangeTransport" or "RangeContent" ? value : null,

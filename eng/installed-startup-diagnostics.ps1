@@ -14,6 +14,7 @@ function Get-InstalledHostStartupDiagnostics {
         'InitializationAnchorRegistration','InitializationAudit','AnchorGuard','AnchorHistory','AnchorPermissionPreparation','AnchorProtectedPermission',
         'AnchorVerification','AnchorPermissionPolicy','AnchorPermissionCatalog','LibraryStart','LibraryStoreOpen')
     $kinds = @('FileNotFound','DirectoryNotFound','DllNotFound','Native','Other')
+    $resources = @('Unclassified','StateDatabase','StateWal','StateSharedMemory','StateOwnerLock','CfSharpAssembly','SqliteAssembly','OtherAssembly')
     $stages = @('LibraryStartBegin','LibraryStartCompleted','LibraryServicesBegin','LibraryServicesCompleted',
         'NamespaceStartupBegin','NamespaceStartupCompleted','NamespaceAnchorBegin','NamespaceAnchorCompleted',
         'NamespaceAnchorEntryGuardBegin','NamespaceAnchorEntryGuardCompleted','NamespaceAnchorDiscoveryBegin','NamespaceAnchorDiscoveryCompleted',
@@ -64,9 +65,10 @@ function Get-InstalledHostStartupDiagnostics {
                             $hresult=if ([string]$entry.Fields.hresult -cmatch '\A[0-9A-Fa-f]{8}\z') { ([string]$entry.Fields.hresult).ToUpperInvariant() } else { $null }
                             $site=if ([string]$entry.Fields.failureSite -cin $sites) { [string]$entry.Fields.failureSite } else { $null }
                             $kind=if ([string]$entry.Fields.failureKind -cin $kinds) { [string]$entry.Fields.failureKind } else { $null }
+                            $resource=if ([string]$entry.Fields.failureResource -cin $resources) { [string]$entry.Fields.failureResource } else { $null }
                             # Never copy arbitrary messages, fields, paths, configuration or credential values.
                             $records.Add([ordered]@{sourceIndex=$index;occurredAt=$at.ToUniversalTime().ToString('O');code=[string]$entry.Code;
-                                failureCategory=$category;hresult=$hresult;failureSite=$site;failureKind=$kind})
+                                failureCategory=$category;hresult=$hresult;failureSite=$site;failureKind=$kind;failureResource=$resource})
                         }
                     }
                 }

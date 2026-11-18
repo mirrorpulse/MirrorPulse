@@ -70,14 +70,17 @@ public sealed partial class InstalledStartupDiagnosticsTests
                 $failureHResult=if($originalIoFailure){'80070002'}else{'80131501'}
                 $failureSite=if($site){$site}else{'PRIVATE_TEST_SENTINEL'}
                 $failureKind=if($site){'FileNotFound'}else{'PRIVATE_TEST_SENTINEL'}
+                $resource=if($Scenario -eq 'library-store-site'){'StateOwnerLock'}else{'PRIVATE_TEST_SENTINEL'}
                 [ordered]@{OccurredAt=$since.AddSeconds(5).ToString('O');Level='Error';Category='host';Code=$failureCode;
-                    Fields=@{failureCategory=$failureCategory;hresult=$failureHResult;failureSite=$failureSite;failureKind=$failureKind}}|ConvertTo-Json -Depth 4 -Compress|
+                    Fields=@{failureCategory=$failureCategory;hresult=$failureHResult;failureSite=$failureSite;failureKind=$failureKind;failureResource=$resource}}|ConvertTo-Json -Depth 4 -Compress|
                     Set-Content -LiteralPath (Join-Path $logs 'mirrorpulse.log')
                 try {
                 $result=Get-InstalledHostStartupDiagnostics -DataRoots @($root) -Since $since
                 $json=$result|ConvertTo-Json -Depth 6 -Compress
                 if ($json.Contains('PRIVATE_TEST_SENTINEL') -or $json.Contains($root)) {throw 'Private fields or paths escaped.'}
                 if ($result.records.Count -ne 1 -or $result.records[0].code -cne $failureCode -or $result.records[0].hresult -cne $failureHResult) {throw 'The original Host failure was lost.'}
+                $expectedResource=if($Scenario -eq 'library-store-site'){'StateOwnerLock'}else{$null}
+                if($result.records[0].failureResource -cne $expectedResource) {throw 'The missing resource is not the original approved category.'}
                 if($site) {
                     if($result.records[0].failureSite -cne $site -or $result.records[0].failureKind -cne 'FileNotFound') {
                         throw 'The original closed startup failure boundary was lost.'
