@@ -189,7 +189,16 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         if (!enabled)
             await catalog.SetInstanceEnabledAsync((await catalog.ReadAdapterTopologyAsync()).Instances.Single().InstanceId, false);
         var registration = (await catalog.ReadAdapterTopologyAsync()).Roots.Single();
-        var original = Baseline() with { RootId = registration.RootId };
+        return await PrepareConfiguredRootSubtreeFixtureAsync(catalog, registration, "Renamed", captureOriginalRoot: captureOriginalRoot);
+    }
+
+    private static async Task<RootSubtreeFixture> PrepareConfiguredRootSubtreeFixtureAsync(MirrorPulseProductCatalog catalog,
+        RootRegistration registration, string targetName, MirrorPulseNamespaceMemberRegistration? existingAnchor = null,
+        bool captureOriginalRoot = false)
+    {
+        var original = Baseline() with { RootId = registration.RootId, RelativePath = registration.DirectoryName };
+        if (existingAnchor is not null)
+            original = original with { LocalObject = existingAnchor.LocalObject with { LocalFileId = original.LocalObject.LocalFileId } };
         var proof = Protection(original);
         if (captureOriginalRoot)
         {
@@ -200,20 +209,26 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             await catalog.SealNamespacePermissionTreeAsync(definition.ManifestId, proof.PreparedAt.AddSeconds(1));
         }
         await ProtectAsync(catalog, original, proof);
-        var root = await RegisterOriginalParentMembersAsync(catalog, original, proof);
-        var anchor = (await catalog.ReadNamespaceMemberAsync(root.ParentMemberId!.Value))!;
-        var childBorn = await AddBornAsync(catalog, Birth(original, proof) with { IsDirectory = true });
+        var root = existingAnchor is null
+            ? await RegisterOriginalParentMembersAsync(catalog, original, proof)
+            : await catalog.RegisterNamespaceMemberAsync(OriginalMember(original, proof, existingAnchor.MemberId));
+        var anchor = existingAnchor ?? (await catalog.ReadNamespaceMemberAsync(root.ParentMemberId!.Value))!;
+        var childBorn = await AddBornAsync(catalog, Birth(original, proof) with
+        {
+            IsDirectory = true,
+            RelativePath = registration.DirectoryName + "/new.txt"
+        });
         var child = BornMember(childBorn, root); await catalog.RegisterNamespaceMemberAsync(child);
         var leafBorn = await AddBornAsync(catalog, NestedBirth(childBorn, "leaf.txt", false));
         var leaf = BornMember(leafBorn, child); await catalog.RegisterNamespaceMemberAsync(leaf);
         var capturedAt = leaf.RegisteredAt.AddSeconds(1);
         // Synthetic catalog evidence only. This test asserts neither public SDK decoding nor native authorization.
-        var rename = await catalog.PrepareManagedRootRenameWithProofAsync(registration.RootId, "Renamed", "Docs",
+        var rename = await catalog.PrepareManagedRootRenameWithProofAsync(registration.RootId, targetName, registration.DirectoryName,
             new(Guid.NewGuid(), root.LocalObject, "AQID", capturedAt, "AA=="));
         var move = new MirrorPulseNamespaceMemberMoveIntent(3, rename.Intent.OperationId, root.MemberId, root.ProtectionId,
             registration.RootId, root.LocalObject, rename.Proof!.ItemId, "local:managed-root", root.OwnerSid, proof.RoleSid,
-            new(anchor.MemberId, anchor.LocalObject, anchor.ProtectionId, "Docs"),
-            new(anchor.MemberId, anchor.LocalObject, anchor.ProtectionId, "Renamed"), capturedAt.AddSeconds(1))
+            new(anchor.MemberId, anchor.LocalObject, anchor.ProtectionId, registration.DirectoryName),
+            new(anchor.MemberId, anchor.LocalObject, anchor.ProtectionId, targetName), capturedAt.AddSeconds(1))
         { DirectoryMoveEvidence = rename.Proof.DirectoryMoveEvidence };
         return new(registration, rename, anchor, root, [root, child, leaf], move);
     }

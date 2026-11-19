@@ -102,14 +102,27 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task AddRootLabelJournalFencesAsync(HashSet<RootId> roots, SqliteTransaction transaction,
         NamespacePendingSelection? pending, CancellationToken token)
     {
-        var ids = await ReadRootLabelJournalPendingIdsCoreAsync(null, null, 4097, transaction, token).ConfigureAwait(false);
-        if (ids.Count > 4096) throw new InvalidDataException("Pending root ACK discovery exceeds the Host's root inventory bound.");
-        foreach (Guid id in ids)
+        const int pageSize = 16;
+        const int maximumFences = 4096;
+        Guid? afterOperationId = null;
+        var inspected = 0;
+        while (true)
         {
-            var retained = await ReadRootLabelJournalCoreAsync(id, transaction, token).ConfigureAwait(false)
-                ?? throw new InvalidDataException("A root journal fence lost its immutable first start.");
-            roots.Add(retained.Witness.RootId);
-            pending?.Add(retained.Witness.RootId, id, MirrorPulseNamespacePendingOperationKind.RootLabelJournal);
+            var ids = await ReadRootLabelJournalPendingIdsCoreAsync(null, afterOperationId, pageSize, transaction, token)
+                .ConfigureAwait(false);
+            inspected += ids.Count;
+            if (inspected > maximumFences)
+                throw new InvalidDataException("Pending root ACK discovery exceeds the Host's root inventory bound.");
+            foreach (Guid id in ids)
+            {
+                var retained = await ReadRootLabelJournalCoreAsync(id, transaction, token).ConfigureAwait(false)
+                    ?? throw new InvalidDataException("A root journal fence lost its immutable first start.");
+                roots.Add(retained.Witness.RootId);
+                pending?.Add(retained.Witness.RootId, id, MirrorPulseNamespacePendingOperationKind.RootLabelJournal);
+            }
+
+            if (ids.Count < pageSize) return;
+            afterOperationId = ids[^1];
         }
     }
 }

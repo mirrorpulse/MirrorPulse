@@ -41,6 +41,12 @@ the indexed payload for every current record and the retained guarded ownership
 where a cancellation records it. A missing side, a malformed key or damage on a
 later page rejects the complete snapshot before the Host can use any roots.
 
+Root Label journal acknowledgement IDs also use 16-row pages in the same
+transaction, up to the existing 4096-record inventory limit. A fixture with
+17 original acknowledgements takes two ID queries. A corrupt original on the
+second page rejects both the global fence list and the first root's pending
+work query.
+
 Startup discovery selects a root's pending operations from the validated fence
 scan in one read transaction. A pending retirement leaf still validates its
 sealed batch membership. The batch is the recovery operation returned for that

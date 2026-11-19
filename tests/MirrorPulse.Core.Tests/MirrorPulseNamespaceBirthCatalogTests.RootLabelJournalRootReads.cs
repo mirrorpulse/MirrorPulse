@@ -9,6 +9,57 @@ namespace MirrorPulse.Core.Tests;
 public sealed partial class MirrorPulseNamespaceBirthCatalogTests
 {
     [TestMethod]
+    public async Task GlobalRootLabelAcknowledgementsValidateLaterPagesBeforeReturningAnyOperation()
+    {
+        using var fixture = new Fixture();
+        await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        var first = await PrepareRootSubtreeFixtureAsync(catalog);
+        var installation = (await catalog.ReadAdapterTopologyAsync()).Installations.Single();
+        var originals = new List<MirrorPulseRootLabelJournalAcknowledgement>();
+        for (int index = 0; index < 17; index++)
+        {
+            var setup = first;
+            if (index > 0)
+            {
+                string label = $"Docs {index}";
+                var instance = await catalog.CreateInstanceAsync(installation.InstallId, label, new Dictionary<string, string>(), [],
+                    Path.Combine(fixture.Paths.DataRootPath, "files", label), Path.Combine(fixture.Paths.DataRootPath, "transfers", label),
+                    rootLabels: new Dictionary<string, string> { ["docs"] = label });
+                var configuration = await catalog.ReadAdapterTopologyAsync();
+                var registration = configuration.Roots.Single(root => root.InstanceId == instance.InstanceId);
+                setup = await PrepareConfiguredRootSubtreeFixtureAsync(catalog, registration, $"Renamed {index}", first.Anchor);
+            }
+            var receipt = await PrepareRootSubtreeFactsAsync(catalog, setup);
+            await catalog.CompleteNamespaceDirectoryMoveAsync(receipt);
+            var tree = await catalog.ReadNamespaceCurrentRootSnapshotAsync(first.Anchor.MemberId, setup.Registration.RootId);
+            var member = tree.Members.Single(owner => owner.Context.Member.MemberId == setup.Root.MemberId);
+            var audit = receipt.Root.VerifiedAt.AddSeconds(3);
+            var observation = RootLabelObservation(setup, audit) with { OperationId = OwnerPageId(4, index + 1) };
+            originals.Add(await catalog.StartRootLabelJournalAcknowledgementAsync(tree, member.Context.Protection.RoleSid,
+                audit, RootLabelNativeIdentity(setup, audit), observation, audit.AddSeconds(1)));
+        }
+
+        var expected = originals.Select(original => original.Witness.RootId).OrderBy(root => root.Value).ToArray();
+        var statements = await TraceOwnerReadsAsync(catalog, async () =>
+            CollectionAssert.AreEqual(expected, (await catalog.ReadNamespaceDispatchFencedRootsAsync()).ToArray()));
+        var pages = statements.Where(sql => sql.Contains("INDEXED BY root_label_journal_pending_status", StringComparison.Ordinal)).ToArray();
+        Assert.HasCount(2, pages, "Seventeen original acknowledgements require exactly two bounded ID reads.");
+        Assert.IsTrue(pages.All(sql => sql.Contains("LIMIT 16", StringComparison.Ordinal)));
+        Assert.Contains("operation_id>", pages[1], StringComparison.Ordinal);
+
+        var selected = originals[^1];
+        CollectionAssert.AreEqual(new[] { new MirrorPulseNamespacePendingOperation(selected.Observation.OperationId, selected.Witness.RootId,
+            MirrorPulseNamespacePendingOperationKind.RootLabelJournal) },
+            (await catalog.ReadNamespacePendingOperationsAsync(selected.Witness.RootId)).ToArray());
+
+        await ExecuteSqlAsync(fixture.Paths,
+            $"UPDATE root_label_journal_acknowledgements SET fingerprint=zeroblob(32) WHERE operation_id='{selected.Observation.OperationId:D}';");
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(() => catalog.ReadNamespaceDispatchFencedRootsAsync());
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(() => catalog.ReadNamespacePendingOperationsAsync(originals[0].Witness.RootId));
+        Assert.AreEqual(originals[0], await catalog.ReadRootLabelJournalAcknowledgementAsync(originals[0].Observation.OperationId));
+    }
+
+    [TestMethod]
     [DataRow(true)]
     [DataRow(false)]
     public async Task RootLabelPendingLookupWorkDoesNotGrowWithUnrelatedPendingRoots(bool existingRoot)
