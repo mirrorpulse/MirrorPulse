@@ -152,8 +152,8 @@ public static partial class CliFixtureProbe
                     value.RelativePath.Replace('\\', '/') == relativePath &&
                     Guid.TryParseExact(value.ChangeId, "D", out Guid changeId) && marker.Originals.Contains(changeId)).ToArray();
                 if (conflicts.Length > 32 || conflicts.Any(value => value.LocalRevision is not { Length: > 0 and <= 512 } ||
-                    value.RemoteRevision is not null))
-                    throw new InvalidDataException("The moved-source conflict must retain its original baseline and absent remote revision.");
+                    value.RemoteRevision is { Length: < 1 or > 512 }))
+                    throw new InvalidDataException("The moved-source conflict must retain bounded revision observations.");
                 movedSource = new
                 {
                     kept.ItemId,
@@ -164,6 +164,7 @@ public static partial class CliFixtureProbe
                         value.ConflictId,
                         value.ChangeId,
                         localRevisionSha256 = RevisionFingerprint(value.LocalRevision!),
+                        remoteRevisionSha256 = value.RemoteRevision is { } remoteRevision ? RevisionFingerprint(remoteRevision) : null,
                         reason = value.Reason.ToString()
                     }).ToArray()
                 };

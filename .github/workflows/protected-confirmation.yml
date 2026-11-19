@@ -26,6 +26,13 @@ on:
         description: Select the concurrent source move case for signed-disabled-host
         type: boolean
         default: false
+      moved_source_address:
+        description: Select the backend state at the original address for the concurrent move case
+        type: choice
+        options:
+          - Absent
+          - Successor
+        default: Absent
 
 permissions:
   contents: read
@@ -294,13 +301,14 @@ jobs:
         env:
           MIRRORPULSE_NATIVE_TEST: '1'
           MOVED_SOURCE_CONFLICT: ${{ inputs.moved_source_conflict }}
+          MOVED_SOURCE_ADDRESS: ${{ inputs.moved_source_address }}
         run: |
           $packages = @(Get-ChildItem -LiteralPath artifacts/official-local -Recurse -Filter '*.mpadapter' -File)
           if ($packages.Count -ne 1 -or -not (Test-Path -LiteralPath ($packages[0].FullName + '.signature.json'))) { throw 'Require one frozen official signed Local package.' }
           New-Item -ItemType Directory -Path artifacts/evidence/cli-disabled-operations -Force | Out-Null
           $arguments = @('-Runtime', 'win-arm64', '-PackagePath', $packages[0].FullName, '-EvidencePath', 'artifacts/evidence/cli-disabled-operations/report.json')
           if ($env:MOVED_SOURCE_CONFLICT -eq 'true') {
-            $arguments += '-MovedSourceConflict'
+            $arguments += @('-MovedSourceConflict', '-MovedSourceAddress', $env:MOVED_SOURCE_ADDRESS)
             Copy-Item -LiteralPath artifacts/official-adapter-releases.json -Destination artifacts/evidence/cli-disabled-operations/official-adapter-releases.json
           }
           pwsh ./eng/verify-cli-disabled-operations.ps1 @arguments

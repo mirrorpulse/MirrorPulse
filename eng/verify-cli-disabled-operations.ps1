@@ -5,10 +5,15 @@ param(
     [ValidateSet('Debug','Release')][string]$Configuration='Release',
     [string]$EvidencePath,
     [switch]$MovedSourceConflict,
+    [ValidateSet('Absent','Successor')][string]$MovedSourceAddress='Absent',
     [switch]$BudgetOnly
 )
 if($BudgetOnly){15;exit 0}
 $ErrorActionPreference='Stop'
+$withSuccessor=$MovedSourceAddress -ieq 'Successor'
+if($withSuccessor -and !$MovedSourceConflict){
+    throw 'The successor address requires the moved-source conflict scenario.'
+}
 if($env:MIRRORPULSE_NATIVE_TEST -cne '1' -or [string]::IsNullOrWhiteSpace($EvidencePath) -or -not (Test-Path -LiteralPath $PackagePath -PathType Leaf)){
     throw 'The signed disabled-operation fixture requires its exact package, evidence path and disposable native environment.'
 }
@@ -112,6 +117,9 @@ function Invoke-DisabledProbe([ValidateSet('audit','cleanup')][string]$Mode,[str
     }finally{if(-not $process.HasExited){$process.Kill($true);$process.WaitForExit()};$process.Dispose()}
 }
 function Get-DisabledHash([string]$Path){(Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash}
+function Get-DisabledRevisionHash([string]$Revision){
+    [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($Revision)))
+}
 function Get-DisabledSourceSnapshot([string]$Path){
     $resolved=[IO.Path]::GetFullPath($Path)
     if(-not $resolved.StartsWith(([IO.Path]::GetFullPath((Join-Path $fixture 'source'))+[IO.Path]::DirectorySeparatorChar),[StringComparison]::OrdinalIgnoreCase)){
@@ -275,6 +283,18 @@ function Invoke-DisabledMovedSourceConflict {
     $afterMove=Get-DisabledSourceSnapshot $sourceRoot
     Write-DisabledOriginal 'moved-source-backend-after-move' $afterMove
     if((Test-Path -LiteralPath $oldSource) -or (Get-DisabledHash $movedSource) -cne $sourceDigest){throw 'The actual backend move did not preserve the original bytes at the new address.'}
+    $expectedBackend=$afterMove
+    $successorDigest=$null
+    if($withSuccessor){
+        $script:phase='MovedSourceBackendSuccessor'
+        $bytes=[Text.Encoding]::UTF8.GetBytes('independent later source generation at the original address')
+        $stream=[IO.File]::Open($oldSource,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+        try{$stream.Write($bytes,0,$bytes.Length);$stream.Flush($true)}finally{$stream.Dispose()}
+        $successorDigest=Get-DisabledHash $oldSource
+        $expectedBackend=Get-DisabledSourceSnapshot $sourceRoot
+        Write-DisabledOriginal 'moved-source-backend-with-successor' $expectedBackend
+        if($successorDigest -cin @($sourceDigest,$localDigest)){throw 'The same-name backend file must have its own distinct content.'}
+    }
     Start-DisabledHost 'moved-source-reopen-disabled'
     Assert-DisabledInstances (Read-DisabledState 'moved-source-reopen-disabled') $false $true
     Read-DisabledWorkers 'moved-source-reopen-disabled' 1
@@ -295,11 +315,21 @@ function Invoke-DisabledMovedSourceConflict {
         if($conflicts.Count){break}
         Start-Sleep -Milliseconds 100
     }while([DateTimeOffset]::UtcNow -lt $deadline)
-    if(!$conflicts.Count -or @($conflicts|Where-Object {
-        $digest=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes([string]$_.localRevision)))
-        $digest -cne $baseline -or $null -ne $_.remoteRevision
-    }).Count){
-        throw 'The reenabled Host did not report the original conditional conflict against an absent source address.'
+    if(!$conflicts.Count -or @($conflicts|Where-Object {(Get-DisabledRevisionHash $_.localRevision) -cne $baseline}).Count){
+        throw 'The reenabled Host did not report the original acknowledged revision in its conditional conflict.'
+    }
+    $observedRevision=$conflicts[0].remoteRevision
+    $observedRevisionHash=$null
+    if($withSuccessor){
+        if([string]::IsNullOrEmpty($observedRevision) -or (Get-DisabledRevisionHash $observedRevision) -ceq $baseline){
+            throw 'The reenabled Host did not observe a distinct successor revision at the original address.'
+        }
+        $observedRevisionHash=Get-DisabledRevisionHash $observedRevision
+    }elseif($null -ne $observedRevision){
+        throw 'The reenabled Host did not observe the absent source address.'
+    }
+    if(@($conflicts|Where-Object remoteRevision -CNE $observedRevision).Count){
+        throw 'Conflicts at the original address disagree about the observed remote revision.'
     }
     $current=Invoke-DisabledCli 'moved-source-retained-member' @('--no-start','namespace','member','inspect',$path)
     if($current.memberId -cne $member.memberId -or $current.nativeItemId -cne $member.nativeItemId -or
@@ -318,16 +348,20 @@ function Invoke-DisabledMovedSourceConflict {
         }
     }
     if($after.movedSource.acknowledgedRevisionSha256 -cne $baseline -or
-        !@($after.movedSource.conflicts|Where-Object {$_.conflictId -cin @($conflicts.conflictId) -and $_.localRevisionSha256 -ceq $baseline}).Count -or
-        (Test-Path -LiteralPath $oldSource) -or (Get-DisabledHash $movedSource) -cne $sourceDigest -or
-        ($finalBackend|ConvertTo-Json -Depth 8 -Compress) -cne ($afterMove|ConvertTo-Json -Depth 8 -Compress)){
+        !@($after.movedSource.conflicts|Where-Object {
+            $_.conflictId -cin @($conflicts.conflictId) -and $_.localRevisionSha256 -ceq $baseline -and
+            $_.remoteRevisionSha256 -ceq $observedRevisionHash -and $_.changeId -cin $marker.originals
+        }).Count -or (Get-DisabledHash $movedSource) -cne $sourceDigest -or
+        ($finalBackend|ConvertTo-Json -Depth 8 -Compress) -cne ($expectedBackend|ConvertTo-Json -Depth 8 -Compress)){
         throw 'The stopped oracle could not bind the same original conflict and the intact moved backend file.'
     }
     Confirm-DisabledPublishedInputs
     [ordered]@{schemaVersion=1;sourceSha=$sourceSha;runId=$env:GITHUB_RUN_ID;runtime=$Runtime;signedPackageSha256=$installation[0].packageSha256;
         originalCount=$originalsForMove.Count;actualHostLifetimes=$lifetimes.ToArray();memberId=$member.memberId;nativeItemId=$member.nativeItemId;
         acknowledgedRevisionSha256=$baseline;backendMovedSha256=$sourceDigest;localEditSha256=$localDigest;
-        movedSourceConflict=$true;oldAddressAbsent=$true;originalsRetained=$true;actualManagedModuleLoadClaimed=$false;fullS06Accepted=$false}
+        movedSourceConflict=$true;oldAddressAbsent=(-not (Test-Path -LiteralPath $oldSource));
+        successorSourceSha256=$successorDigest;successorRemoteRevisionSha256=$observedRevisionHash;
+        originalsRetained=$true;actualManagedModuleLoadClaimed=$false;fullS06Accepted=$false}
 }
 try{
     New-Item -ItemType Directory -Path $sync,$data,(Join-Path $fixture 'source/offline/retire-dir'),(Join-Path $fixture 'source/active') -Force|Out-Null
