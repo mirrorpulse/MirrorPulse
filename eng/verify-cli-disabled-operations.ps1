@@ -26,6 +26,7 @@ if($LASTEXITCODE -ne 0 -or $sourceSha -cnotmatch '^[0-9a-f]{40}$' -or ($env:GITH
 }
 . (Join-Path $PSScriptRoot 'cli-integration-failure-policy.ps1')
 . (Join-Path $PSScriptRoot 'cli-disabled-settlement-evidence.ps1')
+. (Join-Path $PSScriptRoot 'cli-root-label-host-start.ps1')
 $fixture=Join-Path ([IO.Path]::GetTempPath()) ('MirrorPulse-cli-disabled-'+[guid]::NewGuid().ToString('N'))
 $sync=Join-Path $fixture 'sync';$data=Join-Path $fixture 'data'
 $evidenceFile=[IO.Path]::GetFullPath($EvidencePath)
@@ -51,11 +52,12 @@ function Write-DisabledOriginal([string]$Name,[object]$Value){
     $Value|ConvertTo-Json -Depth 40|Set-Content -LiteralPath (Join-Path $originals ($Name+'.json')) -Encoding utf8
 }
 function Save-DisabledMarker{$marker|ConvertTo-Json -Depth 12|Set-Content -LiteralPath $markerPath -Encoding utf8}
-function Invoke-DisabledCli([string]$Name,[string[]]$Arguments){
+function Invoke-DisabledCli([string]$Name,[string[]]$Arguments,[int[]]$ExpectedExitCodes=@(0),[switch]$ReturnEnvelope){
     $raw=(& $cliBinary --json --developer-mode @Arguments 2>&1|Out-String).Trim();$exitCode=$LASTEXITCODE
     if($raw){try{$value=$raw|ConvertFrom-Json;Write-DisabledOriginal $Name $value}catch{}}
-    if($exitCode -ne 0 -or -not $raw){throw ('The actual disabled fixture CLI failed at '+$Name+' (exit '+$exitCode+').')}
+    if($exitCode -notin $ExpectedExitCodes -or -not $raw){throw ('The actual disabled fixture CLI failed at '+$Name+' (exit '+$exitCode+').')}
     $value=$raw|ConvertFrom-Json
+    if($ReturnEnvelope){return $value}
     if($value.kind -cne 'result'){throw 'The public CLI returned an unexpected envelope.'}
     $value.data
 }
@@ -77,8 +79,7 @@ function Stop-DisabledHost([string]$Name){
         $script:ownedDisabledHost=$null
     }finally{$process.Dispose()}
 }
-function Start-DisabledHost([string]$Name){
-    $status=Invoke-DisabledCli ($Name+'-start') @('host','start')
+function Register-DisabledHost([string]$Name,[object]$Status){
     $pidValue=[int]$status.processId;$process=Get-Process -Id $pidValue
     try{
         $image=$process.MainModule.FileName
@@ -88,6 +89,26 @@ function Start-DisabledHost([string]$Name){
         $script:ownedDisabledHost=[ordered]@{phase=$Name;processId=$pidValue;startedUtc=$process.StartTime.ToUniversalTime().ToString('o');imageSha256=(Get-FileHash -LiteralPath $image).Hash;privateRuntime=$true;exitObserved=$false}
         $lifetimes.Add($script:ownedDisabledHost)
     }finally{$process.Dispose()}
+}
+function Start-DisabledHost([string]$Name){
+    if($LargeBacklog -and $lifetimes.Count){
+        $previousProcessId=$lifetimes[-1].processId
+        $status=Wait-CliRootLabelHostStart -Phase $Name -PreviousProcessId $previousProcessId -OriginalsDirectory $originals -InvokeCli {
+            param($arguments,$expectedExitCodes=@(0))
+            $command=$arguments[-1]
+            $envelope=Invoke-DisabledCli ($Name+'-'+$command+'-observation') @($arguments|Where-Object {$_ -cne '--json'}) $expectedExitCodes -ReturnEnvelope
+            if($null -eq $script:ownedDisabledHost -and $envelope.kind -ceq 'result' -and
+                $envelope.data.processId -gt 0 -and $envelope.data.processId -ne $previousProcessId){
+                Register-DisabledHost $Name $envelope.data
+            }
+            return $envelope
+        }
+        Assert-CliRootLabelHostStartOriginal -OriginalsDirectory $originals -Phase $Name -After $status
+        if($script:ownedDisabledHost.processId -ne $status.processId){throw 'The ready backlog Host differs from its authenticated starting process.'}
+    }else{
+        $status=Invoke-DisabledCli ($Name+'-start') @('host','start')
+        Register-DisabledHost $Name $status
+    }
     if($null -ne $marker){Wait-DisabledComposition $Name}
 }
 function Wait-DisabledComposition([string]$Name){
