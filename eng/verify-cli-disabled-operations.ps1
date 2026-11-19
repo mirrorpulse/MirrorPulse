@@ -246,14 +246,14 @@ function Confirm-DisabledPublishedInputs {
     Write-DisabledOriginal 'published-inputs-after' ([ordered]@{sourceSha=$sourceSha;inputs=$inputs.ToArray();actualBytesUnchanged=$true;actualManagedModuleLoadClaimed=$false})
 }
 
-function Wait-DisabledBacklog([string]$Name,[int]$Minimum,[switch]$Exact){
+function Wait-DisabledBacklog([string]$Name,[int]$Minimum,[int]$Maximum=[int]::MaxValue){
     $deadline=[DateTimeOffset]::UtcNow.AddSeconds(45)
     $previous=-1;$changedAt=[DateTimeOffset]::UtcNow
     do{
         $status=Invoke-DisabledCli ($Name+'-status') @('--no-start','status')
         $now=[DateTimeOffset]::UtcNow
         if($status.pendingUploads -ne $previous){$previous=$status.pendingUploads;$changedAt=$now}
-        if($previous -ge $Minimum -and (!$Exact -or $previous -eq $Minimum) -and ($now-$changedAt).TotalSeconds -ge 2){return $status}
+        if($previous -ge $Minimum -and $previous -le $Maximum -and ($now-$changedAt).TotalSeconds -ge 2){return $status}
         Start-Sleep -Milliseconds 150
     }while([DateTimeOffset]::UtcNow -lt $deadline)
     throw 'The public pending upload count did not settle at the required fixture boundary.'
@@ -293,11 +293,17 @@ function Invoke-DisabledLargeBacklog {
     $beforeStatus=Wait-DisabledBacklog 'backlog-capture' $backlogKeys.Count
     Stop-DisabledHost 'backlog-capture';$marker.phase='Before';Save-DisabledMarker
     $before=Invoke-DisabledProbe audit 'backlog-before'
-    $contentItemIds=@($before.journal|Where-Object kind -CEQ 'ContentUpdate'|ForEach-Object itemId|Select-Object -Unique)
     $expectedItems=@($backlogKeys|ForEach-Object {$marker.members[$_].itemId})
-    if(@($before.journal).Count -le $journalPageSize -or $beforeStatus.pendingUploads -lt @($before.journal).Count -or
+    $offlineOriginals=@($before.journal|Where-Object itemId -CIn $expectedItems)
+    $contentItemIds=@($offlineOriginals|Where-Object kind -CEQ 'ContentUpdate'|ForEach-Object itemId|Select-Object -Unique)
+    $activeItemId=$marker.members.activeFile.itemId
+    $activeBaseline=@($before.journal|Where-Object itemId -CEQ $activeItemId)
+    if($offlineOriginals.Count -le $journalPageSize -or $beforeStatus.pendingUploads -lt @($before.journal).Count -or
         @(Compare-Object $expectedItems $contentItemIds -CaseSensitive).Count -or
-        @($before.journal|Where-Object itemId -CNotIn $expectedItems).Count){throw 'The actual first capture lacks one original content change per offline file and a full older SDK page.'}
+        @($before.journal).Count -ne ($offlineOriginals.Count+$activeBaseline.Count) -or
+        @($activeBaseline|Where-Object kind -CNE 'MetadataUpdate').Count){
+        throw 'The capture requires one content change per offline file and only preexisting metadata for the unwritten peer.'
+    }
     $marker.originals=@($before.journal.operationId);Save-DisabledMarker
 
     $script:phase='LargeBacklogDisabledRestart'
@@ -309,10 +315,11 @@ function Invoke-DisabledLargeBacklog {
     $restarted=Invoke-DisabledProbe audit 'backlog-after-disabled-restart'
     Assert-DisabledOriginals $before $restarted
     Assert-DisabledLocalReceipts $before $restarted
-    $activeOriginals=@($restarted.journal|Where-Object itemId -CEQ $marker.members.activeFile.itemId)
-    if(!$activeOriginals.Count -or !@($activeOriginals|Where-Object kind -CEQ 'ContentUpdate').Count -or
-        @($activeOriginals|Where-Object sequence -le $before.journal[-1].sequence).Count -or
-        @($restarted.journal).Count -ne (@($before.journal).Count+$activeOriginals.Count) -or
+    $activeOriginals=@($restarted.journal|Where-Object itemId -CEQ $activeItemId)
+    $laterActive=@($activeOriginals|Where-Object operationId -CNotIn @($activeBaseline.operationId))
+    if(!@($laterActive|Where-Object kind -CEQ 'ContentUpdate').Count -or
+        @($laterActive|Where-Object sequence -le $before.journal[-1].sequence).Count -or
+        @($restarted.journal).Count -ne ($offlineOriginals.Count+$activeOriginals.Count) -or
         $queuedStatus.pendingUploads -lt @($restarted.journal).Count -or (Get-DisabledHash $activeSource) -cne $activeOriginalDigest){
         throw 'The later active peer write did not remain a separate queued SDK operation after the disabled page.'
     }
@@ -325,14 +332,15 @@ function Invoke-DisabledLargeBacklog {
     Read-DisabledWorkers 'backlog-only-peer-active' 1
     $activeDigest=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($activeBytes))
     Wait-DisabledHash $activeSource $activeDigest 'backlog-peer-accepted'
-    $peerAccepted=Wait-DisabledBacklog 'backlog-peer-accepted' @($before.journal).Count -Exact
+    # The public count also includes root metadata outside this file-scoped oracle.
+    $peerAccepted=Wait-DisabledBacklog 'backlog-peer-accepted' $offlineOriginals.Count ($queuedStatus.pendingUploads-$activeOriginals.Count)
     Assert-DisabledInstances @{status=$peerAccepted} $false $true
     Stop-DisabledHost 'backlog-finished';$marker.phase='ActiveProgress';Save-DisabledMarker
     $after=Invoke-DisabledProbe audit 'backlog-after-active-progress'
-    Assert-DisabledOriginals $before $after
+    Assert-DisabledOriginals @{journal=$offlineOriginals} $after
     Assert-DisabledLocalReceipts $before $after
-    if(@($after.journal).Count -ne @($before.journal).Count -or
-        @($after.originals|Where-Object {$_.operationId -cin @($before.journal.operationId) -and
+    if(@($after.journal).Count -ne $offlineOriginals.Count -or
+        @($after.originals|Where-Object {$_.operationId -cin @($offlineOriginals.operationId) -and
             (!$_.pending -or $_.planId -or $_.blockReason -or @($_.effects|Where-Object state -CNE 'Missing').Count)}).Count){
         throw 'The original offline operations changed or acquired remote dispatch state while the peer progressed.'
     }
@@ -357,7 +365,8 @@ function Invoke-DisabledLargeBacklog {
     Confirm-DisabledPublishedInputs
     [ordered]@{schemaVersion=1;sourceSha=$sourceSha;runId=$env:GITHUB_RUN_ID;runtime=$Runtime;signedPackageSha256=$installation[0].packageSha256;
         actualHostLifetimes=$lifetimes.ToArray();largeBacklog=$true;offlineFileCount=$backlogKeys.Count;journalPageSize=$journalPageSize;
-        offlineOriginalCount=@($before.journal).Count;activeOriginalCount=$activeOriginals.Count;activeRemoteSha256=$actualActiveDigest;
+        offlineOriginalCount=$offlineOriginals.Count;activeBaselineMetadataCount=$activeBaseline.Count;laterActiveOriginalCount=$laterActive.Count;
+        activeOriginalCount=$activeOriginals.Count;activeRemoteSha256=$actualActiveDigest;
         originalsPreservedAcrossDisabledRestart=$true;independentActiveSourceProgress=$true;sourceUnchangedWhileDisabled=$true;
         allPublishedInputBytesUnchanged=$true;actualManagedModuleLoadClaimed=$false;fullS06Accepted=$false}
 }
