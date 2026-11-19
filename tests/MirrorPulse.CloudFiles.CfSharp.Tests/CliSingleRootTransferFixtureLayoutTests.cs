@@ -36,6 +36,26 @@ public sealed class CliSingleRootTransferFixtureLayoutTests
     }
 
     [TestMethod]
+    public void LegacyPackageMayRemainUnselectedOnlyWhenItsSignedIdentityMatchesTheFixture()
+    {
+        var fixture = Create(legacySource: true);
+        var modern = fixture.Topology.Installations[0];
+        var definition = new AdapterRootDefinition("local", "Local", "Local", false);
+        var manifest = new AdapterManifest(1, modern.AdapterId, "Local", "0.1.3", new(1, 1),
+            new Dictionary<string, string> { ["win-arm64"] = "worker.exe" },
+            new(null), new(null, null), new(true, false, true, true), ["en-US"], "1.0.0", [definition]);
+        var legacy = new InstalledAdapter(manifest, InstallId.New(), Path.Combine(fixture.Path, "data", "adapters", "installed", "legacy"),
+            new(new string('b', 64)), AdapterInstallSource.LocalFile, null, true, DateTimeOffset.UtcNow, AdapterLifecycleState.Installed);
+        var marker = fixture.Marker with { LegacySourceInstallId = legacy.InstallId.Value, LegacySourcePackageSha256 = legacy.PackageSha256.Hexadecimal };
+        var topology = fixture.Topology with { Installations = [modern, legacy] };
+        Assert.HasCount(2, CliTransferFixtureLayout.Authenticate(fixture.Path, marker, topology).Roots);
+        Assert.ThrowsExactly<InvalidDataException>(() => CliTransferFixtureLayout.Authenticate(fixture.Path,
+            marker with { LegacySourcePackageSha256 = modern.PackageSha256.Hexadecimal }, topology));
+        Assert.ThrowsExactly<InvalidDataException>(() => CliTransferFixtureLayout.Authenticate(fixture.Path, fixture.Marker, topology));
+        Assert.IsFalse(Directory.Exists(fixture.Path));
+    }
+
+    [TestMethod]
     [DataRow("schema")]
     [DataRow("missing-route")]
     [DataRow("duplicate-root")]

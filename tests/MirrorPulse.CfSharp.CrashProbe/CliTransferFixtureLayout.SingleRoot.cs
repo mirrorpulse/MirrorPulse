@@ -9,14 +9,29 @@ public static partial class CliTransferFixtureLayout
     private static CliTransferFixtureInventory AuthenticateSingleRootInstances(string directory,
         CliTransferFixtureMarker marker, MirrorPulseAdapterTopology topology)
     {
-        if (marker.Routes is not { Count: 2 } || topology.Roots.Count != 2 ||
-            topology.Instances.Count != 2 || topology.Installations.Count != 1)
+        int expectedInstallations = marker.LegacySourceInstallId is null ? 1 : 2;
+        if (marker.Routes is not { Count: 2 } || topology.Roots.Count != 2 || topology.Instances.Count != 2 ||
+            topology.Installations.Count != expectedInstallations ||
+            (marker.LegacySourceInstallId is null) != (marker.LegacySourcePackageSha256 is null))
             throw new InvalidDataException("The single-root transfer fixture requires exactly two routes and two instances.");
-        var installed = topology.Installations[0];
+        var modern = topology.Installations.Where(item => item.InstallId.Value != marker.LegacySourceInstallId).ToArray();
+        if (modern.Length != 1) throw new InvalidDataException("The fixture requires one original modern Local installation.");
+        var installed = modern[0];
         if (installed.AdapterId.Value != "com.mirrorpulse.adapter.local" || !installed.IsSigned ||
             installed.Manifest.Protocol.Minimum != 2 || installed.Manifest.Protocol.Maximum != 2 ||
             installed.Manifest.RootDefinitions is not { Count: 1 } || installed.Manifest.RootDefinitions[0].Key != "local")
             throw new InvalidDataException("The single-root fixture requires the signed Local V2 manifest's actual local root.");
+        if (marker.LegacySourceInstallId is { } legacyId)
+        {
+            var legacy = topology.Installations.Single(item => item.InstallId.Value == legacyId);
+            string fixtureInstallations = Path.Combine(directory, "data", "adapters", "installed") + Path.DirectorySeparatorChar;
+            if (!marker.LegacySourceConfiguration || legacyId == Guid.Empty || !legacy.IsSigned || legacy.AdapterId != installed.AdapterId ||
+                legacy.Version != "0.1.3" || legacy.Manifest.Protocol.Minimum != 1 || legacy.Manifest.Protocol.Maximum != 1 ||
+                legacy.Manifest.RootDefinitions is not { Count: 1 } || legacy.Manifest.RootDefinitions[0].Key != "local" ||
+                !string.Equals(legacy.PackageSha256.Hexadecimal, marker.LegacySourcePackageSha256, StringComparison.OrdinalIgnoreCase) ||
+                !Path.GetFullPath(legacy.InstallationDirectory).StartsWith(fixtureInstallations, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("Only the recorded signed Local V1 asset inside this fixture may remain unselected.");
+        }
         var sides = new Dictionary<string, RootRegistration>(StringComparer.Ordinal);
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var ids = new HashSet<Guid>();

@@ -192,6 +192,10 @@ function Write-TransferOriginal {
     $Value | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $originals ($Name + '.json')) -Encoding utf8
 }
 
+function Save-TransferFixtureMarker {
+    $marker|ConvertTo-Json -Depth 5|Set-Content -LiteralPath (Join-Path $fixture '.mp-cli-transfer-fixture.json') -Encoding utf8
+}
+
 function Invoke-PreparedTransferWhileDisabled {
     param([object]$Route, [object[]]$Installations, [object]$Prepared, [hashtable]$ObservationArguments,
         [string]$SourceSha256, [string]$Side)
@@ -225,6 +229,10 @@ function Invoke-PreparedTransferWithLegacySource {
     $legacyReceipt=(Invoke-TransferCli @('--json','--no-start','adapter','install','--package',$LegacyPackage)).data
     $legacyId=$legacyReceipt.installedAdapterId
     if (!$legacyId -or $legacyId -ceq $ModernInstallation.installId) { throw 'The original signed source and the legacy package require different installation IDs.' }
+    $legacyDigest=Read-TransferHash $LegacyPackage
+    $marker.legacySourceInstallId=$legacyId
+    $marker.legacySourcePackageSha256=$legacyDigest
+    Save-TransferFixtureMarker
     $script:legacyRestore=[ordered]@{instanceId=$Route.instanceId;modernId=$ModernInstallation.installId;legacyId=$legacyId}
     Invoke-TransferCli @('--json','--no-start','instance','disable','--instance-id',$Route.instanceId)|Out-Null
     $disabled=(Invoke-TransferCli @('--json','--no-start','adapter','list')).data
@@ -237,12 +245,12 @@ function Invoke-PreparedTransferWithLegacySource {
     Invoke-TransferCli @('--json','host','start')|Out-Null; Wait-TransferWorkersConnected
     $selected=(Invoke-TransferCli @('--json','--no-start','adapter','list')).data
     $legacy=@($selected.installations|Where-Object installId -CEQ $legacyId)
-    $legacyDigest=Read-TransferHash $LegacyPackage
     if ($legacy.Count -ne 1 -or !$legacy[0].isSigned -or $legacy[0].version -cne '0.1.3' -or $legacy[0].packageSha256 -ine $legacyDigest -or
         @($selected.instances|Where-Object {$_.instanceId -ceq $Route.instanceId -and $_.installId -ceq $legacyId -and $_.enabled}).Count -ne 1 -or
         @($selected.roots|Where-Object {$_.rootId -ceq $Route.rootId -and $_.instanceId -ceq $Route.instanceId -and $_.directoryName -ceq $Route.directoryName}).Count -ne 1) {
         throw 'The reenabled source must run the exact signed V1 package without replacing its original root or instance.'
     }
+    $script:legacyRestore.legacyInstallation=$legacy[0]
     $workers=@(Get-TransferWorkerBindings -Installations @($ModernInstallation,$legacy[0]) -FrameworkDependentInstallId $legacyId)
     $hostProcessId=(Invoke-TransferCli @('--json','--no-start','host','status')).data.processId
     $raw=(& $script:transferCli --developer-mode --json --no-start namespace transfer resume $Prepared.operationId 2>&1 | Out-String).Trim()
@@ -274,7 +282,9 @@ function Restore-ModernTransferSource {
     Invoke-TransferCli @('--json','--no-start','instance','enable','--instance-id',$restore.instanceId)|Out-Null
     Invoke-TransferCli @('--json','host','restart')|Out-Null; Wait-TransferHostStopped
     Invoke-TransferCli @('--json','host','start')|Out-Null; Wait-TransferWorkersConnected
-    Invoke-TransferCli @('--json','--no-start','adapter','uninstall','--adapter-id','com.mirrorpulse.adapter.local','--install-id',$restore.legacyId)|Out-Null
+    if ($null -ne $restore.legacyInstallation) {
+        Get-TransferWorkerBindings -Installations @($restore.legacyInstallation) -ExpectedCount 0 -FrameworkDependentInstallId $restore.legacyId|Out-Null
+    }
     $script:legacyRestore=$null
 }
 
@@ -402,8 +412,7 @@ try {
     if ($legacySource) { $marker.legacySourceConfiguration=$true }
     if ($crossPackage) { $marker.webDavEndpoint = $endpoint.AbsoluteUri }
     if ($VerifyDirectoryTransfer) { $marker.directoryTransferOperationId = $directoryOperation }
-    $marker |
-        ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $fixture '.mp-cli-transfer-fixture.json') -Encoding utf8
+    Save-TransferFixtureMarker
     Invoke-TransferCli @('--json', 'host', 'restart') | Out-Null; Wait-TransferHostStopped
     Invoke-TransferCli @('--json', 'host', 'start') | Out-Null
     Wait-TransferWorkersConnected

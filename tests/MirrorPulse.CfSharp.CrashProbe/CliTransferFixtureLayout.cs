@@ -14,6 +14,8 @@ public sealed record CliTransferFixtureMarker(int SchemaVersion, IReadOnlyList<C
     public Guid? DirectoryTransferOperationId { get; init; }
     public string? WebDavEndpoint { get; init; }
     public bool LegacySourceConfiguration { get; init; }
+    public Guid? LegacySourceInstallId { get; init; }
+    public string? LegacySourcePackageSha256 { get; init; }
 }
 public sealed record CliTransferFixtureInventory(IReadOnlyList<RootRegistration> Roots, IReadOnlyDictionary<string, bool> AllowedEntries);
 
@@ -31,7 +33,7 @@ public static partial class CliTransferFixtureLayout
         ArgumentNullException.ThrowIfNull(marker); ArgumentNullException.ThrowIfNull(topology);
         string root = RequireFixtureDirectory(directory);
         if (marker.SchemaVersion == 2) return AuthenticateSingleRootInstances(root, marker, topology);
-        if (marker.LegacySourceConfiguration)
+        if (marker.LegacySourceConfiguration || marker.LegacySourceInstallId is not null || marker.LegacySourcePackageSha256 is not null)
             throw new InvalidDataException("Only the two-Local fixture accepts the legacy source setting.");
         if (marker.DirectoryTransferOperationId is not null)
             throw new InvalidDataException("This transfer fixture does not own an additional directory operation.");
