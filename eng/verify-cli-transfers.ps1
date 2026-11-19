@@ -4,6 +4,7 @@ param(
     [Parameter(Mandatory)][string]$PackagePath,
     [string]$WebDavPackagePath,
     [switch]$VerifyDirectoryTransfer,
+    [switch]$VerifyPreparedTransferReenable,
     [ValidateSet('Debug', 'Release')][string]$Configuration = 'Release',
     [Parameter(Mandatory)][string]$EvidencePath
 )
@@ -21,6 +22,7 @@ $sync = Join-Path $fixture 'sync'; $data = Join-Path $fixture 'data'
 $evidenceFile = [IO.Path]::GetFullPath($EvidencePath)
 $crossPackage = -not [string]::IsNullOrWhiteSpace($WebDavPackagePath)
 if ($VerifyDirectoryTransfer -and $crossPackage) { throw 'The CLI directory command fixture requires two Local instances.' }
+if ($VerifyPreparedTransferReenable -and $crossPackage) { throw 'The prepared file reenable fixture requires two Local instances.' }
 $schemaVersion = if ($crossPackage) { 3 } else { 2 }
 $originals = Join-Path ([IO.Path]::GetDirectoryName($evidenceFile)) $(if ($crossPackage) { 'cli-cross-package.originals' } else { 'cli-transfers.originals' })
 New-Item -ItemType Directory -Path $originals -Force | Out-Null
@@ -126,18 +128,26 @@ function Assert-TransferRootsReady {
 }
 
 function Wait-TransferWorkersConnected {
+    param([string]$DisabledInstanceId)
     $deadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
     do {
         $status = (Invoke-TransferCli @('--json', '--no-start', 'status')).data
-        $connected = @($status.instances | Where-Object { $_.instanceId -cin $script:transferRoutes.instanceId -and $_.workerConnected -eq $true })
-        if ($connected.Count -eq 2) { return }
+        $states = @($status.instances | Where-Object { $_.instanceId -cin $script:transferRoutes.instanceId })
+        $unexpected = @($states | Where-Object {
+            $enabled = $_.instanceId -cne $DisabledInstanceId
+            $_.enabled -ne $enabled -or $_.workerConnected -ne $enabled
+        })
+        if ($states.Count -eq 2 -and $unexpected.Count -eq 0) {
+            if ($DisabledInstanceId) { return $states | Select-Object instanceId, enabled, workerConnected }
+            return
+        }
         Start-Sleep -Milliseconds 100
     } while ([DateTimeOffset]::UtcNow -lt $deadline)
-    throw 'Both actual signed transfer Workers must connect.'
+    throw 'The actual signed transfer Workers did not reach the requested enabled and connected state.'
 }
 
 function Get-TransferWorkerBindings {
-    param([Parameter(Mandatory)][object[]]$Installations)
+    param([Parameter(Mandatory)][object[]]$Installations, [int]$ExpectedCount = 2)
     $bindings = [Collections.Generic.List[object]]::new()
     foreach ($process in Get-Process) {
         try {
@@ -154,8 +164,8 @@ function Get-TransferWorkerBindings {
         } catch [ComponentModel.Win32Exception] { } catch [InvalidOperationException] { }
         finally { $process.Dispose() }
     }
-    if ($bindings.Count -ne 2 -or @($bindings.installId | Select-Object -Unique).Count -ne $Installations.Count) {
-        throw 'The active Host must run two actual Workers from the exact signed installations.'
+    if ($bindings.Count -ne $ExpectedCount -or @($bindings.installId | Select-Object -Unique).Count -ne [Math]::Min($ExpectedCount, $Installations.Count)) {
+        throw 'The active Host did not run the expected processes from the exact signed installations.'
     }
     return $bindings.ToArray()
 }
@@ -175,6 +185,32 @@ function Read-PreparedTransferObservation {
 function Write-TransferOriginal {
     param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][object]$Value)
     $Value | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $originals ($Name + '.json')) -Encoding utf8
+}
+
+function Invoke-PreparedTransferWhileDisabled {
+    param([object]$Route, [object[]]$Installations, [object]$Prepared, [hashtable]$ObservationArguments,
+        [string]$SourceSha256, [string]$Side)
+    $observationName = 'prepared-disabled-' + $Side.ToLowerInvariant()
+    Invoke-TransferCli @('--json', '--no-start', 'instance', 'disable', '--instance-id', $Route.instanceId) | Out-Null
+    Invoke-TransferCli @('--json', 'host', 'restart') | Out-Null; Wait-TransferHostStopped
+    Invoke-TransferCli @('--json', 'host', 'start') | Out-Null
+    $states = @(Wait-TransferWorkersConnected -DisabledInstanceId $Route.instanceId)
+    $workers = @(Get-TransferWorkerBindings -Installations $Installations -ExpectedCount 1)
+    $hostProcess = (Invoke-TransferCli @('--json', '--no-start', 'host', 'status')).data.processId
+    $resume = (& $script:transferCli --developer-mode --json --no-start namespace transfer resume $Prepared.operationId 2>&1 | Out-String).Trim()
+    $resumeExit = $LASTEXITCODE
+    $response = $resume | ConvertFrom-Json
+    $observation = Read-PreparedTransferObservation @ObservationArguments
+    $attempt = [ordered]@{side=$Side;instanceId=$Route.instanceId;rootId=$Route.rootId;hostProcessId=$hostProcess;
+        workerStates=$states;workers=$workers;resumeExitCode=$resumeExit;response=$response;observation=$observation}
+    Write-TransferOriginal -Name $observationName -Value $attempt
+    if ($resumeExit -eq 0 -or $response.kind -cne 'error' -or $response.exitCode -ne $resumeExit -or
+        $response.code -cne 'mp.control.internalFailure') {
+        throw 'The actual resume did not reject the original transfer while its selected instance was disabled.'
+    }
+    Assert-CliPreparedTransferObservation -Observation $observation -Prepared $Prepared -SourceSha256 $SourceSha256
+    Invoke-TransferCli @('--json', '--no-start', 'instance', 'enable', '--instance-id', $Route.instanceId) | Out-Null
+    return $attempt
 }
 
 try {
@@ -328,6 +364,13 @@ try {
             }
             Assert-CliPreparedTransferObservation -Observation $preparedRestart.beforeRestart -Prepared $prepared -SourceSha256 $sourceHash
             Write-TransferOriginal -Name 'prepared-before-restart' -Value $preparedRestart
+            if ($VerifyPreparedTransferReenable) {
+                $phase = 'TransferCommands.Forward.DisabledSourceBeforeFirstCopy'
+                $sourceDisabled = Invoke-PreparedTransferWhileDisabled $source $fixtureInstallations $prepared $observationArguments $sourceHash Source
+                $phase = 'TransferCommands.Forward.DisabledTargetBeforeFirstCopy'
+                $targetDisabled = Invoke-PreparedTransferWhileDisabled $target $fixtureInstallations $prepared $observationArguments $sourceHash Target
+                $preparedRestart.disabledAttempts = @($sourceDisabled, $targetDisabled)
+            }
             $phase = 'TransferCommands.Forward.RestartBeforeFirstCopy'
             Invoke-TransferCli @('--json', 'host', 'restart') | Out-Null; Wait-TransferHostStopped
             Invoke-TransferCli @('--json', 'host', 'start') | Out-Null
@@ -339,6 +382,10 @@ try {
             Assert-CliPreparedTransferObservation -Observation $preparedRestart.afterRestart -Prepared $prepared -SourceSha256 $sourceHash
             if ($preparedRestart.resumedBy -eq $preparedRestart.preparedBy -or @($preparedRestart.resumeWorkers.processId | Where-Object { $_ -in $workerBindings.processId }).Count) {
                 throw 'First copy requires a new Host and two newly started signed Workers.'
+            }
+            if ($VerifyPreparedTransferReenable -and @($preparedRestart.preparedBy, $preparedRestart.resumedBy,
+                $sourceDisabled.hostProcessId, $targetDisabled.hostProcessId | Select-Object -Unique).Count -ne 4) {
+                throw 'The prepared file reenable fixture requires four independent Host processes.'
             }
             $phase = 'TransferCommands.Forward.ResumeFirstCopy'
             $moved = (Invoke-TransferCli @('--json', '--no-start', 'namespace', 'transfer', 'resume', $operations[$index])).data
