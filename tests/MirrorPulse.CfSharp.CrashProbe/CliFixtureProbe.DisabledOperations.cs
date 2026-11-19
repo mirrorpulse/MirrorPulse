@@ -177,7 +177,7 @@ public static partial class CliFixtureProbe
                 .OrderBy(row => row.Sequence).Select(row => new CliDisabledJournalFact(row.OperationId, row.Sequence, row.ItemId,
                     row.Kind.ToString(), row.AttemptCount, row.CreatedAt, Convert.ToHexString(SHA256.HashData(row.Payload.Span)))).ToArray();
             object? movedSource = null;
-            if (marker.MovedSourceConflict)
+            if (marker.MovedSourceConflict || marker.EditedSourceConflict)
             {
                 stage = "MovedSourceOriginal";
                 var kept = marker.Members["keptFile"];
@@ -186,15 +186,15 @@ public static partial class CliFixtureProbe
                 var item = await transaction.Items.GetByItemIdAsync(kept.ItemId);
                 if (item is null || item.IsTombstone || item.RelativePath.Replace('\\', '/') != relativePath ||
                     item.RemoteRevision is not { Length: > 0 and <= 512 } revision)
-                    throw new InvalidDataException("The moved-source oracle requires the original live Local item and its retained baseline.");
+                    throw new InvalidDataException("The source conflict oracle requires the original live Local item and its retained baseline.");
                 var uploadConflicts = await catalog.ReadUploadConflictsAsync();
-                if (uploadConflicts.Count > 128) throw new InvalidDataException("The moved-source fixture exceeded its conflict observation bound.");
+                if (uploadConflicts.Count > 128) throw new InvalidDataException("The source conflict fixture exceeded its observation bound.");
                 var conflicts = uploadConflicts.Where(value => value.InstanceId == root.InstanceId && value.IsPending &&
                     value.RelativePath.Replace('\\', '/') == relativePath &&
                     Guid.TryParseExact(value.ChangeId, "D", out Guid changeId) && marker.Originals.Contains(changeId)).ToArray();
                 if (conflicts.Length > 32 || conflicts.Any(value => value.LocalRevision is not { Length: > 0 and <= 512 } ||
                     value.RemoteRevision is { Length: < 1 or > 512 }))
-                    throw new InvalidDataException("The moved-source conflict must retain bounded revision observations.");
+                    throw new InvalidDataException("The source conflict must retain bounded revision observations.");
                 movedSource = new
                 {
                     kept.ItemId,

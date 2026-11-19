@@ -8,6 +8,10 @@ on:
         description: Run the signed ARM64 Local and Local/WebDAV CLI file transfers only
         type: boolean
         default: false
+      s06_recovery_only:
+        description: Run only the signed ARM64 S06 recovery scenarios
+        type: boolean
+        default: false
       directory_acceptance_only:
         description: Run only signed Local directory Delete, Move, and cross-instance directory and local-only file transfer acceptance
         type: boolean
@@ -46,7 +50,7 @@ permissions:
 
 jobs:
   signed-atomic-directory:
-    if: github.event_name == 'workflow_dispatch' && !inputs.file_transfer_acceptance_only && (inputs.directory_acceptance_only || inputs.verify_atomic_directory || inputs.verify_directory_move || inputs.verify_directory_transfer || inputs.verify_prepared_directory_copy)
+    if: github.event_name == 'workflow_dispatch' && !inputs.s06_recovery_only && !inputs.file_transfer_acceptance_only && (inputs.directory_acceptance_only || inputs.verify_atomic_directory || inputs.verify_directory_move || inputs.verify_directory_transfer || inputs.verify_prepared_directory_copy)
     uses: ./.github/workflows/signed-atomic-directory.yml
     with:
       local_preview: ${{ inputs.local_atomic_preview }}
@@ -56,7 +60,7 @@ jobs:
       verify_prepared_directory_copy: ${{ inputs.verify_prepared_directory_copy }}
 
   official-adapter-candidate:
-    if: github.event_name != 'workflow_dispatch' || inputs.file_transfer_acceptance_only || !(inputs.directory_acceptance_only || inputs.verify_prepared_directory_copy) || inputs.verify_shell
+    if: github.event_name != 'workflow_dispatch' || inputs.s06_recovery_only || inputs.file_transfer_acceptance_only || !(inputs.directory_acceptance_only || inputs.verify_prepared_directory_copy) || inputs.verify_shell
     runs-on: windows-latest
     steps:
       - name: Check out the candidate product source
@@ -82,7 +86,7 @@ jobs:
           if-no-files-found: error
 
   signed-file-transfer:
-    if: github.event_name == 'workflow_dispatch' && inputs.file_transfer_acceptance_only
+    if: github.event_name == 'workflow_dispatch' && !inputs.s06_recovery_only && inputs.file_transfer_acceptance_only
     needs: official-adapter-candidate
     runs-on: windows-11-arm
     timeout-minutes: 30
@@ -139,14 +143,14 @@ jobs:
           if-no-files-found: warn
 
   signed-s06-recovery:
-    if: github.event_name == 'workflow_dispatch' && inputs.verify_shell && !inputs.file_transfer_acceptance_only
+    if: github.event_name == 'workflow_dispatch' && (inputs.s06_recovery_only || (inputs.verify_shell && !inputs.file_transfer_acceptance_only))
     needs: official-adapter-candidate
     runs-on: windows-11-arm
     timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        scenario: [disabled-backlog, legacy-source]
+        scenario: [disabled-backlog, legacy-source, edited-source]
     env:
       MIRRORPULSE_NATIVE_TEST: '1'
       S06_RECOVERY_SCENARIO: ${{ matrix.scenario }}
@@ -190,10 +194,17 @@ jobs:
           $evidencePath = Join-Path 'artifacts/evidence' $env:S06_RECOVERY_SCENARIO
           New-Item -ItemType Directory -Path $evidencePath -Force | Out-Null
           $report = Join-Path $evidencePath 'report.json'
-          if ($env:S06_RECOVERY_SCENARIO -ceq 'disabled-backlog') {
-            pwsh ./eng/verify-cli-disabled-operations.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName -LargeBacklog -EvidencePath $report
-          } else {
-            pwsh ./eng/verify-cli-transfers.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName -LegacySourcePackagePath artifacts/local-v1/com.mirrorpulse.adapter.local-0.1.3.mpadapter -EvidencePath $report
+          switch -CaseSensitive ($env:S06_RECOVERY_SCENARIO) {
+            'disabled-backlog' {
+              pwsh ./eng/verify-cli-disabled-operations.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName -LargeBacklog -EvidencePath $report
+            }
+            'legacy-source' {
+              pwsh ./eng/verify-cli-transfers.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName -LegacySourcePackagePath artifacts/local-v1/com.mirrorpulse.adapter.local-0.1.3.mpadapter -EvidencePath $report
+            }
+            'edited-source' {
+              pwsh ./eng/verify-cli-disabled-operations.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName -EditedSourceConflict -EvidencePath $report
+            }
+            default { throw 'The signed S06 recovery scenario is unknown.' }
           }
           if ($LASTEXITCODE -ne 0) { throw 'The signed S06 recovery scenario failed.' }
       - name: Preserve original evidence and the shared release candidate
@@ -207,7 +218,7 @@ jobs:
           if-no-files-found: warn
 
   build-and-test:
-    if: github.event_name != 'workflow_dispatch' || !inputs.file_transfer_acceptance_only
+    if: github.event_name != 'workflow_dispatch' || (!inputs.s06_recovery_only && !inputs.file_transfer_acceptance_only)
     needs: official-adapter-candidate
     runs-on: windows-latest
     steps:
@@ -360,7 +371,7 @@ jobs:
           if-no-files-found: error
 
   official-package-arm64:
-    if: github.event_name != 'workflow_dispatch' || !inputs.file_transfer_acceptance_only
+    if: github.event_name != 'workflow_dispatch' || (!inputs.s06_recovery_only && !inputs.file_transfer_acceptance_only)
     needs: official-adapter-candidate
     runs-on: windows-11-arm
     steps:
@@ -904,7 +915,7 @@ jobs:
           if-no-files-found: error
 
   official-adapters:
-    if: github.event_name != 'workflow_dispatch' || !inputs.file_transfer_acceptance_only
+    if: github.event_name != 'workflow_dispatch' || (!inputs.s06_recovery_only && !inputs.file_transfer_acceptance_only)
     needs: official-adapter-candidate
     runs-on: windows-latest
     permissions:

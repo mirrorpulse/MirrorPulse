@@ -6,6 +6,7 @@ param(
     [string]$EvidencePath,
     [switch]$MovedSourceConflict,
     [ValidateSet('Absent','Successor')][string]$MovedSourceAddress='Absent',
+    [switch]$EditedSourceConflict,
     [switch]$LargeBacklog,
     [switch]$BudgetOnly
 )
@@ -15,7 +16,10 @@ $withSuccessor=$MovedSourceAddress -ieq 'Successor'
 if($withSuccessor -and !$MovedSourceConflict){
     throw 'The successor address requires the moved-source conflict scenario.'
 }
-if($LargeBacklog -and $MovedSourceConflict){throw 'Select one disabled fixture scenario.'}
+$hasSourceConflict=$MovedSourceConflict -or $EditedSourceConflict
+if(($LargeBacklog -and $hasSourceConflict) -or ($MovedSourceConflict -and $EditedSourceConflict)){
+    throw 'Select one disabled fixture scenario.'
+}
 if($env:MIRRORPULSE_NATIVE_TEST -cne '1' -or [string]::IsNullOrWhiteSpace($EvidencePath) -or -not (Test-Path -LiteralPath $PackagePath -PathType Leaf)){
     throw 'The signed disabled-operation fixture requires its exact package, evidence path and disposable native environment.'
 }
@@ -432,7 +436,7 @@ function Invoke-DisabledLargeBacklog {
         allPublishedInputBytesUnchanged=$true;actualManagedModuleLoadClaimed=$false;fullS06Accepted=$false}
 }
 
-function Invoke-DisabledMovedSourceConflict {
+function Invoke-DisabledSourceConflict {
     $script:phase='MovedSourceOfflineCapture'
     $path=$offlineRoute.directoryName+'/kept.txt'
     $localPath=Join-Path $offlineDirectory 'kept.txt'
@@ -468,14 +472,30 @@ function Invoke-DisabledMovedSourceConflict {
         (Get-DisabledHash $localPath) -cne $localDigest){throw 'The offline edit did not retain its exact original notification and acknowledged source bytes.'}
     $marker.originals=@($originalsForMove.operationId)
     Save-DisabledMarker
-    $script:phase='MovedSourceBackendMove'
-    [void](Get-DisabledSourceSnapshot $sourceRoot)
+    $backendBefore=Get-DisabledSourceSnapshot $sourceRoot
     if(Test-Path -LiteralPath $movedSource){throw 'The fixed backend move destination must be vacant.'}
-    [IO.File]::Move($oldSource,$movedSource)
-    $afterMove=Get-DisabledSourceSnapshot $sourceRoot
-    Write-DisabledOriginal 'moved-source-backend-after-move' $afterMove
-    if((Test-Path -LiteralPath $oldSource) -or (Get-DisabledHash $movedSource) -cne $sourceDigest){throw 'The actual backend move did not preserve the original bytes at the new address.'}
-    $expectedBackend=$afterMove
+    $editedSourceDigest=$null
+    if($EditedSourceConflict){
+        $script:phase='EditedSourceBackendWrite'
+        Write-DisabledOriginal 'edited-source-backend-before-write' $backendBefore
+        $bytes=[Text.Encoding]::UTF8.GetBytes('independent in-place edit of the original backend file while disabled')
+        $editedSourceDigest=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes))
+        Write-DisabledBytes $oldSource $bytes
+        $expectedBackend=Get-DisabledSourceSnapshot $sourceRoot
+        Write-DisabledOriginal 'edited-source-backend-after-write' $expectedBackend
+        $untouchedBefore=@($backendBefore|Where-Object relativePath -CNE 'kept.txt')
+        $untouchedAfter=@($expectedBackend|Where-Object relativePath -CNE 'kept.txt')
+        if($editedSourceDigest -cin @($sourceDigest,$localDigest) -or (Get-DisabledHash $oldSource) -cne $editedSourceDigest -or
+            ($untouchedBefore|ConvertTo-Json -Depth 8 -Compress) -cne ($untouchedAfter|ConvertTo-Json -Depth 8 -Compress)){
+            throw 'The in-place backend write must change only the original source file to distinct bytes.'
+        }
+    }else{
+        $script:phase='MovedSourceBackendMove'
+        [IO.File]::Move($oldSource,$movedSource)
+        $expectedBackend=Get-DisabledSourceSnapshot $sourceRoot
+        Write-DisabledOriginal 'moved-source-backend-after-move' $expectedBackend
+        if((Test-Path -LiteralPath $oldSource) -or (Get-DisabledHash $movedSource) -cne $sourceDigest){throw 'The actual backend move did not preserve the original bytes at the new address.'}
+    }
     $successorDigest=$null
     if($withSuccessor){
         $script:phase='MovedSourceBackendSuccessor'
@@ -494,6 +514,9 @@ function Invoke-DisabledMovedSourceConflict {
     Stop-DisabledHost 'moved-source-before-enable'
     $afterDisabledRestart=Invoke-DisabledProbe audit 'moved-source-after-disabled-restart'
     Assert-DisabledOriginals ([pscustomobject]@{journal=$originalsForMove}) $afterDisabledRestart
+    if($afterDisabledRestart.movedSource.acknowledgedRevisionSha256 -cne $baseline){
+        throw 'The disabled restart changed the original acknowledged revision.'
+    }
 
     $script:phase='MovedSourceReenableConflict'
     Start-DisabledHost 'moved-source-enabled'
@@ -512,9 +535,9 @@ function Invoke-DisabledMovedSourceConflict {
     }
     $observedRevision=$conflicts[0].remoteRevision
     $observedRevisionHash=$null
-    if($withSuccessor){
+    if($withSuccessor -or $EditedSourceConflict){
         if([string]::IsNullOrEmpty($observedRevision) -or (Get-DisabledRevisionHash $observedRevision) -ceq $baseline){
-            throw 'The reenabled Host did not observe a distinct successor revision at the original address.'
+            throw 'The reenabled Host did not observe a distinct revision at the original address.'
         }
         $observedRevisionHash=Get-DisabledRevisionHash $observedRevision
     }elseif($null -ne $observedRevision){
@@ -543,16 +566,20 @@ function Invoke-DisabledMovedSourceConflict {
         !@($after.movedSource.conflicts|Where-Object {
             $_.conflictId -cin @($conflicts.conflictId) -and $_.localRevisionSha256 -ceq $baseline -and
             $_.remoteRevisionSha256 -ceq $observedRevisionHash -and $_.changeId -cin $marker.originals
-        }).Count -or (Get-DisabledHash $movedSource) -cne $sourceDigest -or
+        }).Count -or ($MovedSourceConflict -and (Get-DisabledHash $movedSource) -cne $sourceDigest) -or
+        (Get-DisabledHash $localPath) -cne $localDigest -or
         ($finalBackend|ConvertTo-Json -Depth 8 -Compress) -cne ($expectedBackend|ConvertTo-Json -Depth 8 -Compress)){
-        throw 'The stopped oracle could not bind the same original conflict and the intact moved backend file.'
+        throw 'The stopped oracle could not bind the same original conflict and unchanged backend bytes.'
     }
     Confirm-DisabledPublishedInputs
     [ordered]@{schemaVersion=1;sourceSha=$sourceSha;runId=$env:GITHUB_RUN_ID;runtime=$Runtime;signedPackageSha256=$installation[0].packageSha256;
         originalCount=$originalsForMove.Count;actualHostLifetimes=$lifetimes.ToArray();memberId=$member.memberId;nativeItemId=$member.nativeItemId;
-        acknowledgedRevisionSha256=$baseline;backendMovedSha256=$sourceDigest;localEditSha256=$localDigest;
-        movedSourceConflict=$true;oldAddressAbsent=(-not (Test-Path -LiteralPath $oldSource));
-        successorSourceSha256=$successorDigest;successorRemoteRevisionSha256=$observedRevisionHash;
+        acknowledgedRevisionSha256=$baseline;backendOriginalSha256=$sourceDigest;
+        backendMovedSha256=$(if($MovedSourceConflict){$sourceDigest});localEditSha256=$localDigest;
+        movedSourceConflict=$MovedSourceConflict.IsPresent;editedSourceConflict=$EditedSourceConflict.IsPresent;
+        oldAddressAbsent=(-not (Test-Path -LiteralPath $oldSource));
+        successorSourceSha256=$successorDigest;successorRemoteRevisionSha256=$(if($withSuccessor){$observedRevisionHash});
+        editedSourceSha256=$editedSourceDigest;editedSourceRemoteRevisionSha256=$(if($EditedSourceConflict){$observedRevisionHash});
         originalsRetained=$true;actualManagedModuleLoadClaimed=$false;fullS06Accepted=$false}
 }
 try{
@@ -611,7 +638,8 @@ try{
     $routes=@($topology.roots|ForEach-Object{[ordered]@{instanceId=$_.instanceId;rootId=$_.rootId;rootKey=$_.uniquenessKey;directoryName=$_.directoryName;fixtureSide=$(if($_.instanceId -ceq $offline.createdInstanceId){'offline'}elseif($_.instanceId -ceq $active.createdInstanceId){'active'}else{throw 'A foreign route entered the fixture.'})}})
     $commands=[ordered]@{}
     if(!$LargeBacklog){foreach($key in @('createBornFile','createBornDirectory','createEphemeralFile','createEphemeralDirectory','moveKeptFile','moveBornFile','moveBornDirectory','replaceKeptFile','retireFile','retireDirectory','retireEphemeralFile','retireEphemeralDirectory')){$commands[$key]=[guid]::NewGuid().ToString('D')}}
-    $marker=[ordered]@{schemaVersion=1;sourceSha=$sourceSha;phase='Setup';routes=$routes;commands=$commands;members=[ordered]@{};originals=@();movedSourceConflict=$MovedSourceConflict.IsPresent;largeBacklog=$LargeBacklog.IsPresent};Save-DisabledMarker
+    $marker=[ordered]@{schemaVersion=1;sourceSha=$sourceSha;phase='Setup';routes=$routes;commands=$commands;members=[ordered]@{};originals=@();
+        movedSourceConflict=$MovedSourceConflict.IsPresent;editedSourceConflict=$EditedSourceConflict.IsPresent;largeBacklog=$LargeBacklog.IsPresent};Save-DisabledMarker
     Stop-DisabledHost 'configured';Start-DisabledHost 'configured'
     $offlineRoute=@($routes|Where-Object fixtureSide -ceq offline)[0];$activeRoute=@($routes|Where-Object fixtureSide -ceq active)[0]
     $offlineDirectory=Join-Path $sync $offlineRoute.directoryName;$activeDirectory=Join-Path $sync $activeRoute.directoryName
@@ -625,8 +653,8 @@ try{
         Write-DisabledOriginal 'completed-execution' $report
         return
     }
-    if($MovedSourceConflict){
-        $report=Invoke-DisabledMovedSourceConflict
+    if($hasSourceConflict){
+        $report=Invoke-DisabledSourceConflict
         Write-DisabledOriginal 'completed-execution' $report
         return
     }
@@ -782,6 +810,7 @@ try{
         $report|ConvertTo-Json -Depth 30|Set-Content -LiteralPath $evidenceFile -Encoding utf8
         if($LargeBacklog){'Verified the signed large offline backlog, later active progress, original receipts and authenticated teardown.'}
         elseif($MovedSourceConflict){'Verified the signed Local source move, original reenable conflict, retained bytes and authenticated teardown.'}
+        elseif($EditedSourceConflict){'Verified the signed Local in-place source edit, original reenable conflict, retained bytes and authenticated teardown.'}
         else{'Verified the actual signed default-Host offline-operation chain, independent active progress, original outcomes and authenticated teardown.'}
     }
 }

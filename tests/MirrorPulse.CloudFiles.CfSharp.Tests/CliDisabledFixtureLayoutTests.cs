@@ -28,6 +28,12 @@ public sealed class CliDisabledFixtureLayoutTests
         Assert.AreEqual(movedSource, CliDisabledFixtureLayout.RequireAllowedRelativePath(movedInventory, movedSource));
         Assert.IsFalse(movedInventory.AllowedEntries[movedSource]);
         Assert.IsFalse(movedInventory.AllowedEntries.ContainsKey("Active Progress/externally-moved.txt"));
+        var editedMarker = fixture.Marker with { EditedSourceConflict = true };
+        var editedInventory = CliDisabledFixtureLayout.Authenticate(fixture.Path, editedMarker, fixture.Topology);
+        Assert.HasCount(15, editedInventory.AllowedEntries);
+        Assert.ThrowsExactly<InvalidDataException>(() => CliDisabledFixtureLayout.RequireAllowedRelativePath(editedInventory, movedSource));
+        Assert.ThrowsExactly<InvalidDataException>(() => CliDisabledFixtureLayout.Authenticate(fixture.Path,
+            editedMarker with { MovedSourceConflict = true }, fixture.Topology));
         Assert.IsFalse(Directory.Exists(fixture.Path));
     }
 
@@ -51,6 +57,8 @@ public sealed class CliDisabledFixtureLayoutTests
             Assert.ThrowsExactly<InvalidDataException>(() => CliDisabledFixtureLayout.RequireAllowedRelativePath(inventory, path));
         Assert.ThrowsExactly<InvalidDataException>(() => CliDisabledFixtureLayout.Authenticate(fixture.Path,
             marker with { MovedSourceConflict = true }, fixture.Topology));
+        Assert.ThrowsExactly<InvalidDataException>(() => CliDisabledFixtureLayout.Authenticate(fixture.Path,
+            marker with { EditedSourceConflict = true }, fixture.Topology));
         Assert.ThrowsExactly<InvalidDataException>(() => CliDisabledFixtureLayout.Authenticate(fixture.Path,
             marker with { Members = new Dictionary<string, CliDisabledFixtureMember> { ["backlog-081"] = member } }, fixture.Topology));
         Assert.IsFalse(Directory.Exists(fixture.Path));

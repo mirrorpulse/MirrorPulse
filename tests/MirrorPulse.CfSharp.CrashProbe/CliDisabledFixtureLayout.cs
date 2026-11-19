@@ -11,6 +11,7 @@ public sealed record CliDisabledFixtureMarker(int SchemaVersion, string SourceSh
 {
     public string Phase { get; init; } = "Setup";
     public bool MovedSourceConflict { get; init; }
+    public bool EditedSourceConflict { get; init; }
     public bool LargeBacklog { get; init; }
     public IReadOnlyDictionary<string, CliDisabledFixtureMember> Members { get; init; } = new Dictionary<string, CliDisabledFixtureMember>();
     public IReadOnlyList<Guid> Originals { get; init; } = [];
@@ -96,7 +97,8 @@ public static class CliDisabledFixtureLayout
         int maximumOriginals = marker.LargeBacklog ? 512 : 256;
         if (marker.SchemaVersion != 1 || marker.SourceSha is not { Length: 40 } || !marker.SourceSha.All(char.IsAsciiHexDigit) ||
             marker.Phase is not ("Setup" or "Before" or "DisabledRestart" or "ActiveProgress" or "Reenabled") ||
-            (marker.LargeBacklog && marker.MovedSourceConflict) ||
+            (marker.LargeBacklog && (marker.MovedSourceConflict || marker.EditedSourceConflict)) ||
+            (marker.MovedSourceConflict && marker.EditedSourceConflict) ||
             marker.Routes is not { Count: 2 } || topology.Installations.Count != 1 || topology.Instances.Count != 2 || topology.Roots.Count != 2 ||
             marker.Commands is null || marker.Commands.Count != expectedCommands.Count ||
             expectedCommands.Any(name => !marker.Commands.TryGetValue(name, out Guid id) || id == Guid.Empty) ||
