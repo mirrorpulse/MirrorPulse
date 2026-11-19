@@ -1,3 +1,5 @@
+using System.Reflection;
+using Microsoft.Data.Sqlite;
 using MirrorPulse.Core.Configuration;
 using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.State;
@@ -8,6 +10,80 @@ namespace MirrorPulse.Core.Tests;
 public sealed class MirrorPulseRootLabelCatalogTests
 {
     private static readonly string[] ExpectedNames = ["Docs", "My Files"];
+
+    [TestMethod]
+    public async Task RecoveryReadsRootLabelsInPagesAndRejectsDamageAfterTheFirstPage()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "MirrorPulse-label-pages", Guid.NewGuid().ToString("N"));
+        var paths = new MirrorPulseStoragePaths(Path.Combine(directory, "sync"), Path.Combine(directory, "data"));
+        try
+        {
+            await using var catalog = await MirrorPulseProductCatalog.OpenAsync(paths);
+            var manifest = new AdapterManifest(1, AdapterId.Parse("example.label-pages"), "Example", "1.0.0", new(2, 2),
+                new Dictionary<string, string> { ["win-x64"] = "worker/adapter.exe", ["win-arm64"] = "worker/adapter.exe" },
+                new(null), new(null, null), new(true, false, true, true), ["en-US"], "1.0.0", [new("docs", "Docs", "Docs", false)]);
+            var installation = new InstalledAdapter(manifest, InstallId.New(), Path.Combine(directory, "installed"),
+                new(new string('A', 64)), AdapterInstallSource.LocalFile, null, true, DateTimeOffset.UtcNow, AdapterLifecycleState.Installed);
+            await catalog.AddInstallationAsync(installation);
+            for (int index = 1; index <= 18; index++)
+            {
+                string label = $"Docs {index}";
+                await catalog.CreateInstanceAsync(installation.InstallId, label, new Dictionary<string, string>(), [],
+                    Path.Combine(directory, "files", label), Path.Combine(directory, "transfers", label), enabled: index % 2 == 0,
+                    rootLabels: new Dictionary<string, string> { ["docs"] = label });
+            }
+            var registrations = (await catalog.ReadAdapterTopologyAsync()).Roots
+                .OrderBy(root => root.RootId.ToString(), StringComparer.Ordinal).ToArray();
+            var renames = new List<MirrorPulseRootRenameIntent>();
+            foreach (RootRegistration registration in registrations)
+                renames.Add(await catalog.PrepareManagedRootRenameAsync(registration.RootId, "Proposed " + registration.Label));
+            var last = renames[^1];
+            renames[^1] = await catalog.TransitionManagedRootRenameAsync(last.OperationId,
+                MirrorPulseRootRenamePhase.Prepared, MirrorPulseRootRenamePhase.Cancelled);
+
+            var connection = (SqliteConnection)typeof(MirrorPulseProductCatalog).GetField("_connection", BindingFlags.NonPublic | BindingFlags.Instance)!
+                .GetValue(catalog)!;
+            var statements = new List<string>();
+            SQLitePCL.strdelegate_trace trace = (_, sql) => statements.Add(sql);
+            SQLitePCL.raw.sqlite3_trace(connection.Handle!, trace, null);
+            try
+            {
+                var expected = renames.Where(intent => intent.IsPending).Select(intent => intent.RootId).OrderBy(root => root.Value).ToArray();
+                CollectionAssert.AreEqual(expected, (await catalog.ReadNamespaceRecoveryRootsAsync()).ToArray());
+            }
+            finally
+            {
+                SQLitePCL.raw.sqlite3_trace(connection.Handle!, (SQLitePCL.strdelegate_trace)null!, null);
+                GC.KeepAlive(trace);
+            }
+            var pages = statements.Where(sql => sql.StartsWith("SELECT root_id,payload FROM (", StringComparison.Ordinal) &&
+                sql.Contains("FROM managed_root_renames", StringComparison.Ordinal)).ToArray();
+            Assert.HasCount(2, pages);
+            Assert.IsTrue(pages.All(sql => sql.Contains("LIMIT 16", StringComparison.Ordinal)));
+            CollectionAssert.AreEqual(renames.ToArray(), (await catalog.ReadManagedRootRenamesAsync()).ToArray());
+
+            await using var damage = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = paths.ProductCatalogDatabasePath,
+                Pooling = false
+            }.ToString());
+            await damage.OpenAsync();
+            await using var command = damage.CreateCommand();
+            command.CommandText = "SELECT payload FROM managed_root_renames WHERE root_id=$root;";
+            command.Parameters.AddWithValue("$root", last.RootId.ToString());
+            string original = (string)(await command.ExecuteScalarAsync())!;
+            command.CommandText = "UPDATE managed_root_renames SET payload='{}' WHERE root_id=$root;";
+            Assert.AreEqual(1, await command.ExecuteNonQueryAsync());
+            await Assert.ThrowsExactlyAsync<InvalidDataException>(() => catalog.ReadNamespaceRecoveryRootsAsync());
+
+            command.CommandText = "UPDATE managed_root_renames SET root_id=NULL,payload=$payload WHERE root_id=$root;";
+            command.Parameters.AddWithValue("$payload", original);
+            Assert.AreEqual(1, await command.ExecuteNonQueryAsync());
+            await Assert.ThrowsExactlyAsync<InvalidDataException>(() => catalog.ReadNamespaceDispatchFencedRootsAsync());
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
     [TestMethod]
     [DataRow(true)]
     [DataRow(false)]

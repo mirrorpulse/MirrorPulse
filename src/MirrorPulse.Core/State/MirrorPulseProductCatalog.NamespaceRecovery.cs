@@ -95,7 +95,8 @@ public sealed partial class MirrorPulseProductCatalog
         await AddRootLabelJournalFencesAsync(roots, transaction, cancellationToken).ConfigureAwait(false);
         await foreach (var update in ReadPendingRemoteUpdatesCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
             if (update.Plan.OperationId != admittedRemoteUpdateId) roots.Add(update.Plan.Child.Context.Member.RootId!.Value);
-        foreach (var rename in await ReadManagedRootRenamesCoreAsync(cancellationToken, transaction).ConfigureAwait(false))
+        await foreach (var rename in ReadNamespaceOwnerRowsCoreAsync(NamespaceRootRenamePageSql, transaction,
+            static (row, rootId) => ReadRootRenameIntent(row.GetString(1), rootId.ToString("D")), cancellationToken).ConfigureAwait(false))
         {
             if (rename.IsPending) roots.Add(rename.RootId);
             else if (rename.Phase == MirrorPulseRootRenamePhase.Cancelled)

@@ -34,15 +34,16 @@ Internal callers retain the latest and optional selected action while validating
 the current row. The existing 4096-action history limit stays unchanged. Public
 history queries still return their complete requested original actions. Cache misses can repeat validation; per-turn work and
 fairness require separate limits.
-Pending move root IDs and unregistered birth IDs also use those 16-key pages.
-Birth discovery checks both unregistered intents and retained reservations. A
-missing side, a malformed key or damaged ownership on a later page rejects the
-complete snapshot before the Host can use any roots from it.
+Pending move root IDs, unregistered birth IDs and current managed-root Label
+records all use 16-row pages in the recovery snapshot. Birth discovery checks
+both unregistered intents and retained reservations. Label discovery validates
+the indexed payload for every current record and the retained guarded ownership
+where a cancellation records it. A missing side, a malformed key or damage on a
+later page rejects the complete snapshot before the Host can use any roots.
 
-Managed-root rename discovery, root sorting, total catalog work per turn and
-complete fairness still require their own bounds. The default Host must
-continue using its shared admission, namespace actor and current native
-verification before dispatch.
+Root sorting, total catalog work per turn and complete fairness still require
+their own bounds. The default Host must continue using its shared admission,
+namespace actor and current native verification before dispatch.
 
 An individual managed-root rename recovery now selects its original operation
 through the indexed catalog key in the Host, scheduler service and public-proof
@@ -50,8 +51,8 @@ coordinator. It validates the same indexed owner, original proof and observation
 without loading another root's history. A missing operation returns no record;
 corruption in the selected record still fails. The complete history API retains
 all requested original records and continues to report corruption. Startup still
-requests the complete discovery inventory; only each selected recovery uses the
-point lookup. This does not establish bounded pending discovery or complete P083.
+validates the complete inventory before returning any roots. Individual
+recoveries use the point lookup. Full catalog work and fairness remain open.
 
 Public product move reads now opt into the existing successful-fact snapshot for
 their own SQLite transaction: intent, pending owner, before-native start, status,

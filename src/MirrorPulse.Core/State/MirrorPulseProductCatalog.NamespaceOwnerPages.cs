@@ -5,6 +5,18 @@ namespace MirrorPulse.Core.State;
 
 public sealed partial class MirrorPulseProductCatalog
 {
+    internal const string NamespaceRootRenamePageSql = """
+        SELECT root_id,payload FROM (
+            SELECT root_id,payload FROM (
+                SELECT root_id,payload FROM managed_root_renames
+                WHERE root_id >= $after AND ($first=1 OR root_id<>$after)
+                ORDER BY root_id LIMIT 16)
+            UNION ALL SELECT '', '' FROM (
+                SELECT root_id FROM managed_root_renames
+                WHERE $first=1 AND root_id IS NULL LIMIT 1)
+        ) ORDER BY root_id LIMIT 16;
+        """;
+
     internal const string NamespacePendingMoveRootPageSql = """
         SELECT root_id FROM namespace_member_move_pending
         WHERE root_id >= $after AND ($first=1 OR root_id<>$after)
@@ -80,35 +92,38 @@ public sealed partial class MirrorPulseProductCatalog
         ) ORDER BY member_id LIMIT 16;
         """;
 
-    /// <summary>Streams canonical owner IDs while retaining one page in the caller's original transaction.</summary>
+    private IAsyncEnumerable<Guid> ReadNamespaceOwnerIdsCoreAsync(string sql, SqliteTransaction transaction, CancellationToken token)
+        => ReadNamespaceOwnerRowsCoreAsync(sql, transaction, static (_, id) => id, token);
+
+    /// <summary>Streams owner rows while retaining one page in the caller's original transaction.</summary>
     /// <remarks>Initial inclusive comparison also visits a corrupt empty ID. Each union branch is bounded
     /// before deduplication. Payload validation and complete recovery publication remain with the caller.</remarks>
-    private async IAsyncEnumerable<Guid> ReadNamespaceOwnerIdsCoreAsync(string sql, SqliteTransaction transaction,
-        [EnumeratorCancellation] CancellationToken token)
+    private async IAsyncEnumerable<T> ReadNamespaceOwnerRowsCoreAsync<T>(string sql, SqliteTransaction transaction,
+        Func<SqliteDataReader, Guid, T> read, [EnumeratorCancellation] CancellationToken token)
     {
         string after = string.Empty;
         while (true)
         {
-            var page = new List<Guid>(16);
+            var page = new List<T>(16);
+            string previous = after;
             await using (var query = _connection.CreateCommand())
             {
                 query.Transaction = transaction; query.CommandText = sql;
                 query.Parameters.AddWithValue("$after", after);
                 query.Parameters.AddWithValue("$first", after.Length == 0 ? 1 : 0);
                 await using var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
-                string previous = after;
                 while (await reader.ReadAsync(token).ConfigureAwait(false))
                 {
                     Guid id = ParseNamespaceMemberId(reader.GetString(0));
                     string current = id.ToString("D");
                     if (page.Count == 16 || StringComparer.Ordinal.Compare(previous, current) >= 0)
                         throw new InvalidDataException("The namespace owner page lost its strict canonical continuation.");
-                    page.Add(id); previous = current;
+                    page.Add(read(reader, id)); previous = current;
                 }
             }
-            foreach (Guid id in page) yield return id;
+            foreach (T row in page) yield return row;
             if (page.Count < 16) yield break;
-            after = page[^1].ToString("D");
+            after = previous;
         }
     }
 }
