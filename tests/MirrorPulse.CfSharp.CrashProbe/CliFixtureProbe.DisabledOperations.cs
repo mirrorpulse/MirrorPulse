@@ -212,7 +212,7 @@ public static partial class CliFixtureProbe
             }
             stage = "BlockedOperationInventory";
             var blocked = await catalog.ReadBlockedLocalOperationsAsync();
-            int maximumBlocked = marker.LargeBacklog ? 256 : 128;
+            int maximumBlocked = marker.LargeBacklog ? 512 : 128;
             if (blocked.Count > maximumBlocked)
             {
                 stage = "BlockedOperationInventoryLimit";

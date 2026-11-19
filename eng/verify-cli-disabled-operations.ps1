@@ -281,17 +281,27 @@ function Confirm-DisabledPublishedInputs {
     Write-DisabledOriginal 'published-inputs-after' ([ordered]@{sourceSha=$sourceSha;inputs=$inputs.ToArray();actualBytesUnchanged=$true;actualManagedModuleLoadClaimed=$false})
 }
 
-function Wait-DisabledBacklog([string]$Name,[int]$Minimum,[int]$Maximum=[int]::MaxValue){
+function Wait-DisabledBacklog([string]$Name,[int]$Minimum){
     $deadline=[DateTimeOffset]::UtcNow.AddSeconds(45)
     $previous=-1;$changedAt=[DateTimeOffset]::UtcNow
     do{
         $status=Invoke-DisabledCli ($Name+'-status') @('--no-start','status')
         $now=[DateTimeOffset]::UtcNow
         if($status.pendingUploads -ne $previous){$previous=$status.pendingUploads;$changedAt=$now}
-        if($previous -ge $Minimum -and $previous -le $Maximum -and ($now-$changedAt).TotalSeconds -ge 2){return $status}
+        if($previous -ge $Minimum -and ($now-$changedAt).TotalSeconds -ge 2){return $status}
         Start-Sleep -Milliseconds 150
     }while([DateTimeOffset]::UtcNow -lt $deadline)
     throw 'The public pending upload count did not settle at the required fixture boundary.'
+}
+
+function Read-DisabledBacklogContinuation($Previous,[long]$PreviousSequence,$Current,[string[]]$OfflineItems){
+    $rows=@($Current.journal|Where-Object itemId -CIn $OfflineItems)
+    Assert-DisabledOriginals @{journal=$Previous} @{journal=$rows}
+    $newRows=@($rows|Where-Object operationId -CNotIn @($Previous.operationId))
+    if(@($newRows|Where-Object {$_.kind -cne 'MetadataUpdate' -or $_.sequence -le $PreviousSequence -or $_.attemptCount -ne 0}).Count){
+        throw 'Restart recorded additional offline work beyond fresh, unattempted metadata on the same files.'
+    }
+    [pscustomobject]@{journal=$rows;additionalMetadataCount=$newRows.Count}
 }
 
 function Invoke-DisabledLargeBacklog {
@@ -350,11 +360,12 @@ function Invoke-DisabledLargeBacklog {
     $restarted=Invoke-DisabledProbe audit 'backlog-after-disabled-restart'
     Assert-DisabledOriginals $before $restarted
     Assert-DisabledLocalReceipts $before $restarted
+    $restartBacklog=Read-DisabledBacklogContinuation $offlineOriginals $before.journal[-1].sequence $restarted $expectedItems
     $activeOriginals=@($restarted.journal|Where-Object itemId -CEQ $activeItemId)
     $laterActive=@($activeOriginals|Where-Object operationId -CNotIn @($activeBaseline.operationId))
     if(!@($laterActive|Where-Object kind -CEQ 'ContentUpdate').Count -or
         @($laterActive|Where-Object sequence -le $before.journal[-1].sequence).Count -or
-        @($restarted.journal).Count -ne ($offlineOriginals.Count+$activeOriginals.Count) -or
+        @($restarted.journal).Count -ne ($restartBacklog.journal.Count+$activeOriginals.Count) -or
         $queuedStatus.pendingUploads -lt @($restarted.journal).Count -or (Get-DisabledHash $activeSource) -cne $activeOriginalDigest){
         throw 'The later active peer write did not remain a separate queued SDK operation after the disabled page.'
     }
@@ -367,15 +378,18 @@ function Invoke-DisabledLargeBacklog {
     Read-DisabledWorkers 'backlog-only-peer-active' 1
     $activeDigest=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($activeBytes))
     Wait-DisabledHash $activeSource $activeDigest 'backlog-peer-accepted'
-    # The public count also includes root metadata outside this file-scoped oracle.
-    $peerAccepted=Wait-DisabledBacklog 'backlog-peer-accepted' $offlineOriginals.Count ($queuedStatus.pendingUploads-$activeOriginals.Count)
+    # A Host restart can enqueue more offline metadata. The stopped audit verifies
+    # the exact active originals and their outcomes after the backend accepts the bytes.
+    $peerAccepted=Wait-DisabledBacklog 'backlog-peer-accepted' $restartBacklog.journal.Count
     Assert-DisabledInstances @{status=$peerAccepted} $false $true
     Stop-DisabledHost 'backlog-finished';$marker.phase='ActiveProgress';Save-DisabledMarker
     $after=Invoke-DisabledProbe audit 'backlog-after-active-progress'
-    Assert-DisabledOriginals @{journal=$offlineOriginals} $after
+    $finalBacklog=Read-DisabledBacklogContinuation $restartBacklog.journal $restarted.journal[-1].sequence $after $expectedItems
     Assert-DisabledLocalReceipts $before $after
-    if(@($after.journal).Count -ne $offlineOriginals.Count -or
-        @($after.originals|Where-Object {$_.operationId -cin @($offlineOriginals.operationId) -and
+    $offlineOutcomes=@($after.originals|Where-Object operationId -CIn @($restartBacklog.journal.operationId))
+    if(@($after.journal).Count -ne $finalBacklog.journal.Count -or
+        $offlineOutcomes.Count -ne $restartBacklog.journal.Count -or
+        @($offlineOutcomes|Where-Object {
             (!$_.pending -or $_.planId -or $_.blockReason -or @($_.effects|Where-Object state -CNE 'Missing').Count)}).Count){
         throw 'The original offline operations changed or acquired remote dispatch state while the peer progressed.'
     }
@@ -400,7 +414,9 @@ function Invoke-DisabledLargeBacklog {
     Confirm-DisabledPublishedInputs
     [ordered]@{schemaVersion=1;sourceSha=$sourceSha;runId=$env:GITHUB_RUN_ID;runtime=$Runtime;signedPackageSha256=$installation[0].packageSha256;
         actualHostLifetimes=$lifetimes.ToArray();largeBacklog=$true;offlineFileCount=$backlogKeys.Count;journalPageSize=$journalPageSize;
-        offlineOriginalCount=$offlineOriginals.Count;activeBaselineMetadataCount=$activeBaseline.Count;laterActiveOriginalCount=$laterActive.Count;
+        offlineOriginalCount=$offlineOriginals.Count;offlineMetadataAddedAfterRestart=$restartBacklog.additionalMetadataCount;
+        offlineMetadataAddedWhilePeerAdvanced=$finalBacklog.additionalMetadataCount;
+        activeBaselineMetadataCount=$activeBaseline.Count;laterActiveOriginalCount=$laterActive.Count;
         activeOriginalCount=$activeOriginals.Count;activeRemoteSha256=$actualActiveDigest;
         originalsPreservedAcrossDisabledRestart=$true;independentActiveSourceProgress=$true;sourceUnchangedWhileDisabled=$true;
         allPublishedInputBytesUnchanged=$true;actualManagedModuleLoadClaimed=$false;fullS06Accepted=$false}

@@ -93,6 +93,7 @@ public static class CliDisabledFixtureLayout
         string root = RequireFixtureDirectory(directory);
         var memberSpecs = GetMemberSpecs(marker);
         IReadOnlyList<string> expectedCommands = marker.LargeBacklog ? [] : CommandNames;
+        int maximumOriginals = marker.LargeBacklog ? 512 : 256;
         if (marker.SchemaVersion != 1 || marker.SourceSha is not { Length: 40 } || !marker.SourceSha.All(char.IsAsciiHexDigit) ||
             marker.Phase is not ("Setup" or "Before" or "DisabledRestart" or "ActiveProgress" or "Reenabled") ||
             (marker.LargeBacklog && marker.MovedSourceConflict) ||
@@ -103,7 +104,7 @@ public static class CliDisabledFixtureLayout
             marker.Members.Any(item => !memberSpecs.ContainsKey(item.Key) || item.Value is null || item.Value.MemberId == Guid.Empty || item.Value.ItemId == Guid.Empty) ||
             marker.Members.Values.Select(item => item.MemberId).Distinct().Count() != marker.Members.Count ||
             marker.Members.Values.Select(item => item.ItemId).Distinct().Count() != marker.Members.Count ||
-            marker.Originals is null || marker.Originals.Count > 256 || marker.Originals.Any(id => id == Guid.Empty) || marker.Originals.Distinct().Count() != marker.Originals.Count)
+            marker.Originals is null || marker.Originals.Count > maximumOriginals || marker.Originals.Any(id => id == Guid.Empty) || marker.Originals.Distinct().Count() != marker.Originals.Count)
             throw new InvalidDataException("The disabled fixture lost its exact bounded marker, commands or topology.");
         var installed = topology.Installations[0];
         if (installed.AdapterId.Value != "com.mirrorpulse.adapter.local" || !installed.IsSigned ||
