@@ -34,10 +34,15 @@ Internal callers retain the latest and optional selected action while validating
 the current row. The existing 4096-action history limit stays unchanged. Public
 history queries still return their complete requested original actions. Cache misses can repeat validation; per-turn work and
 fairness require separate limits.
-Managed-root rename discovery, move-root IDs, unregistered birth discovery,
-root sorting, total catalog work per turn and complete fairness still require
-their own bounds. The default Host must continue using its shared admission,
-namespace actor and current native verification before dispatch.
+Pending move root IDs and unregistered birth IDs also use those 16-key pages.
+Birth discovery checks both unregistered intents and retained reservations. A
+missing side, a malformed key or damaged ownership on a later page rejects the
+complete snapshot before the Host can use any roots from it.
+
+Managed-root rename discovery, root sorting, total catalog work per turn and
+complete fairness still require their own bounds. The default Host must
+continue using its shared admission, namespace actor and current native
+verification before dispatch.
 
 An individual managed-root rename recovery now selects its original operation
 through the indexed catalog key in the Host, scheduler service and public-proof
