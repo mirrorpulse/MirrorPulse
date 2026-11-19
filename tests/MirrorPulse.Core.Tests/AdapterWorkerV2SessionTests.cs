@@ -75,34 +75,41 @@ public sealed partial class AdapterWorkerV2SessionTests
         string directory = Path.Combine(Path.GetTempPath(), "MirrorPulse-tests", Guid.NewGuid().ToString("N"));
         InstanceId instance = InstanceId.New();
         var topology = CreateFixtureTopology(directory, instance, RootRegistrationState.Disabled);
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+        CancellationToken token = timeout.Token;
         try
         {
             string cache = topology.Instances.Single().TransferCacheDirectory;
             Directory.CreateDirectory(cache);
-            await File.WriteAllTextAsync(Path.Combine(cache, ".mp-startup-fixture-mode"), mode, timeout.Token);
-            await using var catalog = await MirrorPulseProductCatalog.OpenAsync(new(Path.Combine(directory, "sync"), Path.Combine(directory, "data")));
-            await catalog.SaveAdapterTopologyAsync(topology);
+            await File.WriteAllTextAsync(Path.Combine(cache, ".mp-startup-fixture-mode"), mode, token);
+            await using var catalog = await MirrorPulseProductCatalog.OpenAsync(new(Path.Combine(directory, "sync"), Path.Combine(directory, "data")), cancellationToken: token);
+            await catalog.SaveAdapterTopologyAsync(topology, token);
+            var request = await PrepareRetirementAsync(catalog, RetirementPlan(instance, "left"), token: token);
+            var disabled = mode == "OriginalDirectory"
+                ? await PrepareRetirementAsync(catalog, RetirementPlan(instance, "right"), token: token)
+                : null;
+
+            timeout.CancelAfter(TimeSpan.FromSeconds(15));
             await using var supervisor = new AdapterInstanceProcessSupervisor(catalog, new WindowsCredentialManagerStore());
             await supervisor.StartAsync(topology);
-            while (!supervisor.IsConnected(instance)) await Task.Delay(25, timeout.Token);
+            while (!supervisor.IsConnected(instance)) await Task.Delay(25, token);
 
-            var request = await PrepareRetirementAsync(catalog, RetirementPlan(instance, "left"), token: timeout.Token);
+            timeout.CancelAfter(TimeSpan.FromSeconds(15));
             switch (mode)
             {
                 case "Normal":
                     var unsupported = await Assert.ThrowsExactlyAsync<NotSupportedException>(() =>
-                        supervisor.RetireOriginalDirectoryAsync(request, timeout.Token).AsTask());
+                        supervisor.RetireOriginalDirectoryAsync(request, token).AsTask());
                     Assert.AreEqual("OriginalDirectoryEffectsUnsupported", unsupported.Message);
-                    Assert.AreEqual("left/revision", await supervisor.StatAsync(new(instance, "same.txt", "left"), timeout.Token));
+                    Assert.AreEqual("left/revision", await supervisor.StatAsync(new(instance, "same.txt", "left"), token));
                     break;
                 case "OriginalDirectory":
-                    var disabled = await PrepareRetirementAsync(catalog, RetirementPlan(instance, "right"), token: timeout.Token);
+                    Assert.IsNotNull(disabled);
                     var offline = await Assert.ThrowsExactlyAsync<IOException>(() =>
-                        supervisor.RetireOriginalDirectoryAsync(disabled, timeout.Token).AsTask());
+                        supervisor.RetireOriginalDirectoryAsync(disabled, token).AsTask());
                     Assert.AreEqual("RootOffline", offline.Message);
-                    var replies = await Task.WhenAll(supervisor.RetireOriginalDirectoryAsync(request, timeout.Token).AsTask(),
-                        supervisor.RetireOriginalDirectoryAsync(request, timeout.Token).AsTask());
+                    var replies = await Task.WhenAll(supervisor.RetireOriginalDirectoryAsync(request, token).AsTask(),
+                        supervisor.RetireOriginalDirectoryAsync(request, token).AsTask());
                     var receipt = replies[0];
                     Assert.IsNull(receipt.AcceptedRevision);
                     Assert.AreEqual(receipt.ReceiptId, replies[1].ReceiptId);
@@ -112,7 +119,7 @@ public sealed partial class AdapterWorkerV2SessionTests
                     break;
                 default:
                     var rejected = await Assert.ThrowsExactlyAsync<IOException>(() =>
-                        supervisor.RetireOriginalDirectoryAsync(request, timeout.Token).AsTask());
+                        supervisor.RetireOriginalDirectoryAsync(request, token).AsTask());
                     Assert.AreEqual("The Adapter Worker disconnected.", rejected.Message);
                     break;
             }

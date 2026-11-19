@@ -20,7 +20,7 @@ public sealed partial class AdapterWorkerV2SessionTests
         var topology = CreateFixtureTopology(directory, instance);
         var plan = RetirementPlan(instance, "left");
         Guid operation = plan.Steps[^1].Operation.OperationId;
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
         CancellationToken token = timeout.Token;
         try
         {
@@ -32,9 +32,11 @@ public sealed partial class AdapterWorkerV2SessionTests
             {
                 await catalog.SaveAdapterTopologyAsync(topology, token);
                 request = await PrepareRetirementAsync(catalog, plan, token: token);
+                timeout.CancelAfter(TimeSpan.FromSeconds(15));
                 await using var supervisor = new AdapterInstanceProcessSupervisor(catalog, new WindowsCredentialManagerStore());
                 await supervisor.StartAsync(topology);
                 while (!supervisor.IsConnected(instance)) await Task.Delay(25, token);
+                timeout.CancelAfter(TimeSpan.FromSeconds(20));
                 await Assert.ThrowsExactlyAsync<IOException>(() => supervisor.RetireOriginalDirectoryAsync(request, token).AsTask());
                 var pending = await catalog.ReadOriginalDirectoryRetirementAsync(operation, token);
                 Assert.IsNotNull(pending);
@@ -43,6 +45,7 @@ public sealed partial class AdapterWorkerV2SessionTests
                 Assert.AreEqual(MirrorPulseMutationState.Executing, (await catalog.ReadMutationAsync(operation, token))!.State);
             }
 
+            timeout.CancelAfter(TimeSpan.FromSeconds(45));
             string workerState = Path.Combine(paths.DataRootPath, "state", "workers", instance.Value.ToString("N"));
             byte[] workerOriginal = await File.ReadAllBytesAsync(Path.Combine(workerState, ".mp-original-directory-fixture-receipt"), token);
             var workerReceipt = AdapterProtocolJson.Decode<AdapterOwnedChildEffectReceipt>(workerOriginal);
@@ -57,8 +60,10 @@ public sealed partial class AdapterWorkerV2SessionTests
                 var changed = request with { Retirement = request.Retirement with { SealedManifestFingerprint = new string('B', 64) } };
                 changed = changed with { RequestFingerprint = changed.CalculateFingerprint() };
                 await Assert.ThrowsExactlyAsync<InvalidDataException>(() => supervisor.RetireOriginalDirectoryAsync(changed, token).AsTask());
+                timeout.CancelAfter(TimeSpan.FromSeconds(15));
                 await supervisor.StartAsync(topology);
                 while (!supervisor.IsConnected(instance)) await Task.Delay(25, token);
+                timeout.CancelAfter(TimeSpan.FromSeconds(20));
                 var pending = await catalog.ReadOriginalDirectoryRetirementAsync(operation, token);
                 Assert.IsNotNull(pending);
                 var replay = await supervisor.RetireOriginalDirectoryAsync(pending.Request, token);
@@ -66,6 +71,7 @@ public sealed partial class AdapterWorkerV2SessionTests
                 CollectionAssert.AreEqual(workerOriginal, AdapterProtocolJson.Encode(replay));
             }
 
+            timeout.CancelAfter(TimeSpan.FromSeconds(20));
             await using var reopened = await MirrorPulseProductCatalog.OpenAsync(paths, cancellationToken: token);
             await using var offline = new AdapterInstanceProcessSupervisor(reopened, new WindowsCredentialManagerStore());
             var accepted = await offline.RetireOriginalDirectoryAsync(request, token);
