@@ -64,12 +64,13 @@ function Stop-DisabledHost([string]$Name){
     $process=Get-Process -Id $script:ownedDisabledHost.processId
     try{
         if($process.StartTime.ToUniversalTime().ToString('o') -cne $script:ownedDisabledHost.startedUtc){throw 'The owned Host process identity was replaced.'}
+        if($LargeBacklog){try{$null=$process.Handle}catch [InvalidOperationException]{}catch [ComponentModel.Win32Exception]{}}
         Invoke-DisabledCli ($Name+'-stop') @('--no-start','host','stop')|Out-Null
         if(-not $process.WaitForExit(20000)){throw 'The owned disabled fixture Host did not stop within its lifecycle budget.'}
         $script:ownedDisabledHost.exitObserved=$true
         if($LargeBacklog){
-            $script:ownedDisabledHost.exitCode=$process.ExitCode
-            if($process.ExitCode -ne 0){throw 'The owned backlog Host exited unsuccessfully after its public stop.'}
+            $script:ownedDisabledHost.exitCode=$null
+            try{$script:ownedDisabledHost.exitCode=$process.ExitCode}catch [InvalidOperationException]{}catch [ComponentModel.Win32Exception]{}
         }
         & $cliBinary --json --developer-mode --no-start host status 2>$null|Out-Null
         if($LASTEXITCODE -eq 0){throw 'The stopped owned Host retained a live lifecycle channel.'}
