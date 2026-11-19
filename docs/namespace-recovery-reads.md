@@ -41,17 +41,22 @@ the indexed payload for every current record and the retained guarded ownership
 where a cancellation records it. A missing side, a malformed key or damage on a
 later page rejects the complete snapshot before the Host can use any roots.
 
-Startup discovery selects a root's pending births, born-member actions, remote
-updates, transfers, journal directory Moves and preserving Deletes from the
-same validated fence scan. The read transaction covers the full catalog, and
-selection becomes available to the caller only after that validation succeeds.
-SQLite traces with 17 real owners showed birth-admission reads fall from 34 to
-17, and ID pages for remote updates and born-member actions from four to two
-per startup query. Later-page corruption still rejects the complete result.
+Startup discovery selects a root's pending operations from the validated fence
+scan in one read transaction. A pending retirement leaf still validates its
+sealed batch membership. The batch is the recovery operation returned for that
+leaf. The caller receives the selected work only after validation succeeds
+across the full catalog.
 
-Root sorting, total catalog work per turn and complete fairness still require
-their own bounds. The default Host must continue using its shared admission,
-namespace actor and current native verification before dispatch.
+SQLite traces with 17 real owners showed birth-admission reads fall from 34 to
+17. Remote updates, born-member actions, retirements and retirement batches
+each went from four ID pages to two per startup query. Later-page corruption
+still rejects the complete result. Internal membership checks use the validated
+root set. Public fence lists and full tree fingerprints use the established
+root order. A scoped tree includes only its own fence when present.
+
+Total catalog work per turn and complete fairness still require their own
+bounds. The default Host must continue using its shared admission, namespace
+actor and current native verification before dispatch.
 
 An individual managed-root rename recovery now selects its original operation
 through the indexed catalog key in the Host, scheduler service and public-proof

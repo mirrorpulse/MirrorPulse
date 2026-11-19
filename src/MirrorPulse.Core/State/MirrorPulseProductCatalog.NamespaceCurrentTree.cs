@@ -159,8 +159,11 @@ public sealed partial class MirrorPulseProductCatalog
             snapshots.Add(snapshot);
         }
         var fences = await ReadNamespaceRootFencesCoreAsync(true, transaction, cancellationToken).ConfigureAwait(false);
+        IReadOnlyList<RootId> snapshotFences;
+        if (scopeRoot is not { } scoped) snapshotFences = OrderNamespaceRootFences(fences);
+        else snapshotFences = fences.Contains(scoped) ? Array.AsReadOnly(new[] { scoped }) : Array.Empty<RootId>();
         var result = new MirrorPulseNamespaceCurrentTreeSnapshot(anchorMemberId, snapshots.AsReadOnly(), retired.AsReadOnly(),
-            scopeRoot is null ? fences : Array.AsReadOnly(fences.Where(root => root == scopeRoot).ToArray()), string.Empty)
+            snapshotFences, string.Empty)
         {
             ScopeRoot = scopeRoot,
             RetiredTreeMembers = retiredTrees.Count == 0 ? null : retiredTrees.AsReadOnly(),

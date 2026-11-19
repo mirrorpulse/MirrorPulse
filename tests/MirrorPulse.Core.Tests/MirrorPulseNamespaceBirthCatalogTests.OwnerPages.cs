@@ -127,8 +127,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
                 var selected = await catalog.ReadNamespacePendingOperationsAsync(owners[0].Root);
                 Assert.IsTrue(selected.Any(entry => entry.OperationId == owners[0].Id));
             });
-            if (kind is "update" or "born")
-                Assert.AreEqual(2, startupStatements.Count(IsPage), "Startup must reuse the owners already verified by the single complete fence scan.");
+            Assert.AreEqual(2, startupStatements.Count(IsPage), "Startup must reuse the owners already verified by the single complete fence scan.");
             string key = kind == "born" ? "action_id" : "operation_id";
             await ExecuteSqlAsync(fixture.Paths, $"UPDATE {table} SET fingerprint=zeroblob(32) WHERE {key}='{owners[^1].Id:D}';");
             await Assert.ThrowsExactlyAsync<InvalidDataException>(() => catalog.ReadNamespaceDispatchFencedRootsAsync());

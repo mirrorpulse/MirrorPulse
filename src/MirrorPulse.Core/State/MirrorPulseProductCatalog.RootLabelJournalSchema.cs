@@ -99,7 +99,8 @@ public sealed partial class MirrorPulseProductCatalog
             ?? throw new InvalidDataException("The root journal fence lost its original ACK owner.");
     }
 
-    private async Task AddRootLabelJournalFencesAsync(HashSet<RootId> roots, SqliteTransaction transaction, CancellationToken token)
+    private async Task AddRootLabelJournalFencesAsync(HashSet<RootId> roots, SqliteTransaction transaction,
+        NamespacePendingSelection? pending, CancellationToken token)
     {
         var ids = await ReadRootLabelJournalPendingIdsCoreAsync(null, null, 4097, transaction, token).ConfigureAwait(false);
         if (ids.Count > 4096) throw new InvalidDataException("Pending root ACK discovery exceeds the Host's root inventory bound.");
@@ -108,6 +109,7 @@ public sealed partial class MirrorPulseProductCatalog
             var retained = await ReadRootLabelJournalCoreAsync(id, transaction, token).ConfigureAwait(false)
                 ?? throw new InvalidDataException("A root journal fence lost its immutable first start.");
             roots.Add(retained.Witness.RootId);
+            pending?.Add(retained.Witness.RootId, id, MirrorPulseNamespacePendingOperationKind.RootLabelJournal);
         }
     }
 }

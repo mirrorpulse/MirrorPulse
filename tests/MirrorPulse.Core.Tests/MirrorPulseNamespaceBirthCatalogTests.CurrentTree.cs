@@ -6,6 +6,52 @@ namespace MirrorPulse.Core.Tests;
 public sealed partial class MirrorPulseNamespaceBirthCatalogTests
 {
     [TestMethod]
+    public async Task CurrentTreeSnapshotOrdersFencedRootsBeforeFingerprintingAcrossCatalogOwners()
+    {
+        using var fixture = new Fixture();
+        MirrorPulseNamespaceCurrentTreeSnapshot first;
+        Guid anchor;
+        await using (var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths))
+        {
+            var seed = await PrepareMovableMemberAsync(catalog);
+            anchor = seed.ParentMember.ParentMemberId!.Value;
+            var members = new[]
+            {
+                await AddOwnerPageMemberAsync(catalog, seed, 1),
+                await AddOwnerPageMemberAsync(catalog, seed, 2)
+            }.OrderByDescending(member => member.RootId!.Value.Value).ToArray();
+
+            for (int index = 0; index < members.Length; index++)
+            {
+                var intent = (await RemoteRetirementAsync(catalog, members[index])) with
+                {
+                    Version = 1,
+                    OperationId = OwnerPageId(9, index),
+                    RemoteEntry = null
+                };
+                await catalog.PrepareNamespaceRetirementAsync(intent);
+            }
+
+            var expected = members.Reverse().Select(member => member.RootId!.Value).ToArray();
+            first = await catalog.ReadNamespaceCurrentTreeSnapshotAsync(anchor);
+            CollectionAssert.AreEqual(expected, first.FencedRoots.ToArray());
+            CollectionAssert.AreEqual(expected, (await catalog.ReadNamespaceDispatchFencedRootsAsync()).ToArray());
+            foreach (var root in expected)
+            {
+                var scoped = await catalog.ReadNamespaceCurrentRootSnapshotAsync(anchor, root);
+                CollectionAssert.AreEqual(new[] { root }, scoped.FencedRoots.ToArray());
+            }
+            var idle = await catalog.ReadNamespaceCurrentRootSnapshotAsync(anchor, seed.Move.RootId);
+            Assert.IsEmpty(idle.FencedRoots);
+        }
+
+        await using var reopened = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        var reopenedTree = await reopened.ReadNamespaceCurrentTreeSnapshotAsync(anchor);
+        CollectionAssert.AreEqual(first.FencedRoots.ToArray(), reopenedTree.FencedRoots.ToArray());
+        Assert.AreEqual(first.Fingerprint, reopenedTree.Fingerprint);
+    }
+
+    [TestMethod]
     public async Task CurrentTreeSnapshotRetainsMovedOriginalAndRetiredBirthAcrossCatalogOwners()
     {
         using var fixture = new Fixture();

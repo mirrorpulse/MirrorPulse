@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using Microsoft.Data.Sqlite;
 using MirrorPulse.Core.Contracts;
 
@@ -73,16 +74,19 @@ public sealed partial class MirrorPulseProductCatalog
             ThrowIfDisposed();
             using SqliteTransaction transaction = BeginNamespaceRecoveryReadSnapshot();
             var roots = await ReadNamespaceRootFencesCoreAsync(includeUnregisteredBirths, transaction, cancellationToken).ConfigureAwait(false);
-            transaction.Commit(); return roots;
+            transaction.Commit(); return OrderNamespaceRootFences(roots);
         }
         finally { _gate.Release(); }
     }
 
-    private async Task<IReadOnlyList<RootId>> ReadNamespaceRootFencesCoreAsync(bool includeUnregisteredBirths,
+    private static ReadOnlyCollection<RootId> OrderNamespaceRootFences(HashSet<RootId> roots)
+        => Array.AsReadOnly(roots.OrderBy(root => root.Value).ToArray());
+
+    private async Task<HashSet<RootId>> ReadNamespaceRootFencesCoreAsync(bool includeUnregisteredBirths,
         SqliteTransaction transaction, CancellationToken cancellationToken, Guid? admittedRemoteMoveId = null, Guid? admittedRemoteBirthId = null,
         Guid? admittedRemoteRetirementId = null, Guid? admittedRemoteRetirementTreeId = null, Guid? admittedRemoteResolutionId = null,
         Guid? admittedRemoteUpdateId = null, Guid? admittedTransferId = null, Guid? admittedTransferBirthId = null,
-        Guid? admittedRemoteDeleteRejectionId = null, Action<RootId, Guid, MirrorPulseNamespacePendingOperationKind>? selectPending = null)
+        Guid? admittedRemoteDeleteRejectionId = null, NamespacePendingSelection? pending = null)
     {
         await RequireRemoteTreeSettlementOwnershipIntegrityAsync(transaction, cancellationToken).ConfigureAwait(false);
         await RequireRemoteDeleteResolutionOwnershipIntegrityAsync(transaction, cancellationToken).ConfigureAwait(false);
@@ -90,7 +94,7 @@ public sealed partial class MirrorPulseProductCatalog
         void AddOperationFence(RootId root, Guid id, MirrorPulseNamespacePendingOperationKind kind)
         {
             roots.Add(root);
-            selectPending?.Invoke(root, id, kind);
+            pending?.Add(root, id, kind);
         }
 
         void AddTransferFences(Guid id, RootId source, RootId target)
@@ -104,15 +108,19 @@ public sealed partial class MirrorPulseProductCatalog
         await foreach (var rejection in ReadPendingRemoteDeleteRejectionsCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
             if (rejection.Admission.OperationId != admittedRemoteDeleteRejectionId)
                 AddOperationFence(rejection.Admission.RootId, rejection.Admission.OperationId, MirrorPulseNamespacePendingOperationKind.RemoteDeleteRejection);
-        await AddKeepRemoteFileStartRootFencesAsync(roots, transaction, cancellationToken).ConfigureAwait(false);
-        await AddRootLabelJournalFencesAsync(roots, transaction, cancellationToken).ConfigureAwait(false);
+        await AddKeepRemoteFileStartRootFencesAsync(roots, transaction, pending, cancellationToken).ConfigureAwait(false);
+        await AddRootLabelJournalFencesAsync(roots, transaction, pending, cancellationToken).ConfigureAwait(false);
         await foreach (var update in ReadPendingRemoteUpdatesCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
             if (update.Plan.OperationId != admittedRemoteUpdateId)
                 AddOperationFence(update.Plan.Child.Context.Member.RootId!.Value, update.Plan.OperationId, MirrorPulseNamespacePendingOperationKind.RemoteUpdate);
         await foreach (var rename in ReadNamespaceOwnerRowsCoreAsync(NamespaceRootRenamePageSql, transaction,
             static (row, rootId) => ReadRootRenameIntent(row.GetString(1), rootId.ToString("D")), cancellationToken).ConfigureAwait(false))
         {
-            if (rename.IsPending) roots.Add(rename.RootId);
+            if (rename.IsPending)
+            {
+                roots.Add(rename.RootId);
+                if (pending is not null && pending.RootId == rename.RootId) pending.RootLabel = rename;
+            }
             else if (rename.Phase == MirrorPulseRootRenamePhase.Cancelled)
             {
                 // A sealed cancellation must retain both original owners. Missing
@@ -136,32 +144,47 @@ public sealed partial class MirrorPulseProductCatalog
             var root = new RootId(id);
             var move = await ReadPendingNamespaceMemberMoveCoreAsync(root, transaction, cancellationToken).ConfigureAwait(false)
                 ?? throw new InvalidDataException("The pending move lost its durable root fence.");
-            if (move.OperationId != admittedRemoteMoveId || move.RemoteEntry is null) roots.Add(root);
+            if (move.OperationId != admittedRemoteMoveId || move.RemoteEntry is null)
+                AddOperationFence(root, move.OperationId, MirrorPulseNamespacePendingOperationKind.Move);
         }
         await foreach (var retirement in ReadPendingNamespaceRetirementsCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
-            if (!(retirement.OperationId == admittedRemoteRetirementId && retirement.Intent.RemoteEntry is not null) &&
-                !(admittedTransferId is not null && retirement.Intent.TransferEntry?.OperationId == admittedTransferId) &&
-                !(retirement.Intent.BatchOperationId == admittedRemoteResolutionId && admittedRemoteResolutionId is not null &&
-                    await IsRemoteDeleteResolutionBatchAsync(admittedRemoteResolutionId.Value, transaction, cancellationToken).ConfigureAwait(false))) roots.Add(retirement.Intent.RootId);
+        {
+            var intent = retirement.Intent;
+            if (retirement.OperationId == admittedRemoteRetirementId && intent.RemoteEntry is not null ||
+                admittedTransferId is not null && intent.TransferEntry?.OperationId == admittedTransferId ||
+                admittedRemoteResolutionId is not null && intent.BatchOperationId == admittedRemoteResolutionId &&
+                    await IsRemoteDeleteResolutionBatchAsync(admittedRemoteResolutionId.Value, transaction, cancellationToken).ConfigureAwait(false))
+                continue;
+
+            roots.Add(intent.RootId);
+            if (pending is null || pending.RootId != intent.RootId) continue;
+            if (intent.BatchOperationId is not null)
+            {
+                // The sealed owner publishes the recovery operation. Validate this leaf's membership here.
+                await RequireNamespaceRetirementBatchEntryAsync(intent, transaction, cancellationToken).ConfigureAwait(false);
+            }
+            else pending.Add(intent.RootId, intent.OperationId, MirrorPulseNamespacePendingOperationKind.Retirement);
+        }
         await foreach (var batch in ReadPendingNamespaceRetirementBatchesCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
             if (!(batch.OperationId == admittedRemoteRetirementTreeId && batch.RemoteEntry is not null) &&
-                !(batch.OperationId == admittedRemoteResolutionId && batch.RemoteConflictCommandId == admittedRemoteResolutionId)) roots.Add(batch.RootId);
-        await AddNamespaceReplacementRootFencesAsync(roots, transaction, cancellationToken).ConfigureAwait(false);
+                !(batch.OperationId == admittedRemoteResolutionId && batch.RemoteConflictCommandId == admittedRemoteResolutionId))
+                AddOperationFence(batch.RootId, batch.OperationId, MirrorPulseNamespacePendingOperationKind.RetirementBatch);
+        await AddNamespaceReplacementRootFencesAsync(roots, transaction, pending, cancellationToken).ConfigureAwait(false);
         await AddNamespaceInitializationRootFencesAsync(roots, transaction, cancellationToken).ConfigureAwait(false);
         await foreach (var action in ReadPendingBornMemberRecoveryActionsCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
             AddOperationFence(action.Child.Member.RootId!.Value, action.ActionId, MirrorPulseNamespacePendingOperationKind.BornMemberRecovery);
         if (includeUnregisteredBirths)
         {
             await AddUnregisteredBirthRootFencesAsync(roots, transaction, cancellationToken, admittedRemoteBirthId,
-                admittedTransferId, admittedTransferBirthId, selectPending).ConfigureAwait(false);
+                admittedTransferId, admittedTransferBirthId, pending).ConfigureAwait(false);
         }
-        return Array.AsReadOnly(roots.OrderBy(root => root.Value).ToArray());
+        return roots;
     }
 
     private async Task AddUnregisteredBirthRootFencesAsync(HashSet<RootId> roots,
         SqliteTransaction transaction, CancellationToken token, Guid? admittedRemoteBirthId = null,
         Guid? admittedTransferId = null, Guid? admittedTransferBirthId = null,
-        Action<RootId, Guid, MirrorPulseNamespacePendingOperationKind>? selectPending = null)
+        NamespacePendingSelection? pending = null)
     {
         // Either side can retain evidence of a damaged or incomplete birth.
         await foreach (Guid operation in ReadNamespaceOwnerIdsCoreAsync(NamespaceUnregisteredBirthPageSql, transaction, token).ConfigureAwait(false))
@@ -184,7 +207,7 @@ public sealed partial class MirrorPulseProductCatalog
             if (!ownRemote && !ownTransfer)
             {
                 roots.Add(birth.RootId);
-                selectPending?.Invoke(birth.RootId, operation, MirrorPulseNamespacePendingOperationKind.Birth);
+                pending?.Add(birth.RootId, operation, MirrorPulseNamespacePendingOperationKind.Birth);
             }
         }
     }

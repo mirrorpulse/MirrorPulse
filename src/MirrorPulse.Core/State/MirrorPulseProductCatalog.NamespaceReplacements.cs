@@ -332,7 +332,8 @@ public sealed partial class MirrorPulseProductCatalog
         return intent;
     }
 
-    private async Task AddNamespaceReplacementRootFencesAsync(HashSet<RootId> roots, SqliteTransaction transaction, CancellationToken token)
+    private async Task AddNamespaceReplacementRootFencesAsync(HashSet<RootId> roots, SqliteTransaction transaction,
+        NamespacePendingSelection? pending, CancellationToken token)
     {
         var candidates = new List<RootId>();
         await using (var query = _connection.CreateCommand())
@@ -358,7 +359,11 @@ public sealed partial class MirrorPulseProductCatalog
                 while (await reader.ReadAsync(token).ConfigureAwait(false)) completed.Add(ParseNamespaceMemberId(reader.GetString(0)));
             }
             foreach (Guid id in completed) await ReadReplacementCompletionCoreAsync(id, transaction, token).ConfigureAwait(false);
-            if (await ReadPendingNamespaceReplacementCoreAsync(root, transaction, token).ConfigureAwait(false) is not null) roots.Add(root);
+            if (await ReadPendingNamespaceReplacementCoreAsync(root, transaction, token).ConfigureAwait(false) is { } replacement)
+            {
+                roots.Add(root);
+                pending?.Add(root, replacement.OperationId, MirrorPulseNamespacePendingOperationKind.Replacement);
+            }
         }
     }
 

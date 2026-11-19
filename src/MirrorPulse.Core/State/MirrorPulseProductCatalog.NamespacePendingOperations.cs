@@ -10,6 +10,30 @@ public sealed record MirrorPulseNamespacePendingOperation(Guid OperationId, Root
 
 public sealed partial class MirrorPulseProductCatalog
 {
+    private sealed class NamespacePendingSelection(RootId rootId)
+    {
+        private int _birthCount;
+        private bool _hasRootLabelJournal;
+
+        public RootId RootId { get; } = rootId;
+        public List<MirrorPulseNamespacePendingOperation> Operations { get; } = [];
+        public MirrorPulseRootRenameIntent? RootLabel { get; set; }
+
+        public void Add(RootId root, Guid operation, MirrorPulseNamespacePendingOperationKind kind)
+        {
+            if (kind == MirrorPulseNamespacePendingOperationKind.Birth && ++_birthCount > 4096)
+                throw new InvalidDataException("Pending birth discovery exceeds its recovery bound.");
+            if (root != RootId) return;
+            if (kind == MirrorPulseNamespacePendingOperationKind.RootLabelJournal)
+            {
+                if (_hasRootLabelJournal)
+                    throw new InvalidDataException("One root acquired multiple unfinished original ACK owners.");
+                _hasRootLabelJournal = true;
+            }
+            Operations.Add(new(operation, root, kind));
+        }
+    }
+
     /// <summary>Discovers validated pending local work before startup reserves another initializer.</summary>
     /// <remarks>Initialization has its own route-preserving discovery. This query changes no
     /// completion, reservation, current protection or official journal record.</remarks>
@@ -21,64 +45,25 @@ public sealed partial class MirrorPulseProductCatalog
         try
         {
             ThrowIfDisposed(); using var transaction = _connection.BeginTransaction(deferred: true);
-            var result = new List<MirrorPulseNamespacePendingOperation>();
-            int pendingBirths = 0;
-            void SelectPending(RootId root, Guid operation, MirrorPulseNamespacePendingOperationKind kind)
-            {
-                if (kind == MirrorPulseNamespacePendingOperationKind.Birth && ++pendingBirths > 4096)
-                    throw new InvalidDataException("Pending birth discovery exceeds its recovery bound.");
-                if (root == rootId) result.Add(new(operation, root, kind));
-            }
-
             // Select work from validated owners in the same transaction. All roots must
             // pass the complete fence scan before the caller can receive any work.
-            _ = await ReadNamespaceRootFencesCoreAsync(true, transaction, cancellationToken, selectPending: SelectPending).ConfigureAwait(false);
-            if (await ReadPendingRootLabelJournalForRootCoreAsync(rootId, transaction, cancellationToken).ConfigureAwait(false) is { } rootJournal)
-                result.Add(new(rootJournal.Observation.OperationId, rootId, MirrorPulseNamespacePendingOperationKind.RootLabelJournal));
-            if (await ReadPendingKeepRemoteFileStartForRootCoreAsync(rootId, transaction, cancellationToken).ConfigureAwait(false) is { } keepRemote)
-                result.Add(new(keepRemote.CommandId, rootId, MirrorPulseNamespacePendingOperationKind.ConflictKeepRemote));
-            if (await ReadPendingNamespaceMemberMoveCoreAsync(rootId, transaction, cancellationToken).ConfigureAwait(false) is { } move)
-                result.Add(new(move.OperationId, rootId, MirrorPulseNamespacePendingOperationKind.Move));
-            await AddPendingUnsealedRootLabelOperationAsync(result, rootId, transaction, cancellationToken).ConfigureAwait(false);
-            await foreach (var retirement in ReadPendingNamespaceRetirementsCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
-            {
-                if (retirement.Intent.RootId != rootId) continue;
-                if (retirement.Intent.BatchOperationId is not null)
-                {
-                    // Recovery routes to the original sealed owner; the leaf remains individually queryable.
-                    await RequireNamespaceRetirementBatchEntryAsync(retirement.Intent, transaction, cancellationToken).ConfigureAwait(false);
-                    continue;
-                }
-                result.Add(new(retirement.Intent.OperationId, rootId, MirrorPulseNamespacePendingOperationKind.Retirement));
-            }
-            await foreach (var batch in ReadPendingNamespaceRetirementBatchesCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
-                if (batch.RootId == rootId)
-                    result.Add(new(batch.OperationId, rootId, MirrorPulseNamespacePendingOperationKind.RetirementBatch));
-            if (await ReadPendingNamespaceReplacementCoreAsync(rootId, transaction, cancellationToken).ConfigureAwait(false) is { } replacement)
-                result.Add(new(replacement.OperationId, rootId, MirrorPulseNamespacePendingOperationKind.Replacement));
-            if (result.Count > 4096) throw new InvalidDataException("The root's pending local work exceeds its recovery bound.");
-            transaction.Commit(); return result.OrderBy(entry => entry.OperationId).ThenBy(entry => entry.Kind).ToArray();
+            var pending = new NamespacePendingSelection(rootId);
+            _ = await ReadNamespaceRootFencesCoreAsync(true, transaction, cancellationToken, pending: pending).ConfigureAwait(false);
+            await AddPendingUnsealedRootLabelOperationAsync(pending, transaction, cancellationToken).ConfigureAwait(false);
+            if (pending.Operations.Count > 4096) throw new InvalidDataException("The root's pending local work exceeds its recovery bound.");
+            transaction.Commit(); return pending.Operations.OrderBy(entry => entry.OperationId).ThenBy(entry => entry.Kind).ToArray();
         }
         finally { _gate.Release(); }
     }
 
-    private async Task AddPendingUnsealedRootLabelOperationAsync(List<MirrorPulseNamespacePendingOperation> result, RootId rootId,
+    private async Task AddPendingUnsealedRootLabelOperationAsync(NamespacePendingSelection pending,
         SqliteTransaction transaction, CancellationToken token)
     {
-        MirrorPulseRootRenameIntent? current;
-        await using (var query = _connection.CreateCommand())
-        {
-            query.Transaction = transaction;
-            query.CommandText = "SELECT payload,root_id FROM managed_root_renames WHERE root_id=$root;";
-            query.Parameters.AddWithValue("$root", rootId.ToString());
-            await using var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
-            current = await reader.ReadAsync(token).ConfigureAwait(false) ? ReadRootRenameIntent(reader.GetString(0), reader.GetString(1)) : null;
-        }
-        if (current is not { IsPending: true } original || result.Any(entry =>
+        if (pending.RootLabel is not { } original || pending.Operations.Any(entry =>
             entry.Kind == MirrorPulseNamespacePendingOperationKind.Move && entry.OperationId == original.OperationId)) return;
         var history = await ReadManagedRootRenameHistoryCoreAsync(original.OperationId, token, transaction).ConfigureAwait(false);
         if (history.Intent != original)
             throw new InvalidDataException("Pending root Label discovery cannot replace its current original owner.");
-        result.Add(new(original.OperationId, rootId, MirrorPulseNamespacePendingOperationKind.RootLabel));
+        pending.Add(original.RootId, original.OperationId, MirrorPulseNamespacePendingOperationKind.RootLabel);
     }
 }

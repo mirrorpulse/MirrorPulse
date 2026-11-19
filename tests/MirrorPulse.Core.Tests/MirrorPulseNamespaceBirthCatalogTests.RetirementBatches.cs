@@ -44,6 +44,9 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => first.CompleteNamespaceRetirementBatchAsync(batch.OperationId));
             var childIntent = BatchRetirement(batch, child, nested.Protection.RoleSid);
             await first.PrepareNamespaceRetirementAsync(childIntent);
+            CollectionAssert.AreEqual(new[] { new MirrorPulseNamespacePendingOperation(batch.OperationId, batch.RootId,
+                MirrorPulseNamespacePendingOperationKind.RetirementBatch) },
+                (await first.ReadNamespacePendingOperationsAsync(batch.RootId)).ToArray());
             await first.RecordNamespaceRetirementStartAsync(childIntent.OperationId, childIntent.PreparedAt);
             await first.RecordNamespaceRetirementNativeDeletedAsync(childIntent.OperationId, childIntent.PreparedAt.AddSeconds(1));
             await first.CompleteNamespaceRetirementAsync(childIntent.OperationId, childIntent.PreparedAt.AddSeconds(2));

@@ -81,7 +81,8 @@ public sealed partial class MirrorPulseProductCatalog
         return commandId is { } value ? await ReadKeepRemoteFileStartCoreAsync(value, transaction, token).ConfigureAwait(false) : null;
     }
 
-    private async Task AddKeepRemoteFileStartRootFencesAsync(HashSet<RootId> roots, SqliteTransaction transaction, CancellationToken token)
+    private async Task AddKeepRemoteFileStartRootFencesAsync(HashSet<RootId> roots, SqliteTransaction transaction,
+        NamespacePendingSelection? pending, CancellationToken token)
     {
         var pendingRoots = new List<RootId>();
         await using (var query = _connection.CreateCommand())
@@ -104,9 +105,10 @@ public sealed partial class MirrorPulseProductCatalog
         }
         foreach (var root in pendingRoots)
         {
-            _ = await ReadPendingKeepRemoteFileStartForRootCoreAsync(root, transaction, token).ConfigureAwait(false)
+            var start = await ReadPendingKeepRemoteFileStartForRootCoreAsync(root, transaction, token).ConfigureAwait(false)
                 ?? throw new InvalidDataException("An unfinished KeepRemote file start lost its original root fence.");
             roots.Add(root);
+            pending?.Add(root, start.CommandId, MirrorPulseNamespacePendingOperationKind.ConflictKeepRemote);
         }
     }
 }
