@@ -8,6 +8,64 @@ namespace MirrorPulse.Core.Tests;
 public sealed partial class MirrorPulseNamespaceBirthCatalogTests
 {
     [TestMethod]
+    public async Task GlobalPreservingDeleteFencesValidateLaterPagesBeforeReturningAnyOperation()
+    {
+        using var fixture = new Fixture();
+        await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        var originals = new List<MirrorPulseRemoteDeleteRejectionAdmission>();
+        MirrorPulseNamespaceMemberRegistration? anchor = null;
+        for (int index = 0; index < 17; index++)
+        {
+            var rootId = new RootId(OwnerPageId(6, index + 1));
+            var original = await RejectionAdmissionAsync(catalog, rootId, $"Docs {index}", anchor);
+            if (anchor is null)
+            {
+                var member = await catalog.ReadNamespaceMemberAsync(original.RootMemberId);
+                Assert.IsNotNull(member);
+                anchor = await catalog.ReadNamespaceMemberAsync(member.ParentMemberId!.Value);
+                Assert.IsNotNull(anchor);
+            }
+            // Opposite orders ensure that the continuation follows the indexed root
+            // and operation pair, including when the next operation ID is smaller.
+            original = original with { OperationId = OwnerPageId(7, 17 - index) };
+            await catalog.PrepareRemoteDeleteRejectionAsync(original);
+            originals.Add(original);
+        }
+
+        var expectedRoots = originals.Select(original => original.RootId).ToArray();
+        var statements = await TraceOwnerReadsAsync(catalog, async () =>
+            CollectionAssert.AreEqual(expectedRoots, (await catalog.ReadNamespaceDispatchFencedRootsAsync()).ToArray()));
+        var pages = statements.Where(sql => sql.Contains("ORDER BY root_id,operation_id", StringComparison.Ordinal) &&
+            sql.Contains("FROM remote_delete_rejections", StringComparison.Ordinal)).ToArray();
+        Assert.HasCount(2, pages, "Seventeen preserving Delete originals require two bounded inventory reads.");
+        Assert.IsTrue(pages.All(sql => sql.Contains("LIMIT 16", StringComparison.Ordinal)));
+        Assert.Contains("INDEXED BY ix_remote_delete_rejections_pending_root", pages[1], StringComparison.Ordinal);
+        Assert.Contains("(root_id,operation_id)>", pages[1], StringComparison.Ordinal);
+        Assert.Contains(originals[15].RootId.ToString(), pages[1], StringComparison.Ordinal);
+        Assert.Contains(originals[15].OperationId.ToString("D"), pages[1], StringComparison.Ordinal);
+        await using (var connection = Connection(fixture.Paths))
+        {
+            await connection.OpenAsync();
+            await using var explain = connection.CreateCommand();
+            explain.CommandText = "EXPLAIN QUERY PLAN " + pages[1];
+            await using var reader = await explain.ExecuteReaderAsync();
+            Assert.IsTrue(await reader.ReadAsync());
+            Assert.Contains("SEARCH remote_delete_rejections USING INDEX ix_remote_delete_rejections_pending_root",
+                reader.GetString(3), StringComparison.Ordinal);
+            Assert.IsFalse(await reader.ReadAsync());
+        }
+
+        var last = originals[^1];
+        Assert.AreEqual(new MirrorPulseNamespacePendingOperation(last.OperationId, last.RootId, MirrorPulseNamespacePendingOperationKind.RemoteDeleteRejection),
+            (await catalog.ReadNamespacePendingOperationsAsync(last.RootId)).Single());
+        await ExecuteSqlAsync(fixture.Paths,
+            $"UPDATE remote_delete_rejections SET admission_fingerprint=zeroblob(32) WHERE operation_id='{last.OperationId:D}';");
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(() => catalog.ReadNamespaceDispatchFencedRootsAsync());
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(() => catalog.ReadNamespacePendingOperationsAsync(originals[0].RootId));
+        Assert.AreEqual(originals[0], (await catalog.ReadPendingRemoteDeleteRejectionsAsync(originals[0].RootId, 1)).Single().Admission);
+    }
+
+    [TestMethod]
     public async Task PreservingDeleteOriginalAndCallerSuppliedConflictReceiptRemainImmutableAcrossCatalogOwners()
     {
         using var fixture = new Fixture();
@@ -148,15 +206,22 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             original.BatchId, changed == "index" ? 1 : original.Ordinal));
     }
 
-    private static async Task<MirrorPulseRemoteDeleteRejectionAdmission> RejectionAdmissionAsync(MirrorPulseProductCatalog catalog)
+    private static async Task<MirrorPulseRemoteDeleteRejectionAdmission> RejectionAdmissionAsync(MirrorPulseProductCatalog catalog,
+        RootId? rootId = null, string directoryName = "Docs", MirrorPulseNamespaceMemberRegistration? anchor = null)
     {
-        var baseline = Baseline(); var protection = Protection(baseline);
+        var baseline = Baseline() with { RelativePath = directoryName };
+        if (rootId is { } identified) baseline = baseline with { RootId = identified };
+        if (anchor is not null)
+            baseline = baseline with { LocalObject = anchor.LocalObject with { LocalFileId = baseline.LocalObject.LocalFileId } };
+        var protection = Protection(baseline);
         await ProtectAsync(catalog, baseline, protection);
-        var member = await RegisterOriginalParentMembersAsync(catalog, baseline, protection);
+        var member = anchor is null
+            ? await RegisterOriginalParentMembersAsync(catalog, baseline, protection)
+            : await catalog.RegisterNamespaceMemberAsync(OriginalMember(baseline, protection, anchor.MemberId));
         var instance = InstanceId.New();
-        return new(1, Guid.NewGuid(), instance, member.RootId!.Value, "docs", "Docs", member.MemberId,
+        return new(1, Guid.NewGuid(), instance, member.RootId!.Value, "docs", directoryName, member.MemberId,
             instance + "/original-preserving-delete", new('A', 64), 2, 0, new('B', 64), "original-change", Guid.NewGuid(),
-            "Docs/missing.txt", false, MirrorPulseRemoteLibraryProvenance.CurrentPackageVersion,
+            directoryName + "/missing.txt", false, MirrorPulseRemoteLibraryProvenance.CurrentPackageVersion,
             MirrorPulseRemoteLibraryProvenance.CurrentSourceCommit, new(true, true, TimeSpan.TicksPerMinute, 2), member.RegisteredAt.AddSeconds(1));
     }
 

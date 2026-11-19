@@ -53,6 +53,13 @@ inventory limit. Seventeen original Moves take two ID queries. Damage on the
 second page rejects global discovery and a startup query for the first root.
 The upload pump can still select its own valid cursor page for recovery.
 
+Global preserving Delete discovery uses the existing pending-root index and
+seeks by the canonical root and operation pair. The global scan reads up to 16
+keys per query and retains the 4096-record inventory limit. A public root query
+still reads its requested page. A 17-root fixture verifies an indexed seek
+when the next operation ID sorts earlier. Damage on the second page rejects
+both global discovery and startup work for the first root.
+
 Startup discovery selects a root's pending operations from the validated fence
 scan in one read transaction. A pending retirement leaf still validates its
 sealed batch membership. The batch is the recovery operation returned for that

@@ -58,29 +58,57 @@ public sealed partial class MirrorPulseProductCatalog
     }
 
     private async IAsyncEnumerable<MirrorPulseRemoteDeleteRejection> ReadPendingRemoteDeleteRejectionsCoreAsync(
-        SqliteTransaction transaction, [EnumeratorCancellation] CancellationToken token, RootId? rootId = null, int limit = 4097)
+        SqliteTransaction transaction, [EnumeratorCancellation] CancellationToken token, RootId? rootId = null, int limit = 16)
     {
-        var ids = new List<Guid>();
-        await using (var query = _connection.CreateCommand())
+        const int maximumInventory = 4096;
+        (RootId Root, Guid Operation)? after = null;
+        int inspected = 0;
+        while (true)
         {
-            query.Transaction = transaction;
-            query.CommandText = rootId is null
-                ? "SELECT operation_id FROM remote_delete_rejections WHERE outcome_payload IS NULL ORDER BY root_id,operation_id LIMIT $limit;"
-                : "SELECT operation_id FROM remote_delete_rejections WHERE root_id=$root AND outcome_payload IS NULL ORDER BY operation_id LIMIT $limit;";
-            if (rootId is not null) query.Parameters.AddWithValue("$root", rootId.Value.ToString());
-            query.Parameters.AddWithValue("$limit", limit);
-            await using var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
-            while (await reader.ReadAsync(token).ConfigureAwait(false)) ids.Add(ParseNamespaceMemberId(reader.GetString(0)));
+            var page = await ReadPendingRemoteDeleteRejectionKeysAsync(transaction, rootId, after, limit, token).ConfigureAwait(false);
+            inspected += page.Count;
+            if (inspected > maximumInventory) throw new InvalidDataException("Pending preserving Delete discovery exceeds its recovery bound.");
+            foreach (var (root, operation) in page)
+            {
+                var value = await ReadRemoteDeleteRejectionCoreAsync(operation, transaction, token).ConfigureAwait(false)
+                    ?? throw new InvalidDataException("A pending preserving Delete lost its original immutable attempt.");
+                if (value.Outcome is not null || value.Admission.RootId != root)
+                    throw new InvalidDataException("Pending preserving Delete discovery changed its original root or result.");
+                yield return value;
+            }
+            if (rootId is not null || page.Count < limit) yield break;
+            after = page[^1];
         }
-        if (ids.Count > 4096) throw new InvalidDataException("Pending preserving Delete discovery exceeds its recovery bound.");
-        foreach (Guid id in ids)
+    }
+
+    private async Task<IReadOnlyList<(RootId Root, Guid Operation)>> ReadPendingRemoteDeleteRejectionKeysAsync(
+        SqliteTransaction transaction, RootId? rootId, (RootId Root, Guid Operation)? after, int limit, CancellationToken token)
+    {
+        await using var query = _connection.CreateCommand();
+        query.Transaction = transaction;
+        const string select = """
+            SELECT root_id,operation_id FROM remote_delete_rejections INDEXED BY ix_remote_delete_rejections_pending_root
+            WHERE outcome_payload IS NULL
+            """;
+        const string order = " ORDER BY root_id,operation_id LIMIT $limit;";
+        query.CommandText = select + order;
+        if (rootId is { } root)
         {
-            var value = await ReadRemoteDeleteRejectionCoreAsync(id, transaction, token).ConfigureAwait(false)
-                ?? throw new InvalidDataException("A pending preserving Delete lost its original immutable attempt.");
-            if (value.Outcome is not null || rootId is not null && value.Admission.RootId != rootId)
-                throw new InvalidDataException("Pending preserving Delete discovery changed its original root or result.");
-            yield return value;
+            query.CommandText = select + " AND root_id=$root" + order;
+            query.Parameters.AddWithValue("$root", root.ToString());
         }
+        else if (after is { } cursor)
+        {
+            query.CommandText = select + " AND (root_id,operation_id)>($afterRoot,$afterOperation)" + order;
+            query.Parameters.AddWithValue("$afterRoot", cursor.Root.ToString());
+            query.Parameters.AddWithValue("$afterOperation", cursor.Operation.ToString("D"));
+        }
+        query.Parameters.AddWithValue("$limit", limit);
+        var keys = new List<(RootId Root, Guid Operation)>();
+        await using var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
+        while (await reader.ReadAsync(token).ConfigureAwait(false))
+            keys.Add((new(ParseNamespaceMemberId(reader.GetString(0))), ParseNamespaceMemberId(reader.GetString(1))));
+        return keys;
     }
 
     private async Task RequireRemoteDeleteRejectionRootAsync(MirrorPulseRemoteDeleteRejectionAdmission original,
