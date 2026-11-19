@@ -23,6 +23,8 @@ public sealed class SignedLocalVersionSwitchProcessTests
         _ => throw new PlatformNotSupportedException("The signed Worker test requires Windows x64 or ARM64."),
     };
 
+    public TestContext TestContext { get; set; } = null!;
+
     [TestMethod]
     [TestCategory("OfficialPackages")]
     public async Task PinnedInstanceRunsEachSignedVersionAndStaysOfflineWhenDisabled()
@@ -50,6 +52,7 @@ public sealed class SignedLocalVersionSwitchProcessTests
             InstanceId instanceId;
             InstalledAdapter previous;
             InstalledAdapter latest;
+            (int Protocol, string Revision) previousObservation;
             await using (var catalog = await MirrorPulseProductCatalog.OpenAsync(paths))
             {
                 previous = await catalog.InstallSignedAdapterAsync(
@@ -65,7 +68,7 @@ public sealed class SignedLocalVersionSwitchProcessTests
                     "Pinned Local", new Dictionary<string, string> { ["sourceDirectory"] = source },
                     [], Path.Combine(root, "cache", "files"), Path.Combine(root, "cache", "transfers"));
                 instanceId = instance.InstanceId;
-                await VerifyConnectedVersionAsync(catalog, instanceId, previous, content);
+                previousObservation = await VerifyConnectedVersionAsync(catalog, instanceId, previous, content);
 
                 await catalog.SelectInstanceInstallationAsync(instanceId, latest.InstallId);
                 await catalog.SetInstanceEnabledAsync(instanceId, false);
@@ -91,10 +94,12 @@ public sealed class SignedLocalVersionSwitchProcessTests
 
             await using (var catalog = await MirrorPulseProductCatalog.OpenAsync(paths))
             {
-                await VerifyConnectedVersionAsync(catalog, instanceId, latest, content);
+                var currentObservation = await VerifyConnectedVersionAsync(catalog, instanceId, latest, content);
                 MirrorPulseAdapterTopology selected = await catalog.ReadAdapterTopologyAsync();
                 Assert.AreEqual(latest.InstallId, selected.Instances.Single().InstallId);
                 Assert.IsTrue(selected.Instances.Single().Enabled);
+                bool revisionRetained = string.Equals(previousObservation.Revision, currentObservation.Revision, StringComparison.Ordinal);
+                TestContext.WriteLine($"SignedLocalVersionSwitch: previousProtocol={previousObservation.Protocol}; currentProtocol={currentObservation.Protocol}; originalRevisionRetained={revisionRetained}; sourceBytesVerified=True.");
             }
         }
         finally
@@ -103,7 +108,7 @@ public sealed class SignedLocalVersionSwitchProcessTests
         }
     }
 
-    private static async Task VerifyConnectedVersionAsync(
+    private static async Task<(int Protocol, string Revision)> VerifyConnectedVersionAsync(
         MirrorPulseProductCatalog catalog,
         InstanceId instanceId,
         InstalledAdapter expected,
@@ -139,13 +144,16 @@ public sealed class SignedLocalVersionSwitchProcessTests
         }
 
         await WaitForProcessPathAsync(payload.LaunchRequest.ExecutablePath, timeout.Token);
-        Assert.IsFalse(string.IsNullOrWhiteSpace(await supervisor.StatAsync(
-            new MirrorPulseWorkerStatRequest(instanceId, "note.txt", rootKey), timeout.Token)));
+        int protocol = supervisor.GetConnectedProtocolVersion(instanceId);
+        Assert.IsTrue(protocol >= expected.Manifest.Protocol.Minimum && protocol <= expected.Manifest.Protocol.Maximum);
+        string? revision = await supervisor.StatAsync(new MirrorPulseWorkerStatRequest(instanceId, "note.txt", rootKey), timeout.Token);
+        Assert.IsFalse(string.IsNullOrWhiteSpace(revision));
         await using Stream read = await supervisor.ReadRangeAsync(new MirrorPulseWorkerReadRangeRequest(
             instanceId, "note.txt", ReadOnlyMemory<byte>.Empty, 0, content.Length, RootKey: rootKey), timeout.Token);
         byte[] actual = new byte[content.Length];
         await read.ReadExactlyAsync(actual, timeout.Token);
         CollectionAssert.AreEqual(content, actual);
+        return (protocol, revision);
     }
 
     private static async Task WaitForProcessPathAsync(string executablePath, CancellationToken cancellationToken)
