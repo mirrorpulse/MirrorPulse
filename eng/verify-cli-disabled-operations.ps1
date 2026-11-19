@@ -304,6 +304,20 @@ function Read-DisabledBacklogContinuation($Previous,[long]$PreviousSequence,$Cur
     [pscustomobject]@{journal=$rows;additionalMetadataCount=$newRows.Count}
 }
 
+function Assert-DisabledBacklogOutcomes($OfflineRows,$Observed){
+    $kinds=@{}
+    foreach($row in $OfflineRows){$kinds.Add($row.operationId,$row.kind)}
+    $outcomes=@($Observed.originals|Where-Object {$kinds.ContainsKey($_.operationId)})
+    if($outcomes.Count -ne $OfflineRows.Count){throw 'The stopped audit lacks an original offline operation outcome.'}
+    foreach($outcome in $outcomes){
+        if(!$outcome.pending -or $outcome.planId -or @($outcome.effects|Where-Object state -CNE 'Missing').Count -or
+            ($outcome.blockReason -and ($outcome.blockReason -cne 'UnsupportedMetadataChange' -or $kinds[$outcome.operationId] -cne 'MetadataUpdate'))){
+            throw 'An original offline operation acquired an unexpected disposition or remote dispatch state.'
+        }
+    }
+    @($outcomes|Where-Object blockReason -CEQ 'UnsupportedMetadataChange').Count
+}
+
 function Invoke-DisabledLargeBacklog {
     $script:phase='LargeBacklogPrime'
     $sourceRoot=Join-Path $fixture 'source/offline'
@@ -386,13 +400,8 @@ function Invoke-DisabledLargeBacklog {
     $after=Invoke-DisabledProbe audit 'backlog-after-active-progress'
     $finalBacklog=Read-DisabledBacklogContinuation $restartBacklog.journal $restarted.journal[-1].sequence $after $expectedItems
     Assert-DisabledLocalReceipts $before $after
-    $offlineOutcomes=@($after.originals|Where-Object operationId -CIn @($restartBacklog.journal.operationId))
-    if(@($after.journal).Count -ne $finalBacklog.journal.Count -or
-        $offlineOutcomes.Count -ne $restartBacklog.journal.Count -or
-        @($offlineOutcomes|Where-Object {
-            (!$_.pending -or $_.planId -or $_.blockReason -or @($_.effects|Where-Object state -CNE 'Missing').Count)}).Count){
-        throw 'The original offline operations changed or acquired remote dispatch state while the peer progressed.'
-    }
+    if(@($after.journal).Count -ne $finalBacklog.journal.Count){throw 'The active peer left a selected operation pending after its accepted write.'}
+    $offlineUnsupportedMetadata=Assert-DisabledBacklogOutcomes $restartBacklog.journal $after
     $events=@(Read-CliDisabledAcknowledgementEvents -DataRoot $data)
     Write-DisabledOriginal 'backlog-active-acknowledgement-events' $events
     foreach($row in $activeOriginals){
@@ -416,6 +425,7 @@ function Invoke-DisabledLargeBacklog {
         actualHostLifetimes=$lifetimes.ToArray();largeBacklog=$true;offlineFileCount=$backlogKeys.Count;journalPageSize=$journalPageSize;
         offlineOriginalCount=$offlineOriginals.Count;offlineMetadataAddedAfterRestart=$restartBacklog.additionalMetadataCount;
         offlineMetadataAddedWhilePeerAdvanced=$finalBacklog.additionalMetadataCount;
+        offlineUnsupportedMetadataCount=$offlineUnsupportedMetadata;
         activeBaselineMetadataCount=$activeBaseline.Count;laterActiveOriginalCount=$laterActive.Count;
         activeOriginalCount=$activeOriginals.Count;activeRemoteSha256=$actualActiveDigest;
         originalsPreservedAcrossDisabledRestart=$true;independentActiveSourceProgress=$true;sourceUnchangedWhileDisabled=$true;
