@@ -601,6 +601,28 @@ jobs:
           path: artifacts/evidence/cli-disabled-moved-source/**
           if-no-files-found: ignore
 
+      - name: Verify signed ARM64 stale revision conflict with a same-name successor
+        if: (success() || failure()) && github.event_name == 'workflow_dispatch' && inputs.verify_shell
+        shell: pwsh
+        timeout-minutes: 15
+        env:
+          MIRRORPULSE_NATIVE_TEST: '1'
+        run: |
+          $packages = @(Get-ChildItem -LiteralPath artifacts/official-local -Recurse -Filter '*.mpadapter' -File)
+          if ($packages.Count -ne 1 -or -not (Test-Path -LiteralPath ($packages[0].FullName + '.signature.json'))) { throw 'Require one frozen official signed Local package.' }
+          New-Item -ItemType Directory -Path artifacts/evidence/cli-disabled-source-successor -Force | Out-Null
+          Copy-Item -LiteralPath artifacts/official-adapter-releases.json -Destination artifacts/evidence/cli-disabled-source-successor/official-adapter-releases.json
+          pwsh ./eng/verify-cli-disabled-operations.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName -MovedSourceConflict -MovedSourceAddress Successor -EvidencePath artifacts/evidence/cli-disabled-source-successor/report.json
+          if ($LASTEXITCODE -ne 0) { throw 'The reenabled same-name successor fixture failed.' }
+
+      - name: Preserve signed ARM64 same-name successor originals
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.verify_shell
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: cli-disabled-source-successor-arm64-originals
+          path: artifacts/evidence/cli-disabled-source-successor/**
+          if-no-files-found: ignore
+
       - name: Verify signed official packages and native ARM64 Workers
         if: (success() || failure()) && github.event_name == 'workflow_dispatch'
         run: |
