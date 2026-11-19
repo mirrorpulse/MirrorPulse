@@ -23,6 +23,19 @@ public sealed class CliSingleRootTransferFixtureLayoutTests
     }
 
     [TestMethod]
+    public void LegacySourceConfigurationAuthenticatesOnlyTheMarkedPrivateSource()
+    {
+        var fixture = Create(legacySource: true);
+        var actual = CliTransferFixtureLayout.Authenticate(fixture.Path, fixture.Marker, fixture.Topology);
+        Assert.HasCount(2, actual.Roots);
+        Assert.ThrowsExactly<InvalidDataException>(() => CliTransferFixtureLayout.Authenticate(fixture.Path,
+            fixture.Marker with { LegacySourceConfiguration = false }, fixture.Topology));
+        var outside = Create("outside-source", legacySource: true);
+        Assert.ThrowsExactly<InvalidDataException>(() => CliTransferFixtureLayout.Authenticate(outside.Path, outside.Marker, outside.Topology));
+        Assert.IsFalse(Directory.Exists(fixture.Path));
+    }
+
+    [TestMethod]
     [DataRow("schema")]
     [DataRow("missing-route")]
     [DataRow("duplicate-root")]
@@ -54,7 +67,8 @@ public sealed class CliSingleRootTransferFixtureLayoutTests
         Assert.IsFalse(Directory.Exists(fixture.Path));
     }
 
-    private static (string Path, CliTransferFixtureMarker Marker, MirrorPulseAdapterTopology Topology) Create(string? failure = null)
+    private static (string Path, CliTransferFixtureMarker Marker, MirrorPulseAdapterTopology Topology) Create(string? failure = null,
+        bool legacySource = false)
     {
         string directory = Path.Combine(Path.GetTempPath(), CliTransferFixtureLayout.DirectoryPrefix + Guid.NewGuid().ToString("N"));
         var adapter = AdapterId.Parse("com.mirrorpulse.adapter.local");
@@ -73,9 +87,10 @@ public sealed class CliSingleRootTransferFixtureLayoutTests
                 identityScope: RootIdentityScope.InstanceRoot);
             root = new(adapter, instanceId, root.RootId, "local", label, label, false,
                 failure == "disabled" ? RootRegistrationState.Disabled : RootRegistrationState.Active, root.RegisteredAt, RootIdentityScope.InstanceRoot);
+            string key = legacySource && side == "left" ? "sourceDirectory" : "root.local.sourceDirectory";
             var configuration = new Dictionary<string, string>
             {
-                ["root.local.sourceDirectory"] =
+                [key] =
                 failure == "outside-source" ? Path.GetTempPath() : Path.Combine(directory, "source", side)
             };
             if (failure == "extra-config") configuration.Add("unrelated", "unexpected");
@@ -84,6 +99,6 @@ public sealed class CliSingleRootTransferFixtureLayoutTests
             roots.Add(root);
             routes.Add(new(instanceId.ToString(), root.RootId.ToString(), "local", label) { FixtureSide = side });
         }
-        return (directory, new(2, routes.AsReadOnly()), new([installed], instances, roots));
+        return (directory, new(2, routes.AsReadOnly()) { LegacySourceConfiguration = legacySource }, new([installed], instances, roots));
     }
 }

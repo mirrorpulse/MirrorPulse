@@ -31,12 +31,15 @@ public static partial class CliTransferFixtureLayout
             var actual = topology.Roots.SingleOrDefault(candidate => candidate.RootId.Value == rootId);
             var instance = topology.Instances.SingleOrDefault(candidate => candidate.InstanceId.Value == instanceId);
             string sourceDirectory = Path.Combine(directory, "source", expected.FixtureSide);
+            string configurationKey = marker.LegacySourceConfiguration && expected.FixtureSide == "left"
+                ? "sourceDirectory"
+                : "root.local.sourceDirectory";
             if (actual is null || instance is null || actual.InstanceId != instance.InstanceId ||
                 actual.UniquenessKey != "local" || actual.DirectoryName != expected.DirectoryName || actual.Label != expected.DirectoryName ||
                 actual.AdapterId != installed.AdapterId || actual.IdentityScope != RootIdentityScope.InstanceRoot ||
                 actual.State != RootRegistrationState.Active || instance.AdapterId != installed.AdapterId ||
                 instance.InstallId != installed.InstallId || !instance.Enabled || instance.CredentialReferences.Count != 0 ||
-                instance.Configuration.Count != 1 || !instance.Configuration.TryGetValue("root.local.sourceDirectory", out string? source) ||
+                instance.Configuration.Count != 1 || !instance.Configuration.TryGetValue(configurationKey, out string? source) ||
                 !Path.IsPathFullyQualified(source) || !string.Equals(source, sourceDirectory, StringComparison.OrdinalIgnoreCase) ||
                 !sides.TryAdd(expected.FixtureSide, actual))
                 throw new InvalidDataException("The single-root topology lost its exact declared root, instance or private source directory.");

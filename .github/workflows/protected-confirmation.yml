@@ -38,6 +38,10 @@ on:
         description: Select 80 original offline files and later active progress for signed-disabled-host
         type: boolean
         default: false
+      legacy_file_source:
+        description: Switch the prepared file source to signed Local V1 before reenable
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -205,18 +209,32 @@ jobs:
           pwsh ./eng/verify-cli-integration.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName -Coalescing -CoalescingAction KeepRemote -EvidencePath artifacts/evidence/cli-keep-remote/report.json
           if ($LASTEXITCODE -ne 0) { throw 'The real signed KeepRemote conflict choice failed.' }
 
-      - name: Verify signed ARM64 prepared file transfer after each instance is reenabled
+      - name: Download the signed Local V1 reference for the prepared file transfer
+        if: inputs.contract == 'signed-file-reenable' && inputs.legacy_file_source
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Path artifacts/local-v1 -Force | Out-Null
+          gh release download v0.1.3 --repo mirrorpulse/adapter-local --dir artifacts/local-v1 --pattern 'com.mirrorpulse.adapter.local-0.1.3.mpadapter*'
+          if ($LASTEXITCODE -ne 0) { throw 'The signed Local V1 release could not be downloaded.' }
+
+      - name: Verify signed ARM64 prepared file transfer after reenable
         if: inputs.contract == 'signed-file-reenable'
         shell: pwsh
         timeout-minutes: 15
         env:
           MIRRORPULSE_NATIVE_TEST: '1'
+          LEGACY_FILE_SOURCE: ${{ inputs.legacy_file_source }}
         run: |
           $packages = @(Get-ChildItem -LiteralPath artifacts/official-local -Recurse -Filter '*.mpadapter' -File)
           if ($packages.Count -ne 1 -or -not (Test-Path -LiteralPath ($packages[0].FullName + '.signature.json'))) { throw 'The exact frozen signed Local package is required.' }
           New-Item -ItemType Directory -Path artifacts/evidence/cli-file-reenable -Force | Out-Null
           Copy-Item -LiteralPath artifacts/official-adapter-releases.json -Destination artifacts/evidence/cli-file-reenable/official-adapter-releases.json
-          pwsh ./eng/verify-cli-transfers.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName -VerifyPreparedTransferReenable -EvidencePath artifacts/evidence/cli-file-reenable/report.json
+          $options = if ($env:LEGACY_FILE_SOURCE -eq 'true') {
+            @('-LegacySourcePackagePath', 'artifacts/local-v1/com.mirrorpulse.adapter.local-0.1.3.mpadapter')
+          } else { @('-VerifyPreparedTransferReenable') }
+          pwsh ./eng/verify-cli-transfers.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName @options -EvidencePath artifacts/evidence/cli-file-reenable/report.json
           if ($LASTEXITCODE -ne 0) { throw 'The signed prepared file reenable fixture failed.' }
 
       - name: Preserve signed ARM64 prepared file reenable originals

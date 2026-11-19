@@ -3,6 +3,7 @@ param(
     [ValidateSet('win-x64', 'win-arm64')][string]$Runtime = 'win-arm64',
     [Parameter(Mandatory)][string]$PackagePath,
     [string]$WebDavPackagePath,
+    [string]$LegacySourcePackagePath,
     [switch]$VerifyDirectoryTransfer,
     [switch]$VerifyPreparedTransferReenable,
     [ValidateSet('Debug', 'Release')][string]$Configuration = 'Release',
@@ -21,8 +22,10 @@ $fixture = Join-Path ([IO.Path]::GetTempPath()) ('MirrorPulse-cli-transfer-' + [
 $sync = Join-Path $fixture 'sync'; $data = Join-Path $fixture 'data'
 $evidenceFile = [IO.Path]::GetFullPath($EvidencePath)
 $crossPackage = -not [string]::IsNullOrWhiteSpace($WebDavPackagePath)
+$legacySource = -not [string]::IsNullOrWhiteSpace($LegacySourcePackagePath)
 if ($VerifyDirectoryTransfer -and $crossPackage) { throw 'The CLI directory command fixture requires two Local instances.' }
 if ($VerifyPreparedTransferReenable -and $crossPackage) { throw 'The prepared file reenable fixture requires two Local instances.' }
+if ($legacySource -and ($crossPackage -or $VerifyPreparedTransferReenable)) { throw 'Select the signed Local protocol-switch fixture independently.' }
 $schemaVersion = if ($crossPackage) { 3 } else { 2 }
 $originals = Join-Path ([IO.Path]::GetDirectoryName($evidenceFile)) $(if ($crossPackage) { 'cli-cross-package.originals' } else { 'cli-transfers.originals' })
 New-Item -ItemType Directory -Path $originals -Force | Out-Null
@@ -32,6 +35,7 @@ foreach ($name in @('MIRRORPULSE_DATA_ROOT', 'MIRRORPULSE_SYNC_ROOT', 'MIRRORPUL
 }
 $script:transferCli = $null; $script:transferProbe = $null; $script:ownedTransferHost = $false
 $script:webDavProcess = $null
+$script:legacyRestore = $null
 $primaryFailure = $null; $phase = 'Setup'; $report = $null
 $cases = [Collections.Generic.List[object]]::new()
 $directoryCase = $null
@@ -147,7 +151,7 @@ function Wait-TransferWorkersConnected {
 }
 
 function Get-TransferWorkerBindings {
-    param([Parameter(Mandatory)][object[]]$Installations, [int]$ExpectedCount = 2)
+    param([Parameter(Mandatory)][object[]]$Installations, [int]$ExpectedCount = 2, [string]$FrameworkDependentInstallId)
     $bindings = [Collections.Generic.List[object]]::new()
     foreach ($process in Get-Process) {
         try {
@@ -157,7 +161,8 @@ function Get-TransferWorkerBindings {
             if ($owners.Count -eq 0) { continue }
             if ($owners.Count -ne 1) { throw 'The actual Worker executable has ambiguous installation ownership.' }
             $modules = @($process.Modules | Where-Object ModuleName -ieq 'coreclr.dll')
-            if ($modules.Count -ne 1 -or $modules[0].FileName -ine (Join-Path ([IO.Path]::GetDirectoryName($executable)) 'coreclr.dll')) {
+            if ($modules.Count -ne 1 -or ($owners[0].installId -cne $FrameworkDependentInstallId -and
+                $modules[0].FileName -ine (Join-Path ([IO.Path]::GetDirectoryName($executable)) 'coreclr.dll'))) {
                 throw 'The actual signed Worker did not load its private payload runtime.'
             }
             $bindings.Add([ordered]@{processId=$process.Id;installId=$owners[0].installId;adapterId=$owners[0].adapterId})
@@ -213,6 +218,66 @@ function Invoke-PreparedTransferWhileDisabled {
     return $attempt
 }
 
+function Invoke-PreparedTransferWithLegacySource {
+    param([object]$Route, [object]$ModernInstallation, [object]$Prepared, [hashtable]$ObservationArguments,
+        [string]$SourceSha256, [string]$LegacyPackage)
+
+    $legacyReceipt=(Invoke-TransferCli @('--json','--no-start','adapter','install','--package',$LegacyPackage)).data
+    $legacyId=$legacyReceipt.installedAdapterId
+    if (!$legacyId -or $legacyId -ceq $ModernInstallation.installId) { throw 'The original signed source and the legacy package require different installation IDs.' }
+    $script:legacyRestore=[ordered]@{instanceId=$Route.instanceId;modernId=$ModernInstallation.installId;legacyId=$legacyId}
+    Invoke-TransferCli @('--json','--no-start','instance','disable','--instance-id',$Route.instanceId)|Out-Null
+    $disabled=(Invoke-TransferCli @('--json','--no-start','adapter','list')).data
+    if (@($disabled.instances|Where-Object {$_.instanceId -ceq $Route.instanceId -and !$_.enabled}).Count -ne 1) {
+        throw 'The original source must be disabled before selecting its legacy installation.'
+    }
+    Invoke-TransferCli @('--json','--no-start','instance','select-version','--instance-id',$Route.instanceId,'--install-id',$legacyId)|Out-Null
+    Invoke-TransferCli @('--json','--no-start','instance','enable','--instance-id',$Route.instanceId)|Out-Null
+    Invoke-TransferCli @('--json','host','restart')|Out-Null; Wait-TransferHostStopped
+    Invoke-TransferCli @('--json','host','start')|Out-Null; Wait-TransferWorkersConnected
+    $selected=(Invoke-TransferCli @('--json','--no-start','adapter','list')).data
+    $legacy=@($selected.installations|Where-Object installId -CEQ $legacyId)
+    $legacyDigest=Read-TransferHash $LegacyPackage
+    if ($legacy.Count -ne 1 -or !$legacy[0].isSigned -or $legacy[0].version -cne '0.1.3' -or $legacy[0].packageSha256 -ine $legacyDigest -or
+        @($selected.instances|Where-Object {$_.instanceId -ceq $Route.instanceId -and $_.installId -ceq $legacyId -and $_.enabled}).Count -ne 1 -or
+        @($selected.roots|Where-Object {$_.rootId -ceq $Route.rootId -and $_.instanceId -ceq $Route.instanceId -and $_.directoryName -ceq $Route.directoryName}).Count -ne 1) {
+        throw 'The reenabled source must run the exact signed V1 package without replacing its original root or instance.'
+    }
+    $workers=@(Get-TransferWorkerBindings -Installations @($ModernInstallation,$legacy[0]) -FrameworkDependentInstallId $legacyId)
+    $hostProcessId=(Invoke-TransferCli @('--json','--no-start','host','status')).data.processId
+    $raw=(& $script:transferCli --developer-mode --json --no-start namespace transfer resume $Prepared.operationId 2>&1 | Out-String).Trim()
+    $resumeExitCode=$LASTEXITCODE
+    $response=$raw|ConvertFrom-Json
+    $observation=Read-PreparedTransferObservation @ObservationArguments
+    $log=Get-Item -LiteralPath (Join-Path $data 'logs/transfers/mirrorpulse.log') -ErrorAction SilentlyContinue
+    $routeFailures=@()
+    if ($null -ne $log -and !$log.Attributes.HasFlag([IO.FileAttributes]::ReparsePoint)) {
+        $routeFailures=@(Get-Content -LiteralPath $log.FullName -Tail 32|ForEach-Object {$_|ConvertFrom-Json}|Where-Object {
+            $_.Code -ceq 'TransferCommandFailed' -and $_.Fields.operationId -ceq $Prepared.operationId -and $_.Fields.transferFailureBoundary -ceq 'RootRoute'
+        })
+    }
+    $attempt=[ordered]@{sourceInstanceId=$Route.instanceId;sourceRootId=$Route.rootId;hostProcessId=$hostProcessId;
+        legacyInstallId=$legacyId;legacyPackageSha256=$legacyDigest;workers=$workers;resumeExitCode=$resumeExitCode;
+        response=$response;routeFailures=$routeFailures;observation=$observation}
+    Write-TransferOriginal -Name 'prepared-legacy-source' -Value $attempt
+    if (!$resumeExitCode -or $response.kind -cne 'error' -or $response.exitCode -ne $resumeExitCode -or
+        $response.code -cne 'mp.control.internalFailure' -or $routeFailures.Count -ne 1) {
+        throw 'Resuming the original transfer with the reenabled V1 source must fail at the retained route boundary.'
+    }
+    Assert-CliPreparedTransferObservation -Observation $observation -Prepared $Prepared -SourceSha256 $SourceSha256
+    return $attempt
+}
+
+function Restore-ModernTransferSource {
+    $restore=$script:legacyRestore
+    Invoke-TransferCli @('--json','--no-start','instance','select-version','--instance-id',$restore.instanceId,'--install-id',$restore.modernId)|Out-Null
+    Invoke-TransferCli @('--json','--no-start','instance','enable','--instance-id',$restore.instanceId)|Out-Null
+    Invoke-TransferCli @('--json','host','restart')|Out-Null; Wait-TransferHostStopped
+    Invoke-TransferCli @('--json','host','start')|Out-Null; Wait-TransferWorkersConnected
+    Invoke-TransferCli @('--json','--no-start','adapter','uninstall','--adapter-id','com.mirrorpulse.adapter.local','--install-id',$restore.legacyId)|Out-Null
+    $script:legacyRestore=$null
+}
+
 try {
     if (-not (Test-Path -LiteralPath $PackagePath -PathType Leaf)) { throw 'The exact signed Local package is missing.' }
     $phase = 'PackageContract'
@@ -227,6 +292,22 @@ try {
             throw 'The current transfer fixture requires the actual Local V2 single-root manifest.'
         }
     } finally { $package.Dispose() }
+    if ($legacySource) {
+        $legacyPackage=(Resolve-Path -LiteralPath $LegacySourcePackagePath).Path
+        if (!(Test-Path -LiteralPath ($legacyPackage+'.signature.json') -PathType Leaf)) { throw 'The V1 reference requires its original signature.' }
+        $package=[IO.Compression.ZipFile]::OpenRead($legacyPackage)
+        try {
+            $entry=$package.GetEntry('manifest.json')
+            if ($null -eq $entry -or $entry.Length -gt 1048576) { throw 'The signed V1 manifest is missing or too large.' }
+            $reader=[IO.StreamReader]::new($entry.Open())
+            try { $legacyManifest=$reader.ReadToEnd()|ConvertFrom-Json } finally { $reader.Dispose() }
+            if ($legacyManifest.adapterId -cne 'com.mirrorpulse.adapter.local' -or $legacyManifest.version -cne '0.1.3' -or
+                $legacyManifest.protocol.minimum -ne 1 -or $legacyManifest.protocol.maximum -ne 1 -or
+                @($legacyManifest.rootDefinitions).Count -ne 1 -or $legacyManifest.rootDefinitions[0].key -cne 'local') {
+                throw 'The reference must declare only the legacy Local V1 protocol and its original local root.'
+            }
+        }finally{ $package.Dispose() }
+    }
     if ($crossPackage) {
         $package = [IO.Compression.ZipFile]::OpenRead((Resolve-Path $WebDavPackagePath).Path)
         try {
@@ -291,8 +372,9 @@ try {
     $phase = 'SignedTopology'
     $installation = Invoke-TransferCli @('--json', 'adapter', 'install', '--package', (Resolve-Path $PackagePath).Path)
     $installId = $installation.data.installedAdapterId
+    $sourceKey=if($legacySource){'sourceDirectory'}else{'root.local.sourceDirectory'}
     $sourceInstance = Invoke-TransferCli @('--json', 'instance', 'create', '--install-id', $installId, '--name', 'Transfer source',
-        '--root', 'local=Transfer Left', '--config', ('root.local.sourceDirectory=' + [IO.Path]::Combine($fixture, 'source', 'left')))
+        '--root', 'local=Transfer Left', '--config', ($sourceKey+'='+[IO.Path]::Combine($fixture, 'source', 'left')))
     $targetKey = if ($crossPackage) { 'webdav' } else { 'local' }
     $targetInstallId = $installId
     if ($crossPackage) {
@@ -317,6 +399,7 @@ try {
     })
     $operations = @([guid]::NewGuid().ToString('D'), [guid]::NewGuid().ToString('D'))
     $marker = [ordered]@{schemaVersion=$schemaVersion;routes=$script:transferRoutes;transferOperationIds=$operations}
+    if ($legacySource) { $marker.legacySourceConfiguration=$true }
     if ($crossPackage) { $marker.webDavEndpoint = $endpoint.AbsoluteUri }
     if ($VerifyDirectoryTransfer) { $marker.directoryTransferOperationId = $directoryOperation }
     $marker |
@@ -371,10 +454,16 @@ try {
                 $targetDisabled = Invoke-PreparedTransferWhileDisabled $target $fixtureInstallations $prepared $observationArguments $sourceHash Target
                 $preparedRestart.disabledAttempts = @($sourceDisabled, $targetDisabled)
             }
+            if ($legacySource) {
+                $phase='TransferCommands.Forward.LegacySourceBeforeFirstCopy'
+                $preparedRestart.legacySource=Invoke-PreparedTransferWithLegacySource $source $installed[0] $prepared $observationArguments $sourceHash $legacyPackage
+            }
             $phase = 'TransferCommands.Forward.RestartBeforeFirstCopy'
-            Invoke-TransferCli @('--json', 'host', 'restart') | Out-Null; Wait-TransferHostStopped
-            Invoke-TransferCli @('--json', 'host', 'start') | Out-Null
-            Wait-TransferWorkersConnected
+            if ($legacySource) { Restore-ModernTransferSource } else {
+                Invoke-TransferCli @('--json', 'host', 'restart') | Out-Null; Wait-TransferHostStopped
+                Invoke-TransferCli @('--json', 'host', 'start') | Out-Null
+                Wait-TransferWorkersConnected
+            }
             $preparedRestart.resumedBy = (Invoke-TransferCli @('--json', '--no-start', 'host', 'status')).data.processId
             $preparedRestart.resumeWorkers = @(Get-TransferWorkerBindings -Installations $fixtureInstallations)
             $preparedRestart.afterRestart = Read-PreparedTransferObservation @observationArguments
@@ -386,6 +475,9 @@ try {
             if ($VerifyPreparedTransferReenable -and @($preparedRestart.preparedBy, $preparedRestart.resumedBy,
                 $sourceDisabled.hostProcessId, $targetDisabled.hostProcessId | Select-Object -Unique).Count -ne 4) {
                 throw 'The prepared file reenable fixture requires four independent Host processes.'
+            }
+            if ($legacySource -and $preparedRestart.legacySource.hostProcessId -in @($preparedRestart.preparedBy,$preparedRestart.resumedBy)) {
+                throw 'The signed legacy route requires a distinct actual Host lifetime.'
             }
             $phase = 'TransferCommands.Forward.ResumeFirstCopy'
             $moved = (Invoke-TransferCli @('--json', '--no-start', 'namespace', 'transfer', 'resume', $operations[$index])).data
@@ -552,6 +644,7 @@ try {
             Write-TransferOriginal -Name 'cleanup-failure' -Value ([ordered]@{sourceSha=$env:GITHUB_SHA;runId=$env:GITHUB_RUN_ID
                 type=$failure.Exception.GetType().Name;hresult=$failure.Exception.HResult.ToString('X8');message=$failure.Exception.Message.Replace($fixture, '<fixture>')})
         } -Cleanup {
+            if ($null -ne $script:legacyRestore) { Restore-ModernTransferSource }
             $ownedHostAlive = $false
             foreach ($candidate in Get-Process -Name 'MirrorPulse.Host' -ErrorAction SilentlyContinue) {
                 try { if ($candidate.MainModule.FileName -ieq (Join-Path $fixture 'host/MirrorPulse.Host.exe')) { $ownedHostAlive = $true } }
