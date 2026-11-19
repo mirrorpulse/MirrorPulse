@@ -6,6 +6,7 @@ param(
     [string]$EvidencePath,
     [switch]$MovedSourceConflict,
     [ValidateSet('Absent','Successor')][string]$MovedSourceAddress='Absent',
+    [switch]$LargeBacklog,
     [switch]$BudgetOnly
 )
 if($BudgetOnly){15;exit 0}
@@ -14,6 +15,7 @@ $withSuccessor=$MovedSourceAddress -ieq 'Successor'
 if($withSuccessor -and !$MovedSourceConflict){
     throw 'The successor address requires the moved-source conflict scenario.'
 }
+if($LargeBacklog -and $MovedSourceConflict){throw 'Select one disabled fixture scenario.'}
 if($env:MIRRORPULSE_NATIVE_TEST -cne '1' -or [string]::IsNullOrWhiteSpace($EvidencePath) -or -not (Test-Path -LiteralPath $PackagePath -PathType Leaf)){
     throw 'The signed disabled-operation fixture requires its exact package, evidence path and disposable native environment.'
 }
@@ -42,6 +44,8 @@ $replacementBytes=[Text.Encoding]::UTF8.GetBytes('explicit offline replacement b
 $latestBytes=[Text.Encoding]::UTF8.GetBytes('later offline edit survives replacement and moved-name replay')
 $bornBytes=[Text.Encoding]::UTF8.GetBytes('new offline file remains complete under its moved name')
 $activeBytes=[Text.Encoding]::UTF8.GetBytes('the independent active instance progresses past offline originals')
+$journalPageSize=64
+$backlogKeys=@(1..80|ForEach-Object {'backlog-'+$_.ToString('D3',[Globalization.CultureInfo]::InvariantCulture)})
 function Write-DisabledOriginal([string]$Name,[object]$Value){
     if($Name -cnotmatch '^[a-z0-9-]{1,90}$'){throw 'Bound the original fixture artifact name.'}
     $Value|ConvertTo-Json -Depth 40|Set-Content -LiteralPath (Join-Path $originals ($Name+'.json')) -Encoding utf8
@@ -111,7 +115,8 @@ function Invoke-DisabledProbe([ValidateSet('audit','cleanup')][string]$Mode,[str
     $process=[Diagnostics.Process]::Start($start)
     try{
         $output=$process.StandardOutput.ReadToEndAsync();$errors=$process.StandardError.ReadToEndAsync()
-        if(-not $process.WaitForExit(30000)){throw 'The actual stopped disabled oracle exceeded30seconds.'}
+        $timeoutMilliseconds=if($LargeBacklog){90000}else{30000}
+        if(-not $process.WaitForExit($timeoutMilliseconds)){throw 'The actual stopped disabled oracle exceeded its observation deadline.'}
         if($process.ExitCode -ne 0){throw ('The stopped disabled oracle failed: '+$errors.GetAwaiter().GetResult())}
         $value=$output.GetAwaiter().GetResult()|ConvertFrom-Json;Write-DisabledOriginal $Name $value;$value
     }finally{if(-not $process.HasExited){$process.Kill($true);$process.WaitForExit()};$process.Dispose()}
@@ -120,7 +125,7 @@ function Get-DisabledHash([string]$Path){(Get-FileHash -LiteralPath $Path -Algor
 function Get-DisabledRevisionHash([string]$Revision){
     [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($Revision)))
 }
-function Get-DisabledSourceSnapshot([string]$Path){
+function Get-DisabledSourceSnapshot([string]$Path,[int]$MaximumEntries=64){
     $resolved=[IO.Path]::GetFullPath($Path)
     if(-not $resolved.StartsWith(([IO.Path]::GetFullPath((Join-Path $fixture 'source'))+[IO.Path]::DirectorySeparatorChar),[StringComparison]::OrdinalIgnoreCase)){
         throw 'A source observation escaped the exact private fixture.'
@@ -132,7 +137,7 @@ function Get-DisabledSourceSnapshot([string]$Path){
     $directories=[Collections.Generic.Queue[string]]::new();$directories.Enqueue($resolved)
     while($directories.Count){
         foreach($entry in Get-ChildItem -LiteralPath $directories.Dequeue() -Force){
-            if($entry.Attributes.HasFlag([IO.FileAttributes]::ReparsePoint) -or $items.Count -ge 64){throw 'A private source changed to an unbounded or redirected tree.'}
+            if($entry.Attributes.HasFlag([IO.FileAttributes]::ReparsePoint) -or $items.Count -ge $MaximumEntries){throw 'A private source changed to an unbounded or redirected tree.'}
             $items.Add($entry)
             if($entry.PSIsContainer){$directories.Enqueue($entry.FullName)}
         }
@@ -240,6 +245,123 @@ function Confirm-DisabledPublishedInputs {
     }
     Write-DisabledOriginal 'published-inputs-after' ([ordered]@{sourceSha=$sourceSha;inputs=$inputs.ToArray();actualBytesUnchanged=$true;actualManagedModuleLoadClaimed=$false})
 }
+
+function Wait-DisabledBacklog([string]$Name,[int]$Minimum,[switch]$Exact){
+    $deadline=[DateTimeOffset]::UtcNow.AddSeconds(45)
+    $previous=-1;$changedAt=[DateTimeOffset]::UtcNow
+    do{
+        $status=Invoke-DisabledCli ($Name+'-status') @('--no-start','status')
+        $now=[DateTimeOffset]::UtcNow
+        if($status.pendingUploads -ne $previous){$previous=$status.pendingUploads;$changedAt=$now}
+        if($previous -ge $Minimum -and (!$Exact -or $previous -eq $Minimum) -and ($now-$changedAt).TotalSeconds -ge 2){return $status}
+        Start-Sleep -Milliseconds 150
+    }while([DateTimeOffset]::UtcNow -lt $deadline)
+    throw 'The public pending upload count did not settle at the required fixture boundary.'
+}
+
+function Invoke-DisabledLargeBacklog {
+    $script:phase='LargeBacklogPrime'
+    $sourceRoot=Join-Path $fixture 'source/offline'
+    $activeLocal=Join-Path $activeDirectory 'progress.txt'
+    $activeSource=Join-Path $fixture 'source/active/progress.txt'
+    $activeOriginalDigest=Get-DisabledHash $activeSource
+    $baseline=Get-DisabledSourceSnapshot $sourceRoot $backlogKeys.Count
+    if($baseline.Count -ne $backlogKeys.Count){throw 'The exact synthetic backlog source inventory is incomplete.'}
+    Write-DisabledOriginal 'backlog-source-before' $baseline
+    foreach($key in $backlogKeys){
+        $leaf=$key+'.bin'
+        Wait-DisabledHash (Join-Path $offlineDirectory $leaf) (Get-DisabledHash (Join-Path $sourceRoot $leaf)) $key
+        Record-DisabledMember $key ($offlineRoute.directoryName+'/'+$leaf) $false|Out-Null
+    }
+    Record-DisabledMember 'activeFile' ($activeRoute.directoryName+'/progress.txt') $false|Out-Null
+    Invoke-DisabledCli 'backlog-disable-offline' @('--no-start','instance','disable','--instance-id',$offlineRoute.instanceId)|Out-Null
+    Invoke-DisabledCli 'backlog-disable-active' @('--no-start','instance','disable','--instance-id',$activeRoute.instanceId)|Out-Null
+    Stop-DisabledHost 'backlog-configured';Start-DisabledHost 'backlog-disabled'
+    $state=Read-DisabledState 'backlog-disabled';Assert-DisabledInstances $state $false $false
+    Read-DisabledWorkers 'backlog-disabled' 0
+
+    $script:phase='LargeBacklogCapture'
+    $localDigests=[ordered]@{}
+    foreach($key in $backlogKeys){
+        $path=Join-Path $offlineDirectory ($key+'.bin')
+        $edited=[Text.Encoding]::UTF8.GetBytes('independent offline content for '+$key)
+        Write-DisabledBytes $path $edited
+        $localDigests[$key]=Get-DisabledHash $path
+        if($localDigests[$key] -cne [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($edited))){throw 'An original offline edit did not retain its exact bytes.'}
+    }
+    Write-DisabledOriginal 'backlog-edited-local-bytes' $localDigests
+    $beforeStatus=Wait-DisabledBacklog 'backlog-capture' $backlogKeys.Count
+    Stop-DisabledHost 'backlog-capture';$marker.phase='Before';Save-DisabledMarker
+    $before=Invoke-DisabledProbe audit 'backlog-before'
+    $contentItemIds=@($before.journal|Where-Object kind -CEQ 'ContentUpdate'|ForEach-Object itemId|Select-Object -Unique)
+    $expectedItems=@($backlogKeys|ForEach-Object {$marker.members[$_].itemId})
+    if(@($before.journal).Count -le $journalPageSize -or $beforeStatus.pendingUploads -lt @($before.journal).Count -or
+        @(Compare-Object $expectedItems $contentItemIds -CaseSensitive).Count -or
+        @($before.journal|Where-Object itemId -CNotIn $expectedItems).Count){throw 'The actual first capture lacks one original content change per offline file and a full older SDK page.'}
+    $marker.originals=@($before.journal.operationId);Save-DisabledMarker
+
+    $script:phase='LargeBacklogDisabledRestart'
+    Start-DisabledHost 'backlog-disabled-restart'
+    Read-DisabledWorkers 'backlog-disabled-restart' 0
+    Write-DisabledBytes $activeLocal $activeBytes
+    $queuedStatus=Wait-DisabledBacklog 'backlog-peer-capture' ($marker.originals.Count+1)
+    Stop-DisabledHost 'backlog-peer-capture';$marker.phase='DisabledRestart';Save-DisabledMarker
+    $restarted=Invoke-DisabledProbe audit 'backlog-after-disabled-restart'
+    Assert-DisabledOriginals $before $restarted
+    Assert-DisabledLocalReceipts $before $restarted
+    $activeOriginals=@($restarted.journal|Where-Object itemId -CEQ $marker.members.activeFile.itemId)
+    if(!$activeOriginals.Count -or !@($activeOriginals|Where-Object kind -CEQ 'ContentUpdate').Count -or
+        @($activeOriginals|Where-Object sequence -le $before.journal[-1].sequence).Count -or
+        @($restarted.journal).Count -ne (@($before.journal).Count+$activeOriginals.Count) -or
+        $queuedStatus.pendingUploads -lt @($restarted.journal).Count -or (Get-DisabledHash $activeSource) -cne $activeOriginalDigest){
+        throw 'The later active peer write did not remain a separate queued SDK operation after the disabled page.'
+    }
+    $marker.originals=@($restarted.journal.operationId);Save-DisabledMarker
+
+    $script:phase='LargeBacklogIndependentProgress'
+    Start-DisabledHost 'backlog-before-active-enable'
+    Invoke-DisabledCli 'backlog-enable-active' @('--no-start','instance','enable','--instance-id',$activeRoute.instanceId)|Out-Null
+    Stop-DisabledHost 'backlog-enable-active';Start-DisabledHost 'backlog-only-peer-active'
+    Read-DisabledWorkers 'backlog-only-peer-active' 1
+    $activeDigest=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($activeBytes))
+    Wait-DisabledHash $activeSource $activeDigest 'backlog-peer-accepted'
+    $peerAccepted=Wait-DisabledBacklog 'backlog-peer-accepted' @($before.journal).Count -Exact
+    Assert-DisabledInstances @{status=$peerAccepted} $false $true
+    Stop-DisabledHost 'backlog-finished';$marker.phase='ActiveProgress';Save-DisabledMarker
+    $after=Invoke-DisabledProbe audit 'backlog-after-active-progress'
+    Assert-DisabledOriginals $before $after
+    Assert-DisabledLocalReceipts $before $after
+    if(@($after.journal).Count -ne @($before.journal).Count -or
+        @($after.originals|Where-Object {$_.operationId -cin @($before.journal.operationId) -and
+            (!$_.pending -or $_.planId -or $_.blockReason -or @($_.effects|Where-Object state -CNE 'Missing').Count)}).Count){
+        throw 'The original offline operations changed or acquired remote dispatch state while the peer progressed.'
+    }
+    $events=@(Read-CliDisabledAcknowledgementEvents -DataRoot $data)
+    Write-DisabledOriginal 'backlog-active-acknowledgement-events' $events
+    foreach($row in $activeOriginals){
+        Assert-DisabledSettled (@($after.originals|Where-Object operationId -CEQ $row.operationId)[0]) $row.kind $row $restarted $after $events
+    }
+    $actualActiveDigest=Get-DisabledHash $activeSource
+    if($actualActiveDigest -cne $activeDigest -or $actualActiveDigest -ceq $activeOriginalDigest){throw 'The accepted active source bytes did not survive the Host stop.'}
+    $finalSource=Get-DisabledSourceSnapshot $sourceRoot $backlogKeys.Count
+    Write-DisabledOriginal 'backlog-source-after' $finalSource
+    if(($finalSource|ConvertTo-Json -Depth 8 -Compress) -cne ($baseline|ConvertTo-Json -Depth 8 -Compress)){
+        throw 'The disabled source changed while its peer progressed.'
+    }
+    $finalLocalDigests=[ordered]@{}
+    foreach($key in $backlogKeys){
+        $finalLocalDigests[$key]=Get-DisabledHash (Join-Path $offlineDirectory ($key+'.bin'))
+        if($finalLocalDigests[$key] -cne $localDigests[$key]){throw 'An original offline edit changed during the active peer upload.'}
+    }
+    Write-DisabledOriginal 'backlog-retained-local-bytes' $finalLocalDigests
+    Confirm-DisabledPublishedInputs
+    [ordered]@{schemaVersion=1;sourceSha=$sourceSha;runId=$env:GITHUB_RUN_ID;runtime=$Runtime;signedPackageSha256=$installation[0].packageSha256;
+        actualHostLifetimes=$lifetimes.ToArray();largeBacklog=$true;offlineFileCount=$backlogKeys.Count;journalPageSize=$journalPageSize;
+        offlineOriginalCount=@($before.journal).Count;activeOriginalCount=$activeOriginals.Count;activeRemoteSha256=$actualActiveDigest;
+        originalsPreservedAcrossDisabledRestart=$true;independentActiveSourceProgress=$true;sourceUnchangedWhileDisabled=$true;
+        allPublishedInputBytesUnchanged=$true;actualManagedModuleLoadClaimed=$false;fullS06Accepted=$false}
+}
+
 function Invoke-DisabledMovedSourceConflict {
     $script:phase='MovedSourceOfflineCapture'
     $path=$offlineRoute.directoryName+'/kept.txt'
@@ -364,14 +486,21 @@ function Invoke-DisabledMovedSourceConflict {
         originalsRetained=$true;actualManagedModuleLoadClaimed=$false;fullS06Accepted=$false}
 }
 try{
-    New-Item -ItemType Directory -Path $sync,$data,(Join-Path $fixture 'source/offline/retire-dir'),(Join-Path $fixture 'source/active') -Force|Out-Null
+    New-Item -ItemType Directory -Path $sync,$data,(Join-Path $fixture 'source/offline'),(Join-Path $fixture 'source/active') -Force|Out-Null
     $identity=[Security.Principal.WindowsIdentity]::GetCurrent()
     try{$acl=Get-Acl -LiteralPath $sync;$acl.SetOwner($identity.User);Set-Acl -LiteralPath $sync -AclObject $acl}finally{$identity.Dispose()}
-    [IO.File]::WriteAllBytes((Join-Path $fixture 'source/offline/kept.txt'),$keptBytes)
-    [IO.File]::WriteAllBytes((Join-Path $fixture 'source/offline/retire.bin'),[byte[]]@(1,2,3))
-    [IO.File]::WriteAllBytes((Join-Path $fixture 'source/offline/metadata.txt'),[byte[]]@(4,5,6))
+    if($LargeBacklog){
+        foreach($key in $backlogKeys){
+            [IO.File]::WriteAllBytes((Join-Path $fixture ('source/offline/'+$key+'.bin')),[Text.Encoding]::UTF8.GetBytes('accepted seed for '+$key))
+        }
+    }else{
+        New-Item -ItemType Directory -Path (Join-Path $fixture 'source/offline/retire-dir')|Out-Null
+        [IO.File]::WriteAllBytes((Join-Path $fixture 'source/offline/kept.txt'),$keptBytes)
+        [IO.File]::WriteAllBytes((Join-Path $fixture 'source/offline/retire.bin'),[byte[]]@(1,2,3))
+        [IO.File]::WriteAllBytes((Join-Path $fixture 'source/offline/metadata.txt'),[byte[]]@(4,5,6))
+        [IO.File]::WriteAllBytes($replacementInput,$replacementBytes)
+    }
     [IO.File]::WriteAllBytes((Join-Path $fixture 'source/active/progress.txt'),[byte[]]@(7,8,9))
-    [IO.File]::WriteAllBytes($replacementInput,$replacementBytes)
     foreach($publish in @(@{project='src/MirrorPulse.Cli/MirrorPulse.Cli.csproj';directory='cli';native=$true},
         @{project='src/MirrorPulse.Host/MirrorPulse.Host.csproj';directory='host';native=$true},
         @{project='tests/MirrorPulse.CfSharp.CrashProbe/MirrorPulse.CfSharp.CrashProbe.csproj';directory='probe';native=$false})){
@@ -410,16 +539,22 @@ try{
     $installation=@($topology.installations|Where-Object installId -ceq $installed.installedAdapterId)
     if($installation.Count -ne 1 -or -not $installation[0].isSigned -or $installation[0].adapterId -cne 'com.mirrorpulse.adapter.local' -or @($topology.instances).Count -ne 2 -or @($topology.roots).Count -ne 2){throw 'The fixture requires two actual signed Local single-root instances.'}
     $routes=@($topology.roots|ForEach-Object{[ordered]@{instanceId=$_.instanceId;rootId=$_.rootId;rootKey=$_.uniquenessKey;directoryName=$_.directoryName;fixtureSide=$(if($_.instanceId -ceq $offline.createdInstanceId){'offline'}elseif($_.instanceId -ceq $active.createdInstanceId){'active'}else{throw 'A foreign route entered the fixture.'})}})
-    $commands=[ordered]@{};foreach($key in @('createBornFile','createBornDirectory','createEphemeralFile','createEphemeralDirectory','moveKeptFile','moveBornFile','moveBornDirectory','replaceKeptFile','retireFile','retireDirectory','retireEphemeralFile','retireEphemeralDirectory')){$commands[$key]=[guid]::NewGuid().ToString('D')}
-    $marker=[ordered]@{schemaVersion=1;sourceSha=$sourceSha;phase='Setup';routes=$routes;commands=$commands;members=[ordered]@{};originals=@();movedSourceConflict=$MovedSourceConflict.IsPresent};Save-DisabledMarker
+    $commands=[ordered]@{}
+    if(!$LargeBacklog){foreach($key in @('createBornFile','createBornDirectory','createEphemeralFile','createEphemeralDirectory','moveKeptFile','moveBornFile','moveBornDirectory','replaceKeptFile','retireFile','retireDirectory','retireEphemeralFile','retireEphemeralDirectory')){$commands[$key]=[guid]::NewGuid().ToString('D')}}
+    $marker=[ordered]@{schemaVersion=1;sourceSha=$sourceSha;phase='Setup';routes=$routes;commands=$commands;members=[ordered]@{};originals=@();movedSourceConflict=$MovedSourceConflict.IsPresent;largeBacklog=$LargeBacklog.IsPresent};Save-DisabledMarker
     Stop-DisabledHost 'configured';Start-DisabledHost 'configured'
     $offlineRoute=@($routes|Where-Object fixtureSide -ceq offline)[0];$activeRoute=@($routes|Where-Object fixtureSide -ceq active)[0]
     $offlineDirectory=Join-Path $sync $offlineRoute.directoryName;$activeDirectory=Join-Path $sync $activeRoute.directoryName
     Invoke-DisabledCli 'initial-refresh' @('--no-start','sync','refresh')|Out-Null
     Get-ChildItem -LiteralPath $offlineDirectory|Out-Null;Get-ChildItem -LiteralPath $activeDirectory|Out-Null
-    Wait-DisabledHash (Join-Path $offlineDirectory 'kept.txt') (Get-DisabledHash (Join-Path $fixture 'source/offline/kept.txt')) 'initial-offline-file'
+    if(!$LargeBacklog){Wait-DisabledHash (Join-Path $offlineDirectory 'kept.txt') (Get-DisabledHash (Join-Path $fixture 'source/offline/kept.txt')) 'initial-offline-file'}
     Wait-DisabledHash (Join-Path $activeDirectory 'progress.txt') (Get-DisabledHash (Join-Path $fixture 'source/active/progress.txt')) 'initial-active-file'
     Read-DisabledWorkers 'initial' 2
+    if($LargeBacklog){
+        $report=Invoke-DisabledLargeBacklog
+        Write-DisabledOriginal 'completed-execution' $report
+        return
+    }
     if($MovedSourceConflict){
         $report=Invoke-DisabledMovedSourceConflict
         Write-DisabledOriginal 'completed-execution' $report
@@ -562,6 +697,7 @@ try{
                     [IO.Path]::GetFileName($resolved) -cnotmatch '^MirrorPulse-cli-disabled-[0-9a-f]{32}$' -or (Get-Item -LiteralPath $resolved -Force).Attributes.HasFlag([IO.FileAttributes]::ReparsePoint)){throw 'The cleanup target escaped its exact owned fixture.'}
                 $cleanup=Invoke-DisabledProbe cleanup 'authenticated-cleanup'
                 if(-not $cleanup.exclusiveCatalogOwner -or -not $cleanup.cloudRootUnregistered -or $cleanup.validatedObjects -lt 3 -or $cleanup.validatedObjects -ne $cleanup.restoredObjects){throw 'The authenticated complete fixture cleanup did not finish.'}
+                if($LargeBacklog -and $null -ne $report -and $cleanup.validatedObjects -ne ($backlogKeys.Count+4)){throw 'The completed backlog inventory did not validate both roots, the anchor and every original file.'}
                 Remove-Item -LiteralPath $resolved -Recurse -Force
                 if(Test-Path -LiteralPath $resolved){throw 'The authenticated fixture remained after cleanup.'}
                 if($null -ne $report){$report.cleanup=$cleanup;$report.fixtureRemoved=$true}
@@ -574,7 +710,8 @@ try{
     if($null -ne $report){
         if(!$report.fixtureRemoved){throw 'The signed fixture did not retain authenticated teardown.'}
         $report|ConvertTo-Json -Depth 30|Set-Content -LiteralPath $evidenceFile -Encoding utf8
-        if($MovedSourceConflict){'Verified the signed Local source move, original reenable conflict, retained bytes and authenticated teardown.'}
+        if($LargeBacklog){'Verified the signed large offline backlog, later active progress, original receipts and authenticated teardown.'}
+        elseif($MovedSourceConflict){'Verified the signed Local source move, original reenable conflict, retained bytes and authenticated teardown.'}
         else{'Verified the actual signed default-Host offline-operation chain, independent active progress, original outcomes and authenticated teardown.'}
     }
 }

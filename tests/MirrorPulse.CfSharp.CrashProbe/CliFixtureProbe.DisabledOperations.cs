@@ -75,11 +75,12 @@ public static partial class CliFixtureProbe
         {
             await using var fixture = await OpenDisabledFixtureAsync(directory, value => stage = value);
             var catalog = fixture.Catalog; var marker = fixture.Marker; var inventory = fixture.Inventory;
+            var memberSpecs = CliDisabledFixtureLayout.GetMemberSpecs(marker);
             stage = "OriginalMemberBindings";
             var members = new List<object>(); var identities = new List<object>(); var itemIds = new HashSet<Guid>();
             foreach (var entry in marker.Members.OrderBy(item => item.Key, StringComparer.Ordinal))
             {
-                var spec = CliDisabledFixtureLayout.MemberSpecs[entry.Key];
+                var spec = memberSpecs[entry.Key];
                 var route = marker.Routes.Single(item => item.FixtureSide == spec.Side);
                 var member = await catalog.ReadNamespaceMemberAsync(entry.Value.MemberId)
                     ?? throw new InvalidDataException("The original disabled fixture member is missing.");
@@ -276,8 +277,8 @@ public static partial class CliFixtureProbe
                 }
             }
             object? replacement = null;
-            Guid replacementId = marker.Commands["replaceKeptFile"];
-            if (await catalog.ReadNamespaceReplacementExecutionAsync(replacementId) is { } replaced)
+            if (marker.Commands.TryGetValue("replaceKeptFile", out Guid replacementId) &&
+                await catalog.ReadNamespaceReplacementExecutionAsync(replacementId) is { } replaced)
             {
                 stage = "OriginalReplacementBackup";
                 if (!marker.Members.TryGetValue("keptFile", out var originalMember) || replaced.Intent.MemberId != originalMember.MemberId ||
@@ -303,8 +304,8 @@ public static partial class CliFixtureProbe
                     completion
                 };
             }
-            if (marker.Phase != "Setup" && (members.Count != CliDisabledFixtureLayout.MemberSpecs.Count ||
-                births.Count != 4 || moves.Count != 3 || retirements.Count != 4 || replacement is null))
+            if (marker.Phase != "Setup" && (members.Count != memberSpecs.Count ||
+                (!marker.LargeBacklog && (births.Count != 4 || moves.Count != 3 || retirements.Count != 4 || replacement is null))))
                 throw new InvalidDataException("The stopped oracle requires every original member and local command receipt.");
             stage = "FinalRootAndEffectBoundaries";
             var rootFacts = new List<object>();
@@ -323,18 +324,19 @@ public static partial class CliFixtureProbe
             var remoteSnapshots = new List<object>();
             var snapshots = new MirrorPulseFileRemotePollSnapshotStore(fixture.Paths.DataRootPath);
             var pendingPolls = new MirrorPulseCatalogRemotePollPendingStore(catalog);
+            int maximumSnapshotEntries = marker.LargeBacklog ? CliDisabledFixtureLayout.LargeBacklogFileCount : 32;
             foreach (var root in inventory.Roots)
             {
                 var retainedSnapshot = await snapshots.LoadAsync(root);
                 if (retainedSnapshot is not null)
                 {
-                    if (retainedSnapshot.Count > 32) throw new InvalidDataException("Bound the owned fixture root snapshot.");
+                    if (retainedSnapshot.Count > maximumSnapshotEntries) throw new InvalidDataException("Bound the owned fixture root snapshot.");
                     remoteSnapshots.Add(new { rootId = root.RootId.ToString(), instanceId = root.InstanceId.ToString(), entries = Snapshot(root, retainedSnapshot) });
                 }
                 var pending = await pendingPolls.LoadAsync(root, default);
                 if (pending is null) continue;
                 if (pending.RootId != root.RootId || pending.RootKey != root.UniquenessKey ||
-                    pending.RootDirectoryName != root.DirectoryName || pending.Previous.Count > 32 || pending.Candidate.Count > 32)
+                    pending.RootDirectoryName != root.DirectoryName || pending.Previous.Count > maximumSnapshotEntries || pending.Candidate.Count > maximumSnapshotEntries)
                     throw new InvalidDataException("The retained polling intent exceeds the authenticated fixed fixture scope.");
                 await using var readProgress = await store.BeginTransactionAsync();
                 var progress = await readProgress.RemoteBatches.GetAsync(pending.BatchId);

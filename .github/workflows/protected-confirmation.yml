@@ -34,6 +34,10 @@ on:
           - Absent
           - Successor
         default: Absent
+      large_backlog:
+        description: Select 80 original offline files and later active progress for signed-disabled-host
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -325,6 +329,7 @@ jobs:
           MIRRORPULSE_NATIVE_TEST: '1'
           MOVED_SOURCE_CONFLICT: ${{ inputs.moved_source_conflict }}
           MOVED_SOURCE_ADDRESS: ${{ inputs.moved_source_address }}
+          LARGE_BACKLOG: ${{ inputs.large_backlog }}
         run: |
           $packages = @(Get-ChildItem -LiteralPath artifacts/official-local -Recurse -Filter '*.mpadapter' -File)
           if ($packages.Count -ne 1 -or -not (Test-Path -LiteralPath ($packages[0].FullName + '.signature.json'))) { throw 'Require one frozen official signed Local package.' }
@@ -332,6 +337,9 @@ jobs:
           $arguments = @('-Runtime', 'win-arm64', '-PackagePath', $packages[0].FullName, '-EvidencePath', 'artifacts/evidence/cli-disabled-operations/report.json')
           if ($env:MOVED_SOURCE_CONFLICT -eq 'true') {
             $arguments += @('-MovedSourceConflict', '-MovedSourceAddress', $env:MOVED_SOURCE_ADDRESS)
+          }
+          if ($env:LARGE_BACKLOG -eq 'true') { $arguments += '-LargeBacklog' }
+          if ($env:MOVED_SOURCE_CONFLICT -eq 'true' -or $env:LARGE_BACKLOG -eq 'true') {
             Copy-Item -LiteralPath artifacts/official-adapter-releases.json -Destination artifacts/evidence/cli-disabled-operations/official-adapter-releases.json
           }
           pwsh ./eng/verify-cli-disabled-operations.ps1 @arguments

@@ -32,6 +32,31 @@ public sealed class CliDisabledFixtureLayoutTests
     }
 
     [TestMethod]
+    public void LargeBacklogCleanupAuthorizesOnlyTheFixedOfflineFilesAndActivePeer()
+    {
+        var fixture = Create(false, true);
+        var member = new CliDisabledFixtureMember(Guid.NewGuid(), Guid.NewGuid());
+        var marker = fixture.Marker with
+        {
+            LargeBacklog = true,
+            Commands = new Dictionary<string, Guid>(),
+            Members = new Dictionary<string, CliDisabledFixtureMember> { ["backlog-080"] = member }
+        };
+        var inventory = CliDisabledFixtureLayout.Authenticate(fixture.Path, marker, fixture.Topology);
+        Assert.HasCount(CliDisabledFixtureLayout.LargeBacklogFileCount + 4, inventory.AllowedEntries);
+        Assert.IsFalse(inventory.AllowedEntries["Offline Operations/backlog-001.bin"]);
+        Assert.IsFalse(inventory.AllowedEntries["Offline Operations/backlog-080.bin"]);
+        Assert.IsFalse(inventory.AllowedEntries["Active Progress/progress.txt"]);
+        foreach (string path in new[] { "Offline Operations/backlog-081.bin", "Active Progress/backlog-001.bin", "Offline Operations/kept.txt" })
+            Assert.ThrowsExactly<InvalidDataException>(() => CliDisabledFixtureLayout.RequireAllowedRelativePath(inventory, path));
+        Assert.ThrowsExactly<InvalidDataException>(() => CliDisabledFixtureLayout.Authenticate(fixture.Path,
+            marker with { MovedSourceConflict = true }, fixture.Topology));
+        Assert.ThrowsExactly<InvalidDataException>(() => CliDisabledFixtureLayout.Authenticate(fixture.Path,
+            marker with { Members = new Dictionary<string, CliDisabledFixtureMember> { ["backlog-081"] = member } }, fixture.Topology));
+        Assert.IsFalse(Directory.Exists(fixture.Path));
+    }
+
+    [TestMethod]
     [DataRow("Offline Operations/kept.txt")]
     [DataRow("Offline Operations\\kept.txt")]
     public void OfficialNativeSeparatorSpellingsResolveToTheSameExactFixedEntry(string path)

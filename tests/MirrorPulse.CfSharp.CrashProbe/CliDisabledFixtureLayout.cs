@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Globalization;
 using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.State;
 
@@ -10,6 +11,7 @@ public sealed record CliDisabledFixtureMarker(int SchemaVersion, string SourceSh
 {
     public string Phase { get; init; } = "Setup";
     public bool MovedSourceConflict { get; init; }
+    public bool LargeBacklog { get; init; }
     public IReadOnlyDictionary<string, CliDisabledFixtureMember> Members { get; init; } = new Dictionary<string, CliDisabledFixtureMember>();
     public IReadOnlyList<Guid> Originals { get; init; } = [];
 }
@@ -22,6 +24,7 @@ public static class CliDisabledFixtureLayout
 {
     public const string DirectoryPrefix = "MirrorPulse-cli-disabled-";
     public const string MarkerFileName = ".mp-cli-disabled-fixture.json";
+    public const int LargeBacklogFileCount = 80;
 
     public static IReadOnlyList<string> CommandNames { get; } = Array.AsReadOnly(new[]
     {
@@ -43,6 +46,26 @@ public static class CliDisabledFixtureLayout
             ["metadataFile"] = new("offline", "metadata.txt", false),
             ["activeFile"] = new("active", "progress.txt", false)
         });
+
+    private static readonly IReadOnlyDictionary<string, CliDisabledFixtureMemberSpec> LargeBacklogMembers =
+        CreateLargeBacklogMembers();
+
+    internal static IReadOnlyDictionary<string, CliDisabledFixtureMemberSpec> GetMemberSpecs(CliDisabledFixtureMarker marker) =>
+        marker.LargeBacklog ? LargeBacklogMembers : MemberSpecs;
+
+    private static ReadOnlyDictionary<string, CliDisabledFixtureMemberSpec> CreateLargeBacklogMembers()
+    {
+        var members = new Dictionary<string, CliDisabledFixtureMemberSpec>(StringComparer.Ordinal)
+        {
+            ["activeFile"] = MemberSpecs["activeFile"]
+        };
+        for (int index = 1; index <= LargeBacklogFileCount; index++)
+        {
+            string key = "backlog-" + index.ToString("D3", CultureInfo.InvariantCulture);
+            members.Add(key, new("offline", key + ".bin", false));
+        }
+        return new ReadOnlyDictionary<string, CliDisabledFixtureMemberSpec>(members);
+    }
 
     public static string RequireFixtureDirectory(string directory)
     {
@@ -68,13 +91,16 @@ public static class CliDisabledFixtureLayout
     {
         ArgumentNullException.ThrowIfNull(marker); ArgumentNullException.ThrowIfNull(topology);
         string root = RequireFixtureDirectory(directory);
+        var memberSpecs = GetMemberSpecs(marker);
+        IReadOnlyList<string> expectedCommands = marker.LargeBacklog ? [] : CommandNames;
         if (marker.SchemaVersion != 1 || marker.SourceSha is not { Length: 40 } || !marker.SourceSha.All(char.IsAsciiHexDigit) ||
             marker.Phase is not ("Setup" or "Before" or "DisabledRestart" or "ActiveProgress" or "Reenabled") ||
+            (marker.LargeBacklog && marker.MovedSourceConflict) ||
             marker.Routes is not { Count: 2 } || topology.Installations.Count != 1 || topology.Instances.Count != 2 || topology.Roots.Count != 2 ||
-            marker.Commands is null || marker.Commands.Count != CommandNames.Count ||
-            CommandNames.Any(name => !marker.Commands.TryGetValue(name, out Guid id) || id == Guid.Empty) ||
-            marker.Commands.Values.Distinct().Count() != CommandNames.Count || marker.Members is null || marker.Members.Count > MemberSpecs.Count ||
-            marker.Members.Any(item => !MemberSpecs.ContainsKey(item.Key) || item.Value is null || item.Value.MemberId == Guid.Empty || item.Value.ItemId == Guid.Empty) ||
+            marker.Commands is null || marker.Commands.Count != expectedCommands.Count ||
+            expectedCommands.Any(name => !marker.Commands.TryGetValue(name, out Guid id) || id == Guid.Empty) ||
+            marker.Commands.Values.Distinct().Count() != expectedCommands.Count || marker.Members is null || marker.Members.Count > memberSpecs.Count ||
+            marker.Members.Any(item => !memberSpecs.ContainsKey(item.Key) || item.Value is null || item.Value.MemberId == Guid.Empty || item.Value.ItemId == Guid.Empty) ||
             marker.Members.Values.Select(item => item.MemberId).Distinct().Count() != marker.Members.Count ||
             marker.Members.Values.Select(item => item.ItemId).Distinct().Count() != marker.Members.Count ||
             marker.Originals is null || marker.Originals.Count > 256 || marker.Originals.Any(id => id == Guid.Empty) || marker.Originals.Distinct().Count() != marker.Originals.Count)
@@ -109,10 +135,13 @@ public static class CliDisabledFixtureLayout
         if (sides.Count != 2) throw new InvalidDataException("Both distinct single-root instances are required.");
         var allowed = new Dictionary<string, bool>(StringComparer.Ordinal) { [""] = true };
         foreach (var item in sides.Values) allowed.Add(item.DirectoryName, true);
-        foreach (var spec in MemberSpecs.Values) allowed.Add(sides[spec.Side].DirectoryName + "/" + spec.Name, spec.IsDirectory);
-        foreach (var item in new[] { new CliDisabledFixtureMemberSpec("offline", "kept-renamed.txt", false),
-            new("offline", "born-renamed.txt", false), new("offline", "moved-dir", true) })
-            allowed.Add(sides[item.Side].DirectoryName + "/" + item.Name, item.IsDirectory);
+        foreach (var spec in memberSpecs.Values) allowed.Add(sides[spec.Side].DirectoryName + "/" + spec.Name, spec.IsDirectory);
+        if (!marker.LargeBacklog)
+        {
+            foreach (var item in new[] { new CliDisabledFixtureMemberSpec("offline", "kept-renamed.txt", false),
+                new("offline", "born-renamed.txt", false), new("offline", "moved-dir", true) })
+                allowed.Add(sides[item.Side].DirectoryName + "/" + item.Name, item.IsDirectory);
+        }
         if (marker.MovedSourceConflict)
             allowed.Add(sides["offline"].DirectoryName + "/externally-moved.txt", false);
         return new(Array.AsReadOnly(new[] { sides["offline"], sides["active"] }), new ReadOnlyDictionary<string, bool>(allowed));
