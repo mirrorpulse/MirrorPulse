@@ -61,8 +61,9 @@ public sealed class DeferredP079GateTests
             if($creationBudget -ne $priorBudget+225000){throw 'The five original creation cases must retain their independent 45-second deadlines.'}
             $catalog.required.native=@($catalog.required.native|Where-Object {$_ -cnotin $creationMethods})
             $activeReplacement=$fileTransferPrefix+'NativeActiveReplacementRecoversPreparedOriginalAcrossHostRoles'
-            $catalog.required.namespace=@($catalog.required.namespace|Where-Object {$_ -cne $activeReplacement})
-            $catalog.required.native=@($catalog.required.native|Where-Object {$_ -cne $activeReplacement})
+            $reenabledRemoteMove='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeReenabledRootPreservesOfflineEditsWhenTheOriginalRemoteAddressWasMoved'
+            $catalog.required.namespace=@($catalog.required.namespace|Where-Object {$_ -cnotin @($activeReplacement,$reenabledRemoteMove)})
+            $catalog.required.native=@($catalog.required.native|Where-Object {$_ -cnotin @($activeReplacement,$reenabledRemoteMove)})
             $retirement=$fileTransferPrefix+'NativeInterruptedControlledSubtreeRetirementUsesOriginalLeafAcrossHostRoles'
             if(@($catalog.required.native|Where-Object {$_ -ceq $retirement}).Count -ne 1 -or
                @($catalog.requiredCases.$retirement).Count -ne 3){throw 'Require all three native retirement recovery boundaries.'}

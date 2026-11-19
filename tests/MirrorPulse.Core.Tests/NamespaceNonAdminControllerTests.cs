@@ -83,6 +83,8 @@ public sealed partial class NamespaceNonAdminControllerTests
                 $activeReplacementMethod='NativeActiveReplacementRecoversPreparedOriginalAcrossHostRoles'
                 $activeReplacement=$rejectionPrefix+$activeReplacementMethod
                 $activeReplacementBudget=2*65000
+                $reenabledRemoteMove='MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeReenabledRootPreservesOfflineEditsWhenTheOriginalRemoteAddressWasMoved'
+                $reenabledRemoteMoveBudget=65000
                 $unsealedExecution=$rejectionPrefix+'NativePublicRuntimeExecutesUnsealedBornRootLabelAcrossDisposedRoles'
                 $capturedUnsealedExecution=$rejectionPrefix+'NativePublicRuntimeExecutesUnsealedCapturedRootLabelAcrossDisposedRoles'
                 $rejections=@(
@@ -120,7 +122,7 @@ public sealed partial class NamespaceNonAdminControllerTests
                 )|ForEach-Object {$rejectionPrefix+$_}
                 function ReadPreActiveReplacementNamespaceCatalog([string]$Path) {
                     $value=Get-Content -LiteralPath $Path -Raw|ConvertFrom-Json
-                    $value.required.namespace=@($value.required.namespace|Where-Object {$_ -cne $activeReplacement})
+                    $value.required.namespace=@($value.required.namespace|Where-Object {$_ -cnotin @($activeReplacement,$reenabledRemoteMove)})
                     return $value
                 }
                 function ReadPreFileTransferNamespaceCatalog([string]$Path) {
@@ -906,16 +908,21 @@ public sealed partial class NamespaceNonAdminControllerTests
                             if(($replacementRows -join '|') -cne ($expectedReplacementRows -join '|')){throw 'Require both active replacement restart cases.'}
                             foreach($selection in @(@{names=$catalog.required.namespace},@{names=$catalog.required.native},@{names=$catalog.allowSkipped})){
                                 if(@($selection.names|Where-Object {$_ -ceq $activeReplacement}).Count -ne 1){throw 'Require the active replacement restart method exactly once in every applicable selection.'}
+                                if(@($selection.names|Where-Object {$_ -ceq $reenabledRemoteMove}).Count -ne 1){throw 'Require the reenabled moved-address method exactly once in every applicable selection.'}
                             }
                             if($activeReplacement -cin $catalog.required.deferredP079){throw 'Active replacement is part of S06.'}
-                            $priorNames=@($parameters.TestNames|Where-Object {$_ -cne $activeReplacement})
+                            if($reenabledRemoteMove -cin $catalog.required.deferredP079){throw 'Reenable across a remote move is part of S06.'}
+                            $beforeRemoteMoveNames=@($parameters.TestNames|Where-Object {$_ -cne $reenabledRemoteMove})
+                            $priorNames=@($beforeRemoteMoveNames|Where-Object {$_ -cne $activeReplacement})
                             $historical=@($priorNames|ForEach-Object {if($_ -ceq $replacementWriter){'Fixture.HistoricalReplacementWriter'}else{$_}})
                             foreach($scope in @('AllRetained','S06')){
-                                $prior=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount ($Count-1) -TestNames $historical -Scope $scope
-                                $beforeRestart=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount ($Count-1) -TestNames $priorNames -Scope $scope
+                                $prior=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $historical.Count -TestNames $historical -Scope $scope
+                                $beforeRestart=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $priorNames.Count -TestNames $priorNames -Scope $scope
+                                $beforeRemoteMove=Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $beforeRemoteMoveNames.Count -TestNames $beforeRemoteMoveNames -Scope $scope
                                 $current=Get-OrdinaryUserNamespaceBudgetMilliseconds @parameters -Scope $scope
                                 if($beforeRestart -ne $prior+$replacementWriterBudgetDelta){throw 'Retain all five bounded replacement owner windows.'}
-                                if($current -ne $beforeRestart+$activeReplacementBudget){throw 'Both active replacement restart cases retain their 65-second deadlines.'}
+                                if($beforeRemoteMove -ne $beforeRestart+$activeReplacementBudget){throw 'Both active replacement restart cases retain their 65-second deadlines.'}
+                                if($current -ne $beforeRemoteMove+$reenabledRemoteMoveBudget){throw 'The reenabled moved-address case retains its 65-second deadline.'}
                             }
                         }
                         $budget=Get-OrdinaryUserNamespaceBudgetMilliseconds @parameters
@@ -927,8 +934,8 @@ public sealed partial class NamespaceNonAdminControllerTests
                     } else {
                         $unsealedExecutionBudget=4*90000
                         $fileTransferRecoveryBudget=25*45000
-                        $originalCatalogCount=$Count-3-$fileTransferRecovery.Count
-                        $expectedCatalogBudget=120000+($originalCatalogCount-10+51)*15000+18*30000+28*15000+6*45000+6*15000+4*45000+5*15000+6*45000+2*45000+2*45000+4*60000+10*60000+15000+2*45000+50000+13*15000+29*50000+50000+50000+50000+50000+50000+75000+50000+19*65000+4*60000+10*95000-5*15000+$unsealedExecutionBudget+$fileTransferRecoveryBudget+$replacementWriterBudgetDelta+$activeReplacementBudget
+                        $originalCatalogCount=$Count-4-$fileTransferRecovery.Count
+                        $expectedCatalogBudget=120000+($originalCatalogCount-10+51)*15000+18*30000+28*15000+6*45000+6*15000+4*45000+5*15000+6*45000+2*45000+2*45000+4*60000+10*60000+15000+2*45000+50000+13*15000+29*50000+50000+50000+50000+50000+50000+75000+50000+19*65000+4*60000+10*95000-5*15000+$unsealedExecutionBudget+$fileTransferRecoveryBudget+$replacementWriterBudgetDelta+$activeReplacementBudget+$reenabledRemoteMoveBudget
                         $maximum=if ($Scenario -eq 'budget-catalog') {$expectedCatalogBudget} else {1800000}
                         if ($rejected -or $budget -lt 600000 -or $budget -gt $maximum) { throw 'The whole-suite envelope is missing or unbounded.' }
                         if ($Scenario -eq 'budget-catalog' -and $budget -ne $expectedCatalogBudget) {

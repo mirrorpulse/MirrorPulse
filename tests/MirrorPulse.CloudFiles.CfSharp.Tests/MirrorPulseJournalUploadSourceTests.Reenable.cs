@@ -12,6 +12,8 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 
 public sealed partial class MirrorPulseJournalUploadSourceTests
 {
+    private enum ReenableRemoteChange { None, Edit, Move }
+
     [TestMethod]
     public async Task ReenableTransportSupportsProductionAcceptedUploadReadback()
     {
@@ -78,17 +80,24 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
     [TestCategory("NativeCloudFiles")]
     [SupportedOSPlatform("windows10.0.26100")]
     public Task NativeReenabledRootUploadsOfflineEditsAgainstItsRetainedBaselineAfterRestart() =>
-        RunReenabledRootScenarioAsync(remoteChanged: false);
+        RunReenabledRootScenarioAsync(ReenableRemoteChange.None);
 
     [TestMethod]
     [DoNotParallelize]
     [TestCategory("NativeCloudFiles")]
     [SupportedOSPlatform("windows10.0.26100")]
     public Task NativeReenabledRootPreservesOfflineEditsAndAllOriginalsWhenRemoteChangedAfterRestart() =>
-        RunReenabledRootScenarioAsync(remoteChanged: true);
+        RunReenabledRootScenarioAsync(ReenableRemoteChange.Edit);
+
+    [TestMethod]
+    [DoNotParallelize]
+    [TestCategory("NativeCloudFiles")]
+    [SupportedOSPlatform("windows10.0.26100")]
+    public Task NativeReenabledRootPreservesOfflineEditsWhenTheOriginalRemoteAddressWasMoved() =>
+        RunReenabledRootScenarioAsync(ReenableRemoteChange.Move);
 
     [SupportedOSPlatform("windows10.0.26100")]
-    private async Task RunReenabledRootScenarioAsync(bool remoteChanged)
+    private async Task RunReenabledRootScenarioAsync(ReenableRemoteChange remoteChange)
     {
         if (Environment.GetEnvironmentVariable("MIRRORPULSE_NATIVE_TEST") != "1")
             Assert.Inconclusive("Requires the disposable NativeCloudFiles verification environment.");
@@ -102,6 +111,7 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
         var disabled = new RootRegistration(root.AdapterId, instance, root.RootId, root.UniquenessKey, root.Label,
             root.DirectoryName, root.CustomEntry, RootRegistrationState.Disabled, root.RegisteredAt, root.IdentityScope);
         var remote = new ReenableTransport(instance);
+        bool expectConflict = remoteChange != ReenableRemoteChange.None;
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(65));
         Guid acceptedItem = Guid.Empty;
         MirrorPulseLocalFileBinding? originalBinding = null;
@@ -174,7 +184,8 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
                         .Select(command => command.OperationId).ToArray();
                     Assert.IsNotEmpty(originals); Assert.IsEmpty(pending.ReadyCommands);
                     TestContext.WriteLine($"ReenabledRootCheckpoint: disabled=True; originalCount={originals.Length}; offlineEditObserved=True.");
-                    if (remoteChanged) remote.Seed("concurrent remote edit"u8.ToArray());
+                    if (remoteChange == ReenableRemoteChange.Edit) remote.Seed("concurrent remote edit"u8.ToArray());
+                    if (remoteChange == ReenableRemoteChange.Move) remote.MoveTo("moved-remotely.txt");
                 }
                 int statBefore = remote.Stats;
                 int callsBefore = remote.Calls;
@@ -201,7 +212,7 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
                     long? settledSince = null;
                     while (true)
                     {
-                        bool settled = remoteChanged ? (await catalog.ReadUploadConflictsAsync(cancellationToken: deadline.Token)).Count > 0 :
+                        bool settled = expectConflict ? (await catalog.ReadUploadConflictsAsync(cancellationToken: deadline.Token)).Count > 0 :
                             remote.Uploads.Length == 2 && !await ReenableJournalContainsAsync(state.OpenStore, originals, [acceptedItem], deadline.Token);
                         if (settled)
                         {
@@ -213,24 +224,35 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
                     }
                     Assert.IsGreaterThan(statBefore, remote.Stats);
                     Assert.AreEqual("latest offline edit", await File.ReadAllTextAsync(file, deadline.Token));
-                    Assert.HasCount(remoteChanged ? 1 : 2, remote.Uploads);
-                    Assert.AreEqual(remoteChanged ? "concurrent remote edit" : "latest offline edit", System.Text.Encoding.UTF8.GetString(remote.Bytes!));
-                    await AssertOriginalsAsync(expectedPresent: remoteChanged);
-                    if (remoteChanged)
+                    Assert.HasCount(expectConflict ? 1 : 2, remote.Uploads);
+                    Assert.AreEqual(expectConflict ? 1 : 2, remote.UploadAttempts);
+                    string expectedRemoteContent = remoteChange switch
+                    {
+                        ReenableRemoteChange.Edit => "concurrent remote edit",
+                        ReenableRemoteChange.Move => "accepted baseline",
+                        _ => "latest offline edit"
+                    };
+                    Assert.AreEqual(expectedRemoteContent, System.Text.Encoding.UTF8.GetString(remote.Bytes!));
+                    await AssertOriginalsAsync(expectedPresent: expectConflict);
+                    var current = await cloud.InspectAsync(deadline.Token);
+                    Assert.AreEqual(acceptedItem, current.ItemId);
+                    var currentBinding = current.LocalBinding!;
+                    Assert.AreEqual(originalBinding, new(currentBinding.VolumeSerialNumber, currentBinding.SyncRootFileId, currentBinding.LocalFileId));
+                    if (expectConflict)
                     {
                         var conflicts = await catalog.ReadUploadConflictsAsync(cancellationToken: deadline.Token);
-                        Assert.IsTrue(conflicts.All(conflict => conflict.LocalRevision == seedRevision && conflict.RemoteRevision == remote.Revision));
+                        Assert.IsTrue(conflicts.All(conflict => conflict.LocalRevision == seedRevision &&
+                            conflict.RemoteRevision == remote.RevisionAtOriginalPath));
                         Assert.Contains(conflicts[0].ChangeId, originals.Select(id => id.ToString("D")).ToArray());
                     }
                     else
                     {
                         Assert.AreEqual(seedRevision, remote.Uploads[1].Baseline);
                         Assert.IsTrue((await catalog.ReadContentConfirmationReceiptAsync(remote.Uploads[1].Operation, deadline.Token))!.MayAcknowledge);
-                        Assert.AreEqual(acceptedItem, (await cloud.InspectAsync(deadline.Token)).ItemId);
                     }
                     TestContext.WriteLine($"ReenabledRoot: twoSdkOwners=True; stableRootAndNativeBinding=True; disabledSourceCalls=0; " +
-                        $"originalCount={originals.Length}; retainedBaseline=True; remoteChanged={remoteChanged}; " +
-                        $"conditionalUpload={!remoteChanged}; preservedConflict={remoteChanged}; strictHostIntegration=False; transportFixture=True.");
+                        $"originalCount={originals.Length}; retainedBaseline=True; remoteChange={remoteChange}; " +
+                        $"conditionalUpload={!expectConflict}; preservedConflict={expectConflict}; strictHostIntegration=False; transportFixture=True.");
                 }
 
                 async Task AssertOriginalsAsync(bool expectedPresent)
@@ -264,37 +286,51 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
     private sealed class ReenableTransport(InstanceId instance) : IMirrorPulseWorkerUploadTransport, IMirrorPulseWorkerStatTransport,
         IMirrorPulseWorkerDirectoryPageSource, IMirrorPulseWorkerRangeTransport
     {
+        private const string OriginalPath = "reenabled.txt";
+        private string _remotePath = OriginalPath;
         private int _stats;
         private int _calls;
+        private int _uploadAttempts;
         public int Stats => Volatile.Read(ref _stats);
         public int Calls => Volatile.Read(ref _calls);
+        public int UploadAttempts => Volatile.Read(ref _uploadAttempts);
         public byte[]? Bytes { get; private set; }
         public string? Revision => Bytes is null ? null : Convert.ToHexString(SHA256.HashData(Bytes));
+        public string? RevisionAtOriginalPath => _remotePath == OriginalPath ? Revision : null;
         private readonly System.Collections.Concurrent.ConcurrentQueue<(Guid Operation, string? ExpectedRevision)> _uploads = new();
         public (Guid Operation, string? Baseline)[] Uploads => _uploads.ToArray();
         public void Seed(byte[] bytes) => Bytes = bytes;
-        private void Require(InstanceId actual, string? rootKey, string path)
-        { Assert.AreEqual(instance, actual); Assert.AreEqual("docs", rootKey); Assert.AreEqual("reenabled.txt", path); }
+        public void MoveTo(string path) => _remotePath = path;
+        private void RequireRoute(InstanceId actual, string? rootKey)
+        { Assert.AreEqual(instance, actual); Assert.AreEqual("docs", rootKey); }
         public ValueTask<string?> StatAsync(MirrorPulseWorkerStatRequest request, CancellationToken token)
-        { token.ThrowIfCancellationRequested(); Interlocked.Increment(ref _calls); Require(request.InstanceId, request.RootKey, request.NormalizedPath); Interlocked.Increment(ref _stats); return ValueTask.FromResult(Revision); }
+        {
+            token.ThrowIfCancellationRequested(); Interlocked.Increment(ref _calls);
+            RequireRoute(request.InstanceId, request.RootKey);
+            Assert.AreEqual(OriginalPath, request.NormalizedPath);
+            Interlocked.Increment(ref _stats);
+            return ValueTask.FromResult(RevisionAtOriginalPath);
+        }
         public ValueTask<MirrorPulseWorkerDirectoryPage> ReadDirectoryPageAsync(MirrorPulseWorkerDirectoryPageRequest request, CancellationToken token)
         {
             token.ThrowIfCancellationRequested(); Interlocked.Increment(ref _calls);
-            Require(request.InstanceId, request.RootKey, "reenabled.txt");
+            RequireRoute(request.InstanceId, request.RootKey);
             Assert.AreEqual(string.Empty, request.NormalizedPath); Assert.IsTrue(request.ContinuationCursor.IsEmpty);
             return ValueTask.FromResult(new MirrorPulseWorkerDirectoryPage(Bytes is null ? [] :
-                [new("reenable:file", Revision!, "File", "reenabled.txt", Bytes.LongLength, null, null, false)], ReadOnlyMemory<byte>.Empty, true));
+                [new("reenable:file", Revision!, "File", _remotePath, Bytes.LongLength, null, null, false)], ReadOnlyMemory<byte>.Empty, true));
         }
         public ValueTask<Stream> ReadRangeAsync(MirrorPulseWorkerReadRangeRequest request, CancellationToken token)
         {
-            token.ThrowIfCancellationRequested(); Interlocked.Increment(ref _calls); Require(request.InstanceId, request.RootKey, request.NormalizedPath);
+            token.ThrowIfCancellationRequested(); Interlocked.Increment(ref _calls);
+            RequireRoute(request.InstanceId, request.RootKey); Assert.AreEqual(_remotePath, request.NormalizedPath);
             return ValueTask.FromResult<Stream>(new MemoryStream(Bytes!.AsSpan(checked((int)request.Offset), checked((int)request.Length)).ToArray()));
         }
         public async ValueTask<string> UploadAsync(MirrorPulseWorkerUploadRequest request, CancellationToken token)
         {
             Interlocked.Increment(ref _calls);
-            Require(request.InstanceId, request.RootKey, request.NormalizedPath);
-            Assert.AreEqual(request.ExpectedRevision, Revision); Assert.IsNotNull(request.OperationId);
+            Interlocked.Increment(ref _uploadAttempts);
+            RequireRoute(request.InstanceId, request.RootKey); Assert.AreEqual(OriginalPath, request.NormalizedPath);
+            Assert.AreEqual(request.ExpectedRevision, RevisionAtOriginalPath); Assert.IsNotNull(request.OperationId);
             using var output = new MemoryStream(); await request.Content.CopyToAsync(output, token);
             byte[] bytes = output.ToArray(); Assert.AreEqual(request.Length, bytes.LongLength);
             Assert.AreEqual(request.ExpectedContentSha256, Convert.ToHexString(SHA256.HashData(bytes)));

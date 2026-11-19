@@ -6,7 +6,7 @@ function Get-SignedNamespaceBudgetMilliseconds {
 }
 
 function Get-OrdinaryUserNamespaceBudgetMilliseconds {
-    param([Parameter(Mandatory)][ValidateRange(1, 178)][int]$TestCount, [string[]]$TestNames,
+    param([Parameter(Mandatory)][ValidateRange(1, 179)][int]$TestCount, [string[]]$TestNames,
         [ValidateSet('AllRetained', 'S06')][string]$Scope = 'AllRetained')
     if ($Scope -ceq 'S06' -and -not $PSBoundParameters.ContainsKey('TestNames')) {
         throw 'S06 scope requires its explicit selected test names.'
@@ -33,6 +33,7 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
     $disabledReplacement = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeDisabledRootControlledReplacementRetainsBytesBackupAndJournalAcrossFreshRolesWithoutDispatch'
     $residentReplacement = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.NativeResidentInSyncReplacementRetainsOriginalBytesJournalAndDirtyContentWithoutSourceCalls'
     $journalRescan = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeProductionPumpSettlesOriginalJournalBeforeAnExplicitRescanAcrossOwners'
+    $reenabledRemoteMove = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseJournalUploadSourceTests.NativeReenabledRootPreservesOfflineEditsWhenTheOriginalRemoteAddressWasMoved'
     $prefix = 'MirrorPulse.CloudFiles.CfSharp.Tests.MirrorPulseWindowsNamespacePermissionLeaseTests.'
     $replacementWriter = $prefix + 'NativeReplacementContentWriterRetainsFirstBackupAndDirtyCopyAcrossBothObjectStarts'
     $activeReplacement = $prefix + 'NativeActiveReplacementRecoversPreparedOriginalAcrossHostRoles'
@@ -91,7 +92,7 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
     $fileTransferRecovery.Add($prefix+'NativeHostTransferAcknowledgesOriginalAfterSettledSourceRoleHandoff', 2)
     $fileTransferRecovery.Add($prefix+'NativeHostTransferResumesInterruptedSourceRetirementAcrossRoles', 3)
     $fileTransferRecovery.Add($prefix+'NativeHostTransferCompletesRecreatedAcceptedSourceAfterBothRootAudits', 1)
-    $additionalSelections = @(@($preparation,$approval,$rootPreparation,$rootExecution,$rootRecovery,$rootRuntime,$rootAdmission,$rootPublic,$rootUnsealedExecution,$capturedUnsealedExecution,$rootCancellation,$unsealedCancellation,$legacyInitializer,$bornCancellation,$disabledImport,$disabledCreation,$disabledCreationRole,$disabledMove,$disabledRetirement,$disabledReplacement,$residentReplacement,$activeReplacement,$journalRescan)+@($keepRemote.Keys)+@($deleteRejections.Keys)+@($directoryJournal.Keys)+@($fileTransferRecovery.Keys) | Where-Object {$_ -cin $TestNames}).Count
+    $additionalSelections = @(@($preparation,$approval,$rootPreparation,$rootExecution,$rootRecovery,$rootRuntime,$rootAdmission,$rootPublic,$rootUnsealedExecution,$capturedUnsealedExecution,$rootCancellation,$unsealedCancellation,$legacyInitializer,$bornCancellation,$disabledImport,$disabledCreation,$disabledCreationRole,$disabledMove,$disabledRetirement,$disabledReplacement,$residentReplacement,$activeReplacement,$journalRescan,$reenabledRemoteMove)+@($keepRemote.Keys)+@($deleteRejections.Keys)+@($directoryJournal.Keys)+@($fileTransferRecovery.Keys) | Where-Object {$_ -cin $TestNames}).Count
     if ($TestCount -gt 112 -and (-not $PSBoundParameters.ContainsKey('TestNames') -or $additionalSelections -lt $TestCount-112)) {
         throw 'The additional namespace case requires its explicit original preparation selection.'
     }
@@ -144,6 +145,7 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
             if ($name -ceq $disabledRetirement) { $transferDeadlineMilliseconds += 50000 }
             if ($name -ceq $disabledReplacement) { $transferDeadlineMilliseconds += 50000 }
             if ($name -ceq $journalRescan) { $transferDeadlineMilliseconds += 50000 }
+            if ($name -ceq $reenabledRemoteMove) { $transferDeadlineMilliseconds += 50000 }
             # Two independent 45-second original identity starts retain their full deadlines.
             if ($name -ceq $residentReplacement) { $executions++; $transferDeadlineMilliseconds += 60000 }
             # Both active replacement restart cases retain their original 65-second deadlines.
@@ -202,7 +204,7 @@ function Get-OrdinaryUserNamespaceBudgetMilliseconds {
 }
 
 function Get-OrdinaryUserNamespaceStepTimeoutMinutes {
-    param([Parameter(Mandatory)][ValidateRange(1, 178)][int]$TestCount, [string[]]$TestNames,
+    param([Parameter(Mandatory)][ValidateRange(1, 179)][int]$TestCount, [string[]]$TestNames,
         [ValidateSet('AllRetained', 'S06')][string]$Scope = 'AllRetained')
     # The workflow must let the existing child budget expire and allow the
     # controller to preserve diagnostics and remove its disposable user/profile.
