@@ -136,9 +136,9 @@ public static partial class CliFixtureProbe
             stage = "OfficialJournalRead";
             int journalLimit = marker.LargeBacklog ? 1024 : 512;
             var all = await transaction.Operations.ListAsync(journalLimit);
-            stage = "OfficialJournalReadLimit";
             if (all.Count >= journalLimit)
             {
+                stage = "OfficialJournalReadLimit";
                 if (marker.LargeBacklog)
                 {
                     Guid activeItem = marker.Members["activeFile"].ItemId;
@@ -172,6 +172,7 @@ public static partial class CliFixtureProbe
                 }
                 throw new InvalidDataException("The fixture exceeded its bounded official journal observation.");
             }
+            stage = "OfficialJournalSelection";
             var selected = all.Where(row => row.ItemId is { } itemId && itemIds.Contains(itemId))
                 .OrderBy(row => row.Sequence).Select(row => new CliDisabledJournalFact(row.OperationId, row.Sequence, row.ItemId,
                     row.Kind.ToString(), row.AttemptCount, row.CreatedAt, Convert.ToHexString(SHA256.HashData(row.Payload.Span)))).ToArray();
@@ -209,8 +210,15 @@ public static partial class CliFixtureProbe
                     }).ToArray()
                 };
             }
+            stage = "BlockedOperationInventory";
             var blocked = await catalog.ReadBlockedLocalOperationsAsync();
-            if (blocked.Count > 128) throw new InvalidDataException("The fixture exceeded its bounded blocked-operation observation.");
+            int maximumBlocked = marker.LargeBacklog ? 256 : 128;
+            if (blocked.Count > maximumBlocked)
+            {
+                stage = "BlockedOperationInventoryLimit";
+                throw new InvalidDataException("The fixture exceeded its bounded blocked-operation observation.");
+            }
+            stage = "BlockedOperationScope";
             foreach (var value in blocked)
             {
                 string relativePath = CliDisabledFixtureLayout.RequireAllowedRelativePath(inventory, value.RelativePath);
