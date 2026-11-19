@@ -49,6 +49,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
     [DataRow("reservation-name")]
     [DataRow("intent-fingerprint")]
     [DataRow("operation-index")]
+    [DataRow("null-intent-index")]
     public async Task DamagedUnregisteredBirthCannotSilentlyReleaseItsDispatchFence(string damage)
     {
         using var fixture = new Fixture();
@@ -63,6 +64,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             "reservation-missing" => "DELETE FROM namespace_birth_reservations;",
             "reservation-name" => "UPDATE namespace_birth_reservations SET child_name_key='OTHER.TXT';",
             "intent-fingerprint" => "UPDATE namespace_birth_intents SET fingerprint=zeroblob(32);",
+            "null-intent-index" => "DELETE FROM namespace_birth_reservations; UPDATE namespace_birth_intents SET operation_id=NULL;",
             _ => "PRAGMA foreign_keys=OFF; UPDATE namespace_birth_reservations SET operation_id='{' || operation_id || '}';"
         };
         await ExecuteSqlAsync(fixture.Paths, sql);

@@ -9,6 +9,64 @@ namespace MirrorPulse.Core.Tests;
 public sealed partial class MirrorPulseNamespaceBirthCatalogTests
 {
     [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task RecoveryFenceDiscoveryReadsBothPagesBeforeReturningAnyRoots(bool birth)
+    {
+        using var fixture = new Fixture();
+        await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        var owners = new List<(RootId Root, Guid Operation)>();
+        for (int index = 1; index <= 17; index++)
+        {
+            if (birth)
+            {
+                var parent = Baseline();
+                var protection = Protection(parent);
+                await ProtectAsync(catalog, parent, protection);
+                var intent = Birth(parent, protection) with { OperationId = OwnerPageId(1, index) };
+                await catalog.PrepareNamespaceBirthAsync(intent);
+                owners.Add((intent.RootId, intent.OperationId));
+            }
+            else
+            {
+                var setup = await PrepareMovableMemberAsync(catalog);
+                await catalog.PrepareNamespaceMemberMoveAsync(setup.Move);
+                owners.Add((setup.Move.RootId, setup.Move.OperationId));
+            }
+        }
+
+        var connection = (SqliteConnection)typeof(MirrorPulseProductCatalog).GetField("_connection", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(catalog)!;
+        var statements = new List<string>();
+        SQLitePCL.strdelegate_trace trace = (_, sql) => statements.Add(sql);
+        SQLitePCL.raw.sqlite3_trace(connection.Handle!, trace, null);
+        Task<IReadOnlyList<RootId>> ReadFencesAsync() => birth
+            ? catalog.ReadNamespaceDispatchFencedRootsAsync() : catalog.ReadNamespaceRecoveryRootsAsync();
+        try
+        {
+            CollectionAssert.AreEqual(owners.Select(owner => owner.Root).OrderBy(root => root.Value).ToArray(),
+                (await ReadFencesAsync()).ToArray());
+        }
+        finally
+        {
+            SQLitePCL.raw.sqlite3_trace(connection.Handle!, (SQLitePCL.strdelegate_trace)null!, null);
+            GC.KeepAlive(trace);
+        }
+
+        string pageStart = birth ? "SELECT operation_id FROM (" : "SELECT root_id FROM namespace_member_move_pending";
+        var discovery = statements.Where(sql => sql.StartsWith(pageStart, StringComparison.Ordinal) &&
+            (!birth || sql.Contains("FROM namespace_birth_intents b", StringComparison.Ordinal))).ToArray();
+        Assert.HasCount(2, discovery);
+        Assert.IsTrue(discovery.All(sql => sql.Contains("LIMIT 16", StringComparison.Ordinal)));
+
+        var last = birth ? owners[^1] : owners.OrderBy(owner => owner.Root.ToString(), StringComparer.Ordinal).Last();
+        string corruption = birth
+            ? $"DELETE FROM namespace_birth_reservations WHERE operation_id='{last.Operation:D}';"
+            : $"DELETE FROM namespace_member_move_reservations WHERE operation_id='{last.Operation:D}';";
+        await ExecuteSqlAsync(fixture.Paths, corruption);
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(async () => _ = await ReadFencesAsync());
+    }
+
+    [TestMethod]
     [DataRow("retirement")]
     [DataRow("batch")]
     [DataRow("update")]
@@ -91,6 +149,8 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
     [DataRow("batch")]
     [DataRow("update")]
     [DataRow("born")]
+    [DataRow("move")]
+    [DataRow("birth")]
     public async Task InitialOwnerPageCannotHideAnEmptyOrphanIdFromAnotherRoot(string kind)
     {
         using var fixture = new Fixture(); await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
@@ -100,6 +160,8 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             "retirement" => $"INSERT INTO namespace_member_retirements VALUES('', '{member}', CAST('{{}}' AS BLOB), zeroblob(32), 0);",
             "batch" => $"INSERT INTO namespace_member_retirement_batches VALUES('', '{member}', '{RootId.New()}', CAST('{{}}' AS BLOB), zeroblob(32), 0);",
             "update" => $"INSERT INTO namespace_remote_update_pending VALUES('{RootId.New()}', '');",
+            "move" => $"INSERT INTO namespace_member_move_pending VALUES('', '{member}', '{Guid.NewGuid():D}');",
+            "birth" => $"INSERT INTO namespace_birth_reservations VALUES(0, '{Guid.NewGuid():D}', 'ORPHAN.TXT', '');",
             _ => $"INSERT INTO namespace_born_member_recovery_heads VALUES('', '{Guid.NewGuid():D}');"
         }));
         await Assert.ThrowsExactlyAsync<InvalidDataException>(() => catalog.ReadNamespaceDispatchFencedRootsAsync());

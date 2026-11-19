@@ -122,22 +122,9 @@ public sealed partial class MirrorPulseProductCatalog
             roots.Add(transfer.Source);
             roots.Add(transfer.Target);
         }
-        var moveRoots = new List<RootId>();
-        await using (SqliteCommand query = _connection.CreateCommand())
+        await foreach (Guid id in ReadNamespaceOwnerIdsCoreAsync(NamespacePendingMoveRootPageSql, transaction, cancellationToken).ConfigureAwait(false))
         {
-            query.Transaction = transaction;
-            query.CommandText = "SELECT root_id FROM namespace_member_move_pending ORDER BY root_id;";
-            await using SqliteDataReader reader = await query.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
-            {
-                string stored = reader.GetString(0);
-                if (!RootId.TryParse(stored, out RootId root) || root.ToString() != stored)
-                    throw new InvalidDataException("The pending move root index is invalid.");
-                moveRoots.Add(root);
-            }
-        }
-        foreach (RootId root in moveRoots)
-        {
+            var root = new RootId(id);
             var move = await ReadPendingNamespaceMemberMoveCoreAsync(root, transaction, cancellationToken).ConfigureAwait(false)
                 ?? throw new InvalidDataException("The pending move lost its durable root fence.");
             if (move.OperationId != admittedRemoteMoveId || move.RemoteEntry is null) roots.Add(root);
@@ -166,30 +153,8 @@ public sealed partial class MirrorPulseProductCatalog
         SqliteTransaction transaction, CancellationToken token, Guid? admittedRemoteBirthId = null,
         Guid? admittedTransferId = null, Guid? admittedTransferBirthId = null)
     {
-        var operations = new List<Guid>();
-        await using (SqliteCommand query = _connection.CreateCommand())
-        {
-            query.Transaction = transaction;
-            // The intent side keeps a missing reservation from silently releasing a fence.
-            // The reservation side detects orphaned or erroneously retained reservations.
-            query.CommandText = """
-                SELECT b.operation_id FROM namespace_birth_intents b
-                LEFT JOIN namespace_members m ON m.birth_operation_id=b.operation_id
-                WHERE m.member_id IS NULL
-                UNION SELECT operation_id FROM namespace_birth_reservations
-                ORDER BY operation_id;
-                """;
-            await using SqliteDataReader reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
-            while (await reader.ReadAsync(token).ConfigureAwait(false))
-            {
-                string stored = reader.GetString(0);
-                if (!Guid.TryParseExact(stored, "D", out Guid operation) || operation == Guid.Empty ||
-                    stored != operation.ToString("D"))
-                    throw new InvalidDataException("The pending birth operation index is invalid.");
-                operations.Add(operation);
-            }
-        }
-        foreach (Guid operation in operations)
+        // Either side can retain evidence of a damaged or incomplete birth.
+        await foreach (Guid operation in ReadNamespaceOwnerIdsCoreAsync(NamespaceUnregisteredBirthPageSql, transaction, token).ConfigureAwait(false))
         {
             var birth = await ReadNamespaceBirthCoreAsync(operation, transaction, token).ConfigureAwait(false)
                 ?? throw new InvalidDataException("The pending birth reservation lost its original admission.");

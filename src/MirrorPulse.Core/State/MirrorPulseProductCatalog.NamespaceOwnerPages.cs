@@ -5,6 +5,31 @@ namespace MirrorPulse.Core.State;
 
 public sealed partial class MirrorPulseProductCatalog
 {
+    internal const string NamespacePendingMoveRootPageSql = """
+        SELECT root_id FROM namespace_member_move_pending
+        WHERE root_id >= $after AND ($first=1 OR root_id<>$after)
+        ORDER BY root_id LIMIT 16;
+        """;
+
+    // A legacy SQLite TEXT primary key can contain a corrupt NULL. Place it on the
+    // first page as an invalid key so the ordinary continuation cannot conceal it.
+    internal const string NamespaceUnregisteredBirthPageSql = """
+        SELECT operation_id FROM (
+            SELECT operation_id FROM (
+                SELECT b.operation_id FROM namespace_birth_intents b
+                LEFT JOIN namespace_members m ON m.birth_operation_id=b.operation_id
+                WHERE m.member_id IS NULL AND b.operation_id >= $after AND ($first=1 OR b.operation_id<>$after)
+                ORDER BY b.operation_id LIMIT 16)
+            UNION SELECT operation_id FROM (
+                SELECT operation_id FROM namespace_birth_reservations
+                WHERE operation_id >= $after AND ($first=1 OR operation_id<>$after)
+                ORDER BY operation_id LIMIT 16)
+            UNION SELECT '' FROM (
+                SELECT operation_id FROM namespace_birth_intents
+                WHERE $first=1 AND operation_id IS NULL LIMIT 1)
+        ) ORDER BY operation_id LIMIT 16;
+        """;
+
     internal const string NamespacePendingRetirementPageSql = """
         SELECT operation_id FROM namespace_member_retirements
         WHERE phase NOT IN (2,4) AND operation_id >= $after AND ($first=1 OR operation_id<>$after)
