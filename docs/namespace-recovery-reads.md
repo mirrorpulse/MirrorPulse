@@ -47,6 +47,12 @@ transaction, up to the existing 4096-record inventory limit. A fixture with
 second page rejects both the global fence list and the first root's pending
 work query.
 
+Global journal directory Move discovery uses the same page size and transaction.
+Root exclusivity is checked across all pages, within the existing 4096-record
+inventory limit. Seventeen original Moves take two ID queries. Damage on the
+second page rejects global discovery and a startup query for the first root.
+The upload pump can still select its own valid cursor page for recovery.
+
 Startup discovery selects a root's pending operations from the validated fence
 scan in one read transaction. A pending retirement leaf still validates its
 sealed batch membership. The batch is the recovery operation returned for that

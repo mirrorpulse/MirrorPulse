@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
@@ -9,6 +10,7 @@ namespace MirrorPulse.Core.State;
 public sealed partial class MirrorPulseProductCatalog
 {
     private const int JournalDirectoryMovePayloadLimit = 8 * 1024 * 1024;
+    private const int JournalDirectoryMoveInventoryLimit = 4096;
     private const string JournalDirectoryMoveTable = """
         CREATE TABLE journal_directory_moves(
             operation_id TEXT PRIMARY KEY NOT NULL REFERENCES mutation_intents(operation_id),
@@ -94,8 +96,32 @@ public sealed partial class MirrorPulseProductCatalog
         finally { _gate.Release(); }
     }
 
+    private async IAsyncEnumerable<MirrorPulseNamespacePendingOperation> ReadPendingJournalDirectoryMoveFencesCoreAsync(
+        SqliteTransaction transaction, [EnumeratorCancellation] CancellationToken token)
+    {
+        const int pageSize = 16;
+        var roots = new HashSet<RootId>();
+        Guid? after = null;
+        while (true)
+        {
+            var page = await ReadPendingJournalDirectoryMovesCoreAsync(transaction, token, after: after, limit: pageSize).ConfigureAwait(false);
+            if (roots.Count + page.Count > JournalDirectoryMoveInventoryLimit)
+                throw new InvalidDataException("Pending directory Move recovery exceeds the root inventory bound.");
+            foreach (var move in page)
+            {
+                if (!roots.Add(move.RootId))
+                    throw new InvalidDataException("The pending directory Move does not have an exclusive original root.");
+                yield return move;
+            }
+
+            if (page.Count < pageSize) yield break;
+            after = page[^1].OperationId;
+        }
+    }
+
     private async Task<IReadOnlyList<MirrorPulseNamespacePendingOperation>> ReadPendingJournalDirectoryMovesCoreAsync(
-        SqliteTransaction transaction, CancellationToken token, RootId? rootId = null, Guid? after = null, int limit = 4097)
+        SqliteTransaction transaction, CancellationToken token, RootId? rootId = null, Guid? after = null,
+        int limit = JournalDirectoryMoveInventoryLimit + 1)
     {
         var pending = new List<(Guid OperationId, RootId RootId)>();
         await using (var query = _connection.CreateCommand())
@@ -123,7 +149,8 @@ public sealed partial class MirrorPulseProductCatalog
                 pending.Add((ParseNamespaceMemberId(reader.GetString(0)), indexedRoot));
             }
         }
-        if (pending.Count > 4096) throw new InvalidDataException("Pending directory Move recovery exceeds the root inventory bound.");
+        if (pending.Count > JournalDirectoryMoveInventoryLimit)
+            throw new InvalidDataException("Pending directory Move recovery exceeds the root inventory bound.");
         var roots = new HashSet<RootId>();
         var result = new List<MirrorPulseNamespacePendingOperation>(pending.Count);
         foreach (var item in pending)

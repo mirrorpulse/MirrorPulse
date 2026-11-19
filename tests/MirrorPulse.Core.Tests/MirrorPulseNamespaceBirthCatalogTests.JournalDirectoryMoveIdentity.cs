@@ -7,6 +7,57 @@ namespace MirrorPulse.Core.Tests;
 public sealed partial class MirrorPulseNamespaceBirthCatalogTests
 {
     [TestMethod]
+    public async Task GlobalJournalDirectoryMoveFencesValidateLaterPagesBeforeReturningAnyOperation()
+    {
+        using var fixture = new Fixture();
+        await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        var first = await PrepareMovableMemberAsync(catalog, directory: true);
+        var firstRoot = await AddIdentityTopologyAsync(catalog, first.Move.RootId);
+        var anchor = await catalog.ReadNamespaceMemberAsync(first.ParentMember.ParentMemberId!.Value);
+        Assert.IsNotNull(anchor);
+        var installation = (await catalog.ReadAdapterTopologyAsync()).Installations.Single();
+        var originals = new List<MirrorPulseJournalDirectoryMoveAdmission>();
+        for (int index = 0; index < 17; index++)
+        {
+            var setup = first;
+            var root = firstRoot;
+            if (index > 0)
+            {
+                string label = $"Docs {index}";
+                var instance = await catalog.CreateInstanceAsync(installation.InstallId, label, new Dictionary<string, string>(), [],
+                    Path.Combine(fixture.Paths.DataRootPath, "files", label), Path.Combine(fixture.Paths.DataRootPath, "transfers", label),
+                    rootLabels: new Dictionary<string, string> { ["docs"] = label });
+                var topology = await catalog.ReadAdapterTopologyAsync();
+                root = topology.Roots.Single(registration => registration.InstanceId == instance.InstanceId);
+                setup = await PrepareMovableMemberAsync(catalog, directory: true, registration: root, anchor: anchor);
+            }
+            var completion = await PrepareDirectoryCompletionFactsAsync(catalog, setup);
+            originals.Add(await StartJournalDirectoryMoveFixtureAsync(catalog, root, completion, OwnerPageId(5, index + 1)));
+        }
+
+        var expected = originals.Select(original => original.RootId).OrderBy(root => root.Value).ToArray();
+        var statements = await TraceOwnerReadsAsync(catalog, async () =>
+            CollectionAssert.AreEqual(expected, (await catalog.ReadNamespaceDispatchFencedRootsAsync()).ToArray()));
+        var pages = statements.Where(sql => sql.Contains("FROM journal_directory_moves j", StringComparison.Ordinal) &&
+            sql.Contains("ORDER BY j.operation_id", StringComparison.Ordinal)).ToArray();
+        Assert.HasCount(2, pages, "Seventeen original directory Moves require exactly two bounded ID reads.");
+        Assert.IsTrue(pages.All(sql => sql.Contains("LIMIT 16", StringComparison.Ordinal)));
+        Assert.Contains(originals[15].JournalOperationId.ToString("D"), pages[1], StringComparison.Ordinal);
+
+        var last = originals[^1];
+        var pending = new MirrorPulseNamespacePendingOperation(last.JournalOperationId, last.RootId,
+            MirrorPulseNamespacePendingOperationKind.JournalDirectoryMove);
+        Assert.AreEqual(pending, (await catalog.ReadNamespacePendingOperationsAsync(last.RootId)).Single());
+        Assert.AreEqual(pending, (await catalog.ReadPendingJournalDirectoryMovesAsync(originals[15].JournalOperationId, 1, default)).Single());
+
+        await ExecuteSqlAsync(fixture.Paths,
+            $"UPDATE journal_directory_moves SET admission_hash=zeroblob(32) WHERE operation_id='{last.JournalOperationId:D}';");
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(() => catalog.ReadNamespaceDispatchFencedRootsAsync());
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(() => catalog.ReadNamespacePendingOperationsAsync(firstRoot.RootId));
+        Assert.AreEqual(originals[0].JournalOperationId, (await catalog.ReadPendingJournalDirectoryMovesAsync(null, 1, default)).Single().OperationId);
+    }
+
+    [TestMethod]
     public async Task Schema108IdentityUpgradeRetainsConfirmedDirectoryAndFilePredecessors()
     {
         using var fixture = new Fixture();
@@ -58,18 +109,8 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         {
             setup = await PrepareDirectorySettlementAsync(first, movedChild: true);
             root = await AddIdentityTopologyAsync(first, setup.Move.Move.RootId);
-            await first.CompleteNamespaceDirectoryMoveAsync(setup.Completion);
-            var snapshot = await first.ReadNamespaceDirectoryMoveSnapshotAsync(setup.Completion.OperationId);
-            Assert.IsNotNull(snapshot);
-            var originals = snapshot.Entries.Zip(setup.Completion.Entries, (entry, result) =>
-                new MirrorPulseJournalDirectoryMoveMember(entry.MemberId, entry.LocalObject, entry.RelativePath,
-                    result.Completion.RelativePath, entry.IsDirectory, result.Completion.ItemId, result.Completion.RemoteId,
-                    result.Completion.OfficialRemoteRevision, result.Native.NativeRemoteRevision, entry.Identity.AcceptanceOperationId)).ToArray();
-            var admission = new MirrorPulseJournalDirectoryMoveAdmission(operationId, 1, new string('A', 64),
-                setup.Completion.OperationId, root.RootId, root.InstanceId, root.UniquenessKey, originals);
-            var intent = new MirrorPulseMutationIntent(operationId, root.InstanceId, root.UniquenessKey, MirrorPulseWorkerChangeKind.Move,
-                "moved.txt", "new.txt", true, admission.Root.OriginalRevision, null, null, MirrorPulseMutationOrigin.Journal);
-            await first.StartJournalDirectoryMoveAsync(admission, intent, default);
+            var admission = await StartJournalDirectoryMoveFixtureAsync(first, root, setup.Completion, operationId);
+            var originals = admission.Members;
             CollectionAssert.AreEqual(new[] { root.RootId }, (await first.ReadNamespaceDispatchFencedRootsAsync()).ToArray());
             var pending = (await first.ReadNamespacePendingOperationsAsync(root.RootId)).Single();
             Assert.AreEqual(new MirrorPulseNamespacePendingOperation(operationId, root.RootId, MirrorPulseNamespacePendingOperationKind.JournalDirectoryMove), pending);
@@ -146,5 +187,23 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         Assert.AreEqual(uploadIdentity, await third.ReadNamespaceIdentityAcceptanceAsync(uploadIdentity.Proof.OperationId));
         Assert.AreEqual(directoryProof.AcceptedItemId, (await third.ReadNamespaceMemberIdentityAsync(setup.Move.Member.MemberId)).ItemId);
         Assert.AreEqual(uploadIdentity.Proof.AcceptedItemId, (await third.ReadNamespaceMemberIdentityAsync(setup.Child.MemberId)).ItemId);
+    }
+
+    private static async Task<MirrorPulseJournalDirectoryMoveAdmission> StartJournalDirectoryMoveFixtureAsync(
+        MirrorPulseProductCatalog catalog, RootRegistration root, MirrorPulseNamespaceDirectoryMoveCompletion completion, Guid operationId)
+    {
+        await catalog.CompleteNamespaceDirectoryMoveAsync(completion);
+        var snapshot = await catalog.ReadNamespaceDirectoryMoveSnapshotAsync(completion.OperationId);
+        Assert.IsNotNull(snapshot);
+        var originals = snapshot.Entries.Zip(completion.Entries, (entry, result) =>
+            new MirrorPulseJournalDirectoryMoveMember(entry.MemberId, entry.LocalObject, entry.RelativePath,
+                result.Completion.RelativePath, entry.IsDirectory, result.Completion.ItemId, result.Completion.RemoteId,
+                result.Completion.OfficialRemoteRevision, result.Native.NativeRemoteRevision, entry.Identity.AcceptanceOperationId)).ToArray();
+        var admission = new MirrorPulseJournalDirectoryMoveAdmission(operationId, 1, new string('A', 64),
+            completion.OperationId, root.RootId, root.InstanceId, root.UniquenessKey, originals);
+        var intent = new MirrorPulseMutationIntent(operationId, root.InstanceId, root.UniquenessKey, MirrorPulseWorkerChangeKind.Move,
+            "moved.txt", "new.txt", true, admission.Root.OriginalRevision, null, null, MirrorPulseMutationOrigin.Journal);
+        await catalog.StartJournalDirectoryMoveAsync(admission, intent, default);
+        return admission;
     }
 }

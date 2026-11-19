@@ -103,7 +103,7 @@ public sealed partial class MirrorPulseProductCatalog
             if (target != source) AddOperationFence(target, id, MirrorPulseNamespacePendingOperationKind.Transfer);
         }
 
-        foreach (var move in await ReadPendingJournalDirectoryMovesCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
+        await foreach (var move in ReadPendingJournalDirectoryMoveFencesCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
             AddOperationFence(move.RootId, move.OperationId, move.Kind);
         await foreach (var rejection in ReadPendingRemoteDeleteRejectionsCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
             if (rejection.Admission.OperationId != admittedRemoteDeleteRejectionId)

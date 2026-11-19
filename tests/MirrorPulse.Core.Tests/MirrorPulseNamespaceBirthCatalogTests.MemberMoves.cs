@@ -239,17 +239,30 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         MirrorPulseNamespaceMemberMoveIntent Move);
 
     private static async Task<MoveFixture> PrepareMovableMemberAsync(MirrorPulseProductCatalog catalog, bool directory = false,
-        MirrorPulseNamespaceBirthOrigin origin = MirrorPulseNamespaceBirthOrigin.ControlledCreation)
+        MirrorPulseNamespaceBirthOrigin origin = MirrorPulseNamespaceBirthOrigin.ControlledCreation,
+        RootRegistration? registration = null, MirrorPulseNamespaceMemberRegistration? anchor = null)
     {
-        var parent = Baseline(); var proof = Protection(parent);
+        var parent = Baseline();
+        if (registration is not null)
+            parent = parent with { RootId = registration.RootId, RelativePath = registration.DirectoryName };
+        if (anchor is not null)
+            parent = parent with { LocalObject = anchor.LocalObject with { LocalFileId = parent.LocalObject.LocalFileId } };
+        var proof = Protection(parent);
         await ProtectAsync(catalog, parent, proof);
-        var parentMember = await RegisterOriginalParentMembersAsync(catalog, parent, proof);
-        var born = await AddBornAsync(catalog, Birth(parent, proof) with { IsDirectory = directory, Origin = origin });
+        var parentMember = anchor is null
+            ? await RegisterOriginalParentMembersAsync(catalog, parent, proof)
+            : await catalog.RegisterNamespaceMemberAsync(OriginalMember(parent, proof, anchor.MemberId));
+        var born = await AddBornAsync(catalog, Birth(parent, proof) with
+        {
+            IsDirectory = directory,
+            Origin = origin,
+            RelativePath = parent.RelativePath + "/new.txt"
+        });
         var member = BornMember(born, parentMember); await catalog.RegisterNamespaceMemberAsync(member);
         var move = new MirrorPulseNamespaceMemberMoveIntent(1, Guid.NewGuid(), member.MemberId, born.Protection.ProtectionId,
             born.Birth.RootId, member.LocalObject, born.Plan.ItemId, born.Plan.RemoteId, member.OwnerSid, born.Protection.RoleSid,
             new(parentMember.MemberId, parentMember.LocalObject, proof.OperationId, member.RelativePath),
-            new(parentMember.MemberId, parentMember.LocalObject, proof.OperationId, "Docs/moved.txt"), member.RegisteredAt.AddSeconds(1))
+            new(parentMember.MemberId, parentMember.LocalObject, proof.OperationId, parent.RelativePath + "/moved.txt"), member.RegisteredAt.AddSeconds(1))
         { DirectoryMoveEvidence = directory ? "AA==" : null }; // Opaque synthetic product facts; no public/native proof is asserted here.
         return new(parent, proof, parentMember, born, member, move);
     }
