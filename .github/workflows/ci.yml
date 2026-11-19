@@ -769,7 +769,9 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: namespace-arm64-test-results
-          path: artifacts/test-results/namespace-arm64/**/*.trx
+          path: |
+            artifacts/test-results/namespace-arm64/**/*.trx
+            artifacts/test-results/namespace-arm64/**/namespace.runsettings
           if-no-files-found: ignore
 
       - name: Preserve original ARM64 namespace executing inputs

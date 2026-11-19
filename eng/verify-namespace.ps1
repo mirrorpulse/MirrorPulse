@@ -10,6 +10,7 @@ if ($LASTEXITCODE -ne 0 -or $sourceSha -cnotmatch '^[0-9a-f]{40}$' -or ($env:GIT
     throw 'Namespace test inputs require the selected source revision.'
 }
 . (Join-Path $PSScriptRoot 'native-test-originals.ps1')
+. (Join-Path $PSScriptRoot 'test-execution-policy.ps1')
 $testAssembly = Join-Path $workspace 'tests/MirrorPulse.CloudFiles.CfSharp.Tests/bin/Release/net10.0-windows10.0.26100.0/MirrorPulse.CloudFiles.CfSharp.Tests.dll'
 $evidenceDirectory = Join-Path $PSScriptRoot ('../artifacts/test-results/namespace-' + $ExpectedArchitecture.ToLowerInvariant())
 $identifier = [guid]::NewGuid().ToString('N')
@@ -23,11 +24,18 @@ try {
     $env:MIRRORPULSE_NATIVE_TEST = '1'
     $env:MIRRORPULSE_NAMESPACE_TEST_ARCHITECTURE = $ExpectedArchitecture
     $catalog = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'test-suites.json') -Raw | ConvertFrom-Json
-    $filter = (@($catalog.required.namespace) | ForEach-Object { 'FullyQualifiedName=' + $_ }) -join '|'
+    $runSettings = Join-Path $resultsDirectory 'namespace.runsettings'
+    [void][IO.Directory]::CreateDirectory($resultsDirectory)
+    Write-ExactTestRunSettings -Path $runSettings -Names @($catalog.required.namespace)
+    $runSettingsSha256 = (Get-FileHash -LiteralPath $runSettings).Hash
     Invoke-NativeTestWithOriginals -Workspace $workspace -SourceSha $sourceSha -Suite namespace -TestAssembly $testAssembly `
         -ResultsDirectory $resultsDirectory -OutputDirectory $originalsDirectory -ExpectedTestAssemblySha256 (Get-FileHash -LiteralPath $testAssembly).Hash -Action {
-        & dotnet test $testProject --configuration Release --no-build --filter $filter --logger trx --results-directory $resultsDirectory
-        if ($LASTEXITCODE -ne 0) { throw 'Namespace verification failed.' }
+        & dotnet test $testProject --configuration Release --no-build --settings $runSettings --logger trx --results-directory $resultsDirectory
+        $testExit = $LASTEXITCODE
+        if ((Get-FileHash -LiteralPath $runSettings).Hash -cne $runSettingsSha256) {
+            throw 'The namespace selection changed during verification.'
+        }
+        if ($testExit -ne 0) { throw 'Namespace verification failed.' }
         & (Join-Path $PSScriptRoot 'verify-test-results.ps1') -Suite namespace -ResultsDirectory $resultsDirectory `
             -OutputPath (Join-Path $evidenceDirectory 'test-evidence.json')
     }

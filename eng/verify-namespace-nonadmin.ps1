@@ -43,7 +43,6 @@ $childBudgetMilliseconds = if ($SignedAtomicDirectoryPackage) {
     Get-OrdinaryUserNamespaceBudgetMilliseconds -TestCount $testNames.Count -TestNames $testNames -Scope S06
 }
 Write-Output ("Ordinary-user catalog: selectedMethods={0}; requiredExecutions={1}; controllerBudgetSeconds={2}." -f $testNames.Count, $requiredExecutions, ($childBudgetMilliseconds / 1000))
-$filter = ($testNames | ForEach-Object { 'FullyQualifiedName=' + $_ }) -join '|'
 $evidenceStem = if ($VerifyFileTransferRecovery) { 'file-transfer-recovery-nonadmin-' } elseif ($VerifyPreparedDirectoryCopy) { 'signed-prepared-directory-copy-nonadmin-' } elseif ($VerifyDirectoryCopyRecovery) { 'signed-directory-copy-recovery-nonadmin-' } elseif ($VerifyDirectoryTransfer) { 'signed-directory-transfer-nonadmin-' } elseif ($VerifyDirectoryMove) { 'signed-directory-move-nonadmin-' } elseif ($SignedAtomicDirectoryPackage) { 'signed-atomic-directory-nonadmin-' } else { 'namespace-nonadmin-' }
 $evidenceDirectory = Join-Path $repository ('artifacts/test-results/' + $evidenceStem + $ExpectedArchitecture.ToLowerInvariant())
 New-Item -ItemType Directory -Path $evidenceDirectory -Force | Out-Null
@@ -77,6 +76,14 @@ try {
     $copiedPayload = Join-Path $scratch 'payload'
     $work = Join-Path $scratch 'work'
     New-Item -ItemType Directory -Path $copiedPayload, $work | Out-Null
+    $runSettings = Join-Path $scratch 'namespace.runsettings'
+    Write-ExactTestRunSettings -Path $runSettings -Names $testNames
+    $runSettingsSha256 = (Get-FileHash -LiteralPath $runSettings).Hash
+    $archivedRunSettings = Join-Path $evidenceDirectory 'namespace.runsettings'
+    Copy-Item -LiteralPath $runSettings -Destination $archivedRunSettings
+    if ((Get-FileHash -LiteralPath $archivedRunSettings).Hash -cne $runSettingsSha256) {
+        throw 'The retained namespace selection differs from the controller input.'
+    }
     $entries = @(Get-ChildItem -LiteralPath $payload -Recurse -Force)
     $files = @($entries | Where-Object { -not $_.PSIsContainer })
     if ($files.Count -le 0 -or $files.Count -gt 4096 -or ($files | Measure-Object Length -Sum).Sum -gt 512MB -or
@@ -150,7 +157,7 @@ try {
         [ordered]@{ schemaVersion=1; expectedArchitecture=$ExpectedArchitecture; expectedUserSid=$user.SID.Value;
             expectedUserName=$userName; workDirectory=$work; testAssembly=(Join-Path $copiedPayload $assemblyName);
             sourceSha=$sourceSha; testAssemblySha256=$assemblyHash;
-            filter=$filter; signedAtomicDirectoryPackage=$copiedPackage; signedAtomicDirectoryPackageSha256=$packageHash;
+            runSettingsSha256=$runSettingsSha256; signedAtomicDirectoryPackage=$copiedPackage; signedAtomicDirectoryPackageSha256=$packageHash;
             signedAtomicDirectorySignatureSha256=$signatureHash; signedDirectoryTransferWebDavPackage=$copiedWebDavPackage;
             signedDirectoryTransferWebDavPackageSha256=$webDavPackageHash; signedDirectoryTransferWebDavSignatureSha256=$webDavSignatureHash;
             dotnetPath=(Get-Command dotnet -CommandType Application).Source;
@@ -178,6 +185,9 @@ try {
             throw 'The ordinary-user namespace child did not finish within its CI step budget.'
         }
         $child.WaitForExit()
+        if ((Get-FileHash -LiteralPath $runSettings).Hash -cne $runSettingsSha256) {
+            throw 'The ordinary-user namespace selection changed during verification.'
+        }
         $contextPath = Join-Path $work 'context.json'
         if (Test-Path -LiteralPath $contextPath -PathType Leaf) {
             Copy-Item -LiteralPath $contextPath -Destination (Join-Path $evidenceDirectory 'context.json')

@@ -70,11 +70,15 @@ try {
     [ordered]@{ schemaVersion=1; architecture=$architecture; nonAdministrator=$true; expectedUserMatched=$true;
         profileLoaded=$true } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $configuration.workDirectory 'context.json') -Encoding utf8
     . (Join-Path $PSScriptRoot 'native-test-originals.ps1')
+    $runSettings = Get-NativeOriginalPath (Join-Path $PSScriptRoot 'namespace.runsettings') $PSScriptRoot
+    if ((Get-FileHash -LiteralPath $runSettings).Hash -cne $configuration.runSettingsSha256) {
+        throw 'The ordinary-user namespace selection differs from the controller input.'
+    }
     Invoke-NativeTestWithOriginals -Workspace ([IO.Path]::GetDirectoryName($configuration.workDirectory)) `
         -SourceSha $configuration.sourceSha -Suite namespace-nonadmin -TestAssembly $configuration.testAssembly `
         -ResultsDirectory (Join-Path $configuration.workDirectory 'results') -OutputDirectory (Join-Path $configuration.workDirectory 'native-originals') `
         -ExpectedTestAssemblySha256 $configuration.testAssemblySha256 -Action {
-        & $configuration.dotnetPath test $configuration.testAssembly --filter $configuration.filter --logger 'trx;LogFileName=namespace.trx' --logger 'console;verbosity=normal' `
+        & $configuration.dotnetPath test $configuration.testAssembly --settings $runSettings --logger 'trx;LogFileName=namespace.trx' --logger 'console;verbosity=normal' `
             --results-directory (Join-Path $configuration.workDirectory 'results')
         if ($LASTEXITCODE -ne 0) { throw 'The ordinary-user namespace tests failed.' }
     }

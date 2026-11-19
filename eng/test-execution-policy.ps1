@@ -1,3 +1,17 @@
+function Write-ExactTestRunSettings {
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string[]]$Names)
+
+    if (@($Names | Where-Object { $_ -cnotmatch '^[\w]+(?:[.+][\w]+)+$' }).Count) {
+        throw 'The selected tests must use fully qualified method names.'
+    }
+    [xml]$settings = '<RunSettings><RunConfiguration><TestCaseFilter/><TreatNoTestsAsError>true</TreatNoTestsAsError></RunConfiguration></RunSettings>'
+    $settings.SelectSingleNode('/RunSettings/RunConfiguration/TestCaseFilter').InnerText =
+        ($Names | ForEach-Object { 'FullyQualifiedName=' + $_ }) -join '|'
+    $stream = [IO.File]::Open($Path, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write)
+    try { $settings.Save($stream) }
+    finally { $stream.Dispose() }
+}
+
 function Get-RequiredTestCaseNames {
     param([Parameter(Mandatory)][object]$Catalog, [Parameter(Mandatory)][string]$Name)
 
