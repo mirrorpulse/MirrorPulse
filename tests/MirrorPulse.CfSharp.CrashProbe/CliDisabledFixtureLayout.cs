@@ -9,6 +9,7 @@ public sealed record CliDisabledFixtureMarker(int SchemaVersion, string SourceSh
     IReadOnlyList<CliTransferFixtureRoute> Routes, IReadOnlyDictionary<string, Guid> Commands)
 {
     public string Phase { get; init; } = "Setup";
+    public bool MovedSourceConflict { get; init; }
     public IReadOnlyDictionary<string, CliDisabledFixtureMember> Members { get; init; } = new Dictionary<string, CliDisabledFixtureMember>();
     public IReadOnlyList<Guid> Originals { get; init; } = [];
 }
@@ -112,6 +113,8 @@ public static class CliDisabledFixtureLayout
         foreach (var item in new[] { new CliDisabledFixtureMemberSpec("offline", "kept-renamed.txt", false),
             new("offline", "born-renamed.txt", false), new("offline", "moved-dir", true) })
             allowed.Add(sides[item.Side].DirectoryName + "/" + item.Name, item.IsDirectory);
+        if (marker.MovedSourceConflict)
+            allowed.Add(sides["offline"].DirectoryName + "/externally-moved.txt", false);
         return new(Array.AsReadOnly(new[] { sides["offline"], sides["active"] }), new ReadOnlyDictionary<string, bool>(allowed));
     }
 }

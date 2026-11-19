@@ -135,6 +135,39 @@ public static partial class CliFixtureProbe
             var selected = all.Where(row => row.ItemId is { } itemId && itemIds.Contains(itemId))
                 .OrderBy(row => row.Sequence).Select(row => new CliDisabledJournalFact(row.OperationId, row.Sequence, row.ItemId,
                     row.Kind.ToString(), row.AttemptCount, row.CreatedAt, Convert.ToHexString(SHA256.HashData(row.Payload.Span)))).ToArray();
+            object? movedSource = null;
+            if (marker.MovedSourceConflict)
+            {
+                stage = "MovedSourceOriginal";
+                var kept = marker.Members["keptFile"];
+                var root = inventory.Roots[0];
+                string relativePath = root.DirectoryName + "/kept.txt";
+                var item = await transaction.Items.GetByItemIdAsync(kept.ItemId);
+                if (item is null || item.IsTombstone || item.RelativePath.Replace('\\', '/') != relativePath ||
+                    item.RemoteRevision is not { Length: > 0 and <= 512 } revision)
+                    throw new InvalidDataException("The moved-source oracle requires the original live Local item and its retained baseline.");
+                var uploadConflicts = await catalog.ReadUploadConflictsAsync();
+                if (uploadConflicts.Count > 128) throw new InvalidDataException("The moved-source fixture exceeded its conflict observation bound.");
+                var conflicts = uploadConflicts.Where(value => value.InstanceId == root.InstanceId && value.IsPending &&
+                    value.RelativePath.Replace('\\', '/') == relativePath &&
+                    Guid.TryParseExact(value.ChangeId, "D", out Guid changeId) && marker.Originals.Contains(changeId)).ToArray();
+                if (conflicts.Length > 32 || conflicts.Any(value => value.LocalRevision is not { Length: > 0 and <= 512 } ||
+                    value.RemoteRevision is not null))
+                    throw new InvalidDataException("The moved-source conflict must retain its original baseline and absent remote revision.");
+                movedSource = new
+                {
+                    kept.ItemId,
+                    relativePath,
+                    acknowledgedRevisionSha256 = RevisionFingerprint(revision),
+                    conflicts = conflicts.Select(value => new
+                    {
+                        value.ConflictId,
+                        value.ChangeId,
+                        localRevisionSha256 = RevisionFingerprint(value.LocalRevision!),
+                        reason = value.Reason.ToString()
+                    }).ToArray()
+                };
+            }
             var blocked = await catalog.ReadBlockedLocalOperationsAsync();
             if (blocked.Count > 128) throw new InvalidDataException("The fixture exceeded its bounded blocked-operation observation.");
             foreach (var value in blocked)
@@ -342,6 +375,7 @@ public static partial class CliFixtureProbe
                 polling,
                 journal = selected,
                 originals,
+                movedSource,
                 births,
                 moves,
                 retirements,
@@ -352,6 +386,9 @@ public static partial class CliFixtureProbe
                 originalSdkAcknowledgementExecuted = false
             }, JsonOptions));
             return 0;
+
+            static string RevisionFingerprint(string revision) =>
+                Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(revision)));
 
             object[] Snapshot(RootRegistration root, IReadOnlyDictionary<string, MirrorPulseRemoteSnapshotEntry> entries) => entries
                 .OrderBy(entry => entry.Key, StringComparer.Ordinal).Select(entry =>

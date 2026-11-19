@@ -21,6 +21,13 @@ public sealed class CliDisabledFixtureLayoutTests
         Assert.IsFalse(inventory.AllowedEntries["Offline Operations/kept-renamed.txt"]);
         Assert.IsTrue(inventory.AllowedEntries["Offline Operations/moved-dir"]);
         Assert.IsFalse(inventory.AllowedEntries.ContainsKey("Offline Operations/unrelated.txt"));
+        const string movedSource = "Offline Operations/externally-moved.txt";
+        Assert.ThrowsExactly<InvalidDataException>(() => CliDisabledFixtureLayout.RequireAllowedRelativePath(inventory, movedSource));
+        var movedInventory = CliDisabledFixtureLayout.Authenticate(fixture.Path, fixture.Marker with { MovedSourceConflict = true }, fixture.Topology);
+        Assert.HasCount(16, movedInventory.AllowedEntries);
+        Assert.AreEqual(movedSource, CliDisabledFixtureLayout.RequireAllowedRelativePath(movedInventory, movedSource));
+        Assert.IsFalse(movedInventory.AllowedEntries[movedSource]);
+        Assert.IsFalse(movedInventory.AllowedEntries.ContainsKey("Active Progress/externally-moved.txt"));
         Assert.IsFalse(Directory.Exists(fixture.Path));
     }
 

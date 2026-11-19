@@ -4,6 +4,7 @@ param(
     [string]$PackagePath,
     [ValidateSet('Debug','Release')][string]$Configuration='Release',
     [string]$EvidencePath,
+    [switch]$MovedSourceConflict,
     [switch]$BudgetOnly
 )
 if($BudgetOnly){15;exit 0}
@@ -225,6 +226,109 @@ function Assert-DisabledLocalReceipts($Before,$After){
     }
     if(($Before.replacement|ConvertTo-Json -Depth 20 -Compress) -cne ($After.replacement|ConvertTo-Json -Depth 20 -Compress)){throw 'The original local replacement receipt or backup changed.'}
 }
+function Confirm-DisabledPublishedInputs {
+    foreach($publishedInput in $inputs){
+        if((Get-DisabledHash (Join-Path $fixture ($publishedInput.owner+'/'+$publishedInput.file))) -cne $publishedInput.sha256){throw 'Actual published input bytes changed during the fixture.'}
+    }
+    Write-DisabledOriginal 'published-inputs-after' ([ordered]@{sourceSha=$sourceSha;inputs=$inputs.ToArray();actualBytesUnchanged=$true;actualManagedModuleLoadClaimed=$false})
+}
+function Invoke-DisabledMovedSourceConflict {
+    $script:phase='MovedSourceOfflineCapture'
+    $path=$offlineRoute.directoryName+'/kept.txt'
+    $localPath=Join-Path $offlineDirectory 'kept.txt'
+    $sourceRoot=Join-Path $fixture 'source/offline'
+    $oldSource=Join-Path $sourceRoot 'kept.txt'
+    $movedSource=Join-Path $sourceRoot 'externally-moved.txt'
+    $sourceDigest=Get-DisabledHash $oldSource
+    $member=Record-DisabledMember 'keptFile' $path $false
+    Invoke-DisabledCli 'moved-source-disable' @('--no-start','instance','disable','--instance-id',$offlineRoute.instanceId)|Out-Null
+    Stop-DisabledHost 'moved-source-configured'
+    Start-DisabledHost 'moved-source-disabled'
+    $disabledState=Read-DisabledState 'moved-source-disabled'
+    Assert-DisabledInstances $disabledState $false $true
+    Read-DisabledWorkers 'moved-source-disabled' 1
+    $localBytes=[Text.Encoding]::UTF8.GetBytes('offline edit after the accepted source generation')
+    Write-DisabledBytes $localPath $localBytes
+    $localDigest=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($localBytes))
+    $deadline=[DateTimeOffset]::UtcNow.AddSeconds(30)
+    do {
+        $status=Invoke-DisabledCli 'moved-source-pending' @('--no-start','status')
+        if($status.pendingUploads -gt $disabledState.status.pendingUploads){break}
+        Start-Sleep -Milliseconds 100
+    }while([DateTimeOffset]::UtcNow -lt $deadline)
+    Stop-DisabledHost 'moved-source-before-original'
+    $before=Invoke-DisabledProbe audit 'moved-source-before'
+    $originalsForMove=@($before.journal|Where-Object {$_.itemId -ceq $member.nativeItemId -and $_.kind -ceq 'ContentUpdate'})
+    $baseline=$before.movedSource.acknowledgedRevisionSha256
+    $sourceEntry=@($before.remoteSnapshots|Where-Object rootId -ceq $offlineRoute.rootId|
+        ForEach-Object {$_.entries}|Where-Object relativePath -ceq $path)
+    if(!$originalsForMove.Count -or $before.movedSource.itemId -cne $member.nativeItemId -or
+        $baseline -cnotmatch '^[0-9A-F]{64}$' -or $sourceEntry.Count -ne 1 -or $sourceEntry[0].remoteRevisionSha256 -cne $baseline -or
+        (Get-DisabledHash $oldSource) -cne $sourceDigest -or
+        (Get-DisabledHash $localPath) -cne $localDigest){throw 'The offline edit did not retain its exact original notification and acknowledged source bytes.'}
+    $marker.originals=@($originalsForMove.operationId)
+    Save-DisabledMarker
+    $script:phase='MovedSourceBackendMove'
+    [void](Get-DisabledSourceSnapshot $sourceRoot)
+    if(Test-Path -LiteralPath $movedSource){throw 'The fixed backend move destination must be vacant.'}
+    [IO.File]::Move($oldSource,$movedSource)
+    $afterMove=Get-DisabledSourceSnapshot $sourceRoot
+    Write-DisabledOriginal 'moved-source-backend-after-move' $afterMove
+    if((Test-Path -LiteralPath $oldSource) -or (Get-DisabledHash $movedSource) -cne $sourceDigest){throw 'The actual backend move did not preserve the original bytes at the new address.'}
+    Start-DisabledHost 'moved-source-reopen-disabled'
+    Assert-DisabledInstances (Read-DisabledState 'moved-source-reopen-disabled') $false $true
+    Read-DisabledWorkers 'moved-source-reopen-disabled' 1
+    Invoke-DisabledCli 'moved-source-enable' @('--no-start','instance','enable','--instance-id',$offlineRoute.instanceId)|Out-Null
+    Stop-DisabledHost 'moved-source-before-enable'
+    $afterDisabledRestart=Invoke-DisabledProbe audit 'moved-source-after-disabled-restart'
+    Assert-DisabledOriginals ([pscustomobject]@{journal=$originalsForMove}) $afterDisabledRestart
+
+    $script:phase='MovedSourceReenableConflict'
+    Start-DisabledHost 'moved-source-enabled'
+    Assert-DisabledInstances (Read-DisabledState 'moved-source-enabled') $true $true
+    Read-DisabledWorkers 'moved-source-enabled' 2
+    $deadline=[DateTimeOffset]::UtcNow.AddSeconds(30)
+    do {
+        $page=Invoke-DisabledCli 'moved-source-public-conflicts' @('--no-start','conflict','list')
+        $conflicts=@($page.items|Where-Object {$_.instanceId -ceq $offlineRoute.instanceId -and $_.relativePath.Replace('\','/') -ceq $path -and
+            $_.source -ceq 'Upload' -and $_.reason -ceq 'StaleRemoteRevision' -and $_.status -ceq 'Pending'})
+        if($conflicts.Count){break}
+        Start-Sleep -Milliseconds 100
+    }while([DateTimeOffset]::UtcNow -lt $deadline)
+    if(!$conflicts.Count -or @($conflicts|Where-Object {
+        $digest=[Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes([string]$_.localRevision)))
+        $digest -cne $baseline -or $null -ne $_.remoteRevision
+    }).Count){
+        throw 'The reenabled Host did not report the original conditional conflict against an absent source address.'
+    }
+    $current=Invoke-DisabledCli 'moved-source-retained-member' @('--no-start','namespace','member','inspect',$path)
+    if($current.memberId -cne $member.memberId -or $current.nativeItemId -cne $member.nativeItemId -or
+        (Get-DisabledHash $localPath) -cne $localDigest){throw 'The original local edit or its native member was replaced.'}
+    Stop-DisabledHost 'moved-source-final'
+    $after=Invoke-DisabledProbe audit 'moved-source-stopped-conflict'
+    $finalBackend=Get-DisabledSourceSnapshot $sourceRoot
+    Write-DisabledOriginal 'moved-source-backend-final' $finalBackend
+    foreach($original in $originalsForMove){
+        $pending=@($after.journal|Where-Object operationId -ceq $original.operationId)
+        $outcome=@($after.originals|Where-Object operationId -ceq $original.operationId)
+        if($pending.Count -ne 1 -or $pending[0].payloadSha256 -cne $original.payloadSha256 -or $pending[0].sequence -ne $original.sequence -or
+            $pending[0].itemId -cne $original.itemId -or $pending[0].kind -cne $original.kind -or
+            $outcome.Count -ne 1 -or !$outcome[0].pending -or @($outcome[0].effects|Where-Object state -ceq 'Acknowledged').Count){
+            throw 'A conflicted original notification was acknowledged or replaced.'
+        }
+    }
+    if($after.movedSource.acknowledgedRevisionSha256 -cne $baseline -or
+        !@($after.movedSource.conflicts|Where-Object {$_.conflictId -cin @($conflicts.conflictId) -and $_.localRevisionSha256 -ceq $baseline}).Count -or
+        (Test-Path -LiteralPath $oldSource) -or (Get-DisabledHash $movedSource) -cne $sourceDigest -or
+        ($finalBackend|ConvertTo-Json -Depth 8 -Compress) -cne ($afterMove|ConvertTo-Json -Depth 8 -Compress)){
+        throw 'The stopped oracle could not bind the same original conflict and the intact moved backend file.'
+    }
+    Confirm-DisabledPublishedInputs
+    [ordered]@{schemaVersion=1;sourceSha=$sourceSha;runId=$env:GITHUB_RUN_ID;runtime=$Runtime;signedPackageSha256=$installation[0].packageSha256;
+        originalCount=$originalsForMove.Count;actualHostLifetimes=$lifetimes.ToArray();memberId=$member.memberId;nativeItemId=$member.nativeItemId;
+        acknowledgedRevisionSha256=$baseline;backendMovedSha256=$sourceDigest;localEditSha256=$localDigest;
+        movedSourceConflict=$true;oldAddressAbsent=$true;originalsRetained=$true;actualManagedModuleLoadClaimed=$false;fullS06Accepted=$false}
+}
 try{
     New-Item -ItemType Directory -Path $sync,$data,(Join-Path $fixture 'source/offline/retire-dir'),(Join-Path $fixture 'source/active') -Force|Out-Null
     $identity=[Security.Principal.WindowsIdentity]::GetCurrent()
@@ -273,7 +377,7 @@ try{
     if($installation.Count -ne 1 -or -not $installation[0].isSigned -or $installation[0].adapterId -cne 'com.mirrorpulse.adapter.local' -or @($topology.instances).Count -ne 2 -or @($topology.roots).Count -ne 2){throw 'The fixture requires two actual signed Local single-root instances.'}
     $routes=@($topology.roots|ForEach-Object{[ordered]@{instanceId=$_.instanceId;rootId=$_.rootId;rootKey=$_.uniquenessKey;directoryName=$_.directoryName;fixtureSide=$(if($_.instanceId -ceq $offline.createdInstanceId){'offline'}elseif($_.instanceId -ceq $active.createdInstanceId){'active'}else{throw 'A foreign route entered the fixture.'})}})
     $commands=[ordered]@{};foreach($key in @('createBornFile','createBornDirectory','createEphemeralFile','createEphemeralDirectory','moveKeptFile','moveBornFile','moveBornDirectory','replaceKeptFile','retireFile','retireDirectory','retireEphemeralFile','retireEphemeralDirectory')){$commands[$key]=[guid]::NewGuid().ToString('D')}
-    $marker=[ordered]@{schemaVersion=1;sourceSha=$sourceSha;phase='Setup';routes=$routes;commands=$commands;members=[ordered]@{};originals=@()};Save-DisabledMarker
+    $marker=[ordered]@{schemaVersion=1;sourceSha=$sourceSha;phase='Setup';routes=$routes;commands=$commands;members=[ordered]@{};originals=@();movedSourceConflict=$MovedSourceConflict.IsPresent};Save-DisabledMarker
     Stop-DisabledHost 'configured';Start-DisabledHost 'configured'
     $offlineRoute=@($routes|Where-Object fixtureSide -ceq offline)[0];$activeRoute=@($routes|Where-Object fixtureSide -ceq active)[0]
     $offlineDirectory=Join-Path $sync $offlineRoute.directoryName;$activeDirectory=Join-Path $sync $activeRoute.directoryName
@@ -282,6 +386,11 @@ try{
     Wait-DisabledHash (Join-Path $offlineDirectory 'kept.txt') (Get-DisabledHash (Join-Path $fixture 'source/offline/kept.txt')) 'initial-offline-file'
     Wait-DisabledHash (Join-Path $activeDirectory 'progress.txt') (Get-DisabledHash (Join-Path $fixture 'source/active/progress.txt')) 'initial-active-file'
     Read-DisabledWorkers 'initial' 2
+    if($MovedSourceConflict){
+        $report=Invoke-DisabledMovedSourceConflict
+        Write-DisabledOriginal 'completed-execution' $report
+        return
+    }
     foreach($entry in @(@('keptFile','kept.txt',$false),@('retiredFile','retire.bin',$false),@('retiredDirectory','retire-dir',$true),@('metadataFile','metadata.txt',$false))){Record-DisabledMember $entry[0] ($offlineRoute.directoryName+'/'+$entry[1]) $entry[2]|Out-Null}
     Record-DisabledMember 'activeFile' ($activeRoute.directoryName+'/progress.txt') $false|Out-Null
     Invoke-DisabledCli 'disable-offline' @('--no-start','instance','disable','--instance-id',$offlineRoute.instanceId)|Out-Null
@@ -387,10 +496,7 @@ try{
     $metadataBefore=@($baseline|Where-Object relativePath -ceq 'metadata.txt')[0];$metadataAfter=@($sourceFinal|Where-Object relativePath -ceq 'metadata.txt')[0]
     if(($metadataBefore|ConvertTo-Json -Compress) -cne ($metadataAfter|ConvertTo-Json -Compress) -or @($final.blocked|Where-Object reason -ceq 'UnsupportedMetadataChange').Count -lt 1){throw 'Unsupported metadata must retain its real product result without claiming remote acceptance.'}
     if($before.replacement.backupSha256 -cne [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($keptBytes)) -or $final.replacement.backupSha256 -cne $before.replacement.backupSha256){throw 'The complete original replacement backup was lost or changed.'}
-    foreach($publishedInput in $inputs){
-        if((Get-DisabledHash (Join-Path $fixture ($publishedInput.owner+'/'+$publishedInput.file))) -cne $publishedInput.sha256){throw 'Actual published input bytes changed during the fixture.'}
-    }
-    Write-DisabledOriginal 'published-inputs-after' ([ordered]@{sourceSha=$sourceSha;inputs=$inputs.ToArray();actualBytesUnchanged=$true;actualManagedModuleLoadClaimed=$false})
+    Confirm-DisabledPublishedInputs
     $report=[ordered]@{schemaVersion=1;sourceSha=$sourceSha;runId=$env:GITHUB_RUN_ID;runtime=$Runtime;signedPackageSha256=$installation[0].packageSha256;
         originalCount=@($before.journal).Count;actualHostLifetimes=$lifetimes.ToArray();originalsPreservedAcrossDisabledRestart=$true;independentActiveSourceProgress=$true;
         sourceUnchangedWhileDisabled=$true;allOriginalOutcomesVerified=$true;allPublishedInputBytesUnchanged=$true;metadataRemoteAcceptanceClaimed=$false;actualManagedModuleLoadClaimed=$false;fullS06Accepted=$false}
@@ -431,6 +537,10 @@ try{
         Write-DisabledOriginal 'host-lifetimes' ([ordered]@{sourceSha=$sourceSha;lifetimes=$lifetimes.ToArray();actualManagedModuleLoadClaimed=$false})
         foreach($name in $savedEnvironment.Keys){[Environment]::SetEnvironmentVariable($name,$savedEnvironment[$name],'Process')}
     }
+    if($null -ne $report){
+        if(!$report.fixtureRemoved){throw 'The signed fixture did not retain authenticated teardown.'}
+        $report|ConvertTo-Json -Depth 30|Set-Content -LiteralPath $evidenceFile -Encoding utf8
+        if($MovedSourceConflict){'Verified the signed Local source move, original reenable conflict, retained bytes and authenticated teardown.'}
+        else{'Verified the actual signed default-Host offline-operation chain, independent active progress, original outcomes and authenticated teardown.'}
+    }
 }
-$report|ConvertTo-Json -Depth 30|Set-Content -LiteralPath $evidenceFile -Encoding utf8
-'Verified the actual signed default-Host offline-operation chain, independent active progress, original outcomes and authenticated teardown.'
