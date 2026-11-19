@@ -106,11 +106,14 @@ public sealed partial class MirrorPulseProductCatalog
                 LEFT JOIN mutation_intents u ON j.operation_id=u.operation_id
                 LEFT JOIN namespace_member_moves m ON j.local_move_id=m.operation_id
                 WHERE (u.state IS NULL OR u.state<>$acknowledged) AND (m.root_id IS NULL OR $root IS NULL OR m.root_id=$root)
-                AND j.operation_id>$after ORDER BY j.operation_id LIMIT $limit;
+                AND j.operation_id >= $after AND ($first=1 OR j.operation_id<>$after)
+                ORDER BY j.operation_id LIMIT $limit;
                 """;
             query.Parameters.AddWithValue("$acknowledged", (int)MirrorPulseMutationState.Acknowledged);
             query.Parameters.AddWithValue("$root", rootId is { } root ? root.ToString() : (object)DBNull.Value);
             query.Parameters.AddWithValue("$after", after?.ToString("D") ?? string.Empty);
+            // The first page must validate an empty corrupted index before publishing any fences.
+            query.Parameters.AddWithValue("$first", after is null ? 1 : 0);
             query.Parameters.AddWithValue("$limit", limit);
             await using var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
             while (await reader.ReadAsync(token).ConfigureAwait(false))

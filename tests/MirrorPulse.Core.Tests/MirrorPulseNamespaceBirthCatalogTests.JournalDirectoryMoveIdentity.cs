@@ -76,6 +76,13 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             Assert.IsEmpty(await first.ReadNamespacePendingOperationsAsync(RootId.New()));
             Assert.AreEqual(pending, (await first.ReadPendingJournalDirectoryMovesAsync(null, 1, default)).Single());
             Assert.IsEmpty(await first.ReadPendingJournalDirectoryMovesAsync(operationId, 1, default));
+            await ExecuteSqlAsync(fixture.Paths,
+                $"PRAGMA foreign_keys=OFF; UPDATE journal_directory_moves SET operation_id='' WHERE operation_id='{operationId:D}';");
+            await Assert.ThrowsExactlyAsync<InvalidDataException>(() => first.ReadPendingJournalDirectoryMovesAsync(null, 1, default));
+            await Assert.ThrowsExactlyAsync<InvalidDataException>(() => first.ReadNamespaceDispatchFencedRootsAsync());
+            await ExecuteSqlAsync(fixture.Paths,
+                $"PRAGMA foreign_keys=OFF; UPDATE journal_directory_moves SET operation_id='{operationId:D}' WHERE operation_id='';");
+            Assert.AreEqual(pending, (await first.ReadPendingJournalDirectoryMovesAsync(null, 1, default)).Single());
             await first.AcceptJournalDirectoryMoveAsync(operationId, admission.Root.OriginalRevision!, default);
             targets = originals.Select(member => new MirrorPulseDirectoryMoveTarget(member.MemberId, Guid.NewGuid(),
                 "target:" + member.TargetPath, member.OriginalRevision)).ToArray();
