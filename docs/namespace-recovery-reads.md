@@ -60,6 +60,15 @@ still reads its requested page. A 17-root fixture verifies an indexed seek
 when the next operation ID sorts earlier. Damage on the second page rejects
 both global discovery and startup work for the first root.
 
+Directory transfer discovery validates command, effect, private content and
+journal reservations before reading the next page of 16 original admissions.
+The reservation query seeks only the page's owner IDs. The transaction
+retains the existing 4096-transfer inventory limit and checks root
+exclusivity across all pages. Seventeen cross-instance directory transfers
+exercise both pages. A damaged journal reservation on the second page
+rejects global discovery before startup can use either root of an intact
+transfer on the first page.
+
 Startup discovery selects a root's pending operations from the validated fence
 scan in one read transaction. A pending retirement leaf still validates its
 sealed batch membership. The batch is the recovery operation returned for that

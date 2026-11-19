@@ -596,14 +596,16 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         MirrorPulseNamespacePermissionIntent TargetProof, MirrorPulseNamespaceTransferPlan Plan);
 
     private static async Task<TransferFixture> PrepareTransferFixtureAsync(MirrorPulseProductCatalog catalog, bool sameInstance = false,
-        bool directory = false, bool captureRoots = false)
+        bool directory = false, bool captureRoots = false, RootRegistration? sourceRegistration = null,
+        MirrorPulseNamespaceMemberRegistration? anchor = null, string targetDirectory = "Archive")
     {
-        var source = captureRoots ? await PrepareCurrentMovableMemberAsync(catalog) : await PrepareMovableMemberAsync(catalog, directory);
+        var source = captureRoots ? await PrepareCurrentMovableMemberAsync(catalog) :
+            await PrepareMovableMemberAsync(catalog, directory, registration: sourceRegistration, anchor: anchor);
         var target = source.Parent with
         {
             EvidenceId = Guid.NewGuid(),
             RootId = RootId.New(),
-            RelativePath = "Archive",
+            RelativePath = targetDirectory,
             LocalObject = source.Parent.LocalObject with { LocalFileId = Guid.NewGuid() }
         };
         var proof = Protection(target);
@@ -617,29 +619,38 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         }
         await ProtectAsync(catalog, target, proof);
         var targetMember = OriginalMember(target, proof, source.ParentMember.ParentMemberId); await catalog.RegisterNamespaceMemberAsync(targetMember);
-        var manifest = new AdapterManifest(1, AdapterId.Parse("example.transfer"), "Example", "1.0.0", new ProtocolVersionRange(1, 2),
-            new Dictionary<string, string> { ["win-x64"] = "worker/adapter.exe", ["win-arm64"] = "worker/adapter.exe" },
-            new AdapterInstallPolicy(null), new AdapterInstancePolicy(null, null), new AdapterCapabilities(true, false, true, true), ["en-US"], "1.0.0");
-        var installed = new InstalledAdapter(manifest, InstallId.New(), "C:\\synthetic-transfer\\installed", new Sha256Digest(new string('A', 64)),
-            AdapterInstallSource.LocalFile, null, true, DateTimeOffset.UtcNow, AdapterLifecycleState.Installed);
+        MirrorPulseAdapterTopology topology = anchor is null ? new([], [], []) : await catalog.ReadAdapterTopologyAsync();
+        var installed = topology.Installations.SingleOrDefault() ?? CreateTransferFixtureInstallation();
+        var manifest = installed.Manifest;
         AdapterInstance Instance() => new(manifest.AdapterId, installed.InstallId, InstanceId.New(), "Storage",
             new Dictionary<string, string> { ["endpoint"] = "synthetic" }, [], "C:\\synthetic-transfer\\files", "C:\\synthetic-transfer\\transfers",
             true, AdapterLifecycleState.Installed, null, DateTimeOffset.UtcNow);
         var sourceInstance = Instance(); var targetInstance = sameInstance ? sourceInstance : Instance();
         var sourceRoot = new RootRegistration(manifest.AdapterId, sourceInstance.InstanceId, source.Parent.RootId!.Value,
-            "source", "Docs", "Docs", false, RootRegistrationState.Active, DateTimeOffset.UtcNow, sameInstance ? RootIdentityScope.InstanceRoot : RootIdentityScope.LegacyInstance);
+            "source", source.Parent.RelativePath, source.Parent.RelativePath, false, RootRegistrationState.Active,
+            DateTimeOffset.UtcNow, sameInstance ? RootIdentityScope.InstanceRoot : RootIdentityScope.LegacyInstance);
         var targetRoot = new RootRegistration(manifest.AdapterId, targetInstance.InstanceId, target.RootId!.Value,
-            "target", "Archive", "Archive", false, RootRegistrationState.Active, DateTimeOffset.UtcNow, RootIdentityScope.InstanceRoot);
-        await catalog.SaveAdapterTopologyAsync(new([installed], sameInstance ? [sourceInstance] : [sourceInstance, targetInstance], [sourceRoot, targetRoot]));
+            "target", targetDirectory, targetDirectory, false, RootRegistrationState.Active, DateTimeOffset.UtcNow, RootIdentityScope.InstanceRoot);
+        AdapterInstance[] pair = sameInstance ? [sourceInstance] : [sourceInstance, targetInstance];
+        await catalog.SaveAdapterTopologyAsync(new([installed], [.. topology.Instances, .. pair], [.. topology.Roots, sourceRoot, targetRoot]));
         var child = (await catalog.ReadNamespaceMemberProtectionSnapshotAsync(source.Member.MemberId))!;
         var parent = (await catalog.ReadNamespaceMemberProtectionSnapshotAsync(source.ParentMember.MemberId))!;
         var destination = (await catalog.ReadNamespaceMemberProtectionSnapshotAsync(targetMember.MemberId))!;
         var prepared = new[] { DateTimeOffset.UtcNow, child.Context.Verification.ObservedAt, parent.Context.Verification.ObservedAt,
             destination.Context.Verification.ObservedAt, child.Context.Member.RegisteredAt, targetMember.RegisteredAt }.Max().AddSeconds(1);
         var plan = new MirrorPulseNamespaceTransferPlan(1, Guid.NewGuid(), MirrorPulseTransferRoute.Capture(sourceInstance, sourceRoot, sameInstance || directory ? 2 : 1),
-            MirrorPulseTransferRoute.Capture(targetInstance, targetRoot, 2), child, parent, destination, "Archive/moved.txt", "source-v1",
+            MirrorPulseTransferRoute.Capture(targetInstance, targetRoot, 2), child, parent, destination, targetDirectory + "/moved.txt", "source-v1",
             Guid.NewGuid(), TransferBytes.LongLength, Convert.ToHexString(SHA256.HashData(TransferBytes)), Guid.NewGuid(), Guid.NewGuid(), prepared);
         return new(source, target, proof, plan);
+    }
+
+    private static InstalledAdapter CreateTransferFixtureInstallation()
+    {
+        var manifest = new AdapterManifest(1, AdapterId.Parse("example.transfer"), "Example", "1.0.0", new ProtocolVersionRange(1, 2),
+            new Dictionary<string, string> { ["win-x64"] = "worker/adapter.exe", ["win-arm64"] = "worker/adapter.exe" },
+            new AdapterInstallPolicy(null), new AdapterInstancePolicy(null, null), new AdapterCapabilities(true, false, true, true), ["en-US"], "1.0.0");
+        return new(manifest, InstallId.New(), "C:\\synthetic-transfer\\installed", new Sha256Digest(new string('A', 64)),
+            AdapterInstallSource.LocalFile, null, true, DateTimeOffset.UtcNow, AdapterLifecycleState.Installed);
     }
 
     private sealed class TransferClock(DateTimeOffset now) : TimeProvider

@@ -137,7 +137,7 @@ public sealed partial class MirrorPulseProductCatalog
         await foreach (var transfer in ReadPendingNamespaceTransfersCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
             if (transfer.Plan.OperationId != admittedTransferId)
                 AddTransferFences(transfer.Plan.OperationId, transfer.Plan.SourceRoute.RootId, transfer.Plan.TargetRoute.RootId);
-        foreach (var transfer in await ReadDirectoryTransferFencesCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
+        await foreach (var transfer in ReadDirectoryTransferFencesCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
             AddTransferFences(transfer.OperationId, transfer.Source, transfer.Target);
         await foreach (Guid id in ReadNamespaceOwnerIdsCoreAsync(NamespacePendingMoveRootPageSql, transaction, cancellationToken).ConfigureAwait(false))
         {

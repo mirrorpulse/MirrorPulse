@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
@@ -283,32 +285,56 @@ public sealed partial class MirrorPulseProductCatalog
             throw new InvalidOperationException("Directory transfer role recovery lost its original root fence.");
     }
 
-    private async Task<IReadOnlyList<DirectoryTransferFence>> ReadDirectoryTransferFencesCoreAsync(
-        SqliteTransaction transaction, CancellationToken token)
+    private async IAsyncEnumerable<DirectoryTransferFence> ReadDirectoryTransferFencesCoreAsync(
+        SqliteTransaction transaction, [EnumeratorCancellation] CancellationToken token)
     {
+        const int pageSize = 16;
+        const int maximumInventory = 4096;
         await RequireDirectoryTransferFenceIndexAsync(transaction, token).ConfigureAwait(false);
-        var fences = new List<DirectoryTransferFence>();
         var roots = new HashSet<RootId>();
+        Guid? after = null;
+        int inspected = 0;
+        while (true)
+        {
+            int limit = Math.Min(pageSize, maximumInventory - inspected + 1);
+            var page = await ReadDirectoryTransferFencePageAsync(transaction, after, limit, token).ConfigureAwait(false);
+            inspected += page.Count;
+            if (inspected > maximumInventory) throw new InvalidDataException("The pending directory transfer inventory exceeds its recovery bound.");
+            foreach (var fence in page)
+            {
+                if (!roots.Add(fence.Source) || !roots.Add(fence.Target))
+                    throw new InvalidDataException("The pending directory transfer root fences disagree with their original admissions.");
+                yield return fence;
+            }
+            if (page.Count < pageSize) yield break;
+            after = page[^1].OperationId;
+        }
+    }
+
+    private async Task<IReadOnlyList<DirectoryTransferFence>> ReadDirectoryTransferFencePageAsync(
+        SqliteTransaction transaction, Guid? after, int limit, CancellationToken token)
+    {
+        var fences = new List<DirectoryTransferFence>();
+        var originals = new Dictionary<Guid, (Guid Owner, bool Journal)>();
         await using var query = _connection.CreateCommand();
         query.Transaction = transaction;
         query.CommandText = """
             SELECT a.operation_id,a.source_root_id,a.target_root_id,a.payload,a.fingerprint
             FROM namespace_directory_transfer_admissions a JOIN namespace_directory_transfer_fences f
                 ON f.transfer_id=a.operation_id AND f.root_id=a.source_root_id
-            ORDER BY a.operation_id LIMIT 4097;
-            """;
-        var originals = new Dictionary<Guid, (Guid Owner, bool Journal)>();
+            """ + (after is null ? "" : " WHERE a.operation_id>$after") + " ORDER BY a.operation_id LIMIT $limit;";
+        if (after is { } cursor) query.Parameters.AddWithValue("$after", cursor.ToString("D"));
+        query.Parameters.AddWithValue("$limit", limit);
         await using (var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false))
         {
             while (await reader.ReadAsync(token).ConfigureAwait(false))
             {
-                if (fences.Count == 4096) throw new InvalidDataException("The pending directory transfer inventory exceeds its recovery bound.");
                 var plan = ReadNamespaceMovePayload<MirrorPulseDirectoryTransferAdmission>((byte[])reader[3], (byte[])reader[4],
                     DirectoryTransferAdmissionLimit, ValidateDirectoryTransferAdmission);
                 RootId source = plan.SourceRoute.RootId, target = plan.TargetRoute.RootId;
                 Guid owner = plan.Command.CommandId;
                 if (reader.GetString(0) != owner.ToString("D") || reader.GetString(1) != source.ToString() ||
-                    reader.GetString(2) != target.ToString() || !roots.Add(source) || !roots.Add(target))
+                    reader.GetString(2) != target.ToString())
                     throw new InvalidDataException("The pending directory transfer root fences disagree with their original admissions.");
                 fences.Add(new(owner, source, target));
                 foreach (var (id, journal) in DirectoryTransferIds(plan))
@@ -316,10 +342,22 @@ public sealed partial class MirrorPulseProductCatalog
                         throw new InvalidDataException("Two original directory transfers reserve the same identifier.");
             }
         }
-        query.CommandText = """
-            SELECT i.operation_id,i.transfer_id,i.journal_original FROM namespace_directory_transfer_ids i
-            JOIN namespace_directory_transfer_admissions a ON a.operation_id=i.transfer_id
-            JOIN namespace_directory_transfer_fences f ON f.transfer_id=a.operation_id AND f.root_id=a.source_root_id;
+        if (fences.Count == 0) return fences;
+
+        // Each reservation has one indexed owner. A duplicate ID across pages
+        // cannot satisfy both owners because the reservation ID is a primary key.
+        query.Parameters.Clear();
+        var parameters = new string[fences.Count];
+        for (int index = 0; index < fences.Count; index++)
+        {
+            string parameter = "$owner" + index.ToString(CultureInfo.InvariantCulture);
+            query.Parameters.AddWithValue(parameter, fences[index].OperationId.ToString("D"));
+            parameters[index] = parameter;
+        }
+        query.CommandText = $$"""
+            SELECT i.operation_id,i.transfer_id,i.journal_original
+            FROM namespace_directory_transfer_ids i INDEXED BY namespace_directory_transfer_ids_by_transfer
+            WHERE i.transfer_id IN ({{string.Join(',', parameters)}});
             """;
         await using (var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false))
             while (await reader.ReadAsync(token).ConfigureAwait(false))

@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using Microsoft.Data.Sqlite;
 using MirrorPulse.Core.Caching;
 using MirrorPulse.Core.CloudFiles;
+using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.State;
 using MirrorPulse.Core.Sync;
 
@@ -9,6 +10,69 @@ namespace MirrorPulse.Core.Tests;
 
 public sealed partial class MirrorPulseNamespaceBirthCatalogTests
 {
+    [TestMethod]
+    public async Task DirectoryTransferDiscoveryValidatesReservationsInBoundedOwnerPages()
+    {
+        using var fixture = new Fixture();
+        await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        var first = await PrepareDirectoryTransferFixtureAsync(catalog, commandId: OwnerPageId(8, 1));
+        await catalog.PrepareNamespaceDirectoryTransferAsync(first);
+        var seed = (await catalog.ReadAdapterTopologyAsync()).Roots.Single(root => root.RootId == first.SourceRoute.RootId);
+        var anchor = await catalog.ReadNamespaceMemberAsync(first.SourceParent.Context.Member.ParentMemberId!.Value);
+        Assert.IsNotNull(anchor);
+        var originals = new List<MirrorPulseDirectoryTransferAdmission> { first };
+        for (int index = 1; index < 17; index++)
+        {
+            string sourceDirectory = $"Docs {index}";
+            var source = new RootRegistration(seed.AdapterId, seed.InstanceId, RootId.New(), seed.UniquenessKey,
+                sourceDirectory, sourceDirectory, false, seed.State, seed.RegisteredAt, seed.IdentityScope);
+            var pair = await PrepareTransferFixtureAsync(catalog, directory: true, sourceRegistration: source, anchor: anchor,
+                targetDirectory: $"Archive {index}");
+            var plan = await PrepareDirectoryTransferFixtureAsync(catalog, setup: pair, commandId: OwnerPageId(8, index + 1));
+            await catalog.PrepareNamespaceDirectoryTransferAsync(plan);
+            originals.Add(plan);
+        }
+
+        var expected = originals.SelectMany(plan => new[] { plan.SourceRoute.RootId, plan.TargetRoute.RootId })
+            .OrderBy(root => root.Value).ToArray();
+        var statements = (await TraceOwnerReadsAsync(catalog, async () =>
+            CollectionAssert.AreEqual(expected, (await catalog.ReadNamespaceDispatchFencedRootsAsync()).ToArray()))).ToArray();
+        var admissions = statements.Where(sql => sql.Contains("SELECT a.operation_id,a.source_root_id,a.target_root_id,a.payload,a.fingerprint", StringComparison.Ordinal)
+            && sql.Contains("ORDER BY a.operation_id", StringComparison.Ordinal)).ToArray();
+        var reservations = statements.Where(sql => sql.Contains("SELECT i.operation_id,i.transfer_id,i.journal_original", StringComparison.Ordinal)).ToArray();
+        Assert.HasCount(2, admissions);
+        Assert.IsTrue(admissions.All(sql => sql.Contains("LIMIT 16", StringComparison.Ordinal)));
+        Assert.HasCount(2, reservations);
+        string boundary = originals[15].Command.CommandId.ToString("D"), lastId = originals[^1].Command.CommandId.ToString("D");
+        Assert.Contains("a.operation_id>", admissions[1], StringComparison.Ordinal);
+        Assert.Contains("INDEXED BY namespace_directory_transfer_ids_by_transfer", reservations[1], StringComparison.Ordinal);
+        Assert.Contains("i.transfer_id IN (", reservations[1], StringComparison.Ordinal);
+        Assert.Contains(boundary, reservations[0], StringComparison.Ordinal);
+        Assert.DoesNotContain(lastId, reservations[0], StringComparison.Ordinal);
+        Assert.DoesNotContain(boundary, reservations[1], StringComparison.Ordinal);
+        Assert.Contains(lastId, reservations[1], StringComparison.Ordinal);
+        Assert.IsLessThan(Array.IndexOf(statements, admissions[1]), Array.IndexOf(statements, reservations[0]));
+        await using (var connection = Connection(fixture.Paths))
+        {
+            await connection.OpenAsync();
+            await using var explain = connection.CreateCommand();
+            explain.CommandText = "EXPLAIN QUERY PLAN " + reservations[0];
+            await using var reader = await explain.ExecuteReaderAsync();
+            Assert.IsTrue(await reader.ReadAsync());
+            Assert.Contains("SEARCH i USING INDEX namespace_directory_transfer_ids_by_transfer", reader.GetString(3), StringComparison.Ordinal);
+            Assert.IsFalse(await reader.ReadAsync());
+        }
+
+        var last = originals[^1];
+        var pending = new MirrorPulseNamespacePendingOperation(last.Command.CommandId, last.TargetRoute.RootId, MirrorPulseNamespacePendingOperationKind.Transfer);
+        Assert.AreEqual(pending, (await catalog.ReadNamespacePendingOperationsAsync(last.TargetRoute.RootId)).Single());
+        Guid lostJournal = last.Originals.Members.Single().OperationId;
+        await ExecuteSqlAsync(fixture.Paths, $"UPDATE namespace_directory_transfer_ids SET journal_original=0 WHERE operation_id='{lostJournal:D}';");
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(() => catalog.ReadNamespaceDispatchFencedRootsAsync());
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(() => catalog.ReadNamespacePendingOperationsAsync(first.SourceRoute.RootId));
+        Assert.AreEqual(first.Originals, (await catalog.ReadNamespaceDirectoryTransferAsync(first.Command.CommandId))?.Originals);
+    }
+
     [TestMethod]
     [DataRow(false)]
     [DataRow(true)]
@@ -284,9 +348,9 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
     }
 
     private static async Task<MirrorPulseDirectoryTransferAdmission> PrepareDirectoryTransferFixtureAsync(
-        MirrorPulseProductCatalog catalog, byte[]? bytes = null)
+        MirrorPulseProductCatalog catalog, byte[]? bytes = null, TransferFixture? setup = null, Guid? commandId = null)
     {
-        var setup = await PrepareTransferFixtureAsync(catalog, directory: true);
+        setup ??= await PrepareTransferFixtureAsync(catalog, directory: true);
         var child = await AddBornAsync(catalog, NestedBirth(setup.Source.Born, "payload.bin", false));
         await catalog.RegisterNamespaceMemberAsync(BornMember(child, setup.Source.Member));
         var source = await catalog.ReadNamespaceProtectedSubtreeAsync(setup.Source.Member.MemberId);
@@ -303,7 +367,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         }).ToArray();
         var prepared = source.Select(entry => entry.Protection.Context.Verification.ObservedAt)
             .Append(setup.Plan.PreparedAt).Max().AddSeconds(1);
-        var command = new MirrorPulseNamespaceTransferCommandOrigin(1, Guid.NewGuid(), setup.Source.Member.MemberId,
+        var command = new MirrorPulseNamespaceTransferCommandOrigin(1, commandId ?? Guid.NewGuid(), setup.Source.Member.MemberId,
             setup.Plan.TargetParent.Context.Member.MemberId, "moved.txt", prepared);
         var journal = new MirrorPulseNamespaceTransferJournalClaim(1, command.CommandId, 1, prepared,
             [new(Guid.NewGuid(), 1, MirrorPulseWorkerChangeKind.ContentUpdate, source[1].Protection.Identity.ItemId,
