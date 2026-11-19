@@ -638,10 +638,13 @@ jobs:
         timeout-minutes: 10
         env:
           MIRRORPULSE_NATIVE_TEST: '1'
+          MP_VERIFY_PREPARED_TRANSFER_REENABLE: ${{ inputs.verify_shell && '1' || '0' }}
         run: |
           $packages = @(Get-ChildItem -LiteralPath artifacts/official-local -Recurse -Filter '*.mpadapter' -File)
           if ($packages.Count -ne 1) { throw 'The exact frozen signed Local package is required.' }
-          pwsh ./eng/verify-cli-transfers.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName -VerifyDirectoryTransfer -EvidencePath artifacts/evidence/cli-transfers.json
+          $reenable = @()
+          if ($env:MP_VERIFY_PREPARED_TRANSFER_REENABLE -ceq '1') { $reenable += '-VerifyPreparedTransferReenable' }
+          pwsh ./eng/verify-cli-transfers.ps1 -Runtime win-arm64 -PackagePath $packages[0].FullName -VerifyDirectoryTransfer @reenable -EvidencePath artifacts/evidence/cli-transfers.json
           if ($LASTEXITCODE -ne 0) { throw 'The real signed CLI transfer matrix failed.' }
 
       - name: Preserve original signed ARM64 CLI transfer results and failures
