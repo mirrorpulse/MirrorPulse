@@ -67,6 +67,10 @@ function Stop-DisabledHost([string]$Name){
         Invoke-DisabledCli ($Name+'-stop') @('--no-start','host','stop')|Out-Null
         if(-not $process.WaitForExit(20000)){throw 'The owned disabled fixture Host did not stop within its lifecycle budget.'}
         $script:ownedDisabledHost.exitObserved=$true
+        if($LargeBacklog){
+            $script:ownedDisabledHost.exitCode=$process.ExitCode
+            if($process.ExitCode -ne 0){throw 'The owned backlog Host exited unsuccessfully after its public stop.'}
+        }
         & $cliBinary --json --developer-mode --no-start host status 2>$null|Out-Null
         if($LASTEXITCODE -eq 0){throw 'The stopped owned Host retained a live lifecycle channel.'}
         $script:ownedDisabledHost=$null

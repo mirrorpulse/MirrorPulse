@@ -126,13 +126,18 @@ public static partial class CliFixtureProbe
                     });
                 }
             }
-            stage = "OfficialJournalOwnership";
+            stage = "OfficialJournalFile";
             if (!File.Exists(fixture.Paths.CfSharpStateDatabasePath) || (File.GetAttributes(fixture.Paths.CfSharpStateDatabasePath) & FileAttributes.ReparsePoint) != 0)
                 throw new InvalidDataException("The official fixture journal was redirected or lost.");
+            stage = "OfficialJournalStoreOpen";
             await using var store = await MirrorPulseCfSharpStateStoreFactory.Create(fixture.Paths).OpenAsync(new(fixture.Paths.SyncRootPath));
+            stage = "OfficialJournalBeginRead";
             await using var transaction = await store.BeginTransactionAsync();
-            var all = await transaction.Operations.ListAsync(512);
-            if (all.Count >= 512) throw new InvalidDataException("The fixture exceeded its bounded official journal observation.");
+            stage = "OfficialJournalRead";
+            int journalLimit = marker.LargeBacklog ? 1024 : 512;
+            var all = await transaction.Operations.ListAsync(journalLimit);
+            stage = "OfficialJournalReadLimit";
+            if (all.Count >= journalLimit) throw new InvalidDataException("The fixture exceeded its bounded official journal observation.");
             var selected = all.Where(row => row.ItemId is { } itemId && itemIds.Contains(itemId))
                 .OrderBy(row => row.Sequence).Select(row => new CliDisabledJournalFact(row.OperationId, row.Sequence, row.ItemId,
                     row.Kind.ToString(), row.AttemptCount, row.CreatedAt, Convert.ToHexString(SHA256.HashData(row.Payload.Span)))).ToArray();
@@ -376,6 +381,7 @@ public static partial class CliFixtureProbe
                 remoteSnapshots,
                 roots = rootFacts,
                 polling,
+                observedJournalCount = all.Count,
                 journal = selected,
                 originals,
                 movedSource,
