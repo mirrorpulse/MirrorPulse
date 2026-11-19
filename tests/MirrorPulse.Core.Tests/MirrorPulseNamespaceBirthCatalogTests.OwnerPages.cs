@@ -35,22 +35,11 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             }
         }
 
-        var connection = (SqliteConnection)typeof(MirrorPulseProductCatalog).GetField("_connection", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(catalog)!;
-        var statements = new List<string>();
-        SQLitePCL.strdelegate_trace trace = (_, sql) => statements.Add(sql);
-        SQLitePCL.raw.sqlite3_trace(connection.Handle!, trace, null);
         Task<IReadOnlyList<RootId>> ReadFencesAsync() => birth
             ? catalog.ReadNamespaceDispatchFencedRootsAsync() : catalog.ReadNamespaceRecoveryRootsAsync();
-        try
-        {
+        var statements = await TraceOwnerReadsAsync(catalog, async () =>
             CollectionAssert.AreEqual(owners.Select(owner => owner.Root).OrderBy(root => root.Value).ToArray(),
-                (await ReadFencesAsync()).ToArray());
-        }
-        finally
-        {
-            SQLitePCL.raw.sqlite3_trace(connection.Handle!, (SQLitePCL.strdelegate_trace)null!, null);
-            GC.KeepAlive(trace);
-        }
+                (await ReadFencesAsync()).ToArray()));
 
         string pageStart = birth ? "SELECT operation_id FROM (" : "SELECT root_id FROM namespace_member_move_pending";
         var discovery = statements.Where(sql => sql.StartsWith(pageStart, StringComparison.Ordinal) &&
@@ -59,11 +48,20 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
         Assert.IsTrue(discovery.All(sql => sql.Contains("LIMIT 16", StringComparison.Ordinal)));
 
         var last = birth ? owners[^1] : owners.OrderBy(owner => owner.Root.ToString(), StringComparer.Ordinal).Last();
+        if (birth)
+        {
+            var selected = new MirrorPulseNamespacePendingOperation(last.Operation, last.Root, MirrorPulseNamespacePendingOperationKind.Birth);
+            var startupStatements = await TraceOwnerReadsAsync(catalog, async () =>
+                CollectionAssert.AreEqual(new[] { selected }, (await catalog.ReadNamespacePendingOperationsAsync(last.Root)).ToArray()));
+            Assert.AreEqual(17, startupStatements.Count(sql => sql.Contains("FROM namespace_birth_intents WHERE operation_id=", StringComparison.Ordinal)),
+                "Startup must validate each pending birth admission once, including the original on the second page.");
+        }
         string corruption = birth
             ? $"DELETE FROM namespace_birth_reservations WHERE operation_id='{last.Operation:D}';"
             : $"DELETE FROM namespace_member_move_reservations WHERE operation_id='{last.Operation:D}';";
         await ExecuteSqlAsync(fixture.Paths, corruption);
         await Assert.ThrowsExactlyAsync<InvalidDataException>(async () => _ = await ReadFencesAsync());
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(() => catalog.ReadNamespacePendingOperationsAsync(owners[0].Root));
     }
 
     [TestMethod]
@@ -107,16 +105,11 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
                 owners.Add((member.RootId!.Value, id, member.MemberId));
             }
             string originals = await ReadOwnerPageOriginalsAsync(fixture.Paths);
-            var connection = (SqliteConnection)typeof(MirrorPulseProductCatalog).GetField("_connection", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(catalog)!;
-            var statements = new List<string>();
-            SQLitePCL.strdelegate_trace trace = (_, sql) => statements.Add(sql);
-            SQLitePCL.raw.sqlite3_trace(connection.Handle!, trace, null);
-            try
+            var statements = await TraceOwnerReadsAsync(catalog, async () =>
             {
                 var roots = await catalog.ReadNamespaceDispatchFencedRootsAsync();
                 CollectionAssert.AreEquivalent(owners.Select(owner => owner.Root).ToArray(), roots.ToArray());
-            }
-            finally { SQLitePCL.raw.sqlite3_trace(connection.Handle!, (SQLitePCL.strdelegate_trace)null!, null); GC.KeepAlive(trace); }
+            });
             string table = kind switch
             {
                 "retirement" => "namespace_member_retirements",
@@ -124,13 +117,18 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
                 "update" => "namespace_remote_updates",
                 _ => "namespace_born_member_recovery_actions"
             };
-            var pages = statements.Where(sql => sql.StartsWith(kind == "born" ? "SELECT member_id FROM (" : "SELECT operation_id FROM ", StringComparison.Ordinal) &&
+            bool IsPage(string sql) => sql.StartsWith(kind == "born" ? "SELECT member_id FROM (" : "SELECT operation_id FROM ", StringComparison.Ordinal) &&
                 sql.Contains("FROM " + table, StringComparison.Ordinal) &&
-                sql.Contains("LIMIT 16", StringComparison.Ordinal) && !sql.Contains("WHERE operation_id=", StringComparison.Ordinal)).ToArray();
-            Assert.HasCount(2, pages, "Seventeen actual original owners must be read through two bounded ID pages.");
+                sql.Contains("LIMIT 16", StringComparison.Ordinal) && !sql.Contains("WHERE operation_id=", StringComparison.Ordinal);
+            Assert.AreEqual(2, statements.Count(IsPage), "Seventeen actual original owners must be read through two bounded ID pages.");
             Assert.AreEqual(originals, await ReadOwnerPageOriginalsAsync(fixture.Paths));
-            var selected = await catalog.ReadNamespacePendingOperationsAsync(owners[0].Root);
-            Assert.IsTrue(selected.Any(entry => entry.OperationId == owners[0].Id));
+            var startupStatements = await TraceOwnerReadsAsync(catalog, async () =>
+            {
+                var selected = await catalog.ReadNamespacePendingOperationsAsync(owners[0].Root);
+                Assert.IsTrue(selected.Any(entry => entry.OperationId == owners[0].Id));
+            });
+            if (kind is "update" or "born")
+                Assert.AreEqual(2, startupStatements.Count(IsPage), "Startup must reuse the owners already verified by the single complete fence scan.");
             string key = kind == "born" ? "action_id" : "operation_id";
             await ExecuteSqlAsync(fixture.Paths, $"UPDATE {table} SET fingerprint=zeroblob(32) WHERE {key}='{owners[^1].Id:D}';");
             await Assert.ThrowsExactlyAsync<InvalidDataException>(() => catalog.ReadNamespaceDispatchFencedRootsAsync());
@@ -170,6 +168,22 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
 
     private static Guid OwnerPageId(int prefix, int index) => Guid.Parse(prefix.ToString("D8", CultureInfo.InvariantCulture) +
         "-0000-0000-0000-" + index.ToString("D12", CultureInfo.InvariantCulture));
+
+    private static async Task<IReadOnlyList<string>> TraceOwnerReadsAsync(MirrorPulseProductCatalog catalog, Func<Task> read)
+    {
+        var connection = (SqliteConnection)typeof(MirrorPulseProductCatalog).GetField("_connection", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(catalog)!;
+        var statements = new List<string>();
+        SQLitePCL.strdelegate_trace trace = (_, sql) => statements.Add(sql);
+        SQLitePCL.raw.sqlite3_trace(connection.Handle!, trace, null);
+        try { await read(); }
+        finally
+        {
+            SQLitePCL.raw.sqlite3_trace(connection.Handle!, (SQLitePCL.strdelegate_trace)null!, null);
+            GC.KeepAlive(trace);
+        }
+        return statements;
+    }
 
     private static async Task<MirrorPulseNamespaceMemberRegistration> AddOwnerPageMemberAsync(
         MirrorPulseProductCatalog catalog, MoveFixture seed, int index)

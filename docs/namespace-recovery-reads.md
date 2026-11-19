@@ -41,6 +41,14 @@ the indexed payload for every current record and the retained guarded ownership
 where a cancellation records it. A missing side, a malformed key or damage on a
 later page rejects the complete snapshot before the Host can use any roots.
 
+Startup discovery selects a root's pending births, born-member actions, remote
+updates, transfers, journal directory Moves and preserving Deletes from the
+same validated fence scan. The read transaction covers the full catalog, and
+selection becomes available to the caller only after that validation succeeds.
+SQLite traces with 17 real owners showed birth-admission reads fall from 34 to
+17, and ID pages for remote updates and born-member actions from four to two
+per startup query. Later-page corruption still rejects the complete result.
+
 Root sorting, total catalog work per turn and complete fairness still require
 their own bounds. The default Host must continue using its shared admission,
 namespace actor and current native verification before dispatch.

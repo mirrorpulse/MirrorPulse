@@ -21,26 +21,22 @@ public sealed partial class MirrorPulseProductCatalog
         try
         {
             ThrowIfDisposed(); using var transaction = _connection.BeginTransaction(deferred: true);
-            // Validate the complete reservation indexes first. Missing or corrupt work must
-            // not turn a query for another root into a false declaration of readiness.
-            _ = await ReadNamespaceRootFencesCoreAsync(true, transaction, cancellationToken).ConfigureAwait(false);
             var result = new List<MirrorPulseNamespacePendingOperation>();
-            result.AddRange(await ReadPendingJournalDirectoryMovesCoreAsync(transaction, cancellationToken, rootId).ConfigureAwait(false));
-            await foreach (var rejection in ReadPendingRemoteDeleteRejectionsCoreAsync(transaction, cancellationToken, rootId).ConfigureAwait(false))
-                result.Add(new(rejection.Admission.OperationId, rootId, MirrorPulseNamespacePendingOperationKind.RemoteDeleteRejection));
+            int pendingBirths = 0;
+            void SelectPending(RootId root, Guid operation, MirrorPulseNamespacePendingOperationKind kind)
+            {
+                if (kind == MirrorPulseNamespacePendingOperationKind.Birth && ++pendingBirths > 4096)
+                    throw new InvalidDataException("Pending birth discovery exceeds its recovery bound.");
+                if (root == rootId) result.Add(new(operation, root, kind));
+            }
+
+            // Select work from validated owners in the same transaction. All roots must
+            // pass the complete fence scan before the caller can receive any work.
+            _ = await ReadNamespaceRootFencesCoreAsync(true, transaction, cancellationToken, selectPending: SelectPending).ConfigureAwait(false);
             if (await ReadPendingRootLabelJournalForRootCoreAsync(rootId, transaction, cancellationToken).ConfigureAwait(false) is { } rootJournal)
                 result.Add(new(rootJournal.Observation.OperationId, rootId, MirrorPulseNamespacePendingOperationKind.RootLabelJournal));
             if (await ReadPendingKeepRemoteFileStartForRootCoreAsync(rootId, transaction, cancellationToken).ConfigureAwait(false) is { } keepRemote)
                 result.Add(new(keepRemote.CommandId, rootId, MirrorPulseNamespacePendingOperationKind.ConflictKeepRemote));
-            await foreach (var transfer in ReadPendingNamespaceTransfersCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
-                if (transfer.Plan.SourceRoute.RootId == rootId || transfer.Plan.TargetRoute.RootId == rootId)
-                    result.Add(new(transfer.Plan.OperationId, rootId, MirrorPulseNamespacePendingOperationKind.Transfer));
-            foreach (var transfer in await ReadDirectoryTransferFencesCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
-                if (transfer.Source == rootId || transfer.Target == rootId)
-                    result.Add(new(transfer.OperationId, rootId, MirrorPulseNamespacePendingOperationKind.Transfer));
-            await foreach (var update in ReadPendingRemoteUpdatesCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
-                if (update.Plan.Child.Context.Member.RootId == rootId)
-                    result.Add(new(update.Plan.OperationId, rootId, MirrorPulseNamespacePendingOperationKind.RemoteUpdate));
             if (await ReadPendingNamespaceMemberMoveCoreAsync(rootId, transaction, cancellationToken).ConfigureAwait(false) is { } move)
                 result.Add(new(move.OperationId, rootId, MirrorPulseNamespacePendingOperationKind.Move));
             await AddPendingUnsealedRootLabelOperationAsync(result, rootId, transaction, cancellationToken).ConfigureAwait(false);
@@ -60,29 +56,6 @@ public sealed partial class MirrorPulseProductCatalog
                     result.Add(new(batch.OperationId, rootId, MirrorPulseNamespacePendingOperationKind.RetirementBatch));
             if (await ReadPendingNamespaceReplacementCoreAsync(rootId, transaction, cancellationToken).ConfigureAwait(false) is { } replacement)
                 result.Add(new(replacement.OperationId, rootId, MirrorPulseNamespacePendingOperationKind.Replacement));
-            await foreach (var born in ReadPendingBornMemberRecoveryActionsCoreAsync(transaction, cancellationToken).ConfigureAwait(false))
-                if (born.Child.Member.RootId == rootId)
-                    result.Add(new(born.ActionId, rootId, MirrorPulseNamespacePendingOperationKind.BornMemberRecovery));
-            var births = new List<Guid>();
-            await using (var query = _connection.CreateCommand())
-            {
-                query.Transaction = transaction;
-                query.CommandText = """
-                    SELECT b.operation_id FROM namespace_birth_intents b
-                    LEFT JOIN namespace_members m ON m.birth_operation_id=b.operation_id
-                    WHERE m.member_id IS NULL ORDER BY b.operation_id LIMIT 4097;
-                    """;
-                await using var reader = await query.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-                while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
-                    births.Add(ParseNamespaceMemberId(reader.GetString(0)));
-            }
-            if (births.Count > 4096) throw new InvalidDataException("Pending birth discovery exceeds its recovery bound.");
-            foreach (Guid operation in births)
-            {
-                var birth = await ReadNamespaceBirthCoreAsync(operation, transaction, cancellationToken).ConfigureAwait(false)
-                    ?? throw new InvalidDataException("The pending birth lost its validated original admission.");
-                if (birth.RootId == rootId) result.Add(new(operation, rootId, MirrorPulseNamespacePendingOperationKind.Birth));
-            }
             if (result.Count > 4096) throw new InvalidDataException("The root's pending local work exceeds its recovery bound.");
             transaction.Commit(); return result.OrderBy(entry => entry.OperationId).ThenBy(entry => entry.Kind).ToArray();
         }
