@@ -9,6 +9,51 @@ namespace MirrorPulse.Core.Tests;
 public sealed partial class MirrorPulseNamespaceBirthCatalogTests
 {
     [TestMethod]
+    public async Task BirthRecoveryPageSharesValidatedBirthReferencesAndRechecksThemInTheNextRead()
+    {
+        using var fixture = new Fixture();
+        await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        var parent = await PrepareMovableMemberAsync(catalog, directory: true);
+        var registered = await AddBornAsync(catalog, NestedBirth(parent.Born, "registered.txt", false));
+        var registeredMember = await catalog.RegisterNamespaceMemberAsync(BornMember(registered, parent.Member));
+        var observed = await AddBornAsync(catalog, NestedBirth(parent.Born, "observed.txt", false));
+        var originalTail = NestedBirth(parent.Born, "prepared.txt", false);
+        await catalog.PrepareNamespaceBirthAsync(originalTail);
+        var scan = await catalog.BeginNamespaceBirthRecoveryScanAsync();
+        await catalog.PrepareNamespaceBirthAsync(NestedBirth(parent.Born, "after-scan.txt", false));
+
+        long after = 0;
+        var statements = await TraceOwnerReadsAsync(catalog, async () =>
+        {
+            var page = await catalog.ReadNamespaceBirthRecoveryPageAsync(scan, 0, 3);
+            CollectionAssert.AreEqual(new[] { parent.Born.Birth, registered.Birth, observed.Birth },
+                page.Entries.Select(entry => entry.Intent).ToArray());
+            Assert.IsTrue(page.HasMore);
+            Assert.AreEqual(parent.Member, page.Entries[0].MemberRegistration);
+            Assert.AreEqual(registeredMember, page.Entries[1].MemberRegistration);
+            Assert.IsFalse(page.Entries[1].OwnsNameReservation);
+            Assert.AreEqual(registered.Protection, page.Entries[1].LatestProtection);
+            Assert.IsNull(page.Entries[2].MemberRegistration);
+            Assert.IsTrue(page.Entries[2].OwnsNameReservation);
+            Assert.AreEqual(observed.Observation, page.Entries[2].Observation);
+            after = page.LastScannedSequence;
+        });
+        Assert.AreEqual(3, statements.Count(sql => sql.StartsWith("SELECT 1 FROM namespace_remote_birth_entries WHERE operation_id=", StringComparison.Ordinal)),
+            "The page must validate the persisted references for each original admission once within its read transaction.");
+
+        var tail = await catalog.ReadNamespaceBirthRecoveryPageAsync(scan, after, 3);
+        Assert.AreEqual(originalTail, tail.Entries.Single().Intent);
+        Assert.IsFalse(tail.HasMore);
+
+        await ExecuteSqlAsync(fixture.Paths, $"""
+            PRAGMA foreign_keys=OFF;
+            INSERT INTO namespace_remote_birth_entries
+            VALUES('{registered.Birth.OperationId:D}','{Guid.NewGuid():D}','{Guid.NewGuid():D}','{new string('A', 64)}',1,0,'{Guid.NewGuid():D}','{Guid.NewGuid():D}');
+            """);
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(() => catalog.ReadNamespaceBirthRecoveryPageAsync(scan, 0, 3));
+    }
+
+    [TestMethod]
     [DataRow(MirrorPulseNamespaceBirthOrigin.ControlledCreation)]
     [DataRow(MirrorPulseNamespaceBirthOrigin.Import)]
     [DataRow(MirrorPulseNamespaceBirthOrigin.RemotePopulation)]

@@ -195,11 +195,11 @@ internal sealed class MirrorPulseNamespaceStartupCoordinator(CloudFileSystem fil
                             if (originals.Count == 0) break;
                             afterManifest = originals[^1].Definition.ManifestId;
                         }
-                        var pending = births.Where(birth => birth.Intent.RootId == root.RootId).ToArray();
-                        if (pending.Any(birth => birth.Intent.RelativePath != root.DirectoryName ||
-                            birth.Intent.Origin != MirrorPulseNamespaceBirthOrigin.RemotePopulation) || pending.Length > 1)
+                        var pending = births[root.RootId].ToArray();
+                        if (pending.Any(birth => birth.RelativePath != root.DirectoryName ||
+                            birth.Origin != MirrorPulseNamespaceBirthOrigin.RemotePopulation) || pending.Length > 1)
                             throw new InvalidDataException("The new root has unresolved namespace work that cannot be replaced at startup.");
-                        operationId = pending.SingleOrDefault()?.Intent.OperationId ?? Guid.NewGuid();
+                        operationId = pending.SingleOrDefault()?.OperationId ?? Guid.NewGuid();
                         var specification = router.CreateRootPage().Children.Single(spec => spec.Name == root.DirectoryName);
                         child = await new MirrorPulseNamespaceRemoteCreationCoordinator(fileSystem, catalog, router, execution, actor)
                             .CreateAsync(operationId.Value, anchor.MemberId, specification, cancellationToken).ConfigureAwait(false);
@@ -240,19 +240,19 @@ internal sealed class MirrorPulseNamespaceStartupCoordinator(CloudFileSystem fil
         return existing;
     }
 
-    private async Task<IReadOnlyList<MirrorPulseNamespaceBirthRecoveryEntry>> ReadUnregisteredBirthsAsync(CancellationToken token)
+    private async Task<ILookup<RootId, MirrorPulseNamespaceBirthIntent>> ReadUnregisteredBirthsAsync(CancellationToken token)
     {
         var scan = await catalog.BeginNamespaceBirthRecoveryScanAsync(token).ConfigureAwait(false);
-        var result = new List<MirrorPulseNamespaceBirthRecoveryEntry>(); long after = 0;
+        var result = new List<MirrorPulseNamespaceBirthIntent>(); long after = 0;
         while (true)
         {
             var page = await catalog.ReadNamespaceBirthRecoveryPageAsync(scan, after, cancellationToken: token).ConfigureAwait(false);
-            result.AddRange(page.Entries.Where(entry => entry.MemberRegistration is null));
+            result.AddRange(page.Entries.Where(entry => entry.MemberRegistration is null).Select(entry => entry.Intent));
             if (result.Count > 4096) throw new InvalidDataException("Unregistered birth recovery exceeds its startup bound.");
             if (!page.HasMore) break;
             if (page.LastScannedSequence <= after) throw new InvalidDataException("Birth discovery did not advance.");
             after = page.LastScannedSequence;
         }
-        return result;
+        return result.ToLookup(birth => birth.RootId);
     }
 }

@@ -54,6 +54,13 @@ still rejects the complete result. Internal membership checks use the validated
 root set. Public fence lists and full tree fingerprints use the established
 root order. A scoped tree includes only its own fence when present.
 
+Historical birth pages reuse successful reference checks inside each read
+transaction. A three-record SQLite page containing registered and pending
+births reduced original reference-index queries from 50 to three. A later
+read validates the original references again, including registered births.
+The startup scan validates the complete historical pages through its captured
+upper sequence and retains only pending birth intents grouped by root.
+
 Total catalog work per turn and complete fairness still require their own
 bounds. The default Host must continue using its shared admission, namespace
 actor and current native verification before dispatch.

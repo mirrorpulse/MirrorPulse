@@ -55,7 +55,7 @@ public sealed partial class MirrorPulseProductCatalog
         try
         {
             ThrowIfDisposed();
-            using SqliteTransaction transaction = _connection.BeginTransaction(deferred: true);
+            using SqliteTransaction transaction = BeginNamespaceRecoveryReadSnapshot();
             var admissions = new List<(long Sequence, Guid OperationId)>();
             await using (SqliteCommand query = _connection.CreateCommand())
             {
