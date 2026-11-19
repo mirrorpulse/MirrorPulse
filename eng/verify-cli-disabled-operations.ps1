@@ -122,8 +122,17 @@ function Invoke-DisabledProbe([ValidateSet('audit','cleanup')][string]$Mode,[str
         $output=$process.StandardOutput.ReadToEndAsync();$errors=$process.StandardError.ReadToEndAsync()
         $timeoutMilliseconds=if($LargeBacklog){90000}else{30000}
         if(-not $process.WaitForExit($timeoutMilliseconds)){throw 'The actual stopped disabled oracle exceeded its observation deadline.'}
-        if($process.ExitCode -ne 0){throw ('The stopped disabled oracle failed: '+$errors.GetAwaiter().GetResult())}
-        $value=$output.GetAwaiter().GetResult()|ConvertFrom-Json;Write-DisabledOriginal $Name $value;$value
+        $raw=$output.GetAwaiter().GetResult()
+        if($process.ExitCode -ne 0){
+            if($LargeBacklog -and $raw){
+                $partial=$raw|ConvertFrom-Json -ErrorAction SilentlyContinue
+                if($partial.probeFailureKind -ceq 'OfficialJournalReadLimit' -and $partial.sourceSha -ceq $sourceSha){
+                    Write-DisabledOriginal ($Name+'-partial') $partial
+                }
+            }
+            throw ('The stopped disabled oracle failed: '+$errors.GetAwaiter().GetResult())
+        }
+        $value=$raw|ConvertFrom-Json;Write-DisabledOriginal $Name $value;$value
     }finally{if(-not $process.HasExited){$process.Kill($true);$process.WaitForExit()};$process.Dispose()}
 }
 function Get-DisabledHash([string]$Path){(Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash}

@@ -137,7 +137,41 @@ public static partial class CliFixtureProbe
             int journalLimit = marker.LargeBacklog ? 1024 : 512;
             var all = await transaction.Operations.ListAsync(journalLimit);
             stage = "OfficialJournalReadLimit";
-            if (all.Count >= journalLimit) throw new InvalidDataException("The fixture exceeded its bounded official journal observation.");
+            if (all.Count >= journalLimit)
+            {
+                if (marker.LargeBacklog)
+                {
+                    Guid activeItem = marker.Members["activeFile"].ItemId;
+                    long? highWaterSequence = transaction.Operations is ICloudOperationJournalPaging paging
+                        ? await paging.GetHighWaterSequenceAsync()
+                        : null;
+                    var groups = all.GroupBy(row => new
+                    {
+                        kind = row.Kind.ToString(),
+                        scope = row.ItemId == activeItem ? "Peer" : row.ItemId is { } id && itemIds.Contains(id) ? "OfflineFile" : "Other"
+                    }).Select(group => new
+                    {
+                        group.Key.kind,
+                        group.Key.scope,
+                        count = group.Count(),
+                        identities = group.Select(item => item.ItemId).Distinct().Count(),
+                        firstSequence = group.Min(item => item.Sequence),
+                        lastSequence = group.Max(item => item.Sequence)
+                    }).ToArray();
+                    Console.WriteLine(JsonSerializer.Serialize(new
+                    {
+                        probeFailureKind = "OfficialJournalReadLimit",
+                        marker.SourceSha,
+                        marker.Phase,
+                        journalLimit,
+                        observedJournalCount = all.Count,
+                        highWaterSequence,
+                        journalWindowComplete = false,
+                        groups
+                    }, JsonOptions));
+                }
+                throw new InvalidDataException("The fixture exceeded its bounded official journal observation.");
+            }
             var selected = all.Where(row => row.ItemId is { } itemId && itemIds.Contains(itemId))
                 .OrderBy(row => row.Sequence).Select(row => new CliDisabledJournalFact(row.OperationId, row.Sequence, row.ItemId,
                     row.Kind.ToString(), row.AttemptCount, row.CreatedAt, Convert.ToHexString(SHA256.HashData(row.Payload.Span)))).ToArray();
