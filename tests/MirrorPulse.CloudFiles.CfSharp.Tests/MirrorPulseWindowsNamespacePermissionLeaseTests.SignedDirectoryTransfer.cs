@@ -347,7 +347,11 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 // The command, not an independent upload pump, owns its settlement in this fixture.
                 string localFile = Path.Combine(paths.SyncRootPath, "Docs", original);
                 CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(localFile, token));
-                await File.WriteAllBytesAsync(localFile, bytes, token);
+                await using (var writer = new FileStream(localFile, FileMode.Open, FileAccess.Write, FileShare.Read))
+                {
+                    await writer.WriteAsync(bytes, token);
+                    writer.Flush(flushToDisk: true);
+                }
                 var leaf = await runtime.InspectNamespaceMemberAsync("Docs/" + original, false, token);
                 var originalIdentity = await catalog.ReadNamespaceMemberIdentityAsync(leaf.MemberId, token);
                 Assert.IsNotNull(originalIdentity.ItemId);

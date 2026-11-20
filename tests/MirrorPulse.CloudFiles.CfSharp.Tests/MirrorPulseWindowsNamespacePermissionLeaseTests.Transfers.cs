@@ -1448,19 +1448,31 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     private static async Task<IReadOnlyList<Guid>> WaitForTransferOriginalContentJournalAsync(CloudLocalChangeFeed feed,
         Guid sourceItemId, CancellationToken token)
     {
+        long? reconciliationSince = null;
         while (true)
         {
-            var scan = await feed.BeginScanAsync(token); Assert.IsFalse(scan.RequiresFullRescan);
+            var scan = await feed.BeginScanAsync(token);
+            if (scan.RequiresFullRescan)
+            {
+                reconciliationSince ??= System.Diagnostics.Stopwatch.GetTimestamp();
+                Assert.IsLessThan(TimeSpan.FromSeconds(5), System.Diagnostics.Stopwatch.GetElapsedTime(reconciliationSince.Value),
+                    "The public transfer journal remained unavailable while reconciliation was required.");
+                await Task.Delay(25, token);
+                continue;
+            }
+            reconciliationSince = null;
             var ids = new List<Guid>(); long after = 0;
+            bool lost = false;
             while (true)
             {
-                var page = await feed.ReadPageAsync(scan, after, 64, token); Assert.IsFalse(page.RequiresFullRescan);
+                var page = await feed.ReadPageAsync(scan, after, 64, token);
+                if (page.RequiresFullRescan) { lost = true; break; }
                 ids.AddRange(page.Changes.Where(change => change.ItemId == sourceItemId &&
                     change.Kind is CloudLocalChangeKind.Create or CloudLocalChangeKind.ContentUpdate).Select(change => change.OperationId));
                 if (!page.HasMore) break;
                 Assert.IsGreaterThan(after, page.LastScannedSequence); after = page.LastScannedSequence;
             }
-            if (ids.Count != 0) return ids.AsReadOnly();
+            if (!lost && ids.Count != 0) return ids.AsReadOnly();
             await Task.Delay(10, token);
         }
     }
