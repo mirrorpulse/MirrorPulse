@@ -176,13 +176,18 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
                     Assert.IsTrue((await catalog.ReadContentConfirmationReceiptAsync(remote.Uploads[0].Operation, deadline.Token))!.MayAcknowledge);
                     router.ReplaceRegistrations([disabled]);
                     await File.WriteAllTextAsync(file, "latest offline edit", deadline.Token);
-                    MirrorPulseJournalUploadBatch pending;
-                    while ((pending = await source.ReadPendingAsync(deadline.Token)).CompleteWindow?
-                        .Any(command => command.ItemId == acceptedItem && command.Kind == MirrorPulseWorkerChangeKind.ContentUpdate) != true)
+                    // The native edit is durable even if an attribute observation has
+                    // requested reconciliation. The disabled pump below owns that recovery.
+                    while (originals.Length == 0)
+                    {
+                        await using var transaction = await state.OpenStore.BeginTransactionAsync(deadline.Token);
+                        var rows = await transaction.Operations.ListByItemIdAsync(acceptedItem, 64, deadline.Token);
+                        await transaction.RollbackAsync(deadline.Token);
+                        originals = rows.Where(row => row.Kind == CloudStateOperationKind.ContentUpdate)
+                            .Select(row => row.OperationId).ToArray();
+                        if (originals.Length != 0) break;
                         await Task.Delay(25, deadline.Token);
-                    originals = pending.CompleteWindow!.Where(command => command.ItemId == acceptedItem)
-                        .Select(command => command.OperationId).ToArray();
-                    Assert.IsNotEmpty(originals); Assert.IsEmpty(pending.ReadyCommands);
+                    }
                     TestContext.WriteLine($"ReenabledRootCheckpoint: disabled=True; originalCount={originals.Length}; offlineEditObserved=True.");
                     if (remoteChange == ReenableRemoteChange.Edit) remote.Seed("concurrent remote edit"u8.ToArray());
                     if (remoteChange == ReenableRemoteChange.Move) remote.MoveTo("moved-remotely.txt");
@@ -195,8 +200,11 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
                     // Observe an actual running disabled pump across several polls,
                     // including a new SDK/store owner, without touching the source.
                     await Task.Delay(600, deadline.Token);
+                    MirrorPulseJournalUploadBatch pending;
+                    while ((pending = await source.ReadBeforeRequestedRescanAsync(deadline.Token)).CompleteWindow?
+                        .Any(command => originals.Contains(command.OperationId)) != true)
+                        await Task.Delay(25, deadline.Token);
                     Assert.AreEqual(statBefore, remote.Stats); Assert.AreEqual(callsBefore, remote.Calls); Assert.HasCount(1, remote.Uploads);
-                    var pending = await source.ReadPendingAsync(deadline.Token);
                     Assert.IsEmpty(pending.ReadyCommands); Assert.IsGreaterThan(0, pending.DeferredCount);
                     await AssertOriginalsAsync(expectedPresent: true);
                     var snapshot = await cloud.InspectAsync(deadline.Token);
