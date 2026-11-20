@@ -12,6 +12,7 @@ param(
     [switch]$EmptyCreate,
     [switch]$MoveConflict,
     [switch]$MoveOnlyConflict,
+    [switch]$RequirePureMoveJournal,
     [ValidateSet("Debug", "Release")]
     [string]$Configuration = "Release",
     [string]$EvidencePath
@@ -21,6 +22,9 @@ $ErrorActionPreference = "Stop"
 if (($MoveConflict -or $MoveOnlyConflict) -and (-not $Coalescing -or $CoalescingAction -cne 'KeepRemote' -or
     $CreateConflict -or $EmptyCreate -or ($MoveConflict -and $MoveOnlyConflict))) {
     throw 'The moved-file fixture requires its independent KeepRemote coalescing choice.'
+}
+if ($RequirePureMoveJournal -and -not $MoveOnlyConflict) {
+    throw 'Strict journal qualification requires the independent pure rename fixture.'
 }
 if ($EmptyCreate -and -not $CreateConflict) {
     throw 'The empty creation fixture requires its independent controlled-Create conflict scenario.'
@@ -731,6 +735,13 @@ finally {
 if ($Coalescing) {
     $coalescingEvidence.teardownCompleted = $true
     $coalescingEvidence | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $EvidencePath -Encoding utf8
+    if ($RequirePureMoveJournal -and
+        ($coalescingEvidence.rawEffect -cne 'MoveFile' -or
+         $coalescingEvidence.originalContentObservationCount -ne 0 -or
+         $coalescingEvidence.originalCount -ne 2 -or
+         @($coalescingEvidence.originalMoveJournalOperationIds).Count -ne 2)) {
+        throw "Pure rename requires raw MoveFile and exactly two original Move notifications. Observed $($coalescingEvidence.rawEffect), $($coalescingEvidence.originalCount) originals and $($coalescingEvidence.originalContentObservationCount) content notifications."
+    }
     return
 }
 if ($EvidencePath) {
