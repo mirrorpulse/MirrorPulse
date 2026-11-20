@@ -4,20 +4,20 @@
     "net10.0-windows10.0.26100": {
       "CfSharp": {
         "type": "Direct",
-        "requested": "[0.1.0-preview.14, )",
-        "resolved": "0.1.0-preview.14",
-        "contentHash": "PWWzQVTgWxrd05xkVDCnOMRQtH0sMlxgmtrQWEwXpkW1j3F4ZdFvu4i8l5DsaIashzEN4Eq2WcVe8uiyc76RhA==",
+        "requested": "[0.1.0-preview.15, )",
+        "resolved": "0.1.0-preview.15",
+        "contentHash": "aIffu0PHyNIuFuhc0Ss+KXPNxpPRvNhSC0LTLHdUh9lxAjIe16lj/5mBuh+HNGCI0moYwbdYQ6DjaoDqMbJh0g==",
         "dependencies": {
-          "CfSharp.Native": "0.1.0-preview.14"
+          "CfSharp.Native": "0.1.0-preview.15"
         }
       },
       "CfSharp.Storage.Sqlite": {
         "type": "Direct",
-        "requested": "[0.1.0-preview.14, )",
-        "resolved": "0.1.0-preview.14",
-        "contentHash": "G+RSrtmwrwASmz7VkoeiP3HgVtbMXWc8A5EYIe5qefVRJGHV7ll1keASAlMMjC+Gel2J5WMnhxnFTd0uIZDvTQ==",
+        "requested": "[0.1.0-preview.15, )",
+        "resolved": "0.1.0-preview.15",
+        "contentHash": "8bLGdMCx/eNYHzmqzoqaTCDgpsEC/UquWFaRtQSRDJw7HRMazsaGAZFrJEgdkFd3tKV6+hrlAe1urxFlrPUISg==",
         "dependencies": {
-          "CfSharp": "0.1.0-preview.14",
+          "CfSharp": "0.1.0-preview.15",
           "Microsoft.Data.Sqlite": "8.0.31"
         }
       },
@@ -29,8 +29,8 @@
       },
       "CfSharp.Native": {
         "type": "Transitive",
-        "resolved": "0.1.0-preview.14",
-        "contentHash": "A3eA7pUsviywy46DoL96HIq27fLhij/oufXa0V0+8oW57PzL6W00OVkaV8+6uOSp+1G11nRkAUnhoin4m0duyw=="
+        "resolved": "0.1.0-preview.15",
+        "contentHash": "jlVAw0OVm0QBzyqorqeTcs+1TiBWlX+tp1Ga0cEdITEHMOdDKba3XauldtskcT8G/PaQ8Q/js9+zMm548WwjlA=="
       },
       "Microsoft.Data.Sqlite.Core": {
         "type": "Transitive",

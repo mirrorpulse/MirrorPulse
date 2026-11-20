@@ -13,6 +13,14 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 public sealed partial class MirrorPulseCfSharpStoreFileLeaseTests
 {
     [TestMethod]
+    public async Task OfficialStateSessionExposesJournalAssociationUpdatesToTheFeed()
+    {
+        await using var fixture = await Fixture.OpenAsync();
+        await using var transaction = await fixture.Store.BeginTransactionAsync();
+        Assert.IsInstanceOfType<ICloudOperationJournalItemAssociationUpdates>(transaction.Operations);
+    }
+
+    [TestMethod]
     public async Task OriginalFileBindingSurvivesOfficialWritesAndOwnerReopenWithoutAcknowledgingRows()
     {
         await using var fixture = await Fixture.OpenAsync(); string originalRows = await fixture.RowsAsync();
