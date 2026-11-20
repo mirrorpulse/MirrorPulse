@@ -285,6 +285,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             int targetPublicationStarts = 0;
             bool interruptAcknowledgement = webDav is null && !restartDuringTransfer;
             CloudLocalChangeFeed? journal = null;
+            CloudFileSystem? journalOwner = null;
             MirrorPulseCfSharpStateSession? initialState = null;
             var callerCreationReceipts = new Dictionary<Guid, CloudPlaceholderCreationReceipt>();
             var interruptedCheckpoint = restartCut ?? MirrorPulseTransferSourceRetirementCheckpoint.AfterNativeDeletion;
@@ -293,10 +294,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 worker.IsConnected, scheduler: scheduler, namespaceExecution: execution, namespaceActor: actor, namespaceWork: work,
                 initializeNamespaceOnStart: true, transfers: transfers)
             {
-                StateStoreDecorator = interruptBeforeObservation
-                    ? CaptureInitialState
-                    : null,
                 TransferJournalReady = feed => journal = feed,
+                TransferJournalOwnerReady = (owner, state) => { journalOwner = owner; initialState = state; },
                 TransferCreationReceiptReady = receipt => callerCreationReceipts.Add(receipt.OperationId, receipt),
                 TransferPublicationCheckpoint = (checkpoint, _) =>
                 {
@@ -347,8 +346,14 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 // The command, not an independent upload pump, owns its settlement in this fixture.
                 string localFile = Path.Combine(paths.SyncRootPath, "Docs", original);
                 CollectionAssert.AreEqual(bytes, await File.ReadAllBytesAsync(localFile, token));
-                await using (var writer = new FileStream(localFile, FileMode.Open, FileAccess.Write, FileShare.Read))
+                if (interruptBeforeNativeDelete || interruptAfterWorkerDelete)
                 {
+                    // These retirement cuts qualify the ordinary-file projection and its later conversion.
+                    await File.WriteAllBytesAsync(localFile, bytes, token);
+                }
+                else
+                {
+                    await using var writer = new FileStream(localFile, FileMode.Open, FileAccess.Write, FileShare.Read);
                     await writer.WriteAsync(bytes, token);
                     writer.Flush(flushToDisk: true);
                 }
@@ -356,10 +361,15 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 var originalIdentity = await catalog.ReadNamespaceMemberIdentityAsync(leaf.MemberId, token);
                 Assert.IsNotNull(originalIdentity.ItemId);
                 Assert.IsNotNull(journal);
-                originalNotifications = await WaitForTransferOriginalContentJournalAsync(journal, originalIdentity.ItemId.Value, token);
+                originalNotifications = await WaitForTransferOriginalContentJournalAsync(journal, originalIdentity.ItemId.Value, token,
+                    ReconcileInitialJournalAsync);
             }
             Guid operationId = Guid.NewGuid();
-            Assert.IsTrue(await runtime.PrepareDirectoryNamespaceTransferAsync(operationId, source.MemberId, target.MemberId, "copied", token));
+            Assert.IsTrue(await PrepareTransferAfterReconciliationAsync(
+                stop => runtime.PrepareDirectoryNamespaceTransferAsync(operationId, source.MemberId, target.MemberId, "copied", stop),
+                ReconcileInitialJournalAsync, token));
+            Task ReconcileInitialJournalAsync(CancellationToken stop) =>
+                ReconcileTransferFixtureJournalAsync(journalOwner!, journal!, initialState!, router, catalog, transport, transport, stop);
             var plan = await catalog.ReadNamespaceDirectoryTransferAsync(operationId, token);
             Assert.IsNotNull(plan);
             Assert.IsTrue(originalNotifications.All(id => plan.Originals.Members.Any(change => change.OperationId == id)));
@@ -887,12 +897,6 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             {
                 Assert.IsTrue(await runtime.ResumeDirectoryNamespaceTransferAsync(operationId, token));
                 await AssertCompletedTransferAsync(runtime, work);
-            }
-
-            ICloudStateStoreFactory CaptureInitialState(ICloudStateStoreFactory state)
-            {
-                initialState = (MirrorPulseCfSharpStateSession)state;
-                return state;
             }
 
             async Task AssertSameBackendSuccessorAsync(MirrorPulseRemoteIdentityResolver resolver, MirrorPulseDemandProvider restartedProvider,

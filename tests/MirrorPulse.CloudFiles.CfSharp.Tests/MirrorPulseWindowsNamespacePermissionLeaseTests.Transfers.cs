@@ -376,14 +376,25 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 }
                 CloudLocalChangeFeed? originalJournal = null, currentJournal = null;
                 MirrorPulseJournalUploadSource? currentJournalSource = null;
+                CloudFileSystem? currentJournalFileSystem = null;
+                MirrorPulseCfSharpStateSession? currentState = null;
                 void ObserveJournal(CloudLocalChangeFeed feed)
                 { Assert.IsTrue(feed.IsStarted); originalJournal ??= feed; currentJournal = feed; }
+                void ObserveJournalOwner(CloudFileSystem journalFileSystem, MirrorPulseCfSharpStateSession journalState)
+                {
+                    currentJournalFileSystem = journalFileSystem;
+                    currentState = journalState;
+                }
+                Task ReconcileCurrentJournalAsync(CancellationToken stop) =>
+                    ReconcileTransferFixtureJournalAsync(currentJournalFileSystem!, currentJournal!, currentState!, router,
+                        catalog, transport, transport, stop);
                 var factory = new CfSharpMirrorPulseCloudRuntimeFactory(provider: new MirrorPulseDemandProvider(router, transport, namespaceWork: work),
                     router: router, catalog: catalog, mayDispatch: _ => true,
                     scheduler: scheduler, namespaceExecution: role, namespaceActor: actor, namespaceWork: work, transfers: Services(transport))
                 {
                     StateStoreDecorator = projectionFault.Wrap,
                     TransferJournalReady = ObserveJournal,
+                    TransferJournalOwnerReady = ObserveJournalOwner,
                     TransferJournalSourceReady = source => currentJournalSource = source,
                     TransferSourceRetirementCheckpoint = retireLocal ? RetirementCheckpoint : null,
                     TransferAcknowledgementCheckpoint = completeOriginals && localOnlyBackendScenario is null ? AcknowledgementCheckpoint : null,
@@ -402,6 +413,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                     {
                         StateStoreDecorator = projectionFault.Wrap,
                         TransferJournalReady = ObserveJournal,
+                        TransferJournalOwnerReady = ObserveJournalOwner,
                         TransferJournalSourceReady = source => currentJournalSource = source,
                         TransferSourceRetirementCheckpoint = RetirementCheckpoint,
                         TransferAcknowledgementCheckpoint = acknowledgementFault.CheckpointAsync
@@ -431,14 +443,24 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         await edit.WriteAsync(bytes, deadline.Token);
                         await edit.FlushAsync(deadline.Token);
                     }
+                    else if (completeOriginals && restartBeforeVerification is null && retirementFault is null && !retireBeforePublishedHandoff)
+                    {
+                        // Keep the accepted placeholder through the original ACK cut.
+                        await using var edit = new FileStream(sourcePath, FileMode.Open, FileAccess.Write, FileShare.Read);
+                        await edit.WriteAsync(bytes, deadline.Token);
+                        edit.Flush(flushToDisk: true);
+                    }
                     else
                     {
                         await File.WriteAllBytesAsync(sourcePath, [31], deadline.Token);
                         await File.WriteAllBytesAsync(sourcePath, bytes, deadline.Token);
                     }
-                    var originalContentIds = await WaitForTransferOriginalContentJournalAsync(journal, nativeBefore.ItemId!.Value, deadline.Token);
+                    var originalContentIds = await WaitForTransferOriginalContentJournalAsync(journal, nativeBefore.ItemId!.Value,
+                        deadline.Token, ReconcileCurrentJournalAsync);
                     NoteTransferStage("OriginalJournalObserved");
-                    var prepared = await runtime.PrepareNamespaceTransferAsync(operation, member.MemberId, target.MemberId, "moved.bin", deadline.Token);
+                    var prepared = await PrepareTransferAfterReconciliationAsync(
+                        stop => runtime.PrepareNamespaceTransferAsync(operation, member.MemberId, target.MemberId, "moved.bin", stop),
+                        ReconcileCurrentJournalAsync, deadline.Token);
                     NoteTransferStage("CommandPrepared");
                     Assert.AreEqual(2, prepared.Plan.Version); Assert.IsNotNull(prepared.Plan.CommandOrigin);
                     Assert.AreEqual(operation, prepared.Plan.CommandOrigin.CommandId);
@@ -985,6 +1007,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                             {
                                 TransferPublicationCheckpoint = factory.TransferPublicationCheckpoint,
                                 StateStoreDecorator = projectionFault.Wrap,
+                                TransferJournalOwnerReady = ObserveJournalOwner,
                                 TransferJournalReady = ObserveJournal
                             };
                             secondPublisher = recoveryFactory.Create(paths); publishing = secondPublisher; await publishing.StartAsync(deadline.Token);
@@ -1335,7 +1358,8 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                         if (completeOriginals)
                         {
                             (verified, secondPublisher) = await CompleteNativeTransferWithRecoveryAsync(publishing, CreateAcknowledgementRecoveryOwner, catalog, paths,
-                                verified, () => currentJournal!, () => currentJournalSource!, work, worker, acknowledgementFault, deadline.Token);
+                                verified, () => currentJournal!, () => currentState!.OpenStore, () => currentJournalSource!,
+                                ReconcileCurrentJournalAsync, work, worker, acknowledgementFault, deadline.Token);
                             publishing = secondPublisher;
                         }
                     }
@@ -1445,8 +1469,51 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         Assert.IsTrue(retirement.Intent.PreparedAt <= projection.CapturedAt && projection.CapturedAt <= retirement.StartedAt);
     }
 
+    private static async Task ReconcileTransferFixtureJournalAsync(CloudFileSystem fileSystem, CloudLocalChangeFeed feed,
+        MirrorPulseCfSharpStateSession state, MirrorPulseRootRouter router, MirrorPulseProductCatalog catalog,
+        IMirrorPulseWorkerUploadTransport uploads, IMirrorPulseWorkerStatTransport stats, CancellationToken token)
+    {
+        // The transfer-only fixture deliberately has no ordinary upload pump. Defer both
+        // roots through the normal durable rescan path so the transfer retains its originals.
+        var policy = new MirrorPulseFullRescanPolicy(fileSystem, feed, state, router, catalog, uploads, stats, _ => false);
+        var recovery = new MirrorPulseFullRescanRecovery(catalog, policy.ReconcileAsync, feed.AcknowledgeFullRescanAsync,
+            (_, _) => ValueTask.CompletedTask);
+        while (true)
+        {
+            try
+            {
+                var result = await recovery.RunAsync(new(true), token);
+                Assert.IsTrue(result.WasRequired);
+                Assert.AreEqual(0, result.ReconciledEntryCount);
+                break;
+            }
+            catch (InvalidOperationException error) when
+                (error.Message == "A new loss signal must be persisted and reconciled before acknowledging the rescan.")
+            {
+                await Task.Delay(25, token);
+            }
+        }
+        CollectionAssert.IsSubsetOf(router.Registrations.Select(root => root.RootId).ToArray(),
+            (await catalog.ReadDeferredRescanRootsAsync(token)).ToArray());
+    }
+
+    private static async Task<T> PrepareTransferAfterReconciliationAsync<T>(Func<CancellationToken, ValueTask<T>> prepare,
+        Func<CancellationToken, Task> reconcile, CancellationToken token)
+    {
+        while (true)
+        {
+            try { return await prepare(token); }
+            catch (InvalidOperationException error) when (error.Message is
+                "The original journal requires reconciliation before transfer capture." or
+                "The original journal lost its captured reconciliation boundary.")
+            {
+                await reconcile(token);
+            }
+        }
+    }
+
     private static async Task<IReadOnlyList<Guid>> WaitForTransferOriginalContentJournalAsync(CloudLocalChangeFeed feed,
-        Guid sourceItemId, CancellationToken token)
+        Guid sourceItemId, CancellationToken token, Func<CancellationToken, Task>? reconcile = null)
     {
         long? reconciliationSince = null;
         while (true)
@@ -1457,6 +1524,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 reconciliationSince ??= System.Diagnostics.Stopwatch.GetTimestamp();
                 Assert.IsLessThan(TimeSpan.FromSeconds(5), System.Diagnostics.Stopwatch.GetElapsedTime(reconciliationSince.Value),
                     "The public transfer journal remained unavailable while reconciliation was required.");
+                if (reconcile is not null) await reconcile(token);
                 await Task.Delay(25, token);
                 continue;
             }

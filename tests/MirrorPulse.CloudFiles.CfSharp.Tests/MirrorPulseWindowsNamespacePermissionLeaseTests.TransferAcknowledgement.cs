@@ -14,8 +14,9 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
     private async Task<(MirrorPulseNamespaceTransferCopy Copy, IMirrorPulseCloudRuntime Runtime)> CompleteNativeTransferWithRecoveryAsync(
         IMirrorPulseCloudRuntime publishing, Func<MirrorPulseNamespaceWorkAdmission, IMirrorPulseCloudRuntime> createOwner, MirrorPulseProductCatalog catalog,
         MirrorPulseStoragePaths paths, MirrorPulseNamespaceTransferCopy prepared, Func<CloudLocalChangeFeed> journal,
-        Func<MirrorPulseJournalUploadSource> source,
-        MirrorPulseNamespaceWorkAdmission work, TransferNativeWorker worker, TransferNativeAcknowledgementFault fault, CancellationToken token)
+        Func<ICloudStateStore> currentStore, Func<MirrorPulseJournalUploadSource> source,
+        Func<CancellationToken, Task> reconcile, MirrorPulseNamespaceWorkAdmission work, TransferNativeWorker worker,
+        TransferNativeAcknowledgementFault fault, CancellationToken token)
     {
         Guid operation = prepared.Plan.OperationId;
         MirrorPulseNamespaceTransferAcknowledgement? firstStart = null;
@@ -61,9 +62,14 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
                 Assert.IsGreaterThan(0, interrupted.JournalClaim!.Members.Count);
                 Assert.HasCount(2, await catalog.ReadNamespaceDispatchFencedRootsAsync(token));
                 Assert.IsFalse(work.IsAdmitted(prepared.Plan.SourceRoute.RootId)); Assert.IsFalse(work.IsAdmitted(prepared.Plan.TargetRoute.RootId));
-                var pending = await ReadTransferOriginalJournalIdsAsync(journal(), token);
-                foreach (var original in interrupted.JournalClaim.Members)
-                    Assert.AreEqual(cut == 0, pending.Contains(original.OperationId));
+                // The exact receipt boundary is observable in the public repository
+                // even while a later attribute record fences the feed delivery window.
+                await using (var transaction = await currentStore().BeginTransactionAsync(token))
+                {
+                    foreach (var original in interrupted.JournalClaim.Members)
+                        Assert.AreEqual(cut == 0, await transaction.Operations.GetAsync(original.OperationId, token) is not null);
+                    await transaction.RollbackAsync(token);
+                }
                 if (cut == 0) originalReads = Volatile.Read(ref worker.RangeReads);
                 else Assert.AreEqual(originalReads, Volatile.Read(ref worker.RangeReads), "An accepted ACK retry must not reread or recopy historical target content.");
                 if (cut == 1)
@@ -98,14 +104,18 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             Assert.IsNotNull(await catalog.ReadNamespaceInitializationCompletionAsync(restoredAction.InitializationOperationId, token));
             TestContext.WriteLine($"HostTransferCurrentRecovery: targetPlaceholderRestored=True; laterBytesRetained=True; originalHistoryRetained=True; durableBornAction=True; freshRootInitialization=True; historicalRangeReadsUnchanged=True.");
             Assert.AreEqual(completed, await publishing.CompleteNamespaceTransferAsync(operation, token));
-            Guid lateDelete = await WaitForRetiredTransferDeleteAsync(journal(), prepared.Plan.Source.Identity.ItemId!.Value, token);
+            Guid lateDelete = await WaitForRetiredTransferDeleteAsync(journal(), prepared.Plan.Source.Identity.ItemId!.Value, token, reconcile);
             await ExecuteTransferPublicationFixtureSqlAsync(paths,
                 TransferAcknowledgementFaultSql.BeforeOriginalReceipt(lateDelete), token);
             try { await Assert.ThrowsExactlyAsync<Microsoft.Data.Sqlite.SqliteException>(async () => await source().ReadPendingAsync(token)); }
             finally { await ExecuteTransferPublicationFixtureSqlAsync(paths, "DROP TRIGGER fail_late_transfer_ack;", CancellationToken.None); }
             var lateStart = await catalog.ReadRetiredTransferObservationAcknowledgementAsync(lateDelete, token);
             Assert.IsNotNull(lateStart); Assert.IsNull(lateStart.AcknowledgedAt);
-            Assert.IsFalse((await ReadTransferOriginalJournalIdsAsync(journal(), token)).Contains(lateDelete));
+            await using (var transaction = await currentStore().BeginTransactionAsync(token))
+            {
+                Assert.IsNull(await transaction.Operations.GetAsync(lateDelete, token));
+                await transaction.RollbackAsync(token);
+            }
             await ReopenOwnerAsync();
             Assert.AreEqual(completed, await publishing.CompleteNamespaceTransferAsync(operation, token));
             Assert.IsFalse(work.IsAdmitted(prepared.Plan.SourceRoute.RootId), "Completed history cannot reopen this new admission owner.");
@@ -128,11 +138,18 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         finally { if (!transferred && replacement is not null) await replacement.DisposeAsync(); }
     }
 
-    private static async Task<Guid> WaitForRetiredTransferDeleteAsync(CloudLocalChangeFeed feed, Guid itemId, CancellationToken token)
+    private static async Task<Guid> WaitForRetiredTransferDeleteAsync(CloudLocalChangeFeed feed, Guid itemId,
+        CancellationToken token, Func<CancellationToken, Task>? reconcile = null)
     {
         while (true)
         {
-            var scan = await feed.BeginScanAsync(token); Assert.IsFalse(scan.RequiresFullRescan); long after = 0;
+            var scan = await feed.BeginScanAsync(token);
+            if (scan.RequiresFullRescan && reconcile is not null)
+            {
+                await reconcile(token);
+                continue;
+            }
+            Assert.IsFalse(scan.RequiresFullRescan); long after = 0;
             while (true)
             {
                 var page = await feed.ReadPageAsync(scan, after, 64, token); Assert.IsFalse(page.RequiresFullRescan);

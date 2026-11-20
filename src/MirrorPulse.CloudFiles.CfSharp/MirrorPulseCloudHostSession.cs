@@ -301,6 +301,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
     internal Func<MirrorPulseTransferAcknowledgementCheckpoint, CancellationToken, ValueTask>? TransferAcknowledgementCheckpoint { get; init; }
     internal Func<MirrorPulseNamespaceRetirementCheckpoint, ValueTask>? ControlledRetirementCheckpoint { get; init; }
     internal Action<CloudLocalChangeFeed>? TransferJournalReady { get; init; }
+    internal Action<CloudFileSystem, MirrorPulseCfSharpStateSession>? TransferJournalOwnerReady { get; init; }
     internal Action<MirrorPulseJournalUploadSource>? TransferJournalSourceReady { get; init; }
 
     public CfSharpMirrorPulseCloudRuntimeFactory(
@@ -350,7 +351,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
             .Build(), state, provider, StateStoreDecorator, paths.SyncRootPath, paths.DataRootPath, _uploads, _stats, _mutations, _router, _catalog,
             _mayDispatch, _conflicts, _notifications, _scheduler, _namespaceExecution, _namespaceActor, _namespaceWork, _initializeNamespaceOnStart, _transfers,
             TransferPublicationCheckpoint, TransferSourceRetirementCheckpoint, TransferAcknowledgementCheckpoint, TransferJournalReady, TransferJournalSourceReady,
-            TransferCreationReceiptReady, ControlledRetirementCheckpoint);
+            TransferCreationReceiptReady, ControlledRetirementCheckpoint, TransferJournalOwnerReady);
     }
 
     private sealed class CfSharpRuntime(
@@ -380,7 +381,8 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
         Action<CloudLocalChangeFeed>? transferJournalReady,
         Action<MirrorPulseJournalUploadSource>? transferJournalSourceReady,
         Action<CloudPlaceholderCreationReceipt>? transferCreationReceiptReady,
-        Func<MirrorPulseNamespaceRetirementCheckpoint, ValueTask>? controlledRetirementCheckpoint)
+        Func<MirrorPulseNamespaceRetirementCheckpoint, ValueTask>? controlledRetirementCheckpoint,
+        Action<CloudFileSystem, MirrorPulseCfSharpStateSession>? transferJournalOwnerReady)
         : IMirrorPulseCloudRuntime
     {
         private MirrorPulseJournalUploadPump? _uploadPump;
@@ -1964,6 +1966,7 @@ public sealed class CfSharpMirrorPulseCloudRuntimeFactory : IMirrorPulseCloudRun
                 _ownsTransferJournal = !feed.IsStarted;
                 if (_ownsTransferJournal) await feed.StartAsync(cancellationToken).ConfigureAwait(false);
                 transferJournalReady?.Invoke(feed);
+                transferJournalOwnerReady?.Invoke(fileSystem, state);
                 if (_namespaceExecution is not null && _namespaceActor is not null && namespaceWork is not null)
                 {
                     if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100))
