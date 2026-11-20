@@ -31,6 +31,21 @@ function Read-InputHashes {
     }
 }
 
+function Read-DeclaredCfSharpVersion {
+    [xml]$props = Get-Content -LiteralPath (Join-Path $workspace 'Directory.Packages.props') -Raw
+    $versions = @(foreach ($package in 'CfSharp', 'CfSharp.Storage.Sqlite') {
+        $pin = @($props.Project.ItemGroup.PackageVersion | Where-Object Include -CEQ $package)
+        if ($pin.Count -ne 1 -or [string]$pin[0].Version -cnotmatch '^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$') {
+            throw "The installed comparison requires one exact central version for $package."
+        }
+        [string]$pin[0].Version
+    })
+    if ($versions[0] -cne $versions[1]) {
+        throw 'The installed comparison requires the same exact CfSharp and SQLite package version.'
+    }
+    return $versions[0]
+}
+
 $trackedChanges = if ($ValidateOnly) {
     @(git -C $workspace status --porcelain --untracked-files=no -- $files)
 } else {
@@ -40,6 +55,7 @@ if ($LASTEXITCODE -ne 0 -or $trackedChanges.Count -ne 0) {
     throw 'The comparison requires a clean tracked checkout.'
 }
 $inputHashes = @(Read-InputHashes)
+$lockedVersion = Read-DeclaredCfSharpVersion
 $referencePatchSha256 = $null
 if ($Profile -ceq 'preview13-reference') {
     if (-not $ValidateOnly -and ($env:GITHUB_ACTIONS -cne 'true' -or $env:RUNNER_ENVIRONMENT -cne 'github-hosted')) {
@@ -54,7 +70,13 @@ if ($Profile -ceq 'preview13-reference') {
     }
     $patch = [IO.Path]::GetTempFileName()
     try {
-        & git -C $workspace diff "--output=$patch" --binary "$adoption^" $adoption -- $files
+        $reference = "$adoption^"
+        $referenceChanges = @(git -C $workspace diff --name-only --no-renames $reference $source -- $files)
+        if ($LASTEXITCODE -ne 0) { throw 'Could not compare the exact reference and selected package inputs.' }
+        if ($referenceChanges.Count -eq 0) {
+            throw 'The exact preview.13 reference inputs did not differ from the selected package inputs.'
+        }
+        & git -C $workspace diff "--output=$patch" --binary --no-renames $reference $source -- $files
         if ($LASTEXITCODE -ne 0) { throw 'Could not recover the original CfSharp adoption inputs.' }
         $referencePatchSha256 = (Get-FileHash -LiteralPath $patch).Hash
         & git -C $workspace apply --reverse --check --index -- $patch
@@ -63,7 +85,8 @@ if ($Profile -ceq 'preview13-reference') {
             & git -C $workspace apply --reverse --index -- $patch
             if ($LASTEXITCODE -ne 0) { throw 'Could not apply the checked reference input overlay.' }
             $changed = @(git -C $workspace diff --cached --name-only)
-            if ($LASTEXITCODE -ne 0 -or $changed.Count -ne $files.Count -or @(Compare-Object $files $changed -CaseSensitive).Count -ne 0) {
+            if ($LASTEXITCODE -ne 0 -or $changed.Count -ne $referenceChanges.Count -or
+                @(Compare-Object $referenceChanges $changed -CaseSensitive).Count -ne 0) {
                 throw 'The reference overlay changed files outside its exact package inputs and collector pin.'
             }
         }
@@ -72,13 +95,9 @@ if ($Profile -ceq 'preview13-reference') {
     }
 }
 
-$expectedVersion = if ($Profile -ceq 'preview13-reference' -and -not $ValidateOnly) { '0.1.0-preview.13' } else { '0.1.0-preview.14' }
-$props = [xml](Get-Content -LiteralPath (Join-Path $workspace 'Directory.Packages.props') -Raw)
-foreach ($package in @('CfSharp', 'CfSharp.Storage.Sqlite')) {
-    $pin = @($props.Project.ItemGroup.PackageVersion | Where-Object Include -CEQ $package)
-    if ($pin.Count -ne 1 -or $pin[0].Version -cne $expectedVersion) {
-        throw "The installed comparison expected $expectedVersion for $package."
-    }
+$expectedVersion = if ($Profile -ceq 'preview13-reference' -and -not $ValidateOnly) { '0.1.0-preview.13' } else { $lockedVersion }
+if ((Read-DeclaredCfSharpVersion) -cne $expectedVersion) {
+    throw "The installed comparison expected $expectedVersion in the executing package inputs."
 }
 $output = [IO.Path]::GetFullPath($EvidencePath, $workspace)
 New-Item -ItemType Directory -Path ([IO.Path]::GetDirectoryName($output)) -Force | Out-Null
