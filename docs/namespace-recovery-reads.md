@@ -69,6 +69,13 @@ exercise both pages. A damaged journal reservation on the second page
 rejects global discovery before startup can use either root of an intact
 transfer on the first page.
 
+Global KeepRemote file-start discovery checks both sides of the pending
+ownership index in one query. It then reads 16 indexed roots and commands at
+a time and validates each original start. The 17-root SQLite fixture removes
+17 repeated root discovery queries. Missing ownership on either side and
+damage on a later page still reject startup discovery. A direct query on an
+intact root returns its original retained start.
+
 Startup discovery selects a root's pending operations from the validated fence
 scan in one read transaction. A pending retirement leaf still validates its
 sealed batch membership. The batch is the recovery operation returned for that

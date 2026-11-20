@@ -3,6 +3,7 @@ using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using MirrorPulse.Core.CloudFiles;
 using MirrorPulse.Core.Conflicts;
+using MirrorPulse.Core.Contracts;
 using MirrorPulse.Core.State;
 using MirrorPulse.Core.Sync;
 
@@ -10,6 +11,49 @@ namespace MirrorPulse.Core.Tests;
 
 public sealed partial class MirrorPulseNamespaceBirthCatalogTests
 {
+    [TestMethod]
+    public async Task GlobalKeepRemoteFileStartsValidatePagedOwnersWithoutRediscoveringEachRoot()
+    {
+        using var fixture = new Fixture();
+        await using var catalog = await MirrorPulseProductCatalog.OpenAsync(fixture.Paths);
+        var first = await PrepareKeepRemoteFileAsync(catalog);
+        var installation = (await catalog.ReadAdapterTopologyAsync()).Installations.Single();
+        var anchor = await catalog.ReadNamespaceMemberAsync(first.Parent.Context.Member.ParentMemberId!.Value);
+        Assert.IsNotNull(anchor);
+        var originals = new List<MirrorPulseConflictKeepRemoteFileStart> { await StartKeepRemoteFileAsync(catalog, first) };
+        for (int index = 1; index < 17; index++)
+        {
+            string label = $"Docs {index}";
+            var instance = await catalog.CreateInstanceAsync(installation.InstallId, label, new Dictionary<string, string>(), [],
+                Path.Combine(fixture.Paths.DataRootPath, "files", label), Path.Combine(fixture.Paths.DataRootPath, "transfers", label),
+                rootLabels: new Dictionary<string, string> { ["docs"] = label });
+            var root = (await catalog.ReadAdapterTopologyAsync()).Roots.Single(registration => registration.InstanceId == instance.InstanceId);
+            originals.Add(await StartKeepRemoteFileAsync(catalog, await PrepareKeepRemoteFileAsync(catalog, configuredRoot: root, anchor: anchor)));
+        }
+
+        var expected = originals.OrderBy(start => start.Original.Context.Member.RootId!.Value.ToString(), StringComparer.Ordinal).ToArray();
+        var expectedRoots = expected.Select(start => start.Original.Context.Member.RootId!.Value).ToArray();
+        var statements = await TraceOwnerReadsAsync(catalog, async () =>
+            CollectionAssert.AreEqual(expectedRoots, (await catalog.ReadNamespaceDispatchFencedRootsAsync()).ToArray()));
+        var perRootReads = statements.Where(sql => sql.Contains("WHERE s.root_id=", StringComparison.Ordinal) &&
+            sql.Contains("FROM conflict_keep_remote_file_starts s", StringComparison.Ordinal)).ToArray();
+        Assert.HasCount(0, perRootReads, "The global scan must use the validated owner index without looking up each root again.");
+        var pages = statements.Where(sql => sql.Contains("SELECT root_id,command_id FROM conflict_keep_remote_file_pending", StringComparison.Ordinal)
+            && sql.Contains("ORDER BY root_id", StringComparison.Ordinal)).ToArray();
+        Assert.HasCount(2, pages);
+        Assert.IsTrue(pages.All(sql => sql.Contains("LIMIT 16", StringComparison.Ordinal)));
+        Assert.Contains(expectedRoots[15].ToString(), pages[1], StringComparison.Ordinal);
+
+        var last = expected[^1];
+        Assert.AreEqual(new MirrorPulseNamespacePendingOperation(last.CommandId, expectedRoots[^1], MirrorPulseNamespacePendingOperationKind.ConflictKeepRemote),
+            (await catalog.ReadNamespacePendingOperationsAsync(expectedRoots[^1])).Single());
+        await ExecuteSqlAsync(fixture.Paths,
+            $"UPDATE conflict_keep_remote_file_starts SET fingerprint=zeroblob(32) WHERE command_id='{last.CommandId:D}';");
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(() => catalog.ReadNamespaceDispatchFencedRootsAsync());
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(() => catalog.ReadNamespacePendingOperationsAsync(expectedRoots[0]));
+        Assert.AreEqual(expected[0].CommandId, (await catalog.ReadPendingConflictKeepRemoteFileStartAsync(expectedRoots[0]))?.CommandId);
+    }
+
     [TestMethod]
     public async Task KeepRemoteFileStartRetainsFirstFactsAcrossOwnersWithoutApplicationOrAcknowledgement()
     {
@@ -181,6 +225,7 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
             : "DELETE FROM conflict_keep_remote_file_pending;");
         await Assert.ThrowsExactlyAsync<InvalidDataException>(() => catalog.ReadConflictKeepRemoteFileStartAsync(setup.Preparation.Intent.CommandId));
         await Assert.ThrowsExactlyAsync<InvalidDataException>(() => catalog.ReadNamespaceDispatchFencedRootsAsync());
+        await Assert.ThrowsExactlyAsync<InvalidDataException>(() => catalog.ReadNamespacePendingOperationsAsync(RootId.New()));
         await Assert.ThrowsExactlyAsync<InvalidDataException>(() => catalog.PrepareNamespaceReplacementAsync(Replacement(setup.Original)));
     }
 
@@ -194,9 +239,10 @@ public sealed partial class MirrorPulseNamespaceBirthCatalogTests
 
     private static async Task<KeepRemoteFileSetup> PrepareKeepRemoteFileAsync(MirrorPulseProductCatalog catalog, bool retainJournal = true,
         string? backendRemoteId = null, bool moveAcceptedBeforeConflict = false, bool rejectMove = false, bool createFile = false,
-        bool moveOnly = false)
+        bool moveOnly = false, RootRegistration? configuredRoot = null, MirrorPulseNamespaceMemberRegistration? anchor = null)
     {
-        var member = await PrepareMovableMemberAsync(catalog); var root = await AddIdentityTopologyAsync(catalog, member.Move.RootId);
+        var member = await PrepareMovableMemberAsync(catalog, registration: configuredRoot, anchor: anchor);
+        var root = configuredRoot ?? await AddIdentityTopologyAsync(catalog, member.Move.RootId);
         var original = (await catalog.ReadNamespaceMemberProtectionSnapshotAsync(member.Member.MemberId))!;
         var parent = (await catalog.ReadNamespaceMemberProtectionSnapshotAsync(original.Context.Location.ParentMemberId!.Value))!;
         string path = original.Context.Location.RelativePath[(root.Label.Length + 1)..];

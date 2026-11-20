@@ -84,29 +84,41 @@ public sealed partial class MirrorPulseProductCatalog
     private async Task AddKeepRemoteFileStartRootFencesAsync(HashSet<RootId> roots, SqliteTransaction transaction,
         NamespacePendingSelection? pending, CancellationToken token)
     {
-        var pendingRoots = new List<RootId>();
         await using (var query = _connection.CreateCommand())
         {
             query.Transaction = transaction;
+            // Check both ownership directions before enumerating the pending index.
+            // A missing index row cannot make an unresolved original look ready.
             query.CommandText = """
-                SELECT s.root_id FROM conflict_keep_remote_file_starts s
-                LEFT JOIN conflict_keep_remote_acknowledgements a ON a.command_id=s.command_id
-                LEFT JOIN user_commands u ON u.command_id=s.command_id
-                WHERE a.result_payload IS NULL OR u.state IS NOT 'resolved'
-                UNION SELECT root_id FROM conflict_keep_remote_file_pending;
+                SELECT 1 FROM conflict_keep_remote_file_starts s
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM conflict_keep_remote_file_pending p WHERE p.command_id=s.command_id AND p.root_id=s.root_id)
+                AND (NOT EXISTS (
+                    SELECT 1 FROM conflict_keep_remote_acknowledgements a WHERE a.command_id=s.command_id AND a.result_payload IS NOT NULL)
+                OR NOT EXISTS (
+                    SELECT 1 FROM user_commands u WHERE u.command_id=s.command_id AND u.state='resolved'))
+                UNION ALL
+                SELECT 1 FROM conflict_keep_remote_file_pending p
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM conflict_keep_remote_file_starts s WHERE s.command_id=p.command_id AND s.root_id=p.root_id)
+                LIMIT 1;
                 """;
-            await using var reader = await query.ExecuteReaderAsync(token).ConfigureAwait(false);
-            while (await reader.ReadAsync(token).ConfigureAwait(false))
-            {
-                string value = reader.GetString(0);
-                if (!RootId.TryParse(value, out var root) || root.ToString() != value) throw new InvalidDataException("The KeepRemote file-start root is invalid.");
-                pendingRoots.Add(root);
-            }
+            if (await query.ExecuteScalarAsync(token).ConfigureAwait(false) is not null)
+                throw new InvalidDataException("KeepRemote lost its complete original file-start/root-fence ownership.");
         }
-        foreach (var root in pendingRoots)
+
+        const string pageSql = """
+            SELECT root_id,command_id FROM conflict_keep_remote_file_pending
+            WHERE root_id >= $after AND ($first=1 OR root_id<>$after)
+            ORDER BY root_id LIMIT 16;
+            """;
+        await foreach (var (root, command) in ReadNamespaceOwnerRowsCoreAsync(pageSql, transaction,
+            static (row, id) => (new RootId(id), ParseNamespaceMemberId(row.GetString(1))), token).ConfigureAwait(false))
         {
-            var start = await ReadPendingKeepRemoteFileStartForRootCoreAsync(root, transaction, token).ConfigureAwait(false)
+            var start = await ReadKeepRemoteFileStartCoreAsync(command, transaction, token).ConfigureAwait(false)
                 ?? throw new InvalidDataException("An unfinished KeepRemote file start lost its original root fence.");
+            if (start.Original.Context.Member.RootId != root)
+                throw new InvalidDataException("KeepRemote lost its complete original file-start/root-fence ownership.");
             roots.Add(root);
             pending?.Add(root, start.CommandId, MirrorPulseNamespacePendingOperationKind.ConflictKeepRemote);
         }
