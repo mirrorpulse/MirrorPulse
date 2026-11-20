@@ -55,6 +55,12 @@ internal sealed class MirrorPulseJournalWindowReader<TScan>(
                 {
                     ResetCore(); return new(null, upper, false, true);
                 }
+                if (MirrorPulseCfSharpJournalPages.IsAwaitingMetadataValidation(_afterSequence, upper,
+                    page.LastScannedSequence, page.Changes.Count, page.HasMore, page.RequiresFullRescan))
+                {
+                    await Task.Delay(MirrorPulseCfSharpJournalPages.ValidationRetryDelay, token).ConfigureAwait(false);
+                    return new(null, upper, true, false);
+                }
                 if (page.Changes.Count > _pageSize || page.LastScannedSequence < _afterSequence ||
                     page.LastScannedSequence > upper || page.HasMore && (page.LastScannedSequence <= _afterSequence || page.LastScannedSequence >= upper) ||
                     !page.HasMore && page.LastScannedSequence != upper)

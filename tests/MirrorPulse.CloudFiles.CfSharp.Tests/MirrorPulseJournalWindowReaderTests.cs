@@ -11,6 +11,37 @@ namespace MirrorPulse.CloudFiles.CfSharp.Tests;
 public sealed class MirrorPulseJournalWindowReaderTests
 {
     [TestMethod]
+    public async Task PendingMetadataValidationRetainsTheSameWindowAndRetriesItsExactCursor()
+    {
+        var journal = new Journal(3);
+        var reader = journal.Reader(pages: 8, size: 1);
+        journal.Override = (_, after) => after switch
+        {
+            0 => new([journal.Rows[0]], 1, true, false),
+            1 => new([], 1, true, false),
+            _ => throw new InvalidOperationException("A withheld page must not advance the cursor.")
+        };
+
+        var first = await reader.ReadAsync(default);
+        Assert.IsTrue(first.ScanInProgress); Assert.IsFalse(first.RequiresFullRescan);
+        Assert.IsNull(first.Observations); Assert.AreEqual(3L, first.UpperSequence);
+        Assert.IsTrue(reader.HasPendingScan);
+        CollectionAssert.AreEqual(new long[] { 0, 1 }, journal.Calls.ToArray());
+
+        journal.Rows.Add(Observation(4));
+        Assert.IsTrue((await reader.ReadAsync(default)).ScanInProgress);
+        Assert.AreEqual(1L, journal.Calls[^1]);
+        journal.Override = null;
+        var complete = await reader.ReadAsync(default);
+        Assert.IsFalse(complete.ScanInProgress); Assert.IsFalse(complete.RequiresFullRescan);
+        Assert.AreEqual(3L, complete.UpperSequence);
+        CollectionAssert.AreEqual(journal.Rows.Take(3).Select(row => row.OperationId).ToArray(),
+            complete.Observations!.Select(row => row.OperationId).ToArray());
+        CollectionAssert.AreEqual(new long[] { 0, 1, 1, 1, 2 }, journal.Calls.ToArray());
+        Assert.AreEqual(1, journal.Begins);
+    }
+
+    [TestMethod]
     [DataRow(0, 2)]
     [DataRow(65, 2)]
     [DataRow(1, 0)]
@@ -106,7 +137,7 @@ public sealed class MirrorPulseJournalWindowReaderTests
         var journal = new Journal(5);
         journal.Override = (_, _) => invalid switch
         {
-            "no-progress" => new([], 0, true, false),
+            "no-progress" => new([Observation(1)], 0, true, false),
             "past-boundary" => new([], 6, true, false),
             "unordered" => new([Observation(2), Observation(1)], 2, true, false),
             "past-cursor" => new([Observation(2)], 1, true, false),

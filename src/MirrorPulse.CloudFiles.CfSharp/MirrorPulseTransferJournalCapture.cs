@@ -34,7 +34,7 @@ internal sealed class MirrorPulseTransferJournalCapture(CloudLocalChangeFeed fee
         long after = 0; var members = new List<MirrorPulseTransferJournalObservation>();
         while (true)
         {
-            var page = await feed.ReadPageAsync(scan, after, 64, token).ConfigureAwait(false);
+            var page = await feed.ReadAfterMetadataValidationAsync(scan, after, 64, token).ConfigureAwait(false);
             if (page.RequiresFullRescan) throw new InvalidOperationException("The original journal lost its captured reconciliation boundary.");
             long previous = after;
             foreach (var change in page.Changes)

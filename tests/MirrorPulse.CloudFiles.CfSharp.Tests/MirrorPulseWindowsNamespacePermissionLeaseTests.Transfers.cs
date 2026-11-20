@@ -1533,7 +1533,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
             bool lost = false;
             while (true)
             {
-                var page = await feed.ReadPageAsync(scan, after, 64, token);
+                var page = await feed.ReadAfterMetadataValidationAsync(scan, after, 64, token);
                 if (page.RequiresFullRescan) { lost = true; break; }
                 ids.AddRange(page.Changes.Where(change => change.ItemId == sourceItemId &&
                     change.Kind is CloudLocalChangeKind.Create or CloudLocalChangeKind.ContentUpdate).Select(change => change.OperationId));
@@ -1551,7 +1551,7 @@ public sealed partial class MirrorPulseWindowsNamespacePermissionLeaseTests
         var ids = new List<Guid>(); long after = 0;
         while (true)
         {
-            var page = await feed.ReadPageAsync(scan, after, 64, token); Assert.IsFalse(page.RequiresFullRescan);
+            var page = await feed.ReadAfterMetadataValidationAsync(scan, after, 64, token); Assert.IsFalse(page.RequiresFullRescan);
             ids.AddRange(page.Changes.Select(change => change.OperationId));
             if (!page.HasMore) return ids.AsReadOnly();
             Assert.IsGreaterThan(after, page.LastScannedSequence); after = page.LastScannedSequence;

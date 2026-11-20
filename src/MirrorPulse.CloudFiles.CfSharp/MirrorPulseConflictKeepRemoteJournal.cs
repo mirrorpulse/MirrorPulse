@@ -140,8 +140,12 @@ internal sealed partial class MirrorPulseConflictKeepRemoteJournal(ICloudStateSt
         {
             if (scan.ThroughSequence < member.Sequence)
                 throw new InvalidDataException("The official feed lost an original KeepRemote sequence.");
-            var page = await feed.ReadPageAsync(scan, member.Sequence - 1, 1, token).ConfigureAwait(false);
+            long after = member.Sequence - 1;
+            var page = await feed.ReadPageAsync(scan, after, 1, token).ConfigureAwait(false);
             if (page.RequiresFullRescan) throw new MirrorPulseKeepRemoteJournalDeferredException(requiresFullRescan: true);
+            if (MirrorPulseCfSharpJournalPages.IsAwaitingMetadataValidation(after, scan.ThroughSequence,
+                page.LastScannedSequence, page.Changes.Count, page.HasMore, page.RequiresFullRescan))
+                throw new MirrorPulseKeepRemoteJournalDeferredException(requiresFullRescan: false);
             if (page.Changes.Count != 1 || page.Changes[0].OperationId != member.OperationId ||
                 page.Changes[0].Sequence != member.Sequence)
                 throw new InvalidDataException("The original public KeepRemote observation disappeared or requires reconciliation.");

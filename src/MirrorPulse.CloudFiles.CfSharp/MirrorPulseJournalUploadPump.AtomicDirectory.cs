@@ -136,7 +136,7 @@ public sealed partial class MirrorPulseJournalUploadPump
         long after = 0;
         do
         {
-            var page = await _feed.ReadPageAsync(scan, after, 128, token).ConfigureAwait(false);
+            var page = await _feed.ReadAfterMetadataValidationAsync(scan, after, 128, token).ConfigureAwait(false);
             if (page.RequiresFullRescan || page.LastScannedSequence < after || page.LastScannedSequence > scan.ThroughSequence ||
                 page.HasMore && page.LastScannedSequence == after)
                 throw new InvalidOperationException("The official journal could not retain a complete current window.");
