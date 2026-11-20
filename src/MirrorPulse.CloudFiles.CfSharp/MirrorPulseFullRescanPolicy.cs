@@ -79,9 +79,30 @@ public sealed class MirrorPulseFullRescanPolicy(CloudFileSystem fileSystem, Clou
             }
         }
         IReadOnlyList<CloudItemState> known;
+        HashSet<Guid> pendingMoves = [];
         await using (ICloudStateTransaction transaction = await state.OpenStore.BeginTransactionAsync(cancellationToken).ConfigureAwait(false))
         {
             known = await transaction.Items.ListSubtreeAsync(string.Empty, cancellationToken).ConfigureAwait(false);
+            var candidates = known.Where(item => !item.IsTombstone && item.Kind == CloudItemKind.File && !string.IsNullOrEmpty(item.RemoteRevision) &&
+                observations.TryGetValue(NormalizePath(item.RelativePath), out var current) && current.Snapshot is
+                { IsPlaceholder: true, SynchronizationState: CloudSynchronizationState.NotInSync } && current.Snapshot.ItemId == item.ItemId)
+                .Select(item => item.ItemId).ToHashSet();
+            if (candidates.Count > 0 && transaction.Operations is ICloudOperationJournalPaging journal)
+            {
+                long through = await journal.GetHighWaterSequenceAsync(cancellationToken).ConfigureAwait(false);
+                long after = 0;
+                while (after < through && candidates.Count > 0)
+                {
+                    var page = await journal.ReadPageAsync(after, through, 256, cancellationToken).ConfigureAwait(false);
+                    foreach (var row in page.Operations)
+                        if (row.Kind == CloudStateOperationKind.Move && row.ItemId is { } id && candidates.Remove(id))
+                            pendingMoves.Add(id);
+                    if (!page.HasMore) break;
+                    if (page.LastScannedSequence <= after || page.LastScannedSequence >= through)
+                        throw new InvalidDataException("The pending Move journal scan did not advance within its exact boundary.");
+                    after = page.LastScannedSequence;
+                }
+            }
             await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
         }
         // A retired generation cannot be the upload baseline for a later local object.
@@ -178,6 +199,19 @@ public sealed class MirrorPulseFullRescanPolicy(CloudFileSystem fileSystem, Clou
             content.Position = 0;
             previous.TryGetValue(path, out CloudItemState? prior);
             string? expected = string.IsNullOrEmpty(prior?.RemoteRevision) ? null : prior.RemoteRevision;
+            if (pending is null && expected is not null && prior is not null && pendingMoves.Contains(prior.ItemId) &&
+                lockedSnapshot.ItemId == prior.ItemId && lockedSnapshot.RemoteId == prior.RemoteId &&
+                lockedSnapshot.RemoteRevision == expected && binding.Preparation == MirrorPulseContentPreparation.ReplacePlaceholderIdentity)
+            {
+                // An original Move retains its own remote baseline. Reconciliation must not
+                // create an independent upload or conflict for the already accepted bytes.
+                var proof = await catalog.ReadAcknowledgedContentProofAsync(route.InstanceId, route.RootKey, prior.ItemId, expected,
+                    binding.LocalObject, cancellationToken).ConfigureAwait(false);
+                if (proof is not null && proof.RemoteId == prior.RemoteId && proof.Length == content.Length &&
+                    string.Equals(proof.Sha256, hash, StringComparison.OrdinalIgnoreCase) &&
+                    lockedSnapshot.PlaceholderIdentity.Span.SequenceEqual(new CloudPlaceholderIdentity(prior.ItemId, proof.RemoteId, expected).Encode()))
+                    continue;
+            }
             var intent = pending?.Intent ?? new MirrorPulseMutationIntent(StableId($"upload/{route.InstanceId}/{route.RootKey}/{route.RelativePath}/{expected}/{hash}/{binding.LocalObject.VolumeSerialNumber:X16}/{binding.LocalObject.SyncRootFileId:N}/{binding.LocalObject.LocalFileId:N}"),
                 route.InstanceId, route.RootKey, MirrorPulseWorkerChangeKind.ContentUpdate, route.RelativePath, null, false,
                 expected, content.Length, hash, MirrorPulseMutationOrigin.Rescan, binding);

@@ -101,6 +101,7 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
         };
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(65));
         Guid planId = Guid.Empty; Guid[] originals = []; Guid effectId = Guid.Empty;
+        Guid[] renameOriginals = [];
         Guid? retryCommandId = null;
         MirrorPulseMutationIntent? transferredOriginal = null;
         Guid? seedPlanId = null;
@@ -198,25 +199,48 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
                                 await Task.Delay(25, timeout.Token);
                             }
                         }
-                        Assert.IsTrue((await fileSystem.GetFile("Docs/coalesced.txt").InspectAsync(timeout.Token)).IsPlaceholder);
+                        var acceptedItem = await fileSystem.GetFile("Docs/coalesced.txt").InspectAsync(timeout.Token);
+                        Assert.IsTrue(acceptedItem.IsPlaceholder);
+                        Assert.IsNotNull(acceptedItem.ItemId);
                         Assert.IsTrue((await catalog.ReadContentConfirmationReceiptAsync(remote.UploadedOperations[0], timeout.Token))!.MayAcknowledge);
                         seedAcceptance = await catalog.ReadContentAcceptanceProofAsync(remote.UploadedOperations[0], timeout.Token);
                         seedReceipt = await catalog.ReadContentConfirmationReceiptAsync(remote.UploadedOperations[0], timeout.Token);
                         Assert.IsNotNull(seedAcceptance); Assert.IsNotNull(seedReceipt);
                         await using var moves = fileSystem.CreateLocalChangeFeed(new() { BatchSize = 1 });
                         await moves.StartAsync(timeout.Token);
-                        var moveSource = new MirrorPulseJournalUploadSource(moves, router, catalog, _ => true);
                         string middle = Path.Combine(paths.SyncRootPath, "Docs", "middle.txt");
                         File.Move(file, middle);
-                        while (!(window = await moveSource.ReadPendingAsync(timeout.Token)).ReadyCommands.Any(command => command.Kind == MirrorPulseWorkerChangeKind.Move))
-                            await Task.Delay(25, timeout.Token);
+                        var firstRename = (await WaitForOriginalMovesAsync(1)).Single(row => row.Kind == CloudStateOperationKind.Move);
                         if (moveOnly) file = Path.Combine(paths.SyncRootPath, "Docs", "moved.txt");
                         File.Move(middle, file);
-                        while ((window = await moveSource.ReadPendingAsync(timeout.Token)).ReadyCommands.Count(command => command.Kind == MirrorPulseWorkerChangeKind.Move) < 2)
-                            await Task.Delay(25, timeout.Token);
-                        TestContext.WriteLine((moveOnly ? "MoveContentOriginalWindow: " : "RoundTripOriginalWindow: ") + string.Join(",", window.CompleteWindow!.Select(command =>
-                            $"sequence={command.Sequence};kind={command.Kind};sameItem={command.ItemId == window.ReadyCommands[0].ItemId}")));
+                        var originalRows = await WaitForOriginalMovesAsync(2);
+                        var moveRows = originalRows.Where(row => row.Kind == CloudStateOperationKind.Move).ToArray();
+                        Assert.HasCount(2, moveRows);
+                        Assert.AreEqual(firstRename.OperationId, moveRows[0].OperationId);
+                        Assert.AreEqual(firstRename.Sequence, moveRows[0].Sequence);
+                        Assert.IsGreaterThan(firstRename.Sequence, moveRows[1].Sequence);
+                        renameOriginals = moveRows.Select(row => row.OperationId).ToArray();
+                        TestContext.WriteLine((moveOnly ? "MoveContentOriginalWindow: " : "RoundTripOriginalWindow: ") + string.Join(",", originalRows.Select(row =>
+                            $"sequence={row.Sequence};kind={row.Kind};sameItem={row.ItemId == acceptedItem.ItemId}")));
+                        var scan = await moves.BeginScanAsync(timeout.Token);
+                        TestContext.WriteLine($"RenameOriginalsRequireFullRescan: {scan.RequiresFullRescan}");
                         if (resolveConflict) remote.Seed("concurrent remote bytes"u8.ToArray());
+
+                        async Task<CloudOperationJournalEntry[]> WaitForOriginalMovesAsync(int count)
+                        {
+                            // The production pump handles any full-rescan marker after these originals
+                            // have been captured. Its dispatch window is unavailable while recovery is pending.
+                            while (true)
+                            {
+                                await using var transaction = await state.OpenStore.BeginTransactionAsync(timeout.Token);
+                                var rows = await transaction.Operations.ListByItemIdAsync(acceptedItem.ItemId.Value, 32, timeout.Token);
+                                await transaction.RollbackAsync(timeout.Token);
+                                var observed = rows.Where(row => row.Kind is CloudStateOperationKind.Move or CloudStateOperationKind.ContentUpdate)
+                                    .OrderBy(row => row.Sequence).ToArray();
+                                if (observed.Count(row => row.Kind == CloudStateOperationKind.Move) >= count) return observed;
+                                await Task.Delay(25, timeout.Token);
+                            }
+                        }
                     }
                 }
                 await feed.DisposeAsync();
@@ -245,15 +269,18 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
                     if (owner == 0 && resolveConflict)
                     {
                         MirrorPulseConflictRecord[] conflicts;
-                        while ((conflicts = (await catalog.ReadUploadConflictsAsync(cancellationToken: timeout.Token)).ToArray()).Length < 2)
+                        while ((conflicts = (await catalog.ReadUploadConflictsAsync(cancellationToken: timeout.Token)).ToArray()).Length < 2 ||
+                            !renameOriginals.All(id => conflicts.Any(conflict => conflict.ChangeId == id.ToString("D"))))
                             await Task.Delay(25, timeout.Token);
+                        var selectedConflict = renameOriginals.Length == 0 ? conflicts[1] :
+                            conflicts.Single(conflict => conflict.ChangeId == renameOriginals[1].ToString("D"));
                         var actions = new MirrorPulseUploadConflictActions(catalog, state, pumpFeed,
                             new BackoffPolicy(TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(5)), paths, router, remote, center, scheduler, fileSystem);
-                        var decision = await actions.ApplyAsync(conflicts[1].ConflictId, MirrorPulseConflictAction.KeepLocal, timeout.Token);
+                        var decision = await actions.ApplyAsync(selectedConflict.ConflictId, MirrorPulseConflictAction.KeepLocal, timeout.Token);
                         retryCommandId = decision.ResolutionId;
                         if (moveOnly)
                         {
-                            var ownerPlan = (await catalog.ReadJournalCoalescingOwnerAsync(Guid.Parse(conflicts[1].ChangeId), timeout.Token))!;
+                            var ownerPlan = (await catalog.ReadJournalCoalescingOwnerAsync(Guid.Parse(selectedConflict.ChangeId), timeout.Token))!;
                             var originalProgram = (await catalog.ReadJournalCoalescingExecutionAsync(ownerPlan.PlanId, timeout.Token))!;
                             Assert.IsTrue(originalProgram.IsMoveOnly,
                                 "The complete original window must produce a proven move-only execution before KeepLocal adds content.");
@@ -284,6 +311,8 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
                     }
                     await reached.Task.WaitAsync(timeout.Token);
                     var plan = (await catalog.ReadJournalCoalescingPlansAsync(timeout.Token)).Single(candidate => candidate.PlanId != seedPlanId);
+                    CollectionAssert.AreEqual(renameOriginals, plan.Members.Select(member => member.OperationId)
+                        .Where(renameOriginals.Contains).ToArray());
                     var execution = (await catalog.ReadJournalCoalescingExecutionAsync(plan.PlanId, timeout.Token))!;
                     if (unchanged)
                     {
@@ -380,10 +409,12 @@ public sealed partial class MirrorPulseJournalUploadSourceTests
                             else
                             {
                                 Assert.IsFalse(dispatch.HasMoveContent); Assert.HasCount(1, dispatch.Steps);
+                                var moveProof = await catalog.ReadContentAcceptanceProofAsync(effectId, timeout.Token);
+                                var moveReceipt = await catalog.ReadContentConfirmationReceiptAsync(effectId, timeout.Token);
                                 Assert.IsNotNull(execution.ObservedContent);
-                                var moveProof = (await catalog.ReadContentAcceptanceProofAsync(effectId, timeout.Token))!;
+                                Assert.IsNotNull(moveProof);
                                 Assert.AreEqual(current.AcceptedRevision, moveProof.AcceptedRevision);
-                                Assert.IsTrue((await catalog.ReadContentConfirmationReceiptAsync(effectId, timeout.Token))!.MayAcknowledge);
+                                Assert.IsTrue(moveReceipt?.MayAcknowledge);
                                 var actual = await fileSystem.GetFile("Docs/moved.txt").InspectAsync(timeout.Token);
                                 Assert.AreEqual(CloudSynchronizationState.InSync, actual.SynchronizationState);
                                 Assert.AreEqual(current.AcceptedRevision, CloudPlaceholderIdentity.Decode(actual.PlaceholderIdentity.Span).RemoteRevision);

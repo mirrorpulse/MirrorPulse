@@ -56,7 +56,7 @@ public sealed partial class MirrorPulseProductCatalog
         MirrorPulseJournalCoalescingExecution execution, SqliteTransaction transaction, CancellationToken token)
     {
         if (execution.ObservedContent is not { } observed) return;
-        if (execution.Version != (plan.Effect == MirrorPulseCoalescedEffect.MoveAndUpdateFile ? 3 : 2) || execution.OriginalMutations.Count != 0)
+        if (execution.Version != (plan.Effect == MirrorPulseCoalescedEffect.UpdateFile ? 2 : 3) || execution.OriginalMutations.Count != 0)
             throw new InvalidDataException("An observed program cannot discard prepared original mutation intent.");
         var proof = await ReadContentAcceptanceProofCoreAsync(observed.AcceptanceOperationId, token, transaction).ConfigureAwait(false)
             ?? throw new InvalidDataException("The observed program has no actual historical acceptance proof.");

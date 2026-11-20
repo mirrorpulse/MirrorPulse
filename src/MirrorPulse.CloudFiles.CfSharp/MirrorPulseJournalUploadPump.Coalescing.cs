@@ -75,20 +75,24 @@ public sealed partial class MirrorPulseJournalUploadPump
                 }
                 MirrorPulseCoalescingContent? final = null;
                 MirrorPulseCoalescingObservedContent? observed = null;
-                if (plan.Effect is MirrorPulseCoalescedEffect.CreateFile or MirrorPulseCoalescedEffect.UpdateFile or MirrorPulseCoalescedEffect.MoveAndUpdateFile)
+                bool uploads = plan.Effect is MirrorPulseCoalescedEffect.CreateFile or MirrorPulseCoalescedEffect.UpdateFile or MirrorPulseCoalescedEffect.MoveAndUpdateFile;
+                bool observeMove = plan.Effect == MirrorPulseCoalescedEffect.MoveFile && originals.Length == 0 && baseline is not null &&
+                    initial.IsPlaceholder && initial.ItemId == plan.ItemId && initial.ContentAvailability == CloudContentAvailability.FullyAvailable;
+                if (uploads || observeMove)
                 {
                     await using var content = new FileStream(localPath, FileMode.Open, FileAccess.Read, FileShare.Read,
                         64 * 1024, FileOptions.Asynchronous);
                     var file = _fileSystem!.GetFile(relative);
                     var binding = await _contentConfirmation.CaptureUploadBindingAsync(file,
                         await file.InspectAsync(token).ConfigureAwait(false), token).ConfigureAwait(false);
-                    final = new MirrorPulseCoalescingContent(content.Length,
+                    var captured = new MirrorPulseCoalescingContent(content.Length,
                         Convert.ToHexString(await SHA256.HashDataAsync(content, token).ConfigureAwait(false)), binding);
                     var after = await file.InspectAsync(token).ConfigureAwait(false);
-                    if (after.Length != final.Length || await _contentConfirmation.CaptureUploadBindingAsync(file, after, token).ConfigureAwait(false) != binding)
+                    if (after.Length != captured.Length || await _contentConfirmation.CaptureUploadBindingAsync(file, after, token).ConfigureAwait(false) != binding)
                         throw new InvalidDataException("The guarded coalesced object changed during content capture.");
-                    if (originals.Length == 0 && plan.Effect is MirrorPulseCoalescedEffect.UpdateFile or MirrorPulseCoalescedEffect.MoveAndUpdateFile && baseline is not null)
-                        observed = await TryObserveAcceptedContentAsync(plan, after, final, baseline, token).ConfigureAwait(false);
+                    if (uploads) final = captured;
+                    if (originals.Length == 0 && plan.Effect is MirrorPulseCoalescedEffect.UpdateFile or MirrorPulseCoalescedEffect.MoveAndUpdateFile or MirrorPulseCoalescedEffect.MoveFile && baseline is not null)
+                        observed = await TryObserveAcceptedContentAsync(plan, after, captured, baseline, token).ConfigureAwait(false);
                     if (observed is null && originals.Length == 0 && plan.Effect == MirrorPulseCoalescedEffect.UpdateFile &&
                         MirrorPulseJournalContentPolicy.IsAcceptedObservation(after, _router.GetRegistration(plan.InstanceId, plan.RootKey), baseline))
                     {

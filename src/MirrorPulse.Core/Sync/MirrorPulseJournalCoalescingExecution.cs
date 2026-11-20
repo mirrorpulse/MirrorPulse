@@ -81,7 +81,7 @@ public static class MirrorPulseJournalCoalescingExecutionPlanner
         if (observedContent is not null)
         {
             if ((plan.Effect != MirrorPulseCoalescedEffect.UpdateFile || plan.OriginalPath != plan.FinalPath) &&
-                (plan.Effect != MirrorPulseCoalescedEffect.MoveAndUpdateFile || plan.OriginalPath == plan.FinalPath) ||
+                (plan.Effect is not (MirrorPulseCoalescedEffect.MoveAndUpdateFile or MirrorPulseCoalescedEffect.MoveFile) || plan.OriginalPath == plan.FinalPath) ||
                 observedContent.AcceptanceOperationId == Guid.Empty || observedContent.ItemId != plan.ItemId ||
                 string.IsNullOrEmpty(observedContent.RemoteId) || observedContent.RemoteRevision != expectedRevision ||
                 observedContent.Content is not { Length: >= 0, Sha256.Length: 64, UploadBinding: not null } ||
@@ -108,7 +108,8 @@ public static class MirrorPulseJournalCoalescingExecutionPlanner
         }
         if (observedContent is not null)
         {
-            if (plan.Effect == MirrorPulseCoalescedEffect.MoveAndUpdateFile) Add(MirrorPulseCoalescingStepKind.Move, plan.FinalPath, plan.OriginalPath);
+            if (plan.Effect is MirrorPulseCoalescedEffect.MoveAndUpdateFile or MirrorPulseCoalescedEffect.MoveFile)
+                Add(MirrorPulseCoalescingStepKind.Move, plan.FinalPath, plan.OriginalPath);
             else Add(MirrorPulseCoalescingStepKind.VerifyUnchanged, plan.FinalPath);
         }
         else switch (plan.Effect)
@@ -147,7 +148,7 @@ public static class MirrorPulseJournalCoalescingExecutionPlanner
         if (steps.Any(step => step.OperationId == Guid.Empty || step.OperationId == plan.PlanId ||
             plan.Members.Any(member => member.OperationId == step.OperationId)) || steps.Select(step => step.OperationId).Distinct().Count() != steps.Count)
             throw new InvalidDataException("The coalesced remote-effect identities collide with retained ownership.");
-        return new(plan.IsDirectory ? 4 : observedContent is null ? 1 : plan.Effect == MirrorPulseCoalescedEffect.MoveAndUpdateFile ? 3 : 2,
+        return new(plan.IsDirectory ? 4 : observedContent is null ? 1 : steps[0].Kind == MirrorPulseCoalescingStepKind.Move ? 3 : 2,
             plan.PlanId, Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(plan))),
             expectedRevision, content, steps.AsReadOnly(), Array.Empty<MirrorPulseCoalescingOriginalMutation>())
         { ObservedContent = observedContent };
